@@ -1,0 +1,58 @@
+// types.ts — the provider-agnostic adapter contract (dependency injection via plain
+// interfaces, per docs/standards/typescript.md). Browser-safe: the BYOK playground
+// constructs adapters directly, so nothing here may touch Node APIs.
+
+/** Provider-agnostic tool definition; providers map it to their own wire shape. */
+export interface ToolDef {
+  name: string;
+  description: string;
+  /** JSON Schema (draft-07-ish object schema) for the tool input. */
+  inputSchema: Record<string, unknown>;
+}
+
+/** One tool invocation requested by the model. */
+export interface ToolCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/**
+ * Normalized conversation message. `tool` messages carry a tool result back to the
+ * model; adapters translate them into the provider's shape (Anthropic: `tool_result`
+ * user blocks; OpenAI: `role: "tool"` messages).
+ */
+export type AdapterMessage =
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
+  | { role: 'tool'; toolCallId: string; content: string };
+
+export interface AdapterRequest {
+  system: string;
+  messages: AdapterMessage[];
+  /** Omitted or empty ⇒ no tools are offered (JSON-only mode). */
+  tools?: ToolDef[];
+  signal?: AbortSignal;
+  /** Streamed DELTAS (not cumulative) — callers accumulate. */
+  onDelta?: (delta: string) => void;
+}
+
+/** Errors as data — never thrown across the adapter boundary. */
+export interface AdapterError {
+  ok: false;
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export type AdapterResult =
+  | { ok: true; text: string; toolCalls: ToolCall[]; stopReason: 'end' | 'tool_use' }
+  | AdapterError;
+
+/** The one seam through which any provider is reached (see runAgentTurn). */
+export interface AgentAdapter {
+  complete(request: AdapterRequest): Promise<AdapterResult>;
+}
+
+/** Injectable fetch for fixture-based tests; defaults to the global. */
+export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;

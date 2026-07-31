@@ -5,6 +5,15 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "scripts": { "build": "tsc -p tsconfig.json", "test": "vitest run --passWithNoTests" },
-  "license": "MIT"
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && vitest run"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@snugprotocol/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@snugprotocol/runner": "workspace:*"
+  }
 }
