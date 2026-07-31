@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "appId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "description": {
+      "maxLength": 400,
+      "type": "string"
+    },
+    "displayName": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+    },
+    "iconColor": {
+      "maxLength": 32,
+      "type": "string"
+    },
+    "iconEmoji": {
+      "maxLength": 8,
+      "type": "string"
+    },
+    "type": {
+      "const": "snug:app-announce",
+      "type": "string"
+    },
+    "v": {
+      "const": 1,
+      "type": "number"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "appId",
+    "displayName"
+  ],
+  "type": "object"
+}

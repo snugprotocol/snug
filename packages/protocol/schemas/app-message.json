@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "action": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "appId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "instanceId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "payload": {},
+    "requestId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "responseSchema": {},
+    "state": {},
+    "type": {
+      "const": "snug:app-message",
+      "type": "string"
+    },
+    "v": {
+      "const": 1,
+      "type": "number"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "requestId",
+    "instanceId",
+    "appId",
+    "action"
+  ],
+  "type": "object"
+}
