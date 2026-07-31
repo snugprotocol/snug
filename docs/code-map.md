@@ -6,8 +6,8 @@
 |---|---|---|
 | Envelope message types, zod schemas, JSON Schema export | `packages/protocol/src` ✅ (frames/envelope/reply/security/json-schemas) | `packages/protocol` vitest (74) |
 | Iframe runner, CSP/sandbox, bridge host, transport/db-driver seams, browser-CSP suite template | `packages/runner/src` ✅ | `packages/runner` vitest (90) + child-6 Playwright |
-| In-app hooks (`useAgentBridge`, `useAppDB`, `usePersistedState`) | `packages/sdk/src` ⭕ | `packages/sdk` |
-| Per-app DB (sql.js + OPFS, .sqlite export) | `packages/db/src` ⭕ | `packages/db` |
+| In-app hooks (useSnugApp/usePersistedState/useAppDB; embedded + module forms, KB≡SDK sync) | `packages/sdk/src` + `packages/sdk/embedded` ✅ | `packages/sdk` vitest (33) |
+| Per-app DB (sql.js + OPFS/IDB/memory, .sqlite export/import, kv, DbDriver) | `packages/db/src` ✅ | `packages/db` vitest (37) |
 | Credential broker (v1.1) | `packages/auth/src` ⭕ | `packages/auth` |
 | Central prompt store (ADR-0004: system/KB/tools/skills/templates/ui layers) + typed loaders, assembly, search, centralization lint | `packages/knowledge/prompts` + `packages/knowledge/src` ✅ | `packages/knowledge` vitest (55) |
 | Provider adapters (anthropic/openai/mock) | `packages/adapters/src` ⭕ | `packages/adapters` |

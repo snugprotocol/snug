@@ -196,7 +196,9 @@ The template below has two zones:
     // ============================================================
     function usePersistedState(key, initialValue) {
       const [state, setState] = useState(initialValue);
-      const [hydrated, setHydrated] = useState(false);
+      // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+      // or the old key's state would overwrite the new key's stored value.
+      const [hydratedKey, setHydratedKey] = useState(null);
       const initialRef = useRef(initialValue);
 
       useEffect(() => {
@@ -214,8 +216,10 @@ The template below has two zones:
                 ? { ...init, ...stored }
                 : stored
             );
+          } else {
+            setState(initialRef.current); // nothing stored under this key — back to defaults
           }
-          setHydrated(true);
+          setHydratedKey(key);
         };
         const onReady = () => {
           if (!SnugBridge.ready) return;
@@ -228,9 +232,9 @@ The template below has two zones:
       }, [key]);
 
       useEffect(() => {
-        if (!hydrated) return;
+        if (hydratedKey !== key) return;
         snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
-      }, [hydrated, key, state]);
+      }, [hydratedKey, key, state]);
 
       return [state, setState];
     }

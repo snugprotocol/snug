@@ -41,3 +41,9 @@ db first (driver + persistence + tests), then sdk (embedded file extracted from 
 ### 2026-07-31 — Claude (Fable 5) — session
 - Done: task file.
 - Next: implement (delegated), review, merge.
+
+### 2026-07-31 — Claude (Fable 5) — delegated implementation session
+- Done: packages/db (createDbDriver over sql.js; OPFS/IDB/memory backends with auto-detect + injection; `snug_kv`; debounced persist + flush; single-statement exec; export/import with magic + open-check + 5 MiB caps; 8 MiB frame-class guard; errors-as-data — 29 tests). packages/sdk (embedded/snug-hooks.js generated from the rendered KB block; KB≡SDK sync test; typed module hooks over a bridge importing protocol constants; contract suite ×2 forms (13 each); cross-package integration test runner+sdk+db — 33 tests). Root `pnpm test`: 18/18 tasks green.
+- KB fix (sync discipline): usePersistedState key-change bug — the write-back effect could fire for a NEW key while still holding the OLD key's state (same-commit `hydrated` boolean), clobbering the new key's stored value; replaced with a `hydratedKey` gate + reset-to-defaults when nothing is stored. Fixed in 20-html-template.md, regenerated content, mirrored in embedded + module forms, locked by a regression test in the contract suite.
+- Next: AI review, merge; children 5/6 notes are in the delegated report.
+- Gate-5 hardening applied (tests first): (1) lifecycle auto-flush on pagehide + visibilitychange:hidden, removed by close(); debounce data-loss window documented in createDbDriver JSDoc; (2) corrupt persisted bytes still fail open but surface via new `onRecoverableError({namespace, kind:'corrupt-persisted-bytes', message})` option (regression test with injected corrupt backend); (3) ATTACH / PRAGMA writable_schema / load_extension() rejected pre-prepare with typed `DB_FORBIDDEN_STATEMENT` (other PRAGMAs allowed; negative tests). db 37 passed, sdk 33 passed, root turbo 18/18 green.
