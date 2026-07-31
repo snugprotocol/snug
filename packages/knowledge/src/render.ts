@@ -4,7 +4,13 @@
 // placeholders and this module injects the values from @snugprotocol/protocol. The
 // renderer is strict — an unknown placeholder is a build-breaking error, not silence.
 
-import { CDN_ALLOWLIST, FRAME_TYPES, SNUG_APP_REQUEST_TAG } from '@snugprotocol/protocol';
+import {
+  CDN_ALLOWLIST,
+  FRAME_TYPES,
+  LIMITS,
+  PROTOCOL_VERSION,
+  SNUG_APP_REQUEST_TAG,
+} from '@snugprotocol/protocol';
 
 /**
  * The MCP tool name of the Snug app builder. Underscore form — MCP hosts reject dots.
@@ -13,12 +19,16 @@ import { CDN_ALLOWLIST, FRAME_TYPES, SNUG_APP_REQUEST_TAG } from '@snugprotocol/
  */
 export const APP_BUILDER_TOOL_NAME = 'snug_app_builder';
 
-/** Static substitutions available to every prompt source. */
+/** Static substitutions available to every prompt source — all derived from protocol constants. */
 const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   envelopeTag: SNUG_APP_REQUEST_TAG,
   appBuilderToolName: APP_BUILDER_TOOL_NAME,
   cdnAllowlist: CDN_ALLOWLIST.join(', '),
-  maxArtifactBytes: '5 MB',
+  protocolVersion: String(PROTOCOL_VERSION),
+  maxArtifactBytes: `${LIMITS.MAX_ARTIFACT_BYTES / (1024 * 1024)} MB`,
+  maxFrameKiB: `${LIMITS.MAX_FRAME_BYTES / 1024} KiB`,
+  maxParseFailures: String(LIMITS.MAX_PARSE_FAILURES),
+  rawExcerptChars: String(LIMITS.RAW_EXCERPT_CHARS),
 };
 
 const FRAME_TYPE_PREFIX = 'frameType:';

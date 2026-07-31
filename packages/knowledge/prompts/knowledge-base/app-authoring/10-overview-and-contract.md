@@ -56,7 +56,7 @@ Template") — are the ONLY way an app talks to the host:
 - ONE HTML file, at most {{maxArtifactBytes}}. No separate assets, no build step.
 - Copy the bridge runtime and hooks from the template EXACTLY — never rename, rewrite, or
   hand-roll postMessage plumbing.
-- Every frame carries `v: 1`; the bridge adds it (and `instanceId`) for you.
+- Every frame carries `v: {{protocolVersion}}`; the bridge adds it (and `instanceId`) for you.
 - Send FULL state with every request — the agent has no memory of prior turns.
 - Always include a `responseSchema` and always expect a `message` field in replies.
 - Errors are data: an `{ok: false, error}` result must be rendered by the app, never thrown.

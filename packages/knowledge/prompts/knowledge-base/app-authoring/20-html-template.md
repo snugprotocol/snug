@@ -69,14 +69,14 @@ The template below has two zones:
       listeners: new Set(),  // re-render triggers for hooks
 
       post(frame) {
-        window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+        window.parent.postMessage({ v: {{protocolVersion}}, instanceId: this.instanceId, ...frame }, '*');
       },
       notify() { for (const fn of this.listeners) fn(); },
     };
 
     window.addEventListener('message', (event) => {
       const data = event.data;
-      if (!data || data.v !== 1) return;
+      if (!data || data.v !== {{protocolVersion}}) return;
 
       if (data.type === '{{frameType:hostReady}}') {
         SnugBridge.instanceId = data.instanceId;
@@ -104,13 +104,16 @@ The template below has two zones:
         const resolve = SnugBridge.dbPending.get(data.requestId);
         if (!resolve) return;
         SnugBridge.dbPending.delete(data.requestId);
-        resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+        // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+        resolve(data.ok
+          ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+          : { ok: false, error: data.error });
         return;
       }
 
       if (data.type === '{{frameType:hostEvent}}') {
-        if (data.event === 'theme-change' && data.payload && data.payload.theme) {
-          SnugBridge.theme = data.payload.theme;
+        if (data.event === 'theme-change' && data.data && data.data.theme) {
+          SnugBridge.theme = data.data.theme;
           SnugBridge.notify();
         }
         // Unknown host events MUST be ignored (the protocol is additive).
@@ -151,6 +154,7 @@ The template below has two zones:
       }, []);
 
       const sendMessage = useCallback((action, payload, opts) => {
+        if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
         const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
         inFlight.current += 1;
         setIsWaiting(true);
@@ -200,8 +204,8 @@ The template below has two zones:
         const hydrate = async () => {
           const result = await snugDbRequest('kvGet', { key });
           if (cancelled) return;
-          if (result.ok && result.data && result.data.value != null) {
-            const stored = result.data.value;
+          if (result.ok && result.value != null) {
+            const stored = result.value;
             const init = initialRef.current;
             // Merge objects with defaults so fields added in newer code are never undefined.
             setState(
@@ -239,12 +243,12 @@ The template below has two zones:
         async exec(sql, params) {
           const result = await snugDbRequest('exec', { sql, params });
           if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
-          return result.data; // { rows, rowsAffected }
+          return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
         },
         async exportDb() {
           const result = await snugDbRequest('export', {});
           if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
-          return result.data.bytesBase64;
+          return result.bytesBase64;
         },
         async importDb(bytesBase64) {
           const result = await snugDbRequest('import', { bytesBase64 });

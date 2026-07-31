@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CDN_ALLOWLIST, FRAME_TYPES, SNUG_APP_REQUEST_TAG } from '@snugprotocol/protocol';
+import {
+  CDN_ALLOWLIST,
+  FRAME_TYPES,
+  LIMITS,
+  PROTOCOL_VERSION,
+  SNUG_APP_REQUEST_TAG,
+} from '@snugprotocol/protocol';
 
 import { APP_BUILDER_TOOL_NAME, renderPrompt } from '../index.js';
 
@@ -23,8 +29,28 @@ describe('renderPrompt', () => {
     expect(renderPrompt('{{cdnAllowlist}}')).toBe(CDN_ALLOWLIST.join(', '));
   });
 
-  it('injects {{maxArtifactBytes}} as the human-readable 5 MB', () => {
+  it('injects {{maxArtifactBytes}} derived from LIMITS.MAX_ARTIFACT_BYTES', () => {
+    expect(renderPrompt('max {{maxArtifactBytes}}')).toBe(
+      `max ${LIMITS.MAX_ARTIFACT_BYTES / (1024 * 1024)} MB`,
+    );
     expect(renderPrompt('max {{maxArtifactBytes}}')).toBe('max 5 MB');
+  });
+
+  it('injects {{protocolVersion}} from PROTOCOL_VERSION', () => {
+    expect(renderPrompt('v: {{protocolVersion}}')).toBe(`v: ${String(PROTOCOL_VERSION)}`);
+  });
+
+  it('injects {{maxFrameKiB}} derived from LIMITS.MAX_FRAME_BYTES', () => {
+    expect(renderPrompt('{{maxFrameKiB}}')).toBe(`${LIMITS.MAX_FRAME_BYTES / 1024} KiB`);
+    expect(renderPrompt('{{maxFrameKiB}}')).toBe('256 KiB');
+  });
+
+  it('injects {{maxParseFailures}} from LIMITS.MAX_PARSE_FAILURES', () => {
+    expect(renderPrompt('{{maxParseFailures}}')).toBe(String(LIMITS.MAX_PARSE_FAILURES));
+  });
+
+  it('injects {{rawExcerptChars}} from LIMITS.RAW_EXCERPT_CHARS', () => {
+    expect(renderPrompt('{{rawExcerptChars}}')).toBe(String(LIMITS.RAW_EXCERPT_CHARS));
   });
 
   it('injects {{frameType:<key>}} from FRAME_TYPES', () => {

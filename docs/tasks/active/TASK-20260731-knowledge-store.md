@@ -1,6 +1,6 @@
 # TASK-20260731-knowledge-store: `packages/knowledge` — central prompt store, loaders, lint, skill-creator (child 2 of build-hub)
 
-- **Status**: in-progress
+- **Status**: in-review
 - **Owner**: Jeetu (delegated session)
 - **Risk tier**: medium
 - **Branch**: `feat/TASK-20260731-knowledge-store`
@@ -38,3 +38,8 @@ Workstreams (disjoint paths, delegated): (A) KB rewrite → `prompts/knowledge-b
 ### 2026-07-31 — Claude (Fable 5) — session
 - Done: task file; branch; workstreams delegated.
 - Next: integrate, review, merge.
+
+### 2026-07-31 — Claude (Fable 5) — build+review+fixes
+- Done: 3-workstream build workflow (wf_f7b0d3f1-448): KB rewrite (A), vendored skill-creator + builder prompts (B), loader/lint/goldens infra (C). Integration: eval_review.html vendored, NOTICE.md rewritten for codename rule, conventions.md CDN line aligned. Gate-5 review (agent ab1a32293554ab605) found 9 findings incl. 3 blockers — KB hook code read db fields under `data` (protocol has them top-level; would have broken persistence in every generated app), theme handler read nonexistent `payload`, KB summary never injected (regex + assembly bugs). All fixed (agent a74f7ab8ac908da21) + kb-protocol-sync regression test + {{protocolVersion}}/limit placeholders derived from LIMITS. 55 tests green; root suite green.
+- State: merging. KB≡SDK sync contract recorded for child 4 (hook code in 20-html-template.md is the source the SDK must match).
+- Next: child 3 (runner-sandbox).

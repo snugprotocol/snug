@@ -58,6 +58,13 @@ export function getSystemLayer(name: SystemLayerName): string {
 
 const KB_PREFIX = 'knowledge-base/app-authoring/';
 
+/**
+ * The KB summary file (00-summary.md). Injected into the host system prompt via
+ * getKnowledgeSummary(); EXCLUDED from getKnowledgeBase() and therefore from the
+ * search corpus — it duplicates KB content and would pollute retrieval.
+ */
+const KB_SUMMARY_RE = /(^|\/)00-summary\.md$/;
+
 export interface KnowledgeSection {
   /** Posix path relative to prompts/. */
   file: string;
@@ -68,7 +75,7 @@ export interface KnowledgeSection {
 }
 
 function knowledgeFilePaths(): string[] {
-  return storePaths(KB_PREFIX).filter((p) => p.endsWith('.md'));
+  return storePaths(KB_PREFIX).filter((p) => p.endsWith('.md') && !KB_SUMMARY_RE.test(p));
 }
 
 /** Ordered (by filename) rendered KB sections. */
@@ -80,24 +87,19 @@ export function getKnowledgeBase(): KnowledgeSection[] {
 }
 
 /**
- * Compact KB summary for system-prompt injection alongside a section-search tool.
- * If the KB ships a dedicated summary/overview file (00-*summary*.md / 00-*overview*.md),
- * that rendered file wins; otherwise a deterministic section map (file + heading tree)
- * is generated so the model knows what it can search for.
+ * Compact KB summary (00-summary.md, rendered) for system-prompt injection directly
+ * beneath system/30-app-builder-summary.md. Not part of getKnowledgeBase() — see
+ * KB_SUMMARY_RE. Missing file is a build error, never a silent fallback.
  */
 export function getKnowledgeSummary(): string {
-  const authored = knowledgeFilePaths().find((p) =>
-    /\/00-[^/]*(summary|overview|index)[^/]*\.md$/.test(p),
-  );
-  if (authored !== undefined) return renderedFile(authored);
-
-  const lines: string[] = ['# App-authoring knowledge base — section map', ''];
-  for (const section of getKnowledgeBase()) {
-    lines.push(`## ${section.file}`, '');
-    for (const heading of section.headingTree) lines.push(`- ${heading}`);
-    lines.push('');
+  const file = storePaths(KB_PREFIX).find((p) => KB_SUMMARY_RE.test(p));
+  if (file === undefined) {
+    throw new Error(
+      `Knowledge summary "${KB_PREFIX}00-summary.md" is not in the generated store — ` +
+        'it is required for the app-builder system prompt. Regenerate with `pnpm gen:content`.',
+    );
   }
-  return `${lines.join('\n').trimEnd()}\n`;
+  return renderedFile(file);
 }
 
 // ---------------------------------------------------------------------------

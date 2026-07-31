@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildHostSystemPrompt,
   buildSkillBuilderPrompt,
+  getKnowledgeSummary,
   getSkillBuilderPreamble,
   getSkillCreatorFile,
   getSkillMode,
@@ -40,6 +41,19 @@ describe('buildHostSystemPrompt gating matrix', () => {
       expect(prompt.includes(getSystemLayer('app-builder-summary'))).toBe(combo.appBuilder);
       expect(prompt.includes(getSystemLayer('app-response-format'))).toBe(combo.appBuilder);
     }
+  });
+
+  it('appends the KB summary directly beneath the 30-app-builder-summary layer', () => {
+    const summary = getKnowledgeSummary();
+    const prompt = buildHostSystemPrompt({ appBuilder: true, artifacts: false });
+    const summaryLayerAt = prompt.indexOf(getSystemLayer('app-builder-summary').trimEnd());
+    const kbSummaryAt = prompt.indexOf(summary);
+    const responseFormatAt = prompt.indexOf(getSystemLayer('app-response-format'));
+    expect(summaryLayerAt).toBeGreaterThanOrEqual(0);
+    expect(kbSummaryAt).toBeGreaterThan(summaryLayerAt); // "summary below" is literally true
+    expect(responseFormatAt).toBeGreaterThan(kbSummaryAt); // before 40-response-format
+    // Gated with the app-builder layers: absent when appBuilder is off.
+    expect(buildHostSystemPrompt({ appBuilder: false, artifacts: true })).not.toContain(summary);
   });
 });
 

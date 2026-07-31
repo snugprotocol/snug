@@ -9,7 +9,7 @@
 | In-app hooks (`useAgentBridge`, `useAppDB`, `usePersistedState`) | `packages/sdk/src` ⭕ | `packages/sdk` |
 | Per-app DB (sql.js + OPFS, .sqlite export) | `packages/db/src` ⭕ | `packages/db` |
 | Credential broker (v1.1) | `packages/auth/src` ⭕ | `packages/auth` |
-| LLM app-authoring knowledge base | `packages/knowledge/src` ⭕ | `packages/knowledge` |
+| Central prompt store (ADR-0004: system/KB/tools/skills/templates/ui layers) + typed loaders, assembly, search, centralization lint | `packages/knowledge/prompts` + `packages/knowledge/src` ✅ | `packages/knowledge` vitest (55) |
 | Provider adapters (anthropic/openai/mock) | `packages/adapters/src` ⭕ | `packages/adapters` |
 | Reference backend (/invoke, artifact store) | `apps/server/src` ⭕ | `apps/server` |
 | Playground (chat → build → run) | `apps/playground/src` ⭕ | `apps/playground` |

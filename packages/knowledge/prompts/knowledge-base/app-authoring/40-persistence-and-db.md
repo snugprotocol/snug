@@ -48,7 +48,7 @@ Rules:
 - The initial value must be COMPLETE (every field present) and JSON-serializable.
 - One key per logical document; use a stable, app-specific key like `'chess-state'`.
 - Keep it small — this state also rides inside every `sendMessage` request, and frames cap
-  at 256 KiB. Big or growing data belongs in the SQL tier.
+  at {{maxFrameKiB}}. Big or growing data belongs in the SQL tier.
 
 ## useAppDB — SQL Tier
 
@@ -68,13 +68,15 @@ await db.exec(`CREATE TABLE IF NOT EXISTS workouts (
 await db.exec('INSERT INTO workouts (done_at, exercise, reps, weight_kg) VALUES (?, ?, ?, ?)',
   [new Date().toISOString(), 'squat', 8, 80]);
 
-// Reads:
-const { rows } = await db.exec(
+// Reads — rows are POSITIONAL arrays; columns carries the labels in the same order:
+const { rows, columns } = await db.exec(
   'SELECT exercise, SUM(reps) AS total FROM workouts GROUP BY exercise ORDER BY total DESC');
+// rows[0][0] is the first row's `exercise`, rows[0][1] its `total`.
 ```
 
-- `exec(sql, params?)` resolves `{rows, rowsAffected}`; it THROWS on failure (unlike
-  `sendMessage`), so wrap calls in try/catch and render the failure.
+- `exec(sql, params?)` resolves `{rows: unknown[][], columns: string[]}` — `rows` is an
+  array of positional value arrays (NOT objects), `columns` the matching column names; it
+  THROWS on failure (unlike `sendMessage`), so wrap calls in try/catch and render the failure.
 - `exportDb()` resolves a base64 string of the whole database — offer it as a backup
   download. `importDb(bytesBase64)` restores one.
 
@@ -101,11 +103,16 @@ const result = await sendMessage('analyze', { question: userQuestion }, {
 });
 if (result.ok) {
   try {
-    const { rows } = await db.exec(result.data.sql);
-    renderResults(rows, result.data.message);
+    const { rows, columns } = await db.exec(result.data.sql);
+    // rows are positional — use columns for the header labels when rendering.
+    renderTable(columns, rows, result.data.message);
   } catch (e) {
     renderError('That query failed: ' + e.message); // agent SQL is untrusted input — guard it
   }
+}
+
+function renderTable(columns, rows, message) {
+  // e.g. a <table>: <th> per entry in columns, then a <td> per cell in each positional row.
 }
 ```
 

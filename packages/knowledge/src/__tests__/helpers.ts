@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   getKnowledgeBase,
+  getKnowledgeSummary,
   getSkillBuilderPreamble,
   getSystemLayer,
   getToolPrompt,
@@ -82,6 +83,8 @@ export function renderedStore(): RenderedStoreEntry[] {
   const entries: RenderedStoreEntry[] = [];
   for (const [name, file] of systemLayers) entries.push({ file, text: getSystemLayer(name) });
   for (const section of getKnowledgeBase()) entries.push({ file: section.file, text: section.text });
+  // 00-summary.md is excluded from getKnowledgeBase() (search corpus) but still rendered.
+  entries.push({ file: 'knowledge-base/app-authoring/00-summary.md', text: getKnowledgeSummary() });
   for (const name of toolNames) entries.push({ file: `tools/${name}.md`, text: getToolPrompt(name) });
   entries.push({ file: 'ui/build-app-prompt.md', text: getUiPrompt('build-app-prompt') });
   entries.push({ file: 'skills/builder-preamble.md', text: getSkillBuilderPreamble() });

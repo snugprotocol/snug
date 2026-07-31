@@ -1,6 +1,20 @@
 // AC-3: centralization lint — no LLM-bound prompt text outside the store.
 // Heuristic (per ADR-0004): template literals > 400 chars carrying prompt markers in
 // packages/*/src and apps/*/src, excluding the knowledge package and test files.
+//
+// KNOWN FALSE-NEGATIVE SURFACE (accepted per the Gate-5 review; this lint is a tripwire,
+// not a proof — ADR-0004 remains the normative rule). Prompt text escapes this heuristic
+// when it is:
+//   - built by string CONCATENATION or from many short literals (each piece stays under
+//     MAX_LITERAL_CHARS, or the markers land in a different piece than the length);
+//   - read at RUNTIME from .md/.txt/JSON files outside prompts/ (the lint only scans
+//     code literals, not data files or fs reads);
+//   - located OUTSIDE packages/*/src and apps/*/src (scripts/, tools/, root-level code,
+//     nested src dirs not directly under a workspace package);
+//   - phrased without any PROMPT_MARKER hit ("You are|MUST respond|CRITICAL|system
+//     prompt") — plenty of real prompts contain none of these;
+//   - inside nested ${`...`} template interpolation, which the regex cannot pair.
+// Reviewers should still ask "is this string LLM-bound?" for any sizable text literal.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';

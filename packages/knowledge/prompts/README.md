@@ -17,6 +17,8 @@ prompts/
 │   └── 40-app-response-format.md    ← iff app-builder capability
 ├── knowledge-base/
 │   └── app-authoring/               ← the app-builder KB, section-searchable
+│       ├── 00-summary.md            ← ~600-char blurb injected into the system prompt; NOT part
+│       │                               of the searchable KB/search corpus (it duplicates content)
 │       ├── 10-overview-and-contract.md
 │       ├── 20-html-template.md      ← mandatory skeleton + copy-exactly SDK hooks
 │       ├── 30-bridge-protocol.md
@@ -24,8 +26,7 @@ prompts/
 │       ├── 50-app-catalog.md        ← app types + worked chess example
 │       ├── 60-design-quality.md
 │       ├── 70-defensive-coding.md
-│       ├── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)
-│       └── summary.md               ← ~600-char blurb injected into the system prompt
+│       └── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)
 ├── tools/                           ← tool + parameter descriptions
 │   ├── app-builder.md
 │   └── artifact-write.md
@@ -45,7 +46,7 @@ prompts/
 | Layer | Reaches the LLM as | Typed loader |
 |---|---|---|
 | `system` | Blocks of the host system prompt, in numeric order, capability-gated | `buildHostSystemPrompt({appBuilder, artifacts})` |
-| `knowledge-base` | Tool results from `{{appBuilderToolName}}`; `summary.md` inline in the system prompt | `searchKnowledge(query)` / summary export |
+| `knowledge-base` | Tool results from `{{appBuilderToolName}}`; `00-summary.md` inline in the system prompt (excluded from search) | `searchKnowledge(query)` / `getKnowledgeSummary()` |
 | `tool` | Tool + parameter descriptions in the request's tool list | per-tool exports |
 | `skill` | Skill-builder prompts and the vendored skill-creator | `buildSkillBuilderPrompt(mode, ctx?)` |
 | `template` | Tenant-rendered blocks (runtime data filled by the host) | template export + runtime render |
@@ -55,8 +56,10 @@ prompts/
 
 1. `system/10-host-identity.md` — always.
 2. `system/20-capability-file-creation.md` — iff artifacts enabled.
-3. `system/30-app-builder-summary.md` + `knowledge-base/app-authoring/summary.md`
-   (appended directly below) — iff app-builder enabled.
+3. `system/30-app-builder-summary.md` + `knowledge-base/app-authoring/00-summary.md`
+   (appended directly below, same block) — iff app-builder enabled. `00-summary.md` is
+   served ONLY here: it is excluded from `getKnowledgeBase()` and the `searchKnowledge`
+   corpus because it duplicates KB content and would pollute retrieval.
 4. `system/40-app-response-format.md` — iff app-builder enabled.
 5. Tenant blocks rendered from `templates/` (e.g. user identity) — runtime, optional.
 
@@ -82,7 +85,11 @@ tests assert sources contain placeholders rather than literals:
 | `{{envelopeTag}}` | the app-request chat-envelope tag (`SNUG_APP_REQUEST_TAG`) |
 | `{{appBuilderToolName}}` | the app-builder tool name (underscore form — MCP hosts reject dots) |
 | `{{cdnAllowlist}}` | the fixed `CDN_ALLOWLIST`, joined |
-| `{{maxArtifactBytes}}` | the artifact size cap, human-readable (5 MiB) |
+| `{{protocolVersion}}` | `PROTOCOL_VERSION` (the wire `v` value) |
+| `{{maxArtifactBytes}}` | `LIMITS.MAX_ARTIFACT_BYTES`, human-readable (e.g. `5 MB`) |
+| `{{maxFrameKiB}}` | `LIMITS.MAX_FRAME_BYTES`, human-readable (e.g. `256 KiB`) |
+| `{{maxParseFailures}}` | `LIMITS.MAX_PARSE_FAILURES` |
+| `{{rawExcerptChars}}` | `LIMITS.RAW_EXCERPT_CHARS` |
 | `{{frameType:<key>}}` | a `FRAME_TYPES` literal, e.g. `{{frameType:appMessage}}` |
 
 **Runtime placeholders are triple-brace.** `{{{userName}}}`-style placeholders (see

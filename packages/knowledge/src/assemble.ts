@@ -2,6 +2,7 @@
 // Golden snapshot tests lock both assemblies so any edit shows its blast radius.
 
 import {
+  getKnowledgeSummary,
   getSkillBuilderPreamble,
   getSkillCreatorFile,
   getSkillMode,
@@ -20,13 +21,18 @@ export interface HostSystemPromptOptions {
 /**
  * Assemble the host system prompt: system layers joined in numeric file order.
  * 10-host-identity is unconditional; 20 gates on `artifacts`; 30 + 40 gate on
- * `appBuilder` (ancestor triple-gate pattern, simplified to config).
+ * `appBuilder` (ancestor triple-gate pattern, simplified to config). The KB summary
+ * (knowledge-base/app-authoring/00-summary.md) is appended DIRECTLY beneath the
+ * 30-app-builder-summary layer so that layer's "summary below" sentence is true.
  */
 export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
   const layers: string[] = [getSystemLayer('host-identity')];
   if (opts.artifacts) layers.push(getSystemLayer('capability-file-creation'));
   if (opts.appBuilder) {
-    layers.push(getSystemLayer('app-builder-summary'), getSystemLayer('app-response-format'));
+    layers.push(
+      `${getSystemLayer('app-builder-summary').trimEnd()}\n\n${getKnowledgeSummary()}`,
+      getSystemLayer('app-response-format'),
+    );
   }
   return layers.join(SEPARATOR);
 }

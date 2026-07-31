@@ -9,7 +9,7 @@ source: rewritten for Snug v0.1 from ancestor KBs (internal/05); normative shape
 
 ## Frames at a Glance
 
-Every frame is a `postMessage` object carrying `v: 1` and (once known) `instanceId`. The
+Every frame is a `postMessage` object carrying `v: {{protocolVersion}}` and (once known) `instanceId`. The
 template's bridge runtime handles all of this — this section is the mental model, not code
 you write yourself.
 
@@ -18,7 +18,7 @@ you write yourself.
 | `{{frameType:announce}}` | app → host | Self-describing metadata on mount (appId, displayName, description, iconEmoji, iconColor) |
 | `{{frameType:hostReady}}` | host → app | Ack: delivers `instanceId`, `theme`, `capabilities`, supported protocol versions |
 | `{{frameType:appMessage}}` | app → host | An agent request: `requestId`, `action`, `payload?`, `state?`, `responseSchema?` |
-| `{{frameType:appCancel}}` | app → host | Abort an in-flight `requestId` |
+| `{{frameType:appCancel}}` | app → host | Abort an in-flight `requestId` — reserved: the host/runner honors it; a convenience canceller lands in the SDK (until then an app may hand-roll posting this frame) |
 | `{{frameType:appResponse}}` | host → app | Streaming, final, or error reply (see Terminal Frame Rule) |
 | `{{frameType:dbRequest}}` / `{{frameType:dbResponse}}` | app ↔ host | Host-brokered storage: `op` ∈ `exec`, `export`, `import`, `kvGet`, `kvSet` |
 | `{{frameType:hostEvent}}` / `{{frameType:appEvent}}` | either | Open additive channel (`theme-change`, `visibility`, `resize`, …) — unknown events are ignored |
@@ -73,7 +73,7 @@ Known `error.code` values:
 
 | Code | Meaning | App behavior |
 |---|---|---|
-| `PARSE_FAILED` | The agent's reply was not valid JSON | Show `error.rawExcerpt` (up to 200 chars of the raw reply) and `error.attemptsRemaining`; offer retry while attempts remain |
+| `PARSE_FAILED` | The agent's reply was not valid JSON | Show `error.rawExcerpt` (up to {{rawExcerptChars}} chars of the raw reply) and `error.attemptsRemaining`; offer retry while attempts remain |
 | `CANCELLED` | The request was cancelled ({{frameType:appCancel}}) | Discard silently or note it |
 | `SUPERSEDED` | A newer announce invalidated this request | Discard; the new instance owns the session |
 | `NETWORK_ERROR` | Host could not reach its agent | Offer retry |
@@ -85,14 +85,14 @@ the `retryable` flag.
 
 ## PARSE_FAILED Budget
 
-The host allows 3 consecutive parse failures per instance. Each `PARSE_FAILED` error
+The host allows {{maxParseFailures}} consecutive parse failures per instance. Each `PARSE_FAILED` error
 carries `attemptsRemaining`; when the budget is exhausted the HOST takes over and shows the
 user a reset affordance — the app does not need to build one. The app's job is only to
 display what happened (use `rawExcerpt`) and not to auto-retry in a loop.
 
 ## Events Channel
 
-`{{frameType:hostEvent}}` frames carry `{event, payload}` — e.g. `theme-change` (the bridge
+`{{frameType:hostEvent}}` frames carry `{event, data}` — e.g. `theme-change` (the bridge
 updates `theme` automatically), `visibility`, `resize`. Apps may post `{{frameType:appEvent}}`
 frames the same way. Both sides MUST ignore events they do not recognize; the channel is
 additive by design. Never invent frame types — the `snug:` type prefix is reserved for the
@@ -100,7 +100,7 @@ protocol.
 
 ## Limits
 
-- Frames: 256 KiB max — keep `state` lean (see "Persistence and the App Database" for what
+- Frames: {{maxFrameKiB}} max — keep `state` lean (see "Persistence and the App Database" for what
   belongs in state vs the database).
 - Announce strings: displayName 80 chars, description 400 chars.
 - `action`: 128 chars max.
