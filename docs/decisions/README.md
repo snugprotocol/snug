@@ -22,3 +22,6 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0001 — Adopt the agentic engineering process](0001-adopt-agentic-engineering-process.md)
 - [0002 — Two-repo topology: snug (master) drives spec (downstream)](0002-snug-master-spec-downstream.md)
 - [0003 — v1 scope and hard security constraints inherited from prior production systems](0003-v1-scope-and-security-constraints.md)
+- [0004 — Central layered prompt store](0004-central-layered-prompt-store.md)
+- [0005 — Playground is a Vite + React SPA](0005-playground-vite-spa.md)
+- [0006 — Runner CSP allows 'unsafe-eval' + a fixed CDN allowlist](0006-runner-csp-unsafe-eval-cdn.md)

@@ -13,8 +13,10 @@ iframe and think through the **host's** agent at runtime, over two coupled contr
 ## Normative rules
 
 - **R1 Versioning.** Every frame carries `v: 1`; the chat envelope carries `snug: 1`.
-  Unsupported versions are rejected with `UNSUPPORTED_VERSION` (never answered on the wire
-  when no `requestId` is recoverable). `snug:host-ready.protocolVersions` advertises support.
+  Unsupported versions are rejected with `UNSUPPORTED_VERSION`. Parse failures surface a
+  `requestId` recovered from the raw frame when it carried a plausible string id; hosts
+  answer `UNSUPPORTED_VERSION`/`MALFORMED` on the wire only in that case (never otherwise).
+  `snug:host-ready.protocolVersions` advertises support.
 - **R2 Additivity.** A frame with a valid `v` but unrecognized `snug:*` type MUST be silently
   ignored. Unknown fields on known frames MUST be ignored. The `snug:` type prefix and the
   `event` namespaces are reserved for the spec.
@@ -32,7 +34,9 @@ iframe and think through the **host's** agent at runtime, over two coupled contr
   `SUPERSEDED`, `UNSUPPORTED_VERSION`, `CONSENT_REQUIRED` (reserved), `AUTH_REQUIRED`
   (reserved for the v1.1 credential broker), `HOST_ERROR`. Receivers treat unknown codes per
   `retryable` and render as `HOST_ERROR`.
-- **R6 Limits.** Frames ≤ 256 KiB; artifacts ≤ 5 MiB; `rawExcerpt` ≤ 200 chars; announce
+- **R6 Limits.** Frames ≤ 256 KiB, except `db-request`/`db-response` ≤ 8 MiB (their own
+  size class, so a base64-encoded 5 MiB artifact round-trips through the db bridge);
+  artifacts ≤ 5 MiB; `rawExcerpt` ≤ 200 chars; announce
   strings capped (displayName 80, description 400). Parse-failure budget: 3 consecutive,
   then the host requires an explicit user reset. Thread-conflict backoff: 100/250/500 ms.
 - **Security (C1/C2).** Credentials never enter the iframe, the LLM payload, or a publisher.
