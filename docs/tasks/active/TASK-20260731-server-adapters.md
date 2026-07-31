@@ -41,3 +41,9 @@ adapters first (interfaces → mock → http-transport → anthropic/openai + fi
 
 ### 2026-07-31 — Claude (Fable 5) — session
 - Done: task file. Next: implement (delegated), review, merge.
+
+### 2026-07-31 — Claude (Fable 5) — delegated implementation session
+- Done: `packages/adapters` (types/sse/mock/anthropic/openai/http-transport/agent-turn, 56 tests, fixture-only) and `apps/server` (config/stores/tools/rate-limit/routes/app/server/smoke, 25 tests). All ACs covered; root `pnpm test` 18/18 tasks green (knowledge centralization lint re-verified uncached); `pnpm --filter server smoke` → SMOKE PASS.
+- Decisions of note: adapters carry NO runtime runner dep — `createHttpTransport` is structurally typed, with a compile-time conformance check against `AgentTransport` (runner as devDep) in the transport test; server imports `RUNNER_CSP` via deep path `@snugprotocol/runner/dist/csp.js` to avoid pulling the runner's React surface at runtime; provider HTTP errors map to `HOST_ERROR` with `retryable = 429||>=500` (R5-compatible); new typed server codes: `CREDENTIAL_REJECTED`, `RATE_LIMITED`, `BAD_REQUEST`, `NOT_FOUND` (unknown codes render as HOST_ERROR per R5).
+- Next: AI review, merge; child 6 consumes the SSE contract documented in `routes/invoke.ts` header.
+- Gate-5 fixes applied (tests first): (1) BLOCKER — C1 envelope scan now covers the ENTIRE parsed envelope (a credential in `responseSchema` previously reached the LLM on the app path); negative test added. (2) Explicit `bodyLimit` in `buildApp` tied to `MAX_BODY_BYTES` (1 MiB) + 413 test. (3) Rate limiter sweeps idle (fully refilled) buckets on access + `size()` seam and tests. (4) Test asserting CORS access-control headers survive the hijacked SSE response. Server now 31 tests / 6 files; adapters unchanged at 56; smoke re-run PASS.

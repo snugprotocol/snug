@@ -10,8 +10,8 @@
 | Per-app DB (sql.js + OPFS/IDB/memory, .sqlite export/import, kv, DbDriver) | `packages/db/src` ✅ | `packages/db` vitest (37) |
 | Credential broker (v1.1) | `packages/auth/src` ⭕ | `packages/auth` |
 | Central prompt store (ADR-0004: system/KB/tools/skills/templates/ui layers) + typed loaders, assembly, search, centralization lint | `packages/knowledge/prompts` + `packages/knowledge/src` ✅ | `packages/knowledge` vitest (55) |
-| Provider adapters (anthropic/openai/mock) | `packages/adapters/src` ⭕ | `packages/adapters` |
-| Reference backend (/invoke, artifact store) | `apps/server/src` ⭕ | `apps/server` |
+| Provider adapters (anthropic/openai/mock), runAgentTurn choke point, http SSE transport | `packages/adapters/src` ✅ | `packages/adapters` vitest (56) |
+| Reference backend (/invoke SSE, C1 boundary, artifact store w/ header CSP, thread lock) | `apps/server/src` ✅ | `apps/server` vitest (31) + smoke |
 | Playground (chat → build → run) | `apps/playground/src` ⭕ | `apps/playground` |
 | Example apps | `examples/{chess,flying-pig,habit-tracker}` ⭕ | n/a (curated artifacts) |
 | Spec publication process | `docs/engineering/SPEC_SYNC.md` + `docs/spec-changelog.md` | future `scripts/check-spec-sync` |
