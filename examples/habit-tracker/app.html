@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>kept — a habit tracker you actually own</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f8f1e5; --fg: #2d2115; --muted: #93816a;
+      --card: #fffbf2; --border: #e7d9c2;
+      --accent: #d9822b; --accent-deep: #b4661a; --accent-soft: #f6e3c8;
+      --ok: #6f9b4e; --danger: #b8432f; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      --shadow: 0 10px 30px rgba(72, 46, 14, 0.12);
+    }
+    :root[data-theme="dark"] {
+      --bg: #16110d; --fg: #f1e7d6; --muted: #a48f74; --border: #382b1c;
+      --card: #211912; --accent: #e8963c; --accent-deep: #c97b23; --accent-soft: #3a2a15;
+      --ok: #8fb968; --danger: #e06a52;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 20px 14px 44px; }
+    h1 {
+      font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+      font-size: clamp(1.9rem, 5vw, 2.5rem); font-weight: 600; margin: 0;
+    }
+    h1 em { color: var(--accent); font-style: normal; }
+    .sub { color: var(--muted); margin: 4px 0 20px; font-size: 0.95rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+      padding: 16px; box-shadow: var(--shadow); margin-bottom: 16px;
+    }
+    .card h2 { margin: 0 0 12px; font-size: 0.8rem; text-transform: lowercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+    .habit-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .habit-row:last-child { border-bottom: none; }
+    .habit-emoji { font-size: 1.5rem; width: 40px; text-align: center; flex: none; }
+    .habit-name { flex: 1; min-width: 0; }
+    .habit-name .n { font-weight: 600; font-size: 1.02rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .streak { font-size: 0.8rem; color: var(--muted); }
+    .streak b { color: var(--accent); }
+    .check {
+      flex: none; width: 48px; height: 48px; border-radius: 14px;
+      border: 2px solid var(--border); background: var(--bg); font-size: 1.3rem;
+      transition: background 180ms ease-out, border-color 180ms ease-out, transform 160ms ease-out;
+    }
+    .check:active { transform: scale(0.94); }
+    .check.done { background: var(--accent); border-color: var(--accent-deep); }
+    .retire { flex: none; border: none; background: none; color: var(--muted); font-size: 0.78rem; min-width: 44px; }
+    .retire.arm { color: var(--danger); font-weight: 700; }
+    .grid { overflow-x: auto; }
+    .grid table { border-collapse: separate; border-spacing: 4px; width: 100%; }
+    .grid th { font-size: 0.7rem; color: var(--muted); font-weight: 600; text-transform: lowercase; }
+    .grid th.today { color: var(--accent); }
+    .grid td.name { font-size: 0.82rem; color: var(--muted); text-align: left; white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis; padding-right: 6px; }
+    .cell { width: 34px; height: 34px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border); text-align: center; font-size: 0.95rem; line-height: 34px; }
+    .cell.hit { background: var(--accent-soft); border-color: var(--accent); }
+    .addrow { display: flex; gap: 8px; flex-wrap: wrap; }
+    .addrow input[type="text"] {
+      flex: 1; min-width: 160px; background: var(--bg); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: 1rem;
+    }
+    .addrow input:focus, .ask input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+    .emojis { display: flex; gap: 4px; flex-wrap: wrap; }
+    .emojis button { border: 2px solid transparent; background: none; border-radius: 12px; font-size: 1.25rem; transition: border-color 150ms ease-out; }
+    .emojis button.on { border-color: var(--accent); background: var(--accent-soft); }
+    .btn {
+      border: 1px solid var(--accent); background: var(--accent); color: #fff7ec;
+      border-radius: 12px; padding: 10px 20px; font-size: 0.95rem; font-weight: 700;
+      transition: transform 160ms ease-out, filter 160ms ease-out;
+    }
+    .btn:active { transform: scale(0.97); } .btn:hover { filter: brightness(1.07); }
+    .btn[disabled] { opacity: 0.55; cursor: default; }
+    .ask { display: flex; gap: 8px; }
+    .ask input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: 1rem; }
+    .answer { margin-top: 12px; }
+    .answer .say { font-family: Georgia, 'Iowan Old Style', serif; font-style: italic; line-height: 1.5; margin: 0 0 8px; }
+    .sqlchip {
+      font-family: var(--mono); font-size: 0.75rem; color: var(--muted);
+      background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 10px; overflow-x: auto; white-space: pre; margin-bottom: 10px;
+    }
+    .result { overflow-x: auto; }
+    .result table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+    .result th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 10px; border-bottom: 2px solid var(--border); font-family: var(--mono); font-size: 0.75rem; }
+    .result td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+    .warn { color: var(--danger); font-size: 0.88rem; margin: 8px 0 0; }
+    .own {
+      display: flex; gap: 12px; align-items: flex-start;
+      background: linear-gradient(135deg, var(--accent-soft), var(--card));
+    }
+    .own .arrow { font-size: 1.5rem; flex: none; }
+    .own p { margin: 0; font-size: 0.92rem; line-height: 1.5; }
+    .own b { color: var(--accent-deep); }
+    .skel { height: 52px; border-radius: 12px; margin-bottom: 8px; border: 1px solid var(--border);
+      background: linear-gradient(90deg, var(--card) 25%, var(--border) 50%, var(--card) 75%);
+      background-size: 200% 100%; animation: shimmer 1.3s ease-out infinite; }
+    @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+    .empty { color: var(--muted); font-style: italic; font-size: 0.92rem; }
+    .thinking { color: var(--muted); font-style: italic; animation: shimmer-t 1.4s ease-out infinite; }
+    @keyframes shimmer-t { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); font-style: italic; font-family: Georgia, serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    const RESPONSE_SCHEMA = {
+      sql: "string: exactly ONE SQLite SELECT statement (SELECT or WITH … SELECT) answering the user's question over the schema provided in the payload. Read-only — never INSERT/UPDATE/DELETE/DROP.",
+      message: 'string: a one-line, friendly preamble for the result the query will return (ALWAYS include)',
+    };
+
+    // ============================================================
+    // 6. YOUR APP — kept (habit tracker)
+    // ============================================================
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS habits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL DEFAULT '✨',
+        created_at TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS checks (
+        habit_id INTEGER NOT NULL REFERENCES habits(id),
+        day TEXT NOT NULL,
+        PRIMARY KEY (habit_id, day)
+      )`,
+    ];
+    const SCHEMA_FOR_AGENT =
+      "habits(id INTEGER PK, name TEXT, emoji TEXT, created_at TEXT 'YYYY-MM-DD') ; " +
+      "checks(habit_id INTEGER → habits.id, day TEXT 'YYYY-MM-DD', one row per habit per completed day)";
+    const EMOJIS = ['💧', '🏃', '📖', '🧘', '🌱', '✍️', '🎾', '😴'];
+    const DAY_MS = 86400000;
+    const dstr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const daysBack = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d; };
+
+    function streakOf(daySet, today) {
+      // consecutive days ending today (or yesterday, so a streak isn't "broken" before the day is over)
+      let cursor = daySet.has(today) ? 0 : 1;
+      let count = 0;
+      while (daySet.has(dstr(daysBack(cursor + count)))) count += 1;
+      return count;
+    }
+
+    function App() {
+      const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
+        appId: 'kept-habits',
+        displayName: 'kept',
+        description: 'A habit tracker that writes to a real SQLite file you own. Ask the agent about your habits — it answers with SQL that runs on YOUR data.',
+        iconEmoji: '🔥',
+        iconColor: '#d9822b',
+      });
+      const db = useAppDB();
+      const [ready, setReady] = useState(false);      // schema created + first load done
+      const [habits, setHabits] = useState([]);        // [{id, name, emoji, days:Set}]
+      const [name, setName] = useState('');
+      const [emoji, setEmoji] = useState(EMOJIS[0]);
+      const [armed, setArmed] = useState(null);        // two-tap retire (never window.confirm)
+      const [question, setQuestion] = useState('');
+      const [answer, setAnswer] = useState(null);      // {message, sql, columns, rows} | {warn}
+      const [dbErr, setDbErr] = useState(null);
+      const today = dstr(new Date());
+      const week = [...Array(7)].map((_, i) => daysBack(6 - i));
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const reload = async () => {
+        const h = await db.exec('SELECT id, name, emoji FROM habits ORDER BY id', []);
+        const cutoff = dstr(daysBack(90));
+        const c = await db.exec('SELECT habit_id, day FROM checks WHERE day >= ?', [cutoff]);
+        const byHabit = new Map();
+        for (const [habitId, day] of c.rows) {
+          if (!byHabit.has(habitId)) byHabit.set(habitId, new Set());
+          byHabit.get(habitId).add(day);
+        }
+        setHabits(h.rows.map(([id, nm, em]) => ({ id, name: nm, emoji: em, days: byHabit.get(id) || new Set() })));
+      };
+
+      useEffect(() => {
+        if (!isReady) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []); // DDL on first run — idempotent
+            if (!cancelled) { await reload(); setReady(true); }
+          } catch (e) {
+            if (!cancelled) setDbErr(String(e && e.message || e));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isReady]);
+
+      const addHabit = async (e) => {
+        e.preventDefault();
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        try {
+          await db.exec('INSERT INTO habits (name, emoji, created_at) VALUES (?, ?, ?)', [trimmed, emoji, today]);
+          setName('');
+          await reload();
+        } catch (err) { setDbErr(String(err && err.message || err)); }
+      };
+
+      const toggleToday = async (h) => {
+        try {
+          if (h.days.has(today)) await db.exec('DELETE FROM checks WHERE habit_id = ? AND day = ?', [h.id, today]);
+          else await db.exec('INSERT OR IGNORE INTO checks (habit_id, day) VALUES (?, ?)', [h.id, today]);
+          await reload();
+        } catch (err) { setDbErr(String(err && err.message || err)); }
+      };
+
+      const retire = async (h) => {
+        if (armed !== h.id) { setArmed(h.id); return; } // first tap arms, second confirms
+        setArmed(null);
+        try {
+          await db.exec('DELETE FROM checks WHERE habit_id = ?', [h.id]);
+          await db.exec('DELETE FROM habits WHERE id = ?', [h.id]);
+          await reload();
+        } catch (err) { setDbErr(String(err && err.message || err)); }
+      };
+
+      const ask = async (e) => {
+        e.preventDefault();
+        const q = question.trim();
+        if (!q || isWaiting) return;
+        setAnswer(null);
+        const result = await sendMessage('ask_about_habits', {
+          question: q, schema: SCHEMA_FOR_AGENT, today,
+        }, {
+          state: { habitCount: habits.length, today },
+          responseSchema: RESPONSE_SCHEMA,
+        });
+        if (!result.ok) {
+          setAnswer({ warn: `the agent didn't answer (${(result.error && result.error.message) || 'unknown error'}). try again.` });
+          return;
+        }
+        const d = result.data && typeof result.data === 'object' ? result.data : {};
+        const sql = typeof d.sql === 'string' ? d.sql.trim().replace(/;\s*$/, '') : '';
+        if (!/^\s*(select|with)\b/i.test(sql)) {
+          setAnswer({ warn: 'the agent sent something that isn’t a SELECT — not running it.', message: d.message });
+          return;
+        }
+        try {
+          const res = await db.exec(sql, []);
+          setAnswer({
+            message: typeof d.message === 'string' ? d.message : 'here’s what your data says.',
+            sql, columns: res.columns || [], rows: res.rows || [],
+          });
+        } catch (err) {
+          setAnswer({ warn: `that query didn’t run: ${String(err && err.message || err)}`, sql });
+        }
+      };
+
+      if (!isReady) return <div className="connecting">opening your file…</div>;
+
+      return (
+        <div className="wrap">
+          <h1><em>kept</em></h1>
+          <p className="sub">small promises, kept daily — stored in a sqlite file that belongs to you.</p>
+
+          <section className="card own">
+            <span className="arrow" aria-hidden="true">⬆︎</span>
+            <p><b>this data is yours.</b> everything below lives in a real <b>.sqlite</b> file — hit
+            {' '}<b>export .sqlite</b> in the bar above to download it and take it anywhere.
+            no account, no lock-in, no export tax.</p>
+          </section>
+
+          <section className="card">
+            <h2>today</h2>
+            {dbErr && <p className="warn">storage hiccup: {dbErr}</p>}
+            {!ready ? (<div><div className="skel" /><div className="skel" /><div className="skel" /></div>)
+              : habits.length === 0 ? <p className="empty">no habits yet — name one below and it exists.</p>
+              : habits.map((h) => {
+                  const done = h.days.has(today);
+                  const s = streakOf(h.days, today);
+                  return (
+                    <div className="habit-row" key={h.id}>
+                      <span className="habit-emoji" aria-hidden="true">{h.emoji}</span>
+                      <div className="habit-name">
+                        <div className="n">{h.name}</div>
+                        <div className="streak">{s > 0 ? <span><b>{s} day{s === 1 ? '' : 's'}</b> and counting</span> : 'starts today'}</div>
+                      </div>
+                      <button className={'retire' + (armed === h.id ? ' arm' : '')} onClick={() => retire(h)}
+                        aria-label={armed === h.id ? 'tap again to remove ' + h.name : 'remove ' + h.name}>
+                        {armed === h.id ? 'sure?' : 'retire'}
+                      </button>
+                      <button className={'check' + (done ? ' done' : '')} onClick={() => toggleToday(h)}
+                        aria-label={(done ? 'uncheck ' : 'check off ') + h.name + ' for today'}>
+                        {done ? '✓' : ''}
+                      </button>
+                    </div>
+                  );
+                })}
+          </section>
+
+          <section className="card">
+            <h2>add a habit</h2>
+            <form className="addrow" onSubmit={addHabit}>
+              <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                placeholder="drink water, read ten pages…" maxLength={60} aria-label="new habit name" />
+              <div className="emojis" role="radiogroup" aria-label="pick an emoji">
+                {EMOJIS.map((em) => (
+                  <button type="button" key={em} className={em === emoji ? 'on' : ''} onClick={() => setEmoji(em)} aria-label={'emoji ' + em}>{em}</button>
+                ))}
+              </div>
+              <button className="btn" type="submit" disabled={!name.trim()}>keep it</button>
+            </form>
+          </section>
+
+          {ready && habits.length > 0 && (
+            <section className="card">
+              <h2>this week</h2>
+              <div className="grid">
+                <table>
+                  <thead>
+                    <tr>
+                      <th></th>
+                      {week.map((d) => {
+                        const ds = dstr(d);
+                        return <th key={ds} className={ds === today ? 'today' : ''}>{'smtwtfs'[d.getDay()]}<br />{d.getDate()}</th>;
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {habits.map((h) => (
+                      <tr key={h.id}>
+                        <td className="name">{h.emoji} {h.name}</td>
+                        {week.map((d) => {
+                          const ds = dstr(d);
+                          return <td key={ds} className={'cell' + (h.days.has(ds) ? ' hit' : '')}>{h.days.has(ds) ? h.emoji : ''}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          <section className="card">
+            <h2>ask about your habits</h2>
+            <form className="ask" onSubmit={ask}>
+              <input type="text" value={question} onChange={(e) => setQuestion(e.target.value)}
+                placeholder="which habit has my longest streak?" aria-label="question about your habits" />
+              <button className="btn" type="submit" disabled={isWaiting || !question.trim()}>{isWaiting ? '…' : 'ask'}</button>
+            </form>
+            <div className="answer" aria-live="polite">
+              {isWaiting && <p className="thinking">the agent is writing sql against your file…</p>}
+              {!isWaiting && answer && answer.warn && <p className="warn">{answer.warn}</p>}
+              {!isWaiting && answer && !answer.warn && (
+                <div>
+                  <p className="say">{answer.message}</p>
+                  <div className="sqlchip">{answer.sql}</div>
+                  {answer.rows.length === 0 ? <p className="empty">the query ran fine — it just found nothing.</p> : (
+                    <div className="result">
+                      <table>
+                        <thead><tr>{answer.columns.map((c, i) => <th key={i}>{c}</th>)}</tr></thead>
+                        <tbody>
+                          {answer.rows.map((row, i) => (
+                            <tr key={i}>{row.map((v, j) => <td key={j}>{v == null ? '—' : String(v)}</td>)}</tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!isWaiting && !answer && <p className="empty">the agent answers with a sql query — you watch it run on your own data.</p>}
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

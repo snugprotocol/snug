@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ember chess</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f6efe3; --fg: #2b2118; --muted: #8a7a67;
+      --card: #fffaf1; --border: #e3d6c2;
+      --accent: #c96f2e; --accent-soft: #f3ddc4;
+      --sq-light: #efe0c0; --sq-dark: #b07a52;
+      --sel: #e8a23c; --danger: #b8432f;
+      --piece-w: #fdf6ea; --piece-b: #241a12;
+      --shadow: 0 10px 30px rgba(60, 36, 12, 0.14);
+    }
+    :root[data-theme="dark"] {
+      --bg: #171310; --fg: #efe6d8; --muted: #a08d76;
+      --card: #211a14; --border: #372b1f;
+      --accent: #e8963c; --accent-soft: #3a2a18;
+      --sq-light: #c9ac7e; --sq-dark: #7a4f33;
+      --sel: #e8a23c; --danger: #e06a52;
+      --piece-w: #f7ecd9; --piece-b: #1a110a;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 20px 14px 40px; }
+    header.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+    h1 {
+      font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+      font-size: clamp(1.9rem, 5vw, 2.6rem); font-weight: 600; letter-spacing: -0.01em;
+      margin: 0; color: var(--fg);
+    }
+    h1 .ember { color: var(--accent); }
+    .tag { color: var(--muted); font-size: 0.95rem; }
+    .status {
+      display: inline-flex; align-items: center; gap: 8px; margin: 10px 0 18px;
+      padding: 6px 14px; border-radius: 999px; background: var(--card);
+      border: 1px solid var(--border); font-size: 0.92rem; color: var(--muted);
+      transition: color 180ms ease-out, border-color 180ms ease-out;
+    }
+    .status.hot { color: var(--accent); border-color: var(--accent); }
+    .status.bad { color: var(--danger); border-color: var(--danger); }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 22px; align-items: start; }
+    @media (max-width: 780px) { .layout { grid-template-columns: 1fr; } }
+    .board-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+      padding: 12px; box-shadow: var(--shadow);
+    }
+    .board {
+      display: grid; grid-template-columns: repeat(8, 1fr);
+      width: 100%; max-width: 520px; margin: 0 auto; aspect-ratio: 1;
+      border-radius: 12px; overflow: hidden; border: 1px solid var(--border);
+    }
+    .sq {
+      min-width: 0; min-height: 0; border: none; padding: 0; position: relative;
+      display: flex; align-items: center; justify-content: center;
+      font-size: clamp(1.5rem, 6.5vw, 2.5rem); line-height: 1;
+      transition: box-shadow 150ms ease-out;
+    }
+    .sq.light { background: var(--sq-light); }
+    .sq.dark { background: var(--sq-dark); }
+    .sq.sel { box-shadow: inset 0 0 0 3px var(--sel); }
+    .sq.last { box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--sel) 55%, transparent); }
+    .sq.check { box-shadow: inset 0 0 0 3px var(--danger); }
+    .sq .dot {
+      position: absolute; width: 26%; height: 26%; border-radius: 50%;
+      background: color-mix(in srgb, var(--sel) 75%, transparent);
+    }
+    .sq .ring {
+      position: absolute; inset: 6%; border-radius: 50%;
+      border: 3px solid color-mix(in srgb, var(--sel) 80%, transparent);
+    }
+    .pc { pointer-events: none; }
+    .pc.w { color: var(--piece-w); text-shadow: 0 1px 2px rgba(0,0,0,0.55); }
+    .pc.b { color: var(--piece-b); text-shadow: 0 1px 1px rgba(255,255,255,0.22); }
+    .coords { display: flex; justify-content: space-between; max-width: 520px; margin: 6px auto 0; padding: 0 6px; }
+    .coords span { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.4em; }
+    .rail { display: flex; flex-direction: column; gap: 14px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 14px; box-shadow: var(--shadow);
+    }
+    .card h2 { margin: 0 0 10px; font-size: 0.8rem; text-transform: lowercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+    .bubble { display: flex; gap: 10px; align-items: flex-start; }
+    .avatar {
+      flex: none; width: 44px; height: 44px; border-radius: 50%;
+      background: var(--accent-soft); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center; font-size: 1.35rem;
+    }
+    .quote {
+      font-family: Georgia, 'Iowan Old Style', serif; font-style: italic;
+      font-size: 1.02rem; line-height: 1.45; margin: 2px 0 0; min-height: 2.4em;
+    }
+    .quote .note { display: block; font-family: system-ui, sans-serif; font-style: normal; font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+    .dots { display: inline-flex; gap: 4px; }
+    .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.1s ease-out infinite; }
+    .dots i:nth-child(2) { animation-delay: 0.18s; } .dots i:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes blink { 0%, 70%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
+    .personas { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip {
+      border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+      border-radius: 999px; padding: 8px 14px; font-size: 0.85rem;
+      transition: border-color 160ms ease-out, background 160ms ease-out, transform 160ms ease-out;
+    }
+    .chip:active { transform: scale(0.97); }
+    .chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); }
+    .hist { display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow-y: auto; }
+    .hist span { font-size: 0.78rem; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; }
+    .hist .empty { border: none; background: none; font-style: italic; }
+    .btn {
+      border: 1px solid var(--accent); background: var(--accent); color: #fff8ef;
+      border-radius: 12px; padding: 10px 18px; font-size: 0.95rem; font-weight: 600;
+      transition: transform 160ms ease-out, filter 160ms ease-out; width: 100%;
+    }
+    .btn:active { transform: scale(0.97); } .btn:hover { filter: brightness(1.07); }
+    .btn.ghost { background: transparent; color: var(--accent); }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); font-style: italic; font-family: Georgia, serif; }
+    @media (max-width: 420px) { /* keep squares ≈44px on a 375px screen */
+      .wrap { padding: 14px 6px 32px; }
+      .board-card { padding: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    const RESPONSE_SCHEMA = {
+      move: { from: "string: square the piece moves from, e.g. 'e7'", to: "string: square it moves to, e.g. 'e5'" },
+      message: 'string: one or two short lines of in-character table talk about the position (ALWAYS include)',
+      gameOver: 'boolean (optional): true only if you believe the game just ended',
+      winner: "string (optional): 'player' | 'ai' | 'draw'",
+    };
+
+    // ============================================================
+    // 6. YOUR APP — ember chess
+    // ============================================================
+    // Compact legal-move generator, deliberately demo-scoped: standard moves,
+    // captures, check / checkmate / stalemate detection, automatic promotion
+    // to queen. NO castling and NO en passant — intentional simplification.
+    const FILES = 'abcdefgh';
+    const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1';
+    const GLYPH = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' };
+    const sqName = (i) => FILES[i % 8] + (8 - Math.floor(i / 8));
+    const sqIndex = (s) => {
+      if (typeof s !== 'string' || s.length !== 2) return -1;
+      const f = FILES.indexOf(s[0].toLowerCase()), r = 8 - Number(s[1]);
+      return f < 0 || r < 0 || r > 7 || Number.isNaN(r) ? -1 : r * 8 + f;
+    };
+    const colorOf = (p) => (p === p.toUpperCase() ? 'w' : 'b');
+
+    function parseFen(fen) {
+      const [placement, turn] = fen.split(' ');
+      const board = [];
+      for (const ch of placement) {
+        if (ch === '/') continue;
+        if (/\d/.test(ch)) for (let i = 0; i < Number(ch); i++) board.push(null);
+        else board.push(ch);
+      }
+      return { board, turn };
+    }
+    function toFen(board, turn) {
+      let out = '';
+      for (let r = 0; r < 8; r++) {
+        let empty = 0;
+        for (let f = 0; f < 8; f++) {
+          const p = board[r * 8 + f];
+          if (!p) empty++;
+          else { if (empty) { out += empty; empty = 0; } out += p; }
+        }
+        if (empty) out += empty;
+        if (r < 7) out += '/';
+      }
+      return out + ' ' + turn + ' - - 0 1';
+    }
+
+    const ROOK_DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+    const BISHOP_DIRS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+    const ALL_DIRS = ROOK_DIRS.concat(BISHOP_DIRS);
+    const KNIGHT_JUMPS = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]];
+
+    function pseudoMoves(board, i) {
+      const p = board[i];
+      if (!p) return [];
+      const c = colorOf(p), t = p.toUpperCase();
+      const f = i % 8, r = (i - f) / 8;
+      const out = [];
+      const step = (ff, rr) => { // returns true when the slider may continue
+        if (ff < 0 || ff > 7 || rr < 0 || rr > 7) return false;
+        const j = rr * 8 + ff, q = board[j];
+        if (!q) { out.push(j); return true; }
+        if (colorOf(q) !== c) out.push(j);
+        return false;
+      };
+      if (t === 'P') {
+        const d = c === 'w' ? -1 : 1, home = c === 'w' ? 6 : 1;
+        if (r + d >= 0 && r + d <= 7 && !board[(r + d) * 8 + f]) {
+          out.push((r + d) * 8 + f);
+          if (r === home && !board[(r + 2 * d) * 8 + f]) out.push((r + 2 * d) * 8 + f);
+        }
+        for (const df of [-1, 1]) {
+          const ff = f + df, rr = r + d;
+          if (ff >= 0 && ff <= 7 && rr >= 0 && rr <= 7) {
+            const q = board[rr * 8 + ff];
+            if (q && colorOf(q) !== c) out.push(rr * 8 + ff);
+          }
+        }
+      } else if (t === 'N') { for (const [df, dr] of KNIGHT_JUMPS) step(f + df, r + dr); }
+      else if (t === 'K') { for (const [df, dr] of ALL_DIRS) step(f + df, r + dr); }
+      else {
+        const rays = t === 'R' ? ROOK_DIRS : t === 'B' ? BISHOP_DIRS : ALL_DIRS;
+        for (const [df, dr] of rays) {
+          let ff = f + df, rr = r + dr;
+          while (step(ff, rr)) { ff += df; rr += dr; }
+        }
+      }
+      return out;
+    }
+
+    function isAttacked(board, target, byColor) {
+      for (let j = 0; j < 64; j++) {
+        const p = board[j];
+        if (!p || colorOf(p) !== byColor) continue;
+        if (p.toUpperCase() === 'P') {
+          const d = byColor === 'w' ? -1 : 1, f = j % 8, r = (j - f) / 8;
+          for (const df of [-1, 1]) {
+            const ff = f + df, rr = r + d;
+            if (ff >= 0 && ff <= 7 && rr >= 0 && rr <= 7 && rr * 8 + ff === target) return true;
+          }
+        } else if (pseudoMoves(board, j).includes(target)) return true;
+      }
+      return false;
+    }
+
+    function applyMove(board, from, to) {
+      const next = board.slice();
+      let p = next[from];
+      const rank = Math.floor(to / 8);
+      if (p && p.toUpperCase() === 'P' && (rank === 0 || rank === 7)) p = colorOf(p) === 'w' ? 'Q' : 'q'; // auto-queen
+      next[to] = p;
+      next[from] = null;
+      return next;
+    }
+
+    const kingOf = (board, c) => board.indexOf(c === 'w' ? 'K' : 'k');
+    const inCheck = (board, c) => isAttacked(board, kingOf(board, c), c === 'w' ? 'b' : 'w');
+
+    function legalMoves(board, c) {
+      const out = [];
+      for (let i = 0; i < 64; i++) {
+        const p = board[i];
+        if (!p || colorOf(p) !== c) continue;
+        for (const j of pseudoMoves(board, i)) {
+          if (!inCheck(applyMove(board, i, j), c)) out.push([i, j]);
+        }
+      }
+      return out;
+    }
+
+    const PERSONAS = [
+      { id: 'rival', emoji: '🎩', label: 'gracious rival', prompt: 'a gracious, slightly theatrical chess rival — witty, warm, never mean' },
+      { id: 'fire', emoji: '🔥', label: 'trash talker', prompt: 'a playful trash-talking blitz hustler — cocky one-liners, all in good fun' },
+      { id: 'owl', emoji: '🦉', label: 'patient coach', prompt: 'a patient chess coach — briefly explain the idea behind your move' },
+    ];
+
+    const FRESH = {
+      fen: START_FEN,
+      history: [],
+      lastMove: null,
+      banter: [{ who: 'ai', text: 'fresh board. you take white — your move.' }],
+      over: null,
+      personality: 'rival',
+    };
+
+    function App() {
+      const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
+        appId: 'ember-chess',
+        displayName: 'ember chess',
+        description: 'Play chess against the agent. It reads the board as JSON, answers with a legal move and a little table talk.',
+        iconEmoji: '♞',
+        iconColor: '#c96f2e',
+      });
+      const [game, setGame] = usePersistedState('ember-chess-game', FRESH);
+      const [sel, setSel] = useState(null);
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const { board, turn } = useMemo(() => parseFen(game.fen), [game.fen]);
+      const myMoves = useMemo(() => (turn === 'w' && !game.over ? legalMoves(board, 'w') : []), [board, turn, game.over]);
+      const targets = useMemo(() => (sel == null ? [] : myMoves.filter(([f]) => f === sel).map(([, t]) => t)), [sel, myMoves]);
+      const whiteInCheck = turn === 'w' && !game.over && inCheck(board, 'w');
+      const persona = PERSONAS.find((p) => p.id === game.personality) || PERSONAS[0];
+
+      const pushBanter = (entry) => (prev) => ({ ...prev, banter: [...prev.banter, entry].slice(-6) });
+
+      const requestAgentMove = async (fen, history, replies, personality) => {
+        const result = await sendMessage('player_move', {
+          fen,
+          moveHistory: history.slice(-12),
+          yourColor: 'black',
+          yourLegalMoves: replies.map(([f, t]) => ({ from: sqName(f), to: sqName(t) })),
+          personality: (PERSONAS.find((p) => p.id === personality) || PERSONAS[0]).prompt,
+        }, { state: { fen, history }, responseSchema: RESPONSE_SCHEMA });
+
+        if (!result.ok) {
+          // Errors are data — surface them in the banter bubble, never crash.
+          const msg = (result.error && result.error.message) || 'no reply';
+          setGame(pushBanter({ who: 'app', text: `the agent went quiet (${msg}). poke it to retry.` }));
+          return;
+        }
+        const d = result.data && typeof result.data === 'object' ? result.data : {};
+        const wanted = d.move ? [sqIndex(d.move.from), sqIndex(d.move.to)] : null;
+        let mv = wanted && replies.some(([f, t]) => f === wanted[0] && t === wanted[1]) ? wanted : null;
+        let note = '';
+        if (!mv) { // raw / malformed / illegal reply — play a legal move for it and say so
+          mv = replies[Math.floor(Math.random() * replies.length)];
+          note = d.move ? 'it suggested an illegal move — a legal one was played instead.' : 'it answered off-script — a legal move was played for it.';
+        }
+        setGame((prev) => {
+          const { board: b } = parseFen(fen);
+          const next = applyMove(b, mv[0], mv[1]);
+          const history2 = [...history, sqName(mv[0]) + '→' + sqName(mv[1])];
+          const whiteReplies = legalMoves(next, 'w');
+          let over = null;
+          if (whiteReplies.length === 0) over = inCheck(next, 'w') ? { winner: 'ai', reason: 'checkmate' } : { winner: 'draw', reason: 'stalemate' };
+          const text = typeof d.message === 'string' && d.message.trim() ? d.message.trim() : '…';
+          return {
+            ...prev,
+            fen: toFen(next, 'w'),
+            history: history2,
+            lastMove: mv,
+            over,
+            banter: [...prev.banter, { who: 'ai', text, note }].slice(-6),
+          };
+        });
+      };
+
+      const doPlayerMove = (from, to) => {
+        setSel(null);
+        const next = applyMove(board, from, to);
+        const history = [...game.history, sqName(from) + '→' + sqName(to)];
+        const replies = legalMoves(next, 'b');
+        if (replies.length === 0) {
+          const over = inCheck(next, 'b') ? { winner: 'player', reason: 'checkmate' } : { winner: 'draw', reason: 'stalemate' };
+          setGame((prev) => ({
+            ...prev, fen: toFen(next, 'b'), history, lastMove: [from, to], over,
+            banter: [...prev.banter, { who: 'app', text: over.winner === 'player' ? 'checkmate. the agent tips its king.' : 'stalemate — nobody wins this one.' }].slice(-6),
+          }));
+          return;
+        }
+        const fen2 = toFen(next, 'b');
+        setGame((prev) => ({ ...prev, fen: fen2, history, lastMove: [from, to], over: null }));
+        requestAgentMove(fen2, history, replies, game.personality);
+      };
+
+      const onSquare = (i) => {
+        if (game.over || isWaiting || turn !== 'w') return;
+        if (sel != null && targets.includes(i)) { doPlayerMove(sel, i); return; }
+        const p = board[i];
+        setSel(p && colorOf(p) === 'w' && i !== sel ? i : null);
+      };
+
+      const poke = () => {
+        const replies = legalMoves(board, 'b');
+        if (replies.length) requestAgentMove(game.fen, game.history, replies, game.personality);
+      };
+
+      const newGame = () => { setSel(null); setGame({ ...FRESH, personality: game.personality }); };
+
+      if (!isReady) return <div className="connecting">setting up the board…</div>;
+
+      const status = game.over
+        ? game.over.winner === 'player' ? 'checkmate — you win.'
+          : game.over.winner === 'ai' ? 'checkmate — the agent wins.'
+          : 'stalemate — a draw.'
+        : isWaiting ? 'it’s thinking…'
+        : turn === 'b' ? 'the agent’s move is pending.'
+        : whiteInCheck ? 'check — careful.'
+        : 'your move.';
+      const last = game.banter[game.banter.length - 1];
+      const kingSq = whiteInCheck ? kingOf(board, 'w') : -1;
+
+      return (
+        <div className="wrap">
+          <header className="brand">
+            <h1><span className="ember">ember</span> chess</h1>
+            <span className="tag">the agent plays black</span>
+          </header>
+          <div className={'status' + (isWaiting ? ' hot' : whiteInCheck || (game.over && game.over.winner === 'ai') ? ' bad' : '')} role="status">
+            {isWaiting && <span className="dots"><i /><i /><i /></span>}
+            {status}
+          </div>
+          <div className="layout">
+            <div>
+              <div className="board-card">
+                <div className="board" role="grid" aria-label="chessboard">
+                  {board.map((p, i) => {
+                    const f = i % 8, r = (i - f) / 8;
+                    const cls = ['sq', (f + r) % 2 === 0 ? 'light' : 'dark'];
+                    if (i === sel) cls.push('sel');
+                    if (game.lastMove && (i === game.lastMove[0] || i === game.lastMove[1])) cls.push('last');
+                    if (i === kingSq) cls.push('check');
+                    return (
+                      <button key={i} className={cls.join(' ')} onClick={() => onSquare(i)} aria-label={sqName(i) + (p ? ' ' + p : ' empty')}>
+                        {targets.includes(i) && (p ? <span className="ring" /> : <span className="dot" />)}
+                        {p && <span className={'pc ' + colorOf(p)}>{GLYPH[p.toUpperCase()]}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="coords"><span>abcdefgh</span><span>{isWaiting ? '…' : ''}</span></div>
+              </div>
+            </div>
+            <aside className="rail">
+              <section className="card">
+                <h2>table talk</h2>
+                <div className="bubble">
+                  <div className="avatar" aria-hidden="true">{persona.emoji}</div>
+                  <p className="quote">
+                    {isWaiting ? <span className="dots"><i /><i /><i /></span> : (last ? last.text : '…')}
+                    {!isWaiting && last && last.note ? <span className="note">{last.note}</span> : null}
+                  </p>
+                </div>
+                {!isWaiting && !game.over && turn === 'b' && (
+                  <button className="btn ghost" onClick={poke} style={{ marginTop: 10 }}>poke the agent</button>
+                )}
+              </section>
+              <section className="card">
+                <h2>its personality</h2>
+                <div className="personas">
+                  {PERSONAS.map((p) => (
+                    <button key={p.id} className={'chip' + (p.id === game.personality ? ' on' : '')}
+                      onClick={() => setGame((prev) => ({ ...prev, personality: p.id }))}>
+                      {p.emoji} {p.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+              <section className="card">
+                <h2>moves</h2>
+                <div className="hist">
+                  {game.history.length === 0
+                    ? <span className="empty">tap a white piece to begin.</span>
+                    : game.history.map((m, i) => <span key={i}>{i + 1}. {m}</span>)}
+                </div>
+              </section>
+              <button className="btn" onClick={newGame}>new game</button>
+            </aside>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

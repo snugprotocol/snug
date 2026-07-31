@@ -1,0 +1,124 @@
+// Validates the curated example apps against the Snug app-authoring contract.
+//
+// Run from the repo root (plain node, no build step):
+//
+//   node --test examples/validate.test.mjs
+//
+// Checks, per app:
+//   1. single-file HTML — no external references beyond the allowlisted CDN <script> tags
+//   2. the embedded hooks block is byte-identical to packages/sdk/embedded/snug-hooks.js
+//      (after the same whitespace normalization the sdk kb-sync test uses)
+//   3. announce metadata (appId / displayName / description / iconEmoji / iconColor) present
+//   4. no direct browser-storage usage (the sandboxed iframe has a null origin)
+//   5. parses as HTML (jsdom when available at the repo root; structural checks otherwise)
+//   6. under the 5 MB artifact limit
+import assert from 'node:assert/strict';
+import { readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, '..');
+const EMBEDDED_HOOKS = path.join(REPO_ROOT, 'packages', 'sdk', 'embedded', 'snug-hooks.js');
+const APPS = ['chess', 'flying-pig', 'habit-tracker'];
+const CDN_ALLOWLIST = ['https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://unpkg.com'];
+const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
+
+// jsdom lives in the repo-root devDependencies; the suite degrades gracefully without it.
+let JSDOM = null;
+try {
+  ({ JSDOM } = await import('jsdom'));
+} catch {
+  // fine — structural checks still run
+}
+
+/** Same normalization as packages/sdk/src/__tests__/kb-sync.test.ts: per-line trim, blank lines dropped. */
+const normalize = (code) =>
+  code
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join('\n');
+
+/**
+ * The hook portion of an app: the `<script type="text/babel">` body, cut before the
+ * section-5 RESPONSE SCHEMA banner (app-authored code starts there). Mirrors the sdk
+ * kb-sync test's extraction so all three checks share one definition of "the hook block".
+ */
+function hookBlock(html, name) {
+  const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1];
+  assert.ok(script, `${name}: has a <script type="text/babel"> block`);
+  const lines = script.split('\n');
+  const bannerIndex = lines.findIndex((line) => line.includes('5. RESPONSE SCHEMA'));
+  assert.ok(bannerIndex >= 1, `${name}: has the section-5 RESPONSE SCHEMA banner delimiting the hook block`);
+  return lines.slice(0, bannerIndex - 1).join('\n'); // also drops the ==== line above the banner
+}
+
+const expectedHooks = normalize(readFileSync(EMBEDDED_HOOKS, 'utf8'));
+
+for (const app of APPS) {
+  const file = path.join(HERE, app, 'app.html');
+  const html = readFileSync(file, 'utf8');
+
+  test(`${app}: single-file HTML with no external refs beyond allowlisted CDN scripts`, () => {
+    assert.match(html, /^<!DOCTYPE html>/i, 'starts with <!DOCTYPE html>');
+    // Every absolute URL in the file must sit on the CDN allowlist…
+    for (const [url] of html.matchAll(/https?:\/\/[^\s"'<>)]+/g)) {
+      assert.ok(
+        CDN_ALLOWLIST.some((cdn) => url.startsWith(cdn + '/')),
+        `URL ${url} is on the CDN allowlist`,
+      );
+    }
+    // …and may only appear as a <script src>. No stylesheets, imports, images, or fetches.
+    for (const m of html.matchAll(/(src|href)\s*=\s*["']([^"']*)["']/g)) {
+      const [, attr, value] = m;
+      assert.equal(attr, 'src', `${value}: no href-based external references`);
+      assert.ok(
+        CDN_ALLOWLIST.some((cdn) => value.startsWith(cdn + '/')),
+        `src ${value} is an allowlisted CDN script`,
+      );
+    }
+    assert.doesNotMatch(html, /<link\b/i, 'no <link> elements');
+    assert.doesNotMatch(html, /@import\b/, 'no CSS @import');
+    assert.doesNotMatch(html, /url\(\s*['"]?https?:/i, 'no remote url() in CSS');
+    assert.doesNotMatch(html, /\b(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/, 'no network APIs (connect-src is blocked)');
+  });
+
+  test(`${app}: embedded hooks block is byte-identical to sdk/embedded/snug-hooks.js (normalized)`, () => {
+    assert.equal(normalize(hookBlock(html, app)), expectedHooks);
+  });
+
+  test(`${app}: announce metadata is complete`, () => {
+    for (const field of ['appId', 'displayName', 'description', 'iconEmoji', 'iconColor']) {
+      assert.match(html, new RegExp(`${field}:\\s*['"\`]`), `announce field ${field} present with a literal value`);
+    }
+    assert.match(html, /useSnugApp\(\{/, 'announces via useSnugApp');
+  });
+
+  test(`${app}: no direct browser storage (sandboxed iframe has a null origin)`, () => {
+    for (const banned of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie']) {
+      assert.ok(!html.includes(banned), `does not reference ${banned}`);
+    }
+  });
+
+  test(`${app}: parses as HTML`, () => {
+    assert.match(html, /<html\b[^>]*>/i, 'has <html>');
+    assert.match(html, /<\/html>\s*$/i, 'closes </html>');
+    assert.match(html, /<title>[^<]+<\/title>/i, 'has a non-empty <title>');
+    assert.match(html, /<div id="root"><\/div>/, 'has the #root mount node');
+    assert.match(html, /<meta name="viewport"/, 'has a viewport meta (mobile-usable)');
+    if (JSDOM) {
+      const dom = new JSDOM(html); // scripts NOT executed — parse only
+      const doc = dom.window.document;
+      assert.ok(doc.getElementById('root'), 'jsdom: #root exists');
+      assert.equal(doc.querySelectorAll('script[src]').length, 3, 'jsdom: exactly the three CDN UMD scripts');
+      assert.equal(doc.querySelectorAll('script[type="text/babel"]').length, 1, 'jsdom: exactly one babel script');
+      assert.ok(doc.querySelector('style'), 'jsdom: inline styles present');
+    }
+  });
+
+  test(`${app}: within the ${MAX_ARTIFACT_BYTES / (1024 * 1024)} MB artifact limit`, () => {
+    assert.ok(statSync(file).size <= MAX_ARTIFACT_BYTES, 'app.html is within the artifact size limit');
+  });
+}

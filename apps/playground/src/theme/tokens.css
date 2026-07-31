@@ -1,0 +1,158 @@
+/* tokens.css — the snug design system in custom properties (design brief P3, binding).
+   Warm dark-first: deep warm charcoal, ember/amber accent family, display serif for
+   brand moments, humanist sans for UI. Both themes live here; nothing else defines
+   colors. Theme switching = the data-theme attribute on <html>. */
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* surfaces — warm charcoal family, never blue-black */
+  --bg: #171310;
+  --bg-deep: #100d0b;
+  --surface: #201a15;
+  --surface-2: #29221b;
+  --surface-3: #332a21;
+  --border: #3a2f24;
+  --border-strong: #4d3e2e;
+
+  /* text */
+  --fg: #f3ece1;
+  --fg-muted: #b3a48f;
+  --fg-faint: #7d7160;
+
+  /* the ember family — the one accent */
+  --ember: #e8873a;
+  --ember-bright: #f4a259;
+  --ember-deep: #b95f1d;
+  --ember-ink: #1d1207;
+  --ember-glow: rgba(232, 135, 58, 0.16);
+  --ember-glow-strong: rgba(232, 135, 58, 0.32);
+
+  /* feedback */
+  --ok: #9dbb6e;
+  --warn: #e0b352;
+  --danger: #e06a55;
+  --danger-glow: rgba(224, 106, 85, 0.14);
+
+  --shadow-lift: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --inner-glow: inset 0 1px 0 rgba(255, 245, 230, 0.05);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #faf6ef;
+  --bg-deep: #f1ebe0;
+  --surface: #fffdf8;
+  --surface-2: #f6f0e5;
+  --surface-3: #ede4d5;
+  --border: #e3d8c5;
+  --border-strong: #cbbda4;
+
+  --fg: #2b2015;
+  --fg-muted: #75664f;
+  --fg-faint: #a3937a;
+
+  --ember: #c96f1e;
+  --ember-bright: #e08430;
+  --ember-deep: #a2540e;
+  --ember-ink: #fff8ef;
+  --ember-glow: rgba(201, 111, 30, 0.12);
+  --ember-glow-strong: rgba(201, 111, 30, 0.26);
+
+  --ok: #5f8a2e;
+  --warn: #a97c14;
+  --danger: #bf4530;
+  --danger-glow: rgba(191, 69, 48, 0.1);
+
+  --shadow-lift: 0 12px 28px rgba(90, 66, 34, 0.16);
+  --shadow-soft: 0 4px 14px rgba(90, 66, 34, 0.1);
+  --inner-glow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+:root {
+  /* type — system stacks only: display serif for brand, humanist sans for UI */
+  --font-display: 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  --font-ui: system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-s: 0.875rem;
+  --text-m: 1rem;
+  --text-l: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-hero: clamp(2rem, 5vw, 3.25rem);
+
+  /* shape — generous radius, soft edges */
+  --radius-s: 8px;
+  --radius-m: 14px;
+  --radius-l: 22px;
+  --radius-pill: 999px;
+
+  /* space */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  /* motion — 150–250ms ease-out, always */
+  --dur-1: 150ms;
+  --dur-2: 220ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* touch */
+  --tap: 44px;
+}
+
+/* base */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--text-m);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--ember-bright);
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

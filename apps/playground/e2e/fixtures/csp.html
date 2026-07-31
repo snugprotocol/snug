@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>snug csp harness</title>
+    <!--
+      BROWSER_CSP_CHECKS runner page. The check pages are built HERE, in the real
+      browser, by importing the runner's production dist (injectCsp runs on Chromium's
+      own text/html parser — exactly what the playground does at runtime). The page
+      ships NO CSP of its own: every restriction the checks verify must come from the
+      meta policy injectCsp placed inside each srcdoc (weakest-embedder case).
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@snugprotocol/protocol": "/pkg/protocol/index.js",
+          "zod": "/zod/index.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <script type="module">
+      import {
+        BROWSER_CSP_CHECKS,
+        CSP_VERDICT_MESSAGE_TYPE,
+      } from '/pkg/runner/browser-csp.spec.template.js';
+
+      window.__cspCheckIds = BROWSER_CSP_CHECKS.map((check) => check.id);
+
+      /** Runs one check in a fresh sandbox="allow-scripts" srcdoc iframe (C2 exactly).
+       *  Resolves {pass, detail}, or null when NO verdict arrived within timeoutMs —
+       *  the caller must treat null as FAIL (form-action navigation case). */
+      window.__runCspCheck = (id) =>
+        new Promise((resolve) => {
+          const check = BROWSER_CSP_CHECKS.find((c) => c.id === id);
+          if (check === undefined) {
+            resolve({ pass: false, detail: `unknown check id: ${id}` });
+            return;
+          }
+          const timer = setTimeout(() => resolve(null), check.timeoutMs);
+          window.addEventListener('message', (event) => {
+            const d = event.data;
+            if (d && d.type === CSP_VERDICT_MESSAGE_TYPE && d.id === id) {
+              clearTimeout(timer);
+              resolve({ pass: d.pass === true, detail: String(d.detail ?? '') });
+            }
+          });
+          const iframe = document.createElement('iframe');
+          iframe.setAttribute('sandbox', 'allow-scripts');
+          iframe.style.width = '320px';
+          iframe.style.height = '200px';
+          iframe.srcdoc = check.html;
+          document.body.appendChild(iframe);
+        });
+
+      window.__cspReady = true;
+    </script>
+  </body>
+</html>

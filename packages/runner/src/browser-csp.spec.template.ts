@@ -99,8 +99,21 @@ export const BROWSER_CSP_CHECKS: readonly BrowserCspCheck[] = [
       ws.onopen = function () { failures.push('WebSocket opened'); settle(); };
     } catch (err) { settle(); }
     try {
-      if (navigator.sendBeacon && navigator.sendBeacon('https://example.com/', 'x')) {
-        failures.push('sendBeacon accepted');
+      if (navigator.sendBeacon) {
+        // Modern Chromium returns true from sendBeacon even when connect-src blocks the
+        // request (the securitypolicyviolation event fires and nothing is sent), so the
+        // boolean return is NOT the verdict — a connect-src violation event within 500ms
+        // counts as blocked; a true return with no violation is the failure.
+        var beaconViolated = false;
+        document.addEventListener('securitypolicyviolation', function (e) {
+          if (e.violatedDirective && e.violatedDirective.indexOf('connect-src') === 0) beaconViolated = true;
+        });
+        var beaconReturned = navigator.sendBeacon('https://example.com/', 'x');
+        pending++;
+        setTimeout(function () {
+          if (beaconReturned && !beaconViolated) failures.push('sendBeacon accepted without CSP violation');
+          settle();
+        }, 500);
       }
     } catch (err) { /* throwing is a pass */ }
 `,

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>snug csp harness</title>
+    <!--
+      Embedder page for the BROWSER_CSP_CHECKS iframes. It deliberately ships NO
+      Content-Security-Policy of its own: every restriction the checks verify must come
+      from the meta CSP that the production injectCsp() placed inside each srcdoc —
+      exactly the bytes the runner ships (srcdoc documents also inherit the embedder's
+      policy, so a policy-free embedder is the WEAKEST-embedder case; if the checks pass
+      here, the injected policy alone is doing the enforcing).
+    -->
+  </head>
+  <body></body>
+</html>
