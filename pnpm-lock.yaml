@@ -31,7 +31,11 @@ importers:
 
   packages/db: {}
 
-  packages/knowledge: {}
+  packages/knowledge:
+    dependencies:
+      '@snugprotocol/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/protocol:
     dependencies:
