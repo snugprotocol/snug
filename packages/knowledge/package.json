@@ -5,6 +5,13 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "scripts": { "build": "tsc -p tsconfig.json", "test": "vitest run --passWithNoTests" },
-  "license": "MIT"
+  "scripts": {
+    "gen:content": "node scripts/gen-content.mjs",
+    "build": "node scripts/gen-content.mjs && tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@snugprotocol/protocol": "workspace:*"
+  }
 }

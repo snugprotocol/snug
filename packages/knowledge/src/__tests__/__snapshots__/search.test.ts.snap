@@ -1,0 +1,119 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`KB retrieval structure stability > heading tree per file is locked (edits show up as snapshot diffs) 1`] = `
+[
+  {
+    "file": "knowledge-base/app-authoring/10-overview-and-contract.md",
+    "headingTree": [
+      "# Snug App Authoring — Overview and Contract",
+      "## What a Snug App Is",
+      "## The Runtime Loop",
+      "## The SDK Hooks (the whole app-side API)",
+      "## Hard Rules",
+      "## Section Map",
+    ],
+  },
+  {
+    "file": "knowledge-base/app-authoring/20-html-template.md",
+    "headingTree": [
+      "# The Mandatory HTML Template",
+      "## Single-File Rule",
+      "## Full Template",
+      "## App Metadata",
+      "## sendMessage Options",
+    ],
+  },
+  {
+    "file": "knowledge-base/app-authoring/30-bridge-protocol.md",
+    "headingTree": [
+      "# Bridge Protocol",
+      "## Frames at a Glance",
+      "## Identity and Correlation",
+      "## Terminal Frame Rule",
+      "## The Chat Envelope (what the host does with your request)",
+      "## JSON-Only Reply Rule",
+      "## Errors Are Data",
+      "## PARSE_FAILED Budget",
+      "## Events Channel",
+      "## Limits",
+    ],
+  },
+  {
+    "file": "knowledge-base/app-authoring/40-persistence-and-db.md",
+    "headingTree": [
+      "# Persistence and the App Database",
+      "## Storage Is Host-Brokered",
+      "## usePersistedState — Key-Value State",
+      "## useAppDB — SQL Tier",
+      "## Schema Design Guidance",
+      "## Pattern: Ask the Agent to Write SQL Against Your Schema",
+    ],
+  },
+  {
+    "file": "knowledge-base/app-authoring/50-app-catalog.md",
+    "headingTree": [
+      "# App Catalog",
+      "## Choosing an App Type",
+      "## Per-Type Guidance",
+      "### Games (board, card, word)",
+      "### Trackers and data tools",
+      "### Education and creative",
+      "## Worked Example: Chess",
+      "### State: FEN plus history",
+      "### Response schema for moves",
+      "### The request",
+      "### AI-personality prompt tips",
+    ],
+  },
+  {
+    "file": "knowledge-base/app-authoring/60-design-quality.md",
+    "headingTree": [
+      "# Design Quality",
+      "## The Bar",
+      "## Theming: Follow the Host",
+      "## Layout: Adapt to the Container",
+      "## Touch and Pointer",
+      "## Motion",
+      "## Empty States and First Run",
+      "## Details That Read as Quality",
+    ],
+  },
+  {
+    "file": "knowledge-base/app-authoring/70-defensive-coding.md",
+    "headingTree": [
+      "# Defensive Coding",
+      "## Why This Section Exists",
+      "## What NOT to Do",
+      "## Initialize Complete State",
+      "## Guard Every Collection and Property Access",
+      "## Handle ok:false Everywhere",
+      "## JSON-Only Reply Discipline (both sides)",
+      "## Multiple In-Flight Requests",
+      "## Startup Order",
+    ],
+  },
+  {
+    "file": "knowledge-base/app-authoring/80-cdn-compatibility.md",
+    "headingTree": [
+      "# CDN Compatibility",
+      "## The Allowlist Is Fixed",
+      "## UMD vs ESM: Why Libraries Break",
+      "### Picking a URL",
+      "### If no browser build exists — inline the logic",
+      "### CommonJS shim (last resort)",
+      "## DATA: Pinned Known-Good CDN Builds",
+    ],
+  },
+]
+`;
+
+exports[`KB retrieval structure stability > knowledge summary is locked 1`] = `
+"You can build interactive single-file HTML apps ("Snug apps") that run in a sandboxed
+iframe inside the conversation and talk to you at runtime: apps send structured actions and
+you reply with JSON, enabling board games with an AI opponent, tutors, trackers, data
+tools, and simulations. Apps use React 18 via CDN, persist through host-brokered storage,
+and must follow a mandatory template with copy-exactly bridge hooks. When the user asks for
+an interactive app, game, or tool that needs AI at runtime, call the \`snug_app_builder\`
+tool for the full template and protocol BEFORE writing any code.
+"
+`;
