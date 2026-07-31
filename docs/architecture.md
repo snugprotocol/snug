@@ -1,6 +1,6 @@
 # Snug — Architecture
 
-> Status: **scaffold** (2026-07-31). This describes the v1 target; packages are stubs until their week lands (see [next-steps.md](next-steps.md)). Corrected at Gate 6 whenever reality drifts.
+> Status: **implemented (v1 core, pre-launch)** — 2026-07-31, TASK-20260731-build-hub. All v1 packages + reference server + Playground are built and tested (419 unit / 23 Playwright / 18 example-validation tests). Auth broker remains v1.1. Prompt architecture: ADR-0004 (`packages/knowledge/prompts/`).
 
 ## Components
 

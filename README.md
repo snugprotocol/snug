@@ -18,7 +18,7 @@ This is the **reference implementation monorepo**: protocol bindings, iframe run
 |---|---|
 | `packages/protocol` | `@snugprotocol/protocol` — typed envelope bindings; **source of truth for spec schemas** |
 | `packages/runner` | `@snugprotocol/runner` — sandboxed iframe runner + bridge host |
-| `packages/sdk` | `@snugprotocol/sdk` — in-app hooks: `useAgentBridge`, `useAppDB`, `useConnection` |
+| `packages/sdk` | `@snugprotocol/sdk` — in-app hooks: `useSnugApp`, `usePersistedState`, `useAppDB` (embedded + module forms) |
 | `packages/db` | `@snugprotocol/db` — sql.js + OPFS per-app isolated database, `.sqlite` export/import |
 | `packages/auth` | `@snugprotocol/auth` — dual-layer credential broker (v1.1) |
 | `packages/knowledge` | `@snugprotocol/knowledge` — the LLM app-authoring knowledge base |
@@ -26,6 +26,21 @@ This is the **reference implementation monorepo**: protocol bindings, iframe run
 | `apps/playground` | Snug Playground — hosted demo (chat → build → run) |
 | `apps/server` | Minimal reference backend (`/invoke` + artifact store) |
 | `examples/` | Curated showcase apps (chess, flying-pig, habit-tracker) |
+
+## Quickstart (under 10 minutes, no API key needed)
+
+```bash
+git clone <this repo> && cd snug
+pnpm install                       # ~2 min
+pnpm build && pnpm test            # everything green (~2 min)
+pnpm smoke                         # headless happy path: build an app via the mock adapter
+
+# run the Playground against the reference server (mock "demo brain" — no key):
+pnpm --filter server build && SNUG_ADAPTER=mock node apps/server/dist/server.js &
+pnpm --filter playground dev       # open the printed URL → click a suggestion chip → build → run
+```
+
+Bring your own key instead: open **settings** in the Playground, pick BYOK, paste an Anthropic or OpenAI key (kept in sessionStorage, sent only to the provider). The three starter apps (chess, flying-pig, habit-tracker) run with zero setup.
 
 ## Working in this repo
 

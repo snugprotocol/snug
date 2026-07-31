@@ -1,6 +1,6 @@
 # TASK-20260731-build-hub: Build the Snug v1 hub — all packages, playground, central prompt architecture
 
-- **Status**: planned (awaiting owner plan approval — Gate 2 stop)
+- **Status**: done
 - **Owner**: Jeetu
 - **Risk tier**: **high** (touches `packages/protocol` schemas, `packages/runner` sandbox/CSP, C1/C2 — auto-escalated per PROCESS.md)
 - **Branch**: `feat/TASK-20260731-build-hub` (umbrella — docs/plan only; children get their own `feat/TASK-<id>` branches)
@@ -118,3 +118,9 @@ Child 1 produces spec v0.1 draft (SPEC.md prose + schemas) staged in this repo; 
 - State: **STOPPED at Gate 2 for owner plan approval.** No implementation code written.
 - Next step (post-approval): open child task 1 (`protocol-core`, High — plan gets fresh-context AI review before implementation), then children 2–6 in sequence.
 - Open questions: none blocking — CSP posture (self-contained-HTML vs CDN allowlist) decided inside the runner child with negative tests either way.
+
+### 2026-07-31 — Claude (Fable 5) — build + close (owner approved plan in-session)
+- Done: all six children specced, fresh-context-reviewed (High tier), implemented tests-first, adversarially reviewed, fixed, and merged: protocol-core (85) → knowledge-store (55) → runner-sandbox (90→91) → sdk-db (37+33) → server-adapters (56+32) → playground-hub (36 unit + 23 Playwright + 18 example checks). Root: 19/19 turbo tasks green; `pnpm smoke` PASS; Playwright C2 gate 15/15 CSP checks on the production runner in real Chromium.
+- Umbrella ACs: 1✅(root green) 2✅(sandbox/CSP negatives + real-browser gate) 3✅(C1 strip + whole-envelope scan + review-verified) 4✅(schemas exported, byte-stable, auth_required reserved) 5✅(.sqlite round-trip + DB-Browser-verified magic) 6✅(centralization lint + headers + goldens) 7✅(build→run→bridge E2E on mock) 8✅(vendored skill-creator + builder prompts in store) 9✅(README quickstart + root `pnpm smoke` PASS).
+- Reviews caught pre-merge: schemas contradicting R2 (io:'input'), C1 responseSchema leak, KB db-field nesting bug, meta-CSP parse-order bypass design flaw, sendBeacon polarity, StrictMode dev blank-iframe. Lessons recorded.
+- Deferred (recorded in next-steps): spec push (explicit ask), eval harness (phase 2), auth v1.1, demo videos/private beta (weeks 5–6), deploy (explicit ask).
