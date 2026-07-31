@@ -5,6 +5,29 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "scripts": { "build": "tsc -p tsconfig.json", "test": "vitest run --passWithNoTests" },
-  "license": "MIT"
+  "files": [
+    "dist",
+    "embedded"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@snugprotocol/protocol": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18"
+  },
+  "devDependencies": {
+    "@snugprotocol/db": "workspace:*",
+    "@snugprotocol/knowledge": "workspace:*",
+    "@snugprotocol/runner": "workspace:*",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "react": "^18",
+    "react-dom": "^18",
+    "sql.js": "^1.13.0"
+  }
 }
