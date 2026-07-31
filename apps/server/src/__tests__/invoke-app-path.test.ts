@@ -7,8 +7,9 @@ import { buildAppRequest } from '@snugprotocol/protocol';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { createAdapterFromConfig } from '../adapter.js';
 import { createThreadStore } from '../stores/threads.js';
-import { buildTestApp, invokeBody, parseSsePayload, spyAdapter } from './helpers.js';
+import { buildTestApp, invokeBody, parseSsePayload, spyAdapter, testConfig } from './helpers.js';
 
 let app: FastifyInstance | undefined;
 afterEach(async () => {
@@ -53,6 +54,41 @@ describe('POST /invoke — app path', () => {
     app = await buildTestApp({ adapter });
     await app.inject({ method: 'POST', url: '/invoke', payload: invokeBody(WIRE) });
     expect(calls[0]!.system).toContain(getSystemLayer('app-response-format').slice(0, 80));
+  });
+
+  it('default mock adapter answers app-path requests with a valid JSON-only body (Gate-5)', async () => {
+    app = await buildTestApp({ adapter: createAdapterFromConfig(testConfig()) });
+
+    // Two in-app agent requests in a row both get JSON-only replies…
+    for (const requestId of ['r1', 'r2']) {
+      const wire = buildAppRequest({
+        appId: 'demo',
+        instanceId: 'i1',
+        requestId,
+        action: 'ask',
+        payload: { question: 'anyone home?' },
+      });
+      const response = await app.inject({ method: 'POST', url: '/invoke', payload: invokeBody(wire) });
+      expect(response.statusCode).toBe(200);
+      const events = await parseSsePayload(response.payload);
+      const done = events.find((event) => event.event === 'done');
+      expect(done).toBeDefined();
+      const text = (JSON.parse(done!.data) as { text: string }).text;
+      const body = JSON.parse(text) as Record<string, unknown>;
+      expect(typeof body.message).toBe('string');
+      expect((body.message as string).length).toBeGreaterThan(0);
+      expect(body.echo).toBe('ask');
+    }
+
+    // …without consuming the chat demo script: the build flow still emits its artifact.
+    const chat = await app.inject({
+      method: 'POST',
+      url: '/invoke',
+      payload: invokeBody('build me tic-tac-toe'),
+    });
+    const chatEvents = await parseSsePayload(chat.payload);
+    expect(chatEvents.some((event) => event.event === 'artifact')).toBe(true);
+    expect(chatEvents.some((event) => event.event === 'done')).toBe(true);
   });
 
   it('streams the reply raw — fences and prose reach the client byte-exact for the runner to parse', async () => {

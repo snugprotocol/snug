@@ -35,7 +35,8 @@ export function BuilderView(): ReactElement {
     (idea: string): void => {
       const trimmed = idea.trim();
       if (trimmed === '') return;
-      chat.send(buildUserMessage(trimmed, prompt));
+      // The bubble shows the raw idea; the KB template only travels on the wire.
+      chat.send(trimmed, buildUserMessage(trimmed, prompt));
       setDraft('');
     },
     [chat, prompt],

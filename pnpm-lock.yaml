@@ -110,6 +110,8 @@ importers:
         specifier: ^26.0.0
         version: 26.1.2
 
+  examples: {}
+
   packages/adapters:
     dependencies:
       '@snugprotocol/protocol':

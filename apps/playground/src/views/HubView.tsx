@@ -13,10 +13,10 @@ import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Skeleton } from '../ui/Skeleton.js';
 
-const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string }>> = {
-  chess: { emoji: '♞', color: '#8b5cf6' },
-  'flying-pig': { emoji: '🐷', color: '#ec4899' },
-  'habit-tracker': { emoji: '✅', color: '#22c55e' },
+const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blurb: string }>> = {
+  chess: { emoji: '♞', color: '#8b5cf6', blurb: 'play an opponent with opinions — no server needed' },
+  'flying-pig': { emoji: '🐷', color: '#ec4899', blurb: 'tap to keep a pig airborne — pure offline arcade' },
+  'habit-tracker': { emoji: '✅', color: '#22c55e', blurb: 'track streaks in a real sqlite file you can export' },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };
@@ -108,7 +108,8 @@ export function HubView(): ReactElement {
         <div className="tile-grid">
           {load.entries.map((entry) => {
             const meta = metaMap[entry.id];
-            const style = { '--tile-color': meta?.iconColor ?? 'var(--ember)', '--tile-glow': 'var(--ember-glow)' } as CSSProperties;
+            // --tile-glow derives from --tile-color in app.css (color-matched hover glow).
+            const style = { '--tile-color': meta?.iconColor ?? 'var(--ember)' } as CSSProperties;
             return (
               <Link key={entry.id} to={`/run/${entry.id}`} style={{ color: 'inherit', display: 'block' }}>
                 <Card interactive className="app-tile" style={style}>
@@ -130,7 +131,9 @@ export function HubView(): ReactElement {
       ) : (
         <div className="tile-grid">
           {starters.map((starter) => {
-            const look = STARTER_LOOKS[starter.name.replace(/ /g, '-')] ?? { emoji: '⬡', color: 'var(--ember)' };
+            const look =
+              STARTER_LOOKS[starter.name.replace(/ /g, '-')] ??
+              ({ emoji: '⬡', color: 'var(--ember)', blurb: 'curated example — runs without a server' } as const);
             const style = { '--tile-color': look.color } as CSSProperties;
             return (
               <Link key={starter.id} to={`/run/${starter.id}`} style={{ color: 'inherit', display: 'block' }}>
@@ -139,7 +142,7 @@ export function HubView(): ReactElement {
                     {look.emoji}
                   </span>
                   <span className="tile-name">{starter.name}</span>
-                  <span className="tile-sub">curated example — runs without a server</span>
+                  <span className="tile-sub">{look.blurb}</span>
                 </Card>
               </Link>
             );

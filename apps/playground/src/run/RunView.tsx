@@ -10,7 +10,8 @@ import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { createDbDriver, type SnugDbDriver } from '@snugprotocol/db';
-import { SnugAppFrame, type RunnerHost } from '@snugprotocol/runner';
+import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
+import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
 
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
@@ -18,7 +19,7 @@ import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { libraryForMode } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
-import { isStarterId, loadStarterHtml } from '../starter/starterApps.js';
+import { isStarterId, listStarterApps, loadStarterHtml } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -36,6 +37,9 @@ type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { pha
 
 type RailTab = 'inspector' | 'chat';
 
+/** How long after host-ready the header keeps shimmering before falling back to the library name. */
+const ANNOUNCE_FALLBACK_MS = 1500;
+
 export default function RunView(): ReactElement {
   const { id = '' } = useParams();
   const mode = useMode();
@@ -49,6 +53,10 @@ export default function RunView(): ReactElement {
   const [exhausted, setExhausted] = useState(false);
   const [navigatedAway, setNavigatedAway] = useState(false);
   const [frameEpoch, setFrameEpoch] = useState(0);
+  /** Some apps never announce — after host-ready + a grace period the header stops shimmering. */
+  const [readySeen, setReadySeen] = useState(false);
+  const [announceTimedOut, setAnnounceTimedOut] = useState(false);
+  const [fallbackName, setFallbackName] = useState<string | undefined>(undefined);
   const [railTab, setRailTab] = useState<RailTab>('inspector');
   const [sheetOpen, setSheetOpen] = useState(false);
   const isMobile = useMediaQuery('(max-width: 760px)');
@@ -71,6 +79,8 @@ export default function RunView(): ReactElement {
   useEffect(() => {
     let cancelled = false;
     setHtmlState({ phase: 'loading' });
+    setReadySeen(false);
+    setAnnounceTimedOut(false);
     const load = isStarterId(id) ? loadStarterHtml(id) : libraryForMode(mode).getHtml(id);
     load
       .then((html) => {
@@ -80,10 +90,37 @@ export default function RunView(): ReactElement {
       .catch(() => {
         if (!cancelled) setHtmlState({ phase: 'missing' });
       });
+    // Library display name — the header's fallback when the app never announces.
+    if (isStarterId(id)) {
+      setFallbackName(listStarterApps().find((starter) => starter.id === id)?.name);
+    } else {
+      setFallbackName(undefined);
+      libraryForMode(mode)
+        .list()
+        .then((entries) => {
+          if (!cancelled) setFallbackName(entries.find((entry) => entry.id === id)?.displayName);
+        })
+        .catch(() => {
+          /* fallback name is best-effort */
+        });
+    }
     return () => {
       cancelled = true;
     };
   }, [id, mode]);
+
+  // Capability reveal has a floor: host-ready seen but no announce after the grace
+  // period → show the library name in plain style instead of shimmering forever.
+  useEffect(() => {
+    if (!readySeen || reveal.phase === 'live') return;
+    const timer = setTimeout(() => setAnnounceTimedOut(true), ANNOUNCE_FALLBACK_MS);
+    return () => clearTimeout(timer);
+  }, [readySeen, reveal.phase]);
+
+  const onFrame = useCallback((direction: FrameDirection, frame: Frame): void => {
+    dispatchFrame({ direction, frame });
+    if (direction === 'outbound' && frame.type === FRAME_TYPES.hostReady) setReadySeen(true);
+  }, []);
 
   // Capability reveal → persist announce metadata for the hub's gradient tiles.
   const onAnnounce = useCallback(
@@ -125,6 +162,8 @@ export default function RunView(): ReactElement {
   const onReload = useCallback((): void => {
     setNavigatedAway(false);
     setExhausted(false);
+    setReadySeen(false);
+    setAnnounceTimedOut(false);
     setFrameEpoch((epoch) => epoch + 1);
   }, []);
 
@@ -167,6 +206,17 @@ export default function RunView(): ReactElement {
               <div style={{ minWidth: 0 }}>
                 <div className="run-name">{meta.displayName}</div>
                 {meta.description !== undefined ? <div className="run-desc">{meta.description}</div> : null}
+              </div>
+            </div>
+          ) : announceTimedOut ? (
+            // The app never announced — plain library-name header, no shimmer, and no
+            // reveal animation (that stays reserved for genuine announces).
+            <div className="run-identity">
+              <span className="run-emoji" aria-hidden="true">
+                ⬡
+              </span>
+              <div style={{ minWidth: 0 }}>
+                <div className="run-name">{fallbackName ?? 'snug app'}</div>
               </div>
             </div>
           ) : (
@@ -214,7 +264,9 @@ export default function RunView(): ReactElement {
             </div>
           ) : (
             <SnugAppFrame
-              key={`${id}:${mode}:${frameEpoch}`}
+              // provider is part of the identity: a BYOK provider switch must remount
+              // the frame so the mount-captured transport can't go stale (Gate-5).
+              key={`${id}:${mode}:${provider}:${frameEpoch}`}
               html={htmlState.html}
               transport={transport}
               budgetKey={`app:${id}`}
@@ -224,7 +276,7 @@ export default function RunView(): ReactElement {
               title={meta?.displayName ?? 'Snug app'}
               controlsRef={controlsRef}
               onAnnounce={onAnnounce}
-              onFrame={(direction, frame) => dispatchFrame({ direction, frame })}
+              onFrame={onFrame}
               onBudgetExhausted={() => setExhausted(true)}
               onNavigatedAway={() => setNavigatedAway(true)}
             />

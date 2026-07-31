@@ -2,7 +2,7 @@
 // view's chat rail. Wraps a BuilderAgent (server SSE or byok in-browser) and exposes
 // plain message state; the artifact event is what turns a reply into a "run it" card.
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { byokLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
@@ -11,7 +11,10 @@ import { createByokBuilder, createServerBuilder, type ArtifactEvent, type Builde
 export interface ChatMessage {
   id: number;
   role: 'user' | 'agent';
-  text: string;
+  /** What the UI renders: the raw user idea, or the agent's (streamed) reply. */
+  displayText: string;
+  /** User messages only: what actually went to the transport (e.g. the KB-templated idea). */
+  wireText?: string;
   streaming?: boolean;
   error?: { code: string; message: string; retryable: boolean };
   artifact?: ArtifactEvent;
@@ -23,7 +26,12 @@ export interface BuilderChat {
   /** Reasoning-pill label while the agent works ("consulting the knowledge base…"). */
   activity: string | undefined;
   lastArtifact: ArtifactEvent | undefined;
-  send: (message: string) => void;
+  /**
+   * `displayText` is what the user's bubble shows; `wireText` (defaults to
+   * `displayText`) is what the transport actually sends — internal prompt templates
+   * belong in `wireText`, never on screen.
+   */
+  send: (displayText: string, wireText?: string) => void;
   stop: () => void;
 }
 
@@ -52,14 +60,15 @@ export function useBuilderChat(threadId: string): BuilderChat {
   }, []);
 
   const send = useCallback(
-    (text: string): void => {
-      if (busy || text.trim() === '') return;
+    (displayText: string, wireText?: string): void => {
+      const wire = wireText ?? displayText;
+      if (busy || displayText.trim() === '' || wire.trim() === '') return;
       const userId = ++messageSeq;
       const agentId = ++messageSeq;
       setMessages((current) => [
         ...current,
-        { id: userId, role: 'user', text },
-        { id: agentId, role: 'agent', text: '', streaming: true },
+        { id: userId, role: 'user', displayText, wireText: wire },
+        { id: agentId, role: 'agent', displayText: '', streaming: true },
       ]);
       setBusy(true);
       setActivity(mode === 'server' ? 'it’s thinking…' : 'warming up…');
@@ -67,11 +76,11 @@ export function useBuilderChat(threadId: string): BuilderChat {
       abortRef.current = controller;
       void agent
         .send(
-          text,
+          wire,
           {
             onDelta: (delta) => {
               setActivity(undefined);
-              patchMessage(agentId, (m) => ({ text: m.text + delta }));
+              patchMessage(agentId, (m) => ({ displayText: m.displayText + delta }));
             },
             onArtifact: (artifact) => {
               setLastArtifact(artifact);
@@ -83,7 +92,11 @@ export function useBuilderChat(threadId: string): BuilderChat {
         )
         .then((result) => {
           if (result.ok) {
-            patchMessage(agentId, { streaming: false, text: result.text });
+            // A done event with empty/missing text must not wipe the streamed deltas.
+            patchMessage(agentId, (m) => ({
+              streaming: false,
+              displayText: result.text !== '' ? result.text : m.displayText,
+            }));
           } else {
             patchMessage(agentId, { streaming: false, error: { code: result.code, message: result.message, retryable: result.retryable } });
           }
@@ -100,6 +113,9 @@ export function useBuilderChat(threadId: string): BuilderChat {
   const stop = useCallback((): void => {
     abortRef.current?.abort();
   }, []);
+
+  // Leaving the view aborts any in-flight turn — never leave a request running headless.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   return { messages, busy, activity, lastArtifact, send, stop };
 }

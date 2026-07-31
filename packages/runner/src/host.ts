@@ -567,6 +567,7 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       }
     },
     setTheme(next: ThemeName): void {
+      if (next === theme) return; // unchanged theme is a no-op — never a noise event (Gate-5)
       theme = next; // later host-ready frames carry the new theme
       notifyEvent('theme-change', { theme: next });
     },

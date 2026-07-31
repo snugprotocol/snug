@@ -35,9 +35,9 @@ The hosted demo hub: chat → build → run micro-apps, benchmark-setting UX. **
 5. BYOK mode: key never in localStorage (sessionStorage/memory only — test), never sent to the reference server (spy).
 6. Theme toggle flips tokens AND posts theme-change to a running app (integration with runner harness).
 7. db export button produces a Blob download with SQLite magic (unit with db driver).
-8. Examples validate: each parses as single-file HTML, contains the embedded hooks block verbatim (sync with sdk/embedded — script check), announces correctly in a jsdom harness.
+8. Examples validate: static validation (parse-only) + byte-identical hooks block — each parses as single-file HTML (jsdom parse, scripts never executed), and the embedded hooks block is byte-identical to sdk/embedded (script check). Announce metadata is checked statically, not executed.
 9. Lighthouse-ish sanity: bundle < 400KB gz initial (report actual), no CLS-obvious layout jank (manual note), mobile viewport E2E passes.
-10. Root `pnpm test` green; playground vitest suite green; `pnpm --filter playground e2e` green locally.
+10. Root `pnpm test` green; playground vitest suite green; `pnpm --filter playground test:e2e` green locally.
 
 **Out of scope**: share/install links, pin semantics beyond the artifact list, auth teaser card (small "connect account — coming in v1.1" chip allowed, inert), deployment.
 
@@ -48,3 +48,7 @@ Workstreams (disjoint): (A) app shell + design system + views + inspector (`apps
 
 ### 2026-07-31 — Claude (Fable 5) — session
 - Done: task file. Next: build via workflow, integrate, review, merge.
+
+### 2026-07-31 — Claude (Fable 5) — Gate-5 fixes session
+- Applied all 11 review fixes + copy item: chat displayText/wireText split (template never rendered); StrictMode blank-iframe fix (SnugAppFrame remounts the iframe per host instance); examples/ made a workspace package so root `pnpm test` runs the validate suite (AC-8/AC-10 wording corrected above); composer bottom padding; announce-fallback header after 1.5s; theme-change no-op equality guard in the runner host; server mock answers app-path envelopes JSON-only; done-event empty-text fallback; unmount abort; color-matched tile glow via color-mix; provider in the Run frame key; per-app starter blurbs + lowercase chips (knowledge regenerated).
+- Verified: runner 91 ✓, playground vitest 36 ✓, playwright 23 ✓, server 32 ✓, examples 18 ✓, root turbo test 19/19 ✓; StrictMode paint + no inspector noise confirmed in real Chromium under `pnpm dev`.

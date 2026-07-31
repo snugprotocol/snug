@@ -19,8 +19,8 @@ export function ChatLog({ messages, activity, compact = false }: ChatLogProps): 
       {messages.map((message) => (
         <div key={message.id} style={{ display: 'contents' }}>
           <div className={`msg ${message.role === 'user' ? 'msg-user' : 'msg-agent'}`}>
-            <span className={message.streaming === true && message.text !== '' ? 'streaming-caret' : undefined}>
-              {message.text}
+            <span className={message.streaming === true && message.displayText !== '' ? 'streaming-caret' : undefined}>
+              {message.displayText}
             </span>
             {message.error !== undefined ? (
               <div className="error-note" role="alert">

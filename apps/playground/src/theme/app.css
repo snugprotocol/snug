@@ -407,6 +407,8 @@
   min-height: 140px;
   text-align: left;
   overflow: hidden;
+  /* Hover glow is color-matched to the tile's own color (design brief). */
+  --tile-glow: color-mix(in srgb, var(--tile-color, var(--ember)) 22%, transparent);
 }
 
 .app-tile::before {
@@ -459,6 +461,12 @@
   flex-direction: column;
   gap: var(--space-4);
   padding-bottom: var(--space-4);
+}
+
+/* The sticky composer floats over the scroll area — reserve its height so the last
+   message/artifact card can always scroll clear of it. */
+.builder .chat-log {
+  padding-bottom: 96px;
 }
 
 .msg {
