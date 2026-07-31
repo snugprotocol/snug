@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bytesBase64": {
+      "type": "string"
+    },
+    "instanceId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "key": {
+      "maxLength": 256,
+      "type": "string"
+    },
+    "op": {
+      "enum": [
+        "exec",
+        "export",
+        "import",
+        "kvGet",
+        "kvSet"
+      ],
+      "type": "string"
+    },
+    "params": {
+      "items": {},
+      "type": "array"
+    },
+    "requestId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "sql": {
+      "type": "string"
+    },
+    "type": {
+      "const": "snug:db-request",
+      "type": "string"
+    },
+    "v": {
+      "const": 1,
+      "type": "number"
+    },
+    "value": {}
+  },
+  "required": [
+    "v",
+    "type",
+    "requestId",
+    "instanceId",
+    "op"
+  ],
+  "type": "object"
+}

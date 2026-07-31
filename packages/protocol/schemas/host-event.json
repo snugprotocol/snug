@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "data": {},
+    "event": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    },
+    "type": {
+      "const": "snug:host-event",
+      "type": "string"
+    },
+    "v": {
+      "const": 1,
+      "type": "number"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "event"
+  ],
+  "type": "object"
+}

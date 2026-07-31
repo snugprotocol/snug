@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "streaming": {
+          "const": true,
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:app-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "streaming",
+        "text"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "additionalProperties": {},
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "streaming": {
+          "const": false,
+          "type": "boolean"
+        },
+        "type": {
+          "const": "snug:app-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "streaming",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "additionalProperties": false,
+          "properties": {
+            "attemptsRemaining": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "code": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "rawExcerpt": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "ok": {
+          "const": false,
+          "type": "boolean"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:app-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "error"
+      ],
+      "type": "object"
+    }
+  ]
+}
