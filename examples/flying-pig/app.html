@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>flying pig</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f7efe1; --fg: #33241a; --muted: #8d7a64;
+      --card: #fffaf0; --border: #e6d8c1; --accent: #d97742;
+      --sky-top: #cde9ef; --sky-mid: #e9f0d9; --sky-low: #f7ecd2;
+      --ground: #8fae5c; --ground-dark: #7a9a4c; --dirt: #9a6b48;
+      --wood: #b98453; --wood-dark: #a06f42; --wood-edge: #6f4a2b; --wood-cap: #c8955f;
+      --cloud: rgba(255, 255, 255, 0.9);
+      --shadow: 0 12px 34px rgba(70, 42, 16, 0.16);
+    }
+    :root[data-theme="dark"] {
+      --bg: #191210; --fg: #f2e6d5; --muted: #a68f74;
+      --card: #241a14; --border: #3a2c1e; --accent: #ee9350;
+      --sky-top: #221420; --sky-mid: #58281d; --sky-low: #c97b3a;
+      --ground: #4d3a20; --ground-dark: #3d2d18; --dirt: #2c1d10;
+      --wood: #6f4a2b; --wood-dark: #5c3c21; --wood-edge: #2e1d0e; --wood-cap: #8a5f38;
+      --cloud: rgba(255, 214, 170, 0.28);
+      --shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; }
+    .wrap { max-width: 480px; margin: 0 auto; padding: 18px 12px 32px; }
+    header.brand { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    h1 {
+      font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+      font-size: clamp(1.7rem, 6vw, 2.3rem); font-weight: 600; margin: 0;
+    }
+    h1 em { color: var(--accent); font-style: normal; }
+    .best { color: var(--muted); font-size: 0.9rem; }
+    .stage {
+      position: relative; width: 100%; height: 540px; border-radius: 20px; overflow: hidden;
+      background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-low) 100%);
+      border: 1px solid var(--border); box-shadow: var(--shadow);
+      touch-action: manipulation; user-select: none; -webkit-user-select: none; cursor: pointer;
+    }
+    .px { width: 4px; height: 4px; position: absolute; background: transparent; }
+    .cloud { position: absolute; opacity: 0.9; animation: drift linear infinite; }
+    @keyframes drift { from { transform: translateX(480px); } to { transform: translateX(-140px); } }
+    .pig-wrap { position: absolute; left: 0; top: 0; will-change: transform; transition: none; }
+    .ground {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 56px;
+      background:
+        repeating-linear-gradient(90deg, var(--ground) 0 26px, var(--ground-dark) 26px 52px);
+      border-top: 4px solid var(--dirt);
+    }
+    .stage.live .ground { animation: scroll 0.8s linear infinite; }
+    @keyframes scroll { from { background-position-x: 0; } to { background-position-x: -52px; } }
+    .tower { position: absolute; width: 64px; border-radius: 6px;
+      background: repeating-linear-gradient(0deg, var(--wood) 0 14px, var(--wood-dark) 14px 17px);
+      border: 2px solid var(--wood-edge);
+    }
+    .tower .cap { position: absolute; left: -7px; right: -7px; height: 16px; background: var(--wood-cap); border: 2px solid var(--wood-edge); border-radius: 5px; }
+    .tower.top .cap { bottom: -2px; } .tower.bot .cap { top: -2px; }
+    .score {
+      position: absolute; top: 14px; left: 0; right: 0; text-align: center;
+      font-family: Georgia, 'Iowan Old Style', serif; font-size: 3rem; font-weight: 700;
+      color: var(--fg); text-shadow: 0 2px 0 rgba(255, 255, 255, 0.25); pointer-events: none;
+    }
+    .overlay {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px; padding: 20px; text-align: center;
+      background: color-mix(in srgb, var(--bg) 42%, transparent);
+      backdrop-filter: blur(2px);
+    }
+    .overlay h2 { font-family: Georgia, 'Iowan Old Style', serif; font-size: 2.1rem; margin: 0; }
+    .overlay .hint { color: var(--fg); font-size: 0.95rem; margin: 0; opacity: 0.85; }
+    .scorecard {
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 12px 26px; box-shadow: var(--shadow);
+    }
+    .scorecard .n { font-family: Georgia, serif; font-size: 2.4rem; font-weight: 700; }
+    .scorecard .l { color: var(--muted); font-size: 0.78rem; letter-spacing: 0.08em; }
+    .coach {
+      display: flex; gap: 10px; align-items: flex-start; max-width: 340px; text-align: left;
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 12px 14px; box-shadow: var(--shadow);
+    }
+    .coach .face { flex: none; width: 44px; height: 44px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 20%, var(--card)); display: flex; align-items: center; justify-content: center; font-size: 1.4rem; }
+    .coach p { margin: 0; font-family: Georgia, 'Iowan Old Style', serif; font-style: italic; line-height: 1.45; font-size: 0.98rem; min-height: 2.4em; }
+    .coach p.thinking { animation: pulse 1.4s ease-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+    .diffchip {
+      display: inline-flex; gap: 6px; align-items: center; font-size: 0.78rem; color: var(--muted);
+      background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
+    }
+    .btn {
+      border: 1px solid var(--accent); background: var(--accent); color: #fff6ec;
+      border-radius: 14px; padding: 12px 26px; font-size: 1rem; font-weight: 700;
+      transition: transform 160ms ease-out, filter 160ms ease-out;
+    }
+    .btn:active { transform: scale(0.96); } .btn:hover { filter: brightness(1.07); }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); font-style: italic; font-family: Georgia, serif; }
+    footer.note { margin-top: 10px; text-align: center; color: var(--muted); font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    const RESPONSE_SCHEMA = {
+      difficulty: {
+        speed: 'number between 0.6 and 2.5: obstacle speed multiplier for the NEXT run (raise it when the player is doing well)',
+        gap: 'number between 130 and 240: pixel gap between obstacles for the NEXT run (shrink it to make things harder)',
+      },
+      message: 'string: one or two short lines from a sardonic pig flight coach — taunt them or cheer them on, react to the score (ALWAYS include)',
+    };
+
+    // ============================================================
+    // 6. YOUR APP — flying pig
+    // ============================================================
+    const STAGE_W = 452, STAGE_H = 540, GROUND_H = 56;
+    const PIG_X = 84, PIG_W = 52, PIG_H = 38, PX = 4;
+    const GRAVITY = 1500, FLAP = -430, TOWER_W = 64, BASE_SPEED = 165;
+    const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(n) ? n : lo));
+
+    // pixel-art pig, drawn entirely with CSS box-shadow (no images allowed in the sandbox)
+    const PIG_PALETTE = { P: '#f2a0b5', D: '#d97a97', S: '#e88aa6', N: '#a34d6b', E: '#26161c', W: '#f8e8ce', w: '#e8d2ac' };
+    const PIG_UP = [
+      '...PP....PP..',
+      '..PPPPPPPPPP.',
+      '.PPPPPPEPPPP.',
+      'WWWPPPPPPPSS.',
+      'WWWWPPPPPPSN.',
+      '.WWwPPPPPPSS.',
+      '..PPPPPPPPPP.',
+      '...PPPPPPPP..',
+      '...DP....PD..',
+    ];
+    const PIG_DOWN = [
+      '...PP....PP..',
+      '..PPPPPPPPPP.',
+      '.PPPPPPEPPPP.',
+      '.PPPPPPPPPSS.',
+      'WWwPPPPPPPSN.',
+      'WWWWPPPPPPSS.',
+      '.WWWPPPPPPPP.',
+      '...PPPPPPPP..',
+      '...DP....PD..',
+    ];
+    const CLOUD_ROWS = ['..XXX....', '.XXXXXX..', 'XXXXXXXXX'];
+    function pixelShadow(rows, palette, px) {
+      const out = [];
+      rows.forEach((row, y) => {
+        row.split('').forEach((ch, x) => {
+          const c = palette[ch];
+          if (c) out.push(`${x * px}px ${y * px}px 0 ${c}`);
+        });
+      });
+      return out.join(',');
+    }
+    const SHADOW_UP = pixelShadow(PIG_UP, PIG_PALETTE, PX);
+    const SHADOW_DOWN = pixelShadow(PIG_DOWN, PIG_PALETTE, PX);
+
+    const freshWorld = () => ({
+      pigY: STAGE_H * 0.42, vy: 0, obstacles: [], score: 0, sinceSpawn: 9, dead: false,
+    });
+
+    function stepWorld(w, dt, diff) {
+      if (!w || w.dead) return w;
+      const speed = BASE_SPEED * diff.speed;
+      const spawnEvery = (TOWER_W + 190 + diff.gap * 0.35) / speed;
+      let { pigY, vy, obstacles, score, sinceSpawn } = w;
+      vy += GRAVITY * dt;
+      pigY += vy * dt;
+      sinceSpawn += dt;
+      obstacles = obstacles.map((o) => ({ ...o, x: o.x - speed * dt })).filter((o) => o.x > -TOWER_W - 10);
+      if (sinceSpawn >= spawnEvery) {
+        sinceSpawn = 0;
+        const margin = 90;
+        const gapY = margin + Math.random() * (STAGE_H - GROUND_H - margin * 2);
+        obstacles = [...obstacles, { x: STAGE_W + 20, gapY, passed: false }];
+      }
+      for (const o of obstacles) {
+        if (!o.passed && o.x + TOWER_W < PIG_X) { o.passed = true; score += 1; }
+      }
+      let dead = pigY + PIG_H > STAGE_H - GROUND_H || pigY < -20;
+      for (const o of obstacles) {
+        const overlapX = PIG_X + PIG_W - 6 > o.x && PIG_X + 6 < o.x + TOWER_W;
+        if (overlapX && (pigY + 4 < o.gapY - diff.gap / 2 || pigY + PIG_H - 4 > o.gapY + diff.gap / 2)) dead = true;
+      }
+      return { pigY, vy, obstacles, score, sinceSpawn, dead };
+    }
+
+    function App() {
+      const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
+        appId: 'flying-pig',
+        displayName: 'flying pig',
+        description: 'Flap a pixel pig through the fence towers. The agent is your flight coach: it tunes the difficulty and heckles you between runs.',
+        iconEmoji: '🐷',
+        iconColor: '#d97742',
+      });
+      const [save, setSave] = usePersistedState('flying-pig-save', {
+        best: 0, runs: 0, difficulty: { speed: 1, gap: 190 },
+        coachLine: 'tap or press space. wings are not a metaphor here.',
+      });
+      const [phase, setPhase] = useState('idle'); // idle | playing | over
+      const [world, setWorld] = useState(freshWorld);
+      const [liveCoach, setLiveCoach] = useState(null); // streamed text while the coach is talking
+      const diffRef = useRef(save.difficulty);
+      useEffect(() => { diffRef.current = save.difficulty; }, [save.difficulty]);
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      // game loop
+      useEffect(() => {
+        if (phase !== 'playing') return;
+        let raf, last = performance.now();
+        const tick = (now) => {
+          const dt = Math.min((now - last) / 1000, 0.033);
+          last = now;
+          setWorld((w) => stepWorld(w, dt, diffRef.current));
+          raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf);
+      }, [phase]);
+
+      const endRun = async (score) => {
+        setPhase('over');
+        const best = Math.max(save.best, score);
+        const runs = save.runs + 1;
+        setSave((prev) => ({ ...prev, best, runs }));
+        setLiveCoach('');
+        const result = await sendMessage('run_over', {
+          score, best, runsPlayed: runs, lastDifficulty: save.difficulty,
+        }, {
+          state: { best, runs, difficulty: save.difficulty },
+          responseSchema: RESPONSE_SCHEMA,
+          onStream: (text) => setLiveCoach(text),
+        });
+        setLiveCoach(null);
+        if (!result.ok) {
+          // Coach unreachable — nudge difficulty locally and keep playing. Errors are data.
+          setSave((prev) => ({
+            ...prev,
+            difficulty: { speed: clamp(prev.difficulty.speed + 0.05, 0.6, 2.5), gap: prev.difficulty.gap },
+            coachLine: 'the coach lost its voice. fly anyway — slightly faster, because life is unfair.',
+          }));
+          return;
+        }
+        const d = result.data && typeof result.data === 'object' ? result.data : {};
+        const nd = d.difficulty && typeof d.difficulty === 'object' ? d.difficulty : {};
+        setSave((prev) => ({
+          ...prev,
+          difficulty: {
+            speed: Number.isFinite(Number(nd.speed)) ? clamp(Number(nd.speed), 0.6, 2.5) : prev.difficulty.speed,
+            gap: Number.isFinite(Number(nd.gap)) ? clamp(Number(nd.gap), 130, 240) : prev.difficulty.gap,
+          },
+          coachLine: typeof d.message === 'string' && d.message.trim() ? d.message.trim() : 'hm. the coach just stared. take that as motivation.',
+        }));
+      };
+
+      // collision watcher — the loop marks dead, this effect ends the run exactly once
+      useEffect(() => {
+        if (phase === 'playing' && world.dead) endRun(world.score);
+      }, [world.dead]); // eslint-disable-line
+
+      const act = () => {
+        if (phase === 'playing') { setWorld((w) => ({ ...w, vy: FLAP })); return; }
+        if (phase === 'over' && isWaiting) return; // let the coach finish talking
+        setWorld(freshWorld());
+        setPhase('playing');
+      };
+
+      useEffect(() => {
+        const onKey = (e) => {
+          if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); act(); }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      });
+
+      if (!isReady) return <div className="connecting">warming up the wings…</div>;
+
+      const flapUp = world.vy < 0;
+      const rot = clamp(world.vy * 0.055, -22, 62);
+      const d = save.difficulty;
+      const coachText = liveCoach !== null && liveCoach !== '' ? liveCoach
+        : isWaiting ? 'the coach is reviewing your flight…'
+        : save.coachLine;
+
+      return (
+        <div className="wrap">
+          <header className="brand">
+            <h1>flying <em>pig</em></h1>
+            <span className="best">best {save.best} · runs {save.runs}</span>
+          </header>
+          <div className={'stage' + (phase === 'playing' ? ' live' : '')} onPointerDown={act}
+            role="application" aria-label="flying pig game — tap or press space to flap">
+            <div className="cloud px" style={{ top: 70, boxShadow: pixelShadow(CLOUD_ROWS, { X: 'var(--cloud)' }, 6), animationDuration: '34s' }} />
+            <div className="cloud px" style={{ top: 180, boxShadow: pixelShadow(CLOUD_ROWS, { X: 'var(--cloud)' }, 4), animationDuration: '26s', animationDelay: '-12s' }} />
+            <div className="cloud px" style={{ top: 300, boxShadow: pixelShadow(CLOUD_ROWS, { X: 'var(--cloud)' }, 5), animationDuration: '44s', animationDelay: '-30s' }} />
+            {world.obstacles.map((o, i) => {
+              const topH = o.gapY - d.gap / 2;
+              const botY = o.gapY + d.gap / 2;
+              return (
+                <React.Fragment key={i}>
+                  <div className="tower top" style={{ left: o.x, top: -6, height: topH + 6 }}><div className="cap" /></div>
+                  <div className="tower bot" style={{ left: o.x, top: botY, height: STAGE_H - GROUND_H - botY + 6 }}><div className="cap" /></div>
+                </React.Fragment>
+              );
+            })}
+            <div className="pig-wrap" style={{ transform: `translate(${PIG_X}px, ${world.pigY}px) rotate(${rot}deg)` }}>
+              <div className="px" style={{ boxShadow: flapUp ? SHADOW_UP : SHADOW_DOWN }} />
+            </div>
+            <div className="ground" />
+            {phase === 'playing' && <div className="score">{world.score}</div>}
+            {phase !== 'playing' && (
+              <div className="overlay">
+                {phase === 'idle' ? <h2>flying pig</h2> : (
+                  <div className="scorecard">
+                    <div className="n">{world.score}</div>
+                    <div className="l">this run · best {save.best}</div>
+                  </div>
+                )}
+                <div className="coach">
+                  <div className="face" aria-hidden="true">🐷</div>
+                  <p className={isWaiting && !liveCoach ? 'thinking' : ''}>{coachText}</p>
+                </div>
+                <span className="diffchip">coach set · speed {d.speed.toFixed(2)}× · gap {Math.round(d.gap)}px</span>
+                <button className="btn" onClick={(e) => { e.stopPropagation(); act(); }} disabled={phase === 'over' && isWaiting}>
+                  {phase === 'idle' ? 'take off' : isWaiting ? 'it’s thinking…' : 'fly again'}
+                </button>
+                <p className="hint">tap anywhere or press space to flap.</p>
+              </div>
+            )}
+          </div>
+          <footer className="note">the coach retunes speed and gap after every run — your score is its only input.</footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

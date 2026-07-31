@@ -19,9 +19,9 @@ personality.
 > DATA SECTION — the Playground renders these six ideas as one-tap chips; each chip's text
 > replaces {{{appIdea}}} in the template above.
 
-- Chess with an AI opponent that trash-talks (politely)
-- A flashcard trainer that generates cards on any topic I name
-- 20 Questions — the AI guesses what I'm thinking of
-- A workout tracker where I can ask questions about my history in plain English
-- A collaborative story builder — we alternate paragraphs
-- A quiz-show host that grills me on a topic of my choice
+- chess with an AI opponent that trash-talks (politely)
+- a flashcard trainer that generates cards on any topic I name
+- 20 questions — the AI guesses what I'm thinking of
+- a workout tracker where I can ask questions about my history in plain English
+- a collaborative story builder — we alternate paragraphs
+- a quiz-show host that grills me on a topic of my choice

@@ -159,6 +159,20 @@ describe('SnugAppFrame', () => {
     expect(ready?.theme).toBe('dark');
   });
 
+  it('setTheme with the current theme posts nothing — no mount-time inspector noise (Gate-5)', async () => {
+    const r = await render({ theme: 'dark' });
+    const before = r.posted.length;
+    r.controls.current!.setTheme('dark'); // unchanged — must be a silent no-op
+    await r.rerender({ theme: 'dark' }); // prop-driven path with the same value: also silent
+    expect(r.posted.length).toBe(before);
+    r.controls.current!.setTheme('light'); // a genuine change still posts
+    expect(r.posted.at(-1)).toMatchObject({
+      type: FRAME_TYPES.hostEvent,
+      event: 'theme-change',
+      data: { theme: 'light' },
+    });
+  });
+
   it('exposes host controls via controlsRef (reset for the R6 explicit user reset)', async () => {
     const r = await render();
     expect(r.controls.current).not.toBeNull();

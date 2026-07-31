@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#171310" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#faf6ef" media="(prefers-color-scheme: light)" />
+    <meta name="description" content="snug — build tiny AI apps by talking, then run them in a sandbox you can watch think." />
+    <title>snug — playground</title>
+    <script>
+      // Theme before first paint — no flash. Mirrors src/state/theme.ts persistence.
+      try {
+        var t = localStorage.getItem('snug:theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
