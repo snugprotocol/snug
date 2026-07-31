@@ -1,6 +1,6 @@
 # TASK-20260731-runner-sandbox: `packages/runner` — sandboxed iframe host + bridge (child 3 of build-hub)
 
-- **Status**: in-progress
+- **Status**: in-review
 - **Owner**: Jeetu (delegated session)
 - **Risk tier**: **high** (C2 sandbox/CSP; touches `packages/protocol` via two loop-backs)
 - **Branch**: `feat/TASK-20260731-runner-sandbox`
@@ -52,4 +52,9 @@ Protocol loop-backs first (schemas regen + changelog) → `src/csp.ts` (+hostile
 - Done (tests-first per area): protocol loop-backs (`FrameParseResult.requestId?` recovery, `LIMITS.MAX_DB_FRAME_BYTES` + per-type `frameWithinLimits`; 11 new tests; no JSON-schema drift — schemas untouched, stable test green); spec-changelog entry + SPEC-DRAFT R1/R6 prose; `packages/runner` implemented in full: `csp.ts` (frozen RUNNER_CSP + DOM-parsing injectCsp, 17 tests incl. hostile matrix), `transport.ts` seams (AgentTransport/TransportResult/BudgetStore/DbDriver, C1-noted), `host.ts` (full state machine: announce/ready, per-load instanceId via srcdoc-credit MutationObserver + load counting, navigation cutoff, budget strikes, duplicate/flood, cancel, THREAD_CONFLICT backoff, db routing with host namespace, wire answers for recoverable parse failures, onFrame/onAppEvent; 53 tests), `react/SnugAppFrame.tsx` (StrictMode-safe, effect-declaration-order upholds listener-before-srcDoc, html change = reset flow, controlsRef; 8 tests), `browser-csp.spec.template.ts` (11 data-driven checks for the child-6 Playwright harness), index exports + source-guard (7 tests). ADR-0006 written; ADR index updated (0004–0006).
 - jsdom findings (documented in test harness): vitest-jsdom delivers the natural iframe `load` only to listeners registered before `appendChild` and never re-fires on srcdoc reassignment → host tests simulate loads via `dispatchEvent(new Event('load'))` after letting the srcdoc mutation record deliver. Real-browser load semantics are a Playwright-suite concern (F11).
 - Test totals: protocol 85 (was 74), runner 85, all green; both packages build clean.
-- Next: Gate-5 adversarial review → merge.
+- Gate-5 fixes applied (verdict: merge-ready, 4 minor): (1) three new browser CSP checks — hostile `<base href>` inert (base-uri 'none'), `form.submit()` to external action blocked (form-action 'none'; missing verdict = harness failure), app-supplied permissive CSP meta cannot widen the policy (intersection wins); (2) db-request duplicate + MAX_IN_FLIGHT flood guards mirroring app-message (duplicate → non-retryable, flood → retryable db-response error; 3 tests); (3) `answerUnparseable` only answers app-origin types (app-message/db-request) — host-frame echoes and app-cancel dropped even with recoverable requestId (2 tests). Fourth finding recorded by coordinator as child-6 note. Totals after fixes: runner 90, protocol 85, both green.
+- Next: merge.
+
+### 2026-07-31 — Claude (Fable 5) — Gate-5 close
+- Gate-5 adversarial review (agent aa8b04264051f71c3): MERGE-READY, no blockers; C1 verified airtight, C2 CSP tree-order verified against full hostile matrix. 4 minor findings; 3 applied (browser-suite base-uri/form-action/permissive-meta checks; db flood/duplicate guards; anti-reflection in answerUnparseable), 1 recorded for child 6 (Playwright StrictMode double-srcdoc case). Runner 90/90, protocol 85/85, root green.
+- High-tier self-sign-off: plan fresh-context-reviewed pre-implementation; negative tests present for every C2 claim testable in jsdom; browser-suite template gates the rest via child 6.

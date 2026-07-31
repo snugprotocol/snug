@@ -130,6 +130,46 @@ describe('db-request routing', () => {
   });
 });
 
+describe('db duplicate & flood guards (Gate-5 F2)', () => {
+  it('a duplicate in-flight db requestId gets a non-retryable error and reaches the driver only once', async () => {
+    const handle = vi.fn<DbDriver['handle']>(() => new Promise(() => {}));
+    const ctx = await mountWithDb({ handle });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, dbRequest('db-dup', instanceId));
+    postFromApp(ctx.iframe, dbRequest('db-dup', instanceId));
+    await flush();
+    expect(handle).toHaveBeenCalledTimes(1);
+    const frames = dbResponses(ctx, 'db-dup');
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ ok: false, error: { code: ERROR_CODES.HOST_ERROR, retryable: false } });
+  });
+
+  it('the 9th concurrent db request is rejected with a retryable error (MAX_IN_FLIGHT cap)', async () => {
+    const handle = vi.fn<DbDriver['handle']>(() => new Promise(() => {}));
+    const ctx = await mountWithDb({ handle });
+    const instanceId = await ctx.connect();
+    for (let i = 1; i <= 9; i++) postFromApp(ctx.iframe, dbRequest(`db-${i}`, instanceId));
+    await flush();
+    expect(handle).toHaveBeenCalledTimes(8);
+    expect(dbResponses(ctx, 'db-9').at(-1)).toMatchObject({
+      ok: false,
+      error: { code: ERROR_CODES.HOST_ERROR, retryable: true },
+    });
+  });
+
+  it('a settled db requestId frees its in-flight slot', async () => {
+    const handle = vi.fn<DbDriver['handle']>(async () => ({ ok: true, rows: [[1]] }));
+    const ctx = await mountWithDb({ handle });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, dbRequest('db-1', instanceId));
+    await flush();
+    postFromApp(ctx.iframe, dbRequest('db-1', instanceId)); // settled — no longer a duplicate
+    await flush();
+    expect(handle).toHaveBeenCalledTimes(2);
+    expect(dbResponses(ctx, 'db-1').filter((f) => (f as { ok: boolean }).ok)).toHaveLength(2);
+  });
+});
+
 describe('db size class (8 MiB, R6 amendment)', () => {
   const artifactBase64 = 'A'.repeat(Math.ceil((LIMITS.MAX_ARTIFACT_BYTES * 4) / 3));
 

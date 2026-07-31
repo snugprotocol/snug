@@ -219,6 +219,27 @@ describe('unparseable frames — wire answers only when requestId is recoverable
     await flush();
     expect(ctx.posted.length).toBe(before);
   });
+
+  it('never reflects wire answers for host-frame types, even with a recoverable requestId (Gate-5 F3)', async () => {
+    const ctx = await mount();
+    await ctx.connect();
+    const before = ctx.posted.length;
+    // A hostile app echoing host-frame types must not conjure app-response error frames.
+    postFromApp(ctx.iframe, { v: 2, type: FRAME_TYPES.appResponse, requestId: 'req-reflect' });
+    postFromApp(ctx.iframe, { v: 2, type: FRAME_TYPES.dbResponse, requestId: 'req-reflect-db' });
+    postFromApp(ctx.iframe, { v: 2, type: FRAME_TYPES.hostReady, requestId: 'req-reflect-hr' });
+    await flush();
+    expect(ctx.posted.length).toBe(before);
+  });
+
+  it('drops an unanswerable app-origin type (app-cancel) even when malformed with a requestId (Gate-5 F3)', async () => {
+    const ctx = await mount();
+    const instanceId = await ctx.connect();
+    const before = ctx.posted.length;
+    postFromApp(ctx.iframe, { v: 2, type: FRAME_TYPES.appCancel, requestId: 'req-c', instanceId });
+    await flush();
+    expect(ctx.posted.length).toBe(before);
+  });
 });
 
 describe('host-event / app-event / observation (F12)', () => {

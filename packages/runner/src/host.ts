@@ -149,6 +149,8 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   /** Outstanding srcdoc-assignment credits; a load with zero credits is an escape. */
   let allowedLoads = 0;
   const inFlight = new Map<string, InFlight>();
+  /** In-flight db requestIds — same duplicate/flood discipline as app messages (Gate-5). */
+  const dbInFlight = new Set<string>();
 
   const observer = new MutationObserver((records) => {
     allowedLoads += records.length;
@@ -423,6 +425,15 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       postDbError(frame.requestId, ERROR_CODES.HOST_ERROR, 'this host has no db capability', false);
       return;
     }
+    if (dbInFlight.has(frame.requestId)) {
+      postDbError(frame.requestId, ERROR_CODES.HOST_ERROR, `db requestId ${frame.requestId} is already in flight`, false);
+      return;
+    }
+    if (dbInFlight.size >= MAX_IN_FLIGHT) {
+      postDbError(frame.requestId, ERROR_CODES.HOST_ERROR, `too many concurrent db requests (max ${MAX_IN_FLIGHT})`, true);
+      return;
+    }
+    dbInFlight.add(frame.requestId);
     const boundInstance = instanceId;
     let result: DbDriverResult;
     try {
@@ -435,6 +446,8 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
         message: err instanceof Error ? err.message : 'db driver threw',
         retryable: true,
       };
+    } finally {
+      dbInFlight.delete(frame.requestId);
     }
     if (destroyed || navigatedAway || instanceId !== boundInstance) return; // superseded meanwhile
     if (!result.ok) {
@@ -458,14 +471,19 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
     post(response);
   }
 
-  /** Answer UNSUPPORTED_VERSION/MALFORMED on the wire ONLY when a requestId is recoverable (R1). */
+  /**
+   * Answer UNSUPPORTED_VERSION/MALFORMED on the wire ONLY when a requestId is recoverable
+   * (R1) AND the raw `type` is an answerable app-origin request type. Anything else —
+   * host-frame types echoed back, unknown types, app-cancel — is dropped: a hostile app
+   * must not be able to conjure reflected response frames (Gate-5 finding 3).
+   */
   function answerUnparseable(raw: unknown, code: string, detail: string, requestId: string | undefined): void {
     if (requestId === undefined) return;
     const rawType = (raw as { type?: unknown } | null)?.type;
     const error = { code, message: clampMessage(detail), retryable: false };
     if (rawType === FRAME_TYPES.dbRequest) {
       post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.dbResponse, requestId, ok: false, error });
-    } else {
+    } else if (rawType === FRAME_TYPES.appMessage) {
       post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.appResponse, requestId, ok: false, error });
     }
   }
