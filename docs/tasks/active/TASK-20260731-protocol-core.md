@@ -1,6 +1,6 @@
 # TASK-20260731-protocol-core: `packages/protocol` — envelope schemas, constants, JSON Schema export (child 1 of build-hub)
 
-- **Status**: in-progress
+- **Status**: in-review
 - **Owner**: Jeetu (delegated session)
 - **Risk tier**: **high** (protocol schemas = the public spec)
 - **Branch**: `feat/TASK-20260731-protocol-core`
@@ -45,7 +45,7 @@ Define the Snug envelope protocol as zod schemas + typed helpers, unifying the t
 5. `AUTH_REQUIRED`/`CONSENT_REQUIRED` exist as reserved known codes; unknown string code parses fine and maps to `HOST_ERROR` handling class (R5).
 6. C1: `stripCredentialHeaders` strips the full header list case-insensitively; `scanForCredentialValues` rejects planted `Bearer …`/JWT/high-entropy values nested deep, warns-only on `{token: 'rook'}`.
 7. Schema export deterministic: double-generation byte-identical; committed files match (`pnpm gen:schemas && git diff --exit-code -- schemas`).
-8. Zero runtime deps besides zod; `src/` free of `node:*` imports (lint rule + jsdom import smoke test); size caps enforced by schemas (oversized announce strings rejected).
+8. Zero runtime deps besides zod; `src/` free of `node:*` imports (test-enforced walk + jsdom import smoke test — eslint rule deferred until linting lands); size caps enforced by schemas (oversized announce strings rejected).
 9. R3 helpers: response-builder utilities make it impossible to construct a streaming-only sequence without a terminal frame in the runner's state machine (typed builder API asserted).
 
 **Out of scope**: runner/SDK implementations (children 3–4); spec repo push; auth flows; delta streaming (`mode` reserved only).
@@ -67,3 +67,8 @@ Files (tests FIRST, suite starts red): `src/constants.ts` → `src/frames.ts` (d
 - Done: spec + plan; fresh-context AI plan review completed and incorporated (open frame set, R1–R6 rules, db/event frames, open code set, instanceId, security-helper split, zod v4).
 - State: plan finalized under umbrella approval; **High-tier pre-implementation review satisfied**. Implementation starting: tests first.
 - Next step: branch, red tests, implement, gen schemas, green, AI code review, merge.
+
+### 2026-07-31 — Claude (Fable 5) — review+fixes
+- Done: implemented (tests-first, suite was red at 48). Gate-5 adversarial review (agent ad9d954e7aa646e5c): 12 findings — 1 blocker (exported JSON Schemas carried additionalProperties:false, contradicting R2; fixed with io:'input' + regression test), 3 majors (prose-quote poisoning of the balanced-brace scanner; fail() emitting frames that fail validation → clamped; AC-9 gap → respondTo wrapper guaranteeing terminal frames), plus spread-order marker override, security-scan rebalance (known provider prefixes reject; entropy-only under neutral keys warn), frameWithinLimits, classifyErrorCode, db per-op discriminated unions, path-carrying diagnostics, binary bytes in a test file escaped. 74 tests green; schemas regenerated.
+- State: ready to merge; High-tier self-sign-off: plan reviewed pre-implementation, negative tests present (C1 strip/scan, R2, version rejection), all review findings closed or explicitly re-scoped in AC text.
+- Next step: merge to main, proceed to child 2 (knowledge-store).

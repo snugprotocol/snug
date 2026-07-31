@@ -1,77 +1,109 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "properties": {
-    "bytesBase64": {
-      "type": "string"
-    },
-    "columns": {
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "error": {
-      "additionalProperties": false,
+  "anyOf": [
+    {
       "properties": {
-        "attemptsRemaining": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+        "bytesBase64": {
+          "type": "string"
         },
-        "code": {
-          "maxLength": 64,
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "requestId": {
+          "maxLength": 128,
           "minLength": 1,
           "type": "string"
         },
-        "message": {
+        "rows": {
+          "items": {
+            "items": {},
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "snug:db-response",
           "type": "string"
         },
-        "rawExcerpt": {
-          "maxLength": 200,
-          "type": "string"
+        "v": {
+          "const": 1,
+          "type": "number"
         },
-        "retryable": {
-          "type": "boolean"
-        }
+        "value": {}
       },
       "required": [
-        "code",
-        "message",
-        "retryable"
+        "v",
+        "type",
+        "requestId",
+        "ok"
       ],
       "type": "object"
     },
-    "ok": {
-      "type": "boolean"
-    },
-    "requestId": {
-      "maxLength": 128,
-      "minLength": 1,
-      "type": "string"
-    },
-    "rows": {
-      "items": {
-        "items": {},
-        "type": "array"
+    {
+      "properties": {
+        "error": {
+          "properties": {
+            "attemptsRemaining": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "code": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "rawExcerpt": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "ok": {
+          "const": false,
+          "type": "boolean"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:db-response",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
       },
-      "type": "array"
-    },
-    "type": {
-      "const": "snug:db-response",
-      "type": "string"
-    },
-    "v": {
-      "const": 1,
-      "type": "number"
-    },
-    "value": {}
-  },
-  "required": [
-    "v",
-    "type",
-    "requestId",
-    "ok"
-  ],
-  "type": "object"
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "ok",
+        "error"
+      ],
+      "type": "object"
+    }
+  ]
 }

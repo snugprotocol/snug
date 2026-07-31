@@ -26,7 +26,8 @@ export type EnvelopeInput = Omit<AppRequestEnvelope, 'snug'>;
 
 /** Serialize an envelope to the tagged wire string: `[SNUG_APP_REQUEST]\n{json}`. */
 export function buildAppRequest(env: EnvelopeInput): string {
-  const body: AppRequestEnvelope = { snug: PROTOCOL_VERSION, ...env };
+  // Marker last so a stray `snug` on the input can never override it.
+  const body: AppRequestEnvelope = { ...env, snug: PROTOCOL_VERSION };
   return `${SNUG_APP_REQUEST_TAG}\n${JSON.stringify(body)}`;
 }
 

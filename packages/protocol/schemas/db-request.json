@@ -1,57 +1,203 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "properties": {
-    "bytesBase64": {
-      "type": "string"
-    },
-    "instanceId": {
-      "maxLength": 128,
-      "minLength": 1,
-      "type": "string"
-    },
-    "key": {
-      "maxLength": 256,
-      "type": "string"
-    },
-    "op": {
-      "enum": [
-        "exec",
-        "export",
-        "import",
-        "kvGet",
-        "kvSet"
+  "oneOf": [
+    {
+      "properties": {
+        "instanceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "op": {
+          "const": "exec",
+          "type": "string"
+        },
+        "params": {
+          "items": {},
+          "type": "array"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sql": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:db-request",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "instanceId",
+        "op",
+        "sql"
       ],
-      "type": "string"
+      "type": "object"
     },
-    "params": {
-      "items": {},
-      "type": "array"
+    {
+      "properties": {
+        "instanceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "op": {
+          "const": "export",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:db-request",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "instanceId",
+        "op"
+      ],
+      "type": "object"
     },
-    "requestId": {
-      "maxLength": 128,
-      "minLength": 1,
-      "type": "string"
+    {
+      "properties": {
+        "bytesBase64": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "instanceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "op": {
+          "const": "import",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:db-request",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "instanceId",
+        "op",
+        "bytesBase64"
+      ],
+      "type": "object"
     },
-    "sql": {
-      "type": "string"
+    {
+      "properties": {
+        "instanceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "key": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "op": {
+          "const": "kvGet",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:db-request",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "instanceId",
+        "op",
+        "key"
+      ],
+      "type": "object"
     },
-    "type": {
-      "const": "snug:db-request",
-      "type": "string"
-    },
-    "v": {
-      "const": 1,
-      "type": "number"
-    },
-    "value": {}
-  },
-  "required": [
-    "v",
-    "type",
-    "requestId",
-    "instanceId",
-    "op"
-  ],
-  "type": "object"
+    {
+      "properties": {
+        "instanceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "key": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "op": {
+          "const": "kvSet",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "snug:db-request",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "type": "number"
+        },
+        "value": {}
+      },
+      "required": [
+        "v",
+        "type",
+        "requestId",
+        "instanceId",
+        "op",
+        "key",
+        "value"
+      ],
+      "type": "object"
+    }
+  ]
 }

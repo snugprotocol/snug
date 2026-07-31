@@ -43,6 +43,17 @@ export const ERROR_CODES = {
 
 export type KnownErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 
+const KNOWN_ERROR_CODES = new Set<string>(Object.values(ERROR_CODES));
+
+export function isKnownErrorCode(code: string): code is KnownErrorCode {
+  return KNOWN_ERROR_CODES.has(code);
+}
+
+/** R5: receivers render unknown codes as HOST_ERROR and honor the frame's `retryable` flag. */
+export function classifyErrorCode(code: string): KnownErrorCode {
+  return isKnownErrorCode(code) ? code : ERROR_CODES.HOST_ERROR;
+}
+
 /** Size and retry limits (rule R6). Backoff values inherited from the hardened ancestor. */
 export const LIMITS = {
   MAX_FRAME_BYTES: 256 * 1024,

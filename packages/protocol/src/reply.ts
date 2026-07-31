@@ -53,7 +53,12 @@ function tryParseObject(candidate: string): Record<string, unknown> | null {
   return null;
 }
 
-/** Yields each balanced top-level `{…}` region, tracking JSON string/escape state. */
+/**
+ * Yields each balanced top-level `{…}` region, tracking JSON string/escape state.
+ * String state is only tracked at depth > 0: a lone quote in surrounding prose
+ * (`a 6" board: {...}`) must not swallow the JSON that follows — quotes can only
+ * open JSON strings inside a candidate object.
+ */
 function* balancedObjects(text: string): Generator<string> {
   let depth = 0;
   let start = -1;
@@ -67,7 +72,7 @@ function* balancedObjects(text: string): Generator<string> {
       else if (ch === '"') inString = false;
       continue;
     }
-    if (ch === '"') inString = true;
+    if (ch === '"' && depth > 0) inString = true;
     else if (ch === '{') {
       if (depth === 0) start = i;
       depth++;

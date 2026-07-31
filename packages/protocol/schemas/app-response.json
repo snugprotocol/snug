@@ -2,7 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "anyOf": [
     {
-      "additionalProperties": false,
       "properties": {
         "ok": {
           "const": true,
@@ -45,7 +44,6 @@
       "type": "object"
     },
     {
-      "additionalProperties": false,
       "properties": {
         "data": {
           "additionalProperties": {},
@@ -87,10 +85,8 @@
       "type": "object"
     },
     {
-      "additionalProperties": false,
       "properties": {
         "error": {
-          "additionalProperties": false,
           "properties": {
             "attemptsRemaining": {
               "maximum": 9007199254740991,

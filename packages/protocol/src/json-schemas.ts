@@ -34,7 +34,10 @@ const SOURCES: Record<string, z.ZodType> = {
 export function buildJsonSchemas(): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, schema] of Object.entries(SOURCES)) {
-    const json = z.toJSONSchema(schema, { target: 'draft-2020-12' });
+    // io: 'input' — exported schemas must ACCEPT unknown fields (rule R2 forward-compat);
+    // the default 'output' mode stamps additionalProperties: false, which would make every
+    // conforming v1.0 validator reject additive v1.x fields.
+    const json = z.toJSONSchema(schema, { target: 'draft-2020-12', io: 'input' });
     out[name] = `${JSON.stringify(sortKeysDeep(json), null, 2)}\n`;
   }
   return out;

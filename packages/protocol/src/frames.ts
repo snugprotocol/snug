@@ -84,30 +84,30 @@ export const appResponseSchema = z.union([
   }),
 ]);
 
-export const dbRequestSchema = z.object({
-  v: version,
-  type: z.literal(FRAME_TYPES.dbRequest),
-  requestId: id,
-  instanceId: id,
-  op: z.enum(['exec', 'export', 'import', 'kvGet', 'kvSet']),
-  sql: z.string().optional(),
-  params: z.array(z.unknown()).optional(),
-  key: z.string().max(256).optional(),
-  value: z.unknown().optional(),
-  bytesBase64: z.string().optional(),
-});
+const dbRequestBase = { v: version, type: z.literal(FRAME_TYPES.dbRequest), requestId: id, instanceId: id } as const;
 
-export const dbResponseSchema = z.object({
-  v: version,
-  type: z.literal(FRAME_TYPES.dbResponse),
-  requestId: id,
-  ok: z.boolean(),
-  rows: z.array(z.array(z.unknown())).optional(),
-  columns: z.array(z.string()).optional(),
-  value: z.unknown().optional(),
-  bytesBase64: z.string().optional(),
-  error: responseErrorSchema.optional(),
-});
+/** Per-op invariants are schema-enforced (parse, don't check): exec needs sql, kv ops need key, import needs bytes. */
+export const dbRequestSchema = z.discriminatedUnion('op', [
+  z.object({ ...dbRequestBase, op: z.literal('exec'), sql: z.string().min(1), params: z.array(z.unknown()).optional() }),
+  z.object({ ...dbRequestBase, op: z.literal('export') }),
+  z.object({ ...dbRequestBase, op: z.literal('import'), bytesBase64: z.string().min(1) }),
+  z.object({ ...dbRequestBase, op: z.literal('kvGet'), key: z.string().min(1).max(256) }),
+  z.object({ ...dbRequestBase, op: z.literal('kvSet'), key: z.string().min(1).max(256), value: z.unknown() }),
+]);
+
+const dbResponseBase = { v: version, type: z.literal(FRAME_TYPES.dbResponse), requestId: id } as const;
+
+export const dbResponseSchema = z.union([
+  z.object({
+    ...dbResponseBase,
+    ok: z.literal(true),
+    rows: z.array(z.array(z.unknown())).optional(),
+    columns: z.array(z.string()).optional(),
+    value: z.unknown().optional(),
+    bytesBase64: z.string().optional(),
+  }),
+  z.object({ ...dbResponseBase, ok: z.literal(false), error: responseErrorSchema }),
+]);
 
 export const hostEventSchema = z.object({
   v: version,
@@ -190,9 +190,22 @@ export function parseFrame(input: unknown): FrameParseResult {
   if (!schema) return { ok: false, ignored: true };
   const parsed = schema.safeParse(candidate);
   if (!parsed.success) {
-    return { ok: false, code: 'MALFORMED', detail: parsed.error.issues.map((i) => i.message).join('; ') };
+    return {
+      ok: false,
+      code: 'MALFORMED',
+      detail: parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; '),
+    };
   }
   return { ok: true, frame: parsed.data };
+}
+
+/** R6 helper: hosts/SDKs check outbound frames before posting (structured clone has no built-in cap). */
+export function frameWithinLimits(frame: Frame): boolean {
+  try {
+    return new TextEncoder().encode(JSON.stringify(frame)).byteLength <= LIMITS.MAX_FRAME_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 export interface Responder {
@@ -230,13 +243,46 @@ export function createResponder(requestId: string, send: (frame: AppResponseFram
     fail(code, message, opts) {
       assertOpen('fail');
       closed = true;
+      // Clamp everything: a terminal error frame must NEVER itself fail schema validation
+      // on the app side, or the request hangs forever (violating R3).
       send({
         v: PROTOCOL_VERSION,
         type: FRAME_TYPES.appResponse,
         requestId,
         ok: false,
-        error: { code, message, retryable: opts.retryable, rawExcerpt: opts.rawExcerpt, attemptsRemaining: opts.attemptsRemaining },
+        error: {
+          code: code.slice(0, 64) || ERROR_CODES.HOST_ERROR,
+          message,
+          retryable: opts.retryable,
+          rawExcerpt: opts.rawExcerpt?.slice(0, LIMITS.RAW_EXCERPT_CHARS),
+          attemptsRemaining: opts.attemptsRemaining,
+        },
       });
     },
   };
+}
+
+/**
+ * R3-safe request handling: runs `handler` with a Responder and guarantees a terminal
+ * frame even if the handler returns without closing or throws. This is the entrypoint
+ * hosts should use; bare createResponder is the low-level escape hatch.
+ */
+export async function respondTo(
+  requestId: string,
+  send: (frame: AppResponseFrame) => void,
+  handler: (responder: Responder) => void | Promise<void>,
+): Promise<void> {
+  const responder = createResponder(requestId, send);
+  try {
+    await handler(responder);
+    if (!responder.isClosed) {
+      responder.fail(ERROR_CODES.HOST_ERROR, 'host handler completed without a terminal frame', { retryable: true });
+    }
+  } catch (err) {
+    if (!responder.isClosed) {
+      responder.fail(ERROR_CODES.HOST_ERROR, err instanceof Error ? err.message : 'host handler threw', {
+        retryable: true,
+      });
+    }
+  }
 }
