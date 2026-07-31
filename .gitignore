@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.turbo/
+.next/
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.DS_Store
+
+# Pre-launch strategy — never ships public (hard constraint C4). Kept local only.
+internal/
+
+# Machine-local agent settings — holds absolute paths to the source systems. Never commit.
+.claude/settings.local.json
+*.sqlite
+!examples/**/*.sqlite
