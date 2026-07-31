@@ -54,9 +54,15 @@ export function classifyErrorCode(code: string): KnownErrorCode {
   return isKnownErrorCode(code) ? code : ERROR_CODES.HOST_ERROR;
 }
 
-/** Size and retry limits (rule R6). Backoff values inherited from the hardened ancestor. */
+/**
+ * Size and retry limits (rule R6). Backoff values inherited from the hardened ancestor.
+ * db-request/db-response frames get their own size class (MAX_DB_FRAME_BYTES) so a
+ * base64-encoded MAX_ARTIFACT_BYTES `.sqlite` file can round-trip through the db bridge
+ * (v0.1-draft amendment, TASK-20260731-runner-sandbox).
+ */
 export const LIMITS = {
   MAX_FRAME_BYTES: 256 * 1024,
+  MAX_DB_FRAME_BYTES: 8 * 1024 * 1024,
   MAX_ARTIFACT_BYTES: 5 * 1024 * 1024,
   RAW_EXCERPT_CHARS: 200,
   MAX_PARSE_FAILURES: 3,

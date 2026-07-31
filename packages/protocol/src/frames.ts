@@ -162,13 +162,31 @@ export type FrameParseResult =
   | { ok: true; frame: Frame }
   /** Not addressed to us (non-snug traffic) or a future v1.x frame type — drop silently (rule R2). */
   | { ok: false; ignored: true }
-  | { ok: false; ignored?: false; code: typeof ERROR_CODES.UNSUPPORTED_VERSION | 'MALFORMED'; detail: string };
+  | {
+      ok: false;
+      ignored?: false;
+      code: typeof ERROR_CODES.UNSUPPORTED_VERSION | 'MALFORMED';
+      detail: string;
+      /**
+       * Recovered from the raw input when it carried a plausible string requestId, so
+       * hosts can answer UNSUPPORTED_VERSION/MALFORMED on the wire instead of leaving
+       * the app's request hanging (v0.1-draft amendment, TASK-20260731-runner-sandbox).
+       */
+      requestId?: string;
+    };
+
+/** A requestId is answerable only if it is a non-empty string within the R6 id cap. */
+function recoverRequestId(candidate: Record<string, unknown>): string | undefined {
+  const raw = candidate.requestId;
+  return typeof raw === 'string' && raw.length >= 1 && raw.length <= LIMITS.ID_CHARS ? raw : undefined;
+}
 
 /**
  * Total parser for anything arriving via postMessage. Never throws.
  * Routing rules: non-snug traffic and unknown `snug:*` types are ignored; version
- * mismatches and malformed known frames return typed failures the host may log
- * (but never answers on the wire when no requestId is recoverable).
+ * mismatches and malformed known frames return typed failures carrying a recovered
+ * `requestId` when the raw input had a plausible one — hosts answer on the wire only
+ * in that case, and never otherwise.
  */
 export function parseFrame(input: unknown): FrameParseResult {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
@@ -184,6 +202,7 @@ export function parseFrame(input: unknown): FrameParseResult {
       ok: false,
       code: ERROR_CODES.UNSUPPORTED_VERSION,
       detail: `frame ${type} carried v=${String(candidate.v)}; supported: [${PROTOCOL_VERSION}]`,
+      requestId: recoverRequestId(candidate),
     };
   }
   const schema = FRAME_SCHEMAS[type];
@@ -194,15 +213,24 @@ export function parseFrame(input: unknown): FrameParseResult {
       ok: false,
       code: 'MALFORMED',
       detail: parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; '),
+      requestId: recoverRequestId(candidate),
     };
   }
   return { ok: true, frame: parsed.data };
 }
 
-/** R6 helper: hosts/SDKs check outbound frames before posting (structured clone has no built-in cap). */
+/**
+ * R6 helper: hosts/SDKs check outbound frames before posting (structured clone has no
+ * built-in cap). db-request/db-response use their own 8 MiB size class so artifact
+ * import/export can round-trip; every other frame keeps the 256 KiB cap.
+ */
 export function frameWithinLimits(frame: Frame): boolean {
+  const limit =
+    frame.type === FRAME_TYPES.dbRequest || frame.type === FRAME_TYPES.dbResponse
+      ? LIMITS.MAX_DB_FRAME_BYTES
+      : LIMITS.MAX_FRAME_BYTES;
   try {
-    return new TextEncoder().encode(JSON.stringify(frame)).byteLength <= LIMITS.MAX_FRAME_BYTES;
+    return new TextEncoder().encode(JSON.stringify(frame)).byteLength <= limit;
   } catch {
     return false;
   }

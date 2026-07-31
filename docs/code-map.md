@@ -5,7 +5,7 @@
 | Area / concept | Location | Tests |
 |---|---|---|
 | Envelope message types, zod schemas, JSON Schema export | `packages/protocol/src` ✅ (frames/envelope/reply/security/json-schemas) | `packages/protocol` vitest (74) |
-| Iframe runner, CSP/sandbox, bridge host | `packages/runner/src` ⭕ | `packages/runner` (+ jsdom harness) |
+| Iframe runner, CSP/sandbox, bridge host, transport/db-driver seams, browser-CSP suite template | `packages/runner/src` ✅ | `packages/runner` vitest (90) + child-6 Playwright |
 | In-app hooks (`useAgentBridge`, `useAppDB`, `usePersistedState`) | `packages/sdk/src` ⭕ | `packages/sdk` |
 | Per-app DB (sql.js + OPFS, .sqlite export) | `packages/db/src` ⭕ | `packages/db` |
 | Credential broker (v1.1) | `packages/auth/src` ⭕ | `packages/auth` |
