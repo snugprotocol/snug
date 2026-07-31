@@ -8,7 +8,8 @@
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",
-    "lint": "turbo run lint"
+    "lint": "turbo run lint",
+    "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke"
   },
   "devDependencies": {
     "jsdom": "^30.0.1",

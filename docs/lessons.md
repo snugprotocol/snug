@@ -4,6 +4,15 @@ Short, forward-looking rules learned the hard way. **The agent reads this when p
 
 ---
 
+## 2026-07-31 — Every child merge gets an independent adversarial review with runnable probes
+**Context:** TASK-20260731-build-hub, six child tasks. **What happened:** fresh-context reviewers with permission to run probe scripts found, pre-merge: a C1 credential leak via the envelope's `responseSchema` field, exported JSON Schemas that contradicted the protocol's own forward-compat rule, KB hook code reading db fields at the wrong nesting level (would have broken persistence in every generated app), and a meta-CSP injection bypass. None were caught by the authors' own green suites. **Rule:** High/Medium merges require a reviewer that did not write the code, prompted to attack specific constraint surfaces and to RUN its probes — "tests pass" is not review.
+
+## 2026-07-31 — When one contract lives in two artifacts, add a byte-compare sync test
+**Context:** the KB teaches copy-exactly hook code that `packages/sdk` also ships; prompt files carry wire literals. **What happened:** the KB≡SDK sync test caught a data-loss bug (usePersistedState key-change) and the placeholder-injection tests caught retyped constants; the ancestors' 4-way duplicated envelope tag was exactly this failure mode at scale. **Rule:** never let the same contract exist twice by convention — inject from one source or lock the copies with a byte-compare test in CI.
+
+## 2026-07-31 — Browser security APIs lie in their return values; assert the enforcement signal
+**Context:** the real-browser CSP gate. **What happened:** modern Chromium returns `true` from `navigator.sendBeacon` even when `connect-src` blocks the send — the check read the boolean and reported a hole that wasn't there. **Rule:** CSP/sandbox tests must assert the enforcement signal (`securitypolicyviolation` events, absence of network effects), not API return values.
+
 ## 2026-07-31 — Never trust availability by memory; verify names before proposing them
 **Context:** TASK-20260731-bootstrap (naming rounds). **What happened:** ~20 candidate names (Whim, Carve, Knit, Gizmo, Nook, Yurt, Birdhouse, AXP…) all died on verification against GitHub orgs and web search — every "obviously free" name was taken by an active AI product. **Rule:** any public-facing name (package, command, protocol message) gets a GitHub/npm/web check *before* it is proposed, in the same session.
 
