@@ -18,3 +18,6 @@ Short, forward-looking rules learned the hard way. **The agent reads this when p
 
 ## 2026-07-31 — Port the hardening, not the bugs
 **Context:** audits of the prior production systems this work extracts from. **What happened:** those systems contain a broken two-layer OAuth callback (`userLayer` never unwrapped) and an off-by-default strict-host-injection flag (prompt-injection exfiltration path). **Rule:** when extracting, carry forward the DB invariants + host-freeze from the hardened port and the PKCE/refresh/scrubbing from the original — and never reintroduce configurable security (strictness is not a flag).
+
+## 2026-08-02 — `??` fallbacks make empty env vars a silent foot-gun
+**Context:** apps/server config + .env.example authoring. **What happened:** `SNUG_MODEL=` (present but empty) defeats a `?? 'default'` fallback — empty string is not `undefined` — so the "default" silently becomes `''`. **Rule:** env templates comment optional vars out rather than leaving them empty, and config readers treat `''` as unset (`value || fallback` or explicit trim-check) for any var with a fallback.
