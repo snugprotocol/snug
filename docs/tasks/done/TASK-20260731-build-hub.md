@@ -124,3 +124,9 @@ Child 1 produces spec v0.1 draft (SPEC.md prose + schemas) staged in this repo; 
 - Umbrella ACs: 1✅(root green) 2✅(sandbox/CSP negatives + real-browser gate) 3✅(C1 strip + whole-envelope scan + review-verified) 4✅(schemas exported, byte-stable, auth_required reserved) 5✅(.sqlite round-trip + DB-Browser-verified magic) 6✅(centralization lint + headers + goldens) 7✅(build→run→bridge E2E on mock) 8✅(vendored skill-creator + builder prompts in store) 9✅(README quickstart + root `pnpm smoke` PASS).
 - Reviews caught pre-merge: schemas contradicting R2 (io:'input'), C1 responseSchema leak, KB db-field nesting bug, meta-CSP parse-order bypass design flaw, sendBeacon polarity, StrictMode dev blank-iframe. Lessons recorded.
 - Deferred (recorded in next-steps): spec push (explicit ask), eval harness (phase 2), auth v1.1, demo videos/private beta (weeks 5–6), deploy (explicit ask).
+
+### 2026-08-02 — Claude (Fable 5) — close-session
+- Done: session closed per Gate 6. Committed post-hub dev-environment polish found in the working tree (WAL-sidecar + data/ gitignores, apps/server/.env.example with C5-compliant loading via node --env-file, dev:local script). Server suite re-verified green (32).
+- State: v1 hub complete on `main` (see 2026-07-31 close-out entry). Working tree clean after this commit. Child branches retained for archaeology; `backup-pre-scrub-20260731` predates this work — untouched.
+- Next step (single): decide the week-5 item to start — eval harness or demo videos — via /start-task; spec push/publish/deploy still await an explicit ask.
+- Open questions: none.

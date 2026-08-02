@@ -16,3 +16,12 @@ internal/
 .claude/settings.local.json
 *.sqlite
 !examples/**/*.sqlite
+# SQLite WAL-mode sidecars. The -wal file holds recently written rows (thread
+# content), so it must never be committed even though the .sqlite beside it is.
+*.sqlite-wal
+*.sqlite-shm
+
+# Reference-server runtime store (SNUG_DATA_DIR). Created on first boot; the
+# location depends on the working directory the server was launched from.
+data/
+apps/server/data/
