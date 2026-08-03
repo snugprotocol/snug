@@ -4,9 +4,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { byokLibrary } from '../state/library.js';
-import { useMode, useProvider } from '../state/mode.js';
-import { createByokBuilder, createServerBuilder, type ArtifactEvent, type BuilderAgent } from './builder.js';
+import { userLibrary } from '../state/library.js';
+import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
+import { createDirectBuilder, createServerBuilder, type ArtifactEvent, type BuilderAgent } from './builder.js';
 
 export interface ChatMessage {
   id: number;
@@ -40,6 +40,8 @@ let messageSeq = 0;
 export function useBuilderChat(threadId: string): BuilderChat {
   const mode = useMode();
   const provider = useProvider();
+  const model = useModel();
+  const localUrl = useLocalUrl();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState<string | undefined>(undefined);
@@ -47,8 +49,17 @@ export function useBuilderChat(threadId: string): BuilderChat {
   const abortRef = useRef<AbortController | null>(null);
 
   const agent: BuilderAgent = useMemo(
-    () => (mode === 'server' ? createServerBuilder(threadId) : createByokBuilder({ provider, library: byokLibrary() })),
-    [mode, provider, threadId],
+    () =>
+      mode === 'subscription'
+        ? createServerBuilder(threadId, undefined, model)
+        : createDirectBuilder({
+            mode,
+            provider,
+            library: userLibrary(),
+            ...(model !== undefined ? { model } : {}),
+            localUrl,
+          }),
+    [mode, provider, model, localUrl, threadId],
   );
 
   const patchMessage = useCallback((id: number, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>)): void => {
@@ -71,7 +82,7 @@ export function useBuilderChat(threadId: string): BuilderChat {
         { id: agentId, role: 'agent', displayText: '', streaming: true },
       ]);
       setBusy(true);
-      setActivity(mode === 'server' ? 'it’s thinking…' : 'warming up…');
+      setActivity(mode === 'subscription' ? 'it’s thinking…' : 'warming up…');
       const controller = new AbortController();
       abortRef.current = controller;
       void agent

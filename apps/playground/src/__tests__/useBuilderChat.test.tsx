@@ -11,6 +11,7 @@ import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useBuilderChat, type BuilderChat } from '../agent/useBuilderChat.js';
+import { modeStore } from '../state/mode.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -73,6 +74,8 @@ async function settle(): Promise<void> {
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
+  // These are subscription-mode SSE tests — the default is the serverless byok mode.
+  modeStore.set('subscription');
 });
 
 afterEach(() => {

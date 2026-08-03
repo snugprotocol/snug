@@ -1,8 +1,11 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import type { ReactElement } from 'react';
 import { NavLink, Route, Routes } from 'react-router-dom';
 
+import { refreshAppMeta } from './state/appMeta.js';
+import { initSettings } from './state/mode.js';
 import { toggleTheme, useTheme } from './state/theme.js';
+import { bootUserDb, useUserDbStatus } from './state/userdb.js';
 import { Button } from './ui/Button.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { BuilderView } from './views/BuilderView.js';
@@ -14,8 +17,24 @@ const RunView = lazy(() => import('./run/RunView.js'));
 
 export function App(): ReactElement {
   const theme = useTheme();
+  const dbStatus = useUserDbStatus();
+
+  // Boot the user DB once and hydrate settings/app-meta from it (ADR-0007).
+  useEffect(() => {
+    bootUserDb();
+    void initSettings();
+    void refreshAppMeta();
+  }, []);
+
   return (
     <div className="shell">
+      {dbStatus.state === 'corrupt' || dbStatus.state === 'unsupported' ? (
+        <div className="error-note" role="alert" style={{ margin: 'var(--space-3)' }}>
+          {dbStatus.state === 'corrupt'
+            ? `your snug file was unreadable and has been quarantined (${dbStatus.quarantinedFile}) — nothing was overwritten. restore it from a backup or an origin copy in settings.`
+            : dbStatus.message}
+        </div>
+      ) : null}
       <header className="shell-header">
         <NavLink to="/" className="brand">
           snug<span className="brand-dot">.</span>

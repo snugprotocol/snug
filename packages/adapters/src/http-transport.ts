@@ -36,6 +36,8 @@ export interface HttpTransport {
 export interface HttpTransportOptions {
   /** Forwarded as body `threadId` so the server can keep per-thread history. */
   threadId?: string;
+  /** Forwarded as body `model` — subscription-mode model choice (host-owned, validated server-side). */
+  model?: string;
   /** Extra request headers (host-owned — never app-controlled, per C1). */
   headers?: Record<string, string>;
   /** Injectable for tests; defaults to the global fetch. */
@@ -56,9 +58,11 @@ export function createHttpTransport(invokeUrl: string, options: HttpTransportOpt
             accept: 'text/event-stream',
             ...options.headers,
           },
-          body: JSON.stringify(
-            options.threadId !== undefined ? { message: wire, threadId: options.threadId } : { message: wire },
-          ),
+          body: JSON.stringify({
+            message: wire,
+            ...(options.threadId !== undefined ? { threadId: options.threadId } : {}),
+            ...(options.model !== undefined ? { model: options.model } : {}),
+          }),
           signal,
         });
       } catch (err) {

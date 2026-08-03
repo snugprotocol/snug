@@ -1,11 +1,13 @@
-// appMeta.ts — announce-metadata overlay for the hub's gradient tiles.
+// appMeta.ts — announce-metadata overlay for the hub's gradient tiles, stored on the
+// app row in the USER DB (was a localStorage map pre-portable-hub; abandoned per F13).
 //
-// When an app runs and announces itself (snug:app-announce), we remember its
-// display metadata (iconEmoji/iconColor/description) keyed by LIBRARY id — the
-// host-assigned identity, never the app-claimed appId (display only, rule R4).
-// Capability reveal: tiles upgrade once their app has self-described.
+// When an app runs and announces itself (snug:app-announce), we remember its display
+// metadata keyed by LIBRARY id — the host-assigned identity, never the app-claimed
+// appId (display only, rule R4). Capability reveal: tiles upgrade once their app has
+// self-described. The in-memory store mirrors the DB so views stay synchronous.
 
 import { createStore, useStore } from './store.js';
+import { getUserDb } from './userdb.js';
 
 export interface AppMeta {
   displayName: string;
@@ -18,23 +20,25 @@ export interface AppMeta {
 
 export type AppMetaMap = Readonly<Record<string, AppMeta>>;
 
-const META_KEY = 'snug:app-meta';
+export const appMetaStore = createStore<AppMetaMap>({});
 
-function readAll(): AppMetaMap {
-  try {
-    const raw = localStorage.getItem(META_KEY);
-    if (raw === null) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return parsed as AppMetaMap;
-  } catch {
-    return {};
+/** Boot/refresh hook: mirror app rows from the user DB into the synchronous store. */
+export async function refreshAppMeta(): Promise<void> {
+  const db = await getUserDb();
+  const next: Record<string, AppMeta> = {};
+  for (const app of db.listApps()) {
+    next[app.appId] = {
+      displayName: app.displayName,
+      ...(app.description !== undefined ? { description: app.description } : {}),
+      ...(app.iconEmoji !== undefined ? { iconEmoji: app.iconEmoji } : {}),
+      ...(app.iconColor !== undefined ? { iconColor: app.iconColor } : {}),
+      ...(app.usesDb ? { usesDb: true } : {}),
+    };
   }
+  appMetaStore.set(next);
 }
 
-export const appMetaStore = createStore<AppMetaMap>(readAll());
-
-/** Merge-record metadata for a library id and persist. */
+/** Merge-record metadata for a library id: update the store now, the DB row async. */
 export function recordAppMeta(libraryId: string, meta: Partial<AppMeta>): void {
   const current = appMetaStore.get();
   const existing: Partial<AppMeta> = current[libraryId] ?? {};
@@ -43,13 +47,14 @@ export function recordAppMeta(libraryId: string, meta: Partial<AppMeta>): void {
     ...meta,
     displayName: meta.displayName ?? existing.displayName ?? '',
   };
-  const next: AppMetaMap = { ...current, [libraryId]: merged };
-  appMetaStore.set(next);
-  try {
-    localStorage.setItem(META_KEY, JSON.stringify(next));
-  } catch {
-    /* persistence is best-effort — tiles still upgrade this session */
-  }
+  appMetaStore.set({ ...current, [libraryId]: merged });
+  void getUserDb().then((db) => {
+    try {
+      db.updateAppMeta(libraryId, merged);
+    } catch {
+      // Row may not exist yet (e.g. announce racing install) — the overlay still works.
+    }
+  });
 }
 
 export function getAppMeta(libraryId: string): AppMeta | undefined {

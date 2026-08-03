@@ -13,10 +13,7 @@ export interface ByokToolHooks {
   onArtifact: (artifact: LibraryEntry) => void;
 }
 
-export function buildByokTools(
-  library: LibraryStore & Required<Pick<LibraryStore, 'save'>>,
-  hooks: ByokToolHooks,
-): AgentTool[] {
+export function buildByokTools(library: LibraryStore, hooks: ByokToolHooks): AgentTool[] {
   return [
     {
       def: {

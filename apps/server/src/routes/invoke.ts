@@ -30,6 +30,12 @@ import { buildServerTools } from '../tools.js';
 
 export interface InvokeRouteDeps {
   adapter: AgentAdapter;
+  /**
+   * Subscription-mode model choice (TASK-20260803-serverless-run): builds an adapter
+   * for a validated per-request `model` override. Absent → `model` is accepted but
+   * served by the default adapter.
+   */
+  makeAdapter?: (model: string) => AgentAdapter;
   artifacts: ArtifactStore;
   threads: ThreadStore;
   heartbeatMs: number;
@@ -40,6 +46,7 @@ export interface InvokeRouteDeps {
 const invokeBodySchema = z.object({
   message: z.string().min(1),
   threadId: z.string().min(1).max(LIMITS.ID_CHARS).optional(),
+  model: z.string().min(1).max(128).optional(),
 });
 
 export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps): void {
@@ -70,7 +77,9 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
         retryable: false,
       });
     }
-    const { message, threadId } = parsedBody.data;
+    const { message, threadId, model } = parsedBody.data;
+    const turnDeps: InvokeRouteDeps =
+      model !== undefined && deps.makeAdapter !== undefined ? { ...deps, adapter: deps.makeAdapter(model) } : deps;
 
     const appRequest = parseAppRequest(message);
     if (appRequest.ok) {
@@ -90,7 +99,7 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
       }
       // App path: envelope is self-contained — NO thread history, JSON-only (no tools),
       // raw passthrough (the runner parses the reply; the server never does).
-      return streamTurn(reply, deps, {
+      return streamTurn(reply, turnDeps, {
         system: buildHostSystemPrompt({ appBuilder: true, artifacts: false }),
         messages: [{ role: 'user', content: message }],
         withTools: false,
@@ -111,7 +120,7 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
     try {
       const history: AdapterMessage[] =
         threadId === undefined ? [] : deps.threads.history(threadId).map((m) => ({ role: m.role, content: m.content }));
-      return await streamTurn(reply, deps, {
+      return await streamTurn(reply, turnDeps, {
         system: buildHostSystemPrompt({ appBuilder: true, artifacts: true }),
         messages: [...history, { role: 'user', content: message }],
         withTools: true,

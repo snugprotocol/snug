@@ -1,15 +1,15 @@
-// Builder chat streams — server mode consumes the /invoke SSE contract
-// (delta/artifact/done/error + heartbeats); BYOK mode synthesizes the same events
+// Builder chat streams — subscription mode consumes the /invoke SSE contract
+// (delta/artifact/done/error + heartbeats); direct mode synthesizes the same events
 // from an in-browser agent turn. Plus the AC-5 spy: the BYOK key never travels to
-// the reference server.
+// the hub server.
 
-import { IDBFactory } from 'fake-indexeddb';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createByokBuilder, createServerBuilder, type ArtifactEvent } from '../agent/builder.js';
+import { createDirectBuilder, createServerBuilder, type ArtifactEvent } from '../agent/builder.js';
 import { DEMO_APP_TITLE } from '../agent/demoApp.js';
-import { createByokLibrary } from '../state/library.js';
+import { createUserDbLibrary } from '../state/library.js';
 import { setByokKey } from '../state/mode.js';
+import { installTestUserDb } from './userdbTestHelper.js';
 
 function sseResponse(blocks: string[]): Response {
   const body = new ReadableStream<Uint8Array>({
@@ -21,10 +21,6 @@ function sseResponse(blocks: string[]): Response {
   });
   return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 }
-
-beforeEach(() => {
-  sessionStorage.clear();
-});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -72,8 +68,17 @@ describe('createServerBuilder', () => {
     expect(result).toEqual({ ok: false, code: 'THREAD_CONFLICT', message: 'busy', retryable: true });
   });
 
-  it('never sends the BYOK key to the reference server (AC-5 spy)', async () => {
-    setByokKey('sk-ant-supersecret-42');
+  it('forwards the subscription-mode model choice in the body', async () => {
+    const fetchSpy = vi.fn(async () => sseResponse(['event: done\ndata: {"text":"ok"}\n\n']));
+    const builder = createServerBuilder('thr-1', fetchSpy, 'claude-sonnet-5');
+    await builder.send('hello', {}, new AbortController().signal);
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ message: 'hello', threadId: 'thr-1', model: 'claude-sonnet-5' });
+  });
+
+  it('never sends the BYOK key to the hub server (AC-5 spy)', async () => {
+    await installTestUserDb();
+    await setByokKey('anthropic', 'sk-ant-supersecret-42');
     const fetchSpy = vi.fn(async () => sseResponse(['event: done\ndata: {"text":"ok"}\n\n']));
     const builder = createServerBuilder('thr-1', fetchSpy);
     await builder.send('hello', {}, new AbortController().signal);
@@ -84,11 +89,17 @@ describe('createServerBuilder', () => {
   });
 });
 
-describe('createByokBuilder (demo brain)', () => {
-  it('runs fully in-browser: artifact saved locally, events synthesized, no network', async () => {
+describe('createDirectBuilder (demo brain)', () => {
+  it('runs fully in-browser: artifact saved into the user DB, events synthesized, no network', async () => {
+    const db = await installTestUserDb();
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be touched'));
-    const library = createByokLibrary(new IDBFactory());
-    const builder = createByokBuilder({ provider: 'mock', library, getKey: () => undefined });
+    const library = createUserDbLibrary(() => Promise.resolve(db));
+    const builder = createDirectBuilder({
+      mode: 'byok',
+      provider: 'mock',
+      library,
+      getKey: () => Promise.resolve(undefined),
+    });
 
     const artifacts: ArtifactEvent[] = [];
     const activity: string[] = [];

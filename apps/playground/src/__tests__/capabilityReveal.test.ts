@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { revealReduce, initialRevealState } from '../run/capability.js';
 import { appMetaStore, getAppMeta, recordAppMeta } from '../state/appMeta.js';
+import { installTestUserDb } from './userdbTestHelper.js';
 
 const announce: AppAnnounceFrame = {
   v: PROTOCOL_VERSION,
@@ -37,15 +38,22 @@ describe('revealReduce', () => {
 
 describe('recordAppMeta', () => {
   beforeEach(() => {
-    localStorage.clear();
     appMetaStore.set({});
   });
 
-  it('persists announce metadata per library id and merges partial updates', () => {
-    recordAppMeta('art-1', { displayName: 'chess coach', iconEmoji: '♞', iconColor: '#8b5cf6' });
-    recordAppMeta('art-1', { usesDb: true });
-    expect(getAppMeta('art-1')).toEqual({ displayName: 'chess coach', iconEmoji: '♞', iconColor: '#8b5cf6', usesDb: true });
-    const persisted = JSON.parse(localStorage.getItem('snug:app-meta') ?? '{}') as Record<string, unknown>;
-    expect(persisted['art-1']).toMatchObject({ iconColor: '#8b5cf6', usesDb: true });
+  it('merges partial updates in the store and persists them onto the app row in the user DB', async () => {
+    const db = await installTestUserDb();
+    const app = db.installApp({ appId: 'art-1', displayName: 'untitled app', html: '<html></html>' });
+    recordAppMeta(app.appId, { displayName: 'chess coach', iconEmoji: '♞', iconColor: '#8b5cf6' });
+    recordAppMeta(app.appId, { usesDb: true });
+    expect(getAppMeta(app.appId)).toEqual({
+      displayName: 'chess coach',
+      iconEmoji: '♞',
+      iconColor: '#8b5cf6',
+      usesDb: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0)); // drain the async DB write
+    const row = db.getApp(app.appId);
+    expect(row).toMatchObject({ displayName: 'chess coach', iconColor: '#8b5cf6', usesDb: true });
   });
 });

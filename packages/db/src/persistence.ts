@@ -11,17 +11,21 @@ export interface PersistenceBackend {
   save(file: string, bytes: Uint8Array): Promise<void>;
 }
 
-/** Directory (OPFS) / database (IndexedDB) name shared by all Snug namespaces. */
+/**
+ * Default directory (OPFS) / database (IndexedDB) name shared by all per-app namespaces.
+ * The per-USER database passes its own distinct directory (USERDB_OPFS_DIR, plan F13)
+ * so the two stores can never collide.
+ */
 const STORE_NAME = 'snug-db';
 
 // ---------------------------------------------------------------------------- OPFS
 
-export function createOpfsBackend(): PersistenceBackend {
+export function createOpfsBackend(dirName: string = STORE_NAME): PersistenceBackend {
   let dirPromise: Promise<FileSystemDirectoryHandle> | undefined;
   const dir = (): Promise<FileSystemDirectoryHandle> =>
     (dirPromise ??= navigator.storage
       .getDirectory()
-      .then((root) => root.getDirectoryHandle(STORE_NAME, { create: true })));
+      .then((root) => root.getDirectoryHandle(dirName, { create: true })));
 
   return {
     kind: 'opfs',
@@ -47,12 +51,12 @@ export function createOpfsBackend(): PersistenceBackend {
 
 // ------------------------------------------------------------------------ IndexedDB
 
-export function createIdbBackend(): PersistenceBackend {
+export function createIdbBackend(dirName: string = STORE_NAME): PersistenceBackend {
   const OBJECT_STORE = 'files';
   let dbPromise: Promise<IDBDatabase> | undefined;
   const open = (): Promise<IDBDatabase> =>
     (dbPromise ??= new Promise((resolve, reject) => {
-      const request = indexedDB.open(STORE_NAME, 1);
+      const request = indexedDB.open(dirName, 1);
       request.onupgradeneeded = () => {
         request.result.createObjectStore(OBJECT_STORE);
       };
@@ -116,10 +120,10 @@ export function createMemoryBackend(): MemoryBackend {
  * presence-based (matching how the driver surfaces `persistence` immediately);
  * runtime failures of a detected backend surface as DbDriverResult errors.
  */
-export function detectPersistenceBackend(): PersistenceBackend {
+export function detectPersistenceBackend(dirName: string = STORE_NAME): PersistenceBackend {
   const nav = (globalThis as { navigator?: { storage?: { getDirectory?: unknown } } }).navigator;
-  if (typeof nav?.storage?.getDirectory === 'function') return createOpfsBackend();
+  if (typeof nav?.storage?.getDirectory === 'function') return createOpfsBackend(dirName);
   const idb = (globalThis as { indexedDB?: { open?: unknown } }).indexedDB;
-  if (typeof idb?.open === 'function') return createIdbBackend();
+  if (typeof idb?.open === 'function') return createIdbBackend(dirName);
   return createMemoryBackend();
 }

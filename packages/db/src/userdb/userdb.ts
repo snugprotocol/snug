@@ -13,6 +13,7 @@ import {
   USERDB_DDL,
   USERDB_FILE,
   USERDB_LIMITS,
+  USERDB_OPFS_DIR,
   USERDB_SCHEMA_VERSION,
   USERDB_TABLES,
 } from '@snugprotocol/protocol';
@@ -96,6 +97,11 @@ export interface UserDb {
 
   installApp(input: InstallAppInput): AppRecord;
   saveAppVersion(appId: string, html: string, note?: string): AppVersionMeta;
+  /** Patch display metadata (announce overlay, usesDb observation) — versions untouched. */
+  updateAppMeta(
+    appId: string,
+    patch: Partial<Pick<AppRecord, 'displayName' | 'description' | 'iconEmoji' | 'iconColor' | 'usesDb'>>,
+  ): void;
   listApps(): AppRecord[];
   getApp(appId: string): AppRecord | undefined;
   getAppHtml(appId: string, version?: number): string | undefined;
@@ -192,7 +198,8 @@ interface LifecycleTarget {
 }
 
 export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenUserDbResult> {
-  const backend = options.backend ?? detectPersistenceBackend();
+  // Default backend lives in the user DB's OWN directory (F13) — never the per-app store.
+  const backend = options.backend ?? detectPersistenceBackend(USERDB_OPFS_DIR);
   const file = options.file ?? USERDB_FILE;
   const config = options.locateWasm !== undefined ? { locateFile: (f: string) => options.locateWasm!(f) } : undefined;
   const SQL = await initSqlJs(config);
@@ -483,6 +490,27 @@ function construct(
         appId,
       ]);
       return meta;
+    },
+
+    updateAppMeta(appId, patch) {
+      assertOpen();
+      const app = getApp(appId);
+      if (app === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
+      const merged = { ...app, ...patch };
+      run(
+        `UPDATE ${USERDB_TABLES.apps}
+         SET display_name = ?, description = ?, icon_emoji = ?, icon_color = ?, uses_db = ?, updated_at = ?
+         WHERE app_id = ?`,
+        [
+          merged.displayName,
+          merged.description ?? null,
+          merged.iconEmoji ?? null,
+          merged.iconColor ?? null,
+          merged.usesDb === true ? 1 : 0,
+          now(),
+          appId,
+        ],
+      );
     },
 
     listApps() {

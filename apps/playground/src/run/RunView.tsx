@@ -9,15 +9,16 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
-import { createDbDriver, type SnugDbDriver } from '@snugprotocol/db';
+import type { SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
 
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
-import { libraryForMode } from '../state/library.js';
+import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
+import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { isStarterId, listStarterApps, loadStarterHtml } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
@@ -65,23 +66,25 @@ export default function RunView(): ReactElement {
 
   // Identity seams — captured per app id (SnugAppFrame mount-captures them via key).
   const transport = useMemo(() => createAppTransport(mode, provider), [mode, provider]);
-  const dbRef = useRef<SnugDbDriver | null>(null);
-  if (dbRef.current === null) dbRef.current = createDbDriver({ locateWasm });
-  const db = dbRef.current;
-  useEffect(
-    () => () => {
-      void dbRef.current?.close();
-      dbRef.current = null;
-    },
-    [],
-  );
+  // The db driver is the SHARED user DB's blob-backed face (ADR-0007) — never closed
+  // here; it lives as long as the page. App data lands in snug_app_data rows.
+  const [db, setDb] = useState<SnugDbDriver | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getUserDb().then((userDb) => {
+      if (!cancelled) setDb(userDb.driver);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     setHtmlState({ phase: 'loading' });
     setReadySeen(false);
     setAnnounceTimedOut(false);
-    const load = isStarterId(id) ? loadStarterHtml(id) : libraryForMode(mode).getHtml(id);
+    const load = isStarterId(id) ? loadStarterHtml(id) : userLibrary().getHtml(id);
     load
       .then((html) => {
         if (cancelled) return;
@@ -95,7 +98,7 @@ export default function RunView(): ReactElement {
       setFallbackName(listStarterApps().find((starter) => starter.id === id)?.name);
     } else {
       setFallbackName(undefined);
-      libraryForMode(mode)
+      userLibrary()
         .list()
         .then((entries) => {
           if (!cancelled) setFallbackName(entries.find((entry) => entry.id === id)?.displayName);
@@ -107,7 +110,7 @@ export default function RunView(): ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [id, mode]);
+  }, [id]);
 
   // Capability reveal has a floor: host-ready seen but no announce after the grace
   // period → show the library name in plain style instead of shimmering forever.
@@ -144,6 +147,7 @@ export default function RunView(): ReactElement {
 
   const [exportError, setExportError] = useState<string | undefined>(undefined);
   const onExport = useCallback(async (): Promise<void> => {
+    if (db === null) return;
     setExportError(undefined);
     const result = await exportDatabase(db, id);
     if (!result.ok) {
@@ -253,7 +257,7 @@ export default function RunView(): ReactElement {
         ) : null}
 
         <div className={`frame-wrap${inspector.inFlight > 0 ? ' thinking' : ''}`} data-testid="frame-wrap">
-          {htmlState.phase === 'loading' ? (
+          {htmlState.phase === 'loading' || db === null ? (
             <div className="run-overlay">
               <Skeleton width="60%" height="1.25rem" />
               <Skeleton width="40%" height="1rem" />

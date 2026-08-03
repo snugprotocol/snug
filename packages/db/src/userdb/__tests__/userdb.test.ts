@@ -84,6 +84,20 @@ describe('apps + versioning (AC3)', () => {
     await db.close();
   });
 
+  it('updateAppMeta patches display fields without touching versions', async () => {
+    const db = await open(backend);
+    const app = db.installApp({ displayName: 'Chess', html: 'v1' });
+    db.updateAppMeta(app.appId, { description: 'play vs the model', iconEmoji: '♟️', usesDb: true });
+    const updated = db.getApp(app.appId);
+    expect(updated?.description).toBe('play vs the model');
+    expect(updated?.iconEmoji).toBe('♟️');
+    expect(updated?.usesDb).toBe(true);
+    expect(updated?.displayName).toBe('Chess');
+    expect(updated?.currentVersion).toBe(1);
+    expect(() => db.updateAppMeta('nope', { description: 'x' })).toThrow(UserDbError);
+    await db.close();
+  });
+
   it('rejects unknown apps/versions with typed errors', async () => {
     const db = await open(backend);
     expect(() => db.saveAppVersion('nope', 'html')).toThrow(UserDbError);
