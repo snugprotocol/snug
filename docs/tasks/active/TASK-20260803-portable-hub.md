@@ -1,6 +1,6 @@
 # TASK-20260803-portable-hub: Portable user-owned hub — single user DB, local-first execution, sync origins, SSO
 
-- **Status**: planned (awaiting owner approval)
+- **Status**: in-review (implementation + both adversarial reviews complete; awaiting owner review of the branch)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: touches `packages/protocol` (portable DB format = spec surface), `packages/auth` (SSO), C1/C2 adjacency (serverless LLM call path), `packages/db` (widely depended))
 - **Branch**: `feat/TASK-20260803-portable-hub` (to be created after plan approval)
@@ -172,3 +172,12 @@ Reviewer verdict: redesign needed narrowly (sync/secrets lifecycle; subscription
 - State: fresh-context adversarial review of the merged umbrella running (runnable probes, C1/C2/secrets/sync/persistence surfaces); findings to be folded before this branch goes to PR.
 - Next step: fold review findings → owner review of branch + PR → merge → move task files to done/ (spec push, npm, deploy all still require explicit asks).
 - Known limitations (documented, deliberate): true network-offline runtime queued (CDN allowlist); chat artifact cards not persisted (text history is); Dropbox UI is paste-a-token (PKCE helpers shipped for the full flow); multi-device merge = divergence + explicit LWW.
+
+### 2026-08-03 18:00 — Jeetu/Claude — adversarial review folded (Gate 5 complete)
+- Review verdict was NOT-READY with 1 blocker + 3 majors + 3 minors — all fixed in `cf98f71`:
+  - **Blocker (sidecar dead on OPFS)**: the JSON sidecar failed the A/B-slot completeness check (SQLite-magic only) → every session saw a `{}` sidecar → false divergence on every login, hash gate dead, auto pull-merge unreachable. Fixed with a `SNUGSYNC1` envelope magic the backend recognizes; regression test now runs the loop against the PRODUCTION OPFS path (`sync/__tests__/opfs-sidecar.test.ts`) — the review's core point was that all sync tests used the memory backend.
+  - **Majors**: F15 guard added to `createDirectBuilder` (was app-transport only — an imported DB could route builder prompts to an attacker `localUrl`); auto pull-merge now arms F15 + rehydrates stores (`afterForeignBytes`, also fixes the store/DB split-brain after import); corrupt-state UI gained the recovery exit ("start fresh, quarantine kept" → restore via origin divergence or import).
+  - **Minors**: per-IP rate limiting on `/userdb` + `/auth/*`; unique quarantine filenames; artifact-sink install latch (concurrent unpinned writes can't double-install).
+- Surfaces that HELD under probes: secret VACUUM strip (bytes-level), A/B-slot crash windows, version pruning/revert, client C1 (no secret in any frame), server CSRF/CORS/session hardening, fail-closed config.
+- Verification after fixes: root suite 19/19 tasks green (db 116); Playwright 25/25.
+- State: ready for owner review. Branch is local-only — nothing pushed; PR/merge, spec push, npm, deploy all await explicit asks.

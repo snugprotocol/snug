@@ -1,6 +1,6 @@
 # TASK-20260803-versions-chat: App versioning UX + persistent chat, client-authoritative in all modes (child 3 of portable-hub)
 
-- **Status**: in-review (implementation green; Playwright pass pending)
+- **Status**: in-review (green incl. Playwright; umbrella review folded)
 - **Owner**: Jeetu
 - **Risk tier**: medium
 - **Branch**: `feat/TASK-20260803-portable-hub` (umbrella branch)

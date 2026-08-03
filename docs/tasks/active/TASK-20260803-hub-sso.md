@@ -1,6 +1,6 @@
 # TASK-20260803-hub-sso: Google OIDC, per-user DB provisioning, /userdb endpoints, static hosting (child 5 of portable-hub)
 
-- **Status**: planned
+- **Status**: in-review (green; umbrella review folded)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auth; fail-closed CORS/CSRF surface)
 - **Branch**: `feat/TASK-20260803-portable-hub` (umbrella branch)
