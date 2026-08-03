@@ -9,6 +9,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { checkCsrf, readSession, type SessionInfo } from '../auth/session.js';
+import type { RateLimiter } from '../rate-limit.js';
 import type { UserDbStore } from '../stores/userdbs.js';
 
 /** First 16 bytes of every SQLite database file: 'SQLite format 3\0'. */
@@ -19,10 +20,20 @@ export const BODY_LIMIT_HEADROOM = 64 * 1024;
 export interface UserDbRouteDeps {
   userdbs: UserDbStore;
   sessionSecret: string;
+  /** Optional per-IP throttle (umbrella review minor 5) — absent in unit tests. */
+  rateLimiter?: RateLimiter;
 }
 
 export function registerUserDbRoutes(app: FastifyInstance, deps: UserDbRouteDeps): void {
-  const { userdbs, sessionSecret } = deps;
+  const { userdbs, sessionSecret, rateLimiter } = deps;
+
+  const throttled = (request: FastifyRequest, reply: FastifyReply): boolean => {
+    if (rateLimiter !== undefined && !rateLimiter.take(request.ip)) {
+      void reply.status(429).send({ code: 'RATE_LIMITED', message: 'too many requests — slow down and retry', retryable: true });
+      return true;
+    }
+    return false;
+  };
 
   const requireSession = (request: FastifyRequest, reply: FastifyReply): SessionInfo | undefined => {
     const session = readSession(request, sessionSecret);
@@ -34,6 +45,7 @@ export function registerUserDbRoutes(app: FastifyInstance, deps: UserDbRouteDeps
   };
 
   app.get('/userdb', async (request, reply) => {
+    if (throttled(request, reply)) return reply;
     const session = requireSession(request, reply);
     if (session === undefined) return reply;
     const record = userdbs.get(session.userId);
@@ -54,6 +66,7 @@ export function registerUserDbRoutes(app: FastifyInstance, deps: UserDbRouteDeps
     '/userdb',
     { bodyLimit: userdbs.maxBytes + BODY_LIMIT_HEADROOM },
     async (request, reply) => {
+      if (throttled(request, reply)) return reply;
       const session = requireSession(request, reply);
       if (session === undefined) return reply;
       if (!checkCsrf(request)) {

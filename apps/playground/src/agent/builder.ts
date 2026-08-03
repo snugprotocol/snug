@@ -8,7 +8,7 @@ import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentTool } from '@snu
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
-import { getByokKey, type ByokProvider, type PlaygroundMode } from '../state/mode.js';
+import { endpointsNeedConfirmStore, getByokKey, type ByokProvider, type PlaygroundMode } from '../state/mode.js';
 import { createTurnAdapter } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
@@ -122,13 +122,26 @@ export interface DirectBuilderOptions {
   getKey?: (provider: ByokProvider) => Promise<string | undefined>;
   model?: string;
   localUrl?: string;
+  /** Injectable for tests; default reads the F15 confirm-guard store. */
+  needsConfirm?: () => boolean;
 }
 
 export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent {
   const readKey = options.getKey ?? getByokKey;
+  const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
   const system = buildHostSystemPrompt({ appBuilder: true, artifacts: true });
   return {
     async send(message, handlers, signal) {
+      // F15: an imported/pulled DB is executable config — its endpoint/provider
+      // settings must be re-confirmed before ANY direct turn, builder included.
+      if (needsConfirm()) {
+        return {
+          ok: false,
+          code: ERROR_CODES.CONSENT_REQUIRED,
+          message: 'endpoint settings came from an imported or synced file — confirm them in Settings before building',
+          retryable: false,
+        };
+      }
       const key = options.mode === 'local' ? undefined : await readKey(options.provider);
       const adapter = createTurnAdapter(
         {

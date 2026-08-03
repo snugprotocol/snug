@@ -6,7 +6,7 @@
 // Loading is a total parser: absent, corrupt, or foreign bytes all collapse to `{}`
 // (= "never pushed"), which fails safe — the loop then treats local state as having
 // un-pushed changes and will surface divergence rather than auto-pull over it.
-import type { PersistenceBackend } from '../persistence.js';
+import { SYNC_SIDECAR_MAGIC, type PersistenceBackend } from '../persistence.js';
 
 export interface SyncSidecarState {
   /** Origin revision our last successful push produced (the next push's baseRevision). */
@@ -30,7 +30,10 @@ export async function loadSidecar(backend: PersistenceBackend, file: string): Pr
   }
   if (raw === undefined) return {};
   try {
-    const parsed = JSON.parse(new TextDecoder().decode(raw)) as Record<string, unknown>;
+    // Stored with the sidecar envelope (see saveSidecar); tolerate bare JSON too.
+    const text = new TextDecoder().decode(raw);
+    const json = text.startsWith(SYNC_SIDECAR_MAGIC) ? text.slice(SYNC_SIDECAR_MAGIC.length) : text;
+    const parsed = JSON.parse(json) as Record<string, unknown>;
     const lastPushedRevision = stringField(parsed.lastPushedRevision);
     const lastPushedHash = stringField(parsed.lastPushedHash);
     const lastSyncAt = stringField(parsed.lastSyncAt);
@@ -45,7 +48,9 @@ export async function loadSidecar(backend: PersistenceBackend, file: string): Pr
 }
 
 export async function saveSidecar(backend: PersistenceBackend, file: string, state: SyncSidecarState): Promise<void> {
-  await backend.save(sidecarFileFor(file), new TextEncoder().encode(JSON.stringify(state)));
+  // The envelope magic is what lets the OPFS backend's completeness check recognize a
+  // fully-written sidecar (its A/B-slot recovery treats first-bytes as the signal).
+  await backend.save(sidecarFileFor(file), new TextEncoder().encode(SYNC_SIDECAR_MAGIC + JSON.stringify(state)));
 }
 
 /** SHA-256 hex of payload bytes via WebCrypto (browser and node ≥20 both provide it). */

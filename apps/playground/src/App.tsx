@@ -7,7 +7,7 @@ import { refreshAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
 import { initSync } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
-import { bootUserDb, useUserDbStatus } from './state/userdb.js';
+import { bootUserDb, recoverFresh, useUserDbStatus } from './state/userdb.js';
 import { Button } from './ui/Button.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { BuilderView } from './views/BuilderView.js';
@@ -35,9 +35,33 @@ export function App(): ReactElement {
     <div className="shell">
       {dbStatus.state === 'corrupt' || dbStatus.state === 'unsupported' ? (
         <div className="error-note" role="alert" style={{ margin: 'var(--space-3)' }}>
-          {dbStatus.state === 'corrupt'
-            ? `your snug file was unreadable and has been quarantined (${dbStatus.quarantinedFile}) — nothing was overwritten. restore it from a backup or an origin copy in settings.`
-            : dbStatus.message}
+          {dbStatus.state === 'corrupt' ? (
+            <>
+              your snug file was unreadable and has been quarantined ({dbStatus.quarantinedFile}) — nothing was
+              overwritten.
+              <div style={{ marginTop: 'var(--space-2)' }}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    // Explicit recovery decision (F6/AC12): start empty, then restore
+                    // via Settings — pick a sync origin (divergence → "use the origin
+                    // copy") or import an exported snug file. The quarantine stays.
+                    void recoverFresh().then(async () => {
+                      await initSettings();
+                      await refreshAppMeta();
+                      await initSync();
+                    });
+                  }}
+                >
+                  start fresh (keep the quarantined copy)
+                </button>
+              </div>
+              then restore in settings: pick your sync origin and choose “use the origin copy”, or import a snug file.
+            </>
+          ) : (
+            dbStatus.message
+          )}
         </div>
       ) : null}
       <header className="shell-header">

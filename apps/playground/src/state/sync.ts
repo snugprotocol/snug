@@ -17,7 +17,8 @@ import {
 } from '@snugprotocol/db';
 import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 
-import { markEndpointsNeedConfirm } from './mode.js';
+import { refreshAppMeta } from './appMeta.js';
+import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
 import { readCsrfToken } from './auth.js';
@@ -38,6 +39,17 @@ export const DROPBOX_TOKEN_SECRET = 'dropbox:token';
 
 let loop: SyncLoop | undefined;
 
+/** Foreign bytes just became local state: arm F15 and re-mirror stores from the DB. */
+async function afterForeignBytes(): Promise<void> {
+  markEndpointsNeedConfirm();
+  const db = await getUserDb();
+  hydrateSettings(db);
+  // hydrateSettings re-reads needsEndpointConfirm from the (pulled) DB — the arm above
+  // must win regardless of what the foreign image claimed about itself.
+  markEndpointsNeedConfirm();
+  await refreshAppMeta();
+}
+
 function onSyncEvent(event: SyncEvent): void {
   const current = syncStatusStore.get();
   if (event.kind === 'divergence') {
@@ -45,6 +57,7 @@ function onSyncEvent(event: SyncEvent): void {
   } else if (event.kind === 'error') {
     syncStatusStore.set({ ...current, state: 'error', detail: event.message });
   } else {
+    if (event.kind === 'pulled') void afterForeignBytes(); // auto pull-merge (F15 + rehydrate)
     syncStatusStore.set({ ...current, state: 'idle', detail: undefined });
   }
 }
@@ -117,7 +130,7 @@ export async function setSyncOrigin(kind: SyncOriginKind): Promise<void> {
 export async function applyRemote(): Promise<void> {
   if (loop === undefined) return;
   await loop.applyRemote();
-  markEndpointsNeedConfirm();
+  await afterForeignBytes();
   syncStatusStore.set({ ...syncStatusStore.get(), state: 'idle', detail: undefined });
 }
 
@@ -152,5 +165,5 @@ export async function importUserFile(file: { arrayBuffer(): Promise<ArrayBuffer>
   const db = await getUserDb();
   const bytes = new Uint8Array(await file.arrayBuffer());
   await db.importUserDb(bytes);
-  markEndpointsNeedConfirm();
+  await afterForeignBytes();
 }

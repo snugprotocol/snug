@@ -52,7 +52,7 @@ describe('restoreFromOrigin (AC5, F6)', () => {
     expect(result.revision).toBe('r7');
     expect(result.userDb.getSetting('who')).toBe('origin-copy');
     expect(provider.push).not.toHaveBeenCalled();
-    expect(backend.files.has(`${USERDB_FILE}.corrupt.bak`)).toBe(true); // quarantine retained
+    expect([...backend.files.keys()].some((f) => /\.corrupt-[a-z0-9]+\.bak$/.test(f))).toBe(true); // quarantine retained
     await result.userDb.close();
   });
 

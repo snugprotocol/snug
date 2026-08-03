@@ -216,8 +216,10 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
       candidate.exec('SELECT count(*) FROM sqlite_master'); // open-check: corrupt bytes fail here
     } catch (err) {
       candidate?.close();
-      // F6: the user DB never fails open — quarantine and make recovery an explicit choice.
-      const quarantinedFile = `${file}.corrupt.bak`;
+      // F6: the user DB never fails open — quarantine and make recovery an explicit
+      // choice. Unique name per occurrence: repeat corruption must not overwrite the
+      // previous forensic copy (umbrella review minor 6).
+      const quarantinedFile = `${file}.corrupt-${Date.now().toString(36)}.bak`;
       await backend.save(quarantinedFile, stored);
       return {
         status: 'corrupt',

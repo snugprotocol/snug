@@ -109,8 +109,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     userdbs = options.userDbStore ?? createUserDbStore(dbPath(config.dataDir, 'userdbs.sqlite'));
     const oidc =
       options.oidcClient ?? createOidcClient({ issuer: config.oidcIssuer, clientId, clientSecret });
-    registerAuthRoutes(app, { oidc, users, sessionSecret });
-    registerUserDbRoutes(app, { userdbs, sessionSecret });
+    registerAuthRoutes(app, { oidc, users, sessionSecret, rateLimiter });
+    registerUserDbRoutes(app, { userdbs, sessionSecret, rateLimiter });
   }
 
   registerStaticHosting(app, config.staticDir);

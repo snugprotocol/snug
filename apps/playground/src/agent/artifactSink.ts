@@ -34,30 +34,45 @@ export interface CreateAppTargetSinkOptions {
 
 export function createAppTargetSink(options: CreateAppTargetSinkOptions = {}): ArtifactSink {
   const getDb = options.getDb ?? getUserDb;
-  /** Builder-thread pin: set by the first write, versions from then on. */
-  let threadTarget: string | undefined;
+  /**
+   * Builder-thread pin, latched SYNCHRONOUSLY on first entry (umbrella review minor
+   * 7): two concurrent writes racing an unpinned sink must not install two apps —
+   * the second awaits the first install and versions the same id.
+   */
+  let threadInstall: Promise<string> | undefined;
 
   return {
     async write(html, title) {
       const db = await getDb();
-      const target = options.pinnedAppId ?? threadTarget;
+      const pinned = options.pinnedAppId;
 
-      if (target !== undefined) {
-        const existing = db.getApp(target);
+      if (pinned !== undefined) {
+        const existing = db.getApp(pinned);
         if (existing !== undefined) {
-          const meta = db.saveAppVersion(target, html, title);
-          const record = db.getApp(target);
-          return { id: target, displayName: record?.displayName ?? existing.displayName, version: meta.version };
+          const meta = db.saveAppVersion(pinned, html, title);
+          const record = db.getApp(pinned);
+          return { id: pinned, displayName: record?.displayName ?? existing.displayName, version: meta.version };
         }
         // Pinned id with no row yet (e.g. chat alongside a never-installed preview):
         // install UNDER the pinned id so the chat and the app agree on identity.
-        const installed = db.installApp({ appId: target, displayName: deriveDisplayName(html, title), html });
+        const installed = db.installApp({ appId: pinned, displayName: deriveDisplayName(html, title), html });
         return { id: installed.appId, displayName: installed.displayName, version: 1 };
       }
 
-      const installed = db.installApp({ displayName: deriveDisplayName(html, title), html });
-      threadTarget = installed.appId;
-      return { id: installed.appId, displayName: installed.displayName, version: 1 };
+      if (threadInstall === undefined) {
+        let resolveInstall: (id: string) => void = () => undefined;
+        threadInstall = new Promise<string>((resolve) => {
+          resolveInstall = resolve;
+        });
+        const installed = db.installApp({ displayName: deriveDisplayName(html, title), html });
+        resolveInstall(installed.appId);
+        return { id: installed.appId, displayName: installed.displayName, version: 1 };
+      }
+
+      const targetId = await threadInstall;
+      const meta = db.saveAppVersion(targetId, html, title);
+      const record = db.getApp(targetId);
+      return { id: targetId, displayName: record?.displayName ?? 'app', version: meta.version };
     },
   };
 }

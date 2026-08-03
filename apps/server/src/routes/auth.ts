@@ -5,10 +5,11 @@
 // 404 until the client's first PUT, ADR-0009). Logout is CSRF-protected: a cookie-
 // authed mutating route, same double-submit rule as PUT /userdb.
 
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import type { OidcClient } from '../auth/oidc.js';
+import type { RateLimiter } from '../rate-limit.js';
 import {
   checkCsrf,
   clearSessionCookies,
@@ -26,6 +27,8 @@ export interface AuthRouteDeps {
   oidc: OidcClient;
   users: UserStore;
   sessionSecret: string;
+  /** Optional per-IP throttle (umbrella review minor 5) — absent in unit tests. */
+  rateLimiter?: RateLimiter;
 }
 
 const loginStatePayload = z.looseObject({
@@ -39,9 +42,18 @@ function requestOrigin(request: FastifyRequest): string {
 }
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
-  const { oidc, users, sessionSecret } = deps;
+  const { oidc, users, sessionSecret, rateLimiter } = deps;
+
+  const throttled = (request: FastifyRequest, reply: FastifyReply): boolean => {
+    if (rateLimiter !== undefined && !rateLimiter.take(request.ip)) {
+      void reply.status(429).send({ code: 'RATE_LIMITED', message: 'too many requests — slow down and retry', retryable: true });
+      return true;
+    }
+    return false;
+  };
 
   app.get('/auth/login', async (request, reply) => {
+    if (throttled(request, reply)) return reply;
     const redirectUri = `${requestOrigin(request)}/auth/callback`;
     let start;
     try {
@@ -67,6 +79,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   });
 
   app.get('/auth/callback', async (request, reply) => {
+    if (throttled(request, reply)) return reply;
     const clearLoginCookie = (): void => {
       void reply.clearCookie(OIDC_COOKIE, {
         path: '/auth',

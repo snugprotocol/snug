@@ -4,6 +4,13 @@
 
 export type PersistenceKind = 'opfs' | 'idb' | 'memory';
 
+/**
+ * Envelope prefix for non-SQLite files stored through a backend (the sync sidecar).
+ * The OPFS backend's crash-window recovery treats first-bytes as the completeness
+ * signal, so every stored format must declare one — sidecar.ts prefixes this.
+ */
+export const SYNC_SIDECAR_MAGIC = 'SNUGSYNC1\n';
+
 export interface PersistenceBackend {
   readonly kind: PersistenceKind;
   /** Resolves undefined when the file does not exist yet. */
@@ -38,16 +45,21 @@ export function createOpfsBackend(dirName: string = STORE_NAME): PersistenceBack
     }
   };
 
-  // All files this backend stores are serialized SQLite databases, so the header is a
-  // universal completeness signal for crash-window recovery below.
+  // Everything this backend stores declares its completeness in its first bytes:
+  // serialized SQLite databases by their own header, and the sync sidecar by the
+  // SYNC_SIDECAR_MAGIC envelope (saveSidecar prefixes it for exactly this reason —
+  // a bare-JSON sidecar would read back as never-complete and break the sync loop's
+  // content-hash gate on the one backend real users get).
   const SQLITE_MAGIC = 'SQLite format 3' + String.fromCharCode(0);
-  const looksComplete = (bytes: Uint8Array | undefined): bytes is Uint8Array => {
-    if (bytes === undefined || bytes.length < SQLITE_MAGIC.length) return false;
-    for (let i = 0; i < SQLITE_MAGIC.length; i++) {
-      if (bytes[i] !== SQLITE_MAGIC.charCodeAt(i)) return false;
+  const startsWithAscii = (bytes: Uint8Array, prefix: string): boolean => {
+    if (bytes.length < prefix.length) return false;
+    for (let i = 0; i < prefix.length; i++) {
+      if (bytes[i] !== prefix.charCodeAt(i)) return false;
     }
     return true;
   };
+  const looksComplete = (bytes: Uint8Array | undefined): bytes is Uint8Array =>
+    bytes !== undefined && (startsWithAscii(bytes, SQLITE_MAGIC) || startsWithAscii(bytes, SYNC_SIDECAR_MAGIC));
 
   // ---- crash-safe A/B slots -----------------------------------------------------
   // A page being torn down mid-write (pagehide flush) must never destroy committed

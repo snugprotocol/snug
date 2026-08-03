@@ -90,6 +90,21 @@ describe('createServerBuilder', () => {
 });
 
 describe('createDirectBuilder (demo brain)', () => {
+  it('F15 guard: refuses the turn while endpoint settings are unconfirmed — key untouched', async () => {
+    const db = await installTestUserDb();
+    const getKey = vi.fn(() => Promise.resolve('sk-should-not-be-read'));
+    const builder = createDirectBuilder({
+      mode: 'byok',
+      provider: 'anthropic',
+      sink: createAppTargetSink({ getDb: () => Promise.resolve(db) }),
+      getKey,
+      needsConfirm: () => true,
+    });
+    const result = await builder.send('build me anything', {}, new AbortController().signal);
+    expect(result).toMatchObject({ ok: false, code: 'CONSENT_REQUIRED', retryable: false });
+    expect(getKey).not.toHaveBeenCalled();
+  });
+
   it('runs fully in-browser: artifact saved into the user DB, events synthesized, no network', async () => {
     const db = await installTestUserDb();
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be touched'));
