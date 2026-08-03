@@ -6,7 +6,7 @@
 
 ## The three differentiators (the entire pitch)
 1. **Runtime agent bridge** — the app's brain is the host agent. A Snug chess game sends moves to the LLM over the envelope protocol and animates the JSON reply. Body/mind split; a runtime relationship, not codegen.
-2. **User-owned data** — per-app isolated sql.js/OPFS database, exportable as a real `.sqlite` file. Your app, your file.
+2. **User-owned data** — ONE portable SQLite file per user holding every app (code + ≥5 versions), its isolated data, chats, and settings; runs from the browser (OPFS), syncs to an origin the user picks (hub, Dropbox, …), and exports/imports whole. Your apps, your file, any hub, any LLM provider.
 3. **Embeddable + secure by construction** — any SaaS drops in the runner/SDK; tokens never enter the iframe, never reach the LLM, never reach a publisher (v1.1 broker).
 
 ## What Snug is not (anti-positioning)

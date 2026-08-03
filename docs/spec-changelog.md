@@ -4,7 +4,19 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
-## 2026-07-31 — spec v0.1 DRAFT amendment (staged, not pushed) — TASK-20260731-runner-sandbox
+## 2026-08-03 — spec v0.2 DRAFT (staged, not pushed) — TASK-20260803-portable-hub
+New normative layer on top of v0.1 (wire frames/envelope UNCHANGED): **Portable User
+Database Format** — one SQLite file per user (schema v1 via `PRAGMA user_version`; DDL +
+limits snapshot-locked in `packages/protocol/src/userdb-schema.ts`), `snug_*` hub tables
+(apps + versions ≥5 with copy-forward revert, chats, settings, secrets, blob-embedded
+per-app databases, sync config), `MAX_USERDB_BYTES` 64 MiB, secrets stripped+VACUUMed
+from hub pushes and default exports. Hub obligations: no backend required for app
+execution; mandatory Export/Import; optional hosted origin via `GET/PUT /userdb`
+(ETag/If-Match CAS, 401/403/412/413/428 ladder, CSRF double-submit `x-snug-csrf`,
+fail-closed CORS); SyncProvider contract with divergence surfaced and LWW only on
+explicit user action; client-authoritative writes in every execution mode
+(byok/local/subscription). Staged in `docs/spec-drafts/spec-v0.2-userdb.md`. No push to
+snugprotocol/spec (needs explicit ask).
 Two amendments from runner implementation loop-backs: (1) **R1 — recoverable requestId on
 parse failures**: `FrameParseResult` failure variants (`UNSUPPORTED_VERSION`, `MALFORMED`)
 now carry `requestId?` recovered from the raw frame when it held a plausible string id, so
