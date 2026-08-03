@@ -1,19 +1,21 @@
-// tools.ts — the BYOK chat-path tool set: the browser-side twin of the server's
+// tools.ts — the direct-mode chat-path tool set: the browser-side twin of the server's
 // buildServerTools. Tool names/descriptions come from the knowledge store (ADR-0004);
-// artifact_write lands in the LOCAL library (IndexedDB) instead of the server store.
+// artifact_write flows through an ArtifactSink into the USER DB — the sink pins the
+// target app host-side (F9), so a write is an install or a new version, never a
+// model-chosen destination.
 
 import type { AgentTool } from '@snugprotocol/adapters';
 import { APP_BUILDER_TOOL_NAME, getToolPrompt, searchKnowledge } from '@snugprotocol/knowledge';
 
-import type { LibraryEntry, LibraryStore } from '../state/library.js';
+import type { ArtifactSink, ArtifactWriteResult } from './artifactSink.js';
 
 export const ARTIFACT_WRITE_TOOL_NAME = 'artifact_write';
 
 export interface ByokToolHooks {
-  onArtifact: (artifact: LibraryEntry) => void;
+  onArtifact: (artifact: ArtifactWriteResult) => void;
 }
 
-export function buildByokTools(library: LibraryStore, hooks: ByokToolHooks): AgentTool[] {
+export function buildByokTools(sink: ArtifactSink, hooks: ByokToolHooks): AgentTool[] {
   return [
     {
       def: {
@@ -48,9 +50,11 @@ export function buildByokTools(library: LibraryStore, hooks: ByokToolHooks): Age
           return 'Error: "content" must be a non-empty string containing the entire file body.';
         }
         const title = typeof input.title === 'string' ? input.title : undefined;
-        const artifact = await library.save(input.content, title);
+        const artifact = await sink.write(input.content, title);
         hooks.onArtifact(artifact);
-        return `Created artifact "${artifact.displayName}" at /artifacts/${artifact.id}`;
+        return artifact.version === 1
+          ? `Created "${artifact.displayName}" at /artifacts/${artifact.id}`
+          : `Updated "${artifact.displayName}" (version ${artifact.version}) at /artifacts/${artifact.id}`;
       },
     },
   ];

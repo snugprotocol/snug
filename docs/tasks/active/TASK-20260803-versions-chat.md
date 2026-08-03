@@ -1,6 +1,6 @@
 # TASK-20260803-versions-chat: App versioning UX + persistent chat, client-authoritative in all modes (child 3 of portable-hub)
 
-- **Status**: planned
+- **Status**: in-review (implementation green; Playwright pass pending)
 - **Owner**: Jeetu
 - **Risk tier**: medium
 - **Branch**: `feat/TASK-20260803-portable-hub` (umbrella branch)
@@ -30,3 +30,8 @@ Files: `apps/playground/src/agent/{tools.ts,useBuilderChat.ts,builder.ts}` (targ
 —
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-03 15:10 — Jeetu/Claude — session
+- Done: `agent/artifactSink.ts` (host-side F9 pinning: per-app chat pins the app; builder thread installs-then-versions; new thread = new app escape hatch; pinned-no-row installs under the pinned id) + 4 sink tests; tools/builder rewired to the sink (`ArtifactEvent` gains `version`); `useBuilderChat(threadId, {pinnedAppId})` persists user+assistant messages to `snug_chat_threads/messages` and hydrates them on mount (AC9 test: fresh hook re-renders history); subscription mode client-authoritative (AC13 test: SSE artifact → client fetches `/artifacts/:id` → sink versions the pinned app; card points at the user-DB id, never the hub cache id); RunView rail: pinned `app:<id>` thread, versions tab (`run/VersionsPanel.tsx`, revert = copy-forward + frame remount), artifact events reload html; `artifact-write.md` prompt updated to edit-in-place semantics + `pnpm gen:content` (content-drift test caught the stale generation — regenerated).
+- State: playground 45/45, knowledge 55/55. Chat artifact CARDS are not persisted (text history only) — documented limitation, fine for AC9's wording.
+- Next step: integration pass (sync/auth UI) then consolidated Playwright run.

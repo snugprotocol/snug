@@ -8,14 +8,16 @@ import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentTool } from '@snu
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
-import type { LibraryStore } from '../state/library.js';
 import { getByokKey, type ByokProvider, type PlaygroundMode } from '../state/mode.js';
 import { createTurnAdapter } from './adapter.js';
+import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
 
 export interface ArtifactEvent {
   artifactId: string;
   displayName: string;
+  /** User-DB version number — set on direct-mode writes; subscription mode fills it after the client-side fetch+write. */
+  version?: number;
 }
 
 export interface BuildHandlers {
@@ -114,7 +116,8 @@ export function createServerBuilder(threadId: string, fetchImpl?: FetchLike, mod
 export interface DirectBuilderOptions {
   mode: Exclude<PlaygroundMode, 'subscription'>;
   provider: ByokProvider;
-  library: LibraryStore;
+  /** Where artifact_write lands — the sink pins the target app host-side (F9). */
+  sink: ArtifactSink;
   /** Injectable for tests; defaults to the user-DB secret for the provider. */
   getKey?: (provider: ByokProvider) => Promise<string | undefined>;
   model?: string;
@@ -137,8 +140,9 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         },
         'chat',
       );
-      const tools: AgentTool[] = buildByokTools(options.library, {
-        onArtifact: (artifact) => handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName }),
+      const tools: AgentTool[] = buildByokTools(options.sink, {
+        onArtifact: (artifact) =>
+          handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName, version: artifact.version }),
       });
       const result = await runAgentTurn({
         adapter,

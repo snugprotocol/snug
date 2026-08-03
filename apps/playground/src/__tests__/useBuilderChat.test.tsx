@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useBuilderChat, type BuilderChat } from '../agent/useBuilderChat.js';
 import { modeStore } from '../state/mode.js';
+import { installTestUserDb } from './userdbTestHelper.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -71,11 +72,13 @@ async function settle(): Promise<void> {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear();
   sessionStorage.clear();
   // These are subscription-mode SSE tests — the default is the serverless byok mode.
   modeStore.set('subscription');
+  // The hook persists chat into the page user DB — inject a memory one.
+  await installTestUserDb();
 });
 
 afterEach(() => {

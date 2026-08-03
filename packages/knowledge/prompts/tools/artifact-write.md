@@ -7,12 +7,19 @@ source: rewritten for Snug v0.1 from the ancestor fs.write tool description (int
 
 ## Tool: artifact write
 
-Creates a user-visible artifact (an HTML app, code file, or document) from the complete
-file content you supply. This is the ONLY way to deliver a file: content passed here is
-stored and rendered for the user; file bodies must never appear in your reply text instead.
+Creates or updates a user-visible artifact (an HTML app, code file, or document) from
+the complete file content you supply. This is the ONLY way to deliver a file: content
+passed here is stored and rendered for the user; file bodies must never appear in your
+reply text instead.
 
-Returns a link to the created artifact — include that link in your reply, followed by a
-one- or two-sentence summary of what you built.
+The host decides where the write lands: in an app's chat, every write updates THAT app
+in place as a new version (the user can revert); in a fresh build conversation, the
+first write creates the app and later writes update it. You never choose the target —
+just pass complete content. When asked to change an existing app, write the ENTIRE
+updated file; the newest write becomes the running version.
+
+Returns a link to the created or updated artifact — include that link in your reply,
+followed by a one- or two-sentence summary of what you built or changed.
 
 ### Parameter: content
 

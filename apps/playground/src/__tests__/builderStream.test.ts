@@ -5,9 +5,9 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createAppTargetSink } from '../agent/artifactSink.js';
 import { createDirectBuilder, createServerBuilder, type ArtifactEvent } from '../agent/builder.js';
 import { DEMO_APP_TITLE } from '../agent/demoApp.js';
-import { createUserDbLibrary } from '../state/library.js';
 import { setByokKey } from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -93,11 +93,11 @@ describe('createDirectBuilder (demo brain)', () => {
   it('runs fully in-browser: artifact saved into the user DB, events synthesized, no network', async () => {
     const db = await installTestUserDb();
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be touched'));
-    const library = createUserDbLibrary(() => Promise.resolve(db));
+    const sink = createAppTargetSink({ getDb: () => Promise.resolve(db) });
     const builder = createDirectBuilder({
       mode: 'byok',
       provider: 'mock',
-      library,
+      sink,
       getKey: () => Promise.resolve(undefined),
     });
 
@@ -122,7 +122,7 @@ describe('createDirectBuilder (demo brain)', () => {
     expect(artifacts[0]?.displayName).toBe(DEMO_APP_TITLE);
     expect(activity).toEqual(['consulting the knowledge base…', 'writing the app file…']);
     // The artifact is really in the local library, runnable.
-    const html = await library.getHtml(artifacts[0]?.artifactId ?? '');
+    const html = db.getAppHtml(artifacts[0]?.artifactId ?? '');
     expect(html).toContain('<!DOCTYPE html>');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
