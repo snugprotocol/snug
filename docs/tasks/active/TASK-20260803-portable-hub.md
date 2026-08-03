@@ -165,3 +165,10 @@ Reviewer verdict: redesign needed narrowly (sync/secrets lifecycle; subscription
 - State: plan amended per review; spawning child task files next.
 - Next step: child task files → child 1 Gate 3 failing tests.
 - Open questions: owner may override two judgment calls made autonomously: (a) client-authoritative subscription mode, (b) offline re-scope + static hosting now / vendored-runtime later.
+
+### 2026-08-03 17:10 — Jeetu/Claude — session (implementation complete)
+- Done: all six children implemented and committed on this branch — child 1 `7dde1e8` (userdb core, 34 tests), child 2 `04a1299` (serverless run + picker), child 4 `520866a` (sync module, 44 tests, delegated agent), child 5 `15bc195` (server OIDC/CSRF//userdb/static, 54 new tests, delegated agent), child 3 `fb0a22e` (sink pinning + chat persistence + versions UI), integration `c44b144` (auth/sync UI, **CSRF header fork between the two agents caught and unified to `x-snug-csrf`**, makeAdapter wiring), durability `ab88f97` (A/B-slot OPFS persistence — real-browser e2e falsified in-place writes, renames, AND directory iteration under teardown; three data-loss bugs fixed), child 6 `9b1e3e2` (spec v0.2 draft staging + changelog + docs).
+- Verification: full root suite 19/19 tasks green (protocol 80 · db 114 · adapters 60 · knowledge 55 · sdk 33 · runner 90 · server 89 · playground 51 unit); Playwright 25/25 twice consecutively (C2 gate + both AC2 serverless gates).
+- State: fresh-context adversarial review of the merged umbrella running (runnable probes, C1/C2/secrets/sync/persistence surfaces); findings to be folded before this branch goes to PR.
+- Next step: fold review findings → owner review of branch + PR → merge → move task files to done/ (spec push, npm, deploy all still require explicit asks).
+- Known limitations (documented, deliberate): true network-offline runtime queued (CDN allowlist); chat artifact cards not persisted (text history is); Dropbox UI is paste-a-token (PKCE helpers shipped for the full flow); multi-device merge = divergence + explicit LWW.
