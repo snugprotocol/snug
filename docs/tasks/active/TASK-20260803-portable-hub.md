@@ -23,15 +23,19 @@ Vision points (from owner, 2026-08-03):
 
 **Acceptance criteria** (each becomes at least one test; refined at plan approval):
 1. A single user `.sqlite` file contains apps (code), app versions, per-app data namespaces, chat threads, settings, and profile; exporting and re-importing it on a fresh origin/profile restores apps, data, and chat history.
-2. An app runs end-to-end (load → interact → data persist) with the hub server stopped, from the OPFS copy of the user DB.
+2. An app runs end-to-end (load → interact → data persist) with **no hub backend process running**, served by the static hub client, from the OPFS copy of the user DB. (True network-offline app runtime is out of scope — generated apps load their runtime from the CDN allowlist; vendored-runtime template queued in next-steps. AC wording amended per plan review F3.)
 3. In BYOK mode, LLM traffic goes browser → provider directly (no hub-server hop), from the **host page** — app iframes still cannot reach the network (C2 negative test stays green); credentials never enter the iframe (C1 negative test).
-4. A local-LLM endpoint (OpenAI-compatible, e.g. Ollama) is selectable as a provider and works offline.
+4. A local-LLM endpoint (OpenAI-compatible, e.g. Ollama) is selectable as a provider and works with no hub server and no frontier-API reachability (LLM traffic to localhost only; CDN caveat as AC2; Ollama CORS + https/mixed-content practicalities documented with targeted picker errors — F17).
 5. Sync: OPFS copy periodically persists to the configured origin; origin is switchable via a `SyncProvider` interface; hub-origin + one example adapter (Dropbox) implemented; conflict story defined (last-writer-wins v1, documented).
 6. Provider+model picker: BYOK and hub-subscription modes; subscription mode routes via hub server; BYOK keys stored in the user DB settings (with documented at-rest posture) and never sent to the hub.
 7. Installing a starter/marketplace app writes it into the user DB; editing an app via its Chat page writes a new version; ≥5 versions retained (pruning beyond N); version list + one-click revert works.
 8. Google SSO on the sample hub: login yields a per-user DB provisioned/loaded by the hub; logout/login on a new device restores the same state from origin.
 9. Chat/builder edits round-trip: edit app → new version in DB → reload in fresh session loads latest version; chat history for the app persists in the same DB.
-10. Spec sync: portable DB schema (tables, versioning, namespaces, mandatory Export) documented as spec v0.2 draft sourced from `packages/db/src/userdb/schema.ts` DDL constants (wire protocol/envelope unchanged at v1), locked by a DDL snapshot test + spec-changelog entry (push to spec repo only on explicit ask).
+10. Spec sync: portable DB schema (tables, versioning semantics, namespace rule, mandatory Export, size caps) documented as spec v0.2 draft sourced from **`packages/protocol/src/userdb-schema.ts`** DDL/limit constants (one spec source per SPEC_SYNC — F10; wire frames/envelope unchanged at v1), locked by a DDL snapshot test + spec-changelog entry (push to spec repo only on explicit ask).
+11. Secrets lifecycle (F1/F14): BYOK/Dropbox secrets survive a hub-origin sync round-trip locally; the pushed payload and default export contain zero secret bytes; keys absent from localStorage/sessionStorage and from every frame posted to the iframe.
+12. Sync safety (F1/F6/F12): local-first-then-login pushes local state up (never clobbered by an empty provisioned DB); a corrupt local user DB is quarantined and restored from origin with **no auto-push** after recovery; two tabs cannot interleave-destroy writes (single writer via Web Lock, readers invalidated via BroadcastChannel).
+13. Subscription mode is client-authoritative (F4): a subscription-mode chat edit lands as a new version of the target app in the **user DB** (client fetches artifact HTML on the SSE artifact event); server artifact/thread stores are transient cache, and export after a subscription edit contains the newest version.
+14. Hub endpoints fail closed (F2/F11/F19): `/userdb` refuses unauthenticated requests (401) and cross-origin credentialed access; enabling auth requires explicit `SNUG_CORS_ORIGIN` (boot failure otherwise, no reflect-any); mutating cookie-auth'd routes carry CSRF defense; `GET /userdb` served `application/octet-stream` + `nosniff` + `no-store`.
 
 **Out of scope**: desktop local hub app (later phase); adapters beyond Dropbox (OneDrive/Drive/S3 — interface only); multi-device concurrent-write merge/CRDT (v1 = last-writer-wins); hub marketplace curation/review flow; payments/subscription billing for hub LLM; KeyProvider/KMS encryption of BYOK keys at rest (documented posture instead); non-Google SSO providers.
 
@@ -108,11 +112,35 @@ Wire protocol: **no message/schema changes**; envelope + frames stay v1 (AC10 wo
 - **Secrets in synced file**: mitigated by strip-by-default (see posture above); adversarial probe in review.
 - **Lesson applied** (2026-07-31): each child merge gets an independent fresh-context adversarial review with runnable probes targeting C1/C2/secrets surfaces — "tests pass" is not review.
 
+### Plan amendments after fresh-context review (2026-08-03, F1–F19)
+
+Reviewer verdict: redesign needed narrowly (sync/secrets lifecycle; subscription write path); host-page bridge + blob-embedded layout survived attack. All findings folded as follows — **this section supersedes conflicting text above**:
+
+**Sync/secrets state machine — redesigned (F1, F5, F6, F12):**
+- OPFS is **authoritative**; the origin is a replica. Push-state (last pushed revision, content hash, dirty flag) lives **outside the synced image** (OPFS sidecar file) so the image never contains its own revision (kills the F5 push loop). Change detection hashes the image excluding volatile rows.
+- **Pull is a merge, never a swap**: local `snug_secrets` rows are preserved into any pulled image; pull may replace local state only when local has no un-pushed changes, otherwise divergence is surfaced (LWW only on explicit user action).
+- **First login with existing local data pushes up**, never pulls the empty provisioned DB down.
+- **Corruption recovery fails closed** (unlike the per-app driver): corrupt bytes quarantined to `.bak`, restore attempted from origin, **no auto-push** until a good state is user-confirmed.
+- Network push cadence decoupled from the 250 ms OPFS debounce: interval + changed-hash; **no pagehide network push** (keepalive caps ~64 KiB — only the OPFS flush runs at pagehide; a newer-than-origin local copy pushes on next session start).
+- Multi-tab: single writer via Web Lock (`snug-userdb`); reader tabs get a read-only banner + BroadcastChannel invalidation; writer-crash handoff tested.
+
+**Subscription mode — client-authoritative (F4, F9, F16):** on the SSE `artifact` event the client GETs `/artifacts/:id` and writes the HTML into `snug_apps`/`snug_app_versions` as a new version of the **host-side pinned target id** (per-app chat pins the app id; a builder thread pins to the id minted by its first write, with a defined new-app escape hatch). Server artifact/thread stores are demoted to transient cache; the user DB is the single source of truth in every mode. `artifact-write` prompt in `packages/knowledge` updated for edit-in-place semantics (BYOK/server parity); `/invoke` body gains optional `model` (zod-validated) for subscription-mode model choice.
+
+**Offline — re-scoped honestly (F3, ADR-0003 honesty rule):** the claim is "serverless: no hub backend needed; local LLM keeps LLM traffic on-device". Generated apps load React/Babel from the CDN allowlist (ADR-0006), and sandboxed srcdoc iframes cannot be service-worker-cached — true network-offline runtime requires a vendored-runtime template variant, **queued in next-steps, not claimed**. Child 5 adds static hosting of the built playground to `apps/server` (`@fastify/static`) so a "hub provider" actually serves the hub client (also fixes AC2's serving story).
+
+**Spec source (F10):** DDL + userdb limit constants live in **`packages/protocol/src/userdb-schema.ts`** (High tier, one spec source, SPEC_SYNC-consistent); `packages/db` imports them. Adds `MAX_USERDB_BYTES` (64 MiB v1) and per-route body limit for `PUT /userdb`; per-user server quota = same constant (F8).
+
+**Single-writer core (F7):** one shared `UserDb` service owns the sql.js handle and persistence pipeline; both the typed CRUD API and the `DbDriver` face are views over it. Interleaved-write survival test required.
+
+**Child resequencing (F11):** server `/userdb` endpoints move from child 4 to child 5 (they need auth to exist; no unauthenticated per-user blob window). Child 4 is client-side only (sync core + providers, hub-origin tested against mocks). Order: **1 → {2, 3} → 4 → 5 → 6**.
+
+**Minors folded:** F13 — no data migration (pre-launch; old IndexedDB/localStorage/per-app OPFS files abandoned, stated in child 2; user DB lives under a distinct OPFS directory `snug-userdb/` so it can never collide with `namespaceToFileName` output). F14 — ADR-0008 amended: persistent plaintext secrets are a deliberate, documented weakening vs sessionStorage-only BYOK; storage negatives in AC11. F15 — imported/first-pulled DBs are executable config: endpoint/provider settings require re-confirmation before use; stored keys never auto-attach to an unconfirmed endpoint. F17 — Ollama `OLLAMA_ORIGINS` + Safari mixed-content documented, targeted picker errors. F18 — session-signing key env-only, fail-closed outside dev, commented-out in `.env.example` (2026-08-02 lesson). F19 — folded into AC14. F2 — child 5 must land CORS fail-closed + `SameSite=Lax` + `Secure` + CSRF token on mutating routes, with cross-origin negative tests; also fixes `config.ts` `??` on `SNUG_CORS_ORIGIN` per the 2026-08-02 lesson.
+
 ### Post-approval sequence
 
-1. Fresh-context AI review of this plan (High-tier requirement) — findings folded in before any code.
-2. Spawn child task files (1→{2,3,4}→5→6), each with its own Gate 3 failing tests first.
-3. Implementation per child; umbrella journal tracks cross-child state.
+1. ✅ Fresh-context AI review of this plan (High-tier requirement) — findings folded in above.
+2. Spawn child task files (1→{2,3}→4→5→6), each with its own Gate 3 failing tests first.
+3. Implementation per child; umbrella journal tracks cross-child state; each child merge gets an independent adversarial review with runnable probes.
 
 ## Decisions & surprises
 
@@ -131,3 +159,9 @@ Wire protocol: **no message/schema changes**; envelope + frames stay v1 (AC10 wo
 - State: **Gate 2 complete, awaiting owner plan approval.** No implementation code written.
 - Next step: owner approves plan → fresh-context AI plan review (High tier) → spawn child 1 (`userdb` core) with failing tests first.
 - Open questions: none blocking; retention default (5) and single-tab-writer UX are confirmable at child-task level.
+
+### 2026-08-03 15:20 — Jeetu/Claude — review + session
+- Done: owner approved plan ("go ahead"). Fresh-context adversarial review completed (4 blockers / 8 majors / 7 minors, F1–F19); all findings folded — sync/secrets state machine redesigned (pull-merge, out-of-image push-state, fail-closed corruption recovery), subscription mode made client-authoritative, offline claim re-scoped honestly (+ static hosting added to child 5, vendored-runtime queued), spec source moved to `packages/protocol/src/userdb-schema.ts`, children resequenced 1→{2,3}→4→5→6. ADRs 0007/0008/0009 amended in place (still proposed-drafts of this task). ACs 2/4/10 amended; ACs 11–14 added.
+- State: plan amended per review; spawning child task files next.
+- Next step: child task files → child 1 Gate 3 failing tests.
+- Open questions: owner may override two judgment calls made autonomously: (a) client-authoritative subscription mode, (b) offline re-scope + static hosting now / vendored-runtime later.

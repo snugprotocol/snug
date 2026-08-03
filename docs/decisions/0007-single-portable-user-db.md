@@ -12,8 +12,10 @@ One physical SQLite file per user is the canonical artifact. Inside it:
 - **Hub-namespace tables** (`snug_*`): apps, app_versions (≥5 retained per app, revert supported), chat threads/messages, settings (incl. provider/model choice and BYOK keys), profile, sync metadata.
 - **Per-app data namespaces**: each app's tables live under a driver-enforced namespace (prefix); the SDK/db driver guarantees an app can only touch its own namespace — the v1 isolation property is preserved logically instead of physically.
 - **Per-app export stays**: a per-app `.sqlite` can be derived on demand from the user DB.
-- The user-DB layout (table names, columns, versioning semantics, namespace rule) becomes **normative spec surface** (spec v0.2 draft) — portability across hub providers requires hubs to agree on the schema.
+- The user-DB layout (table names, columns, versioning semantics, namespace rule) becomes **normative spec surface** (spec v0.2 draft) — portability across hub providers requires hubs to agree on the schema. DDL + limit constants (incl. `MAX_USERDB_BYTES`, 64 MiB v1) live in **`packages/protocol/src/userdb-schema.ts`** so the spec has one High-tier source (SPEC_SYNC); `packages/db` imports them.
 - A `schema_version` + forward migration mechanism ships with the layout from day one.
+- One shared `UserDb` service owns the single sql.js handle and persistence pipeline; the typed CRUD API and the runner-facing `DbDriver` are views over it (two independent writers of one file are forbidden by construction).
+- The user DB lives under a distinct OPFS directory (`snug-userdb/`) that can never collide with per-app `namespaceToFileName` output; pre-launch v1 local data (IndexedDB artifacts, localStorage meta, per-app OPFS files) is abandoned, not migrated.
 
 ## Alternatives considered
 - **Per-app files + user manifest, export = archive** — rejected: "one `.sqlite` file" is the portability story; an archive is not openable by standard SQLite tooling as a unit.

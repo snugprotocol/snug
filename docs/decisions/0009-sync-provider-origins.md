@@ -8,11 +8,15 @@
 The single user DB (ADR-0007) runs in browser OPFS at runtime. Users need it durable and portable: hosted by the hub by default, but switchable to personal storage (Dropbox, OneDrive, Drive, S3), always exportable, and restorable on a new device after login.
 
 ## Decision
-- **Runtime copy is OPFS**; a background sync loop periodically pushes the serialized DB to the configured **origin** and pulls on session start.
+- **OPFS is authoritative; the origin is a replica.** A background loop pushes the serialized DB to the configured **origin** on an interval gated by a content-hash change check; session start reconciles (see safety rules).
 - Origins implement a small **`SyncProvider` interface** (roughly: `pull() → {bytes, revision}`, `push(bytes, baseRevision) → revision`, `info()`). Hub-hosted origin is the default provider; **Dropbox** ships as the example third-party adapter; OneDrive/Drive/S3 are interface-conformant future work.
-- **Conflict policy v1: last-writer-wins** with revision tokens and a user-visible "newer copy exists" warning on divergence. Multi-device concurrent-write merge (CRDT/changeset) is explicitly out of scope for v1 and a documented limitation.
-- **Export is mandatory hub behavior**: one-click download of the canonical `.sqlite`; import likewise — this is the portability escape hatch that keeps hub providers honest.
-- Sync metadata (origin config, revision, last-sync time) lives in the user DB itself (hub-namespace), so the file remains self-describing when ported.
+- **Push-state lives outside the synced image** (OPFS sidecar: last pushed revision, content hash, dirty flag) — the image never contains its own revision, so pushing cannot re-dirty the DB. Origin *config* stays inside the DB (`snug_sync`) so the ported file remains self-describing.
+- **Pull is a merge, never a swap**: local `snug_secrets` rows are preserved into any pulled image; pull replaces local state only when local has no un-pushed changes; otherwise divergence is surfaced and last-writer-wins applies only on explicit user action. First login with existing local data **pushes up** — a freshly provisioned empty origin DB never clobbers local state.
+- **Corruption fails closed at the user-DB level** (unlike the per-app driver's fail-open): corrupt local bytes are quarantined (`.bak`), restore is attempted from origin, and nothing auto-pushes after recovery without user confirmation.
+- **No pagehide network push** (keepalive caps ~64 KiB): pagehide flushes OPFS only; a local copy newer than origin pushes on next session start.
+- **Multi-tab**: single writer via Web Lock; reader tabs are read-only with BroadcastChannel invalidation.
+- **Export is mandatory hub behavior**: one-click download of the canonical `.sqlite`; import likewise — this is the portability escape hatch that keeps hub providers honest. Default export strips secrets (ADR-0008); imported or first-pulled DBs are treated as executable config — endpoint/provider settings require re-confirmation before use.
+- Multi-device concurrent-write merge (CRDT/changeset) is explicitly out of scope for v1 and a documented limitation.
 
 ## Alternatives considered
 - **Server-mediated sync only** — rejected: contradicts the no-backend principle and re-centralizes the hub.
