@@ -181,3 +181,9 @@ Reviewer verdict: redesign needed narrowly (sync/secrets lifecycle; subscription
 - Surfaces that HELD under probes: secret VACUUM strip (bytes-level), A/B-slot crash windows, version pruning/revert, client C1 (no secret in any frame), server CSRF/CORS/session hardening, fail-closed config.
 - Verification after fixes: root suite 19/19 tasks green (db 116); Playwright 25/25.
 - State: ready for owner review. Branch is local-only — nothing pushed; PR/merge, spec push, npm, deploy all await explicit asks.
+
+### 2026-08-03 18:20 — Jeetu/Claude — close-session (Gate 6)
+- Done: ADRs 0007–0009 flipped to accepted (plan approved + implemented); decisions index cleaned; all Gate 6 artifacts verified in-branch — 3 lessons (`docs/lessons.md` 2026-08-03 entries), docs drift fixed (architecture, code-map, product-vision, glossary, next-steps dated), spec-changelog entry for the protocol change (`userdb-schema.ts`) with the spec-sync plan (draft staged in `docs/spec-drafts/spec-v0.2-userdb.md`; push to `snugprotocol/spec` awaits explicit ask), auto-memory updated (`snug-portable-hub-built`).
+- State: implementation + both adversarial reviews complete; every suite green (root 19/19 tasks; Playwright 25/25). Branch `feat/TASK-20260803-portable-hub`, 15 commits ahead of local `main`, working tree clean after this commit. Task files stay in `active/` until merged (PROCESS: done/ only after merge).
+- Next step (single): owner reviews the branch (start here, then the diff) → says "open the PR" → merge → move the seven task files to `done/`.
+- Open questions: none for the implementation. Awaiting owner decisions only: PR/merge; spec v0.2 push; whether to prioritize the queued vendored-runtime offline work next.

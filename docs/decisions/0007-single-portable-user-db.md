@@ -1,6 +1,6 @@
 # 0007 — Single portable per-user SQLite DB with per-app namespaces and app versioning
 
-- **Status:** proposed (pending Gate 2 plan approval)
+- **Status:** accepted
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-portable-hub
 

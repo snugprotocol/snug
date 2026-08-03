@@ -1,6 +1,6 @@
 # 0009 — User-DB sync: OPFS runtime copy, pluggable origin via SyncProvider, last-writer-wins v1
 
-- **Status:** proposed (pending Gate 2 plan approval)
+- **Status:** accepted
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-portable-hub
 

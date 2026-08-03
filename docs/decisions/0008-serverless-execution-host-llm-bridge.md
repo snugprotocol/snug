@@ -1,6 +1,6 @@
 # 0008 — Serverless app execution; LLM calls from the host page, never from the app iframe
 
-- **Status:** proposed (pending Gate 2 plan approval)
+- **Status:** accepted
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-portable-hub
 
