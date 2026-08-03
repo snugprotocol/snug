@@ -51,4 +51,53 @@ export {
   type UserDbWriterLock,
 } from './userdb/locks.js';
 
+export {
+  defaultFetch,
+  fetchOrNetworkError,
+  SYNC_ERROR_CODES,
+  SyncProviderError,
+  type FetchLike,
+  type SyncErrorCode,
+  type SyncProvider,
+  type SyncProviderInfo,
+  type SyncPullResult,
+  type SyncPushResult,
+} from './sync/provider.js';
+
+export {
+  loadSidecar,
+  saveSidecar,
+  sha256Hex,
+  sidecarFileFor,
+  type SyncSidecarState,
+} from './sync/sidecar.js';
+
+export {
+  createSyncLoop,
+  type CreateSyncLoopOptions,
+  type SyncableUserDb,
+  type SyncEvent,
+  type SyncLoop,
+} from './sync/loop.js';
+
+export {
+  restoreFromOrigin,
+  type RestorableUserDb,
+  type RestoreFromOriginOptions,
+  type RestoreFromOriginResult,
+} from './sync/recovery.js';
+
+export { createHubOriginProvider, type CreateHubOriginProviderOptions } from './sync/hub-origin.js';
+
+export {
+  buildDropboxAuthUrl,
+  createDropboxProvider,
+  DROPBOX_DEFAULT_PATH,
+  exchangeDropboxCode,
+  type BuildDropboxAuthUrlOptions,
+  type CreateDropboxProviderOptions,
+  type DropboxTokenResponse,
+  type ExchangeDropboxCodeOptions,
+} from './sync/dropbox.js';
+
 export { base64ToBytes, bytesToBase64 } from './base64.js';

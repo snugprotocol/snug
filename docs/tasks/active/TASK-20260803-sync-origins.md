@@ -32,3 +32,9 @@ Files: `packages/db/src/sync/{provider.ts,loop.ts,sidecar.ts,hub-origin.ts,dropb
 —
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-03 15:25 — delegated agent (client sync core) / Claude orchestrating — session
+- Done: full client sync module, TDD (44 new tests; db package 110 green; tsc clean). `SyncProvider` + typed errors, sidecar (`<file>.sync.json`, corrupt→never-pushed fail-safe), `createSyncLoop` (ops serialized on one promise chain; hash-gated interval pushes; divergence events; explicit `applyRemote`/`pushLocal` LWW; NO lifecycle listeners — pinned by test), `restoreFromOrigin` (never pushes — tested), hub-origin provider (etag/if-match ladder, credentials include, csrf header seam), Dropbox provider (raw HTTP v2, PKCE with zero client_secret — asserted).
+- Documented deviations (all accepted): hash gates on the actual push payload (not always the stripped export — secrets-only changes must sync to personal origins); `pushLocal` rebases via pull-then-push (a `head()` provider op queued for spec prose, child 6); empty-origin reconcile pushes unconditionally (provisioning semantics, F1); **new device + non-empty origin = divergence, not auto-pull** — integration must call `applyRemote` explicitly in the login-restore flow (AC8 UX note); Dropbox conflict rev needs a get_metadata follow-up.
+- State: ACs 1–6 (client parts) done; playground UI (origin picker, export/import, F15 hook-up) remains — integration pass.
+- Next step: integration pass wires loop + providers into the playground and the login-restore flow.
