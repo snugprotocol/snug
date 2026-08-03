@@ -31,3 +31,9 @@ Files: `apps/server/src/{config.ts,app.ts}` (CORS fail-closed, cookie, csrf, sta
 —
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-03 15:20 — delegated agent (server half) / Claude orchestrating — session
+- Done: full server half, TDD (54 new tests; 86 total server tests green; tsc + build green). OIDC (openid-client v6, PKCE S256 verified for real by the fake issuer fixture), HMAC session + double-submit CSRF cookies, users + userdbs stores (CAS revisions `r<n>-<hex>`, quota via `USERDB_LIMITS`), `/userdb` GET/PUT with the full precondition ladder (401→403→415→400→428→413→412→204), static hosting gated on dist existing, config fail-closed (SNUG_AUTH invalid value → boot throw; `''`-as-unset everywhere incl. the pre-existing `corsOrigin ??` foot-gun).
+- Notable findings: (1) `@fastify/cors` bare-string origin emits ACAO unconditionally — array form required; caught by the CORS negative test. (2) 428 chosen for missing PUT precondition (412 reserved for real mismatches). (3) Secure cookie flag forced for non-localhost even on http (fail-closed: login breaks without TLS rather than shipping insecure cookies). (4) First login provisions the user row ONLY — `/userdb` stays 404 until the client pushes (ADR-0009 no-clobber, tested).
+- State: server ACs 1, 3–6 done; playground login UI + end-to-end hub sync remain (integration pass).
+- Next step: playground login UI + hub-origin sync wiring after children 3/4 land.

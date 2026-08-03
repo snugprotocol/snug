@@ -12,6 +12,9 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, type AppOptions } from '../app.js';
 import type { ServerConfig } from '../config.js';
 
+/** Long enough to clear the fail-closed minimum-length check on session secrets. */
+export const TEST_SESSION_SECRET = 'test-session-secret-0123456789abcdef-0123456789abcdef';
+
 export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
     adapter: 'mock',
@@ -21,8 +24,24 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     dataDir: ':memory:',
     heartbeatMs: 15_000,
     rateLimit: { capacity: 1000, refillPerSecond: 1000 },
+    authEnabled: false,
+    oidcIssuer: 'https://accounts.google.com',
+    // Points at nothing so static hosting never engages unless a test opts in.
+    staticDir: '/nonexistent/snug-playground-dist',
     ...overrides,
   };
+}
+
+/** Auth-enabled config with valid fail-closed settings; oidcIssuer overridden per test. */
+export function authTestConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
+  return testConfig({
+    authEnabled: true,
+    corsOrigin: 'http://localhost:5173',
+    sessionSecret: TEST_SESSION_SECRET,
+    googleClientId: 'snug-test-client',
+    googleClientSecret: 'snug-test-client-secret',
+    ...overrides,
+  });
 }
 
 export async function buildTestApp(options: Partial<AppOptions> & { config?: ServerConfig } = {}): Promise<FastifyInstance> {
