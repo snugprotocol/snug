@@ -16,3 +16,6 @@ Dated, ordered backlog. Append with a date; ✅ when shipped. Task files are the
 - **Week 6:** launch (see `internal/LAUNCH_OPS.md` — landing page T-3, flip public T-2, Show HN).
 - **v1.1 (+4 weeks):** `packages/auth` credential broker per `internal/03-audit-auth.md` build order.
 - **2026-07-31 — Post-hub next:** eval harness for prompt changes (phase 2 — prompts are eval-addressable by path per ADR-0004) · demo videos + quickstart timing run (week 5) · spec v0.1 push to `snugprotocol/spec` (needs explicit ask) · auth broker v1.1 per `internal/03` build order.
+- **2026-08-03 — Portable user-owned hub umbrella (TASK-20260803-portable-hub, in progress):** single per-user SQLite (ADR-0007) · serverless run + BYOK/local LLM (ADR-0008) · SyncProvider origins + Dropbox (ADR-0009) · Google OIDC on sample hub · spec v0.2 draft.
+- **2026-08-03 — Queued from portable-hub review (F3):** true network-offline app runtime — vendored/inline-runtime app template variant (srcdoc iframes can't be SW-cached; CDN allowlist is the current runtime source) + offline Playwright gate (`context.setOffline(true)`).
+- **2026-08-03 — Queued (later phases from vision):** desktop local hub example · OneDrive/Drive/S3 SyncProviders · CRDT/changeset multi-device merge · marketplace/spotlight curation.

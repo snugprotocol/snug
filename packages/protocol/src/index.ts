@@ -17,6 +17,16 @@ export {
 } from './constants.js';
 
 export {
+  USERDB_DDL,
+  USERDB_FILE,
+  USERDB_LIMITS,
+  USERDB_OPFS_DIR,
+  USERDB_SCHEMA_VERSION,
+  USERDB_TABLES,
+  type UserDbTable,
+} from './userdb-schema.js';
+
+export {
   appAnnounceSchema,
   appCancelSchema,
   appEventSchema,

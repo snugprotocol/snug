@@ -1,7 +1,12 @@
-// library.ts — where built apps live. Server mode reads the reference server's
-// artifact store (GET /artifacts, GET /artifacts/:id); BYOK mode keeps artifact
-// records in IndexedDB so the whole flow works with zero backend. Both sit behind
-// one LibraryStore interface so the views never care which mode is active.
+// library.ts — where built apps live: the USER DB, in every mode (ADR-0007, F4 —
+// client-authoritative). The old split (server artifact store / IndexedDB) is gone;
+// pre-launch local data in those stores is abandoned (plan F13). createServerLibrary
+// survives only as the subscription-mode artifact FETCH path — on the SSE artifact
+// event the client pulls the HTML and writes it into the user DB (child 3).
+
+import type { UserDb } from '@snugprotocol/db';
+
+import { getUserDb } from './userdb.js';
 
 export interface LibraryEntry {
   id: string;
@@ -13,44 +18,14 @@ export interface LibraryEntry {
 export interface LibraryStore {
   list(): Promise<LibraryEntry[]>;
   getHtml(id: string): Promise<string | undefined>;
-  /** BYOK only — server-mode artifacts are written server-side by the artifact tool. */
-  save?(html: string, displayName?: string): Promise<LibraryEntry>;
+  save(html: string, displayName?: string): Promise<LibraryEntry>;
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-// ---------------------------------------------------------------- server mode
-
-export function createServerLibrary(fetchImpl?: FetchLike): LibraryStore {
-  const doFetch: FetchLike = fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
-  return {
-    async list() {
-      const response = await doFetch('/artifacts');
-      if (!response.ok) throw new Error(`GET /artifacts failed (${response.status})`);
-      const body = (await response.json()) as { artifacts?: LibraryEntry[] };
-      return Array.isArray(body.artifacts) ? body.artifacts : [];
-    },
-    async getHtml(id) {
-      const response = await doFetch(`/artifacts/${encodeURIComponent(id)}`);
-      if (response.status === 404) return undefined;
-      if (!response.ok) throw new Error(`GET /artifacts/${id} failed (${response.status})`);
-      return response.text();
-    },
-  };
-}
-
-// ------------------------------------------------------------------ byok mode
-
-const IDB_NAME = 'snug-playground';
-const IDB_STORE = 'artifacts';
-
-interface StoredArtifact extends LibraryEntry {
-  html: string;
-}
-
 const TITLE_RE = /<title[^>]*>([^<]*)<\/title>/i;
 
-/** Mirrors the server store's naming rule: explicit name → <title> → fallback. */
+/** Naming rule shared with the server store: explicit name → <title> → fallback. */
 export function deriveDisplayName(html: string, displayName?: string): string {
   const explicit = displayName?.trim() ?? '';
   const fromTitle = TITLE_RE.exec(html)?.[1]?.trim() ?? '';
@@ -58,80 +33,59 @@ export function deriveDisplayName(html: string, displayName?: string): string {
   return name.slice(0, 80);
 }
 
-function openDb(factory: IDBFactory): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = factory.open(IDB_NAME, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(IDB_STORE)) {
-        request.result.createObjectStore(IDB_STORE, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'));
-  });
-}
+// ------------------------------------------------------------------ user DB library
 
-function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'));
-  });
-}
-
-function mintId(): string {
-  const uuid = globalThis.crypto?.randomUUID?.();
-  return uuid ?? `art-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-export function createByokLibrary(factory?: IDBFactory): LibraryStore & Required<Pick<LibraryStore, 'save'>> {
-  const idb = factory ?? globalThis.indexedDB;
-  const dbPromise = openDb(idb);
-
-  async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-    const db = await dbPromise;
-    return requestToPromise(run(db.transaction(IDB_STORE, mode).objectStore(IDB_STORE)));
-  }
-
+export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): LibraryStore {
   return {
     async list() {
-      const all = await withStore<StoredArtifact[]>('readonly', (store) => store.getAll() as IDBRequest<StoredArtifact[]>);
-      return all
-        .map(({ id, displayName, bytes, createdAt }) => ({ id, displayName, bytes, createdAt }))
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      const db = await getDb();
+      return db.listApps().map((app) => ({
+        id: app.appId,
+        displayName: app.displayName,
+        bytes: db.getAppHtml(app.appId)?.length ?? 0,
+        createdAt: app.createdAt,
+      }));
     },
     async getHtml(id) {
-      const record = await withStore<StoredArtifact | undefined>(
-        'readonly',
-        (store) => store.get(id) as IDBRequest<StoredArtifact | undefined>,
-      );
-      return record?.html;
+      const db = await getDb();
+      return db.getAppHtml(id);
     },
     async save(html, displayName) {
-      const entry: LibraryEntry = {
-        id: mintId(),
-        displayName: deriveDisplayName(html, displayName),
-        bytes: new TextEncoder().encode(html).byteLength,
-        createdAt: new Date().toISOString(),
-      };
-      await withStore('readwrite', (store) => store.put({ ...entry, html } satisfies StoredArtifact));
-      return entry;
+      const db = await getDb();
+      const app = db.installApp({ displayName: deriveDisplayName(html, displayName), html });
+      return { id: app.appId, displayName: app.displayName, bytes: html.length, createdAt: app.createdAt };
     },
   };
 }
 
-// ------------------------------------------------------------------ selection
+let singleton: LibraryStore | undefined;
 
-type ByokLibrary = LibraryStore & Required<Pick<LibraryStore, 'save'>>;
-
-let byokSingleton: ByokLibrary | undefined;
-
-/** The page-wide BYOK library (IndexedDB) — one instance so views share records. */
-export function byokLibrary(): ByokLibrary {
-  byokSingleton ??= createByokLibrary();
-  return byokSingleton;
+/** The page-wide library over the shared user DB. */
+export function userLibrary(): LibraryStore {
+  singleton ??= createUserDbLibrary();
+  return singleton;
 }
 
-/** The active library for a mode. */
-export function libraryForMode(mode: 'server' | 'byok'): LibraryStore {
-  return mode === 'server' ? createServerLibrary() : byokLibrary();
+/** Test seam. */
+export function resetLibraryForTests(): void {
+  singleton = undefined;
+}
+
+// -------------------------------------------------- subscription-mode artifact fetch
+
+export interface RemoteArtifactStore {
+  getHtml(id: string): Promise<string | undefined>;
+}
+
+/** Reads one artifact from the hub's transient cache (GET /artifacts/:id). */
+export function createServerArtifactFetch(fetchImpl?: FetchLike): RemoteArtifactStore {
+  const doFetch: FetchLike = fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
+  return {
+    async getHtml(id) {
+      const response = await doFetch(`/artifacts/${encodeURIComponent(id)}`);
+      if (response.status === 404) return undefined;
+      if (!response.ok) throw new Error(`GET /artifacts/${id} failed (${response.status})`);
+      return response.text();
+    },
+  };
 }

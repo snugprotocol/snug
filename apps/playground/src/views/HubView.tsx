@@ -3,10 +3,9 @@ import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { parseBuildPrompt } from '../agent/chips.js';
-import { useAppMetaMap } from '../state/appMeta.js';
-import { libraryForMode, type LibraryEntry } from '../state/library.js';
-import { useMode } from '../state/mode.js';
-import { listStarterApps } from '../starter/starterApps.js';
+import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
+import { userLibrary, type LibraryEntry } from '../state/library.js';
+import { listStarterApps, loadStarterHtml } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { Chip } from '../ui/Chip.js';
@@ -22,38 +21,50 @@ const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blu
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };
 
 export function HubView(): ReactElement {
-  const mode = useMode();
   const navigate = useNavigate();
   const metaMap = useAppMetaMap();
   const prompt = useMemo(() => parseBuildPrompt(), []);
   const starters = useMemo(listStarterApps, []);
   const [idea, setIdea] = useState('');
   const [load, setLoad] = useState<LoadState>({ phase: 'loading' });
+  const [installError, setInstallError] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
     setLoad({ phase: 'loading' });
-    libraryForMode(mode)
+    void refreshAppMeta();
+    userLibrary()
       .list()
       .then((entries) => {
         if (!cancelled) setLoad({ phase: 'ready', entries });
       })
       .catch(() => {
-        if (!cancelled)
-          setLoad({
-            phase: 'error',
-            message: mode === 'server' ? 'the local server isn’t answering — is it running on :8787?' : 'could not open your local library.',
-          });
+        if (!cancelled) setLoad({ phase: 'error', message: 'could not open your snug file.' });
       });
     return () => {
       cancelled = true;
     };
-  }, [mode]);
+  }, []);
 
   const startBuild = (text: string): void => {
     const trimmed = text.trim();
     if (trimmed === '') return;
     navigate(`/build?idea=${encodeURIComponent(trimmed)}`);
+  };
+
+  // Starter "install" (AC6): copy the bundled HTML into the user DB, then run the
+  // installed copy — from here on it versions and syncs like any built app.
+  const installStarter = (starterId: string, name: string): void => {
+    setInstallError(undefined);
+    void loadStarterHtml(starterId)
+      .then(async (html) => {
+        if (html === undefined) throw new Error('starter not bundled');
+        const entry = await userLibrary().save(html, name);
+        navigate(`/run/${entry.id}`);
+      })
+      .catch((err: unknown) => {
+        setInstallError(err instanceof Error ? err.message : String(err));
+      });
   };
 
   const onIdeaKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
@@ -126,6 +137,11 @@ export function HubView(): ReactElement {
       )}
 
       <h2 className="section-title">starter apps</h2>
+      {installError !== undefined ? (
+        <div className="error-note" role="alert">
+          install failed — {installError}
+        </div>
+      ) : null}
       {starters.length === 0 ? (
         <EmptyState glyph="⬡" title="no starters bundled" lesson="the examples/ folder ships curated apps in the full build." />
       ) : (
@@ -136,15 +152,21 @@ export function HubView(): ReactElement {
               ({ emoji: '⬡', color: 'var(--ember)', blurb: 'curated example — runs without a server' } as const);
             const style = { '--tile-color': look.color } as CSSProperties;
             return (
-              <Link key={starter.id} to={`/run/${starter.id}`} style={{ color: 'inherit', display: 'block' }}>
+              <button
+                key={starter.id}
+                type="button"
+                onClick={() => installStarter(starter.id, starter.name)}
+                style={{ all: 'unset', display: 'block', cursor: 'pointer' }}
+                aria-label={`install ${starter.name}`}
+              >
                 <Card interactive className="app-tile" style={style}>
                   <span className="tile-emoji" aria-hidden="true">
                     {look.emoji}
                   </span>
                   <span className="tile-name">{starter.name}</span>
-                  <span className="tile-sub">{look.blurb}</span>
+                  <span className="tile-sub">{look.blurb} — installs into your snug file</span>
                 </Card>
-              </Link>
+              </button>
             );
           })}
         </div>

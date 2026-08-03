@@ -12,13 +12,16 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^11.0.0",
+    "@fastify/static": "^10.1.2",
     "@snugprotocol/adapters": "workspace:*",
     "@snugprotocol/knowledge": "workspace:*",
     "@snugprotocol/protocol": "workspace:*",
     "@snugprotocol/runner": "workspace:*",
     "better-sqlite3": "^12.2.0",
     "fastify": "^5.4.0",
+    "openid-client": "^6.8.4",
     "zod": "^4"
   },
   "devDependencies": {

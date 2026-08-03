@@ -1,35 +1,69 @@
-// transport.ts — the Run view's AgentTransport, identical interface in both modes so
+// transport.ts — the Run view's AgentTransport, identical interface in every mode so
 // the Run view code never branches:
-//   server → createHttpTransport('/invoke') (SSE; the reference server owns the LLM)
-//   byok   → runAgentTurn in-browser (JSON-only mode — the wire envelope goes straight
-//            to the selected provider with the sessionStorage key; mock needs no key)
+//   subscription → createHttpTransport('/invoke') (SSE; the hub server owns the LLM)
+//   byok/local   → runAgentTurn in-browser (JSON-only mode — the wire envelope goes
+//                  straight to the provider; keys from the user DB, mock needs none)
+// F15 guard: after an import/first-pull, byok/local turns are refused until the user
+// re-confirms endpoint settings — an imported DB is executable config.
 
-import { createHttpTransport } from '@snugprotocol/adapters';
-import { runAgentTurn } from '@snugprotocol/adapters';
+import { createHttpTransport, runAgentTurn } from '@snugprotocol/adapters';
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
+import { ERROR_CODES } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
-import { getByokKey, type ByokProvider, type PlaygroundMode } from '../state/mode.js';
-import { createByokAdapter } from './adapter.js';
+import {
+  endpointsNeedConfirmStore,
+  getByokKey,
+  localUrlStore,
+  modelStore,
+  providerStore,
+  type ByokProvider,
+  type PlaygroundMode,
+} from '../state/mode.js';
+import { createTurnAdapter } from './adapter.js';
 
-export function createServerAppTransport(): AgentTransport {
+export function createServerAppTransport(model?: string): AgentTransport {
   // App-path requests are self-contained envelopes — no threadId, no history.
-  return createHttpTransport('/invoke');
+  return createHttpTransport('/invoke', model !== undefined ? { model } : {});
 }
 
-export interface ByokTransportOptions {
+export interface DirectTransportOptions {
+  mode: Exclude<PlaygroundMode, 'subscription'>;
   provider: ByokProvider;
-  /** Injectable for tests; defaults to the sessionStorage-backed key. */
-  getKey?: () => string | undefined;
+  /** Injectable for tests; default reads the user DB secret for the provider. */
+  getKey?: (provider: ByokProvider) => Promise<string | undefined>;
+  model?: string;
+  localUrl?: string;
+  /** Injectable for tests; default reads the F15 confirm-guard store. */
+  needsConfirm?: () => boolean;
 }
 
-export function createByokAppTransport(options: ByokTransportOptions): AgentTransport {
+export function createDirectAppTransport(options: DirectTransportOptions): AgentTransport {
   const readKey = options.getKey ?? getByokKey;
+  const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
   // Mirrors the server's app path: app-builder KB summary in, artifact tools out.
   const system = buildHostSystemPrompt({ appBuilder: true, artifacts: false });
   return {
     async send(wire, { signal, onDelta }) {
-      const adapter = createByokAdapter(options.provider, readKey(), 'app');
+      if (needsConfirm()) {
+        return {
+          ok: false,
+          code: ERROR_CODES.CONSENT_REQUIRED,
+          message: 'endpoint settings came from an imported or synced file — confirm them in Settings before running',
+          retryable: false,
+        };
+      }
+      const key = options.mode === 'local' ? undefined : await readKey(options.provider);
+      const adapter = createTurnAdapter(
+        {
+          mode: options.mode,
+          provider: options.provider,
+          ...(key !== undefined ? { key } : {}),
+          ...(options.model !== undefined ? { model: options.model } : {}),
+          ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),
+        },
+        'app',
+      );
       const result = await runAgentTurn({
         adapter,
         system,
@@ -44,6 +78,14 @@ export function createByokAppTransport(options: ByokTransportOptions): AgentTran
   };
 }
 
+/** The active transport for the current settings (stores read at creation time). */
 export function createAppTransport(mode: PlaygroundMode, provider: ByokProvider): AgentTransport {
-  return mode === 'server' ? createServerAppTransport() : createByokAppTransport({ provider });
+  const model = modelStore.get();
+  if (mode === 'subscription') return createServerAppTransport(model);
+  return createDirectAppTransport({
+    mode,
+    provider,
+    ...(model !== undefined ? { model } : {}),
+    localUrl: localUrlStore.get(),
+  });
 }

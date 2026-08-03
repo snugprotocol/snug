@@ -1,20 +1,27 @@
-// The BYOK app-mode transport: same AgentTransport surface as server mode, runs the
-// turn in-browser, and its demo-brain replies are valid JSON-only agent replies.
+// The direct (byok/local) app-mode transport: same AgentTransport surface as
+// subscription mode, runs the turn in-browser, refuses turns while imported
+// endpoint settings await re-confirmation (F15), and its demo-brain replies are
+// valid JSON-only agent replies.
 
 import { parseAgentReply } from '@snugprotocol/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEMO_APP_REPLY } from '../agent/demoApp.js';
-import { createByokAppTransport } from '../agent/transport.js';
+import { createDirectAppTransport } from '../agent/transport.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('createByokAppTransport', () => {
+describe('createDirectAppTransport', () => {
   it('answers an app-mode wire request without touching the network (mock provider)', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be touched'));
-    const transport = createByokAppTransport({ provider: 'mock', getKey: () => undefined });
+    const transport = createDirectAppTransport({
+      mode: 'byok',
+      provider: 'mock',
+      getKey: () => Promise.resolve(undefined),
+      needsConfirm: () => false,
+    });
     const deltas: string[] = [];
     const result = await transport.send('[SNUG_APP_REQUEST] {"snug":1}', {
       signal: new AbortController().signal,
@@ -22,6 +29,23 @@ describe('createByokAppTransport', () => {
     });
     expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY });
     expect(deltas.join('')).toBe(DEMO_APP_REPLY);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('F15 guard: refuses the turn while endpoint settings are unconfirmed — provider untouched', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be touched'));
+    const getKey = vi.fn(() => Promise.resolve('sk-should-not-be-read'));
+    const transport = createDirectAppTransport({
+      mode: 'byok',
+      provider: 'anthropic',
+      getKey,
+      needsConfirm: () => true,
+    });
+    const result = await transport.send('[SNUG_APP_REQUEST] {"snug":1}', {
+      signal: new AbortController().signal,
+    });
+    expect(result).toMatchObject({ ok: false, code: 'CONSENT_REQUIRED', retryable: false });
+    expect(getKey).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

@@ -1,0 +1,47 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`userdb schema constants (spec surface) > locks the DDL byte-for-byte (spec snapshot — changes flow through SPEC_SYNC) 1`] = `
+"CREATE TABLE IF NOT EXISTS snug_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS snug_profile (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS snug_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS snug_secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS snug_apps (
+    app_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    description TEXT,
+    icon_emoji TEXT,
+    icon_color TEXT,
+    uses_db INTEGER NOT NULL DEFAULT 0,
+    current_version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+CREATE TABLE IF NOT EXISTS snug_app_versions (
+    app_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    html TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, version)
+  );
+CREATE TABLE IF NOT EXISTS snug_chat_threads (
+    thread_id TEXT PRIMARY KEY,
+    app_id TEXT,
+    title TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+CREATE TABLE IF NOT EXISTS snug_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+CREATE TABLE IF NOT EXISTS snug_app_data (
+    namespace TEXT PRIMARY KEY,
+    bytes BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+CREATE TABLE IF NOT EXISTS snug_sync (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+`;

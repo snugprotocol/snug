@@ -79,6 +79,9 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
             'content-type': 'application/json',
             'x-api-key': options.apiKey,
             'anthropic-version': ANTHROPIC_VERSION,
+            // BYOK runs in the page (ADR-0008); Anthropic requires this explicit opt-in
+            // before it will serve CORS to browser callers. Keys are the user's own.
+            'anthropic-dangerous-direct-browser-access': 'true',
           },
           body: JSON.stringify({
             model,

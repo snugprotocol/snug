@@ -29,18 +29,20 @@ const hasApp = process.env.SNUG_E2E_HAS_APP === '1';
 test.describe('AC-7 part A — build → artifact → run in the playground app', () => {
   test.skip(!hasApp, AWAITS_INTEGRATION);
 
-  test('composer request streams, artifact card appears, run renders the app', async ({ page }) => {
+  test('composer request streams, artifact card appears, run renders the app — serverless default', async ({ page }) => {
+    // The portable-hub default is byok+demo-brain: the whole build runs in-page and
+    // the app lands in the USER DB (ADR-0007/0008). No hub server involvement at all.
     await page.goto('/build');
 
     const composer = page.getByRole('textbox', { name: 'describe your app' });
     await composer.fill('build me tic-tac-toe');
     await composer.press('Enter');
 
-    // Mock adapter turn 1 streams "Building a demo app…" then emits the artifact event.
-    await expect(page.getByText(/building a demo app/i)).toBeVisible({ timeout: 20_000 });
+    // Demo brain turn 1 streams "let me check the app template first…" then writes the artifact.
+    await expect(page.getByText(/check the app template/i)).toBeVisible({ timeout: 20_000 });
     const card = page.getByTestId('artifact-card');
     await expect(card).toBeVisible({ timeout: 20_000 });
-    await expect(card).toContainText(/snug demo counter/i);
+    await expect(card).toContainText(/the oracle \(demo\)/i);
 
     await card.getByRole('link', { name: /run it/i }).click();
     await expect(page).toHaveURL(/\/run\//);
@@ -49,9 +51,8 @@ test.describe('AC-7 part A — build → artifact → run in the playground app'
     const iframe = page.getByTestId('frame-wrap').locator('iframe[sandbox="allow-scripts"]');
     await expect(iframe).toBeVisible({ timeout: 20_000 });
     const app = page.frameLocator('[data-testid="frame-wrap"] iframe[sandbox="allow-scripts"]');
-    await expect(app.locator('#b')).toHaveText(/clicks: 0/); // DEMO_APP_HTML from apps/server/src/adapter.ts
-    await app.locator('#b').click();
-    await expect(app.locator('#b')).toHaveText(/clicks: 1/); // scripts really run in the sandbox
+    // DEMO_APP_HTML (the tiny oracle) boots and reaches host-ready inside the sandbox.
+    await expect(app.locator('#ask')).toBeEnabled({ timeout: 20_000 });
   });
 });
 

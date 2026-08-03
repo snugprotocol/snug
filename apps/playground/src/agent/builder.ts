@@ -8,14 +8,16 @@ import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentTool } from '@snu
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
-import type { LibraryStore } from '../state/library.js';
-import { getByokKey, type ByokProvider } from '../state/mode.js';
-import { createByokAdapter } from './adapter.js';
+import { endpointsNeedConfirmStore, getByokKey, type ByokProvider, type PlaygroundMode } from '../state/mode.js';
+import { createTurnAdapter } from './adapter.js';
+import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
 
 export interface ArtifactEvent {
   artifactId: string;
   displayName: string;
+  /** User-DB version number — set on direct-mode writes; subscription mode fills it after the client-side fetch+write. */
+  version?: number;
 }
 
 export interface BuildHandlers {
@@ -50,7 +52,7 @@ const cancelled = (): BuildResult => ({
 
 // ---------------------------------------------------------------- server mode
 
-export function createServerBuilder(threadId: string, fetchImpl?: FetchLike): BuilderAgent {
+export function createServerBuilder(threadId: string, fetchImpl?: FetchLike, model?: string): BuilderAgent {
   const doFetch: FetchLike = fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
   return {
     async send(message, handlers, signal) {
@@ -59,7 +61,7 @@ export function createServerBuilder(threadId: string, fetchImpl?: FetchLike): Bu
         response = await doFetch('/invoke', {
           method: 'POST',
           headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-          body: JSON.stringify({ message, threadId }),
+          body: JSON.stringify({ message, threadId, ...(model !== undefined ? { model } : {}) }),
           signal,
         });
       } catch (err) {
@@ -109,23 +111,51 @@ export function createServerBuilder(threadId: string, fetchImpl?: FetchLike): Bu
   };
 }
 
-// ------------------------------------------------------------------ byok mode
+// ------------------------------------------------- direct mode (byok / local)
 
-export interface ByokBuilderOptions {
+export interface DirectBuilderOptions {
+  mode: Exclude<PlaygroundMode, 'subscription'>;
   provider: ByokProvider;
-  library: LibraryStore & Required<Pick<LibraryStore, 'save'>>;
-  /** Injectable for tests; defaults to the sessionStorage-backed key. */
-  getKey?: () => string | undefined;
+  /** Where artifact_write lands — the sink pins the target app host-side (F9). */
+  sink: ArtifactSink;
+  /** Injectable for tests; defaults to the user-DB secret for the provider. */
+  getKey?: (provider: ByokProvider) => Promise<string | undefined>;
+  model?: string;
+  localUrl?: string;
+  /** Injectable for tests; default reads the F15 confirm-guard store. */
+  needsConfirm?: () => boolean;
 }
 
-export function createByokBuilder(options: ByokBuilderOptions): BuilderAgent {
+export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent {
   const readKey = options.getKey ?? getByokKey;
+  const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
   const system = buildHostSystemPrompt({ appBuilder: true, artifacts: true });
   return {
     async send(message, handlers, signal) {
-      const adapter = createByokAdapter(options.provider, readKey(), 'chat');
-      const tools: AgentTool[] = buildByokTools(options.library, {
-        onArtifact: (artifact) => handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName }),
+      // F15: an imported/pulled DB is executable config — its endpoint/provider
+      // settings must be re-confirmed before ANY direct turn, builder included.
+      if (needsConfirm()) {
+        return {
+          ok: false,
+          code: ERROR_CODES.CONSENT_REQUIRED,
+          message: 'endpoint settings came from an imported or synced file — confirm them in Settings before building',
+          retryable: false,
+        };
+      }
+      const key = options.mode === 'local' ? undefined : await readKey(options.provider);
+      const adapter = createTurnAdapter(
+        {
+          mode: options.mode,
+          provider: options.provider,
+          ...(key !== undefined ? { key } : {}),
+          ...(options.model !== undefined ? { model: options.model } : {}),
+          ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),
+        },
+        'chat',
+      );
+      const tools: AgentTool[] = buildByokTools(options.sink, {
+        onArtifact: (artifact) =>
+          handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName, version: artifact.version }),
       });
       const result = await runAgentTurn({
         adapter,

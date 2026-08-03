@@ -13,6 +13,8 @@ export default defineConfig({
     proxy: {
       '/invoke': SERVER,
       '/artifacts': SERVER,
+      '/auth': SERVER,
+      '/userdb': SERVER,
     },
   },
   build: {

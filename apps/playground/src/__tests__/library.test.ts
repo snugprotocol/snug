@@ -1,51 +1,48 @@
-// Library stores: server mode reads the artifact routes; BYOK mode round-trips
-// records through IndexedDB (fake-indexeddb here).
+// The library after the portable-hub evolution: apps live in the USER DB in every
+// mode (child-2 AC6); the server artifact fetch survives only as the subscription-mode
+// pull path (client-authoritative, F4).
 
-import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createByokLibrary, createServerLibrary, deriveDisplayName } from '../state/library.js';
+import { createServerArtifactFetch, createUserDbLibrary, deriveDisplayName } from '../state/library.js';
+import { installTestUserDb } from './userdbTestHelper.js';
 
 const HTML = '<!DOCTYPE html><html><head><title>Chess Coach</title></head><body></body></html>';
 
-describe('createByokLibrary', () => {
-  it('saves, lists, and returns html by id', async () => {
-    const library = createByokLibrary(new IDBFactory());
-    const saved = await library.save(HTML);
-    expect(saved.displayName).toBe('Chess Coach');
-    expect(saved.bytes).toBe(new TextEncoder().encode(HTML).byteLength);
-
+describe('createUserDbLibrary', () => {
+  it('saves into the user DB, lists, and returns html by id', async () => {
+    const db = await installTestUserDb();
+    const library = createUserDbLibrary(() => Promise.resolve(db));
+    const entry = await library.save(HTML);
+    expect(entry.displayName).toBe('Chess Coach'); // derived from <title>
     const listed = await library.list();
-    expect(listed).toHaveLength(1);
-    expect(listed[0]?.id).toBe(saved.id);
-    expect(await library.getHtml(saved.id)).toBe(HTML);
+    expect(listed.map((e) => e.id)).toEqual([entry.id]);
+    expect(await library.getHtml(entry.id)).toBe(HTML);
+    // and it is REALLY an app row with a version, not a blob on the side
+    expect(db.getApp(entry.id)?.currentVersion).toBe(1);
   });
 
-  it('lists newest first and misses return undefined', async () => {
-    const library = createByokLibrary(new IDBFactory());
-    const first = await library.save(HTML, 'older');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    const second = await library.save(HTML, 'newer');
-    const listed = await library.list();
-    expect(listed.map((entry) => entry.id)).toEqual([second.id, first.id]);
+  it('misses return undefined; entries list newest-updated first', async () => {
+    const db = await installTestUserDb();
+    const library = createUserDbLibrary(() => Promise.resolve(db));
     expect(await library.getHtml('nope')).toBeUndefined();
+    await library.save(HTML, 'first');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await library.save(HTML, 'second');
+    const listed = await library.list();
+    expect(listed.map((e) => e.displayName)).toEqual(['second', 'first']);
   });
 });
 
-describe('createServerLibrary', () => {
-  it('lists from GET /artifacts and fetches html from GET /artifacts/:id', async () => {
-    const fetchSpy = vi.fn(async (input: string) => {
-      if (input === '/artifacts') {
-        return new Response(JSON.stringify({ artifacts: [{ id: 'a1', displayName: 'x', bytes: 10, createdAt: 'now' }] }));
-      }
-      if (input === '/artifacts/a1') return new Response(HTML);
-      return new Response('nope', { status: 404 });
-    });
-    const library = createServerLibrary(fetchSpy);
-    const listed = await library.list();
-    expect(listed).toEqual([{ id: 'a1', displayName: 'x', bytes: 10, createdAt: 'now' }]);
-    expect(await library.getHtml('a1')).toBe(HTML);
-    expect(await library.getHtml('missing')).toBeUndefined();
+describe('createServerArtifactFetch (subscription pull path)', () => {
+  it('fetches html by id and maps 404 to undefined', async () => {
+    const fetchSpy = vi.fn(async (input: string) =>
+      input.includes('art-1') ? new Response(HTML, { status: 200 }) : new Response('', { status: 404 }),
+    );
+    const store = createServerArtifactFetch(fetchSpy);
+    expect(await store.getHtml('art-1')).toBe(HTML);
+    expect(await store.getHtml('gone')).toBeUndefined();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('/artifacts/art-1');
   });
 });
 

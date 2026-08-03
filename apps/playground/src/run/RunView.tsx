@@ -9,15 +9,16 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
-import { createDbDriver, type SnugDbDriver } from '@snugprotocol/db';
+import type { SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
 
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
-import { libraryForMode } from '../state/library.js';
+import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
+import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { isStarterId, listStarterApps, loadStarterHtml } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
@@ -28,6 +29,7 @@ import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
 import { downloadBlob, exportDatabase } from './exportDb.js';
 import { InspectorPanel } from './InspectorPanel.js';
+import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
 import { useMediaQuery } from './useMediaQuery.js';
 import { locateWasm } from './wasm.js';
@@ -35,7 +37,7 @@ import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
 
-type RailTab = 'inspector' | 'chat';
+type RailTab = 'inspector' | 'chat' | 'versions';
 
 /** How long after host-ready the header keeps shimmering before falling back to the library name. */
 const ANNOUNCE_FALLBACK_MS = 1500;
@@ -61,27 +63,41 @@ export default function RunView(): ReactElement {
   const [sheetOpen, setSheetOpen] = useState(false);
   const isMobile = useMediaQuery('(max-width: 760px)');
   const controlsRef = useRef<RunnerHost | null>(null);
-  const chat = useBuilderChat(`run-${id}`);
+  /** Bumped when a chat edit or revert lands a new version — reloads html + frame. */
+  const [contentEpoch, setContentEpoch] = useState(0);
+  // Stable per-app thread (persists across sessions) pinned to this app: every
+  // artifact_write in this rail versions THIS app (F9).
+  const chat = useBuilderChat(`app:${id}`, isStarterId(id) ? {} : { pinnedAppId: id });
+
+  // A chat edit for this app landed a new version → reload the code and remount.
+  useEffect(() => {
+    if (chat.lastArtifact?.artifactId === id && chat.lastArtifact.version !== undefined) {
+      setContentEpoch((epoch) => epoch + 1);
+      setFrameEpoch((epoch) => epoch + 1);
+    }
+  }, [chat.lastArtifact, id]);
 
   // Identity seams — captured per app id (SnugAppFrame mount-captures them via key).
   const transport = useMemo(() => createAppTransport(mode, provider), [mode, provider]);
-  const dbRef = useRef<SnugDbDriver | null>(null);
-  if (dbRef.current === null) dbRef.current = createDbDriver({ locateWasm });
-  const db = dbRef.current;
-  useEffect(
-    () => () => {
-      void dbRef.current?.close();
-      dbRef.current = null;
-    },
-    [],
-  );
+  // The db driver is the SHARED user DB's blob-backed face (ADR-0007) — never closed
+  // here; it lives as long as the page. App data lands in snug_app_data rows.
+  const [db, setDb] = useState<SnugDbDriver | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getUserDb().then((userDb) => {
+      if (!cancelled) setDb(userDb.driver);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     setHtmlState({ phase: 'loading' });
     setReadySeen(false);
     setAnnounceTimedOut(false);
-    const load = isStarterId(id) ? loadStarterHtml(id) : libraryForMode(mode).getHtml(id);
+    const load = isStarterId(id) ? loadStarterHtml(id) : userLibrary().getHtml(id);
     load
       .then((html) => {
         if (cancelled) return;
@@ -95,7 +111,7 @@ export default function RunView(): ReactElement {
       setFallbackName(listStarterApps().find((starter) => starter.id === id)?.name);
     } else {
       setFallbackName(undefined);
-      libraryForMode(mode)
+      userLibrary()
         .list()
         .then((entries) => {
           if (!cancelled) setFallbackName(entries.find((entry) => entry.id === id)?.displayName);
@@ -107,7 +123,7 @@ export default function RunView(): ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [id, mode]);
+  }, [id, contentEpoch]);
 
   // Capability reveal has a floor: host-ready seen but no announce after the grace
   // period → show the library name in plain style instead of shimmering forever.
@@ -144,6 +160,7 @@ export default function RunView(): ReactElement {
 
   const [exportError, setExportError] = useState<string | undefined>(undefined);
   const onExport = useCallback(async (): Promise<void> => {
+    if (db === null) return;
     setExportError(undefined);
     const result = await exportDatabase(db, id);
     if (!result.ok) {
@@ -179,9 +196,23 @@ export default function RunView(): ReactElement {
         <button type="button" aria-pressed={railTab === 'chat'} onClick={() => setRailTab('chat')}>
           chat
         </button>
+        {!isStarterId(id) ? (
+          <button type="button" aria-pressed={railTab === 'versions'} onClick={() => setRailTab('versions')}>
+            versions
+          </button>
+        ) : null}
       </div>
       {railTab === 'inspector' ? (
         <InspectorPanel entries={inspector.entries} />
+      ) : railTab === 'versions' ? (
+        <VersionsPanel
+          appId={id}
+          refreshToken={contentEpoch}
+          onReverted={() => {
+            setContentEpoch((epoch) => epoch + 1);
+            setFrameEpoch((epoch) => epoch + 1);
+          }}
+        />
       ) : (
         <RailChat
           messages={chat.messages}
@@ -253,7 +284,7 @@ export default function RunView(): ReactElement {
         ) : null}
 
         <div className={`frame-wrap${inspector.inFlight > 0 ? ' thinking' : ''}`} data-testid="frame-wrap">
-          {htmlState.phase === 'loading' ? (
+          {htmlState.phase === 'loading' || db === null ? (
             <div className="run-overlay">
               <Skeleton width="60%" height="1.25rem" />
               <Skeleton width="40%" height="1rem" />
