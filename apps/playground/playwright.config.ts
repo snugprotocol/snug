@@ -77,7 +77,7 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: /mobile\.spec\.ts/,
+      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/],
     },
     {
       name: 'mobile-chromium',
@@ -88,6 +88,15 @@ export default defineConfig({
         hasTouch: true,
       },
       testMatch: /mobile\.spec\.ts/,
+    },
+    {
+      // AC2's OPFS-persistence gate gets its OWN browser process: Chromium shares
+      // ephemeral-context OPFS profile-wide, and the ASYNC storage cleanup from other
+      // tests' closing contexts (csp.spec's 15 rapid contexts) lands mid-test and
+      // wipes the origin's OPFS. A separate project = separate worker = fresh profile.
+      name: 'no-server',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /no-server\.spec\.ts/,
     },
   ],
 });

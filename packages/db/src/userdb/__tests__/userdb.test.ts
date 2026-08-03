@@ -193,6 +193,18 @@ describe('export / import (AC1)', () => {
 });
 
 describe('corruption fails closed (AC6, F6)', () => {
+  it('treats a ZERO-BYTE file as corrupt — an interrupted write must never silently become a fresh DB', async () => {
+    await backend.save(USERDB_FILE, new Uint8Array(0));
+    const result = await openUserDb({ backend, locateWasm });
+    expect(result.status).toBe('corrupt');
+  });
+
+  it('treats magic-less bytes as corrupt even when sql.js would tolerate them', async () => {
+    await backend.save(USERDB_FILE, new Uint8Array(32)); // zeros: no SQLite header
+    const result = await openUserDb({ backend, locateWasm });
+    expect(result.status).toBe('corrupt');
+  });
+
   it('quarantines corrupt bytes and reports — never silently fresh', async () => {
     await backend.save(USERDB_FILE, new TextEncoder().encode('garbage-not-sqlite'));
     const result = await openUserDb({ backend, locateWasm });

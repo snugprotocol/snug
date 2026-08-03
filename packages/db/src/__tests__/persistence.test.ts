@@ -19,11 +19,25 @@ afterEach(() => {
 /** Minimal in-memory OPFS fake covering exactly the surface the OPFS backend uses. */
 function fakeOpfs(files = new Map<string, Uint8Array>()) {
   const notFound = (): Error => Object.assign(new Error('file not found'), { name: 'NotFoundError' });
+  let clock = 0;
+  const mtimes = new Map<string, number>();
   const fileHandle = (path: string) => ({
     async getFile() {
       const bytes = files.get(path);
       if (!bytes) throw notFound();
-      return { arrayBuffer: async () => bytes.slice().buffer };
+      return {
+        arrayBuffer: async () => bytes.slice().buffer,
+        text: async () => new TextDecoder().decode(bytes),
+        lastModified: mtimes.get(path) ?? 0,
+      };
+    },
+    /** Chromium rename semantics: replaces the destination, removes the source. */
+    async move(newName: string) {
+      const bytes = files.get(path);
+      if (!bytes) throw notFound();
+      const dirPrefix = path.slice(0, path.lastIndexOf('/') + 1);
+      files.delete(path);
+      files.set(`${dirPrefix}${newName}`, bytes);
     },
     async createWritable() {
       const chunks: Uint8Array[] = [];
@@ -40,6 +54,7 @@ function fakeOpfs(files = new Map<string, Uint8Array>()) {
             offset += c.length;
           }
           files.set(path, merged);
+          mtimes.set(path, ++clock);
         },
       };
     },
@@ -52,7 +67,16 @@ function fakeOpfs(files = new Map<string, Uint8Array>()) {
     async getFileHandle(name: string, opts?: { create?: boolean }) {
       const path = `${prefix}${name}`;
       if (!files.has(path) && !opts?.create) throw notFound();
+      if (opts?.create && !files.has(path)) files.set(path, new Uint8Array(0));
       return fileHandle(path);
+    },
+    async *keys() {
+      for (const path of [...files.keys()]) {
+        if (path.startsWith(prefix) && !path.slice(prefix.length).includes('/')) yield path.slice(prefix.length);
+      }
+    },
+    async removeEntry(name: string) {
+      files.delete(`${prefix}${name}`);
     },
   });
   return {
@@ -74,11 +98,47 @@ describe('backend auto-detect (AC-5)', () => {
     expect(d.persistence).toBe('opfs');
     await d.handle('app', execFrame('CREATE TABLE t (x)'));
     await d.flush();
-    const saved = [...opfs.files.values()];
-    expect(saved).toHaveLength(1);
-    expect(hasSqliteMagic(saved[0] as Uint8Array)).toBe(true);
+    // A/B slot layout: one complete slot file + the one-byte pointer file.
+    const slotPaths = [...opfs.files.keys()].filter((p) => p.includes('.slot-'));
+    expect(slotPaths).toHaveLength(1);
+    expect(hasSqliteMagic(opfs.files.get(slotPaths[0] as string) as Uint8Array)).toBe(true);
+    expect([...opfs.files.keys()].some((p) => p.endsWith('.ptr'))).toBe(true);
 
     // reload: a NEW driver over the same (stubbed) OPFS restores the schema
+    const reloaded = createDbDriver({ locateWasm });
+    const probe = await reloaded.handle('app', execFrame('INSERT INTO t (x) VALUES (1)'));
+    expect(probe.ok).toBe(true);
+  });
+
+  it('a crashed write leaves a partial slot — load falls back to the pointed complete slot', async () => {
+    const opfs = fakeOpfs();
+    stubNavigator(opfs.storage);
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    const d = createDbDriver({ locateWasm, persistDebounceMs: 1 });
+    await d.handle('app', execFrame('CREATE TABLE t (x)'));
+    await d.flush();
+    // Teardown killed the NEXT save mid-write: the other slot holds truncated garbage
+    // and the pointer still names the last complete slot.
+    const slotPath = [...opfs.files.keys()].find((p) => p.includes('.slot-')) as string;
+    const otherSlot = slotPath.endsWith('.slot-a') ? slotPath.replace(/a$/, 'b') : slotPath.replace(/b$/, 'a');
+    opfs.files.set(otherSlot, new Uint8Array(7));
+
+    const reloaded = createDbDriver({ locateWasm });
+    const probe = await reloaded.handle('app', execFrame('INSERT INTO t (x) VALUES (1)'));
+    expect(probe.ok).toBe(true); // schema restored from the complete slot
+  });
+
+  it('a crashed pointer write degrades to newest-complete-slot by mtime', async () => {
+    const opfs = fakeOpfs();
+    stubNavigator(opfs.storage);
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    const d = createDbDriver({ locateWasm, persistDebounceMs: 1 });
+    await d.handle('app', execFrame('CREATE TABLE t (x)'));
+    await d.flush();
+    // Pointer bytes torn mid-write: garbage content, but the slot itself is complete.
+    const ptrPath = [...opfs.files.keys()].find((p) => p.endsWith('.ptr')) as string;
+    opfs.files.set(ptrPath, new Uint8Array([0x00, 0xff]));
+
     const reloaded = createDbDriver({ locateWasm });
     const probe = await reloaded.handle('app', execFrame('INSERT INTO t (x) VALUES (1)'));
     expect(probe.ok).toBe(true);

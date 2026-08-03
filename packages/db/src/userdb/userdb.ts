@@ -208,6 +208,10 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
   if (stored !== undefined) {
     let candidate: Database | undefined;
     try {
+      // sql.js silently treats empty/zeroed bytes as a fresh database — but for the
+      // USER DB that means an interrupted write would silently erase everything.
+      // Magic-less stored bytes are corruption, full stop (F6).
+      if (!hasSqliteMagic(stored)) throw new Error('missing SQLite header (empty or truncated file)');
       candidate = new SQL.Database(stored);
       candidate.exec('SELECT count(*) FROM sqlite_master'); // open-check: corrupt bytes fail here
     } catch (err) {
