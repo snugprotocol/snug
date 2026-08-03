@@ -1,6 +1,6 @@
 # TASK-20260803-serverless-run: Serverless run, provider+model picker, local LLM (child 2 of portable-hub)
 
-- **Status**: in-review (green incl. Playwright; umbrella review folded)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: medium (High where C1/C2 suites are brushed — they must stay green untouched)
 - **Branch**: `feat/TASK-20260803-portable-hub` (umbrella branch)

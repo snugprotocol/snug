@@ -1,6 +1,6 @@
 # TASK-20260803-sync-origins: SyncProvider, sync loop, Dropbox adapter, export/import UI (child 4 of portable-hub)
 
-- **Status**: in-review (green; umbrella review folded)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: medium (client-side only; server endpoints live in child 5)
 - **Branch**: `feat/TASK-20260803-portable-hub` (umbrella branch)

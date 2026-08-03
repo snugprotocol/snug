@@ -1,6 +1,6 @@
 # TASK-20260803-portable-hub: Portable user-owned hub — single user DB, local-first execution, sync origins, SSO
 
-- **Status**: in-review (implementation + both adversarial reviews complete; awaiting owner review of the branch)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: touches `packages/protocol` (portable DB format = spec surface), `packages/auth` (SSO), C1/C2 adjacency (serverless LLM call path), `packages/db` (widely depended))
 - **Branch**: `feat/TASK-20260803-portable-hub` (to be created after plan approval)

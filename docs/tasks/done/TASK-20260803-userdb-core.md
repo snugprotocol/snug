@@ -1,6 +1,6 @@
 # TASK-20260803-userdb-core: Single per-user DB — schema constants, UserDb service, DbDriver face (child 1 of portable-hub)
 
-- **Status**: in-review (green; umbrella adversarial review folded)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (touches `packages/protocol` (userdb-schema spec constants) + `packages/db` foundation)
 - **Branch**: `feat/TASK-20260803-portable-hub` (umbrella branch)
