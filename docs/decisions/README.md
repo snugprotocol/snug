@@ -25,3 +25,6 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0004 — Central layered prompt store](0004-central-layered-prompt-store.md)
 - [0005 — Playground is a Vite + React SPA](0005-playground-vite-spa.md)
 - [0006 — Runner CSP allows 'unsafe-eval' + a fixed CDN allowlist](0006-runner-csp-unsafe-eval-cdn.md)
+- [0007 — Single portable per-user SQLite DB with per-app namespaces and app versioning](0007-single-portable-user-db.md) *(proposed)*
+- [0008 — Serverless app execution; LLM calls from the host page, never from the app iframe](0008-serverless-execution-host-llm-bridge.md) *(proposed)*
+- [0009 — User-DB sync: OPFS runtime copy, pluggable SyncProvider origins, LWW v1](0009-sync-provider-origins.md) *(proposed)*
