@@ -76,7 +76,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const adapter = options.adapter ?? createAdapterFromConfig(config);
   const rateLimiter = options.rateLimiter ?? createRateLimiter(config.rateLimit);
 
-  registerInvokeRoute(app, { adapter, artifacts, threads, heartbeatMs: config.heartbeatMs, rateLimiter });
+  registerInvokeRoute(app, {
+    adapter,
+    // Subscription-mode model choice: rebuild the configured adapter with the
+    // validated per-request model. Injected test adapters are never overridden.
+    ...(options.adapter === undefined
+      ? { makeAdapter: (model: string) => createAdapterFromConfig({ ...config, model }) }
+      : {}),
+    artifacts,
+    threads,
+    heartbeatMs: config.heartbeatMs,
+    rateLimiter,
+  });
   registerArtifactRoutes(app, artifacts);
 
   let users: UserStore | undefined;

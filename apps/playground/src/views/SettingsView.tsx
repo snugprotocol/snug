@@ -16,10 +16,23 @@ import {
   useProvider,
   type ByokProvider,
 } from '../state/mode.js';
+import { login, logout, useAuth } from '../state/auth.js';
+import {
+  applyRemote,
+  DROPBOX_TOKEN_SECRET,
+  exportUserFile,
+  importUserFile,
+  pushLocal,
+  setSyncOrigin,
+  useSyncStatus,
+  type SyncOriginKind,
+} from '../state/sync.js';
 import { setTheme, useTheme } from '../state/theme.js';
+import { getUserDb } from '../state/userdb.js';
+import { downloadBlob } from '../run/exportDb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
-import { Chip } from '../ui/Chip.js';
+
 
 export function SettingsView(): ReactElement {
   const mode = useMode();
@@ -163,6 +176,9 @@ export function SettingsView(): ReactElement {
         </Card>
       ) : null}
 
+      <AccountCard />
+      <DataCard />
+
       <Card>
         <div className="field">
           <label id="theme-label">theme</label>
@@ -178,9 +194,151 @@ export function SettingsView(): ReactElement {
         </div>
       </Card>
 
-      <div>
-        <Chip inert>connect account — coming in v1.1</Chip>
-      </div>
     </div>
+  );
+}
+
+/** Hub account (child 5): optional — logged-out is fully functional, local-only. */
+function AccountCard(): ReactElement | null {
+  const auth = useAuth();
+  if (auth.state === 'unavailable' || auth.state === 'unknown') return null;
+  return (
+    <Card>
+      <div className="field">
+        <label>hub account</label>
+        {auth.state === 'signed-in' ? (
+          <>
+            <span className="hint">
+              signed in as {auth.user.name ?? auth.user.email ?? auth.user.userId} — the hub can host your snug file
+              as a sync origin.
+            </span>
+            <Button onClick={() => void logout()}>sign out</Button>
+          </>
+        ) : (
+          <>
+            <span className="hint">
+              optional: sign in with Google so this hub can keep a copy of your snug file and restore it on any
+              device. everything works without it.
+            </span>
+            <Button onClick={() => login()}>sign in with google</Button>
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/** Your data (children 3/4): the single portable file — origin, export, import. */
+function DataCard(): ReactElement {
+  const sync = useSyncStatus();
+  const [dropboxToken, setDropboxToken] = useState('');
+  const [includeSecrets, setIncludeSecrets] = useState(false);
+  const [dataError, setDataError] = useState<string | undefined>(undefined);
+
+  const onExport = (): void => {
+    setDataError(undefined);
+    void exportUserFile(includeSecrets)
+      .then((blob) => downloadBlob(blob, 'snug-user.sqlite'))
+      .catch((err: unknown) => setDataError(err instanceof Error ? err.message : String(err)));
+  };
+
+  const onImport = (file: File | undefined): void => {
+    if (file === undefined) return;
+    setDataError(undefined);
+    void importUserFile(file).catch((err: unknown) =>
+      setDataError(err instanceof Error ? err.message : String(err)),
+    );
+  };
+
+  return (
+    <Card>
+      <div className="field">
+        <label id="origin-label">your snug file</label>
+        <span className="hint">
+          one SQLite file holds your apps, their data, chats, and settings. it runs from this browser and can sync to
+          an origin you choose — or nowhere.
+        </span>
+        <div className="seg" role="group" aria-labelledby="origin-label">
+          {(['none', 'hub', 'dropbox'] as SyncOriginKind[]).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              aria-pressed={sync.origin === kind}
+              onClick={() => void setSyncOrigin(kind)}
+            >
+              {kind === 'none' ? 'this device only' : kind === 'hub' ? 'this hub' : 'dropbox'}
+            </button>
+          ))}
+        </div>
+        {sync.state === 'divergence' ? (
+          <div className="error-note" role="alert">
+            the origin holds a different copy of your file. pick which one wins:
+            <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+              <Button onClick={() => void applyRemote()}>use the origin copy</Button>
+              <Button onClick={() => void pushLocal()}>keep this device’s copy</Button>
+            </div>
+          </div>
+        ) : sync.state === 'error' ? (
+          <div className="error-note" role="alert">
+            sync problem — {sync.detail}
+          </div>
+        ) : null}
+        {sync.origin === 'dropbox' ? (
+          <div className="field" style={{ marginTop: 'var(--space-3)' }}>
+            <label htmlFor="dropbox-token">dropbox access token</label>
+            <input
+              id="dropbox-token"
+              type="password"
+              autoComplete="off"
+              value={dropboxToken}
+              placeholder="paste a Dropbox access token"
+              onChange={(event) => {
+                setDropboxToken(event.target.value);
+                void getUserDb().then((db) => {
+                  const trimmed = event.target.value.trim();
+                  if (trimmed === '') db.deleteSecret(DROPBOX_TOKEN_SECRET);
+                  else db.setSecret(DROPBOX_TOKEN_SECRET, trimmed);
+                });
+              }}
+            />
+            <span className="hint">
+              stored in your snug file on this device only — like BYOK keys, it never syncs to the hub.
+            </span>
+          </div>
+        ) : null}
+      </div>
+      <div className="field" style={{ marginTop: 'var(--space-4)' }}>
+        <label>portability</label>
+        {dataError !== undefined ? (
+          <div className="error-note" role="alert">
+            {dataError}
+          </div>
+        ) : null}
+        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+          <Button onClick={onExport}>export snug file</Button>
+          <label style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={includeSecrets}
+              onChange={(event) => setIncludeSecrets(event.target.checked)}
+            />
+            include secrets
+          </label>
+          <label className="btn" style={{ cursor: 'pointer' }}>
+            import snug file
+            <input
+              type="file"
+              accept=".sqlite,application/x-sqlite3,application/octet-stream"
+              style={{ display: 'none' }}
+              onChange={(event) => onImport(event.target.files?.[0])}
+            />
+          </label>
+        </div>
+        <span className="hint">
+          the export is the whole file — take it to another hub, a personal origin, or a local runner. secrets stay
+          out unless you opt in. imported files ask you to re-confirm model endpoints before running.
+        </span>
+      </div>
+    </Card>
   );
 }

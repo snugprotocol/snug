@@ -229,7 +229,7 @@ describe('hub origin provider specifics', () => {
     expect(firstHeaders['content-type']).toBe('application/octet-stream');
     expect(firstHeaders['if-none-match']).toBe('*');
     expect(firstHeaders['if-match']).toBeUndefined();
-    expect(firstHeaders['x-csrf-token']).toBe('csrf-123');
+    expect(firstHeaders['x-snug-csrf']).toBe('csrf-123');
     expect(secondHeaders['if-match']).toBe(first.revision);
     expect(secondHeaders['if-none-match']).toBeUndefined();
   });

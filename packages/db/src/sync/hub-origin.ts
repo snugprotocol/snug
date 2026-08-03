@@ -21,7 +21,7 @@ export interface CreateHubOriginProviderOptions {
   baseUrl: string;
   /** Injectable fetch (tests). Default: global fetch. */
   fetch?: FetchLike;
-  /** Forwarded as `x-csrf-token` when the hub session uses CSRF double-submit. */
+  /** Forwarded as `x-snug-csrf` when the hub session uses CSRF double-submit. */
   csrfToken?: string;
 }
 
@@ -53,7 +53,7 @@ export function createHubOriginProvider(options: CreateHubOriginProviderOptions)
   const fetchImpl = options.fetch ?? defaultFetch;
   const url = `${options.baseUrl}/userdb`;
   const csrfHeader: Record<string, string> =
-    options.csrfToken !== undefined ? { 'x-csrf-token': options.csrfToken } : {};
+    options.csrfToken !== undefined ? { 'x-snug-csrf': options.csrfToken } : {};
 
   return {
     info: () => ({ kind: 'hub', secretsAllowed: false }),

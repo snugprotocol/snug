@@ -3,7 +3,9 @@ import type { ReactElement } from 'react';
 import { NavLink, Route, Routes } from 'react-router-dom';
 
 import { refreshAppMeta } from './state/appMeta.js';
+import { refreshAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
+import { initSync } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
 import { bootUserDb, useUserDbStatus } from './state/userdb.js';
 import { Button } from './ui/Button.js';
@@ -19,11 +21,14 @@ export function App(): ReactElement {
   const theme = useTheme();
   const dbStatus = useUserDbStatus();
 
-  // Boot the user DB once and hydrate settings/app-meta from it (ADR-0007).
+  // Boot the user DB once and hydrate settings/app-meta from it (ADR-0007), then
+  // resume the configured sync origin and probe the hub's optional auth surface.
   useEffect(() => {
     bootUserDb();
     void initSettings();
     void refreshAppMeta();
+    void initSync();
+    void refreshAuth();
   }, []);
 
   return (
