@@ -1,6 +1,6 @@
 # TASK-20260803-userdb-core: Single per-user DB — schema constants, UserDb service, DbDriver face (child 1 of portable-hub)
 
-- **Status**: planned
+- **Status**: in-review (implementation green, adversarial review pending)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (touches `packages/protocol` (userdb-schema spec constants) + `packages/db` foundation)
 - **Branch**: `feat/TASK-20260803-portable-hub` (umbrella branch)
@@ -33,3 +33,9 @@ Files: `packages/protocol/src/userdb-schema.ts` (+ export from index, no zod/wir
 —
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-03 14:45 — Jeetu/Claude — session
+- Done: Gate 3 — 34 failing tests written first (6 protocol schema-lock incl. DDL snapshot; 15 userdb; 8 driver-face; 5 locks), confirmed failing, then implemented: `packages/protocol/src/userdb-schema.ts` (DDL/limits/OPFS-dir constants, exported), `packages/db/src/userdb/userdb.ts` (openUserDb with corrupt-quarantine + unsupported-version fail-closed paths, typed CRUD, versioning w/ retention+revert, chat, kv stores, secrets, export w/ VACUUM strip, import w/ validation+migrate+driver swap), `packages/db/src/userdb/locks.ts` (Web Lock + BroadcastChannel seams). All green; full root suite green (19 tasks); db tsc build clean.
+- Key design: driver face COMPOSES existing `createDbDriver` with a blob `PersistenceBackend` over `snug_app_data` — all exec/kv guardrails inherited, zero duplication (per 2026-07-31 byte-sync lesson). One `construct()` closure owns the single sql.js handle + one write-back pipeline (F7).
+- State: ACs 1–8 covered by tests. Fixed en route: TDZ on `now` helper (seedMeta ran before const init).
+- Next step: adversarial review at umbrella Gate 5; children 2/3 can start on this foundation.

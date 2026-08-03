@@ -26,4 +26,29 @@ export {
 
 export { namespaceToFileName } from './namespace.js';
 
+export {
+  openUserDb,
+  USERDB_ERROR_CODES,
+  UserDbError,
+  type AppRecord,
+  type AppVersionMeta,
+  type ChatMessage,
+  type ChatThread,
+  type InstallAppInput,
+  type OpenUserDbOptions,
+  type OpenUserDbResult,
+  type UserDb,
+  type UserDbErrorCode,
+} from './userdb/userdb.js';
+
+export {
+  acquireUserDbWriterLock,
+  createUserDbChannel,
+  USERDB_LOCK_NAME,
+  type AcquireUserDbWriterLockOptions,
+  type CreateUserDbChannelOptions,
+  type UserDbInvalidationChannel,
+  type UserDbWriterLock,
+} from './userdb/locks.js';
+
 export { base64ToBytes, bytesToBase64 } from './base64.js';
