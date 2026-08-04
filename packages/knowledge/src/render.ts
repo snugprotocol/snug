@@ -5,11 +5,13 @@
 // renderer is strict — an unknown placeholder is a build-breaking error, not silence.
 
 import {
+  APP_OBJECT_NAME_RULE,
   CDN_ALLOWLIST,
   FRAME_TYPES,
   LIMITS,
   PROTOCOL_VERSION,
   SNUG_APP_REQUEST_TAG,
+  STANDARD_APP_DOC_SLUGS,
 } from '@snugprotocol/protocol';
 
 /**
@@ -19,10 +21,20 @@ import {
  */
 export const APP_BUILDER_TOOL_NAME = 'snug_app_builder';
 
+/** Host tool that executes LLM-proposed app schema DDL (ADR-0010). Single home of the name. */
+export const SCHEMA_APPLY_TOOL_NAME = 'schema_apply';
+
+/** Host tool that writes the app's knowledge-wiki docs. Single home of the name. */
+export const APP_DOC_WRITE_TOOL_NAME = 'app_doc_write';
+
 /** Static substitutions available to every prompt source — all derived from protocol constants. */
 const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   envelopeTag: SNUG_APP_REQUEST_TAG,
   appBuilderToolName: APP_BUILDER_TOOL_NAME,
+  schemaApplyToolName: SCHEMA_APPLY_TOOL_NAME,
+  appDocWriteToolName: APP_DOC_WRITE_TOOL_NAME,
+  appObjectNameRule: APP_OBJECT_NAME_RULE.source,
+  standardDocSlugs: STANDARD_APP_DOC_SLUGS.join(', '),
   cdnAllowlist: CDN_ALLOWLIST.join(', '),
   protocolVersion: String(PROTOCOL_VERSION),
   maxArtifactBytes: `${LIMITS.MAX_ARTIFACT_BYTES / (1024 * 1024)} MB`,

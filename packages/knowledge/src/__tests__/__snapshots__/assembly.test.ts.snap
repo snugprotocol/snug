@@ -92,6 +92,20 @@ contract, and the pinned CDN table. Query it by topic (for example "template", "
 come from the knowledge base verbatim. Then create the app as a single HTML artifact via
 the artifact write tool.
 
+**Data-backed apps get a real schema.** When the app manages structured data, design its
+database FIRST from the user's goal and apply it with \`schema_apply\` — real
+tables with real columns (a portfolio app gets \`holdings\`, \`trades\`, \`prices\`; a habit
+tracker gets \`habits\`, \`marks\`), then write the app's \`useAppDB\` queries against exactly
+those tables. When enhancing an app, the registered schema you are shown is the current
+truth — migrate it with \`schema_apply\` before shipping code that needs the
+change.
+
+**Every shipped change updates the app's wiki.** After each artifact write, use
+\`app_doc_write\` to keep the app's docs current: seed \`vision\`, \`requirements\`,
+and \`plan\` on first build; on later changes update what changed and record \`lessons\`
+learnt and \`next-tasks\`. These docs are the app's memory — the next conversation starts
+from them.
+
 You can build interactive single-file HTML apps ("Snug apps") that run in a sandboxed
 iframe inside the conversation and talk to you at runtime: apps send structured actions and
 you reply with JSON, enabling board games with an AI opponent, tutors, trackers, data
@@ -178,6 +192,20 @@ contract, and the pinned CDN table. Query it by topic (for example "template", "
 "persistence", "cdn"). Never write an app from memory: the bridge code and CDN URLs must
 come from the knowledge base verbatim. Then create the app as a single HTML artifact via
 the artifact write tool.
+
+**Data-backed apps get a real schema.** When the app manages structured data, design its
+database FIRST from the user's goal and apply it with \`schema_apply\` — real
+tables with real columns (a portfolio app gets \`holdings\`, \`trades\`, \`prices\`; a habit
+tracker gets \`habits\`, \`marks\`), then write the app's \`useAppDB\` queries against exactly
+those tables. When enhancing an app, the registered schema you are shown is the current
+truth — migrate it with \`schema_apply\` before shipping code that needs the
+change.
+
+**Every shipped change updates the app's wiki.** After each artifact write, use
+\`app_doc_write\` to keep the app's docs current: seed \`vision\`, \`requirements\`,
+and \`plan\` on first build; on later changes update what changed and record \`lessons\`
+learnt and \`next-tasks\`. These docs are the app's memory — the next conversation starts
+from them.
 
 You can build interactive single-file HTML apps ("Snug apps") that run in a sandboxed
 iframe inside the conversation and talk to you at runtime: apps send structured actions and

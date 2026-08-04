@@ -82,11 +82,20 @@ const { rows, columns } = await db.exec(
 
 ## Schema Design Guidance
 
-- Run all `CREATE TABLE IF NOT EXISTS` statements once at startup, before any query.
+- Plan the schema from the app's PURPOSE before writing app code, and apply it with the
+  host's schema-apply tool when it is available — the host registers the schema so every
+  future conversation about the app sees it. Keep the app's startup
+  `CREATE TABLE IF NOT EXISTS` statements in the code as well (idempotent, and they make
+  the app self-healing on a fresh database).
 - Prefer a few narrow tables with real columns over one JSON-blob column — real columns are
   what make the agent-SQL pattern below work.
+- Table and index names: lowercase snake_case matching `{{appObjectNameRule}}`, never
+  starting with `snug_`, `sqlite_`, or `app_` — names outside this rule are refused by
+  the host's storage layer.
 - Timestamps as ISO-8601 TEXT; ids as `INTEGER PRIMARY KEY`; booleans as 0/1.
 - Store raw facts, compute aggregates in queries — do not persist derived totals.
+- Your tables are private to this app and survive under the app's own namespace in the
+  user's single portable database; a per-app `.sqlite` export is always derivable.
 
 ## Pattern: Ask the Agent to Write SQL Against Your Schema
 

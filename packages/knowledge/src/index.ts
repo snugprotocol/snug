@@ -3,7 +3,7 @@
 // accessors with protocol constants injected from @snugprotocol/protocol. Browser-safe:
 // content is inlined at build time by scripts/gen-content.mjs — no runtime fs.
 
-export { APP_BUILDER_TOOL_NAME, renderPrompt } from './render.js';
+export { APP_BUILDER_TOOL_NAME, APP_DOC_WRITE_TOOL_NAME, SCHEMA_APPLY_TOOL_NAME, renderPrompt } from './render.js';
 
 export {
   getKnowledgeBase,
