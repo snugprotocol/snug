@@ -42,8 +42,8 @@ function cookieOf(response: { cookies: unknown }, name: string): InjectedCookie 
 const REMOTE_HOST = 'hub.example.com';
 
 /** Drive the whole browser dance via inject + real fetches to the fake issuer. */
-async function login(appInstance: FastifyInstance, host: string = REMOTE_HOST) {
-  const loginResponse = await appInstance.inject({ method: 'GET', url: '/auth/login', headers: { host } });
+async function login(appInstance: FastifyInstance, host: string = REMOTE_HOST, loginUrl = '/auth/login') {
+  const loginResponse = await appInstance.inject({ method: 'GET', url: loginUrl, headers: { host } });
   expect(loginResponse.statusCode).toBe(302);
   const authorizationUrl = loginResponse.headers.location as string;
   expect(authorizationUrl.startsWith(`${issuer.url}/authorize`)).toBe(true);
@@ -90,6 +90,22 @@ describe('OIDC login flow (fake issuer)', () => {
     const clearedOidc = cookieOf(callbackResponse, OIDC_COOKIE);
     expect(clearedOidc).toBeDefined();
     expect(clearedOidc!.value).toBe('');
+  });
+
+  it('honors a same-origin return path through the login state cookie (living-apps child 4)', async () => {
+    const app = await buildTestApp({ config: authTestConfig({ oidcIssuer: issuer.url }) });
+    const { callbackResponse } = await login(app, REMOTE_HOST, `/auth/login?return=${encodeURIComponent('/run/app-1')}`);
+    expect(callbackResponse.statusCode).toBe(302);
+    expect(callbackResponse.headers.location).toBe('/run/app-1');
+  });
+
+  it('rejects open-redirect return targets — absolute and protocol-relative fall back to / (negative)', async () => {
+    const app = await buildTestApp({ config: authTestConfig({ oidcIssuer: issuer.url }) });
+    for (const evil of ['https://evil.example', '//evil.example', '/\\evil.example']) {
+      const { callbackResponse } = await login(app, REMOTE_HOST, `/auth/login?return=${encodeURIComponent(evil)}`);
+      expect(callbackResponse.statusCode).toBe(302);
+      expect(callbackResponse.headers.location, evil).toBe('/');
+    }
   });
 
   it('omits the Secure flag only for plain-http localhost dev', async () => {

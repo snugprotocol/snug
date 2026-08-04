@@ -1,9 +1,9 @@
 import { Suspense, lazy, useEffect } from 'react';
 import type { ReactElement } from 'react';
-import { NavLink, Route, Routes } from 'react-router-dom';
+import { Link, NavLink, Route, Routes } from 'react-router-dom';
 
 import { refreshAppMeta } from './state/appMeta.js';
-import { refreshAuth } from './state/auth.js';
+import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
 import { initSync } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
@@ -81,6 +81,7 @@ export function App(): ReactElement {
           <Button variant="ghost" onClick={toggleTheme} aria-label={`switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
             {theme === 'dark' ? '☀' : '☾'}
           </Button>
+          <IdentityChip />
         </nav>
       </header>
       <main className="shell-main">
@@ -106,5 +107,33 @@ export function App(): ReactElement {
         </Routes>
       </main>
     </div>
+  );
+}
+
+/**
+ * Header identity (living-apps child 4): login state, visible on EVERY page.
+ * `unavailable` (static demo / v1 server) renders nothing — logged-out stays a fully
+ * working local-only hub, so we advertise sign-in only where it exists.
+ */
+function IdentityChip(): ReactElement | null {
+  const auth = useAuth();
+  if (auth.state === 'unavailable') return null;
+  if (auth.state === 'unknown') return <Skeleton width="72px" height="28px" />;
+  if (auth.state === 'anonymous') {
+    return (
+      <Button variant="ghost" onClick={() => login()} title="sign in with Google — the hub can keep a synced copy of your snug file">
+        sign in
+      </Button>
+    );
+  }
+  const label = auth.user.name ?? auth.user.email ?? 'account';
+  const initial = label.slice(0, 1).toUpperCase();
+  return (
+    <Link to="/settings" className="identity-chip" title={`${label} — account & sync settings`}>
+      <span className="identity-avatar" aria-hidden="true">
+        {initial}
+      </span>
+      <span className="identity-name">{label}</span>
+    </Link>
   );
 }

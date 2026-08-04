@@ -3,10 +3,11 @@
 // produces a real SQLite blob honoring the secrets-strip default, and import arms
 // the F15 endpoint re-confirmation guard.
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { authStore } from '../state/auth.js';
 import { endpointsNeedConfirmStore } from '../state/mode.js';
-import { exportUserFile, importUserFile, setSyncOrigin, syncStatusStore } from '../state/sync.js';
+import { exportUserFile, importUserFile, setSyncOrigin, signOut, syncStatusStore } from '../state/sync.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const SQLITE_MAGIC = 'SQLite format 3';
@@ -52,5 +53,34 @@ describe('export / import UI layer', () => {
     await importUserFile(exported);
     expect(target.listApps().map((a) => a.displayName)).toEqual(['Ported App']);
     expect(endpointsNeedConfirmStore.get()).toBe(true);
+  });
+});
+
+describe('signOut rebuilds the sync loop AFTER logout (living-apps child 4, review F14)', () => {
+  it('logs out (fresh auth probe) and re-inits sync from the DB config in order', async () => {
+    await installTestUserDb();
+    syncStatusStore.set({ origin: 'hub', state: 'idle' });
+    const order: string[] = [];
+    document.cookie = 'snug_csrf=stale-token';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      order.push(url);
+      if (url === '/auth/logout') {
+        document.cookie = 'snug_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        return new Response('', { status: 204 });
+      }
+      if (url === '/auth/me') return new Response('', { status: 401 });
+      return new Response('', { status: 404 });
+    });
+
+    await signOut();
+
+    // logout + auth re-probe happen BEFORE the loop rebuild reads sync config
+    expect(order[0]).toBe('/auth/logout');
+    expect(order[1]).toBe('/auth/me');
+    expect(authStore.get()).toEqual({ state: 'anonymous' });
+    // no origin configured in the fresh test DB → loop lands in 'off' (rebuilt, not stale 'idle')
+    expect(syncStatusStore.get()).toEqual({ origin: 'none', state: 'off' });
+    vi.restoreAllMocks();
   });
 });

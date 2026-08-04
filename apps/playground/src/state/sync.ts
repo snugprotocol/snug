@@ -21,7 +21,7 @@ import { refreshAppMeta } from './appMeta.js';
 import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
-import { readCsrfToken } from './auth.js';
+import { logout, readCsrfToken } from './auth.js';
 
 export type SyncOriginKind = 'none' | 'hub' | 'dropbox';
 
@@ -143,6 +143,16 @@ export async function pushLocal(): Promise<void> {
 
 export async function syncNow(): Promise<void> {
   await loop?.syncNow();
+}
+
+/**
+ * Sign out AND rebuild the sync loop (review F14): the hub provider captures the CSRF
+ * token at construction, so the rebuild must happen AFTER the logout cleared the
+ * cookies — otherwise a hub-origin loop keeps pushing with stale credentials.
+ */
+export async function signOut(): Promise<void> {
+  await logout();
+  await initSync();
 }
 
 export function useSyncStatus(): SyncStatus {
