@@ -580,10 +580,17 @@ function construct(
         const rest = appRestTableName(info.token, name);
         if (restTables.includes(rest)) copyRows(db, rest, temp, name);
       }
-      // AUTOINCREMENT continuity: exact counters from the registry beat max(id) inference.
+      // AUTOINCREMENT continuity: exact counters from the registry beat max(id)
+      // inference (deleted-max rows must never free their ids). sqlite_sequence has
+      // NO unique constraint on name, so INSERT OR REPLACE would APPEND a duplicate
+      // row and SQLite would read the lower one — UPDATE first, INSERT only when the
+      // row does not exist yet (review B1).
       if (schema?.sequences !== undefined && hasTable(temp, 'sqlite_sequence')) {
         for (const [name, seq] of Object.entries(schema.sequences)) {
-          temp.run('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)', [name, seq]);
+          temp.run('UPDATE sqlite_sequence SET seq = ? WHERE name = ?', [seq, name]);
+          if (temp.getRowsModified() === 0) {
+            temp.run('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)', [name, seq]);
+          }
         }
       }
       const bytes = temp.export();
@@ -990,6 +997,14 @@ function construct(
             throw new UserDbError(
               USERDB_ERROR_CODES.INVALID_NAME,
               `proposed DDL creates ${JSON.stringify(name)}, which violates the naming rule (runtime restored)`,
+            );
+          }
+          // Same gate the write-back applies (review O4) — surface it HERE as a typed error.
+          if (/^CREATE\s+VIRTUAL\s+TABLE/i.test(String(row[2] ?? '').trim())) {
+            await restore();
+            throw new UserDbError(
+              USERDB_ERROR_CODES.INVALID_NAME,
+              `virtual tables are not portable — "${name}" cannot be persisted (runtime restored)`,
             );
           }
         }

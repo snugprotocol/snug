@@ -130,6 +130,27 @@ describe('round-trip fidelity (AC2 — the F2 suite)', () => {
     await reopened.close();
   });
 
+  it('AUTOINCREMENT never reuses ids of deleted rows across reopen (review B1)', async () => {
+    const ns = 'seq-app';
+    await db.driver.handle(ns, execFrame('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)'));
+    for (const v of ['a', 'b', 'c']) {
+      await db.driver.handle(ns, execFrame('INSERT INTO items (v) VALUES (?)', [v]));
+    }
+    // Deleting the MAX rows is the trap: max(id) inference would hand id 2 out again.
+    await db.driver.handle(ns, execFrame('DELETE FROM items WHERE id >= 2'));
+    await db.flush();
+    await db.close();
+
+    const reopened = await open();
+    await reopened.driver.handle(ns, execFrame("INSERT INTO items (v) VALUES ('d')"));
+    const next = await reopened.driver.handle(ns, execFrame('SELECT MAX(id) FROM items'));
+    expect(next).toMatchObject({ ok: true, rows: [[4]] });
+    // exactly ONE counter row — INSERT OR REPLACE used to append a duplicate
+    const seqRows = await reopened.driver.handle(ns, execFrame("SELECT count(*) FROM sqlite_sequence WHERE name = 'items'"));
+    expect(seqRows).toMatchObject({ ok: true, rows: [[1]] });
+    await reopened.close();
+  });
+
   it('kv round-trips through materialize/write-back/reopen (F7)', async () => {
     await db.driver.handle('app-kv', kvSetFrame('theme', { dark: true }));
     await db.flush();
