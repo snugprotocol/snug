@@ -1,6 +1,6 @@
 # TASK-20260803-hub-ops: long-run builds, build observability, app delete, LLM-free apps
 
-- **Status**: in-progress — **ALL PHASES (0–6) done; ADR-0011 accepted; Gate 5 COMPLETE** (tests + validator + Playwright + independent adversarial review, whose findings are fixed). Remaining: Gate 6 (`/close-session`) and merge.
+- **Status**: **done** — all phases (0–6) complete, ADR-0011 accepted, Gate 5 verified, **Gate 6 closed 2026-08-04** (lessons, doc drift, next-steps; merged to `main` via PR).
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point; `packages/db` gains a destructive cascade delete; `apps/server` request/timeout config)
 - **Branch**: `feat/TASK-20260803-hub-ops`
@@ -230,6 +230,17 @@ Two independent fresh-context reviewers (high-tier requirement) audited the db c
 - State: 9 commits + this one. Suite 718 → **727** (db 160→163, adapters 72→74, playground 102→106). Build 9/9, validator 18/18, **Playwright 26/26**.
 - Next step: **Gate 6 (`/close-session`)** — lessons, doc drift (`architecture.md`, `code-map.md`, `next-steps.md`), move this file to `done/` on merge. No spec-changelog entry.
 - Open questions: the reviewer noted `importUserDb` clears `lastSavedHash` but not `namespaceByFile` — same cache-coherence family as F1, **pre-existing** and out of this task's scope. Queue it in `next-steps.md` at Gate 6.
+
+### 2026-08-04 — Jeetu — session (Gate 6 — closed)
+
+- Done: **Gate 6.** Re-verified the Gate 5 baseline from a clean tree before closing: `pnpm test` **19/19 tasks, 727 tests** (protocol 103 · runner 91 · knowledge 61 · adapters 74 · db 163 · server 94 · sdk 35 · playground 106), `node --test examples/validate.test.mjs` **18/18**, `pnpm build` **9/9**. ADR-0011 was already `accepted` — no flip needed.
+- Doc drift fixed in-branch: `architecture.md` status line now names hub-ops and its five additions; `code-map.md` gained rows for **app delete**, the **LLM round-trip inspector** (with the sibling-not-extension rule stated in the map itself) and the **build step timeline**, and every stale per-package test count was corrected against a measured run (protocol 74→103, runner 90→91, sdk 33→35, knowledge 55→61, adapters 56→74, server 89→94, db 144→163, playground 51→106, Playwright 25→26); `next-steps.md` gained the ✅ hub-ops line, the queued `importUserDb`/`namespaceByFile` cache-coherence item the reviewer flagged, and the deferred subscription-parity item.
+- **Two lessons promoted** (both cost real debug cycles this task): *"would this fail if the code were wrong?"* — three tests passed for the wrong reason in one session, and none were caught by the suite; and the single-use `ReadableStream` mock trap, which makes a second turn silently see zero events.
+- The outstanding `apps/playground/vite.config.ts` change is committed **here, where it belongs** — it is this task's AC5 (proxy timeouts admitting a ≥30-min build) plus the `changeOrigin: false` OAuth fix (the server builds `redirect_uri` from `request.host`, so rewriting the Host split the `snug_oidc` cookie across `localhost`/`127.0.0.1` and the callback failed with `LOGIN_STATE_MISSING`). It was left uncommitted at the end of the prior session.
+- **No spec-changelog entry** — `packages/protocol` deliberately untouched, as planned in D1.
+- State: merged to `main` via PR; task file moved to `docs/tasks/done/`.
+- Next step: none for this task. Successor is **TASK-20260804-hub-polish**, which branches off the updated `main` and builds directly on this work.
+- Open questions: none.
 
 ---
 
