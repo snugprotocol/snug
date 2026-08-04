@@ -115,7 +115,7 @@ export function App(): ReactElement {
  * `unavailable` (static demo / v1 server) renders nothing — logged-out stays a fully
  * working local-only hub, so we advertise sign-in only where it exists.
  */
-function IdentityChip(): ReactElement | null {
+export function IdentityChip(): ReactElement | null {
   const auth = useAuth();
   if (auth.state === 'unavailable') return null;
   if (auth.state === 'unknown') return <Skeleton width="72px" height="28px" />;
