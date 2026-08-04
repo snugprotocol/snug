@@ -13,11 +13,15 @@ import type { AdapterMessage, AdapterResult, AgentAdapter, FetchLike, ToolCall }
 
 export const OPENAI_DEFAULT_MODEL = 'gpt-4o';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+/** Matches the anthropic adapter: an app build can emit a whole single-file app. */
+const DEFAULT_MAX_TOKENS = 128_000;
 
 export interface OpenAiAdapterOptions {
   apiKey: string;
   model?: string;
   baseUrl?: string;
+  /** Output ceiling; app builds are long, so the default matches the anthropic adapter. */
+  maxTokens?: number;
   /** Injectable for fixture-based tests — adapter tests never hit the network. */
   fetch?: FetchLike;
 }
@@ -54,6 +58,7 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
   const fetchImpl: FetchLike = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
   const model = options.model ?? OPENAI_DEFAULT_MODEL;
+  const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
   return {
     async complete({ system, messages, tools, signal, onDelta }): Promise<AdapterResult> {
@@ -68,6 +73,7 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
           body: JSON.stringify({
             model,
             stream: true,
+            max_completion_tokens: maxTokens,
             messages: toOpenAiMessages(system, messages),
             ...(tools !== undefined && tools.length > 0
               ? {
@@ -126,9 +132,13 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
           }
         }
       } catch (err) {
-        return isAbortError(err) || signal?.aborted === true ? cancelledResult() : streamDroppedResult();
+        if (isAbortError(err) || signal?.aborted === true) return cancelledResult();
+        return { ...streamDroppedResult(), ...(text !== '' ? { partialText: text } : {}) };
       }
-      if (finishReason === null) return streamDroppedResult();
+      // No finish_reason means the stream died mid-reply — keep what was already written.
+      if (finishReason === null) {
+        return { ...streamDroppedResult(), ...(text !== '' ? { partialText: text } : {}) };
+      }
 
       const toolCalls: ToolCall[] = [...pending.entries()]
         .sort(([a], [b]) => a - b)

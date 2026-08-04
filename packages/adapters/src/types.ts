@@ -43,10 +43,28 @@ export interface AdapterError {
   code: string;
   message: string;
   retryable: boolean;
+  /**
+   * Text streamed before the failure, when any. A long build that dies at minute 28
+   * must not lose what it already wrote — callers render this alongside the error
+   * instead of showing an empty reply.
+   */
+  partialText?: string;
+}
+
+/** Token accounting, when the provider reports it. Observation only — never persisted. */
+export interface TokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export type AdapterResult =
-  | { ok: true; text: string; toolCalls: ToolCall[]; stopReason: 'end' | 'tool_use' }
+  | {
+      ok: true;
+      text: string;
+      toolCalls: ToolCall[];
+      stopReason: 'end' | 'tool_use';
+      usage?: TokenUsage;
+    }
   | AdapterError;
 
 /** The one seam through which any provider is reached (see runAgentTurn). */

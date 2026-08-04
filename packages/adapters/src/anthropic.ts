@@ -11,12 +11,26 @@ import {
   streamDroppedResult,
 } from './errors.js';
 import { parseSse, tryParseJsonRecord } from './sse.js';
-import type { AdapterMessage, AdapterResult, AgentAdapter, FetchLike, ToolCall } from './types.js';
+import type {
+  AdapterMessage,
+  AdapterResult,
+  AgentAdapter,
+  FetchLike,
+  TokenUsage,
+  ToolCall,
+} from './types.js';
 
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-sonnet-5';
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
-const DEFAULT_MAX_TOKENS = 8192;
+/**
+ * App building is a heavy, long-context task: a single artifact_write can carry a whole
+ * single-file app. 8192 truncated real builds mid-file, so the default is the model's
+ * 128K output ceiling. No beta header is needed — 128K output is built in on Claude 4.6+
+ * (the old `output-128k-2025-02-19` opt-in is legacy and a no-op). The request MUST be
+ * streamed at this size, which this adapter always does.
+ */
+const DEFAULT_MAX_TOKENS = 128_000;
 
 export interface AnthropicAdapterOptions {
   apiKey: string;
@@ -110,6 +124,7 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
       const toolCalls: ToolCall[] = [];
       const pending = new Map<number, { id: string; name: string; json: string }>();
       let completed = false;
+      const usage: TokenUsage = {};
       try {
         for await (const event of parseSse(response.body)) {
           const payload = tryParseJsonRecord(event.data);
@@ -147,15 +162,32 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
               code: ERROR_CODES.HOST_ERROR,
               message: typeof error?.message === 'string' ? error.message : 'provider stream error',
               retryable: true,
+              ...(text !== '' ? { partialText: text } : {}),
             };
+          } else if (type === 'message_start') {
+            // Usage rides here (input) and on message_delta (output) — observation only.
+            const usageRecord = asRecord(asRecord(payload.message)?.usage);
+            if (typeof usageRecord?.input_tokens === 'number') usage.inputTokens = usageRecord.input_tokens;
+          } else if (type === 'message_delta') {
+            const usageRecord = asRecord(payload.usage);
+            if (typeof usageRecord?.output_tokens === 'number') usage.outputTokens = usageRecord.output_tokens;
           }
-          // message_start / message_delta / ping — nothing to collect
+          // ping — nothing to collect
         }
       } catch (err) {
-        return isAbortError(err) || signal?.aborted === true ? cancelledResult() : streamDroppedResult();
+        if (isAbortError(err) || signal?.aborted === true) return cancelledResult();
+        return { ...streamDroppedResult(), ...(text !== '' ? { partialText: text } : {}) };
       }
-      if (!completed) return streamDroppedResult();
-      return { ok: true, text, toolCalls, stopReason: toolCalls.length > 0 ? 'tool_use' : 'end' };
+      // A stream that ends without message_stop lost the rest of the reply — but NOT what
+      // it already wrote. A 30-minute build that drops at minute 28 keeps its work.
+      if (!completed) return { ...streamDroppedResult(), ...(text !== '' ? { partialText: text } : {}) };
+      return {
+        ok: true,
+        text,
+        toolCalls,
+        stopReason: toolCalls.length > 0 ? 'tool_use' : 'end',
+        ...(usage.inputTokens !== undefined || usage.outputTokens !== undefined ? { usage } : {}),
+      };
     },
   };
 }
