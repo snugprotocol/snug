@@ -30,7 +30,10 @@ test.describe('AC2 — serverless execution', () => {
       await page.route(route, (r) => r.abort('connectionrefused'));
     }
     await page.goto('/');
-    await page.getByRole('button', { name: /install chess/i }).click();
+    // A starter now OPENS read-only first; Install lives in the run view, so owning a
+    // copy is a deliberate two-step act (owner request, 2026-08-04).
+    await page.getByRole('button', { name: /open chess/i }).click();
+    await page.getByTestId('starter-install').click();
     await expect(page).toHaveURL(/\/run\//, { timeout: 20_000 });
     // The sandboxed frame renders the installed copy — no backend answered anything.
     await expect(page.getByTestId('frame-wrap').locator('iframe[sandbox="allow-scripts"]')).toBeVisible({
@@ -53,7 +56,10 @@ test.describe('AC2 — serverless execution', () => {
       });
 
       await page.goto(`${APP_URL}/`);
-      await page.getByRole('button', { name: /install chess/i }).click();
+      // A starter now OPENS read-only first; Install lives in the run view, so owning a
+    // copy is a deliberate two-step act (owner request, 2026-08-04).
+    await page.getByRole('button', { name: /open chess/i }).click();
+    await page.getByTestId('starter-install').click();
       await expect(page).toHaveURL(/\/run\//, { timeout: 20_000 });
       const runUrl = page.url();
       const appPath = new URL(runUrl).pathname;

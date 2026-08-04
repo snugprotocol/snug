@@ -121,8 +121,12 @@ function starterTile(el: HTMLElement, name: string): HTMLElement {
   return found;
 }
 
-const installButton = (tile: HTMLElement): HTMLButtonElement | null =>
-  tile.querySelector<HTMLButtonElement>('[data-testid="starter-install"]');
+/** The hub tile's action for an UNINSTALLED starter: it opens, it does not install. */
+const tryButton = (tile: HTMLElement): HTMLButtonElement | null =>
+  tile.querySelector<HTMLButtonElement>('[data-testid="starter-try"]');
+/** The Install control, which lives in the RUN VIEW now — never on the hub tile. */
+const runInstallButton = (el: HTMLElement): HTMLButtonElement | null =>
+  el.querySelector<HTMLButtonElement>('[data-testid="starter-install"]');
 const openButton = (tile: HTMLElement): HTMLButtonElement | null =>
   tile.querySelector<HTMLButtonElement>('[data-testid="starter-open"]');
 
@@ -156,21 +160,33 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('an uninstalled starter offers an explicit Install control (AC18)', () => {
-  it('shows Install — not a silent auto-install-on-click', async () => {
-    const { el } = await renderHub();
+describe('an uninstalled starter OPENS read-only; Install lives in the run view (AC18)', () => {
+  // Owner correction (2026-08-04): "it should open the starter app without installing
+  // and also show Install button when opened on the UI (if not yet installed)". The hub
+  // tile previously auto-installed on click, so a starter could never be tried first.
+
+  it('the hub tile opens the starter WITHOUT installing anything', async () => {
+    const { el, path } = await renderHub();
     const tile = starterTile(el, STARTER_NAME);
-    const install = installButton(tile);
-    expect(install, 'an uninstalled starter must offer an explicit Install control').not.toBeNull();
-    expect(install!.textContent?.toLowerCase()).toContain('install');
-    // Nothing was installed merely by rendering the shelf.
-    expect(db.listApps()).toHaveLength(0);
+    expect(tryButton(tile), 'an uninstalled starter must offer an open control').not.toBeNull();
+    act(() => {
+      tryButton(tile)!.click();
+    });
+    await settle();
+    // Routed to the READ-ONLY starter, and the library is still empty.
+    expect(path()).toContain(STARTER_PREFIX);
+    expect(db.listApps(), 'opening a starter must not install it').toHaveLength(0);
   });
 
-  it('installing navigates to the user’s OWN copy, not to the starter route', async () => {
-    const { el, path } = await renderHub();
+  it('the run view offers Install for a starter the user does not own', async () => {
+    const { el } = await renderRun(STARTER_ID);
+    expect(runInstallButton(el), 'the run view must offer Install for an unowned starter').not.toBeNull();
+  });
+
+  it('installing from the run view creates the copy and navigates to it', async () => {
+    const { el, path } = await renderRun(STARTER_ID);
     act(() => {
-      installButton(starterTile(el, STARTER_NAME))!.click();
+      runInstallButton(el)!.click();
     });
     await settleUntil(() => db.listApps().length > 0, 'the starter to be installed');
 
@@ -182,33 +198,31 @@ describe('an uninstalled starter offers an explicit Install control (AC18)', () 
     expect(path()).not.toContain(STARTER_PREFIX);
   });
 
-  it('a double-click installs exactly one copy (the latch survives)', async () => {
-    const { el } = await renderHub();
-    const install = installButton(starterTile(el, STARTER_NAME))!;
+  it('a double-click installs exactly one copy (the run-view latch)', async () => {
+    const { el } = await renderRun(STARTER_ID);
+    const install = runInstallButton(el)!;
     act(() => {
       install.click();
       install.click();
     });
     await settleUntil(() => db.listApps().length > 0, 'the starter to be installed');
-    // A second install would land AFTER the first; settle again so the latch is really
-    // tested rather than the assertion simply running before the race could resolve.
+    // A second install would land AFTER the first; settle twice so the latch is really
+    // tested rather than the assertion running before the race could resolve.
     await settle();
     await settle();
     expect(db.listApps()).toHaveLength(1);
   });
 
   it('an install failure is surfaced, not swallowed', async () => {
-    const { el } = await renderHub();
-    // installApp is what the library.save path ultimately calls.
+    const { el } = await renderRun(STARTER_ID);
     vi.spyOn(db, 'installApp').mockImplementation(() => {
       throw new Error('disk full');
     });
     act(() => {
-      installButton(starterTile(el, STARTER_NAME))!.click();
+      runInstallButton(el)!.click();
     });
     await settleUntil(() => el.querySelector('[role="alert"]') !== null, 'the install error to surface');
-    const alert = el.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain('disk full');
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('disk full');
   });
 });
 
@@ -217,7 +231,7 @@ describe('an installed starter opens the user’s copy, never a second one (AC18
     const copy = db.installApp({ displayName: 'chess', html: '<html>copy</html>', installSource: STARTER_SOURCE });
     const { el, path } = await renderHub();
     const tile = starterTile(el, STARTER_NAME);
-    expect(installButton(tile), 'an installed starter must not offer Install again').toBeNull();
+    expect(tryButton(tile), 'an installed starter shows Open, not the try control').toBeNull();
     expect(tile.querySelector('.tile-installed-badge')).not.toBeNull();
 
     act(() => {
@@ -291,9 +305,9 @@ describe('no starter interaction can produce an unreachable app row (AC18)', () 
     unmountCurrent();
 
     // 2. Install it from the hub.
-    const hub = await renderHub();
+    const run = await renderRun(STARTER_ID);
     act(() => {
-      installButton(starterTile(hub.el, STARTER_NAME))!.click();
+      runInstallButton(run.el)!.click();
     });
     await settleUntil(() => db.listApps().length > 0, 'the starter to be installed');
     unmountCurrent();
@@ -376,9 +390,9 @@ describe('no starter interaction can produce an unreachable app row (AC18)', () 
     // A fork is exactly a row with no install_source. Install legitimately, then drive
     // the run view of the INSTALLED copy — the surface that is allowed to write — and
     // assert we still have exactly one source-tagged row rather than a second one.
-    const hub = await renderHub();
+    const run = await renderRun(STARTER_ID);
     act(() => {
-      installButton(starterTile(hub.el, STARTER_NAME))!.click();
+      runInstallButton(run.el)!.click();
     });
     await settleUntil(() => db.listApps().length > 0, 'the starter to be installed');
     unmountCurrent();

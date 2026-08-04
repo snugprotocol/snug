@@ -21,7 +21,7 @@ import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
-import { isStarterId, listStarterApps, loadStarterHtml, STARTER_PREFIX } from '../starter/starterApps.js';
+import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -61,14 +61,7 @@ const RAIL_TAB_ICONS: Record<RailTab, string> = {
 /** How long after host-ready the header keeps shimmering before falling back to the library name. */
 const ANNOUNCE_FALLBACK_MS = 1500;
 
-/**
- * The starter→install_source identity rule, shared verbatim with HubView (which builds
- * its dedup map the same way). One rule, one place: a second convention here would let
- * the hub and the run view disagree about whether a starter is installed.
- */
-export function starterInstallSource(starterId: string): string {
-  return `starter:${starterId.slice(STARTER_PREFIX.length)}`;
-}
+export { starterInstallSource };
 
 /** Just enough of a thread row for the main-thread rule — keeps this testable and pure. */
 interface ThreadRowLike {
@@ -208,7 +201,10 @@ export default function RunView(): ReactElement {
   }, [chat.lastArtifact, id]);
 
   // Identity seams — captured per app id (SnugAppFrame mount-captures them via key).
-  const transport = useMemo(() => createAppTransport(mode, provider), [mode, provider]);
+  // onRoundTrip is stable (useCallback with [] deps), so threading it here does not
+  // rebuild the transport on every render. This is what makes an APP's LLM turn —
+  // e.g. a Chess move — visible in the LLM surface alongside the builder's turns.
+  const transport = useMemo(() => createAppTransport(mode, provider, onRoundTrip), [mode, provider, onRoundTrip]);
   // The db driver is the SHARED user DB's materialized face (ADR-0010) — never closed
   // here; it lives as long as the page. App data lands as native app_* tables.
   const [db, setDb] = useState<SnugDbDriver | null>(null);
@@ -226,6 +222,35 @@ export default function RunView(): ReactElement {
   // user's OWN copy when they already installed it — the same install_source identity
   // the hub's shelf uses. Without this, the starter route stays reachable behind the
   // hub's Install control and the chat rail forks a hidden app off a read-only starter.
+  /**
+   * Install THIS starter into the user's snug file, from inside the run view. Uses the
+   * same `userLibrary().save(html, name, install_source)` call the hub uses, so the
+   * find-or-create dedup and the DB's partial unique index both still apply — two
+   * installs of one starter can never produce two apps. The latch mirrors the hub's:
+   * a double-click must not race two saves.
+   */
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string | undefined>(undefined);
+  const installLatch = useRef(false);
+  const installThisStarter = useCallback(async (): Promise<void> => {
+    if (installLatch.current || !isStarterId(id)) return;
+    installLatch.current = true;
+    setInstalling(true);
+    setInstallError(undefined);
+    try {
+      const html = await loadStarterHtml(id);
+      if (html === undefined) throw new Error('starter not bundled');
+      const name = listStarterApps().find((s) => s.id === id)?.name ?? 'starter';
+      const entry = await userLibrary().save(html, name, starterInstallSource(id));
+      navigate(`/run/${entry.id}`, { replace: true });
+    } catch (err) {
+      setInstallError(err instanceof Error ? err.message : String(err));
+    } finally {
+      installLatch.current = false;
+      setInstalling(false);
+    }
+  }, [id, navigate]);
+
   useEffect(() => {
     if (!isStarterId(id)) return;
     let cancelled = false;
@@ -451,6 +476,30 @@ export default function RunView(): ReactElement {
             </div>
           )}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+            {/*
+              A starter opens READ-ONLY so it can be tried before it is owned (owner:
+              "it should open the starter app without installing and also show Install
+              button when opened on the UI"). Installing makes a real copy in the user's
+              snug file and navigates there — from that point it versions normally and
+              gains the chat tab. The route redirects to the copy if one already exists,
+              so this button only ever appears for a starter the user does not have.
+            */}
+            {isStarterId(id) && installError !== undefined ? (
+              <span className="error-note" role="alert" style={{ padding: '2px 8px' }}>
+                install failed — {installError}
+              </span>
+            ) : null}
+            {isStarterId(id) ? (
+              <Button
+                variant="primary"
+                data-testid="starter-install"
+                disabled={installing}
+                onClick={() => void installThisStarter()}
+                title="add this starter to your snug file so you can edit it"
+              >
+                {installing ? 'installing…' : 'install'}
+              </Button>
+            ) : null}
             {sawDbOp ? (
               <Button onClick={() => void onExport()} title="download this app’s database as a real .sqlite file">
                 export .sqlite

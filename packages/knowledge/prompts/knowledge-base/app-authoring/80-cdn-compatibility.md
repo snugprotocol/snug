@@ -64,6 +64,24 @@ Fragile; prefer UMD builds or inlined logic.
 | marked | `https://cdn.jsdelivr.net/npm/marked@9/marked.min.js` | `marked` |
 | Tone.js | `https://unpkg.com/tone@14/build/Tone.js` | `Tone` |
 
+### A CSP console error for a `.map` file is EXPECTED, not a bug
+
+Loading any minified CDN bundle makes browser devtools try to fetch its sourcemap
+sidecar (e.g. `babel.min.js.map`). The app sandbox sets `connect-src 'none'`, so that
+fetch is refused and Chrome logs:
+
+> Connecting to '…babel.min.js.map' violates the following Content Security Policy
+> directive: "connect-src 'none'"
+
+**This is C2 working correctly.** The SCRIPT itself loads fine (it is allowed by
+`script-src` via the CDN allowlist) — only the sourcemap is blocked, and blocking it is
+the point: `connect-src 'none'` is what stops an app exfiltrating data. The message
+appears only with devtools open and has no effect on the running app.
+
+Do **not** "fix" it by widening the CSP. `apps/playground/e2e/owner-report.spec.ts`
+pins this distinction: it asserts the app still renders (proving the script loaded)
+while treating the `.map` refusal as benign.
+
 Notes:
 
 - chess.js versions AFTER 0.10.x dropped the UMD build — pin 0.10.3 or inline the rules.
