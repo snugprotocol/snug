@@ -1,6 +1,6 @@
 # TASK-20260803-hub-retrofit: Marketplace dedup, SSO surfacing, design pass (child 4 of living-apps)
 
-- **Status**: in-review (complete on umbrella branch)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: medium (auth-adjacent UI; one server auth change)
 - **Branch**: `feat/TASK-20260803-living-apps` (umbrella branch)

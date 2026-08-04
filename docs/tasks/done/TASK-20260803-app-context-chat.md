@@ -1,6 +1,6 @@
 # TASK-20260803-app-context-chat: App-attached chat, durable pins, threads/docs UX, factory reset (child 3 of living-apps)
 
-- **Status**: in-review (complete on umbrella branch)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: medium
 - **Branch**: `feat/TASK-20260803-living-apps` (umbrella branch)

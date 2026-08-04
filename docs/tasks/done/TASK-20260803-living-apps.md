@@ -1,6 +1,6 @@
 # TASK-20260803-living-apps: LLM-designed per-app data schemas, app-context chat, factory-pinned versions, per-app knowledge wiki, SSO/marketplace retrofit
 
-- **Status**: in-review (implementation + adversarial review complete; awaiting owner review → PR → merge)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/protocol/src/userdb-schema.ts` = spec surface; db driver work is C2-adjacent; auth UI touches the SSO surface; `db`/`protocol` widely depended)
 - **Branch**: `feat/TASK-20260803-living-apps` (created off `main` at plan time; no implementation code until approval)

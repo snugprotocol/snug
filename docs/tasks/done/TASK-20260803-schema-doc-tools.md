@@ -1,6 +1,6 @@
 # TASK-20260803-schema-doc-tools: schema_apply + app_doc_write tools and compounding prompts (child 2 of living-apps)
 
-- **Status**: in-review (complete on umbrella branch)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: medium (prompt store per ADR-0004; tool wiring in playground)
 - **Branch**: `feat/TASK-20260803-living-apps` (umbrella branch)

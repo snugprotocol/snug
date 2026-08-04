@@ -1,6 +1,6 @@
 # TASK-20260803-userdb-v2: User-DB schema v2 — native app tables, schema registry, factory pins, docs (child 1 of living-apps)
 
-- **Status**: in-review (complete on umbrella branch)
+- **Status**: done (merged via PR)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (`packages/protocol/src/userdb-schema.ts` = spec surface; driver seam C2-adjacent)
 - **Branch**: `feat/TASK-20260803-living-apps` (umbrella branch)
