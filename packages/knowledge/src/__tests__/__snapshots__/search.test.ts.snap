@@ -54,7 +54,9 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
     "headingTree": [
       "# App Catalog",
       "## Choosing an App Type",
+      "## Deciding Whether a Turn Needs the Model",
       "## Per-Type Guidance",
+      "### Autonomous / local-only",
       "### Games (board, card, word)",
       "### Trackers and data tools",
       "### Education and creative",

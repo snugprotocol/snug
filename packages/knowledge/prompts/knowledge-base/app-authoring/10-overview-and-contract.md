@@ -10,22 +10,34 @@ source: rewritten for Snug v0.1 from ancestor KBs (internal/05)
 ## What a Snug App Is
 
 A Snug app is ONE self-contained HTML file that runs in a sandboxed iframe inside the
-conversation and thinks through the host's agent at runtime. The app is not a static page:
-it sends structured actions to the agent (a chess move, a quiz answer, a data question) and
-receives structured JSON replies that it turns back into UI state.
+conversation, announces itself to the host, and persists its state through the host bridge.
+That contract — one file, the sandbox, host-brokered storage — is what makes something a
+Snug app.
+
+Reaching the agent is a CAPABILITY an app MAY use, not part of the definition. An app that
+never calls the agent is a first-class Snug app: an arcade game, a timer, a drawing pad, a
+calculator are complete without a single model round trip. Do not add one to qualify.
 
 An app can:
 
-- Send structured requests to the agent and await structured JSON replies
-- Receive cumulative streaming text for display while the agent thinks
 - Persist state across reloads through HOST-BROKERED storage (key-value and SQL)
 - Use React 18 and other UMD libraries loaded from the allowed CDNs: {{cdnAllowlist}}
+- OPTIONALLY send structured requests to the agent and await structured JSON replies
+- OPTIONALLY receive cumulative streaming text for display while the agent thinks
+
+Apps that DO think through the agent send structured actions (a chess move, a quiz answer,
+a data question) and turn the structured JSON replies back into UI state. See "Choosing an
+App Type" for deciding, per app, whether a turn needs the model at all.
 
 An app cannot: call `fetch`/`XMLHttpRequest` (network is blocked by CSP), use browser
 storage (the sandbox has a null origin — storage exists only via the host bridge), open
 windows, or reach any credential. Everything flows through `postMessage` frames.
 
 ## The Runtime Loop
+
+Steps 1-2 are the WHOLE loop for an app that does not use the agent — after host-ready it
+simply runs. Steps 3-5 describe one agent round trip, and happen only when the app calls
+`sendMessage`.
 
 1. On mount the app announces itself ({{frameType:announce}}) with its display metadata.
 2. The host replies {{frameType:hostReady}}, delivering `instanceId`, `theme`, and

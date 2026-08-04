@@ -1,6 +1,6 @@
 # TASK-20260803-hub-ops: long-run builds, build observability, app delete, LLM-free apps
 
-- **Status**: in-progress — **Phases 0–5 done and committed; resume at Phase 6** (see the handoff at the bottom of this file)
+- **Status**: in-progress — **ALL PHASES (0–6) done and committed; ADR-0011 accepted.** Remaining: Playwright + independent adversarial review (Gate 5), then Gate 6.  
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point; `packages/db` gains a destructive cascade delete; `apps/server` request/timeout config)
 - **Branch**: `feat/TASK-20260803-hub-ops`
@@ -192,6 +192,23 @@ The remaining four are real work.
 - Next step: **Phase 6** — knowledge + examples (AC24–27) + accept ADR-0011. Largest remaining piece: KB doctrine rewrite, the autonomous archetype, regenerating `content.ts`, and porting the pig game to the contract (hooks block **copied, never retyped**).
 - Open questions: none blocking.
 
+### 2026-08-03 — Jeetu — session (Phase 6 implemented — all phases complete)
+
+- Done: **Phase 6** (AC24–27) test-first, **ADR-0011 accepted**. 8 new tests; suite 710 → **718** (knowledge 55 → 61, sdk 33 → 35).
+  - **AC24 doctrine.** The opening definition no longer makes agent use constitutive: an app is defined by the contract it honours (one file, sandbox, host-brokered storage); reaching the agent is a capability it MAY use. The Runtime Loop now says steps 1-2 are the whole loop for a local-only app and 3-5 happen only on `sendMessage`. Catalog gains an **Autonomous / local-only** row with Agent's role **None**, a "Deciding Whether a Turn Needs the Model" section (chess = every move → quiz = per batch → tracker = on demand → arcade = never), and per-type guidance. `content.ts` regenerated.
+  - **AC25/26 pig port.** CSS art **byte-identical** to the source (verified programmatically), every gameplay symbol count matches (`AudioEngine` 13/13, `randBetween` 6/6, …). Hooks block **copied** from the already-validated example, never retyped. `localStorage` → `usePersistedState`, `cheo-app-announce` → `useSnugApp`, `// 5. RESPONSE SCHEMA` banner added (set to `null`, with a comment saying why, rather than faking a schema). `node --test examples/validate.test.mjs` passes **18/18, validator unchanged**.
+  - **AC27.** LLM-free runtime test on the existing sdk jsdom harness: announce → host-ready → play → persist → reload, asserting `transportCalls` stays `[]`. Mutation-tested — adding one stray `sendMessage` fails it.
+- Surprises:
+  - **The doctrine phrase lived in TWO files**, not one: the KB overview *and* `prompts/skills/builder-preamble.md`. The test asserts on both. My first preamble rewrite still contained the banned phrase mid-sentence and the test caught it — worth noting that the assertion is on the phrase, not the file.
+  - **The validator requires announce fields as inline LITERALS.** The source game passed `displayName: APP_DISPLAY_NAME` constants, which fails `announce metadata is complete`. Inlined the literals and deleted the now-dead constants rather than relaxing the check (AC26 forbids that).
+  - Two golden snapshots (skill-prompt assembly, KB heading tree) failed on the doctrine edit — **as designed**. Reviewed both diffs before updating: exactly the two new headings and the one rewritten sentence, nothing else.
+  - `isReady`/`theme` were initially destructured but unused. Now gates the first paint, because the high score hydrates through the bridge and rendering earlier flashes a 0 — an LLM-free app still waits for `hostReady`.
+  - The ported JSX has no build step, so a validator pass does not prove it compiles. Verified separately with `tsc --jsx preserve --allowJs` (993 lines, zero syntax errors). `@babel/standalone` is CDN-only and not resolvable locally.
+- Removed `docs/tasks/active/TASK-20260803-hub-ops-assets/` per the handoff, now that the port has landed.
+- State: 8 commits + this one. **Gate 5 green**: `pnpm test` 19/19 tasks / **718 tests**; `node --test examples/validate.test.mjs` 18/18; `pnpm build` 9/9.
+- Next step: **remaining Gate 5** — the Playwright suite (`pnpm --filter playground test:e2e`) and, per the high tier, an independent adversarial review before merge. Then Gate 6 (`/close-session`): lessons, doc drift (`architecture.md`, `code-map.md`, `next-steps.md`), and move this file to `done/` on merge. **No spec-changelog entry — `packages/protocol` deliberately untouched.**
+- Open questions: none blocking.
+
 ---
 
 ## HANDOFF — resume here (written 2026-08-03, end of session)
@@ -205,7 +222,7 @@ a5454f8 Phase 1 — adapters: the real long-build fix
 d4a5bc5 Gate 1-2 — spec, interview, plan, ADR-0011 draft
 ```
 
-**Baseline to preserve**: `pnpm test` → 19/19 tasks, **710 tests**. Per-package: protocol 103 · knowledge 55 · runner 91 · db 160 · sdk 33 · server 94 · adapters 72 · playground **102**. `pnpm build` 9/9 clean. Note there is **no root `lint` task** — turbo reports "No tasks were executed"; typecheck rides on `build`.
+**Baseline to preserve**: `pnpm test` → 19/19 tasks, **718 tests**. Per-package: protocol 103 · knowledge **61** · runner 91 · db 160 · sdk **35** · server 94 · adapters 72 · playground 102. Plus `node --test examples/validate.test.mjs` 18/18 and `pnpm build` 9/9. Note there is **no root `lint` task**; typecheck rides on `build`.
 
 ### What is DONE (do not redo)
 

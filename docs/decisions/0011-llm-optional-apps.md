@@ -1,6 +1,6 @@
 # 0011 — Apps are LLM-optional: the agent is a capability, not a requirement
 
-- **Status:** draft
+- **Status:** accepted
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-hub-ops
 
