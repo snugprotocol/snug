@@ -134,7 +134,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       });
     }
 
-    const user = users.upsertByGoogleSub({ googleSub: identity.sub, email: identity.email, name: identity.name });
+    const user = users.upsertByGoogleSub({
+      googleSub: identity.sub,
+      email: identity.email,
+      name: identity.name,
+      picture: identity.picture,
+    });
     clearLoginCookie();
     setSessionCookies(reply, request, user.id, sessionSecret);
     // Sanitized AGAIN on the way out: the cookie is signed, but defense-in-depth is free.
@@ -157,6 +162,13 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     if (user === undefined) {
       return reply.status(401).send({ code: 'UNAUTHENTICATED', message: 'no valid session', retryable: false });
     }
-    return { userId: user.id, email: user.email, name: user.name };
+    // Wire shape: { userId, email, name, picture? } — `picture` is OMITTED entirely
+    // when the account has no avatar (never null/undefined), per AC4.
+    return {
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      ...(user.picture !== undefined ? { picture: user.picture } : {}),
+    };
   });
 }

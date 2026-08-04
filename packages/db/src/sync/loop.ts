@@ -31,7 +31,12 @@ export interface SyncableUserDb {
 export type SyncEvent =
   | { kind: 'pushed'; revision: string }
   | { kind: 'pulled'; revision: string }
-  | { kind: 'divergence'; remoteRevision: string }
+  /**
+   * The origin refused our conditional write. `remoteRevision` is absent when the origin
+   * could not name one — in practice the origin holds no image (its row was wiped) while
+   * our sidecar still remembers a revision. Either way: surface only, resolve explicitly.
+   */
+  | { kind: 'divergence'; remoteRevision?: string }
   | { kind: 'error'; code: string; message: string };
 
 export interface CreateSyncLoopOptions {
@@ -130,7 +135,12 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
       emit({ kind: 'pushed', revision: result.revision });
       return;
     }
-    emit({ kind: 'divergence', remoteRevision: result.remoteRevision });
+    // ADR-0009: a conflict is surfaced, never auto-retried and never auto-merged. The
+    // sidecar is deliberately NOT re-anchored, so nothing here can become a silent write.
+    emit({
+      kind: 'divergence',
+      ...(result.remoteRevision !== undefined ? { remoteRevision: result.remoteRevision } : {}),
+    });
   };
 
   /** Pull is a merge, never a swap: local `snug_secrets` rows survive the import. */

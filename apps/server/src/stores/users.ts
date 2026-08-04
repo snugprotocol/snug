@@ -12,12 +12,14 @@ export interface UserRecord {
   googleSub: string;
   email: string;
   name: string;
+  /** Google avatar URL; absent when the id_token carried no `picture` claim. */
+  picture?: string;
   createdAt: string;
 }
 
 export interface UserStore {
-  /** Insert on first login; refresh email/name on later logins. Id is stable per google sub. */
-  upsertByGoogleSub(input: { googleSub: string; email: string; name: string }): UserRecord;
+  /** Insert on first login; refresh email/name/picture on later logins. Id is stable per google sub. */
+  upsertByGoogleSub(input: { googleSub: string; email: string; name: string; picture?: string }): UserRecord;
   get(id: string): UserRecord | undefined;
   close(): void;
 }
@@ -27,11 +29,20 @@ interface Row {
   google_sub: string;
   email: string;
   name: string;
+  picture: string | null;
   created_at: string;
 }
 
 function toRecord(row: Row): UserRecord {
-  return { id: row.id, googleSub: row.google_sub, email: row.email, name: row.name, createdAt: row.created_at };
+  return {
+    id: row.id,
+    googleSub: row.google_sub,
+    email: row.email,
+    name: row.name,
+    // NULL in SQLite ⇢ key omitted, never `picture: null` — /auth/me's contract is omission.
+    ...(row.picture !== null && row.picture !== '' ? { picture: row.picture } : {}),
+    createdAt: row.created_at,
+  };
 }
 
 /** `dbPath` is a file path or ':memory:' (tests). */
@@ -39,35 +50,39 @@ export function createUserStore(dbPath: string): UserStore {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.exec(
+    // `picture` is declared here rather than migrated in (owner decision D3, 2026-08-04):
+    // the hub DB is disposable dev state and is deleted and rebuilt. Nullable — Google
+    // does not send a picture claim for every account.
     `CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       google_sub TEXT NOT NULL UNIQUE,
       email TEXT NOT NULL,
       name TEXT NOT NULL,
+      picture TEXT,
       created_at TEXT NOT NULL
     )`,
   );
-  const insert = db.prepare('INSERT INTO users (id, google_sub, email, name, created_at) VALUES (?, ?, ?, ?, ?)');
-  const update = db.prepare('UPDATE users SET email = ?, name = ? WHERE google_sub = ?');
-  const selectBySub = db.prepare('SELECT id, google_sub, email, name, created_at FROM users WHERE google_sub = ?');
-  const selectById = db.prepare('SELECT id, google_sub, email, name, created_at FROM users WHERE id = ?');
+  const insert = db.prepare(
+    'INSERT INTO users (id, google_sub, email, name, picture, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  const update = db.prepare('UPDATE users SET email = ?, name = ?, picture = ? WHERE google_sub = ?');
+  const selectBySub = db.prepare(
+    'SELECT id, google_sub, email, name, picture, created_at FROM users WHERE google_sub = ?',
+  );
+  const selectById = db.prepare('SELECT id, google_sub, email, name, picture, created_at FROM users WHERE id = ?');
 
   return {
-    upsertByGoogleSub({ googleSub, email, name }) {
+    upsertByGoogleSub({ googleSub, email, name, picture }) {
+      const stored = picture !== undefined && picture !== '' ? picture : null;
       const existing = selectBySub.get(googleSub) as Row | undefined;
       if (existing !== undefined) {
-        update.run(email, name, googleSub);
-        return toRecord({ ...existing, email, name });
+        update.run(email, name, stored, googleSub);
+        return toRecord({ ...existing, email, name, picture: stored });
       }
-      const record: UserRecord = {
-        id: randomUUID(),
-        googleSub,
-        email,
-        name,
-        createdAt: new Date().toISOString(),
-      };
-      insert.run(record.id, record.googleSub, record.email, record.name, record.createdAt);
-      return record;
+      const id = randomUUID();
+      const createdAt = new Date().toISOString();
+      insert.run(id, googleSub, email, name, stored, createdAt);
+      return toRecord({ id, google_sub: googleSub, email, name, picture: stored, created_at: createdAt });
     },
     get(id) {
       const row = selectById.get(id) as Row | undefined;

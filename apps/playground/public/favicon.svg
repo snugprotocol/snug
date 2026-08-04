@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="snug">
+  <title>snug</title>
+  <desc>The snug mark, "The Ember Niche" (variant C of TASK-20260804-logo-variants.md). The ember hex is inlined rather than currentColor because a favicon has no CSS context; e8873a is the dark theme ember, which holds contrast against both light and dark browser chrome. The niche is a true evenodd knockout, so the tab strip background shows through it. NOTE: keep XML comments out of this file, a double hyphen inside one is a parse error and silently breaks the icon.</desc>
+  <path
+    fill="#e8873a"
+    fill-rule="evenodd"
+    d="M10 2h12a8 8 0 0 1 8 8v12a8 8 0 0 1-8 8H10a8 8 0 0 1-8-8V10a8 8 0 0 1 8-8zm6 9a5 5 0 0 0-5 5v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-6a5 5 0 0 0-5-5z"
+  />
+</svg>

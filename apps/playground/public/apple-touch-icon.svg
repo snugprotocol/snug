@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="snug">
+  <title>snug</title>
+  <desc>Apple touch icon: the same mark as favicon.svg but on an opaque plate, because iOS composites home screen icons onto white and squares off transparency. The ground is 171310, the dark theme background, with the 32 unit mark scaled 4x and centred in the 180 box.</desc>
+  <rect width="180" height="180" fill="#171310" />
+  <g transform="translate(26 26) scale(4)">
+    <path
+      fill="#e8873a"
+      fill-rule="evenodd"
+      d="M10 2h12a8 8 0 0 1 8 8v12a8 8 0 0 1-8 8H10a8 8 0 0 1-8-8V10a8 8 0 0 1 8-8zm6 9a5 5 0 0 0-5 5v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-6a5 5 0 0 0-5-5z"
+    />
+  </g>
+</svg>

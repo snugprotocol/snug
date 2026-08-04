@@ -250,30 +250,47 @@ export function HubView(): ReactElement {
             const style = { '--tile-color': look.color } as CSSProperties;
             const source = `starter:${starter.id.slice(STARTER_PREFIX.length)}`;
             const installed = installedBySource.has(source);
+            // AC18: installing is now an EXPLICIT act. The tile itself no longer
+            // installs on click — an uninstalled starter offers "install", an installed
+            // one offers "open" and routes to the user's OWN copy. Clicking a starter
+            // must never quietly write into the user's snug file.
             return (
-              <button
+              <Card
                 key={starter.id}
-                type="button"
-                onClick={() => installStarter(starter.id, starter.name)}
-                disabled={installing !== undefined && installing !== starter.id}
-                style={{ all: 'unset', display: 'block', cursor: 'pointer', position: 'relative' }}
-                aria-label={installed ? `open ${starter.name}` : `install ${starter.name}`}
+                interactive
+                className="app-tile"
+                style={style}
+                data-testid="starter-tile"
+                data-starter-name={starter.name}
               >
-                <Card interactive className="app-tile" style={style}>
-                  {installed ? <span className="tile-installed-badge">installed</span> : null}
-                  <span className="tile-emoji" aria-hidden="true">
-                    {look.emoji}
-                  </span>
-                  <span className="tile-name">{starter.name}</span>
-                  <span className="tile-sub">
-                    {installed
-                      ? `${look.blurb} — already in your snug file, opens your copy`
-                      : installing === starter.id
-                        ? 'installing…'
-                        : `${look.blurb} — installs into your snug file`}
-                  </span>
-                </Card>
-              </button>
+                {installed ? <span className="tile-installed-badge">installed</span> : null}
+                <span className="tile-emoji" aria-hidden="true">
+                  {look.emoji}
+                </span>
+                <span className="tile-name">{starter.name}</span>
+                <span className="tile-sub">
+                  {installed
+                    ? `${look.blurb} — already in your snug file, opens your copy`
+                    : installing === starter.id
+                      ? 'installing…'
+                      : `${look.blurb} — installs into your snug file`}
+                </span>
+                <Button
+                  variant={installed ? 'ghost' : 'primary'}
+                  className="tile-install"
+                  data-testid={installed ? 'starter-open' : 'starter-install'}
+                  disabled={installing !== undefined}
+                  onClick={() => installStarter(starter.id, starter.name)}
+                  aria-label={installed ? `open ${starter.name}` : `install ${starter.name}`}
+                  title={
+                    installed
+                      ? `open your copy of ${starter.name}`
+                      : `install ${starter.name} into your snug file`
+                  }
+                >
+                  {installed ? 'open' : installing === starter.id ? 'installing…' : 'install'}
+                </Button>
+              </Card>
             );
           })}
         </div>

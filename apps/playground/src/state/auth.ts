@@ -9,6 +9,8 @@ export interface HubUser {
   userId: string;
   email?: string;
   name?: string;
+  /** Google avatar URL. Omitted (never null) when the id_token carried no `picture` claim. */
+  picture?: string;
 }
 
 export type AuthState =

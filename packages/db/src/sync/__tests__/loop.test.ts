@@ -175,6 +175,54 @@ describe('divergence (AC3): surfaced, never auto-resolved', () => {
     expect(db.getSetting('who')).toBe('local'); // local untouched
   });
 
+  // TASK-20260804-hub-polish AC21: a provider may report a conflict it cannot name a
+  // revision for (hub 412 with no etag and no body revision = "the origin row is gone").
+  // The loop must still surface divergence — reaching the resolver, not the error state.
+  it('surfaces divergence when the provider reports a conflict with no remote revision (AC21)', async () => {
+    const origin = fakeOrigin();
+    origin.push.mockResolvedValue({ ok: false, conflict: true });
+    db.setSetting('who', 'local');
+    await makeLoop(origin).syncNow();
+    expect(eventKinds()).toEqual(['divergence']); // divergence, NOT error
+    const divergence = events[0] as { kind: string; remoteRevision?: string };
+    // The key is absent, not merely undefined — consumers branch on "is the origin named?"
+    expect(Object.hasOwn(divergence, 'remoteRevision')).toBe(false);
+  });
+
+  // TASK-20260804-hub-polish AC23 (ADR-0009 doctrine): a conflict is NEVER auto-retried
+  // and NEVER auto-merged. One push attempt in, one divergence event out — and the next
+  // tick must not sneak a second write in either.
+  it('never auto-retries a conflict: exactly one push, no import, no second write (AC23)', async () => {
+    const origin = fakeOrigin();
+    const remoteRevision = origin.seed(await remoteImage((remote) => remote.setSetting('who', 'remote')));
+    db.setSetting('who', 'local');
+    const loop = makeLoop(origin);
+    await loop.syncNow();
+    expect(origin.push).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual({ kind: 'divergence', remoteRevision });
+    // A second tick may re-attempt the SAME conditional push (the hash still differs), but
+    // it must never retry with the remote revision — i.e. never turn a conflict into a
+    // silent overwrite. Every attempt carries the same (unanchored) baseRevision.
+    await loop.syncNow();
+    const baseRevisions = origin.push.mock.calls.map((call) => call[1]);
+    expect(baseRevisions.every((rev) => rev !== remoteRevision)).toBe(true);
+    expect(origin.stored()?.revision).toBe(remoteRevision); // origin never overwritten
+    expect(db.getSetting('who')).toBe('local'); // no auto-merge into local either
+    expect(eventKinds().filter((k) => k === 'pushed')).toHaveLength(0);
+  });
+
+  it('never auto-retries a revision-less conflict either — no silent second PUT (AC23)', async () => {
+    const origin = fakeOrigin();
+    // Models the hub's "If-Match sent, origin row gone" 412: a conflict with no revision.
+    origin.push.mockResolvedValue({ ok: false, conflict: true });
+    db.setSetting('who', 'local');
+    const loop = makeLoop(origin);
+    await loop.syncNow();
+    expect(origin.push).toHaveBeenCalledTimes(1);
+    expect(eventKinds()).toEqual(['divergence']);
+    expect(origin.push.mock.calls[0]?.[1]).toBeUndefined(); // the sidecar's revision, unretried
+  });
+
   it('explicit pushLocal() applies local-wins over the current remote revision', async () => {
     const origin = fakeOrigin();
     origin.seed(await remoteImage((remote) => remote.setSetting('who', 'remote')));

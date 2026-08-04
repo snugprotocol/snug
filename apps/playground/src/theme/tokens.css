@@ -85,6 +85,13 @@
   --text-xl: 1.75rem;
   --text-hero: clamp(2rem, 5vw, 3.25rem);
 
+  /* header wordmark — deliberately its own token, not a --text-* step: the brand is
+     sized against the header, not the type scale (AC9 doubled it from --text-l).
+     --text-brand-narrow is what it falls back to under 760px so a 2x wordmark plus
+     the logo mark cannot push the nav off a phone screen. */
+  --text-brand: 2.5rem;
+  --text-brand-narrow: 1.5rem;
+
   /* shape — generous radius, soft edges */
   --radius-s: 8px;
   --radius-m: 14px;

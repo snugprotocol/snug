@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import type { AgentRoundTrip } from '@snugprotocol/adapters';
 import type { SnugDbDriver } from '@snugprotocol/db';
@@ -21,7 +21,7 @@ import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
-import { isStarterId, listStarterApps, loadStarterHtml } from '../starter/starterApps.js';
+import { isStarterId, listStarterApps, loadStarterHtml, STARTER_PREFIX } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -30,9 +30,8 @@ import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
 import { DocsPanel } from './DocsPanel.js';
 import { downloadBlob, exportDatabase } from './exportDb.js';
-import { InspectorPanel } from './InspectorPanel.js';
-import { LlmInspectorPanel } from './LlmInspectorPanel.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from './llmInspector.js';
+import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
 import { useMediaQuery } from './useMediaQuery.js';
@@ -41,15 +40,93 @@ import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
 
-// 'inspector' is the bridge/frame timeline (structural only); 'llm' is the round-trip
-// inspector (renders prompt bodies). Two separate surfaces on purpose — see llmInspector.ts.
-type RailTab = 'chat' | 'inspector' | 'llm' | 'docs' | 'versions';
+// 'inspector' is now ONE surface (AC10): the LLM round-trip section above the
+// bridge/frame timeline, composed by ThinkPanel. The two FEEDS remain separate modules
+// with opposite rules — llmInspector.ts renders bodies, inspector.ts is value-blind
+// (AC11 locks it byte-for-byte). Only the presentation merged.
+type RailTab = 'chat' | 'inspector' | 'docs' | 'versions';
+
+/**
+ * Tab chrome (AC12): a decorative glyph plus the ORIGINAL label as the accessible
+ * name. `aria-label` is what a screen reader announces and what tests query by;
+ * `title` is only the hover tooltip — a title alone is not an accessible name.
+ */
+const RAIL_TAB_ICONS: Record<RailTab, string> = {
+  chat: '✎',
+  inspector: '◍',
+  docs: '✧',
+  versions: '⧉',
+};
 
 /** How long after host-ready the header keeps shimmering before falling back to the library name. */
 const ANNOUNCE_FALLBACK_MS = 1500;
 
+/**
+ * The starter→install_source identity rule, shared verbatim with HubView (which builds
+ * its dedup map the same way). One rule, one place: a second convention here would let
+ * the hub and the run view disagree about whether a starter is installed.
+ */
+export function starterInstallSource(starterId: string): string {
+  return `starter:${starterId.slice(STARTER_PREFIX.length)}`;
+}
+
+/** Just enough of a thread row for the main-thread rule — keeps this testable and pure. */
+interface ThreadRowLike {
+  threadId: string;
+  appId?: string;
+}
+
+/**
+ * Which thread is the app's MAIN conversation (AC19/AC20).
+ *
+ * The old rule was "always `app:<id>`", which is why a freshly built app opened an empty
+ * chat: the build history lives in the builder's `thr-<uuid>` thread, and nothing ever
+ * pointed `app:<id>` at it.
+ *
+ * R5 — this runs on EVERY app open, so the answer must be deterministic. `listThreads()`
+ * orders by `updated_at DESC` and rows written in the same tick tie, so list order alone
+ * can flip between runs (the previous task hit exactly that flake). The rule is therefore
+ * a total order with an explicit final tie-break:
+ *
+ *   1. the thread carrying the app's PINNED BOOTSTRAP turn — the turn that produced v1
+ *      (useBuilderChat pins both sides of it), i.e. the real build conversation;
+ *   2. else `app:<id>` IF it actually holds messages — never regress an app whose
+ *      conversation already lives there;
+ *   3. else the only other thread with messages;
+ *   4. else `app:<id>`, the fresh-start default.
+ *
+ * Ties inside (1) and (3) break on `threadId` lexicographically — a stable property of
+ * the row, never its position in the list.
+ */
+function resolveMainThread(
+  db: { listChatMessages: (threadId: string) => Array<{ pinned: boolean }> },
+  appId: string,
+  threads: readonly ThreadRowLike[],
+): string {
+  const synthetic = `app:${appId}`;
+  const withMessages: string[] = [];
+  const withBootstrap: string[] = [];
+  for (const thread of threads) {
+    const messages = db.listChatMessages(thread.threadId);
+    if (messages.length === 0) continue;
+    withMessages.push(thread.threadId);
+    if (messages.some((message) => message.pinned)) withBootstrap.push(thread.threadId);
+  }
+  const first = (ids: readonly string[]): string | undefined => [...ids].sort()[0];
+
+  // (1) the pinned bootstrap turn is the strongest signal of "this built the app".
+  if (withBootstrap.includes(synthetic)) return synthetic;
+  const bootstrap = first(withBootstrap);
+  if (bootstrap !== undefined) return bootstrap;
+  // (2) no pin anywhere — an app whose conversation already sits on app:<id> keeps it.
+  if (withMessages.includes(synthetic)) return synthetic;
+  // (3) otherwise the (only, or lexicographically first) thread that has anything to say.
+  return first(withMessages) ?? synthetic;
+}
+
 export default function RunView(): ReactElement {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const mode = useMode();
   const provider = useProvider();
   const theme = useTheme();
@@ -66,18 +143,27 @@ export default function RunView(): ReactElement {
   const [announceTimedOut, setAnnounceTimedOut] = useState(false);
   const [fallbackName, setFallbackName] = useState<string | undefined>(undefined);
   // The chat IS the app's workbench now: installed apps open on it (the attached
-  // conversation with full context); starters keep the inspector front.
-  const [railTab, setRailTab] = useState<RailTab>(isStarterId(id) ? 'inspector' : 'chat');
+  // conversation with full context). A starter has NO chat tab at all (AC18) — the
+  // chat rail is exactly where a starter edit used to fork a hidden app — so it opens
+  // on the inspector and can never land on 'chat'.
+  const [railTabRaw, setRailTab] = useState<RailTab>(isStarterId(id) ? 'inspector' : 'chat');
+  // Belt and braces for AC18: even if some future path sets 'chat' for a starter (a
+  // stale state across an id change, a restored tab), the starter renders the inspector.
+  const railTab: RailTab = isStarterId(id) && railTabRaw === 'chat' ? 'inspector' : railTabRaw;
   const [sheetOpen, setSheetOpen] = useState(false);
   const isMobile = useMediaQuery('(max-width: 760px)');
   const controlsRef = useRef<RunnerHost | null>(null);
   /** Bumped when a chat edit or revert lands a new version — reloads html + frame. */
   const [contentEpoch, setContentEpoch] = useState(0);
-  // Threads: the stable per-app thread (`app:<id>`) is the main line; extra threads
-  // (`thr-<uuid>`, app_id set on the row) let the user branch without losing the
-  // bootstrap context. All of them pin artifact writes to THIS app (F9).
+  // Threads (AC19/AC20). The MAIN thread is the app's real conversation — usually the
+  // builder thread that produced it (`thr-<uuid>` with app_id set), not the synthetic
+  // `app:<id>`. Before this, the rail read `app:<id>` unconditionally, so a freshly
+  // built app opened an EMPTY chat while its build history sat in a thread with no
+  // route to it. Extra threads let the user branch without losing bootstrap context.
   const [threadOverride, setThreadOverride] = useState<string | undefined>(undefined);
-  const threadId = threadOverride ?? `app:${id}`;
+  /** Resolved main thread; `undefined` until the DB answers (R5 — never guess early). */
+  const [mainThreadId, setMainThreadId] = useState<string | undefined>(undefined);
+  const threadId = threadOverride ?? mainThreadId ?? `app:${id}`;
   const [appThreads, setAppThreads] = useState<Array<{ threadId: string; title?: string }>>([]);
   // The LLM inspector's feed. In-memory only (AC14) — this reducer state is the ONLY
   // place round trips live, and it dies with the view.
@@ -90,21 +176,23 @@ export default function RunView(): ReactElement {
     onTurnStart,
   });
 
-  // Thread list for the picker — refreshed when the turn settles (new threads get
-  // their row on the first message).
+  // Thread list for the picker AND the main-thread resolution — refreshed when the turn
+  // settles (new threads get their row on the first message).
   useEffect(() => {
     if (isStarterId(id) || chat.busy) return;
     let cancelled = false;
     void getUserDb().then((db) => {
       if (cancelled) return;
-      const rows = db
+      const matching = db
         .listThreads()
-        .filter((thread) => thread.appId === id || thread.threadId === `app:${id}`)
-        .map((thread) => ({
+        .filter((thread) => thread.appId === id || thread.threadId === `app:${id}`);
+      setAppThreads(
+        matching.map((thread) => ({
           threadId: thread.threadId,
           ...(thread.title !== undefined ? { title: thread.title } : {}),
-        }));
-      setAppThreads(rows);
+        })),
+      );
+      setMainThreadId(resolveMainThread(db, id, matching));
     });
     return () => {
       cancelled = true;
@@ -133,6 +221,23 @@ export default function RunView(): ReactElement {
       cancelled = true;
     };
   }, []);
+
+  // AC18: a direct /run/starter--* visit (bookmark, back button, deep link) opens the
+  // user's OWN copy when they already installed it — the same install_source identity
+  // the hub's shelf uses. Without this, the starter route stays reachable behind the
+  // hub's Install control and the chat rail forks a hidden app off a read-only starter.
+  useEffect(() => {
+    if (!isStarterId(id)) return;
+    let cancelled = false;
+    void getUserDb().then((db) => {
+      if (cancelled) return;
+      const installed = db.getAppByInstallSource(starterInstallSource(id));
+      if (installed !== undefined) navigate(`/run/${installed.appId}`, { replace: true });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -231,33 +336,22 @@ export default function RunView(): ReactElement {
 
   const railContent = (
     <>
-      <div className="seg" role="group" aria-label="rail tabs" style={{ margin: '0 0 var(--space-3)' }}>
-        <button type="button" aria-pressed={railTab === 'chat'} onClick={() => setRailTab('chat')}>
-          chat
-        </button>
-        <button type="button" aria-pressed={railTab === 'inspector'} onClick={() => setRailTab('inspector')}>
-          inspector
-        </button>
-        <button type="button" aria-pressed={railTab === 'llm'} onClick={() => setRailTab('llm')}>
-          llm
-        </button>
+      <div className="seg seg-icons" role="group" aria-label="rail tabs" style={{ margin: '0 0 var(--space-3)' }}>
+        {/* AC18: no chat tab until the starter is installed. The chat rail is where a
+            starter edit forked a hidden app — a read-only starter must not offer it. */}
+        {!isStarterId(id) ? <RailTabButton tab="chat" active={railTab} onSelect={setRailTab} /> : null}
+        <RailTabButton tab="inspector" active={railTab} onSelect={setRailTab} />
         {!isStarterId(id) ? (
           <>
-            <button type="button" aria-pressed={railTab === 'docs'} onClick={() => setRailTab('docs')}>
-              docs
-            </button>
-            <button type="button" aria-pressed={railTab === 'versions'} onClick={() => setRailTab('versions')}>
-              versions
-            </button>
+            <RailTabButton tab="docs" active={railTab} onSelect={setRailTab} />
+            <RailTabButton tab="versions" active={railTab} onSelect={setRailTab} />
           </>
         ) : null}
       </div>
       {railTab === 'inspector' ? (
-        <InspectorPanel entries={inspector.entries} />
-      ) : railTab === 'llm' ? (
-        <LlmInspectorPanel state={llmInspector} />
+        <ThinkPanel llm={llmInspector} frames={inspector.entries} mode={mode} />
       ) : railTab === 'docs' ? (
-        <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} />
+        <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} mode={mode} />
       ) : railTab === 'versions' ? (
         <VersionsPanel
           appId={id}
@@ -276,12 +370,19 @@ export default function RunView(): ReactElement {
                 aria-label="switch thread"
                 onChange={(event) => {
                   const next = event.target.value;
-                  setThreadOverride(next === `app:${id}` ? undefined : next);
+                  // Selecting the main thread clears the override so the resolved
+                  // default keeps applying — `app:<id>` is no longer that default (AC20).
+                  setThreadOverride(next === (mainThreadId ?? `app:${id}`) ? undefined : next);
                 }}
               >
                 {appThreads.map((thread) => (
                   <option key={thread.threadId} value={thread.threadId}>
-                    {thread.threadId === `app:${id}` ? 'main thread' : (thread.title ?? thread.threadId)}
+                    {/* AC20: "main thread" NAMES the resolved conversation. It used to be
+                        hardcoded to `app:<id>`, so the thread actually holding the build
+                        history could never be the main thread by construction. */}
+                    {thread.threadId === (mainThreadId ?? `app:${id}`)
+                      ? 'main thread'
+                      : (thread.title ?? thread.threadId)}
                   </option>
                 ))}
                 {appThreads.every((thread) => thread.threadId !== threadId) ? (
@@ -439,6 +540,26 @@ export default function RunView(): ReactElement {
         <Rail title="watch it think">{railContent}</Rail>
       )}
     </div>
+  );
+}
+
+interface RailTabButtonProps {
+  tab: RailTab;
+  active: RailTab;
+  onSelect: (tab: RailTab) => void;
+}
+
+/**
+ * One icon tab (AC12). The glyph is `aria-hidden` so a screen reader announces the
+ * label ONCE, from `aria-label`; `title` carries the same text as the hover tooltip.
+ * Keeping the label as the accessible name is what lets existing tests — and users of
+ * assistive tech — still find "chat", "inspector", "docs", "versions".
+ */
+function RailTabButton({ tab, active, onSelect }: RailTabButtonProps): ReactElement {
+  return (
+    <button type="button" aria-pressed={active === tab} aria-label={tab} title={tab} onClick={() => onSelect(tab)}>
+      <span aria-hidden="true">{RAIL_TAB_ICONS[tab]}</span>
+    </button>
   );
 }
 

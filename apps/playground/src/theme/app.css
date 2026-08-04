@@ -24,11 +24,33 @@
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   font-family: var(--font-display);
-  font-size: var(--text-l);
+  font-size: var(--text-brand);
   font-weight: 700;
   letter-spacing: -0.01em;
+  line-height: 1;
   color: var(--fg);
+}
+
+/* The mark is set to 0.72em — below the cap height on purpose. At full size the solid
+   ember tile optically outweighs the wordmark and dominates the lockup (noted in the
+   variant-C tradeoff). em-relative means it tracks the narrow-breakpoint size for free. */
+.brand .brand-mark {
+  flex: none;
+  width: 0.72em;
+  height: 0.72em;
+  color: var(--ember);
+}
+
+.brand .brand-word {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand .brand-dot {
@@ -452,6 +474,16 @@
   flex-wrap: wrap;
 }
 
+/* Starter shelf: installing is an EXPLICIT act (AC18), so the control is always
+   visible — unlike .tile-delete, which hides until hover. `margin-top: auto` pins it to
+   the bottom of the tile so a shelf of mixed-length blurbs still lines its buttons up. */
+.app-tile .tile-install {
+  position: relative;
+  z-index: 1;
+  margin-top: auto;
+  align-self: flex-start;
+}
+
 .app-tile .tile-confirm-copy {
   flex: 1;
   font-size: var(--text-xs);
@@ -798,6 +830,36 @@
 
 /* ---------------------------------------------------------------- inspector */
 
+/* The merged think surface (AC10): both feeds in ONE scroll container, LLM on top.
+   Presentation only — the two reducers stay separate modules (AC11). */
+.think-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.think-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.think-section-head h3 {
+  margin: 0;
+  font-size: var(--text-s);
+  font-weight: 700;
+  color: var(--fg);
+  text-transform: lowercase;
+}
+
+.think-section-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
 .inspector-list {
   display: flex;
   flex-direction: column;
@@ -1014,11 +1076,35 @@
   color: var(--ember-bright);
 }
 
+/* Icon tabs (AC12): the label moved to aria-label/title, so the button sizes to its
+   glyph instead of its text. Square tap targets, evenly distributed across the rail. */
+.seg-icons {
+  display: flex;
+  width: 100%;
+}
+
+.seg-icons button {
+  flex: 1;
+  min-width: var(--tap);
+  padding: 0;
+  font-size: var(--text-m);
+  line-height: 1;
+}
+
 /* ---------------------------------------------------------------- responsive */
 
 @media (max-width: 760px) {
   .shell-header {
     padding: var(--space-2) var(--space-3);
+    gap: var(--space-2);
+  }
+
+  /* AC9: at 2.5rem the lockup is ~150px, and on a 375px screen the flex row resolves
+     that by ellipsising the wordmark down to "sn…" rather than by overflowing. Measured,
+     not assumed: nothing breaks either way, but the brand should stay readable, so it
+     steps down here. The mark follows via its em-relative sizing. */
+  .brand {
+    font-size: var(--text-brand-narrow);
   }
 
   .shell-main {
@@ -1216,6 +1302,36 @@
   font-size: 0.85rem;
 }
 
+/* Build observability (AC13): the round-trip surface in the builder. Collapsed by
+   default — the build conversation stays the subject; open it to watch it think. */
+.builder-llm {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  padding: var(--space-2) var(--space-3);
+}
+
+.builder-llm > summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: var(--text-s);
+  font-weight: 700;
+  min-height: var(--tap);
+  display: flex;
+  align-items: center;
+}
+
+.builder-llm > summary::marker {
+  color: var(--ember);
+}
+
+.builder-llm > .llm-inspector,
+.builder-llm > .empty-state {
+  margin-top: var(--space-2);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
 /* ---- living-apps (child 4): identity chip + installed tiles ---- */
 
 .identity-chip {
@@ -1231,16 +1347,75 @@
 .identity-chip:hover {
   background: var(--surface-2);
 }
+/* The chip is a <button> now (menu trigger, AC1) — strip the UA button chrome so it
+   still reads as the same pill it was as a <Link>. */
+.identity-chip {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
 .identity-avatar {
   display: inline-grid;
   place-items: center;
   width: 28px;
   height: 28px;
+  flex: none;
   border-radius: 50%;
   background: var(--ember-deep);
   color: var(--ember-ink);
   font-weight: 700;
   font-size: 0.85rem;
+}
+/* Same 28px box for the Google avatar; object-fit keeps a non-square source from
+   stretching, and the background shows through only while the image is loading. */
+img.identity-avatar {
+  object-fit: cover;
+}
+
+.identity-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.identity-menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-lift);
+}
+.identity-menu-label {
+  padding: var(--space-2);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identity-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-s);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.identity-menu-item:hover {
+  background: var(--surface-2);
 }
 .identity-name {
   max-width: 140px;

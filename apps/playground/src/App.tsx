@@ -1,14 +1,15 @@
-import { Suspense, lazy, useEffect } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router-dom';
 
 import { refreshAppMeta } from './state/appMeta.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
-import { initSync } from './state/sync.js';
+import { initSync, signOut } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
 import { bootUserDb, recoverFresh, useUserDbStatus } from './state/userdb.js';
 import { Button } from './ui/Button.js';
+import { Logo } from './ui/Logo.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { BuilderView } from './views/BuilderView.js';
 import { HubView } from './views/HubView.js';
@@ -66,7 +67,10 @@ export function App(): ReactElement {
       ) : null}
       <header className="shell-header">
         <NavLink to="/" className="brand">
-          snug<span className="brand-dot">.</span>
+          <Logo className="brand-mark" />
+          <span className="brand-word">
+            snug<span className="brand-dot">.</span>
+          </span>
         </NavLink>
         <nav className="shell-nav" aria-label="primary">
           <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
@@ -114,9 +118,47 @@ export function App(): ReactElement {
  * Header identity (living-apps child 4): login state, visible on EVERY page.
  * `unavailable` (static demo / v1 server) renders nothing — logged-out stays a fully
  * working local-only hub, so we advertise sign-in only where it exists.
+ *
+ * Signed in, the chip is a MENU trigger (not a link): account name, a route to
+ * account & sync settings, and sign out. Sign out goes through `signOut()` from
+ * state/sync.js — NEVER the bare `logout()` — because the hub sync provider captures
+ * the CSRF token at construction, so the loop has to be rebuilt after the cookies
+ * are cleared (review F14).
  */
 export function IdentityChip(): ReactElement | null {
   const auth = useAuth();
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close on Escape and on any pointer landing outside the chip+menu. Both paths
+  // return focus to the trigger so keyboard users are never dropped at the top of
+  // the document (AC2).
+  const close = useCallback((restoreFocus: boolean): void => {
+    setOpen(false);
+    if (restoreFocus) triggerRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') close(true);
+    };
+    const onPointer = (event: MouseEvent): void => {
+      const target = event.target as Node | null;
+      if (target !== null && (menuRef.current?.contains(target) === true || triggerRef.current?.contains(target) === true)) {
+        return;
+      }
+      close(true);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onPointer);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onPointer);
+    };
+  }, [open, close]);
+
   if (auth.state === 'unavailable') return null;
   if (auth.state === 'unknown') return <Skeleton width="72px" height="28px" />;
   if (auth.state === 'anonymous') {
@@ -127,13 +169,74 @@ export function IdentityChip(): ReactElement | null {
     );
   }
   const label = auth.user.name ?? auth.user.email ?? 'account';
-  const initial = label.slice(0, 1).toUpperCase();
   return (
-    <Link to="/settings" className="identity-chip" title={`${label} — account & sync settings`}>
-      <span className="identity-avatar" aria-hidden="true">
-        {initial}
-      </span>
-      <span className="identity-name">{label}</span>
-    </Link>
+    <div className="identity-menu-wrap">
+      <button
+        type="button"
+        ref={triggerRef}
+        className="identity-chip"
+        aria-haspopup="true"
+        aria-expanded={open}
+        title={`${label} — account & sync settings`}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <IdentityAvatar label={label} picture={auth.user.picture} />
+        <span className="identity-name">{label}</span>
+      </button>
+      {open ? (
+        // ADVERSARIAL-REVIEW FIX (2026-08-04): this carried role="menu"/role="menuitem",
+        // which promises the APG keyboard contract — focus moves into the menu on open,
+        // Arrow keys move between items, Home/End jump. None of that was implemented, so
+        // a screen-reader user heard "menu, 2 items" and found the documented keys inert
+        // — WORSE than plain markup. AC2 asks for keyboard-reachable, which Tab already
+        // satisfies natively for a link + button. Dropping the roles (rather than
+        // implementing roving focus) makes the markup honest about what it does.
+        // aria-haspopup="true" still announces that the trigger opens something.
+        <div className="identity-menu" ref={menuRef} aria-label="account">
+          <span className="identity-menu-label">{label}</span>
+          <Link to="/settings" className="identity-menu-item" onClick={() => close(false)}>
+            account &amp; sync settings
+          </Link>
+          <button
+            type="button"
+            className="identity-menu-item"
+            onClick={() => {
+              close(false);
+              void signOut();
+            }}
+          >
+            sign out
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Avatar: the Google picture when we have one, the initial-letter circle otherwise.
+ * `referrerPolicy="no-referrer"` is load-bearing — lh3.googleusercontent.com answers
+ * 403 for some accounts when a referrer is sent (AC7) — and a load failure falls back
+ * to the letter rather than leaving a broken image in the header (AC6).
+ */
+function IdentityAvatar({ label, picture }: { label: string; picture?: string }): ReactElement {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [picture]);
+  if (picture !== undefined && picture !== '' && !failed) {
+    return (
+      <img
+        className="identity-avatar"
+        src={picture}
+        alt=""
+        aria-hidden="true"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return (
+    <span className="identity-avatar" aria-hidden="true">
+      {label.slice(0, 1).toUpperCase()}
+    </span>
   );
 }

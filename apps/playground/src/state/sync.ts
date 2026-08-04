@@ -53,7 +53,17 @@ async function afterForeignBytes(): Promise<void> {
 function onSyncEvent(event: SyncEvent): void {
   const current = syncStatusStore.get();
   if (event.kind === 'divergence') {
-    syncStatusStore.set({ ...current, state: 'divergence', detail: 'the origin has a different copy' });
+    // An unnamed remote revision means the origin could not identify what it holds — in
+    // practice it holds nothing (its copy was reset) while this device still remembers
+    // syncing to it. Same resolver, honest copy: "keep this device's copy" re-provisions.
+    syncStatusStore.set({
+      ...current,
+      state: 'divergence',
+      detail:
+        event.remoteRevision === undefined
+          ? 'the origin no longer has the copy this device synced to'
+          : 'the origin has a different copy',
+    });
   } else if (event.kind === 'error') {
     syncStatusStore.set({ ...current, state: 'error', detail: event.message });
   } else {
@@ -126,10 +136,31 @@ export async function setSyncOrigin(kind: SyncOriginKind): Promise<void> {
   await startLoop(kind);
 }
 
-/** Explicit LWW: take the origin copy. Pulled bytes are executable config (F15). */
+/**
+ * Explicit LWW: take the origin copy. Pulled bytes are executable config (F15).
+ *
+ * ADVERSARIAL-REVIEW FIX (2026-08-04). This used to unconditionally set `idle`, which
+ * ERASED a terminal error the loop had just emitted. `loop.applyRemote()` does not
+ * throw when the origin holds no image — it emits `{kind:'error', ORIGIN_EMPTY}` and
+ * returns (`packages/db/src/sync/loop.ts:195-202`), so the old code overwrote that
+ * error one tick later and the banner vanished with nothing synced.
+ *
+ * The empty-origin case became REACHABLE in this task: before Phase B a revision-less
+ * 412 threw SYNC_BAD_RESPONSE and never reached the resolver at all. Phase B correctly
+ * routes it to the two-button resolver, and "use the origin copy" is the intuitive
+ * click when the detail reads "the origin no longer has the copy this device synced
+ * to" — so the dead-end button is now exactly what a user is invited to press.
+ *
+ * Two rules: never clobber a terminal state we did not clear, and never arm the F15
+ * re-confirmation for bytes that were never imported.
+ */
 export async function applyRemote(): Promise<void> {
   if (loop === undefined) return;
+  const before = syncStatusStore.get().state;
   await loop.applyRemote();
+  // A pull that imported nothing leaves the loop's own error/divergence standing.
+  const after = syncStatusStore.get();
+  if (after.state === 'error' && before !== 'error') return;
   await afterForeignBytes();
   syncStatusStore.set({ ...syncStatusStore.get(), state: 'idle', detail: undefined });
 }

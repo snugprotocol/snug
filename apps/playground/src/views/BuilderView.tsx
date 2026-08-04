@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactElement } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
+import type { AgentRoundTrip } from '@snugprotocol/adapters';
+
 import { buildUserMessage, parseBuildPrompt } from '../agent/chips.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
+import { LlmInspectorPanel } from '../run/LlmInspectorPanel.js';
+import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
+import { useMode } from '../state/mode.js';
 import { Button } from '../ui/Button.js';
 import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -29,7 +34,19 @@ export function BuilderView(): ReactElement {
   // The thread→app pin is durable now (F10): returning to /build resumes the SAME
   // app. "new app" mints a fresh thread — the explicit escape hatch.
   const [threadId, setThreadId] = useState(threadIdForTab);
-  const chat = useBuilderChat(threadId);
+  const mode = useMode();
+  // Build observability (AC13). Before this, useBuilderChat was called with NO options,
+  // so onRoundTrip/onTurnStart were undefined and every round trip was DROPPED — the
+  // build turn was the one place you could not watch it think.
+  //
+  // In-memory only (AC14): this reducer state is the ONLY place round trips live and it
+  // dies with the view. Nothing here touches the user DB.
+  const [llmInspector, dispatchRoundTrip] = useReducer(llmInspectorReduce, initialLlmInspectorState as LlmInspectorState);
+  // Stable ([]) deps are load-bearing, not style: useBuilderChat's send() dep array
+  // includes both callbacks, so inline arrows would rebuild send() on every render.
+  const onRoundTrip = useCallback((trip: AgentRoundTrip): void => dispatchRoundTrip(trip), []);
+  const onTurnStart = useCallback((): void => dispatchRoundTrip('reset'), []);
+  const chat = useBuilderChat(threadId, { onRoundTrip, onTurnStart });
   const startNewApp = useCallback((): void => {
     const minted = `thr-${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
     try {
@@ -121,6 +138,14 @@ export function BuilderView(): ReactElement {
           ))}
         </div>
       ) : null}
+
+      <details className="builder-llm" data-testid="builder-llm" open={llmInspector.entries.length > 0}>
+        <summary>
+          watch it think
+          {llmInspector.entries.length > 0 ? ` · ${llmInspector.entries.length}` : ''}
+        </summary>
+        <LlmInspectorPanel state={llmInspector} mode={mode} />
+      </details>
 
       <div className="composer">
         <textarea
