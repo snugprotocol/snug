@@ -124,6 +124,8 @@ export interface AppSchemaObject {
 /** `snug_app_schemas.schema_json` shape: all objects in creation order. */
 export interface AppSchemaJson {
   objects: AppSchemaObject[];
+  /** AUTOINCREMENT continuity: sqlite_sequence values per table at last write-back. */
+  sequences?: Record<string, number>;
 }
 
 /** Advisory standard slugs for `snug_app_docs`; the table shape is normative, the values are not. */

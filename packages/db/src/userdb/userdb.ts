@@ -1,23 +1,40 @@
-// The per-USER database (ADR-0007): one sql.js handle over one file holding hub tables
-// (apps, versions, chat, settings, secrets, profile, sync config) plus blob-embedded
-// per-app databases. One shared handle + one write-back pipeline serve both the typed
-// CRUD API and the runner-facing DbDriver (F7 — two independent writers of one file are
-// forbidden by construction). The driver face COMPOSES the existing per-app driver with
-// a blob PersistenceBackend, so every exec/kv guardrail is inherited, not re-implemented.
+// The per-USER database (ADR-0007 + ADR-0010): one sql.js handle over one file holding
+// hub tables (apps, versions, schema registry, docs, chat, settings, secrets, profile,
+// sync config) plus per-app data as REAL namespaced tables (`app_<token>__<name>`).
+// One shared handle + one write-back pipeline serve both the typed CRUD API and the
+// runner-facing DbDriver (F7 — two independent writers of one file are forbidden by
+// construction). The driver face COMPOSES the existing per-app driver with a
+// MATERIALIZER PersistenceBackend: at run, an app's objects are replayed into the app's
+// own database (natural names — physical isolation preserved); at rest, table rows live
+// under `app_<token>__<name>` and the registry carries the runtime sqlite_master DDL
+// VERBATIM. DDL bodies are never string-rewritten; at-rest names come from SQLite's own
+// ALTER TABLE … RENAME under legacy_alter_table (a pure name swap). Objects with names
+// outside the normative rule fail the write-back CLOSED (previous rest state retained,
+// surfaced via onAppPersistError) — nothing is ever built from an unvalidated name.
 //
 // Unlike the per-app driver (errors-as-data at the frame boundary), the typed CRUD API
 // throws UserDbError — it is an in-process API, mirroring useAppDB's throwing contract.
 import initSqlJs from 'sql.js';
 import type { Database, SqlJsStatic } from 'sql.js';
 import {
+  APP_KV_TABLE,
+  FRAME_TYPES,
+  PROTOCOL_VERSION,
   USERDB_DDL,
   USERDB_FILE,
+  USERDB_INDEX_DDL,
   USERDB_LIMITS,
   USERDB_OPFS_DIR,
   USERDB_SCHEMA_VERSION,
   USERDB_TABLES,
+  appDataToken,
+  appRestTableName,
+  isValidAppObjectName,
+  type AppSchemaJson,
+  type AppSchemaObject,
+  type DbRequestFrame,
 } from '@snugprotocol/protocol';
-import { createDbDriver, type DbPersistence, type SnugDbDriver } from '../driver.js';
+import { KV_TABLE_DDL, createDbDriver, type DbPersistence, type SnugDbDriver } from '../driver.js';
 import { namespaceToFileName } from '../namespace.js';
 import { detectPersistenceBackend, type PersistenceBackend } from '../persistence.js';
 
@@ -30,6 +47,10 @@ export const USERDB_ERROR_CODES = {
   NOT_FOUND: 'USERDB_NOT_FOUND',
   /** The UserDb was closed. */
   CLOSED: 'USERDB_CLOSED',
+  /** An app runtime object name violates the normative naming rule (write-back refused). */
+  INVALID_NAME: 'USERDB_INVALID_NAME',
+  /** applyAppDdl failed; the app runtime was restored to its pre-batch snapshot. */
+  DDL_FAILED: 'USERDB_DDL_FAILED',
 } as const;
 
 export type UserDbErrorCode = (typeof USERDB_ERROR_CODES)[keyof typeof USERDB_ERROR_CODES];
@@ -44,6 +65,13 @@ export class UserDbError extends Error {
   }
 }
 
+/** A write-back failure the service recovered from by keeping the previous rest state. */
+export interface AppPersistErrorEvent {
+  namespace: string;
+  code: string;
+  message: string;
+}
+
 export interface AppRecord {
   appId: string;
   displayName: string;
@@ -54,6 +82,8 @@ export interface AppRecord {
   currentVersion: number;
   createdAt: string;
   updatedAt: string;
+  /** Dedup identity for marketplace/starter installs (`starter:<folder>`); absent for built apps. */
+  installSource?: string;
 }
 
 export interface AppVersionMeta {
@@ -61,6 +91,8 @@ export interface AppVersionMeta {
   note?: string;
   createdAt: string;
   htmlBytes: number;
+  /** Pinned versions (the factory version) are never pruned. */
+  pinned: boolean;
 }
 
 export interface ChatThread {
@@ -77,6 +109,23 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: string;
+  /** Pinned messages (the bootstrap turn) survive any pruning for the life of the app. */
+  pinned: boolean;
+  /** Structured sidecar: artifact card refs, wire text — JSON, shape owned by the client. */
+  meta?: unknown;
+}
+
+export interface AppDocRecord {
+  slug: string;
+  title?: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface AppMigrationRecord {
+  seq: number;
+  ddl: string;
+  appliedAt: string;
 }
 
 export interface InstallAppInput {
@@ -88,11 +137,13 @@ export interface InstallAppInput {
   usesDb?: boolean;
   html: string;
   note?: string;
+  /** When present, install is find-or-create on this identity (unique at the DB level). */
+  installSource?: string;
 }
 
 export interface UserDb {
   readonly persistence: DbPersistence;
-  /** Runner-facing DbDriver over blob-embedded app databases (inject into SnugAppFrame). */
+  /** Runner-facing DbDriver over materialized per-app databases (inject into SnugAppFrame). */
   readonly driver: SnugDbDriver;
 
   installApp(input: InstallAppInput): AppRecord;
@@ -104,12 +155,39 @@ export interface UserDb {
   ): void;
   listApps(): AppRecord[];
   getApp(appId: string): AppRecord | undefined;
+  getAppByInstallSource(source: string): AppRecord | undefined;
   getAppHtml(appId: string, version?: number): string | undefined;
   listAppVersions(appId: string): AppVersionMeta[];
   revertApp(appId: string, toVersion: number): AppVersionMeta;
+  /** Copy-forward to the pinned factory version (the never-pruned v1 of build/install). */
+  resetToFactory(appId: string): AppVersionMeta;
+
+  /** The app's registered schema (verbatim natural DDL), or undefined when it has none. */
+  getAppSchema(appId: string): AppSchemaJson | undefined;
+  /**
+   * Hub-side execution layer for LLM-proposed DDL: applies the statements to the app's
+   * materialized runtime atomically (all-or-nothing via snapshot restore), then
+   * persists + registers the schema and appends the audit trail.
+   */
+  applyAppDdl(appId: string, statements: string[]): Promise<AppSchemaJson>;
+  listAppMigrations(appId: string): AppMigrationRecord[];
+
+  putAppDoc(appId: string, slug: string, doc: { title?: string; content: string }): void;
+  getAppDoc(appId: string, slug: string): AppDocRecord | undefined;
+  listAppDocs(appId: string): AppDocRecord[];
+  deleteAppDoc(appId: string, slug: string): void;
 
   upsertThread(threadId: string, opts?: { appId?: string; title?: string }): void;
-  appendChatMessage(threadId: string, role: ChatMessage['role'], content: string): ChatMessage;
+  appendChatMessage(
+    threadId: string,
+    role: ChatMessage['role'],
+    content: string,
+    opts?: { pinned?: boolean; meta?: unknown },
+  ): ChatMessage;
+  /** Marks an already-stored message as bootstrap (review F9: the v1-artifact turn). */
+  pinChatMessage(id: number): void;
+  /** Deletes unpinned messages beyond the newest `keepUnpinned`; pinned rows always survive. */
+  pruneChatMessages(threadId: string, keepUnpinned: number): void;
   listThreads(): ChatThread[];
   listChatMessages(threadId: string): ChatMessage[];
 
@@ -152,9 +230,11 @@ export interface OpenUserDbOptions {
   persistDebounceMs?: number;
   /** Whole-file cap; defaults to the spec constant. Tests shrink it. */
   maxBytes?: number;
-  /** Versions retained per app; defaults to the spec constant. */
+  /** Unpinned versions retained per app; defaults to the spec constant. */
   versionsRetained?: number;
   file?: string;
+  /** Surfaced when a write-back fails closed (name gate, cap) — previous rest state retained. */
+  onAppPersistError?: (event: AppPersistErrorEvent) => void;
 }
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
@@ -176,10 +256,39 @@ function readUserVersion(db: Database): number {
   return typeof value === 'number' ? value : 0;
 }
 
-/** Forward-only migrations; index N migrates FROM version N. v0 → v1 applies the full DDL. */
+/** `"…"`-quote an identifier. Table names are rule-validated BEFORE quoting; column names may be arbitrary. */
+const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  const info = db.exec(`PRAGMA table_info(${table})`);
+  return (info[0]?.values ?? []).some((row) => String(row[1]) === column);
+}
+
+function addColumnIfMissing(db: Database, table: string, column: string, decl: string): void {
+  if (!hasColumn(db, table, column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+}
+
+/** Forward-only migrations; index N migrates FROM version N. v0 → current applies the full DDL. */
 const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
   (db) => {
     for (const ddl of USERDB_DDL) db.run(ddl);
+    for (const ddl of USERDB_INDEX_DDL) db.run(ddl);
+  },
+  // v1 → v2 (ADR-0010): STRUCTURAL only — blob app data is abandoned (owner-approved,
+  // pre-launch). New tables/columns/index land; the oldest surviving version per app is
+  // stamped as the factory version so the pin invariant holds for migrated files.
+  (db) => {
+    for (const ddl of USERDB_DDL) db.run(ddl);
+    addColumnIfMissing(db, USERDB_TABLES.apps, 'install_source', 'TEXT');
+    addColumnIfMissing(db, USERDB_TABLES.appVersions, 'pinned', 'INTEGER NOT NULL DEFAULT 0');
+    addColumnIfMissing(db, USERDB_TABLES.chatMessages, 'pinned', 'INTEGER NOT NULL DEFAULT 0');
+    addColumnIfMissing(db, USERDB_TABLES.chatMessages, 'meta', 'TEXT');
+    for (const ddl of USERDB_INDEX_DDL) db.run(ddl);
+    db.run('DROP TABLE IF EXISTS snug_app_data');
+    db.run(
+      `UPDATE ${USERDB_TABLES.appVersions} SET pinned = 1 WHERE (app_id, version) IN
+       (SELECT app_id, MIN(version) FROM ${USERDB_TABLES.appVersions} GROUP BY app_id)`,
+    );
   },
 ];
 
@@ -318,8 +427,8 @@ function construct(
     markDirty();
   }
 
-  function select(sql: string, params?: unknown[]): unknown[][] {
-    const statement = db.prepare(sql);
+  function selectFrom(target: Database, sql: string, params?: unknown[]): unknown[][] {
+    const statement = target.prepare(sql);
     try {
       if (params !== undefined && params.length > 0) statement.bind(params as never);
       const rows: unknown[][] = [];
@@ -328,6 +437,10 @@ function construct(
     } finally {
       statement.free();
     }
+  }
+
+  function select(sql: string, params?: unknown[]): unknown[][] {
+    return selectFrom(db, sql, params);
   }
 
   function now(): string {
@@ -375,32 +488,244 @@ function construct(
     run(`INSERT OR REPLACE INTO ${table} (key, value) VALUES (?, ?)`, [key, JSON.stringify(value ?? null)]);
   }
 
-  // ------------------------------------------ driver face: blob PersistenceBackend
+  // ------------------------------------- driver face: materializer PersistenceBackend
+  //
+  // The per-app driver computes file names via namespaceToFileName; the wrapper below
+  // records the namespace → token mapping BEFORE delegating so load/save can key rest
+  // tables. Composing createDbDriver over this backend inherits every exec/kv/export/
+  // import guardrail from the tested driver.
 
-  // The per-app driver computes file names via namespaceToFileName; those file names are
-  // the `namespace` column keys in snug_app_data. Composing createDbDriver over this
-  // backend inherits every exec/kv/export/import guardrail from the tested driver.
-  const blobBackend: PersistenceBackend = {
+  interface NamespaceInfo {
+    namespace: string;
+    token: string;
+  }
+
+  const namespaceByFile = new Map<string, NamespaceInfo>();
+  /** F6 sync-hash stability: identical runtime bytes → write-back is a no-op. */
+  const lastSavedHash = new Map<string, string>();
+
+  function noteNamespace(namespace: string): string {
+    const blobFile = namespaceToFileName(namespace);
+    if (!namespaceByFile.has(blobFile)) {
+      namespaceByFile.set(blobFile, { namespace, token: appDataToken(namespace) });
+    }
+    return blobFile;
+  }
+
+  function bytesHash(bytes: Uint8Array): string {
+    let hash = 5381;
+    for (let i = 0; i < bytes.length; i++) {
+      hash = ((hash << 5) + hash + bytes[i]!) | 0;
+    }
+    return `${bytes.length}:${(hash >>> 0).toString(16)}`;
+  }
+
+  function restTablesFor(token: string): string[] {
+    return select(`SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB ?`, [
+      `app_${token}__*`,
+    ]).map((row) => String(row[0]));
+  }
+
+  function readSchemaJson(token: string): AppSchemaJson | undefined {
+    const raw = select(`SELECT schema_json FROM ${USERDB_TABLES.appSchemas} WHERE token = ?`, [token])[0]?.[0];
+    return raw === undefined ? undefined : (JSON.parse(String(raw)) as AppSchemaJson);
+  }
+
+  /** Copy all rows between same-shaped tables in two databases (non-generated columns only). */
+  function copyRows(from: Database, fromTable: string, to: Database, toTable: string): void {
+    const columns = selectFrom(from, `PRAGMA table_xinfo(${quoteIdent(fromTable)})`)
+      .filter((row) => Number(row[6]) === 0)
+      .map((row) => String(row[1]));
+    if (columns.length === 0) return;
+    const columnList = columns.map(quoteIdent).join(', ');
+    const read = from.prepare(`SELECT ${columnList} FROM ${quoteIdent(fromTable)}`);
+    const write = to.prepare(
+      `INSERT INTO ${quoteIdent(toTable)} (${columnList}) VALUES (${columns.map(() => '?').join(', ')})`,
+    );
+    try {
+      while (read.step()) {
+        write.run(read.get() as never);
+      }
+    } finally {
+      read.free();
+      write.free();
+    }
+  }
+
+  function hasTable(target: Database, name: string): boolean {
+    return (
+      selectFrom(target, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, [name]).length > 0
+    );
+  }
+
+  /** Build the app's runtime database (natural names) from rest tables + registry. */
+  function materializeBytes(info: NamespaceInfo): Uint8Array | undefined {
+    const schema = readSchemaJson(info.token);
+    const restTables = restTablesFor(info.token);
+    if (schema === undefined && restTables.length === 0) return undefined;
+    const kvRest = appRestTableName(info.token, APP_KV_TABLE);
+    const temp = new SQL.Database();
+    try {
+      const tableNames: string[] = [];
+      if (restTables.includes(kvRest)) {
+        temp.run(KV_TABLE_DDL);
+        tableNames.push(APP_KV_TABLE);
+      }
+      for (const object of schema?.objects ?? []) {
+        temp.run(object.ddl);
+        if (object.type === 'table') tableNames.push(object.name);
+      }
+      for (const name of tableNames) {
+        const rest = appRestTableName(info.token, name);
+        if (restTables.includes(rest)) copyRows(db, rest, temp, name);
+      }
+      // AUTOINCREMENT continuity: exact counters from the registry beat max(id) inference.
+      if (schema?.sequences !== undefined && hasTable(temp, 'sqlite_sequence')) {
+        for (const [name, seq] of Object.entries(schema.sequences)) {
+          temp.run('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)', [name, seq]);
+        }
+      }
+      const bytes = temp.export();
+      lastSavedHash.set(namespaceToFileName(info.namespace), bytesHash(bytes));
+      return bytes;
+    } finally {
+      temp.close();
+    }
+  }
+
+  /** Validate + snapshot the runtime's sqlite_master. Throws INVALID_NAME on gate failure. */
+  function readRuntimeObjects(temp: Database): { objects: AppSchemaObject[]; tables: string[]; hasKv: boolean } {
+    const rows = selectFrom(temp, `SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY rowid`);
+    const objects: AppSchemaObject[] = [];
+    const tables: string[] = [];
+    let hasKv = false;
+    for (const row of rows) {
+      const type = String(row[0]);
+      const name = String(row[1]);
+      const ddl = String(row[2]);
+      if (name.toLowerCase().startsWith('sqlite_')) continue; // engine-internal (sqlite_sequence …)
+      if (name === APP_KV_TABLE) {
+        hasKv = true;
+        tables.push(name);
+        continue; // driver-internal — persisted but never registered
+      }
+      if (!isValidAppObjectName(name)) {
+        throw new UserDbError(
+          USERDB_ERROR_CODES.INVALID_NAME,
+          `app object name ${JSON.stringify(name)} violates the naming rule — write-back refused, previous data retained`,
+        );
+      }
+      if (type !== 'table' && type !== 'index' && type !== 'trigger' && type !== 'view') continue;
+      if (type === 'table' && /^CREATE\s+VIRTUAL\s+TABLE/i.test(ddl.trim())) {
+        throw new UserDbError(
+          USERDB_ERROR_CODES.INVALID_NAME,
+          `virtual tables are not portable — "${name}" cannot be persisted`,
+        );
+      }
+      objects.push({ type, name, ddl });
+      if (type === 'table') tables.push(name);
+    }
+    return { objects, tables, hasKv };
+  }
+
+  /**
+   * Transactional write-back of one app runtime into rest tables + registry. Entirely
+   * synchronous on the shared handle: outer persist/export can never observe a torn
+   * state. Throws (after ROLLBACK) on gate or cap violations — previous state retained.
+   */
+  function writeBack(info: NamespaceInfo, temp: Database): void {
+    const { objects, tables, hasKv } = readRuntimeObjects(temp);
+    db.run('BEGIN IMMEDIATE');
+    try {
+      for (const rest of restTablesFor(info.token)) {
+        db.run(`DROP TABLE IF EXISTS ${quoteIdent(rest)}`);
+      }
+      db.run('PRAGMA legacy_alter_table = ON');
+      for (const name of tables) {
+        const ddl = name === APP_KV_TABLE ? KV_TABLE_DDL : objects.find((o) => o.type === 'table' && o.name === name)!.ddl;
+        db.run(ddl);
+        db.run(`ALTER TABLE ${quoteIdent(name)} RENAME TO ${quoteIdent(appRestTableName(info.token, name))}`);
+      }
+      db.run('PRAGMA legacy_alter_table = OFF');
+      for (const name of tables) {
+        copyRows(temp, name, db, appRestTableName(info.token, name));
+      }
+      if (objects.length > 0) {
+        const schemaJson: AppSchemaJson = { objects };
+        if (hasTable(temp, 'sqlite_sequence')) {
+          const sequences: Record<string, number> = {};
+          for (const row of selectFrom(temp, 'SELECT name, seq FROM sqlite_sequence')) {
+            if (tables.includes(String(row[0]))) sequences[String(row[0])] = Number(row[1]);
+          }
+          if (Object.keys(sequences).length > 0) schemaJson.sequences = sequences;
+        }
+        db.run(
+          `INSERT OR REPLACE INTO ${USERDB_TABLES.appSchemas} (app_id, token, schema_json, updated_at) VALUES (?, ?, ?, ?)`,
+          [info.namespace, info.token, JSON.stringify(schemaJson), now()],
+        );
+      } else {
+        db.run(`DELETE FROM ${USERDB_TABLES.appSchemas} WHERE token = ?`, [info.token]);
+      }
+      if (tables.length > 0) {
+        db.run(`UPDATE ${USERDB_TABLES.apps} SET uses_db = 1 WHERE app_id = ? AND uses_db = 0`, [info.namespace]);
+      }
+      if (currentBytes() > maxBytes) {
+        throw new UserDbError(
+          USERDB_ERROR_CODES.TOO_LARGE,
+          `app data for "${info.namespace}" would push the user DB past the ${maxBytes}-byte cap`,
+        );
+      }
+      db.run('COMMIT');
+    } catch (err) {
+      try {
+        db.run('ROLLBACK');
+      } catch {
+        /* nothing to roll back */
+      }
+      try {
+        db.run('PRAGMA legacy_alter_table = OFF');
+      } catch {
+        /* pragma restore is best-effort */
+      }
+      throw err;
+    }
+    markDirty();
+  }
+
+  const materializerBackend: PersistenceBackend = {
     kind: backend.kind,
     load: (blobFile) => {
-      const rows = select(`SELECT bytes FROM ${USERDB_TABLES.appData} WHERE namespace = ?`, [blobFile]);
-      const raw = rows[0]?.[0];
-      return Promise.resolve(raw instanceof Uint8Array ? raw : undefined);
+      const info = namespaceByFile.get(blobFile);
+      if (info === undefined) return Promise.resolve(undefined);
+      return Promise.resolve(materializeBytes(info));
     },
     save: (blobFile, bytes) => {
-      guardAddedBytes(bytes.byteLength, `app data for "${blobFile}"`);
-      run(`INSERT OR REPLACE INTO ${USERDB_TABLES.appData} (namespace, bytes, updated_at) VALUES (?, ?, ?)`, [
-        blobFile,
-        bytes,
-        now(),
-      ]);
+      const info = namespaceByFile.get(blobFile);
+      if (info === undefined) return Promise.resolve();
+      const hash = bytesHash(bytes);
+      if (lastSavedHash.get(blobFile) === hash) return Promise.resolve();
+      let temp: Database | undefined;
+      try {
+        temp = new SQL.Database(bytes);
+        writeBack(info, temp);
+        lastSavedHash.set(blobFile, hash);
+      } catch (err) {
+        options.onAppPersistError?.({
+          namespace: info.namespace,
+          code: err instanceof UserDbError ? err.code : 'USERDB_PERSIST_FAILED',
+          message: errorMessage(err),
+        });
+        throw err; // the driver keeps the namespace dirty; previous rest state is retained
+      } finally {
+        temp?.close();
+      }
       return Promise.resolve();
     },
   };
 
   const makeInnerDriver = (): SnugDbDriver =>
     createDbDriver({
-      backend: blobBackend,
+      backend: materializerBackend,
       ...(options.locateWasm !== undefined ? { locateWasm: options.locateWasm } : {}),
       persistDebounceMs: debounceMs,
     });
@@ -409,13 +734,27 @@ function construct(
 
   /** Stable facade so `userDb.driver` survives importUserDb swapping the inner driver. */
   const driver: SnugDbDriver = {
-    handle: (namespace, request) => inner.handle(namespace, request),
+    handle: (namespace, request) => {
+      noteNamespace(namespace);
+      return inner.handle(namespace, request);
+    },
     get persistence() {
       return inner.persistence;
     },
     flush: () => inner.flush(),
     close: () => inner.close(),
   };
+
+  /** Internal db-request frames for applyAppDdl's snapshot/exec/restore round trip. */
+  let internalSeq = 0;
+  const internalFrame = (fields: Record<string, unknown>): DbRequestFrame =>
+    ({
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.dbRequest,
+      requestId: `userdb-internal-${++internalSeq}`,
+      instanceId: 'userdb-internal',
+      ...fields,
+    }) as DbRequestFrame;
 
   // ------------------------------------------------------------------------- apps
 
@@ -429,10 +768,11 @@ function construct(
     currentVersion: Number(row[6]),
     createdAt: String(row[7]),
     updatedAt: String(row[8]),
+    ...(row[9] !== null && row[9] !== undefined ? { installSource: String(row[9]) } : {}),
   });
 
   const APP_COLUMNS =
-    'app_id, display_name, description, icon_emoji, icon_color, uses_db, current_version, created_at, updated_at';
+    'app_id, display_name, description, icon_emoji, icon_color, uses_db, current_version, created_at, updated_at, install_source';
 
   function getApp(appId: string): AppRecord | undefined {
     assertOpen();
@@ -441,20 +781,34 @@ function construct(
     return row === undefined ? undefined : toAppRecord(row);
   }
 
-  function insertVersion(appId: string, version: number, html: string, note: string | undefined): AppVersionMeta {
-    const createdAt = now();
-    run(`INSERT INTO ${USERDB_TABLES.appVersions} (app_id, version, html, note, created_at) VALUES (?, ?, ?, ?, ?)`, [
-      appId,
-      version,
-      html,
-      note ?? null,
-      createdAt,
-    ]);
-    run(`DELETE FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND version <= ?`, [appId, version - retained]);
-    return { version, ...(note !== undefined ? { note } : {}), createdAt, htmlBytes: html.length };
+  function getAppByInstallSource(source: string): AppRecord | undefined {
+    assertOpen();
+    const rows = select(`SELECT ${APP_COLUMNS} FROM ${USERDB_TABLES.apps} WHERE install_source = ?`, [source]);
+    const row = rows[0];
+    return row === undefined ? undefined : toAppRecord(row);
   }
 
-  return {
+  function insertVersion(
+    appId: string,
+    version: number,
+    html: string,
+    note: string | undefined,
+    pinned: boolean,
+  ): AppVersionMeta {
+    const createdAt = now();
+    run(
+      `INSERT INTO ${USERDB_TABLES.appVersions} (app_id, version, html, note, created_at, pinned) VALUES (?, ?, ?, ?, ?, ?)`,
+      [appId, version, html, note ?? null, createdAt, pinned ? 1 : 0],
+    );
+    // Retention: the newest N unpinned versions plus every pinned (factory) version.
+    run(`DELETE FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND version <= ? AND pinned = 0`, [
+      appId,
+      version - retained,
+    ]);
+    return { version, ...(note !== undefined ? { note } : {}), createdAt, htmlBytes: html.length, pinned };
+  }
+
+  const userDb: UserDb = {
     get persistence(): DbPersistence {
       return backend.kind === 'memory' ? 'none' : backend.kind;
     },
@@ -462,12 +816,15 @@ function construct(
 
     installApp(input) {
       assertOpen();
+      if (input.installSource !== undefined) {
+        const existing = getAppByInstallSource(input.installSource);
+        if (existing !== undefined) return existing; // find-or-open: never duplicate an install identity
+      }
       guardAddedBytes(input.html.length, `installing "${input.displayName}"`);
       const appId = input.appId ?? crypto.randomUUID();
       const timestamp = now();
-      run(
-        `INSERT INTO ${USERDB_TABLES.apps} (${APP_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+      try {
+        run(`INSERT INTO ${USERDB_TABLES.apps} (${APP_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
           appId,
           input.displayName,
           input.description ?? null,
@@ -477,9 +834,17 @@ function construct(
           1,
           timestamp,
           timestamp,
-        ],
-      );
-      insertVersion(appId, 1, input.html, input.note);
+          input.installSource ?? null,
+        ]);
+      } catch (err) {
+        // Unique-index backstop: a racing install of the same source connects to the winner.
+        if (input.installSource !== undefined) {
+          const existing = getAppByInstallSource(input.installSource);
+          if (existing !== undefined) return existing;
+        }
+        throw err;
+      }
+      insertVersion(appId, 1, input.html, input.note, true); // v1 = the pinned factory version
       return getApp(appId) as AppRecord;
     },
 
@@ -489,7 +854,7 @@ function construct(
       if (app === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
       guardAddedBytes(html.length, `new version of "${appId}"`);
       const version = app.currentVersion + 1;
-      const meta = insertVersion(appId, version, html, note);
+      const meta = insertVersion(appId, version, html, note, false);
       run(`UPDATE ${USERDB_TABLES.apps} SET current_version = ?, updated_at = ? WHERE app_id = ?`, [
         version,
         now(),
@@ -527,6 +892,7 @@ function construct(
     },
 
     getApp,
+    getAppByInstallSource,
 
     getAppHtml(appId, version) {
       assertOpen();
@@ -543,13 +909,14 @@ function construct(
     listAppVersions(appId) {
       assertOpen();
       return select(
-        `SELECT version, note, created_at, length(html) FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? ORDER BY version DESC`,
+        `SELECT version, note, created_at, length(html), pinned FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? ORDER BY version DESC`,
         [appId],
       ).map((row) => ({
         version: Number(row[0]),
         ...(row[1] !== null && row[1] !== undefined ? { note: String(row[1]) } : {}),
         createdAt: String(row[2]),
         htmlBytes: Number(row[3]),
+        pinned: row[4] === 1,
       }));
     },
 
@@ -560,6 +927,142 @@ function construct(
         throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `app "${appId}" has no version ${toVersion}`);
       }
       return this.saveAppVersion(appId, html, `revert to v${toVersion}`);
+    },
+
+    resetToFactory(appId) {
+      assertOpen();
+      const factory = select(
+        `SELECT MIN(version) FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND pinned = 1`,
+        [appId],
+      )[0]?.[0];
+      if (typeof factory !== 'number') {
+        throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `app "${appId}" has no pinned factory version`);
+      }
+      const html = this.getAppHtml(appId, factory);
+      if (html === undefined) {
+        throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `factory version ${factory} of "${appId}" is missing`);
+      }
+      return this.saveAppVersion(appId, html, `reset to factory (v${factory})`);
+    },
+
+    // ------------------------------------------------------------- schema registry
+
+    getAppSchema(appId) {
+      assertOpen();
+      const raw = select(`SELECT schema_json FROM ${USERDB_TABLES.appSchemas} WHERE app_id = ?`, [appId])[0]?.[0];
+      return raw === undefined ? undefined : (JSON.parse(String(raw)) as AppSchemaJson);
+    },
+
+    async applyAppDdl(appId, statements) {
+      assertOpen();
+      if (statements.length === 0) return this.getAppSchema(appId) ?? { objects: [] };
+      const snapshot = await driver.handle(appId, internalFrame({ op: 'export' }));
+      if (!snapshot.ok || snapshot.bytesBase64 === undefined) {
+        const detail = snapshot.ok ? 'no bytes' : snapshot.message;
+        throw new UserDbError(USERDB_ERROR_CODES.DDL_FAILED, `cannot snapshot app runtime: ${detail}`);
+      }
+      const restore = async (): Promise<void> => {
+        await driver.handle(appId, internalFrame({ op: 'import', bytesBase64: snapshot.bytesBase64 }));
+      };
+      for (const [index, sql] of statements.entries()) {
+        const result = await driver.handle(appId, internalFrame({ op: 'exec', sql }));
+        if (!result.ok) {
+          await restore();
+          throw new UserDbError(
+            USERDB_ERROR_CODES.DDL_FAILED,
+            `statement ${index + 1} failed (runtime restored): ${result.message}`,
+          );
+        }
+      }
+      // Pre-validate the post-batch runtime with the same gate the write-back uses, so a
+      // bad name surfaces HERE as a typed error instead of a background persist failure.
+      const master = await driver.handle(
+        appId,
+        internalFrame({ op: 'exec', sql: 'SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL' }),
+      );
+      if (master.ok && master.rows !== undefined) {
+        for (const row of master.rows) {
+          const name = String(row[1]);
+          if (name.toLowerCase().startsWith('sqlite_') || name === APP_KV_TABLE) continue;
+          if (!isValidAppObjectName(name)) {
+            await restore();
+            throw new UserDbError(
+              USERDB_ERROR_CODES.INVALID_NAME,
+              `proposed DDL creates ${JSON.stringify(name)}, which violates the naming rule (runtime restored)`,
+            );
+          }
+        }
+      }
+      await inner.flush(); // write-back registers the schema transactionally
+      const nextSeq = Number(
+        select(`SELECT COALESCE(MAX(seq), 0) FROM ${USERDB_TABLES.appMigrations} WHERE app_id = ?`, [appId])[0]?.[0] ?? 0,
+      );
+      const appliedAt = now();
+      statements.forEach((sql, index) => {
+        run(`INSERT INTO ${USERDB_TABLES.appMigrations} (app_id, seq, ddl, applied_at) VALUES (?, ?, ?, ?)`, [
+          appId,
+          nextSeq + index + 1,
+          sql,
+          appliedAt,
+        ]);
+      });
+      return this.getAppSchema(appId) ?? { objects: [] };
+    },
+
+    listAppMigrations(appId) {
+      assertOpen();
+      return select(
+        `SELECT seq, ddl, applied_at FROM ${USERDB_TABLES.appMigrations} WHERE app_id = ? ORDER BY seq`,
+        [appId],
+      ).map((row) => ({ seq: Number(row[0]), ddl: String(row[1]), appliedAt: String(row[2]) }));
+    },
+
+    // ------------------------------------------------------------------------ docs
+
+    putAppDoc(appId, slug, doc) {
+      assertOpen();
+      guardAddedBytes(doc.content.length + (doc.title?.length ?? 0) + slug.length, `doc "${slug}"`);
+      run(
+        `INSERT INTO ${USERDB_TABLES.appDocs} (app_id, slug, title, content, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(app_id, slug) DO UPDATE SET
+           title = COALESCE(excluded.title, title),
+           content = excluded.content,
+           updated_at = excluded.updated_at`,
+        [appId, slug, doc.title ?? null, doc.content, now()],
+      );
+    },
+
+    getAppDoc(appId, slug) {
+      assertOpen();
+      const row = select(
+        `SELECT slug, title, content, updated_at FROM ${USERDB_TABLES.appDocs} WHERE app_id = ? AND slug = ?`,
+        [appId, slug],
+      )[0];
+      if (row === undefined) return undefined;
+      return {
+        slug: String(row[0]),
+        ...(row[1] !== null && row[1] !== undefined ? { title: String(row[1]) } : {}),
+        content: String(row[2]),
+        updatedAt: String(row[3]),
+      };
+    },
+
+    listAppDocs(appId) {
+      assertOpen();
+      return select(
+        `SELECT slug, title, content, updated_at FROM ${USERDB_TABLES.appDocs} WHERE app_id = ? ORDER BY slug`,
+        [appId],
+      ).map((row) => ({
+        slug: String(row[0]),
+        ...(row[1] !== null && row[1] !== undefined ? { title: String(row[1]) } : {}),
+        content: String(row[2]),
+        updatedAt: String(row[3]),
+      }));
+    },
+
+    deleteAppDoc(appId, slug) {
+      assertOpen();
+      run(`DELETE FROM ${USERDB_TABLES.appDocs} WHERE app_id = ? AND slug = ?`, [appId, slug]);
     },
 
     // ------------------------------------------------------------------------ chat
@@ -578,19 +1081,40 @@ function construct(
       );
     },
 
-    appendChatMessage(threadId, role, content) {
+    appendChatMessage(threadId, role, content, opts = {}) {
       assertOpen();
-      guardAddedBytes(content.length, 'chat message');
+      const metaJson = opts.meta === undefined ? null : JSON.stringify(opts.meta);
+      guardAddedBytes(content.length + (metaJson?.length ?? 0), 'chat message');
       this.upsertThread(threadId);
       const createdAt = now();
-      run(`INSERT INTO ${USERDB_TABLES.chatMessages} (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)`, [
+      run(
+        `INSERT INTO ${USERDB_TABLES.chatMessages} (thread_id, role, content, created_at, pinned, meta) VALUES (?, ?, ?, ?, ?, ?)`,
+        [threadId, role, content, createdAt, opts.pinned === true ? 1 : 0, metaJson],
+      );
+      const id = select('SELECT last_insert_rowid()')[0]?.[0];
+      return {
+        id: Number(id),
         threadId,
         role,
         content,
         createdAt,
-      ]);
-      const id = select('SELECT last_insert_rowid()')[0]?.[0];
-      return { id: Number(id), threadId, role, content, createdAt };
+        pinned: opts.pinned === true,
+        ...(opts.meta !== undefined ? { meta: opts.meta } : {}),
+      };
+    },
+
+    pinChatMessage(id) {
+      assertOpen();
+      run(`UPDATE ${USERDB_TABLES.chatMessages} SET pinned = 1 WHERE id = ?`, [id]);
+    },
+
+    pruneChatMessages(threadId, keepUnpinned) {
+      assertOpen();
+      run(
+        `DELETE FROM ${USERDB_TABLES.chatMessages} WHERE thread_id = ? AND pinned = 0 AND id NOT IN (
+           SELECT id FROM ${USERDB_TABLES.chatMessages} WHERE thread_id = ? AND pinned = 0 ORDER BY id DESC LIMIT ?)`,
+        [threadId, threadId, keepUnpinned],
+      );
     },
 
     listThreads() {
@@ -609,7 +1133,7 @@ function construct(
     listChatMessages(threadId) {
       assertOpen();
       return select(
-        `SELECT id, role, content, created_at FROM ${USERDB_TABLES.chatMessages} WHERE thread_id = ? ORDER BY id`,
+        `SELECT id, role, content, created_at, pinned, meta FROM ${USERDB_TABLES.chatMessages} WHERE thread_id = ? ORDER BY id`,
         [threadId],
       ).map((row) => ({
         id: Number(row[0]),
@@ -617,6 +1141,8 @@ function construct(
         role: String(row[1]) as ChatMessage['role'],
         content: String(row[2]),
         createdAt: String(row[3]),
+        pinned: row[4] === 1,
+        ...(row[5] !== null && row[5] !== undefined ? { meta: JSON.parse(String(row[5])) as unknown } : {}),
       }));
     },
 
@@ -653,16 +1179,17 @@ function construct(
 
     async deriveAppExport(namespace) {
       assertOpen();
+      const blobFile = noteNamespace(namespace);
       await inner.flush();
-      const blobFile = namespaceToFileName(namespace);
-      const rows = select(`SELECT bytes FROM ${USERDB_TABLES.appData} WHERE namespace = ?`, [blobFile]);
-      const raw = rows[0]?.[0];
-      return raw instanceof Uint8Array ? raw.slice() : undefined;
+      const info = namespaceByFile.get(blobFile);
+      if (info === undefined) return undefined;
+      return materializeBytes(info);
     },
 
     async exportUserDb(opts = {}) {
       assertOpen();
       await inner.flush();
+      await persistNow();
       const bytes = db.export();
       if (opts.includeSecrets === true) {
         if (bytes.byteLength > maxBytes) {
@@ -719,6 +1246,7 @@ function construct(
       db.close();
       db = next;
       inner = makeInnerDriver();
+      lastSavedHash.clear(); // foreign bytes: every namespace must re-materialize
       markDirty();
     },
 
@@ -737,4 +1265,6 @@ function construct(
       db.close();
     },
   };
+
+  return userDb;
 }
