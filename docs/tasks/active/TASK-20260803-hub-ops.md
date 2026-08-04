@@ -1,6 +1,6 @@
 # TASK-20260803-hub-ops: long-run builds, build observability, app delete, LLM-free apps
 
-- **Status**: in-progress — **Phases 0–4 done and committed; resume at Phase 5** (see the handoff at the bottom of this file)
+- **Status**: in-progress — **Phases 0–5 done and committed; resume at Phase 6** (see the handoff at the bottom of this file)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point; `packages/db` gains a destructive cascade delete; `apps/server` request/timeout config)
 - **Branch**: `feat/TASK-20260803-hub-ops`
@@ -178,6 +178,20 @@ The remaining four are real work.
 - Next step: **Phase 5** — hub UI delete (AC22): inline two-step confirm, no `window.confirm`, tile restructured out of the `<Link>`, double-click latched.
 - Open questions: none blocking.
 
+### 2026-08-03 — Jeetu — session (Phase 5 implemented)
+
+- Done: **Phase 5** (AC22) test-first. 8 new tests; suite 702 → **710** (playground 94 → 102).
+  - `HubView` tile restructured from `<Link>`-wrapping-`Card` to **`Card` containing `Link` + action**, so the delete button is a sibling of the navigation rather than nested inside an `<a>` (a button inside the link navigates into the app on click). A test asserts `button.closest('a') === null` so the nesting cannot silently return.
+  - Inline two-step confirm ("delete" → "delete for good? / keep"), styled on the `.factory-reset` callout. **No `window.confirm`** — a test spies on it and asserts zero calls.
+  - Double-click latched with a **`useRef`, not the `deleting` state**: two clicks in the same tick both read the pre-render state value and would each fire a delete. Mutation-tested — removing the latch makes `deleteApp` fire twice.
+  - `delete` is revealed on hover/focus-within, and forced visible under `@media (hover: none)` so it is reachable on touch.
+- Surprises:
+  - **A test that passed in isolation failed in the full suite** — the wrong app survived. `listApps` orders by `updated_at DESC, app_id`, and two saves in the same millisecond tie-break on a **random uuid**, so tile order is not deterministic. My test had indexed `tiles[1]`, i.e. it was passing by luck. Now finds the tile by name. **Never index into a tile/app list in a test** — the order is only stable when the timestamps differ.
+  - `.app-tile` is shared with the starter tiles, so a bare `.app-tile` selector matched 4 elements, not 1. Installed tiles now carry `data-testid="installed-tile"`.
+- State: 7 commits + this one; `pnpm test` 19/19 tasks / **710 tests**; `pnpm build` 9/9 clean. Playground suite run 3× to confirm the ordering flake is gone.
+- Next step: **Phase 6** — knowledge + examples (AC24–27) + accept ADR-0011. Largest remaining piece: KB doctrine rewrite, the autonomous archetype, regenerating `content.ts`, and porting the pig game to the contract (hooks block **copied, never retyped**).
+- Open questions: none blocking.
+
 ---
 
 ## HANDOFF — resume here (written 2026-08-03, end of session)
@@ -191,7 +205,7 @@ a5454f8 Phase 1 — adapters: the real long-build fix
 d4a5bc5 Gate 1-2 — spec, interview, plan, ADR-0011 draft
 ```
 
-**Baseline to preserve**: `pnpm test` → 19/19 tasks, **702 tests**. Per-package: protocol 103 · knowledge 55 · runner 91 · db **160** · sdk 33 · server 94 · adapters 72 · playground **94**. (Deltas: adapters 56→72, server 91→94, playground 67→73→92→94, db 145→160.) `pnpm build` 9/9 clean. Note there is **no root `lint` task** — turbo reports "No tasks were executed"; typecheck rides on `build`.
+**Baseline to preserve**: `pnpm test` → 19/19 tasks, **710 tests**. Per-package: protocol 103 · knowledge 55 · runner 91 · db 160 · sdk 33 · server 94 · adapters 72 · playground **102**. `pnpm build` 9/9 clean. Note there is **no root `lint` task** — turbo reports "No tasks were executed"; typecheck rides on `build`.
 
 ### What is DONE (do not redo)
 
@@ -231,7 +245,7 @@ The notes below are kept because they document the seams as they now stand:
 - LLM inspector must be **in-memory only** (AC14: assert nothing written to the user DB, and ring-buffer it) and must **never render a BYOK key** (AC15 negative test).
 - `ChatLog.tsx` and `BuilderView.tsx` have **no component tests today** — AC9 adds the first.
 
-### Resume at PHASE 4 — then 5–6 (unchanged from the Plan section above)
+### Resume at PHASE 6 (Phases 4 and 5 are DONE — see their journal entries)
 
 - **Phase 4 — `packages/db` cascade delete (AC16–21, AC23).** Highest-risk item. There are **zero foreign keys** in the user DB and `PRAGMA foreign_keys` is **never set**, so cascade is entirely hand-written. Owner explicitly confirmed: **delete pinned rows too — the factory version AND the bootstrap chat message**. Do NOT reuse `pruneChatMessages` or the version-retention helper: both refuse pinned rows. Use the `BEGIN IMMEDIATE`/`ROLLBACK` pattern from `writeBack` (`packages/db/src/userdb/userdb.ts:644-701`) and the module-private `restTablesFor(token)` helper (`:524-528`); token = `appDataToken(appId)`. **Resurrection hazard (R1)**: the materializer rebuilds rest tables from the still-open runtime copy on flush — invalidate `namespaceByFile` (`:504`) and `lastSavedHash` (`:506`) and close the inner driver, modelled on `importUserDb` (`:1281-1285`). Must `markDirty()` + flush so the delete reaches the exported bytes (AC23).
 - **Phase 5 — hub UI delete (AC22).** `HubView.tsx:141-158` tiles are a `<Link>` **wrapping** a Card — restructure to Card **containing** Link + action. `danger` Button variant already exists (`ui/Button.tsx:4`). Inline confirm, **no `window.confirm`** (forbidden by the design contract); nearest pattern is the `.factory-reset` callout at `run/VersionsPanel.tsx:83-92`. Latch double-clicks like `HubView.tsx:32`. Add `delete` to `LibraryStore` (`state/library.ts:20-26`).
