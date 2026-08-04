@@ -1,6 +1,6 @@
 # TASK-20260803-hub-ops: long-run builds, build observability, app delete, LLM-free apps
 
-- **Status**: in-progress — **Phases 0–2 done and committed; resume at Phase 3** (see the handoff at the bottom of this file)
+- **Status**: in-progress — **Phases 0–3 done and committed; resume at Phase 4** (see the handoff at the bottom of this file)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point; `packages/db` gains a destructive cascade delete; `apps/server` request/timeout config)
 - **Branch**: `feat/TASK-20260803-hub-ops`
@@ -146,6 +146,22 @@ The remaining four are real work.
 - Next step: **Phase 3** (playground step timeline + LLM round-trip inspector). See the handoff block below.
 - Open questions: none blocking.
 
+### 2026-08-03 — Jeetu — session (Phase 3 implemented)
+
+- Done: **Phase 3** (AC9–AC15) test-first. 19 new tests, all green; suite 666 → **685** (playground 73 → 92).
+  - **Step timeline (AC9, AC10, AC12).** `activity: string | undefined` (one last-write-wins slot) is now backed by `steps: BuildStepView[]` — ordered, per-turn, each with its own `done` flag. `onStep` added to `BuildHandlers` as the seam; **both** modes feed it: direct mode from `tool_call`/`tool_result` (the `tool_result` branch that was previously received-and-ignored is now what marks a step done), subscription mode from Phase 2's `step` SSE event. `ChatLog` renders the timeline and keeps the old pill as the pre-first-tool fallback.
+  - **LLM inspector (AC13–15).** New sibling module `run/llmInspector.ts` (pure reducer, mirroring `inspectorReduce`) + `run/LlmInspectorPanel.tsx` + a new `llm` rail tab. `run/inspector.ts` and `__tests__/inspector.test.ts` are **byte-untouched** — verified by an empty `git diff` on both, which is AC15's real assertion.
+- Surprises / decisions worth keeping:
+  - **`AgentRoundTrip` and `TokenUsage` were never exported from the adapters barrel** in Phase 1 — the types existed but were unreachable from the playground. Added to `packages/adapters/src/index.ts`. Anything consuming Phase 1's observation contract needs this.
+  - **Redaction happens on the way IN, not at render.** An un-redacted key is never stored in inspector state, so the AC15 marker test holds no matter what a future panel chooses to render. This is the inverse of the structural inspector's approach (which never captures values at all) and is the reason the two modules must stay separate.
+  - **A tool can legitimately run twice in one turn** (two KB consults — the exact case that used to blow the old 6-iteration ceiling). `applyStep` therefore completes the *newest open* step for a tool, not the first match, and the step key includes the index.
+  - `findLastIndex` is ES2023; the playground lib target is ES2022. Hand-rolled the reverse scan rather than move a project-wide target for one call.
+  - Test-harness trap (cost ~2 debug cycles): `mockResolvedValue(sseResponse(...))` shares ONE `Response` across calls, and a `ReadableStream` body is single-use — the second turn gets an already-drained stream and silently sees zero events. Multi-turn SSE tests must use `mockImplementation` to build a fresh Response per call. Candidate for `docs/lessons.md` at Gate 6.
+  - `llmInspectorPersistence.test.tsx` passed on first run *by design*: it is a guard (byte-level export assertion that no round-trip data reaches the user DB) — it exists to fail if a later phase starts persisting. Re-verified green after implementation.
+- State: 5 commits + this one on `feat/TASK-20260803-hub-ops`; `pnpm test` 19/19 tasks / **685 tests**; `pnpm build` 9/9 clean. (No root `lint` task exists — turbo reports "No tasks were executed"; typecheck rides on `build`.)
+- Next step: **Phase 4** — `packages/db` cascade delete (AC16–21, AC23). Highest-risk item in the task; see the handoff notes below, especially R1 (resurrection via `writeBack`).
+- Open questions: none blocking.
+
 ---
 
 ## HANDOFF — resume here (written 2026-08-03, end of session)
@@ -159,7 +175,7 @@ a5454f8 Phase 1 — adapters: the real long-build fix
 d4a5bc5 Gate 1-2 — spec, interview, plan, ADR-0011 draft
 ```
 
-**Baseline to preserve**: `pnpm test` → 19/19 tasks, 666 tests. Per-package: protocol 103 · knowledge 55 · runner 91 · db 145 · sdk 33 · server 94 · adapters 72 · playground 73. (Deltas so far: adapters 56→72, server 91→94, playground 67→73.)
+**Baseline to preserve**: `pnpm test` → 19/19 tasks, **685 tests** (was 666 after Phase 2). Per-package: protocol 103 · knowledge 55 · runner 91 · db 145 · sdk 33 · server 94 · adapters 72 · playground **92**. (Deltas so far: adapters 56→72, server 91→94, playground 67→73→92.) `pnpm build` 9/9 clean. Note there is **no root `lint` task** — turbo reports "No tasks were executed"; typecheck rides on `build`.
 
 ### What is DONE (do not redo)
 
@@ -183,9 +199,11 @@ d4a5bc5 Gate 1-2 — spec, interview, plan, ADR-0011 draft
 - **Step events carry tool NAME + phase only** — never inputs/outputs (marker test enforces it). `round_trip` stays server-side, never serialized to the client.
 - New file: `apps/server/src/__tests__/long-run.test.ts` (3 tests). Forward-compat verified: the existing SSE parser skips unknown events, so playground stayed green unchanged.
 
-### Resume at PHASE 3 — playground step timeline + LLM inspector
+### PHASE 3 — playground step timeline + LLM inspector — ✅ DONE (see the 2026-08-03 Phase 3 journal entry)
 
-Covers **AC9–AC15**. Tests FIRST (Gate 3). Read `docs/engineering/TDD.md` and this file's Plan section before starting.
+Covered **AC9–AC15**. Landed: `steps: BuildStepView[]` in `useBuilderChat` (+ `onStep` on `BuildHandlers`, fed by both modes), the timeline in `ChatLog`, and the new `run/llmInspector.ts` + `run/LlmInspectorPanel.tsx` on a new `llm` rail tab. `run/inspector.ts` untouched.
+
+The notes below are kept because they document the seams as they now stand:
 
 **Key facts already established — don't re-investigate:**
 - `useBuilderChat` (`apps/playground/src/agent/useBuilderChat.ts`) currently exposes `activity: string | undefined` — a **single last-write-wins slot**, rendered in exactly ONE place: `apps/playground/src/views/ChatLog.tsx:47-52` (`.reasoning-pill`). Replace with a `steps: BuildStep[]` model.
@@ -197,7 +215,7 @@ Covers **AC9–AC15**. Tests FIRST (Gate 3). Read `docs/engineering/TDD.md` and 
 - LLM inspector must be **in-memory only** (AC14: assert nothing written to the user DB, and ring-buffer it) and must **never render a BYOK key** (AC15 negative test).
 - `ChatLog.tsx` and `BuilderView.tsx` have **no component tests today** — AC9 adds the first.
 
-### Then PHASES 4–6 (unchanged from the Plan section above)
+### Resume at PHASE 4 — then 5–6 (unchanged from the Plan section above)
 
 - **Phase 4 — `packages/db` cascade delete (AC16–21, AC23).** Highest-risk item. There are **zero foreign keys** in the user DB and `PRAGMA foreign_keys` is **never set**, so cascade is entirely hand-written. Owner explicitly confirmed: **delete pinned rows too — the factory version AND the bootstrap chat message**. Do NOT reuse `pruneChatMessages` or the version-retention helper: both refuse pinned rows. Use the `BEGIN IMMEDIATE`/`ROLLBACK` pattern from `writeBack` (`packages/db/src/userdb/userdb.ts:644-701`) and the module-private `restTablesFor(token)` helper (`:524-528`); token = `appDataToken(appId)`. **Resurrection hazard (R1)**: the materializer rebuilds rest tables from the still-open runtime copy on flush — invalidate `namespaceByFile` (`:504`) and `lastSavedHash` (`:506`) and close the inner driver, modelled on `importUserDb` (`:1281-1285`). Must `markDirty()` + flush so the delete reaches the exported bytes (AC23).
 - **Phase 5 — hub UI delete (AC22).** `HubView.tsx:141-158` tiles are a `<Link>` **wrapping** a Card — restructure to Card **containing** Link + action. `danger` Button variant already exists (`ui/Button.tsx:4`). Inline confirm, **no `window.confirm`** (forbidden by the design contract); nearest pattern is the `.factory-reset` callout at `run/VersionsPanel.tsx:83-92`. Latch double-clicks like `HubView.tsx:32`. Add `delete` to `LibraryStore` (`state/library.ts:20-26`).

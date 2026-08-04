@@ -108,7 +108,7 @@ export function BuilderView(): ReactElement {
               </Button>
             </div>
           ) : null}
-          <ChatLog messages={chat.messages} activity={chat.activity} />
+          <ChatLog messages={chat.messages} steps={chat.steps} activity={chat.activity} />
         </>
       )}
 

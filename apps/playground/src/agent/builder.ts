@@ -4,7 +4,7 @@
 //   byok   → runAgentTurn in-browser with the KB + artifact tools; SSE-shaped events
 //            are SYNTHESIZED from the turn callbacks so the view code is identical.
 
-import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentTool } from '@snugprotocol/adapters';
+import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentRoundTrip, type AgentTool } from '@snugprotocol/adapters';
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
@@ -37,15 +37,37 @@ export interface BuilderTurn {
   history?: TurnHistoryMessage[];
 }
 
+/**
+ * One entry in the build step timeline. A tool STARTS and later ENDS; the view keeps
+ * every step in order rather than collapsing them into one label (task AC9/AC10).
+ * Carries the tool NAME and phase only — never its inputs or outputs.
+ */
+export interface BuildStep {
+  tool: string;
+  phase: 'start' | 'end';
+}
+
 export interface BuildHandlers {
   /** Streamed DELTA (not cumulative) — callers accumulate. */
   onDelta?: (delta: string) => void;
   /** An artifact landed (SSE `artifact` event / byok artifact_write). */
   onArtifact?: (artifact: ArtifactEvent) => void;
+  /**
+   * Ordered tool progress for the step timeline. Both modes emit it: direct mode from
+   * the turn's tool_call/tool_result events, subscription mode from the hub's `step`
+   * SSE event (added server-side in the same task).
+   */
+  onStep?: (step: BuildStep) => void;
   /** Tool activity for the reasoning pill ("consulting the knowledge base…"). */
   onActivity?: (label: string) => void;
   /** The app's schema or wiki docs changed (direct-mode tools) — refresh panels. */
   onKnowledge?: () => void;
+  /**
+   * One completed LLM round trip — the LLM inspector's only feed (AC13). Direct mode
+   * only: subscription-mode round trips happen on the hub and are never serialized to
+   * the client, by design.
+   */
+  onRoundTrip?: (trip: AgentRoundTrip) => void;
 }
 
 export type BuildResult =
@@ -117,6 +139,12 @@ export function createServerBuilder(threadId: string, fetchImpl?: FetchLike, mod
                 artifactId: data.artifactId,
                 displayName: typeof data.displayName === 'string' ? data.displayName : 'your app',
               });
+            }
+          } else if (event.event === 'step') {
+            // Tool name + phase only (the server sends nothing else). A malformed step
+            // is skipped like any other bad block — one bad event never kills a build.
+            if (typeof data.tool === 'string' && (data.phase === 'start' || data.phase === 'end')) {
+              handlers.onStep?.({ tool: data.tool, phase: data.phase });
             }
           } else if (event.event === 'done') {
             return { ok: true, text: typeof data.text === 'string' ? data.text : '' };
@@ -204,6 +232,14 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         onEvent: (event) => {
           if (event.type === 'tool_call') {
             handlers.onActivity?.(activityLabels[event.call.name] ?? 'consulting the knowledge base…');
+            handlers.onStep?.({ tool: event.call.name, phase: 'start' });
+          } else if (event.type === 'tool_result') {
+            // Previously received and dropped — completion is what makes the timeline
+            // a timeline rather than a list of things that merely started (AC10).
+            handlers.onStep?.({ tool: event.call.name, phase: 'end' });
+          } else if (event.type === 'round_trip') {
+            const { type: _type, ...trip } = event;
+            handlers.onRoundTrip?.(trip satisfies AgentRoundTrip);
           }
         },
       });

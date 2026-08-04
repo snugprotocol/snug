@@ -14,12 +14,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { AgentRoundTrip } from '@snugprotocol/adapters';
+
 import { createServerArtifactFetch } from '../state/library.js';
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
 import { getUserDb } from '../state/userdb.js';
 import { buildAppTurnContext } from './appContext.js';
 import { createAppTargetSink } from './artifactSink.js';
-import { createDirectBuilder, createServerBuilder, type ArtifactEvent, type BuilderAgent } from './builder.js';
+import {
+  createDirectBuilder,
+  createServerBuilder,
+  type ArtifactEvent,
+  type BuilderAgent,
+  type BuildStep,
+} from './builder.js';
 
 export interface ChatMessage {
   id: number;
@@ -33,11 +41,26 @@ export interface ChatMessage {
   artifact?: ArtifactEvent;
 }
 
+/**
+ * One rendered step of the build timeline (AC9/AC10). Unlike the old single `activity`
+ * slot, steps accumulate in order within a turn and carry their own completion state.
+ */
+export interface BuildStepView {
+  /** Tool name — the timeline's identity key within a turn. */
+  tool: string;
+  /** Human label ("designing the app’s database…"). */
+  label: string;
+  /** True once the tool's result came back (AC10). */
+  done: boolean;
+}
+
 export interface BuilderChat {
   messages: ChatMessage[];
   busy: boolean;
   /** Reasoning-pill label while the agent works ("consulting the knowledge base…"). */
   activity: string | undefined;
+  /** Ordered, live build steps for the current turn — cleared when the next turn starts. */
+  steps: BuildStepView[];
   lastArtifact: ArtifactEvent | undefined;
   /** The app this thread is durably attached to (pin or recorded install), if any. */
   attachedAppId: string | undefined;
@@ -55,6 +78,11 @@ export interface BuilderChat {
 export interface UseBuilderChatOptions {
   /** Per-app chat: every artifact_write versions THIS app (F9 pinning). */
   pinnedAppId?: string;
+  /**
+   * Observation sink for completed LLM round trips (direct mode only) — the LLM
+   * inspector's feed. IN-MEMORY ONLY: the hook never persists these (AC14).
+   */
+  onRoundTrip?: (trip: AgentRoundTrip) => void;
 }
 
 /** Persisted message meta shape (owned here; the DB stores it as opaque JSON). */
@@ -64,6 +92,46 @@ interface PersistedMeta {
 }
 
 let messageSeq = 0;
+
+/**
+ * Tool name → timeline label. Shared by both modes: direct mode names tools locally,
+ * subscription mode gets the same names over the `step` SSE event, so one map serves
+ * both. An unknown tool still gets a step (falling back to its raw name) — a new
+ * server-side tool must never render as a blank row.
+ */
+const STEP_LABELS: Record<string, string> = {
+  snug_knowledge: 'consulting the knowledge base…',
+  artifact_write: 'writing the app file…',
+  schema_apply: 'designing the app’s database…',
+  app_doc_write: 'updating the app’s docs…',
+};
+
+const stepLabel = (tool: string): string => STEP_LABELS[tool] ?? `${tool.replace(/_/g, ' ')}…`;
+
+/**
+ * Fold one start/end step into the timeline. `start` appends (or re-opens a repeat
+ * call of the same tool); `end` completes the newest open step for that tool — a tool
+ * legitimately runs more than once per turn (two KB consults is the exact case that
+ * used to blow the old iteration ceiling).
+ */
+function applyStep(current: BuildStepView[], step: BuildStep): BuildStepView[] {
+  if (step.phase === 'start') {
+    return [...current, { tool: step.tool, label: stepLabel(step.tool), done: false }];
+  }
+  // Newest open step for that tool (no findLastIndex — the lib target is ES2022).
+  let index = -1;
+  for (let i = current.length - 1; i >= 0; i--) {
+    const entry = current[i] as BuildStepView;
+    if (entry.tool === step.tool && !entry.done) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) return current;
+  const next = current.slice();
+  next[index] = { ...(next[index] as BuildStepView), done: true };
+  return next;
+}
 
 function metaToArtifact(meta: unknown): ArtifactEvent | undefined {
   if (typeof meta !== 'object' || meta === null) return undefined;
@@ -77,7 +145,7 @@ function metaToArtifact(meta: unknown): ArtifactEvent | undefined {
 }
 
 export function useBuilderChat(threadId: string, options: UseBuilderChatOptions = {}): BuilderChat {
-  const { pinnedAppId } = options;
+  const { pinnedAppId, onRoundTrip } = options;
   const mode = useMode();
   const provider = useProvider();
   const model = useModel();
@@ -85,6 +153,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState<string | undefined>(undefined);
+  const [steps, setSteps] = useState<BuildStepView[]>([]);
   const [lastArtifact, setLastArtifact] = useState<ArtifactEvent | undefined>(undefined);
   const [knowledgeEpoch, setKnowledgeEpoch] = useState(0);
   /** Durable thread→app pin (review F10): loaded from the thread row, set on install. */
@@ -195,6 +264,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       ]);
       setBusy(true);
       setActivity(mode === 'subscription' ? 'it’s thinking…' : 'warming up…');
+      // The timeline is per-turn: the previous turn's steps are history, not progress.
+      setSteps([]);
       streamAccumRef.current = '';
       const controller = new AbortController();
       abortRef.current = controller;
@@ -258,6 +329,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               }
             },
             onActivity: (label) => setActivity(label),
+            onStep: (step: BuildStep) => setSteps((current) => applyStep(current, step)),
+            onRoundTrip: (trip) => onRoundTrip?.(trip),
           },
           controller.signal,
         );
@@ -309,7 +382,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           abortRef.current = null;
         });
     },
-    [agent, busy, messages.length, mode, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
+    [agent, busy, messages.length, mode, onRoundTrip, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
   );
 
   const stop = useCallback((): void => {
@@ -319,5 +392,5 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   // Leaving the view aborts any in-flight turn — never leave a request running headless.
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  return { messages, busy, activity, lastArtifact, attachedAppId, knowledgeEpoch, send, stop };
+  return { messages, busy, activity, steps, lastArtifact, attachedAppId, knowledgeEpoch, send, stop };
 }
