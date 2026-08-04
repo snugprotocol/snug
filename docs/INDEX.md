@@ -39,6 +39,7 @@ Optimize for **clarity and maintainability** over cleverness.
 | [engineering/TDD.md](engineering/TDD.md) | Test-first policy + test command table | Before writing tests/implementation |
 | [engineering/SPEC_SYNC.md](engineering/SPEC_SYNC.md) | **How this repo drives the `spec` repo** | Any protocol/schema change |
 | [engineering/PROMPT_TEMPLATES.md](engineering/PROMPT_TEMPLATES.md) | Copy-paste prompts per workflow stage | Steering an agent manually |
+| [`packages/knowledge/prompts/README.md`](../packages/knowledge/prompts/README.md) | **The layered prompt store** (ADR-0004): tree, layers, placeholder rules, goldens — plus the external prompt-engineering references | Authoring or changing any LLM-bound prompt |
 | [tasks/](tasks/README.md) | **Task registry** — one file per work item | Any work session (`/start-task`, `/pickup`) |
 
 ## Living state
