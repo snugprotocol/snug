@@ -1,0 +1,1115 @@
+<!--
+  SOURCE INPUT for TASK-20260803-hub-ops Phase 6 (AC25) — owner-attached 2026-08-03.
+
+  This is the owner's "Flying Pig Feed!" game, VERBATIM as attached. It is NOT a Snug
+  app yet and is NOT wired into examples/ — it is the input to the port.
+
+  It fails examples/validate.test.mjs on four counts, all of which the port must fix
+  WITHOUT changing gameplay, art, audio, or feel:
+    1. No embedded hooks block / no `useSnugApp({` — uses raw window.parent.postMessage.
+    2. Announce type is `cheo-app-announce` (foreign protocol), not the Snug envelope.
+    3. Uses `localStorage` for the high score — dead in a null-origin iframe, so the
+       score silently never persists. Must move to `usePersistedState`.
+    4. No `// 5. RESPONSE SCHEMA` banner, which the validator's hook-block extractor
+       requires as the delimiter between copied hooks and app code.
+
+  The hooks block must be COPIED byte-identically from
+  packages/sdk/embedded/snug-hooks.js — never retyped (lessons.md 2026-07-31).
+
+  This app is also the exemplar for ADR-0011: it is genuinely LLM-FREE — it never calls
+  the agent. The ported version must stay that way.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Flying Pig Feed! 🐷</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; touch-action: none; }
+    body {
+      font-family: 'Comic Sans MS', 'Chalkboard SE', cursive;
+      background: #87CEEB;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #root { width: 100vw; height: 100vh; overflow: hidden; }
+
+    @keyframes float { 0%,100%{transform:translateY(0px) rotate(-3deg)} 50%{transform:translateY(-12px) rotate(3deg)} }
+    @keyframes wiggle { 0%,100%{transform:rotate(-8deg)} 50%{transform:rotate(8deg)} }
+    @keyframes pop { 0%{transform:scale(1)} 30%{transform:scale(1.6)} 100%{transform:scale(0) translateY(-40px); opacity:0;} }
+    @keyframes flyFood { 0%{opacity:1;transform:scale(1)} 100%{opacity:0;transform:scale(0.3)} }
+    @keyframes hitStar { 0%{opacity:1;transform:scale(0.5) rotate(0deg)} 50%{transform:scale(1.8) rotate(180deg)} 100%{opacity:0;transform:scale(0) rotate(360deg)} }
+    @keyframes scoreFloat { 0%{opacity:1;transform:translateY(0)} 100%{opacity:0;transform:translateY(-60px)} }
+    @keyframes cloudMove { 0%{transform:translateX(-200px)} 100%{transform:translateX(110vw)} }
+    @keyframes bgSky { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
+    @keyframes pigAppear { 0%{transform:scale(0) rotate(-20deg);opacity:0} 60%{transform:scale(1.2) rotate(5deg)} 100%{transform:scale(1) rotate(0deg);opacity:1} }
+    @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
+    @keyframes rainbowText { 0%{color:#ff6b6b} 16%{color:#ffa500} 33%{color:#ffdd57} 50%{color:#48c774} 66%{color:#3273dc} 83%{color:#9b59b6} 100%{color:#ff6b6b} }
+    @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
+    @keyframes groundRumble { 0%,100%{transform:translateX(0)} 33%{transform:translateX(-3px)} 66%{transform:translateX(3px)} }
+    @keyframes pigHit { 0%{filter:brightness(1)} 30%{filter:brightness(3) hue-rotate(60deg)} 100%{filter:brightness(1)} }
+    @keyframes slingPull { 0%{transform:scale(1)} 50%{transform:scale(0.9)} 100%{transform:scale(1)} }
+    @keyframes introSlide { 0%{transform:translateY(100%) scale(0.8);opacity:0} 100%{transform:translateY(0) scale(1);opacity:1} }
+    @keyframes titleBounce { 0%,100%{transform:scale(1) rotate(-2deg)} 50%{transform:scale(1.05) rotate(2deg)} }
+    @keyframes sparkle { 0%,100%{opacity:0;transform:scale(0)} 50%{opacity:1;transform:scale(1)} }
+
+    .sky-bg {
+      background: linear-gradient(180deg, #1a6db0 0%, #5ba3d9 30%, #87CEEB 60%, #c8e6f5 80%, #e8f4f8 100%);
+      animation: bgSky 20s ease infinite;
+    }
+    .cloud {
+      position:absolute;
+      font-size:clamp(2.5rem,8vw,5rem);
+      animation: cloudMove linear infinite;
+      opacity:0.85;
+      pointer-events:none;
+      filter: drop-shadow(2px 2px 4px rgba(255,255,255,0.5));
+    }
+    .pig {
+      position:absolute;
+      cursor:pointer;
+      transition:transform 0.1s;
+      font-size:clamp(2.2rem,7vw,4rem);
+      filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));
+      z-index:10;
+    }
+    .pig:hover { transform:scale(1.15); }
+    .food-projectile {
+      position:absolute;
+      font-size:clamp(1.2rem,4vw,2.2rem);
+      animation: flyFood 0.5s ease-in forwards;
+      pointer-events:none;
+      z-index:20;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+    }
+    .hit-effect {
+      position:absolute;
+      font-size:clamp(1.5rem,5vw,3rem);
+      animation: hitStar 0.7s ease-out forwards;
+      pointer-events:none;
+      z-index:30;
+    }
+    .score-popup {
+      position:absolute;
+      font-size:clamp(1.2rem,4vw,2rem);
+      font-weight:900;
+      animation: scoreFloat 1.2s ease-out forwards;
+      pointer-events:none;
+      z-index:40;
+      text-shadow: 2px 2px 0px rgba(0,0,0,0.5);
+    }
+    .sling-ball {
+      position:absolute;
+      transition: all 0.1s ease;
+      cursor:crosshair;
+      z-index:25;
+      filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));
+    }
+    .aim-line {
+      position:absolute;
+      pointer-events:none;
+      z-index:15;
+    }
+    canvas { display:none; }
+
+    .ground {
+      position:absolute;
+      bottom:0;
+      width:100%;
+      height:clamp(60px,12vh,100px);
+      background: linear-gradient(180deg, #4CAF50 0%, #2E7D32 40%, #1B5E20 100%);
+      border-radius: 40% 40% 0 0 / 20px 20px 0 0;
+      box-shadow: 0 -4px 20px rgba(0,100,0,0.4);
+    }
+    .ground::after {
+      content:'🌿🌸🌿🌻🌿🌺🌿🌸🌿🌻🌿🌺🌿🌸🌿';
+      position:absolute;
+      top:-20px;
+      left:0;
+      right:0;
+      font-size:clamp(1rem,3.5vw,1.8rem);
+      white-space:nowrap;
+      overflow:hidden;
+    }
+    .hud {
+      position:absolute;
+      top:0; left:0; right:0;
+      padding: clamp(6px,2vw,14px) clamp(8px,2.5vw,18px);
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      z-index:50;
+      background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 100%);
+      pointer-events:none;
+    }
+    .score-badge {
+      background: linear-gradient(135deg, #FF6B35, #F7C59F);
+      border-radius: 999px;
+      padding: clamp(4px,1.5vw,10px) clamp(10px,3vw,22px);
+      font-size:clamp(0.9rem,3vw,1.4rem);
+      font-weight:900;
+      color:white;
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.4);
+      box-shadow: 0 4px 15px rgba(255,107,53,0.5), inset 0 1px 0 rgba(255,255,255,0.3);
+      border: 2px solid rgba(255,255,255,0.4);
+    }
+    .lives-badge {
+      background: linear-gradient(135deg, #E91E63, #F06292);
+      border-radius: 999px;
+      padding: clamp(4px,1.5vw,10px) clamp(10px,3vw,22px);
+      font-size:clamp(0.9rem,3vw,1.4rem);
+      font-weight:900;
+      color:white;
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.4);
+      box-shadow: 0 4px 15px rgba(233,30,99,0.5), inset 0 1px 0 rgba(255,255,255,0.3);
+      border: 2px solid rgba(255,255,255,0.4);
+    }
+    .level-badge {
+      background: linear-gradient(135deg, #9C27B0, #CE93D8);
+      border-radius: 999px;
+      padding: clamp(4px,1.5vw,10px) clamp(10px,3vw,22px);
+      font-size:clamp(0.9rem,3vw,1.4rem);
+      font-weight:900;
+      color:white;
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.4);
+      box-shadow: 0 4px 15px rgba(156,39,176,0.5), inset 0 1px 0 rgba(255,255,255,0.3);
+      border: 2px solid rgba(255,255,255,0.4);
+    }
+    .food-bar {
+      position:absolute;
+      bottom: clamp(65px,13vh,105px);
+      left:50%;
+      transform:translateX(-50%);
+      display:flex;
+      gap:clamp(4px,1.5vw,10px);
+      align-items:center;
+      z-index:50;
+      background: rgba(255,255,255,0.25);
+      backdrop-filter: blur(8px);
+      border-radius:999px;
+      padding: clamp(4px,1.5vw,8px) clamp(10px,3vw,20px);
+      border: 2px solid rgba(255,255,255,0.5);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+    .food-item {
+      font-size:clamp(1.4rem,5vw,2.4rem);
+      cursor:pointer;
+      border-radius:50%;
+      padding:clamp(4px,1.5vw,8px);
+      transition:all 0.2s;
+      border:3px solid transparent;
+    }
+    .food-item.selected {
+      background:rgba(255,255,255,0.5);
+      border-color:#FFD700;
+      transform:scale(1.25);
+      box-shadow:0 0 15px rgba(255,215,0,0.8);
+    }
+    .food-item:hover { transform:scale(1.15); }
+    .food-label {
+      font-size:clamp(0.55rem,1.8vw,0.85rem);
+      color:white;
+      font-weight:700;
+      text-align:center;
+      text-shadow:1px 1px 2px rgba(0,0,0,0.5);
+    }
+    .combo-banner {
+      position:absolute;
+      top:50%;
+      left:50%;
+      transform:translate(-50%,-50%);
+      font-size:clamp(2rem,8vw,5rem);
+      font-weight:900;
+      animation: rainbowText 1s linear infinite, bounce 0.4s ease infinite;
+      text-shadow: 3px 3px 0 rgba(0,0,0,0.3);
+      pointer-events:none;
+      z-index:60;
+      white-space:nowrap;
+    }
+    .intro-overlay {
+      position:fixed;
+      inset:0;
+      background: linear-gradient(135deg, #FF9FF3 0%, #54A0FF 50%, #5F27CD 100%);
+      z-index:100;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:clamp(12px,3vh,24px);
+      padding:20px;
+    }
+    .intro-card {
+      background: rgba(255,255,255,0.2);
+      backdrop-filter:blur(10px);
+      border-radius:30px;
+      padding:clamp(16px,4vw,32px);
+      border:3px solid rgba(255,255,255,0.5);
+      text-align:center;
+      animation: introSlide 0.6s ease-out;
+      max-width:520px;
+      width:100%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .title-text {
+      font-size:clamp(2.2rem,8vw,4.5rem);
+      font-weight:900;
+      color:white;
+      text-shadow:3px 3px 0 rgba(0,0,0,0.3);
+      animation: titleBounce 1.5s ease-in-out infinite;
+      line-height:1;
+    }
+    .start-btn {
+      background: linear-gradient(135deg, #FFD700, #FFA500);
+      color:white;
+      font-size:clamp(1.2rem,4.5vw,2rem);
+      font-weight:900;
+      border:none;
+      border-radius:999px;
+      padding: clamp(12px,2.5vh,20px) clamp(30px,6vw,60px);
+      cursor:pointer;
+      text-shadow:1px 1px 2px rgba(0,0,0,0.3);
+      box-shadow: 0 8px 30px rgba(255,165,0,0.6), inset 0 2px 0 rgba(255,255,255,0.3);
+      transition:all 0.15s;
+      border:3px solid rgba(255,255,255,0.4);
+      animation: bounce 1s ease infinite;
+      touch-action:manipulation;
+    }
+    .start-btn:hover { transform:scale(1.08) translateY(-2px); }
+    .start-btn:active { transform:scale(0.95); }
+    .game-over-overlay {
+      position:fixed;
+      inset:0;
+      background:rgba(0,0,0,0.7);
+      z-index:100;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      backdrop-filter:blur(4px);
+    }
+    .accuracy-meter {
+      position:absolute;
+      right:clamp(8px,2.5vw,18px);
+      top:50%;
+      transform:translateY(-50%);
+      z-index:50;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:4px;
+    }
+    .acc-bar-bg {
+      width:clamp(16px,2.5vw,22px);
+      height:clamp(80px,20vh,160px);
+      background:rgba(0,0,0,0.3);
+      border-radius:999px;
+      border:2px solid rgba(255,255,255,0.3);
+      overflow:hidden;
+      position:relative;
+    }
+    .acc-bar-fill {
+      position:absolute;
+      bottom:0;
+      width:100%;
+      border-radius:999px;
+      transition:height 0.5s ease, background 0.5s ease;
+    }
+    .sparkle-container { position:absolute; pointer-events:none; z-index:35; }
+    .sparkle { position:absolute; animation:sparkle 0.6s ease-out forwards; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+const APP_DISPLAY_NAME = 'Flying Pig Feed!';
+const APP_DESCRIPTION = 'Throw food at flying pigs and score points! 🐷🍎';
+const APP_ICON_EMOJI = '🐷';
+const APP_ICON_COLOR = '#FF9FF3';
+
+// ── Audio Engine ─────────────────────────────────────────────────────────────
+const AudioEngine = (() => {
+  let ctx = null;
+  const getCtx = () => {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    return ctx;
+  };
+  const oink = () => {
+    try {
+      const c = getCtx();
+      const o = c.createOscillator(); const g = c.createGain();
+      o.connect(g); g.connect(c.destination);
+      o.type = 'sine'; o.frequency.setValueAtTime(350, c.currentTime);
+      o.frequency.exponentialRampToValueAtTime(200, c.currentTime + 0.15);
+      o.frequency.exponentialRampToValueAtTime(280, c.currentTime + 0.3);
+      g.gain.setValueAtTime(0.4, c.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.4);
+      o.start(c.currentTime); o.stop(c.currentTime + 0.4);
+    } catch(e){}
+  };
+  const hit = (big=false) => {
+    try {
+      const c = getCtx();
+      // Satisfying "splat" sound
+      const buf = c.createBuffer(1, c.sampleRate*0.3, c.sampleRate);
+      const d = buf.getChannelData(0);
+      for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.exp(-i/(c.sampleRate*0.08));
+      const src = c.createBufferSource(); src.buffer = buf;
+      const g = c.createGain(); g.gain.setValueAtTime(big?0.7:0.45, c.currentTime);
+      const f = c.createBiquadFilter(); f.type='lowpass'; f.frequency.value=big?1200:800;
+      src.connect(f); f.connect(g); g.connect(c.destination);
+      src.start();
+      // Bonus boing for big hit
+      if(big){
+        const o = c.createOscillator(); const g2 = c.createGain();
+        o.connect(g2); g2.connect(c.destination);
+        o.type='sine'; o.frequency.setValueAtTime(600,c.currentTime);
+        o.frequency.exponentialRampToValueAtTime(1200,c.currentTime+0.1);
+        g2.gain.setValueAtTime(0.3,c.currentTime);
+        g2.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.25);
+        o.start(c.currentTime); o.stop(c.currentTime+0.25);
+      }
+    } catch(e){}
+  };
+  const miss = () => {
+    try {
+      const c = getCtx();
+      const o = c.createOscillator(); const g = c.createGain();
+      o.connect(g); g.connect(c.destination);
+      o.type='sawtooth'; o.frequency.setValueAtTime(200,c.currentTime);
+      o.frequency.exponentialRampToValueAtTime(80,c.currentTime+0.3);
+      g.gain.setValueAtTime(0.2,c.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.35);
+      o.start(c.currentTime); o.stop(c.currentTime+0.35);
+    } catch(e){}
+  };
+  const combo = () => {
+    try {
+      const c = getCtx();
+      [0,0.08,0.16,0.24].forEach((t,i)=>{
+        const o = c.createOscillator(); const g = c.createGain();
+        o.connect(g); g.connect(c.destination);
+        o.type='sine';
+        const freqs=[523,659,784,1047];
+        o.frequency.setValueAtTime(freqs[i],c.currentTime+t);
+        g.gain.setValueAtTime(0.3,c.currentTime+t);
+        g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+t+0.12);
+        o.start(c.currentTime+t); o.stop(c.currentTime+t+0.15);
+      });
+    } catch(e){}
+  };
+  const launch = () => {
+    try {
+      const c = getCtx();
+      const o = c.createOscillator(); const g = c.createGain();
+      o.connect(g); g.connect(c.destination);
+      o.type='sine'; o.frequency.setValueAtTime(800,c.currentTime);
+      o.frequency.exponentialRampToValueAtTime(400,c.currentTime+0.12);
+      g.gain.setValueAtTime(0.25,c.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.15);
+      o.start(c.currentTime); o.stop(c.currentTime+0.15);
+    } catch(e){}
+  };
+  const levelUp = () => {
+    try {
+      const c = getCtx();
+      [0,0.1,0.2,0.3,0.4].forEach((t,i)=>{
+        const freqs=[523,659,784,880,1047];
+        const o = c.createOscillator(); const g = c.createGain();
+        o.connect(g); g.connect(c.destination);
+        o.type='triangle';
+        o.frequency.setValueAtTime(freqs[i],c.currentTime+t);
+        g.gain.setValueAtTime(0.35,c.currentTime+t);
+        g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+t+0.18);
+        o.start(c.currentTime+t); o.stop(c.currentTime+t+0.2);
+      });
+    } catch(e){}
+  };
+  const bgMusic = (() => {
+    let playing = false; let nodes = [];
+    const notes = [261,294,329,349,392,440,494,523];
+    const melody = [4,4,5,4,7,6, 4,4,5,4,8,7, 4,4,11,9,6,5,4, 10,10,9,6,7,6];
+    const freqMap = [0,0,0,0,261,294,329,349,392,440,494,523,587];
+    let idx = 0; let timerId = null;
+    const playNote = () => {
+      if(!playing) return;
+      try {
+        const c = getCtx();
+        const f = freqMap[melody[idx % melody.length]] || 261;
+        idx++;
+        const o = c.createOscillator(); const g = c.createGain();
+        o.connect(g); g.connect(c.destination);
+        o.type='triangle'; o.frequency.value=f;
+        g.gain.setValueAtTime(0.06,c.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.35);
+        o.start(c.currentTime); o.stop(c.currentTime+0.38);
+        nodes.push(o);
+      } catch(e){}
+      timerId = setTimeout(playNote, 300);
+    };
+    return {
+      start(){ if(!playing){ playing=true; playNote(); } },
+      stop(){ playing=false; if(timerId) clearTimeout(timerId); }
+    };
+  })();
+  return { oink, hit, miss, combo, launch, levelUp, bgMusic };
+})();
+
+// ── Food types ───────────────────────────────────────────────────────────────
+const FOODS = [
+  { emoji:'🍎', name:'Apple',   pts:10, size:'med', color:'#ff4444' },
+  { emoji:'🌽', name:'Corn',    pts:15, size:'med', color:'#FFD700' },
+  { emoji:'🍩', name:'Donut',   pts:20, size:'lrg', color:'#FF69B4' },
+  { emoji:'🥕', name:'Carrot',  pts:12, size:'sml', color:'#FF8C00' },
+  { emoji:'🍰', name:'Cake',    pts:25, size:'lrg', color:'#FFB6C1' },
+  { emoji:'🍓', name:'Berry',   pts:8,  size:'sml', color:'#DC143C' },
+];
+
+// ── Pig types ────────────────────────────────────────────────────────────────
+const PIG_TYPES = [
+  { emoji:'🐷', wings:'🦋', color:'#FFB6C1', pts:10, size:1.0, name:'Pinky'  },
+  { emoji:'🐽', wings:'🦅', color:'#FFA07A', pts:15, size:0.9, name:'Snorty' },
+  { emoji:'🐖', wings:'🦆', color:'#FF69B4', pts:20, size:0.8, name:'Oink'   },
+];
+
+const COMBO_LABELS = ['','','','x3 COMBO! 🔥','x4 WOW! 🌟','x5 AMAZING! 💥','x6 UNSTOPPABLE! ⚡','x7+ LEGENDARY! 👑'];
+
+// ── Utility helpers ──────────────────────────────────────────────────────────
+const randBetween = (a,b) => Math.random()*(b-a)+a;
+const clamp = (v,mn,mx) => Math.max(mn,Math.min(mx,v));
+
+// ── Main App ─────────────────────────────────────────────────────────────────
+function App() {
+  // Bridge
+  const bridgeReadyRef = useRef(false);
+  useEffect(() => {
+    window.parent.postMessage({
+      type:'cheo-app-announce',
+      payload:{ appId:'flying-pig-feed', displayName:APP_DISPLAY_NAME, description:APP_DESCRIPTION, iconEmoji:APP_ICON_EMOJI, iconColor:APP_ICON_COLOR }
+    },'*');
+    const h = (e) => { if(e.data?.type==='cheo-app-ready') bridgeReadyRef.current=true; };
+    window.addEventListener('message',h);
+    return ()=>window.removeEventListener('message',h);
+  },[]);
+
+  // Game state
+  const [screen, setScreen] = useState('intro'); // intro | playing | gameover
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(() => parseInt(localStorage.getItem('fpf-hs')||'0'));
+  const [lives, setLives] = useState(5);
+  const [level, setLevel] = useState(1);
+  const [selectedFood, setSelectedFood] = useState(0);
+  const [pigs, setPigs] = useState([]);
+  const [projectiles, setProjectiles] = useState([]);
+  const [effects, setEffects] = useState([]);
+  const [scorePopups, setScorePopups] = useState([]);
+  const [combo, setCombo] = useState(0);
+  const [comboLabel, setComboLabel] = useState('');
+  const [accuracy, setAccuracy] = useState({ hits:0, shots:0 });
+  const [isPulling, setIsPulling] = useState(false);
+  const [pullPos, setPullPos] = useState(null);
+  const [aimTarget, setAimTarget] = useState(null);
+  const [clouds, setClouds] = useState([]);
+  const [musicOn, setMusicOn] = useState(true);
+  const [levelUpBanner, setLevelUpBanner] = useState(false);
+
+  const gameAreaRef = useRef(null);
+  const pigsRef = useRef([]);
+  const animRef = useRef(null);
+  const pigIdRef = useRef(0);
+  const effectIdRef = useRef(0);
+  const spawnTimerRef = useRef(null);
+  const comboTimerRef = useRef(null);
+  const lastMissRef = useRef(0);
+  const screenRef = useRef('intro');
+  screenRef.current = screen;
+
+  // Slingshot base position (bottom-center)
+  const [slingPos, setSlingPos] = useState({ x:0, y:0 });
+  useEffect(() => {
+    const update = () => {
+      const vw = window.innerWidth, vh = window.innerHeight;
+      setSlingPos({ x: vw*0.15, y: vh - (vh*0.14) - 20 });
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  },[]);
+
+  // Accuracy ratio
+  const accRatio = accuracy.shots > 0 ? accuracy.hits/accuracy.shots : 0.5;
+
+  // Pig speed multiplier: higher accuracy → faster pigs (more challenge)
+  const speedMult = useMemo(() => {
+    const base = 0.6 + (level-1)*0.2;
+    const accBoost = accRatio * 1.4;
+    return clamp(base + accBoost, 0.5, 3.5);
+  }, [accRatio, level]);
+
+  // Clouds
+  useEffect(() => {
+    const initial = Array.from({length:5},(_,i)=>({
+      id:i, emoji:['☁️','🌤️','⛅','☁️','🌥️'][i],
+      x: Math.random()*80, y: randBetween(5,40),
+      dur: randBetween(18,35), delay:-Math.random()*20,
+    }));
+    setClouds(initial);
+    const interval = setInterval(()=>{
+      setClouds(c=>[...c.slice(-8),{
+        id:Date.now(), emoji:['☁️','⛅','🌤️','☁️'][Math.floor(Math.random()*4)],
+        x:-10, y:randBetween(5,38), dur:randBetween(20,38), delay:0,
+      }]);
+    },6000);
+    return ()=>clearInterval(interval);
+  },[]);
+
+  // Spawn pigs
+  const spawnPig = useCallback(() => {
+    if(screenRef.current !== 'playing') return;
+    const vh = window.innerHeight, vw = window.innerWidth;
+    const groundY = vh*0.82;
+    const type = PIG_TYPES[Math.floor(Math.random()*PIG_TYPES.length)];
+    const fromLeft = Math.random() > 0.5;
+    const startX = fromLeft ? -80 : vw+80;
+    const endX   = fromLeft ? vw+80 : -80;
+    const y = randBetween(vh*0.08, groundY - 80);
+    const dur = (3000 + Math.random()*2000) / speedMult;
+    const id = ++pigIdRef.current;
+    const pig = {
+      id, type, startX, endX, y,
+      duration: dur, startTime: Date.now(),
+      bobAmp: randBetween(15,35), bobFreq: randBetween(1.5,3),
+      hit: false, hitTime: 0,
+    };
+    setPigs(p=>[...p.filter(px=>!px.hit || Date.now()-px.hitTime<600), pig]);
+    pigsRef.current = [...pigsRef.current.filter(px=>!px.hit || Date.now()-px.hitTime<600), pig];
+    AudioEngine.oink();
+  },[speedMult]);
+
+  // Pig animation loop
+  useEffect(()=>{
+    if(screen !== 'playing') return;
+    let rafId;
+    const animate = () => {
+      const now = Date.now();
+      setPigs(prev=>{
+        const next = prev.map(pig=>{
+          if(pig.hit) return pig;
+          const elapsed = now - pig.startTime;
+          const t = clamp(elapsed/pig.duration,0,1);
+          const x = pig.startX + (pig.endX - pig.startX)*t;
+          const bobY = pig.y + Math.sin(elapsed/1000*pig.bobFreq*Math.PI*2)*pig.bobAmp;
+          if(t>=1 && !pig.missed){
+            // pig escaped
+            setLives(l=>{
+              const nl = l-1;
+              if(nl<=0){ endGame(); }
+              return nl;
+            });
+            AudioEngine.miss();
+            return {...pig, missed:true, x, bobY};
+          }
+          return {...pig, x, bobY};
+        }).filter(pig=>!pig.missed);
+        pigsRef.current = next;
+        return next;
+      });
+      rafId = requestAnimationFrame(animate);
+    };
+    rafId = requestAnimationFrame(animate);
+    return ()=>cancelAnimationFrame(rafId);
+  },[screen]);
+
+  // Spawn timer
+  useEffect(()=>{
+    if(screen !== 'playing') return;
+    const baseInterval = 1800 - (level-1)*120;
+    const interval = Math.max(700, baseInterval) / clamp(speedMult, 0.8, 2);
+    spawnTimerRef.current = setInterval(spawnPig, interval);
+    return ()=>clearInterval(spawnTimerRef.current);
+  },[screen, level, speedMult]);
+
+  // Level up when score crosses threshold
+  useEffect(()=>{
+    const newLevel = Math.floor(score/200)+1;
+    if(newLevel > level && screen==='playing'){
+      setLevel(newLevel);
+      setLevelUpBanner(true);
+      AudioEngine.levelUp();
+      setTimeout(()=>setLevelUpBanner(false),2000);
+    }
+  },[score, level, screen]);
+
+  // Music
+  useEffect(()=>{
+    if(screen==='playing' && musicOn) AudioEngine.bgMusic.start();
+    else AudioEngine.bgMusic.stop();
+    return ()=>AudioEngine.bgMusic.stop();
+  },[screen, musicOn]);
+
+  const endGame = useCallback(()=>{
+    setScreen('gameover');
+    AudioEngine.bgMusic.stop();
+    setHighScore(prev=>{
+      const hs = Math.max(prev, score);
+      localStorage.setItem('fpf-hs', hs);
+      return hs;
+    });
+  },[score]);
+
+  // Lives → 0
+  useEffect(()=>{
+    if(lives<=0 && screen==='playing') endGame();
+  },[lives, screen]);
+
+  const startGame = () => {
+    setScreen('playing');
+    setScore(0); setLives(5); setLevel(1);
+    setCombo(0); setComboLabel('');
+    setAccuracy({hits:0,shots:0});
+    setPigs([]); pigsRef.current=[];
+    setProjectiles([]); setEffects([]); setScorePopups([]);
+    AudioEngine.bgMusic.start();
+  };
+
+  // ── Shooting ───────────────────────────────────────────────────────────────
+  const getEventPos = (e, el) => {
+    const r = el.getBoundingClientRect();
+    if(e.touches && e.touches.length>0){
+      return { x: e.touches[0].clientX - r.left, y: e.touches[0].clientY - r.top };
+    }
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+
+  const handlePointerDown = (e) => {
+    if(screen!=='playing') return;
+    e.preventDefault();
+    const pos = getEventPos(e, gameAreaRef.current);
+    setIsPulling(true);
+    setPullPos(pos);
+    setAimTarget(pos);
+  };
+
+  const handlePointerMove = (e) => {
+    if(!isPulling || screen!=='playing') return;
+    e.preventDefault();
+    const pos = getEventPos(e, gameAreaRef.current);
+    setAimTarget(pos);
+  };
+
+  const handlePointerUp = (e) => {
+    if(!isPulling || screen!=='playing') return;
+    e.preventDefault();
+    const pos = aimTarget || pullPos;
+    setIsPulling(false);
+    setPullPos(null);
+    setAimTarget(null);
+    if(!pos) return;
+
+    // Fire projectile
+    const food = FOODS[selectedFood];
+    const projId = ++effectIdRef.current;
+    const startX = slingPos.x;
+    const startY = slingPos.y;
+
+    setProjectiles(p=>[...p, {
+      id: projId, food,
+      startX, startY,
+      targetX: pos.x, targetY: pos.y,
+      fired: Date.now(),
+    }]);
+    AudioEngine.launch();
+    setAccuracy(a=>({...a, shots: a.shots+1}));
+
+    // Check pig hit with trajectory
+    const vx = pos.x - startX, vy = pos.y - startY;
+    const len = Math.sqrt(vx*vx+vy*vy);
+    const ux = vx/len, uy = vy/len;
+
+    const hitRadius = clamp(55 + (window.innerWidth * 0.04), 45, 90);
+
+    let hitPig = null;
+    let bestDist = Infinity;
+
+    pigsRef.current.forEach(pig=>{
+      if(pig.hit || pig.missed) return;
+      const px = pig.x, py = pig.bobY ?? pig.y;
+      // Project pig onto aim ray
+      const dx = px - startX, dy = py - startY;
+      const dot = dx*ux + dy*uy;
+      if(dot < 0) return;
+      const closestX = startX + ux*dot;
+      const closestY = startY + uy*dot;
+      const dist = Math.sqrt((px-closestX)**2 + (py-closestY)**2);
+      if(dist < hitRadius && dist < bestDist){
+        bestDist = dist;
+        hitPig = pig;
+      }
+    });
+
+    if(hitPig){
+      // Hit!
+      AudioEngine.hit(bestDist < hitRadius*0.4);
+      setAccuracy(a=>({...a, hits:a.hits+1}));
+      const newCombo = combo+1;
+      setCombo(newCombo);
+      if(comboTimerRef.current) clearTimeout(comboTimerRef.current);
+      comboTimerRef.current = setTimeout(()=>setCombo(0), 2500);
+      if(newCombo>=3){
+        AudioEngine.combo();
+        setComboLabel(COMBO_LABELS[Math.min(newCombo,7)]);
+        setTimeout(()=>setComboLabel(''),1500);
+      }
+      const comboMult = newCombo>=3 ? newCombo : 1;
+      const pts = food.pts * hitPig.type.pts / 10 * comboMult;
+      const finalPts = Math.round(pts);
+      setScore(s=>s+finalPts);
+
+      // Score popup
+      const popId = ++effectIdRef.current;
+      setScorePopups(p=>[...p, {
+        id:popId, x:hitPig.x, y:hitPig.bobY??hitPig.y,
+        text: newCombo>=3 ? `+${finalPts} x${newCombo}!` : `+${finalPts}`,
+        color: newCombo>=3 ? '#FFD700' : '#ffffff',
+        fired:Date.now(),
+      }]);
+      setTimeout(()=>setScorePopups(p=>p.filter(sp=>sp.id!==popId)),1300);
+
+      // Hit effect stars
+      const effId = ++effectIdRef.current;
+      setEffects(ef=>[...ef, { id:effId, x:hitPig.x, y:hitPig.bobY??hitPig.y, big:newCombo>=3, fired:Date.now() }]);
+      setTimeout(()=>setEffects(ef=>ef.filter(e=>e.id!==effId)),800);
+
+      // Remove pig
+      setPigs(p=>p.map(pg=>pg.id===hitPig.id ? {...pg, hit:true, hitTime:Date.now()} : pg));
+      pigsRef.current = pigsRef.current.map(pg=>pg.id===hitPig.id?{...pg,hit:true,hitTime:Date.now()}:pg);
+      setTimeout(()=>{
+        setPigs(p=>p.filter(pg=>pg.id!==hitPig.id));
+        pigsRef.current=pigsRef.current.filter(pg=>pg.id!==hitPig.id);
+      },600);
+    } else {
+      // Miss
+      AudioEngine.miss();
+      setCombo(0);
+      if(comboTimerRef.current) clearTimeout(comboTimerRef.current);
+    }
+
+    // Remove projectile after animation
+    setTimeout(()=>setProjectiles(p=>p.filter(pr=>pr.id!==projId)),500);
+  };
+
+  // ── Slingshot aim line ─────────────────────────────────────────────────────
+  const renderAimLine = () => {
+    if(!isPulling || !aimTarget) return null;
+    const sx = slingPos.x, sy = slingPos.y;
+    const tx = aimTarget.x, ty = aimTarget.y;
+    const dots = [];
+    for(let i=1;i<=10;i++){
+      const t = i/10;
+      dots.push({
+        x: sx+(tx-sx)*t,
+        y: sy+(ty-sy)*t - Math.sin(Math.PI*t)*40,
+        alpha: 1-t*0.6,
+        size: 8-i*0.5,
+      });
+    }
+    return dots.map((d,i)=>(
+      <div key={i} style={{
+        position:'absolute',
+        left:d.x-d.size/2, top:d.y-d.size/2,
+        width:d.size, height:d.size,
+        borderRadius:'50%',
+        background: `rgba(255,255,255,${d.alpha})`,
+        pointerEvents:'none',
+        zIndex:15,
+        boxShadow:'0 0 4px rgba(255,255,255,0.5)',
+      }}/>
+    ));
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  if(screen==='intro') return (
+    <div className="intro-overlay">
+      <div style={{fontSize:'clamp(5rem,15vw,9rem)',filter:'drop-shadow(0 8px 20px rgba(0,0,0,0.3))',animation:'titleBounce 1.5s ease infinite'}}>🐷</div>
+      <div className="title-text">Flying Pig<br/>Feed!</div>
+      <div className="intro-card">
+        <div style={{fontSize:'clamp(0.85rem,2.8vw,1.1rem)',color:'white',lineHeight:1.7,fontWeight:700}}>
+          🎯 <b>Aim</b> the slingshot at flying pigs!<br/>
+          🍎 Pick your <b>food</b> and tap to throw!<br/>
+          🔥 Hit combos for <b>bonus points!</b><br/>
+          ⚡ The better you aim, the <b>faster they fly!</b>
+        </div>
+      </div>
+      <button className="start-btn" onClick={startGame}>
+        🚀 Let's Play!
+      </button>
+      <div style={{color:'rgba(255,255,255,0.8)',fontSize:'clamp(0.8rem,2.5vw,1rem)',fontWeight:700}}>
+        🏆 Best Score: {highScore}
+      </div>
+      <div style={{color:'rgba(255,255,255,0.6)',fontSize:'clamp(0.65rem,2vw,0.85rem)'}}>
+        🔊 Turn up your sound for the full experience!
+      </div>
+    </div>
+  );
+
+  if(screen==='gameover') return (
+    <div className="game-over-overlay">
+      <div style={{
+        background:'linear-gradient(135deg,#FF9FF3,#54A0FF)',
+        borderRadius:30,padding:'clamp(20px,5vw,40px)',
+        textAlign:'center',
+        animation:'introSlide 0.5s ease-out',
+        border:'3px solid rgba(255,255,255,0.5)',
+        boxShadow:'0 20px 60px rgba(0,0,0,0.5)',
+        maxWidth:480, width:'90%',
+      }}>
+        <div style={{fontSize:'clamp(3rem,10vw,6rem)'}}>🐷</div>
+        <div style={{fontSize:'clamp(1.8rem,6vw,3rem)',fontWeight:900,color:'white',textShadow:'2px 2px 0 rgba(0,0,0,0.3)'}}>
+          Game Over!
+        </div>
+        <div style={{fontSize:'clamp(1.1rem,3.5vw,1.6rem)',color:'white',margin:'12px 0',fontWeight:700}}>
+          Score: <span style={{color:'#FFD700'}}>{score}</span>
+        </div>
+        {score >= highScore && score > 0 && (
+          <div style={{fontSize:'clamp(0.9rem,3vw,1.2rem)',color:'#FFD700',fontWeight:900,marginBottom:8}}>
+            🏆 NEW HIGH SCORE! 🏆
+          </div>
+        )}
+        <div style={{fontSize:'clamp(0.85rem,2.5vw,1rem)',color:'rgba(255,255,255,0.85)',marginBottom:16,fontWeight:700}}>
+          Best: {highScore} | Level: {level} | Accuracy: {accuracy.shots>0?Math.round(accuracy.hits/accuracy.shots*100):0}%
+        </div>
+        <div style={{display:'flex',gap:12,justifyContent:'center',flexWrap:'wrap'}}>
+          <button className="start-btn" onClick={startGame} style={{fontSize:'clamp(1rem,3.5vw,1.4rem)',padding:'12px 28px'}}>
+            🔄 Play Again!
+          </button>
+          <button onClick={()=>setScreen('intro')} style={{
+            background:'rgba(255,255,255,0.2)',color:'white',fontSize:'clamp(0.9rem,3vw,1.2rem)',
+            fontWeight:900,border:'3px solid rgba(255,255,255,0.4)',borderRadius:999,
+            padding:'12px 22px',cursor:'pointer'
+          }}>
+            🏠 Home
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const accPct = Math.round(accRatio*100);
+  const accColor = accRatio>0.7?'#48c774':accRatio>0.4?'#FFD700':'#ff4444';
+
+  return (
+    <div ref={gameAreaRef}
+      className="sky-bg"
+      style={{width:'100vw',height:'100vh',position:'relative',overflow:'hidden',cursor:isPulling?'crosshair':'default'}}
+      onMouseDown={handlePointerDown}
+      onMouseMove={handlePointerMove}
+      onMouseUp={handlePointerUp}
+      onTouchStart={handlePointerDown}
+      onTouchMove={handlePointerMove}
+      onTouchEnd={handlePointerUp}
+    >
+      {/* Clouds */}
+      {clouds.map(cl=>(
+        <div key={cl.id} className="cloud" style={{
+          top:`${cl.y}%`,
+          animationDuration:`${cl.dur}s`,
+          animationDelay:`${cl.delay}s`,
+          fontSize:`clamp(2.5rem,8vw,5rem)`,
+        }}>{cl.emoji}</div>
+      ))}
+
+      {/* Pigs */}
+      {pigs.map(pig=>(
+        <div key={pig.id} className="pig" style={{
+          left: pig.x,
+          top: pig.bobY ?? pig.y,
+          transform: `translateX(-50%) translateY(-50%) scaleX(${pig.endX > pig.startX ? 1 : -1}) ${pig.hit ? 'scale(1.5)' : 'scale(1)'}`,
+          opacity: pig.hit ? 0 : 1,
+          transition: pig.hit ? 'opacity 0.5s, transform 0.3s' : 'none',
+          animation: pig.hit ? 'none' : `float ${2/pig.bobFreq}s ease-in-out infinite`,
+          pointerEvents: 'none',
+          fontSize: `clamp(${2.2*pig.type.size}rem,${7*pig.type.size}vw,${4*pig.type.size}rem)`,
+        }}>
+          {pig.type.emoji}
+        </div>
+      ))}
+
+      {/* Aim line dots */}
+      {renderAimLine()}
+
+      {/* Slingshot */}
+      <div style={{
+        position:'absolute',
+        left: slingPos.x,
+        top: slingPos.y,
+        transform:'translate(-50%,-50%)',
+        fontSize:'clamp(2.5rem,8vw,4.5rem)',
+        zIndex:20,
+        filter:'drop-shadow(0 4px 12px rgba(0,0,0,0.4))',
+        animation: isPulling ? 'slingPull 0.3s ease' : 'none',
+        pointerEvents:'none',
+      }}>
+        🪝
+      </div>
+
+      {/* Food ball on sling */}
+      {!isPulling && (
+        <div style={{
+          position:'absolute',
+          left:slingPos.x+8,
+          top:slingPos.y-clamp(30,6,50),
+          transform:'translate(-50%,-50%)',
+          fontSize:'clamp(1.5rem,5vw,2.5rem)',
+          zIndex:22,
+          pointerEvents:'none',
+          filter:'drop-shadow(0 2px 6px rgba(0,0,0,0.3))',
+        }}>
+          {FOODS[selectedFood].emoji}
+        </div>
+      )}
+      {isPulling && aimTarget && (
+        <div style={{
+          position:'absolute',
+          left:aimTarget.x,
+          top:aimTarget.y,
+          transform:'translate(-50%,-50%)',
+          fontSize:'clamp(1.6rem,5vw,2.6rem)',
+          zIndex:22,
+          pointerEvents:'none',
+          filter:'drop-shadow(0 4px 10px rgba(0,0,0,0.4))',
+          animation:'wiggle 0.2s linear infinite',
+        }}>
+          {FOODS[selectedFood].emoji}
+        </div>
+      )}
+
+      {/* Projectiles */}
+      {projectiles.map(proj=>(
+        <div key={proj.id} className="food-projectile" style={{
+          left: proj.targetX,
+          top: proj.targetY,
+          transform:'translate(-50%,-50%)',
+        }}>
+          {proj.food.emoji}
+        </div>
+      ))}
+
+      {/* Hit effects */}
+      {effects.map(ef=>(
+        <div key={ef.id} className="hit-effect" style={{ left:ef.x, top:ef.y, transform:'translate(-50%,-50%)' }}>
+          {ef.big ? '🌟💥✨' : '⭐✨'}
+        </div>
+      ))}
+
+      {/* Score popups */}
+      {scorePopups.map(sp=>(
+        <div key={sp.id} className="score-popup" style={{ left:sp.x, top:sp.y, color:sp.color, transform:'translate(-50%,-100%)' }}>
+          {sp.text}
+        </div>
+      ))}
+
+      {/* Combo banner */}
+      {comboLabel && <div className="combo-banner">{comboLabel}</div>}
+      {levelUpBanner && (
+        <div style={{
+          position:'absolute',top:'35%',left:'50%',transform:'translate(-50%,-50%)',
+          fontSize:'clamp(1.8rem,6vw,3.5rem)',fontWeight:900,
+          color:'#FFD700',textShadow:'3px 3px 0 rgba(0,0,0,0.4)',
+          animation:'scoreFloat 2s ease-out forwards',
+          pointerEvents:'none',zIndex:60,whiteSpace:'nowrap',
+        }}>
+          🎉 Level {level}! 🎉
+        </div>
+      )}
+
+      {/* Ground */}
+      <div className="ground" />
+
+      {/* HUD */}
+      <div className="hud">
+        <div className="score-badge">⭐ {score}</div>
+        <div className="level-badge">Lv.{level}</div>
+        <div className="lives-badge">{'❤️'.repeat(lives)}</div>
+      </div>
+
+      {/* Music toggle */}
+      <button
+        onClick={(e)=>{e.stopPropagation();setMusicOn(m=>!m);}}
+        style={{
+          position:'absolute',top:clamp(40,10,70),left:'50%',transform:'translateX(-50%)',
+          background:'rgba(255,255,255,0.25)',border:'2px solid rgba(255,255,255,0.4)',
+          borderRadius:999,padding:'4px 14px',cursor:'pointer',
+          fontSize:'clamp(0.7rem,2vw,0.85rem)',fontWeight:700,color:'white',
+          zIndex:55,backdropFilter:'blur(4px)',
+          touchAction:'manipulation',
+        }}
+      >
+        {musicOn?'🎵 Music On':'🔇 Music Off'}
+      </button>
+
+      {/* Accuracy meter */}
+      <div className="accuracy-meter">
+        <div style={{fontSize:'clamp(0.55rem,1.8vw,0.75rem)',color:'white',fontWeight:800,textShadow:'1px 1px 2px rgba(0,0,0,0.5)'}}>
+          🎯
+        </div>
+        <div className="acc-bar-bg">
+          <div className="acc-bar-fill" style={{
+            height:`${accPct}%`,
+            background:`linear-gradient(0deg, ${accColor}, ${accColor}dd)`,
+          }}/>
+        </div>
+        <div style={{fontSize:'clamp(0.5rem,1.6vw,0.7rem)',color:'white',fontWeight:800,textShadow:'1px 1px 2px rgba(0,0,0,0.5)'}}>
+          {accPct}%
+        </div>
+        <div style={{fontSize:'clamp(0.45rem,1.4vw,0.65rem)',color:'rgba(255,255,255,0.75)',fontWeight:700,textShadow:'1px 1px 2px rgba(0,0,0,0.5)',textAlign:'center',maxWidth:40}}>
+          ⚡x{speedMult.toFixed(1)}
+        </div>
+      </div>
+
+      {/* Food selector */}
+      <div className="food-bar" onClick={e=>e.stopPropagation()}>
+        {FOODS.map((f,i)=>(
+          <div key={i} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2}}>
+            <div
+              className={`food-item${selectedFood===i?' selected':''}`}
+              onClick={(e)=>{e.stopPropagation();setSelectedFood(i);}}
+              onTouchStart={(e)=>{e.stopPropagation();e.preventDefault();setSelectedFood(i);}}
+            >
+              {f.emoji}
+            </div>
+            <div className="food-label">{f.pts}pts</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Instruction hint (first few seconds) */}
+      {accuracy.shots===0 && (
+        <div style={{
+          position:'absolute',bottom:`clamp(120px,22vh,180px)`,left:'50%',
+          transform:'translateX(-50%)',
+          background:'rgba(255,255,255,0.3)',backdropFilter:'blur(6px)',
+          borderRadius:20,padding:'8px 18px',
+          color:'white',fontWeight:800,fontSize:'clamp(0.75rem,2.5vw,1rem)',
+          textShadow:'1px 1px 2px rgba(0,0,0,0.4)',
+          border:'2px solid rgba(255,255,255,0.5)',
+          animation:'bounce 1.5s ease infinite',
+          pointerEvents:'none',zIndex:50,textAlign:'center',
+          whiteSpace:'nowrap',
+        }}>
+          👆 Press & drag to aim • Release to throw!
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

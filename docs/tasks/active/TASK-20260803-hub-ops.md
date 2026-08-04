@@ -1,6 +1,6 @@
 # TASK-20260803-hub-ops: long-run builds, build observability, app delete, LLM-free apps
 
-- **Status**: planned (awaiting plan approval)
+- **Status**: in-progress — **Phases 0–2 done and committed; resume at Phase 3** (see the handoff at the bottom of this file)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point; `packages/db` gains a destructive cascade delete; `apps/server` request/timeout config)
 - **Branch**: `feat/TASK-20260803-hub-ops`
@@ -139,3 +139,72 @@ The remaining four are real work.
 - State: **awaiting plan approval — no implementation code written.**
 - Next step: on approval, Phase 0 → Phase 6 in order, tests first at each step. High tier also requires a fresh-context AI review of this plan before implementation.
 - Open questions: none blocking. Iteration-ceiling value and the exact server timeout numbers are proposed at implementation time as part of Phase 1/2 tests.
+
+### 2026-08-03 — Jeetu — session (plan approved; Phases 0–2 implemented)
+- Done: **plan approved** by owner, with one explicit confirmation: *"Delete must also delete pinned, the factory version & bootstrap message"* (this is AC17 as written — no change to the plan). Implemented Phases 0, 1 and 2 test-first; each committed with the full suite green.
+- State: 4 commits on `feat/TASK-20260803-hub-ops`, working tree clean, `pnpm test` = **19/19 tasks, 666 tests**.
+- Next step: **Phase 3** (playground step timeline + LLM round-trip inspector). See the handoff block below.
+- Open questions: none blocking.
+
+---
+
+## HANDOFF — resume here (written 2026-08-03, end of session)
+
+**Branch**: `feat/TASK-20260803-hub-ops` (off `main`), working tree **clean**.
+
+```
+8715521 Phase 2 — server: 30-min lifetimes + SSE step events
+a5454f8 Phase 1 — adapters: the real long-build fix
+381939d Phase 0 — SSO render-condition tests + enable runbook
+d4a5bc5 Gate 1-2 — spec, interview, plan, ADR-0011 draft
+```
+
+**Baseline to preserve**: `pnpm test` → 19/19 tasks, 666 tests. Per-package: protocol 103 · knowledge 55 · runner 91 · db 145 · sdk 33 · server 94 · adapters 72 · playground 73. (Deltas so far: adapters 56→72, server 91→94, playground 67→73.)
+
+### What is DONE (do not redo)
+
+**Phase 0 — item 1 (SSO). No feature work was needed; it is configuration.**
+- The `sign in with google` button already existed at `apps/playground/src/views/SettingsView.tsx:237` and `App.tsx:124`, gated on `GET /auth/me` returning **401**. That route only exists when the server boots with `SNUG_AUTH=google`; otherwise it 404s → `authState` `'unavailable'` → both surfaces hide **by design**.
+- Added `apps/playground/src/__tests__/authSurface.test.tsx` (6 tests) and `docs/runbooks/enable-google-sso.md`. Exported `IdentityChip` / `AccountCard` for test (no behavior change).
+- **Tell the user**: to see the button, set `SNUG_AUTH=google`, `SNUG_SESSION_SECRET` (≥32 chars), `SNUG_GOOGLE_CLIENT_ID`, `SNUG_GOOGLE_CLIENT_SECRET`, `SNUG_CORS_ORIGIN=http://localhost:5173` in `apps/server/.env.local`, run `pnpm --filter server dev:local` (plain `dev` reads NO env file), and register `http://127.0.0.1:8787/auth/callback` in Google Cloud Console (server origin, **not** the Vite origin).
+
+**Phase 1 — adapters (`packages/adapters`).**
+- **The real root cause of "long builds silently drop" was NOT a timeout.** There is no timeout anywhere in the LLM path. It was `DEFAULT_MAX_ITERATIONS = 6` in `agent-turn.ts`, never overridden by either caller. Raised **6 → 48**.
+- Partial text preserved on every drop path: `AdapterError.partialText` added in `types.ts`; both adapters populate it; `runAgentTurn` carries text from EARLIER completed iterations onto the error.
+- 128K max output on both adapters. **NO beta header** — 128K is built in on current models; the legacy `output-128k-2025-02-19` is a no-op. A test asserts `anthropic-beta` is **absent** so it cannot be re-added. (An earlier draft added that header from memory; it was wrong and was removed after checking the API reference.) OpenAI had no cap at all → added `max_completion_tokens` + `maxTokens` option.
+- Token usage parsed from `message_start` / `message_delta` (previously explicitly discarded) → `AdapterResult.usage`.
+- **New `round_trip` AgentTurnEvent** — `{type, index, request, response, durationMs}`, emitted per iteration in `agent-turn.ts`. **This is the single capture point Phase 3's inspector consumes.**
+- `agent-turn.test.ts`'s exact-event assertion was narrowed to `.filter(e => e.type !== 'round_trip')` — same intent, not weakened.
+- New file: `packages/adapters/src/__tests__/long-run.test.ts` (12 tests).
+
+**Phase 2 — server (`apps/server`).**
+- `app.ts`: added exported `LONG_RUN_MS = 30 * 60_000`; Fastify now sets `connectionTimeout: 0`, `requestTimeout: 0`, `keepAliveTimeout: LONG_RUN_MS`, plus `app.server.headersTimeout = 0` (Fastify does not surface it). **Why**: Node's defaults are `requestTimeout` 300_000ms (exactly 5 min) and `headersTimeout` 60_000ms — inherited, they tore down long streams with no client-visible error.
+- `routes/invoke.ts`: now passes `onEvent` into `runAgentTurn` and emits a new SSE event `step` → `{phase: 'start'|'end', tool: <name>}`. Subscription mode previously had **zero** progress signal.
+- **Step events carry tool NAME + phase only** — never inputs/outputs (marker test enforces it). `round_trip` stays server-side, never serialized to the client.
+- New file: `apps/server/src/__tests__/long-run.test.ts` (3 tests). Forward-compat verified: the existing SSE parser skips unknown events, so playground stayed green unchanged.
+
+### Resume at PHASE 3 — playground step timeline + LLM inspector
+
+Covers **AC9–AC15**. Tests FIRST (Gate 3). Read `docs/engineering/TDD.md` and this file's Plan section before starting.
+
+**Key facts already established — don't re-investigate:**
+- `useBuilderChat` (`apps/playground/src/agent/useBuilderChat.ts`) currently exposes `activity: string | undefined` — a **single last-write-wins slot**, rendered in exactly ONE place: `apps/playground/src/views/ChatLog.tsx:47-52` (`.reasoning-pill`). Replace with a `steps: BuildStep[]` model.
+- `activity` is set at `useBuilderChat.ts:197` (initial), `:238` (artifact save), `:260` (from `onActivity`), cleared at `:229` on first delta and `:308` in `finally`.
+- `BuildHandlers` (`apps/playground/src/agent/builder.ts:40-49`) already has `onDelta` / `onArtifact` / `onActivity` / `onKnowledge` — **add `onStep` and `onRoundTrip` here**; this is the seam.
+- Direct mode maps tool calls to labels at `builder.ts:190-208` (`activityLabels`); **`tool_result` is received and ignored today** — AC10 wants step completion.
+- Subscription mode (`createServerBuilder`, `builder.ts:80-139`) must now handle the new `step` SSE event from Phase 2.
+- **CRITICAL — two inspectors, not one.** `apps/playground/src/run/inspector.ts` is the **bridge/frame** inspector and is deliberately **structural-only** (no payload values ever), enforced by marker assertions at `apps/playground/src/__tests__/inspector.test.ts:64` and `:105`. **Do NOT extend it.** Build a NEW sibling module (e.g. `run/llmInspector.ts` + panel) as a new rail tab; RunView's tabs are at `run/RunView.tsx:41` (`chat | inspector | docs | versions`).
+- LLM inspector must be **in-memory only** (AC14: assert nothing written to the user DB, and ring-buffer it) and must **never render a BYOK key** (AC15 negative test).
+- `ChatLog.tsx` and `BuilderView.tsx` have **no component tests today** — AC9 adds the first.
+
+### Then PHASES 4–6 (unchanged from the Plan section above)
+
+- **Phase 4 — `packages/db` cascade delete (AC16–21, AC23).** Highest-risk item. There are **zero foreign keys** in the user DB and `PRAGMA foreign_keys` is **never set**, so cascade is entirely hand-written. Owner explicitly confirmed: **delete pinned rows too — the factory version AND the bootstrap chat message**. Do NOT reuse `pruneChatMessages` or the version-retention helper: both refuse pinned rows. Use the `BEGIN IMMEDIATE`/`ROLLBACK` pattern from `writeBack` (`packages/db/src/userdb/userdb.ts:644-701`) and the module-private `restTablesFor(token)` helper (`:524-528`); token = `appDataToken(appId)`. **Resurrection hazard (R1)**: the materializer rebuilds rest tables from the still-open runtime copy on flush — invalidate `namespaceByFile` (`:504`) and `lastSavedHash` (`:506`) and close the inner driver, modelled on `importUserDb` (`:1281-1285`). Must `markDirty()` + flush so the delete reaches the exported bytes (AC23).
+- **Phase 5 — hub UI delete (AC22).** `HubView.tsx:141-158` tiles are a `<Link>` **wrapping** a Card — restructure to Card **containing** Link + action. `danger` Button variant already exists (`ui/Button.tsx:4`). Inline confirm, **no `window.confirm`** (forbidden by the design contract); nearest pattern is the `.factory-reset` callout at `run/VersionsPanel.tsx:83-92`. Latch double-clicks like `HubView.tsx:32`. Add `delete` to `LibraryStore` (`state/library.ts:20-26`).
+- **Phase 6 — knowledge + examples (AC24–27) + accept ADR-0011.** Rewrite the opening of `packages/knowledge/prompts/knowledge-base/app-authoring/10-overview-and-contract.md` (it currently *defines* an app as one that "thinks through the host's agent at runtime" — the doctrine gap) and add an autonomous/local-only archetype to `50-app-catalog.md` (its table has an "Agent's role" for all nine archetypes). Regenerate `packages/knowledge/src/generated/content.ts`. **Port the attached pig game to the contract** — keep gameplay/art/audio verbatim, but swap raw `postMessage`/`cheo-app-announce` for the byte-identical hooks block from `packages/sdk/embedded/snug-hooks.js` (**copy, never retype** — lesson 2026-07-31) and move the `localStorage` high score to `usePersistedState` (localStorage silently never persists in a null-origin iframe). `node --test examples/validate.test.mjs` must pass **unchanged** — do not relax the validator.
+  - The attached HTML fails the validator on 4 counts: no hooks block / no `useSnugApp({`, `localStorage`, `cheo-app-announce` announce type, and no `// 5. RESPONSE SCHEMA` banner (the extractor needs it).
+  - **The owner's source HTML is saved in-repo** at `docs/tasks/active/TASK-20260803-hub-ops-assets/flying-pigs-source.html` (verbatim, with a header comment listing the four violations). Phase 6 does **not** need it re-attached. Delete that assets folder as part of Gate 6 once `examples/flying-pig/app.html` is ported.
+
+### Gate 5 / Gate 6 reminders
+- Gate 5: run `pnpm test` at root **plus** `node --test examples/validate.test.mjs` **plus** the Playwright suite (`pnpm --filter playground test:e2e`). High tier also wants an independent adversarial review before merge (lesson 2026-07-31).
+- Gate 6 (`/close-session`): journal, lessons, doc drift (`architecture.md`, `code-map.md`, `next-steps.md`), flip **ADR-0011 draft → accepted**, and move this file to `docs/tasks/done/` on merge. **No spec-changelog entry needed — `packages/protocol` is deliberately untouched.**
