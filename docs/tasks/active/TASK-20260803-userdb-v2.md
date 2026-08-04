@@ -24,13 +24,15 @@ Foundation for the living-apps umbrella: schema v2 with real per-app tables + re
 
 **Out of scope**: tools/prompts (child 2), playground UI (children 3–4).
 
-## Shared literals (from umbrella — verbatim)
+## Shared literals (from umbrella — verbatim, REVISED per plan review F1/F2/F7/F8)
 
-`USERDB_SCHEMA_VERSION = 2` · rest-table prefix `app_<32-hex-token>__` (UUID sans dashes; non-UUID namespace → djb2 fallback token) · table-name rule `^[a-z][a-z0-9_]{0,40}$` · tables `snug_app_schemas` / `snug_app_migrations` / `snug_app_docs` · columns `snug_apps.install_source` / `snug_app_versions.pinned` / `snug_chat_messages.pinned` / `snug_chat_messages.meta` · index `idx_snug_apps_install_source` (partial unique `WHERE install_source IS NOT NULL`) · doc slugs `vision|requirements|plan|lessons|memory|next-tasks` · install-source format `starter:<folder>`.
+`USERDB_SCHEMA_VERSION = 2` · token fn `appDataToken(namespace)`: UUID-shaped → 32 lowercase hex sans dashes, else `'x' + hex(utf8(namespace))` · rest prefix `app_<token>__` · object-name rule `^[A-Za-z][A-Za-z0-9_]{0,40}$` · reserved prefixes (case-insensitive) `snug_` / `sqlite_` / `app_`, single exemption exact `snug_kv` (at rest `app_<token>__snug_kv`) · tables `snug_app_schemas` / `snug_app_migrations` / `snug_app_docs` · columns `snug_apps.install_source` / `snug_app_versions.pinned` / `snug_chat_messages.pinned` / `snug_chat_messages.meta` · DDL arrays `USERDB_DDL` (tables only) + `USERDB_INDEX_DDL` · index `idx_snug_apps_install_source` (partial unique `WHERE install_source IS NOT NULL`) · doc slugs `vision|requirements|plan|lessons|memory|next-tasks` · install-source format `starter:<folder>` (NULL for built apps).
 
 ## Plan
 
-`packages/protocol/src/userdb-schema.ts` (constants + DDL + naming rule + token fn spec) → protocol tests → `packages/db/src/userdb/userdb.ts` (materializer PersistenceBackend replacing blobBackend; registry/docs/pin APIs; migration) → db tests. Tests FIRST per AC.
+Mechanism per umbrella amendments (F1–F8): registry stores runtime `sqlite_master` DDL **verbatim** (all objects, creation order); materialize = replay + row copy; write-back = natural-DDL create + `legacy_alter_table=ON` rename + row copy, synchronous `BEGIN IMMEDIATE…COMMIT/ROLLBACK` on the shared handle, fail-closed name gate (rule + reserved prefixes) surfaced via `onAppPersistError`, transactional cap guard, per-namespace unchanged-bytes gate, `sqlite_sequence` name-mapped, generated columns via explicit column lists.
+
+Order: `packages/protocol/src/userdb-schema.ts` (constants + token fn + DDL/INDEX arrays) → protocol tests → `packages/db/src/userdb/userdb.ts` (materializer backend replacing blobBackend; registry/docs/pin/dedup APIs; structural migration) → db tests. Tests FIRST per AC, including: C2 write-back-injection negative (hostile quoted table name), DDL fidelity suite (index/trigger/view/AUTOINCREMENT/self-ref FK/WITHOUT ROWID/STRICT/generated), transactional cap, sync-hash stability, kv round-trip.
 
 ## Decisions & surprises
 

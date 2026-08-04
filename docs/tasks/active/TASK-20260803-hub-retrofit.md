@@ -15,7 +15,7 @@ Marketplace click connects to the existing install instead of duplicating: find-
 **Acceptance criteria** (umbrella AC8/AC9):
 1. N clicks (incl. two racing) on a starter tile → exactly one app row; installed tile opens the existing app (unit + Playwright regression).
 2. Identity chip renders all four auth states on every page; sign-in from any page returns to it (server unit for return path; open-redirect negative: only same-origin paths honored).
-3. Logout tears down/rebuilds the sync loop (unit on `state/sync`); CSRF/CORS negatives stay green.
+3. Logout sequence (review F14): `logout()` → await `refreshAuth()` → rebuild sync loop, so the rebuilt hub provider re-reads the post-logout CSRF/cookie state (unit asserts token recapture); CSRF/CORS negatives stay green.
 4. No inline-style blocks remain in SettingsView/VersionsPanel (style audit); warm-ember tokens only.
 
 **Out of scope**: marketplace curation, non-Google SSO, new sync providers.

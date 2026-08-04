@@ -16,7 +16,8 @@ Every chat page attaches to the loaded app: context assembler feeds the LLM the 
 1. Reopen app in fresh session over same DB bytes → prior threads, messages, artifact cards render; thread list + new-thread works.
 2. Enhance turn's outgoing request contains app HTML + schema + docs + history (mock adapter capture); assembler caps enforced with truncation markers (unit).
 3. Builder thread resumed in a new session versions the SAME app (durable pin regression test).
-4. First build pins bootstrap messages; prune helper never removes them.
+4. Bootstrap = **the turn that produced the app's v1 artifact** (review F9 — not chronological message #1): that turn's user message + assistant reply are pinned via the sink's install signal; test includes pre-build chatter turns. Prune helper never removes pinned rows.
+4b. Durable pin regression (review F10): remount/new-session over the same builder thread versions the SAME app — dedup for built apps is pin-based (`install_source` is NULL for them); cross-tab races precluded by the single-writer Web Lock posture.
 5. Factory badge shown; reset-to-factory works after v1 would have been pruned unpinned.
 
 **Out of scope**: hub tiles/SSO/design pass (child 4).
