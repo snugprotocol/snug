@@ -60,7 +60,7 @@ Answered 2026-08-03 (owner):
   - **At-rest data tables**: `app_<token>__<table>` where `<token>` = app UUID with `-` stripped (fixed 32 hex chars) and `<table>` matches `^[a-z][a-z0-9_]{0,40}$`, never `snug_*`/`sqlite_*` (spec-normative naming rule; makes the one-identifier DDL rewrite trivial and unambiguous — no general SQL parsing).
   - `snug_app_schemas` — registry: `app_id TEXT PRIMARY KEY, schema_json TEXT NOT NULL, updated_at TEXT NOT NULL`. `schema_json` = ordered `[{name, ddl, indexes[]}]` where `ddl` is the natural-name `CREATE TABLE` exactly as it appears in the app runtime DB's `sqlite_master`. The hub reads this when loading/working on an app; the LLM reads it as enhance-turn context.
   - `snug_app_migrations` — append-only DDL audit: `app_id, seq, ddl, applied_at, PRIMARY KEY (app_id, seq)`.
-  - `snug_app_data` **dropped**. v1→v2 migration **explodes** each blob (open with the module's SqlJsStatic, copy tables/rows into prefixed rest tables, register schema); a corrupt blob quarantines that one app's data (recorded in `snug_meta`), never fails the whole migration.
+  - `snug_app_data` **dropped**. v1→v2 migration is **structural only** (add new tables/columns/index, drop `snug_app_data`, stamp each app's oldest surviving version `pinned=1` so the factory invariant holds): existing blob data is **abandoned** — owner-confirmed 2026-08-03 ("plan to clean all the data and start fresh"), consistent with the portable-hub F13 pre-launch precedent. No data-fidelity obligations from v1 files.
 - `packages/db/src/userdb/`: `blobBackend` replaced by a **materializer**: on first driver op for a namespace, build the app's in-memory DB from registry DDL + rest-table rows (natural names, incl. driver-internal `snug_kv`); app `exec` runs there (existing guardrails inherited). Debounced write-back (existing 250 ms pipeline): inside one outer transaction, refresh the app's rest tables from the runtime DB; if runtime `sqlite_master` diverged from the registry (app-code DDL is legal), auto-register new/changed tables + append to `snug_app_migrations`. Values copy as sql.js natives (numbers/strings/`Uint8Array`/null — BLOB fidelity tested).
 - New service API: `getAppSchema(appId)` · `applyAppDdl(appId, statements[])` — the hub-client execution layer for LLM-proposed DDL: validates names, executes against the materialized runtime DB, syncs registry + rest tables + audit atomically. `deriveAppExport` = materialize → `export()` (still a standalone `.sqlite` with natural names). Portable surface = tables + indexes (triggers/views out of scope, documented).
 - Isolation stays **physical at runtime**: a materialized DB only ever contains its own app's tables — negative test: app A `exec` referencing `app_<B>__x` or B's natural table fails with no data movement.
@@ -98,7 +98,7 @@ Answered 2026-08-03 (owner):
 - **AC7** (c2): tool schemas + prompt lint; docs CRUD round-trip; prompt instructs docs-on-change (content test); Playwright: build → vision/requirements/plan docs exist; enhance → lessons/plan updated.
 - **AC8** (c1/c4): repeated `installStarter` clicks (incl. racing two) → exactly one app row (unit + Playwright regression); partial unique index enforced at DB level; installed tile opens existing app.
 - **AC9** (c4): identity chip renders all four auth states; logout rebuilds sync loop (unit on `state/sync`); callback honors return path (server unit); cross-origin/CSRF negatives stay green.
-- **AC10**: protocol DDL snapshot + `userdb-schema.test.ts` invariants updated deliberately; migration test v1→v2 (populated blobs explode losslessly; corrupt blob quarantines only that app); **full C1/C2 negative suites + root `pnpm test` + Playwright** (protocol change → everything runs, per dependency graph).
+- **AC10**: protocol DDL snapshot + `userdb-schema.test.ts` invariants updated deliberately; migration test v1→v2 (structural: new tables/columns/index present, `snug_app_data` gone, `user_version`=2, oldest surviving versions stamped pinned; blob data abandoned by design); **full C1/C2 negative suites + root `pnpm test` + Playwright** (protocol change → everything runs, per dependency graph).
 
 ### Spec-sync impact (Gate 2 statement per SPEC_SYNC)
 
@@ -108,7 +108,7 @@ Wire protocol: **no message/schema changes** — envelope + frames stay v1. `pac
 
 - **Write amplification** (full rest-table refresh per debounce): bounded by 64 MiB cap / typical tiny app data; lever = per-table dirty tracking later; perf smoke test in child 1.
 - **DDL identifier rewrite**: constrained to one leading identifier under the strict naming rule — property-tested; no general SQL parsing (honors the portable-hub review's rejection).
-- **Migration explode**: per-app failure isolation (quarantine one app's data, continue); tested with a deliberately corrupt blob.
+- **Migration**: structural-only, data abandoned (owner-confirmed) — no fidelity risk; tested for structure, not content.
 - **Context bloat**: assembler enforces byte caps per section with explicit truncation markers; caps unit-tested.
 - **Lessons applied**: shared literals (tool names, table-name rule, prefix format) pinned in this file before any fan-out (2026-08-03 lesson); each child merge gets an independent fresh-context adversarial review with runnable probes (2026-07-31 lesson); High tier → this plan itself gets a fresh-context AI review before implementation.
 
@@ -140,3 +140,8 @@ Wire protocol: **no message/schema changes** — envelope + frames stay v1. `pac
 - State: **Gate 2 complete, awaiting owner plan approval.** No implementation code written.
 - Next step: owner approves → fresh-context AI plan review (High tier) → spawn child 1 (userdb v2 core) failing-tests-first.
 - Open questions: none blocking. Owner may override two judgment calls: (a) blob-explode migration vs abandon, (b) per-app thread list (multi-thread) vs single implicit thread per app.
+
+### 2026-08-03 — Jeetu/Claude — session (plan approved)
+- Done: owner approved the plan ("rest all looks good, go ahead") with one amendment: **abandon pre-launch data — no blob-explode migration** (owner will clean all data and start fresh). Plan/AC10/risks amended: v1→v2 migration is structural only. Multi-thread-per-app judgment call stands.
+- State: entering High-tier pre-implementation step — fresh-context AI plan review.
+- Next step: fold review findings → spawn child task files → child 1 failing tests first.
