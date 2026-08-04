@@ -24,7 +24,7 @@ When the methodology says "package" or "publish", on the Snug reference host tha
 
 ## Interactive app skills
 
-Snug's signature capability is LLM-authored single-file HTML micro-apps that run in a sandboxed iframe and think through the host's agent at runtime. Some skills exist to produce such apps.
+Snug's signature capability is LLM-authored single-file HTML micro-apps that run in a sandboxed iframe. Many of them consult the host's agent while running; others — arcade games, timers, drawing pads — are complete without ever calling the agent, and are no less Snug apps for it. Some skills exist to produce such apps.
 
 ### Snug App Builder
 

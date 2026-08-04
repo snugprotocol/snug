@@ -411,6 +411,53 @@
   --tile-glow: color-mix(in srgb, var(--tile-color, var(--ember)) 22%, transparent);
 }
 
+/* The Card now CONTAINS the Link rather than the reverse (AC22), so the link carries
+   the tile's own column layout and the delete action sits beside it, not inside it. */
+.app-tile .tile-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  text-decoration: none;
+}
+
+/* Revealed on hover/focus so the grid stays calm, but always reachable by keyboard
+   and always present on touch, where there is no hover. */
+.app-tile .tile-delete {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 1;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.app-tile:hover .tile-delete,
+.app-tile:focus-within .tile-delete {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .app-tile .tile-delete {
+    opacity: 1;
+  }
+}
+
+.app-tile .tile-confirm {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.app-tile .tile-confirm-copy {
+  flex: 1;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
 .app-tile::before {
   content: '';
   position: absolute;
@@ -529,6 +576,46 @@
   border-radius: 50%;
   background: var(--ember);
   animation: caret-breathe 0.9s var(--ease-out) infinite alternate;
+}
+
+/* Build step timeline — replaces the single last-write-wins reasoning pill. Steps
+   accumulate in order and complete in place, so a long build shows its whole path. */
+.build-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.build-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-2);
+  animation: reveal-in var(--dur-1) var(--ease-out);
+}
+
+.build-step .pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ember);
+  animation: caret-breathe 0.9s var(--ease-out) infinite alternate;
+}
+
+.build-step .step-check {
+  width: 6px;
+  color: var(--ok);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.build-step.is-done {
+  opacity: 0.65;
 }
 
 .artifact-card {
@@ -754,6 +841,108 @@
 
 .inspector-entry.is-error .frame-label {
   color: var(--danger);
+}
+
+/* LLM round-trip inspector — the SIBLING of the frame inspector above, not a variant
+   of it. That one is structural-only by design; this one renders prompt bodies. */
+.llm-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.llm-totals {
+  margin: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+
+.llm-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.llm-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  animation: reveal-in var(--dur-1) var(--ease-out);
+}
+
+.llm-entry.is-error {
+  border-color: var(--danger);
+}
+
+.llm-entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: var(--space-2);
+  text-align: left;
+}
+
+.llm-entry .llm-index {
+  color: var(--ember);
+  font-weight: 700;
+}
+
+.llm-entry .llm-summary {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.llm-entry .llm-meta {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.llm-entry-body {
+  border-top: 1px solid var(--border);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.llm-entry-body h4 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  text-transform: lowercase;
+}
+
+.llm-entry-body .llm-tools {
+  margin: 0 0 var(--space-1);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+
+.llm-entry-body .llm-error {
+  margin: 0 0 var(--space-1);
+  color: var(--danger);
+}
+
+/* Bodies can be very large (a full system prompt) — cap and scroll, never push the rail. */
+.llm-block {
+  margin: 0 0 var(--space-1);
+  max-height: 14rem;
+  overflow: auto;
+  padding: var(--space-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-s);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ---------------------------------------------------------------- settings */

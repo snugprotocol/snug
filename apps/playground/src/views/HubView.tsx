@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -30,6 +30,36 @@ export function HubView(): ReactElement {
   const [installError, setInstallError] = useState<string | undefined>(undefined);
   /** In-flight latch: a double-click must not race two installs (AC8). */
   const [installing, setInstalling] = useState<string | undefined>(undefined);
+  /** Which tile is showing its inline confirm — no window.confirm (design contract, AC22). */
+  const [confirmingDelete, setConfirmingDelete] = useState<string | undefined>(undefined);
+  /** In-flight latch for delete, mirroring `installing`: one confirm = one delete. */
+  const [deleting, setDeleting] = useState<string | undefined>(undefined);
+  const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
+
+  /**
+   * Irreversible: cascades the app's data, schema, docs, versions and chat. The latch is
+   * a ref rather than the `deleting` state because two clicks in the SAME tick both read
+   * the pre-render state value and would each start a delete (AC22).
+   */
+  const deleteLatch = useRef<string | undefined>(undefined);
+  const confirmDelete = useCallback(async (appId: string): Promise<void> => {
+    if (deleteLatch.current !== undefined) return;
+    deleteLatch.current = appId;
+    setDeleting(appId);
+    setDeleteError(undefined);
+    try {
+      await userLibrary().delete(appId);
+      setLoad((current) =>
+        current.phase === 'ready' ? { phase: 'ready', entries: current.entries.filter((e) => e.id !== appId) } : current,
+      );
+      setConfirmingDelete(undefined);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'unknown error');
+    } finally {
+      deleteLatch.current = undefined;
+      setDeleting(undefined);
+    }
+  }, []);
 
   /** Which starters are already in the user's file — the tile becomes "open" (AC8). */
   const installedBySource = useMemo(() => {
@@ -123,6 +153,11 @@ export function HubView(): ReactElement {
       </div>
 
       <h2 className="section-title">your apps</h2>
+      {deleteError !== undefined ? (
+        <div className="error-note" role="alert">
+          delete failed — {deleteError}
+        </div>
+      ) : null}
       {load.phase === 'loading' ? (
         <div className="tile-grid">
           {[0, 1, 2].map((i) => (
@@ -143,16 +178,56 @@ export function HubView(): ReactElement {
             const meta = metaMap[entry.id];
             // --tile-glow derives from --tile-color in app.css (color-matched hover glow).
             const style = { '--tile-color': meta?.iconColor ?? 'var(--ember)' } as CSSProperties;
+            const name = meta?.displayName !== undefined && meta.displayName !== '' ? meta.displayName : entry.displayName;
+            const armed = confirmingDelete === entry.id;
+            // The Card CONTAINS the Link (rather than the Link wrapping the Card) so the
+            // delete action is a sibling of the navigation, not nested inside it — a
+            // button inside an <a> would navigate into the app on click (AC22).
             return (
-              <Link key={entry.id} to={`/run/${entry.id}`} style={{ color: 'inherit', display: 'block' }}>
-                <Card interactive className="app-tile" style={style}>
+              <Card key={entry.id} interactive className="app-tile" style={style} data-testid="installed-tile">
+                <Link to={`/run/${entry.id}`} className="tile-link" style={{ color: 'inherit' }}>
                   <span className="tile-emoji" aria-hidden="true">
                     {meta?.iconEmoji ?? '⬡'}
                   </span>
-                  <span className="tile-name">{meta?.displayName !== undefined && meta.displayName !== '' ? meta.displayName : entry.displayName}</span>
+                  <span className="tile-name">{name}</span>
                   <span className="tile-sub">{meta?.description ?? new Date(entry.createdAt).toLocaleDateString()}</span>
-                </Card>
-              </Link>
+                </Link>
+                {armed ? (
+                  <div className="tile-confirm" role="group" aria-label={`delete ${name}?`}>
+                    <span className="tile-confirm-copy">delete for good?</span>
+                    <Button
+                      variant="danger"
+                      data-testid="app-delete-confirm"
+                      disabled={deleting !== undefined}
+                      onClick={() => void confirmDelete(entry.id)}
+                      title={`permanently delete ${name} and all of its data`}
+                    >
+                      {deleting === entry.id ? 'deleting…' : 'delete'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      data-testid="app-delete-cancel"
+                      onClick={() => setConfirmingDelete(undefined)}
+                    >
+                      keep
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    className="tile-delete"
+                    data-testid="app-delete"
+                    onClick={() => {
+                      setDeleteError(undefined);
+                      setConfirmingDelete(entry.id);
+                    }}
+                    title={`delete ${name}`}
+                    aria-label={`delete ${name}`}
+                  >
+                    delete
+                  </Button>
+                )}
+              </Card>
             );
           })}
         </div>

@@ -212,3 +212,44 @@ describe('integration: runner host × sdk module hooks × db driver (one jsdom h
     await expect(db.exec('SELECT * FROM missing')).rejects.toThrow(/missing/);
   });
 });
+
+
+// ---------------------------------------------------------------------------------
+// LLM-FREE runtime path (TASK-20260803-hub-ops AC27, ADR-0011)
+//
+// An app that never calls sendMessage must still work end to end: announce, host-ready,
+// play, and persist. This is the flying-pig archetype — reflexes and scoring are local,
+// and a round trip would only add latency. The test proves the path is SUPPORTED, not
+// merely tolerated: the transport must never be touched.
+// ---------------------------------------------------------------------------------
+
+describe('LLM-free apps (AC27)', () => {
+  it('completes announce -> host-ready -> play -> persist without ever calling the agent', async () => {
+    const ctx = await mountIntegration();
+
+    // announce + host-ready landed, exactly as for an agent-using app
+    expect(ctx.announces).toContain('itest-app');
+    expect(ctx.probe.result.current.snug.isReady).toBe(true);
+
+    // "play": local state changes persist through the host bridge (no agent involved)
+    await act(async () => {
+      ctx.probe.result.current.persisted[1]({ count: 7 });
+    });
+    await flush();
+    expect(ctx.probe.result.current.persisted[0]).toEqual({ count: 7 });
+
+    // survives a reload — the high-score case the pig port depends on
+    const reloaded = await ctx.remountApp();
+    expect(reloaded.result.current.persisted[0]).toEqual({ count: 7 });
+
+    // THE assertion: the agent was never reached for any of it.
+    expect(ctx.transportCalls).toEqual([]);
+    expect(ctx.probe.result.current.snug.isWaiting).toBe(false);
+  });
+
+  it('exposes theme to a local-only app so it can match the host', async () => {
+    const ctx = await mountIntegration();
+    expect(['light', 'dark']).toContain(ctx.probe.result.current.snug.theme);
+    expect(ctx.transportCalls).toEqual([]);
+  });
+});

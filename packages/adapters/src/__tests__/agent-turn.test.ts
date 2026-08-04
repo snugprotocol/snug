@@ -42,7 +42,8 @@ describe('runAgentTurn', () => {
     });
     expect(result).toEqual({ ok: true, text: 'Calling. Done.' });
     expect(deltas.join('')).toBe('Calling. Done.'); // done text === accumulated deltas
-    expect(events).toEqual([
+    // Tool events unchanged; `round_trip` observations are interleaved (see long-run.test.ts).
+    expect(events.filter((e) => e.type !== 'round_trip')).toEqual([
       { type: 'tool_call', call: { id: 'call_1_1', name: 'echo', input: { value: 42 } } },
       { type: 'tool_result', call: { id: 'call_1_1', name: 'echo', input: { value: 42 } }, output: 'echoed:42' },
     ]);

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import type { AgentRoundTrip } from '@snugprotocol/adapters';
 import type { SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
@@ -30,6 +31,8 @@ import { initialRevealState, revealReduce, type RevealState } from './capability
 import { DocsPanel } from './DocsPanel.js';
 import { downloadBlob, exportDatabase } from './exportDb.js';
 import { InspectorPanel } from './InspectorPanel.js';
+import { LlmInspectorPanel } from './LlmInspectorPanel.js';
+import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from './llmInspector.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
 import { useMediaQuery } from './useMediaQuery.js';
@@ -38,7 +41,9 @@ import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
 
-type RailTab = 'chat' | 'inspector' | 'docs' | 'versions';
+// 'inspector' is the bridge/frame timeline (structural only); 'llm' is the round-trip
+// inspector (renders prompt bodies). Two separate surfaces on purpose — see llmInspector.ts.
+type RailTab = 'chat' | 'inspector' | 'llm' | 'docs' | 'versions';
 
 /** How long after host-ready the header keeps shimmering before falling back to the library name. */
 const ANNOUNCE_FALLBACK_MS = 1500;
@@ -74,7 +79,16 @@ export default function RunView(): ReactElement {
   const [threadOverride, setThreadOverride] = useState<string | undefined>(undefined);
   const threadId = threadOverride ?? `app:${id}`;
   const [appThreads, setAppThreads] = useState<Array<{ threadId: string; title?: string }>>([]);
-  const chat = useBuilderChat(threadId, isStarterId(id) ? {} : { pinnedAppId: id });
+  // The LLM inspector's feed. In-memory only (AC14) — this reducer state is the ONLY
+  // place round trips live, and it dies with the view.
+  const [llmInspector, dispatchRoundTrip] = useReducer(llmInspectorReduce, initialLlmInspectorState as LlmInspectorState);
+  const onRoundTrip = useCallback((trip: AgentRoundTrip): void => dispatchRoundTrip(trip), []);
+  const onTurnStart = useCallback((): void => dispatchRoundTrip('reset'), []);
+  const chat = useBuilderChat(threadId, {
+    ...(isStarterId(id) ? {} : { pinnedAppId: id }),
+    onRoundTrip,
+    onTurnStart,
+  });
 
   // Thread list for the picker — refreshed when the turn settles (new threads get
   // their row on the first message).
@@ -224,6 +238,9 @@ export default function RunView(): ReactElement {
         <button type="button" aria-pressed={railTab === 'inspector'} onClick={() => setRailTab('inspector')}>
           inspector
         </button>
+        <button type="button" aria-pressed={railTab === 'llm'} onClick={() => setRailTab('llm')}>
+          llm
+        </button>
         {!isStarterId(id) ? (
           <>
             <button type="button" aria-pressed={railTab === 'docs'} onClick={() => setRailTab('docs')}>
@@ -237,6 +254,8 @@ export default function RunView(): ReactElement {
       </div>
       {railTab === 'inspector' ? (
         <InspectorPanel entries={inspector.entries} />
+      ) : railTab === 'llm' ? (
+        <LlmInspectorPanel state={llmInspector} />
       ) : railTab === 'docs' ? (
         <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} />
       ) : railTab === 'versions' ? (
@@ -283,6 +302,7 @@ export default function RunView(): ReactElement {
           ) : null}
           <RailChat
             messages={chat.messages}
+            steps={chat.steps}
             activity={chat.activity}
             busy={chat.busy}
             onSend={chat.send}
@@ -424,6 +444,7 @@ export default function RunView(): ReactElement {
 
 interface RailChatProps {
   messages: ReturnType<typeof useBuilderChat>['messages'];
+  steps: ReturnType<typeof useBuilderChat>['steps'];
   activity: string | undefined;
   busy: boolean;
   onSend: (text: string) => void;
@@ -431,7 +452,7 @@ interface RailChatProps {
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
-function RailChat({ messages, activity, busy, onSend, onStop }: RailChatProps): ReactElement {
+function RailChat({ messages, steps, activity, busy, onSend, onStop }: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
   const submit = (): void => {
     if (draft.trim() === '') return;
@@ -449,7 +470,7 @@ function RailChat({ messages, activity, busy, onSend, onStop }: RailChatProps): 
       {messages.length === 0 ? (
         <EmptyState glyph="✎" title="keep talking" lesson="ask for tweaks — the agent can rebuild the app from here." />
       ) : (
-        <ChatLog messages={messages} activity={activity} />
+        <ChatLog messages={messages} steps={steps} activity={activity} />
       )}
       <div className="composer" style={{ position: 'static', padding: 0, background: 'none' }}>
         <textarea

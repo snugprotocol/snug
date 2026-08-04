@@ -57,6 +57,13 @@ export interface SnugDbDriver {
   readonly persistence: DbPersistence;
   /** Cancels debounce timers and writes everything dirty now (tests/teardown). */
   flush(): Promise<void>;
+  /**
+   * Forget one namespace: cancel its debounce, DISCARD pending writes, and close its
+   * handle. Deliberately does NOT persist — this exists for app deletion, where the
+   * cached runtime copy would otherwise be written back and resurrect the app. The
+   * namespace re-opens from scratch if used again.
+   */
+  evict(namespace: string): Promise<void>;
   /** flush + close all sql.js handles. The driver is unusable afterwards. */
   close(): Promise<void>;
 }
@@ -404,6 +411,31 @@ export function createDbDriver(options: CreateDbDriverOptions = {}): SnugDbDrive
 
     flush(): Promise<void> {
       return flushAllNamespaces();
+    },
+
+    async evict(namespace: string): Promise<void> {
+      const pending = namespaces.get(namespace);
+      if (pending === undefined) return;
+      // Drop the cache entry FIRST: a concurrent handle() must open a fresh state
+      // rather than join the one being torn down.
+      namespaces.delete(namespace);
+      let state: NamespaceState;
+      try {
+        state = await pending;
+      } catch {
+        return; // a failed open cached nothing to close
+      }
+      // Cancel the debounce and DISCARD the dirty flag: evict exists for deletion, so
+      // persisting here would write the very bytes the caller is removing.
+      if (state.timer !== undefined) {
+        clearTimeout(state.timer);
+        state.timer = undefined;
+      }
+      state.dirty = false;
+      // An in-flight save must land before the handle closes, or sql.js frees memory
+      // out from under it.
+      await state.saving.catch(() => undefined);
+      state.db.close();
     },
 
     async close(): Promise<void> {

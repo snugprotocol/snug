@@ -15,6 +15,7 @@ asks for, and how much logic lives in the app vs the agent.
 
 | Archetype | Examples | Agent's role |
 |---|---|---|
+| Autonomous / local-only | Arcade and reflex games, timers, drawing pads, calculators, clocks | **None** — the app never calls the agent |
 | Board games | Chess, Checkers, Connect Four, Tic-tac-toe, Go | Opponent: pick a legal move, add commentary |
 | Card games | Blackjack, Poker, Memory match | Opponent/dealer + banter |
 | Word games | Hangman, 20 Questions, Word chain | Word source, guesser, or judge |
@@ -25,7 +26,39 @@ asks for, and how much logic lives in the app vs the agent.
 | Creative | Story builder, drawing prompts, music ideas | Co-author |
 | Simulations | Game of Life, ecosystem sim | Commentator + scenario author |
 
+## Deciding Whether a Turn Needs the Model
+
+Ask it per app, before writing any `sendMessage` call: **what would the model contribute
+that JavaScript cannot?** Judgment, language, and open-ended choice are worth a round trip.
+Arithmetic, physics, collision detection, rule enforcement, and timing are not — they are
+faster, cheaper, and more reliable in the app.
+
+The archetypes sit on a spectrum:
+
+- **Chess: every move.** The agent IS the opponent; there is no game without it.
+- **Quiz builder: once per batch.** Generate ten questions in one request, then grade
+  locally until the user asks for more.
+- **Habit tracker: on demand.** The app records and charts on its own; the agent is invoked
+  only when the user asks a question about their data.
+- **Arcade game: never.** Reflexes, spawn timers, and score are pure local computation. A
+  round trip here would only add latency to a game whose whole appeal is that it responds
+  instantly.
+
+An app in the autonomous row calls `useSnugApp` for announce, theme, and `isReady` — it
+just never calls `sendMessage`. That is a supported, tested runtime path, not a degraded
+one. Do not invent a "get an encouraging message from the agent" feature to justify the
+dependency; if the user did not ask for it, the app is finished without it.
+
 ## Per-Type Guidance
+
+### Autonomous / local-only
+
+- Everything is local: game loop, scoring, input, and persistence via `usePersistedState`
+  or `useAppDB`. `isReady` still gates the first render, and `theme` still applies.
+- `localStorage` is NOT available (null-origin iframe) — reach for `usePersistedState`
+  for high scores and preferences. This is the single most common bug in ported games:
+  it fails silently, so the score simply never survives a reload.
+- Keep the loop in `requestAnimationFrame` and cancel it on unmount.
 
 ### Games (board, card, word)
 

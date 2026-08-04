@@ -10,6 +10,7 @@ export type {
   AdapterResult,
   AgentAdapter,
   FetchLike,
+  TokenUsage,
   ToolCall,
   ToolDef,
 } from './types.js';
@@ -35,6 +36,7 @@ export {
 export {
   DEFAULT_MAX_ITERATIONS,
   runAgentTurn,
+  type AgentRoundTrip,
   type AgentTool,
   type AgentTurnEvent,
   type AgentTurnResult,

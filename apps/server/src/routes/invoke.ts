@@ -182,6 +182,13 @@ async function streamTurn(reply: FastifyReply, deps: InvokeRouteDeps, plan: Turn
       maxIterations: deps.maxIterations,
       signal: abort.signal,
       onDelta: (delta) => send('delta', { text: delta }),
+      // Progress for the client's step timeline. Tool NAME and phase only — never the
+      // tool input or output, which carry prompt content (mirrors the runner
+      // inspector's structural-only rule). `round_trip` stays server-side.
+      onEvent: (event) => {
+        if (event.type === 'tool_call') send('step', { phase: 'start', tool: event.call.name });
+        else if (event.type === 'tool_result') send('step', { phase: 'end', tool: event.call.name });
+      },
     });
     settled = true;
     if (result.ok) {

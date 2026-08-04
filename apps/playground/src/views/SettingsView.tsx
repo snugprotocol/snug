@@ -200,7 +200,7 @@ export function SettingsView(): ReactElement {
 }
 
 /** Hub account (living-apps child 4): optional — logged-out is fully functional, local-only. */
-function AccountCard(): ReactElement | null {
+export function AccountCard(): ReactElement | null {
   const auth = useAuth();
   const sync = useSyncStatus();
   if (auth.state === 'unknown') return null;

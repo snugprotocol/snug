@@ -66,3 +66,28 @@ describe('deriveDisplayName', () => {
     expect(deriveDisplayName('<html></html>')).toBe('untitled app');
   });
 });
+
+describe('createUserDbLibrary delete (TASK-20260803-hub-ops, plan step 14)', () => {
+  it('removes the app so it leaves the list and its html is gone', async () => {
+    const db = await installTestUserDb();
+    const library = createUserDbLibrary(() => Promise.resolve(db));
+    const keep = await library.save(HTML, 'keeper');
+    const drop = await library.save(HTML, 'goner');
+
+    await library.delete(drop.id);
+
+    expect((await library.list()).map((e) => e.id)).toEqual([keep.id]);
+    expect(await library.getHtml(drop.id)).toBeUndefined();
+    expect(db.getApp(drop.id)).toBeUndefined();
+  });
+
+  it('frees the install source for reinstall', async () => {
+    const db = await installTestUserDb();
+    const library = createUserDbLibrary(() => Promise.resolve(db));
+    const entry = await library.save(HTML, 'starter', 'starter:chess');
+    await library.delete(entry.id);
+    expect(await library.findByInstallSource('starter:chess')).toBeUndefined();
+    const again = await library.save(HTML, 'starter', 'starter:chess');
+    expect((await library.findByInstallSource('starter:chess'))?.id).toBe(again.id);
+  });
+});
