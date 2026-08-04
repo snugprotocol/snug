@@ -1,6 +1,6 @@
 # TASK-20260803-hub-retrofit: Marketplace dedup, SSO surfacing, design pass (child 4 of living-apps)
 
-- **Status**: planned
+- **Status**: in-review (complete on umbrella branch)
 - **Owner**: Jeetu
 - **Risk tier**: medium (auth-adjacent UI; one server auth change)
 - **Branch**: `feat/TASK-20260803-living-apps` (umbrella branch)
@@ -33,3 +33,8 @@ Marketplace click connects to the existing install instead of duplicating: find-
 —
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-03 — Jeetu/Claude — session (complete)
+- Done: find-or-open installs + tile states + latch (AC8 Playwright regression, SPA-nav to dodge the ephemeral-OPFS reload trap), identity chip, signOut→initSync ordering (F14 unit), post-login return path + open-redirect/control-char negatives (server 91), AccountCard three-state + hub-sync suggestion, Settings class cleanup.
+- State: complete on umbrella branch.
+- Next step: rides the umbrella PR.

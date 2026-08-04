@@ -1,6 +1,6 @@
 # TASK-20260803-app-context-chat: App-attached chat, durable pins, threads/docs UX, factory reset (child 3 of living-apps)
 
-- **Status**: planned
+- **Status**: in-review (complete on umbrella branch)
 - **Owner**: Jeetu
 - **Risk tier**: medium
 - **Branch**: `feat/TASK-20260803-living-apps` (umbrella branch)
@@ -35,3 +35,8 @@ Thread id forms `app:<id>` (primary per-app thread) / `thr-<uuid>` (builder + ex
 —
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-03 — Jeetu/Claude — session (complete)
+- Done: appContext assembler (caps + markers), BuilderTurn context in both modes, durable thread pin + new-app hatch (F10), bootstrap = v1-artifact turn w/ pre-build-chatter test (F9), meta artifact cards + rehydration, thread picker, DocsPanel, factory badge/reset (playground 65 → 67 with child 4).
+- State: complete on umbrella branch.
+- Next step: rides the umbrella PR.

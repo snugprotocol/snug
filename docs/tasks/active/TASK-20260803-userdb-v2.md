@@ -1,6 +1,6 @@
 # TASK-20260803-userdb-v2: User-DB schema v2 — native app tables, schema registry, factory pins, docs (child 1 of living-apps)
 
-- **Status**: planned
+- **Status**: in-review (complete on umbrella branch)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (`packages/protocol/src/userdb-schema.ts` = spec surface; driver seam C2-adjacent)
 - **Branch**: `feat/TASK-20260803-living-apps` (umbrella branch)
@@ -39,3 +39,8 @@ Order: `packages/protocol/src/userdb-schema.ts` (constants + token fn + DDL/INDE
 —
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-03 — Jeetu/Claude — session (complete)
+- Done: protocol schema v2 + materializer core, tests-first (protocol 103, db 144). Review B1 (sqlite_sequence duplicate-row) fixed with UPDATE-then-INSERT + delete-max regression; O4 virtual-table pre-validation added to applyAppDdl.
+- State: complete on umbrella branch; all ACs covered incl. C2 injection negatives, cap rollback, sync-hash stability, structural migration.
+- Next step: rides the umbrella PR.

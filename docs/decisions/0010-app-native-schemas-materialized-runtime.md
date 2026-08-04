@@ -1,6 +1,6 @@
 # 0010 — Per-app data as LLM-designed native tables; materialized runtime DB for isolation
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-living-apps
 

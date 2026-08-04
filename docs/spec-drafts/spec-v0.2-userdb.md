@@ -106,7 +106,7 @@ no KMS/host-blind claim is made until a KeyProvider ships.
 - `byok` — browser-direct frontier API; key from `snug_secrets`.
 - `local` — browser-direct OpenAI-compatible endpoint (e.g. Ollama).
 - `subscription` — hub-mediated `/invoke` (opt-in); body may carry a validated
-  `model`; artifacts still land client-authoritatively (§2.2).
+  `model`; artifacts still land client-authoritatively (§2.3).
 
 C1/C2 are unchanged in every mode: app iframes stay `sandbox="allow-scripts"` with
 `connect-src` blocked; LLM calls originate from the HOST page only; credentials never

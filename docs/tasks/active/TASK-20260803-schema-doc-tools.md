@@ -1,6 +1,6 @@
 # TASK-20260803-schema-doc-tools: schema_apply + app_doc_write tools and compounding prompts (child 2 of living-apps)
 
-- **Status**: planned
+- **Status**: in-review (complete on umbrella branch)
 - **Owner**: Jeetu
 - **Risk tier**: medium (prompt store per ADR-0004; tool wiring in playground)
 - **Branch**: `feat/TASK-20260803-living-apps` (umbrella branch)
@@ -33,3 +33,8 @@ Tool names `schema_apply` / `app_doc_write` · doc slugs `vision|requirements|pl
 —
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-03 — Jeetu/Claude — session (complete)
+- Done: schema-apply + app-doc-write prompts (store-sourced, protocol-derived placeholders), 30-layer + KB doctrine (goldens regenerated; knowledge 55), sink ensureTargetId pre-pin, playground tool wiring + 10 tests. Limitation (documented in umbrella): direct-mode only; subscription server twins queued in next-steps.
+- State: complete on umbrella branch.
+- Next step: rides the umbrella PR.
