@@ -35,6 +35,15 @@ import { createUserStore, type UserStore } from './stores/users.js';
  */
 export const MAX_BODY_BYTES = 1024 * 1024;
 
+/**
+ * Upper bound on a single streaming turn. Building an app is a long task — up to 30
+ * minutes — and Fastify leaves Node's `http.Server` defaults in place, where
+ * `requestTimeout` is 300_000ms (5 minutes) and `headersTimeout` 60_000ms. Inheriting
+ * those tears the response down mid-build, which reaches the client as a stream that
+ * simply stops. Both are disabled below and `keepAliveTimeout` is raised past this bound.
+ */
+export const LONG_RUN_MS = 30 * 60_000;
+
 /** Namespaces the SPA fallback must never swallow (API contract stays JSON). */
 const API_PREFIXES = ['/invoke', '/artifacts', '/auth', '/userdb'];
 
@@ -59,7 +68,18 @@ function dbPath(dataDir: string, file: string): string {
 
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const { config } = options;
-  const app = Fastify({ logger: options.logger ?? false, bodyLimit: MAX_BODY_BYTES });
+  const app = Fastify({
+    logger: options.logger ?? false,
+    bodyLimit: MAX_BODY_BYTES,
+    // 0 disables the inherited Node teardown timers; the client's own disconnect
+    // (raw.on('close') in the invoke route) remains the way a run is cancelled.
+    connectionTimeout: 0,
+    requestTimeout: 0,
+    keepAliveTimeout: LONG_RUN_MS,
+  });
+  // Fastify does not surface headersTimeout, and Node's 60s default would still cut a
+  // long stream. Set it directly on the underlying server.
+  app.server.headersTimeout = 0;
   if (config.authEnabled) {
     // Credentialed CORS is only ever paired with the explicit origin (F2 fail-closed;
     // loadConfig guarantees corsOrigin is a concrete string when auth is enabled).
