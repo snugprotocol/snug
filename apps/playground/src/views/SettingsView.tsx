@@ -16,7 +16,7 @@ import {
   useProvider,
   type ByokProvider,
 } from '../state/mode.js';
-import { login, logout, useAuth } from '../state/auth.js';
+import { login, useAuth } from '../state/auth.js';
 import {
   applyRemote,
   DROPBOX_TOKEN_SECRET,
@@ -24,6 +24,7 @@ import {
   importUserFile,
   pushLocal,
   setSyncOrigin,
+  signOut,
   useSyncStatus,
   type SyncOriginKind,
 } from '../state/sync.js';
@@ -117,7 +118,7 @@ export function SettingsView(): ReactElement {
             ) : null}
           </div>
           {provider !== 'mock' ? (
-            <div className="field" style={{ marginTop: 'var(--space-4)' }}>
+            <div className="field field-gap">
               <label htmlFor="byok-key">api key</label>
               <input
                 id="byok-key"
@@ -198,21 +199,34 @@ export function SettingsView(): ReactElement {
   );
 }
 
-/** Hub account (child 5): optional — logged-out is fully functional, local-only. */
+/** Hub account (living-apps child 4): optional — logged-out is fully functional, local-only. */
 function AccountCard(): ReactElement | null {
   const auth = useAuth();
-  if (auth.state === 'unavailable' || auth.state === 'unknown') return null;
+  const sync = useSyncStatus();
+  if (auth.state === 'unknown') return null;
   return (
     <Card>
       <div className="field">
         <label>hub account</label>
-        {auth.state === 'signed-in' ? (
+        {auth.state === 'unavailable' ? (
+          <span className="hint">
+            this hub is running without an account surface (static demo or a server without SNUG_AUTH) — everything
+            here is local-only and fully functional. a hub with Google sign-in can keep a synced copy of your snug
+            file across devices.
+          </span>
+        ) : auth.state === 'signed-in' ? (
           <>
             <span className="hint">
               signed in as {auth.user.name ?? auth.user.email ?? auth.user.userId} — the hub can host your snug file
               as a sync origin.
             </span>
-            <Button onClick={() => void logout()}>sign out</Button>
+            {sync.origin === 'none' ? (
+              <div className="field-row">
+                <span className="hint">your snug file isn’t syncing anywhere yet.</span>
+                <Button onClick={() => void setSyncOrigin('hub')}>sync to this hub</Button>
+              </div>
+            ) : null}
+            <Button onClick={() => void signOut()}>sign out</Button>
           </>
         ) : (
           <>
@@ -273,7 +287,7 @@ function DataCard(): ReactElement {
         {sync.state === 'divergence' ? (
           <div className="error-note" role="alert">
             the origin holds a different copy of your file. pick which one wins:
-            <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+            <div className="field-row">
               <Button onClick={() => void applyRemote()}>use the origin copy</Button>
               <Button onClick={() => void pushLocal()}>keep this device’s copy</Button>
             </div>
@@ -284,7 +298,7 @@ function DataCard(): ReactElement {
           </div>
         ) : null}
         {sync.origin === 'dropbox' ? (
-          <div className="field" style={{ marginTop: 'var(--space-3)' }}>
+          <div className="field field-gap-s">
             <label htmlFor="dropbox-token">dropbox access token</label>
             <input
               id="dropbox-token"
@@ -307,16 +321,16 @@ function DataCard(): ReactElement {
           </div>
         ) : null}
       </div>
-      <div className="field" style={{ marginTop: 'var(--space-4)' }}>
+      <div className="field field-gap">
         <label>portability</label>
         {dataError !== undefined ? (
           <div className="error-note" role="alert">
             {dataError}
           </div>
         ) : null}
-        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="field-row field-row-wrap">
           <Button onClick={onExport}>export snug file</Button>
-          <label style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+          <label className="check-label">
             <input
               type="checkbox"
               checked={includeSecrets}
@@ -324,7 +338,7 @@ function DataCard(): ReactElement {
             />
             include secrets
           </label>
-          <label className="btn" style={{ cursor: 'pointer' }}>
+          <label className="btn file-btn">
             import snug file
             <input
               type="file"

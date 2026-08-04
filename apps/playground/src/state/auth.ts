@@ -48,8 +48,10 @@ export async function refreshAuth(fetchImpl: FetchLike = doFetch): Promise<AuthS
   return next;
 }
 
-export function login(): void {
-  globalThis.location.assign('/auth/login');
+/** Starts the hub login; `returnTo` (same-origin path) brings the user back where they were. */
+export function login(returnTo?: string): void {
+  const target = returnTo ?? globalThis.location?.pathname ?? '/';
+  globalThis.location.assign(`/auth/login?return=${encodeURIComponent(target)}`);
 }
 
 export async function logout(fetchImpl: FetchLike = doFetch): Promise<void> {

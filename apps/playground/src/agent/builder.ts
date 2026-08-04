@@ -20,6 +20,23 @@ export interface ArtifactEvent {
   version?: number;
 }
 
+export interface TurnHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * One chat turn with its app-attached context (child 3, AC4). Direct mode appends
+ * `contextBlock` to the system prompt and replays `history` as real turns;
+ * subscription mode prepends the block to the wire message (server unchanged, which
+ * keeps its own history — `history` is ignored there).
+ */
+export interface BuilderTurn {
+  message: string;
+  contextBlock?: string;
+  history?: TurnHistoryMessage[];
+}
+
 export interface BuildHandlers {
   /** Streamed DELTA (not cumulative) — callers accumulate. */
   onDelta?: (delta: string) => void;
@@ -27,6 +44,8 @@ export interface BuildHandlers {
   onArtifact?: (artifact: ArtifactEvent) => void;
   /** Tool activity for the reasoning pill ("consulting the knowledge base…"). */
   onActivity?: (label: string) => void;
+  /** The app's schema or wiki docs changed (direct-mode tools) — refresh panels. */
+  onKnowledge?: () => void;
 }
 
 export type BuildResult =
@@ -34,8 +53,12 @@ export type BuildResult =
   | { ok: false; code: string; message: string; retryable: boolean };
 
 export interface BuilderAgent {
-  send(message: string, handlers: BuildHandlers, signal: AbortSignal): Promise<BuildResult>;
+  send(turn: string | BuilderTurn, handlers: BuildHandlers, signal: AbortSignal): Promise<BuildResult>;
 }
+
+const asTurn = (turn: string | BuilderTurn): BuilderTurn => (typeof turn === 'string' ? { message: turn } : turn);
+
+const CONTEXT_SEPARATOR = '\n\n---\n\n';
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -55,13 +78,17 @@ const cancelled = (): BuildResult => ({
 export function createServerBuilder(threadId: string, fetchImpl?: FetchLike, model?: string): BuilderAgent {
   const doFetch: FetchLike = fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
   return {
-    async send(message, handlers, signal) {
+    async send(turn, handlers, signal) {
+      const { message, contextBlock } = asTurn(turn);
+      // Subscription mode: the context rides inside the wire message (the hub server
+      // and its thread store stay unchanged; it keeps its own text history).
+      const wireMessage = contextBlock !== undefined ? `${contextBlock}${CONTEXT_SEPARATOR}${message}` : message;
       let response: Response;
       try {
         response = await doFetch('/invoke', {
           method: 'POST',
           headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-          body: JSON.stringify({ message, threadId, ...(model !== undefined ? { model } : {}) }),
+          body: JSON.stringify({ message: wireMessage, threadId, ...(model !== undefined ? { model } : {}) }),
           signal,
         });
       } catch (err) {
@@ -131,7 +158,8 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
   const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
   const system = buildHostSystemPrompt({ appBuilder: true, artifacts: true });
   return {
-    async send(message, handlers, signal) {
+    async send(turn, handlers, signal) {
+      const { message, contextBlock, history } = asTurn(turn);
       // F15: an imported/pulled DB is executable config — its endpoint/provider
       // settings must be re-confirmed before ANY direct turn, builder included.
       if (needsConfirm()) {
@@ -156,19 +184,26 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
       const tools: AgentTool[] = buildByokTools(options.sink, {
         onArtifact: (artifact) =>
           handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName, version: artifact.version }),
+        onSchemaApplied: () => handlers.onKnowledge?.(),
+        onDocWritten: () => handlers.onKnowledge?.(),
       });
+      const activityLabels: Record<string, string> = {
+        artifact_write: 'writing the app file…',
+        schema_apply: 'designing the app’s database…',
+        app_doc_write: 'updating the app’s docs…',
+      };
       const result = await runAgentTurn({
         adapter,
-        system,
-        messages: [{ role: 'user', content: message }],
+        // The app-attached context (code, schema, docs) rides as a per-turn system
+        // suffix; the base layers stay byte-stable for the golden assembly tests.
+        system: contextBlock !== undefined ? `${system}${CONTEXT_SEPARATOR}${contextBlock}` : system,
+        messages: [...(history ?? []), { role: 'user', content: message }],
         tools,
         signal,
         onDelta: (delta) => handlers.onDelta?.(delta),
         onEvent: (event) => {
           if (event.type === 'tool_call') {
-            handlers.onActivity?.(
-              event.call.name === 'artifact_write' ? 'writing the app file…' : 'consulting the knowledge base…',
-            );
+            handlers.onActivity?.(activityLabels[event.call.name] ?? 'consulting the knowledge base…');
           }
         },
       });

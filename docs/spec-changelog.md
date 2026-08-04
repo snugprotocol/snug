@@ -4,6 +4,24 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-03 — spec v0.2 DRAFT amended in place (staged, not pushed) — TASK-20260803-living-apps
+The still-unpushed v0.2 draft's storage layer moves to **schema v2** (ADR-0010): per-app
+data becomes REAL namespaced tables — `app_<token>__<name>` with a NORMATIVE total
+injective token function (`appDataToken`: UUID → 32 hex sans dashes, else `'x'+hex(utf8)`),
+object-name rule `^[A-Za-z][A-Za-z0-9_]{0,40}$`, reserved prefixes `snug_`/`sqlite_`/`app_`
+(single exemption: driver-internal `snug_kv`), and a per-app registry
+(`snug_app_schemas.schema_json`) holding the runtime `sqlite_master` DDL VERBATIM plus
+AUTOINCREMENT sequence counters. `snug_app_data` (blob) is dropped; v1→v2 migration is
+structural (pre-launch data abandoned, owner-approved). New tables: `snug_app_migrations`
+(append-only DDL audit), `snug_app_docs` (per-app knowledge wiki — shape normative, slug
+values advisory). New columns: `snug_apps.install_source` (partial unique — a marketplace
+identity installs at most once), `snug_app_versions.pinned` (the factory version is never
+pruned; retention = factory + newest `VERSIONS_RETAINED` unpinned),
+`snug_chat_messages.pinned`/`meta` (the bootstrap turn survives all pruning for the app's
+life). Wire frames/envelope UNCHANGED at v1. Source: `packages/protocol/src/userdb-schema.ts`
+(DDL + index snapshots regenerated deliberately); staged in
+`docs/spec-drafts/spec-v0.2-userdb.md`. No push to snugprotocol/spec (needs explicit ask).
+
 ## 2026-08-03 — spec v0.2 DRAFT (staged, not pushed) — TASK-20260803-portable-hub
 New normative layer on top of v0.1 (wire frames/envelope UNCHANGED): **Portable User
 Database Format** — one SQLite file per user (schema v1 via `PRAGMA user_version`; DDL +

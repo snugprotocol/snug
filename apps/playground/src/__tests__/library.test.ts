@@ -34,6 +34,19 @@ describe('createUserDbLibrary', () => {
   });
 });
 
+describe('install-source dedup (living-apps AC8)', () => {
+  it('save with the same installSource returns the existing app; findByInstallSource resolves it', async () => {
+    const db = await installTestUserDb();
+    const store = createUserDbLibrary(() => Promise.resolve(db));
+    const first = await store.save('<html><head><title>Chess</title></head></html>', 'chess', 'starter:chess');
+    const second = await store.save('<html><head><title>Chess</title></head></html>', 'chess', 'starter:chess');
+    expect(second.id).toBe(first.id);
+    expect(await store.list()).toHaveLength(1);
+    expect((await store.findByInstallSource('starter:chess'))?.id).toBe(first.id);
+    expect(await store.findByInstallSource('starter:none')).toBeUndefined();
+  });
+});
+
 describe('createServerArtifactFetch (subscription pull path)', () => {
   it('fetches html by id and maps 404 to undefined', async () => {
     const fetchSpy = vi.fn(async (input: string) =>

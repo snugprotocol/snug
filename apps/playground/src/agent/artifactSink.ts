@@ -23,11 +23,24 @@ export interface ArtifactWriteResult {
 
 export interface ArtifactSink {
   write(html: string, title?: string): Promise<ArtifactWriteResult>;
+  /**
+   * The app id every write/tool call in this surface targets. For a builder thread this
+   * MINTS (and latches) the id before the first write, so schema/doc tools can run
+   * schema-first — the eventual first artifact write installs under the same id.
+   */
+  ensureTargetId(): Promise<string>;
 }
 
 export interface CreateAppTargetSinkOptions {
   /** Per-app chat: the app every write versions. Absent → builder-thread rule. */
   pinnedAppId?: string;
+  /**
+   * Durable builder-thread pin (review F10): the app id the thread's row already
+   * records. A resumed thread versions the SAME app instead of installing a duplicate.
+   */
+  initialTargetId?: string;
+  /** Fired when a write INSTALLS (v1) — the caller persists the thread→app pin. */
+  onInstall?: (appId: string) => void;
   /** Injectable for tests; defaults to the page user DB. */
   getDb?: () => Promise<UserDb>;
 }
@@ -35,44 +48,43 @@ export interface CreateAppTargetSinkOptions {
 export function createAppTargetSink(options: CreateAppTargetSinkOptions = {}): ArtifactSink {
   const getDb = options.getDb ?? getUserDb;
   /**
-   * Builder-thread pin, latched SYNCHRONOUSLY on first entry (umbrella review minor
-   * 7): two concurrent writes racing an unpinned sink must not install two apps —
-   * the second awaits the first install and versions the same id.
+   * Builder-thread target id, latched SYNCHRONOUSLY on first need (umbrella review
+   * minor 7): concurrent writes racing an unpinned sink must not install two apps.
+   * The id may exist BEFORE the app row does (schema-first building); the first
+   * artifact write then installs under it, and any writer that finds no row after the
+   * await installs synchronously — later continuations see the row and version it.
    */
-  let threadInstall: Promise<string> | undefined;
+  let threadTargetId: Promise<string> | undefined =
+    options.initialTargetId !== undefined ? Promise.resolve(options.initialTargetId) : undefined;
+
+  const ensureThreadTargetId = (): Promise<string> => {
+    threadTargetId ??= Promise.resolve(crypto.randomUUID());
+    return threadTargetId;
+  };
 
   return {
+    ensureTargetId() {
+      if (options.pinnedAppId !== undefined) return Promise.resolve(options.pinnedAppId);
+      return ensureThreadTargetId();
+    },
+
     async write(html, title) {
       const db = await getDb();
-      const pinned = options.pinnedAppId;
+      const targetId = options.pinnedAppId ?? (await ensureThreadTargetId());
 
-      if (pinned !== undefined) {
-        const existing = db.getApp(pinned);
-        if (existing !== undefined) {
-          const meta = db.saveAppVersion(pinned, html, title);
-          const record = db.getApp(pinned);
-          return { id: pinned, displayName: record?.displayName ?? existing.displayName, version: meta.version };
-        }
-        // Pinned id with no row yet (e.g. chat alongside a never-installed preview):
-        // install UNDER the pinned id so the chat and the app agree on identity.
-        const installed = db.installApp({ appId: pinned, displayName: deriveDisplayName(html, title), html });
-        return { id: installed.appId, displayName: installed.displayName, version: 1 };
+      const existing = db.getApp(targetId);
+      if (existing !== undefined) {
+        const meta = db.saveAppVersion(targetId, html, title);
+        const record = db.getApp(targetId);
+        return { id: targetId, displayName: record?.displayName ?? existing.displayName, version: meta.version };
       }
-
-      if (threadInstall === undefined) {
-        let resolveInstall: (id: string) => void = () => undefined;
-        threadInstall = new Promise<string>((resolve) => {
-          resolveInstall = resolve;
-        });
-        const installed = db.installApp({ displayName: deriveDisplayName(html, title), html });
-        resolveInstall(installed.appId);
-        return { id: installed.appId, displayName: installed.displayName, version: 1 };
-      }
-
-      const targetId = await threadInstall;
-      const meta = db.saveAppVersion(targetId, html, title);
-      const record = db.getApp(targetId);
-      return { id: targetId, displayName: record?.displayName ?? 'app', version: meta.version };
+      // No row yet (fresh builder thread, schema-first pre-pin, or a pinned chat
+      // alongside a never-installed preview): install UNDER the target id so chat,
+      // schema, docs, and app all agree on identity. Synchronous after the awaits
+      // above, so a concurrent second write sees the row and versions it.
+      const installed = db.installApp({ appId: targetId, displayName: deriveDisplayName(html, title), html });
+      options.onInstall?.(installed.appId);
+      return { id: installed.appId, displayName: installed.displayName, version: 1 };
     },
   };
 }

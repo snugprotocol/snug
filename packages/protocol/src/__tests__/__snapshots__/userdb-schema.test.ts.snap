@@ -1,6 +1,11 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`userdb schema constants (spec surface) > locks the DDL byte-for-byte (spec snapshot — changes flow through SPEC_SYNC) 1`] = `
+exports[`DDL snapshots (spec surface — changes flow through SPEC_SYNC) > locks the index DDL byte-for-byte 1`] = `
+"CREATE UNIQUE INDEX IF NOT EXISTS idx_snug_apps_install_source
+    ON snug_apps (install_source) WHERE install_source IS NOT NULL"
+`;
+
+exports[`DDL snapshots (spec surface — changes flow through SPEC_SYNC) > locks the table DDL byte-for-byte 1`] = `
 "CREATE TABLE IF NOT EXISTS snug_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS snug_profile (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS snug_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -14,7 +19,8 @@ CREATE TABLE IF NOT EXISTS snug_apps (
     uses_db INTEGER NOT NULL DEFAULT 0,
     current_version INTEGER NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    install_source TEXT
   );
 CREATE TABLE IF NOT EXISTS snug_app_versions (
     app_id TEXT NOT NULL,
@@ -22,7 +28,29 @@ CREATE TABLE IF NOT EXISTS snug_app_versions (
     html TEXT NOT NULL,
     note TEXT,
     created_at TEXT NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (app_id, version)
+  );
+CREATE TABLE IF NOT EXISTS snug_app_schemas (
+    app_id TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    schema_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+CREATE TABLE IF NOT EXISTS snug_app_migrations (
+    app_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    ddl TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, seq)
+  );
+CREATE TABLE IF NOT EXISTS snug_app_docs (
+    app_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    title TEXT,
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, slug)
   );
 CREATE TABLE IF NOT EXISTS snug_chat_threads (
     thread_id TEXT PRIMARY KEY,
@@ -36,12 +64,9 @@ CREATE TABLE IF NOT EXISTS snug_chat_messages (
     thread_id TEXT NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
-CREATE TABLE IF NOT EXISTS snug_app_data (
-    namespace TEXT PRIMARY KEY,
-    bytes BLOB NOT NULL,
-    updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    meta TEXT
   );
 CREATE TABLE IF NOT EXISTS snug_sync (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
 `;

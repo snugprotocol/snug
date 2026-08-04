@@ -17,12 +17,24 @@ export {
 } from './constants.js';
 
 export {
+  APP_KV_TABLE,
+  APP_OBJECT_NAME_RULE,
+  APP_RESERVED_PREFIXES,
+  APP_REST_PREFIX,
+  APP_REST_SEPARATOR,
+  STANDARD_APP_DOC_SLUGS,
   USERDB_DDL,
   USERDB_FILE,
+  USERDB_INDEX_DDL,
   USERDB_LIMITS,
   USERDB_OPFS_DIR,
   USERDB_SCHEMA_VERSION,
   USERDB_TABLES,
+  appDataToken,
+  appRestTableName,
+  isValidAppObjectName,
+  type AppSchemaJson,
+  type AppSchemaObject,
   type UserDbTable,
 } from './userdb-schema.js';
 

@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { parseBuildPrompt } from '../agent/chips.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary, type LibraryEntry } from '../state/library.js';
-import { listStarterApps, loadStarterHtml } from '../starter/starterApps.js';
+import { listStarterApps, loadStarterHtml, STARTER_PREFIX } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { Chip } from '../ui/Chip.js';
@@ -28,6 +28,18 @@ export function HubView(): ReactElement {
   const [idea, setIdea] = useState('');
   const [load, setLoad] = useState<LoadState>({ phase: 'loading' });
   const [installError, setInstallError] = useState<string | undefined>(undefined);
+  /** In-flight latch: a double-click must not race two installs (AC8). */
+  const [installing, setInstalling] = useState<string | undefined>(undefined);
+
+  /** Which starters are already in the user's file — the tile becomes "open" (AC8). */
+  const installedBySource = useMemo(() => {
+    if (load.phase !== 'ready') return new Map<string, string>();
+    const map = new Map<string, string>();
+    for (const entry of load.entries) {
+      if (entry.installSource !== undefined) map.set(entry.installSource, entry.id);
+    }
+    return map;
+  }, [load]);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,19 +64,29 @@ export function HubView(): ReactElement {
     navigate(`/build?idea=${encodeURIComponent(trimmed)}`);
   };
 
-  // Starter "install" (AC6): copy the bundled HTML into the user DB, then run the
-  // installed copy — from here on it versions and syncs like any built app.
+  // Starter "install" is find-or-open now (AC8): the starter's identity travels as
+  // `install_source`, so clicking an installed tile opens the EXISTING app — the
+  // duplicate-copies bug is dead at the UI, the store, and the DB unique index.
   const installStarter = (starterId: string, name: string): void => {
+    if (installing !== undefined) return;
+    const source = `starter:${starterId.slice(STARTER_PREFIX.length)}`;
+    const existing = installedBySource.get(source);
+    if (existing !== undefined) {
+      navigate(`/run/${existing}`);
+      return;
+    }
     setInstallError(undefined);
+    setInstalling(starterId);
     void loadStarterHtml(starterId)
       .then(async (html) => {
         if (html === undefined) throw new Error('starter not bundled');
-        const entry = await userLibrary().save(html, name);
+        const entry = await userLibrary().save(html, name, source);
         navigate(`/run/${entry.id}`);
       })
       .catch((err: unknown) => {
         setInstallError(err instanceof Error ? err.message : String(err));
-      });
+      })
+      .finally(() => setInstalling(undefined));
   };
 
   const onIdeaKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
@@ -151,20 +173,30 @@ export function HubView(): ReactElement {
               STARTER_LOOKS[starter.name.replace(/ /g, '-')] ??
               ({ emoji: '⬡', color: 'var(--ember)', blurb: 'curated example — runs without a server' } as const);
             const style = { '--tile-color': look.color } as CSSProperties;
+            const source = `starter:${starter.id.slice(STARTER_PREFIX.length)}`;
+            const installed = installedBySource.has(source);
             return (
               <button
                 key={starter.id}
                 type="button"
                 onClick={() => installStarter(starter.id, starter.name)}
-                style={{ all: 'unset', display: 'block', cursor: 'pointer' }}
-                aria-label={`install ${starter.name}`}
+                disabled={installing !== undefined && installing !== starter.id}
+                style={{ all: 'unset', display: 'block', cursor: 'pointer', position: 'relative' }}
+                aria-label={installed ? `open ${starter.name}` : `install ${starter.name}`}
               >
                 <Card interactive className="app-tile" style={style}>
+                  {installed ? <span className="tile-installed-badge">installed</span> : null}
                   <span className="tile-emoji" aria-hidden="true">
                     {look.emoji}
                   </span>
                   <span className="tile-name">{starter.name}</span>
-                  <span className="tile-sub">{look.blurb} — installs into your snug file</span>
+                  <span className="tile-sub">
+                    {installed
+                      ? `${look.blurb} — already in your snug file, opens your copy`
+                      : installing === starter.id
+                        ? 'installing…'
+                        : `${look.blurb} — installs into your snug file`}
+                  </span>
                 </Card>
               </button>
             );

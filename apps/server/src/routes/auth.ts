@@ -35,7 +35,23 @@ const loginStatePayload = z.looseObject({
   state: z.string().min(1),
   codeVerifier: z.string().min(1),
   redirectUri: z.string().min(1),
+  returnTo: z.string().optional(),
 });
+
+/**
+ * Post-login return target (living-apps child 4). Same-origin PATHS only — anything
+ * absolute, protocol-relative (`//evil`), or backslash-tricky falls back to `/`
+ * (open-redirect guard).
+ */
+export function sanitizeReturnTo(raw: unknown): string {
+  if (typeof raw !== 'string' || raw === '') return '/';
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return '/';
+  // Control chars are never part of a legitimate path (review O1 — defense in depth;
+  // Node already refuses them in headers, but a clean '/' beats a 500).
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return '/';
+  return raw;
+}
 
 function requestOrigin(request: FastifyRequest): string {
   return `${request.protocol}://${request.host}`;
@@ -64,8 +80,9 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         .status(502)
         .send({ code: 'OIDC_UNAVAILABLE', message: 'could not reach the identity provider', retryable: true });
     }
+    const returnTo = sanitizeReturnTo((request.query as { return?: unknown } | undefined)?.return);
     const value = signPayload(
-      { state: start.state, codeVerifier: start.codeVerifier, redirectUri, exp: Date.now() + LOGIN_TTL_MS },
+      { state: start.state, codeVerifier: start.codeVerifier, redirectUri, returnTo, exp: Date.now() + LOGIN_TTL_MS },
       sessionSecret,
     );
     reply.setCookie(OIDC_COOKIE, value, {
@@ -120,7 +137,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const user = users.upsertByGoogleSub({ googleSub: identity.sub, email: identity.email, name: identity.name });
     clearLoginCookie();
     setSessionCookies(reply, request, user.id, sessionSecret);
-    return reply.redirect('/', 302);
+    // Sanitized AGAIN on the way out: the cookie is signed, but defense-in-depth is free.
+    return reply.redirect(sanitizeReturnTo(login.data.returnTo), 302);
   });
 
   app.post('/auth/logout', async (request, reply) => {

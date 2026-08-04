@@ -59,7 +59,7 @@ describe('per-app driver contract over blobs (AC4)', () => {
     expect(result).toMatchObject({ ok: false, code: 'DB_FORBIDDEN_STATEMENT' });
   });
 
-  it('app data lands in snug_app_data blobs inside the user DB after flush', async () => {
+  it('app data lands inside the single user DB file and survives reopen (v2: native app_* tables)', async () => {
     await db.driver.handle('app-1', execFrame('CREATE TABLE t (v TEXT)'));
     await db.flush();
     // reopen the persisted user DB from bytes: the blob must be there

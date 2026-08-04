@@ -869,3 +869,238 @@
     max-width: 100%;
   }
 }
+
+/* ---- living-apps (child 3): threads, docs wiki, versions ---- */
+
+.thread-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.thread-picker select {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+}
+.thread-picker-label {
+  flex: 1;
+  color: var(--fg-muted);
+  font-size: 0.9rem;
+}
+
+.chip-active {
+  border-color: var(--ember);
+  color: var(--ember);
+}
+
+.docs-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.doc-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.doc-page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.doc-page-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.doc-updated {
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.doc-body {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.doc-editor {
+  width: 100%;
+  padding: var(--space-3);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+.doc-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.versions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-m);
+}
+.version-current {
+  background: var(--surface-2);
+}
+.version-row-main {
+  min-width: 0;
+  flex: 1;
+}
+.version-row-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+.version-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+.version-tag-factory {
+  color: var(--ember);
+  border-color: var(--ember);
+  background: transparent;
+}
+.factory-reset {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-m);
+  border: 1px dashed var(--border);
+}
+.factory-reset-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  font-size: 0.85rem;
+}
+.factory-reset-copy span {
+  color: var(--fg-muted);
+}
+
+.builder-resume {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-m);
+  border: 1px dashed var(--border);
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+}
+
+/* ---- living-apps (child 4): identity chip + installed tiles ---- */
+
+.identity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  color: var(--fg);
+  text-decoration: none;
+}
+.identity-chip:hover {
+  background: var(--surface-2);
+}
+.identity-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--ember-deep);
+  color: var(--ember-ink);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.identity-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+@media (max-width: 830px) {
+  .identity-name {
+    display: none;
+  }
+}
+
+.tile-installed-badge {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--ok);
+  border: 1px solid var(--ok);
+  background: transparent;
+}
+
+.field-gap {
+  margin-top: var(--space-4);
+}
+.field-gap-s {
+  margin-top: var(--space-3);
+}
+.field-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-top: var(--space-2);
+}
+.field-row-wrap {
+  flex-wrap: wrap;
+}
+.check-label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.file-btn {
+  cursor: pointer;
+}

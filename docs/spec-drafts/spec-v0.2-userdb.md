@@ -18,8 +18,9 @@
 ## 2. The user database
 
 One SQLite file per user (`user.sqlite`) is the canonical artifact. `PRAGMA
-user_version` carries the schema version (currently **1**); migrations are
-forward-only. Size cap: `MAX_USERDB_BYTES` (64 MiB v1).
+user_version` carries the schema version (currently **2**); migrations are
+forward-only (v1→v2 is structural; v1 blob app data does not survive). Size cap:
+`MAX_USERDB_BYTES` (64 MiB v1).
 
 ### 2.1 Hub-namespace tables (normative DDL in `userdb-schema.ts`)
 
@@ -29,20 +30,40 @@ forward-only. Size cap: `MAX_USERDB_BYTES` (64 MiB v1).
 | `snug_profile` | display profile (key/value, JSON values) |
 | `snug_settings` | mode, provider, model, endpoints (key/value, JSON values) |
 | `snug_secrets` | BYOK keys, personal-origin tokens (opaque strings; see §4) |
-| `snug_apps` | one row per app: display metadata, `current_version` |
-| `snug_app_versions` | complete HTML per version; hubs retain ≥ `VERSIONS_RETAINED` (5), pruning oldest; revert = copy-forward as a NEW version |
-| `snug_chat_threads` / `snug_chat_messages` | every chat surface's history |
-| `snug_app_data` | one BLOB row per app namespace: a complete standalone SQLite database (per-app isolation is physical-in-logical) |
+| `snug_apps` | one row per app: display metadata, `current_version`, `install_source` (unique when present — a marketplace/starter identity may be installed at most once) |
+| `snug_app_versions` | complete HTML per version; hubs retain ≥ `VERSIONS_RETAINED` (5) unpinned versions, pruning oldest; the factory version (v1 of a build or install) is `pinned` and NEVER pruned; revert/reset = copy-forward as a NEW version |
+| `snug_app_schemas` | one row per app with data: the app's runtime `sqlite_master` DDL **verbatim** (`schema_json`: objects in creation order + AUTOINCREMENT sequence counters) and its namespace `token` |
+| `snug_app_migrations` | append-only DDL audit per app (`seq`, statement, applied-at) |
+| `snug_app_docs` | per-app knowledge wiki: `(app_id, slug)` → markdown (`vision`, `requirements`, `plan`, `lessons`, `memory`, `next-tasks` are advisory slug values; the table shape is normative) |
+| `snug_chat_threads` / `snug_chat_messages` | every chat surface's history; messages carry `pinned` (bootstrap turns survive any pruning for the life of the app) and `meta` (JSON sidecar) |
 | `snug_sync` | sync-origin CONFIG only (self-describing when ported) |
 
-Rules:
-- Hub-namespace tables are `snug_`-prefixed; apps can never reach them — the runner db
-  bridge only addresses blob-embedded app databases via host-assigned namespaces.
-- Per-app export = the `snug_app_data` blob, a valid standalone `.sqlite` file.
+### 2.2 Per-app data: native namespaced tables (v2, ADR-0010)
+
+Each app's data lives as REAL tables in the same file under
+`app_<token>__<name>`, where `token = appDataToken(namespace)` — a **normative,
+total, injective** function of the host-assigned namespace: UUID-shaped →
+32 lowercase hex (dashes stripped); anything else → `'x' + hex(utf8(namespace))`.
+
+Rules (all normative):
+- **Reserved prefixes** (case-insensitive): `snug_`, `sqlite_`, `app_`. App object
+  names must match `^[A-Za-z][A-Za-z0-9_]{0,40}$` and carry no reserved prefix; the
+  single exemption is the driver-internal `snug_kv` (at rest `app_<token>__snug_kv`).
+  A conforming hub REFUSES to persist (fails closed, prior state retained) any runtime
+  whose object names violate the rule — unvalidated names are never interpolated.
+- **Isolation is physical at runtime**: app SQL executes only against a materialized
+  database containing that app's own objects under natural names; hub-namespace and
+  other apps' tables are unreachable.
+- **DDL is stored verbatim** in `snug_app_schemas.schema_json` (tables, indexes,
+  triggers, views, in creation order) and replayed on materialization; DDL bodies are
+  never rewritten. At-rest table names are produced by SQLite `ALTER TABLE … RENAME`
+  (a pure name swap), not by editing statement text.
+- Per-app export = materialize + export: a standalone `.sqlite` with natural names.
+- Hub-namespace tables are `snug_`-prefixed; apps can never reach them.
 - Push-state (last pushed revision/hash) lives OUTSIDE the image (sidecar) so the file
   never contains its own revision.
 
-### 2.2 Client-authoritative writes
+### 2.3 Client-authoritative writes
 
 The user DB is the single source of truth in every mode. In subscription mode the hub
 may cache artifacts and thread history server-side, but the client fetches artifact
@@ -85,7 +106,7 @@ no KMS/host-blind claim is made until a KeyProvider ships.
 - `byok` — browser-direct frontier API; key from `snug_secrets`.
 - `local` — browser-direct OpenAI-compatible endpoint (e.g. Ollama).
 - `subscription` — hub-mediated `/invoke` (opt-in); body may carry a validated
-  `model`; artifacts still land client-authoritatively (§2.2).
+  `model`; artifacts still land client-authoritatively (§2.3).
 
 C1/C2 are unchanged in every mode: app iframes stay `sandbox="allow-scripts"` with
 `connect-src` blocked; LLM calls originate from the HOST page only; credentials never

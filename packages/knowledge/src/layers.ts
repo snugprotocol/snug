@@ -106,7 +106,7 @@ export function getKnowledgeSummary(): string {
 // Tool prompts — prompts/tools/*.md.
 // ---------------------------------------------------------------------------
 
-export type ToolPromptName = 'app-builder' | 'artifact-write';
+export type ToolPromptName = 'app-builder' | 'artifact-write' | 'schema-apply' | 'app-doc-write';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);

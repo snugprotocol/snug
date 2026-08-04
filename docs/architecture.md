@@ -1,6 +1,6 @@
 # Snug — Architecture
 
-> Status: **implemented (portable-hub evolution, pre-launch)** — 2026-08-03, TASK-20260803-portable-hub (on the v1 core of TASK-20260731-build-hub). Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Wire protocol unchanged at v1; storage/hub behavior is spec v0.2 draft (`docs/spec-drafts/spec-v0.2-userdb.md`). Auth broker (app credentials) remains v1.1 — hub LOGIN shipped separately in `apps/server`.
+> Status: **implemented (living-apps evolution, pre-launch)** — 2026-08-03, TASK-20260803-living-apps (on portable-hub, TASK-20260803-portable-hub). Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is spec v0.2 draft schema v2 (`docs/spec-drafts/spec-v0.2-userdb.md`). Auth broker (app credentials) remains v1.1 — hub LOGIN shipped separately in `apps/server`.
 
 ## Components
 
@@ -16,8 +16,10 @@
 │  micro app (single-file HTML, authored by LLM via packages/knowledge)                    │
 │      │ useSnugApp / usePersistedState / useAppDB   (packages/sdk)                        │
 │      ▼                                                                                   │
-│  packages/db USER DB (ADR-0007): ONE sql.js file/user — apps + versions (≥5, revert) +   │
-│  chats + settings + secrets + per-app data as blob-embedded standalone SQLite DBs        │
+│  packages/db USER DB (ADR-0007/0010): ONE sql.js file/user — apps + versions (factory    │
+│  pinned + 5 recent, revert/reset) + chats (bootstrap turn pinned) + per-app wiki docs +  │
+│  schema registry + settings + secrets + per-app data as NATIVE app_<token>__* tables,    │
+│  materialized into the app's own runtime DB at load (physical isolation preserved)       │
 │      │  OPFS runtime copy (crash-safe A/B slots) · export/import (secrets stripped)      │
 │      ▼                                                                                   │
 │  packages/db sync (ADR-0009): SyncProvider → hub origin (/userdb CAS) | Dropbox | …      │

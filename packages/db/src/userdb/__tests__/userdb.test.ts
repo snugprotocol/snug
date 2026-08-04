@@ -60,15 +60,16 @@ describe('apps + versioning (AC3)', () => {
     await db.close();
   });
 
-  it('saveAppVersion increments, prunes beyond retention, and keeps the newest N', async () => {
+  it('saveAppVersion increments, prunes beyond retention, and keeps the newest N plus the pinned factory (v2)', async () => {
     const db = await open(backend);
     const app = db.installApp({ displayName: 'Chess', html: 'v1' });
     for (let i = 2; i <= 7; i++) db.saveAppVersion(app.appId, `v${i}`);
     const versions = db.listAppVersions(app.appId).map((v) => v.version);
-    expect(versions).toEqual([7, 6, 5, 4, 3]); // newest first, 5 retained
+    expect(versions).toEqual([7, 6, 5, 4, 3, 1]); // newest first, 5 unpinned retained + factory v1 pinned forever
     expect(db.getApp(app.appId)?.currentVersion).toBe(7);
     expect(db.getAppHtml(app.appId)).toBe('v7');
     expect(db.getAppHtml(app.appId, 3)).toBe('v3');
+    expect(db.getAppHtml(app.appId, 1)).toBe('v1'); // factory default always recoverable
     await db.close();
   });
 

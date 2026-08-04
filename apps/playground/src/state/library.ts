@@ -13,12 +13,16 @@ export interface LibraryEntry {
   displayName: string;
   bytes: number;
   createdAt: string;
+  /** Dedup identity for marketplace/starter installs (`starter:<folder>`); absent for built apps. */
+  installSource?: string;
 }
 
 export interface LibraryStore {
   list(): Promise<LibraryEntry[]>;
   getHtml(id: string): Promise<string | undefined>;
-  save(html: string, displayName?: string): Promise<LibraryEntry>;
+  /** With `installSource`, save is find-or-create on that identity — never a duplicate (AC8). */
+  save(html: string, displayName?: string, installSource?: string): Promise<LibraryEntry>;
+  findByInstallSource(source: string): Promise<LibraryEntry | undefined>;
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -44,16 +48,39 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
         displayName: app.displayName,
         bytes: db.getAppHtml(app.appId)?.length ?? 0,
         createdAt: app.createdAt,
+        ...(app.installSource !== undefined ? { installSource: app.installSource } : {}),
       }));
     },
     async getHtml(id) {
       const db = await getDb();
       return db.getAppHtml(id);
     },
-    async save(html, displayName) {
+    async save(html, displayName, installSource) {
       const db = await getDb();
-      const app = db.installApp({ displayName: deriveDisplayName(html, displayName), html });
-      return { id: app.appId, displayName: app.displayName, bytes: html.length, createdAt: app.createdAt };
+      const app = db.installApp({
+        displayName: deriveDisplayName(html, displayName),
+        html,
+        ...(installSource !== undefined ? { installSource } : {}),
+      });
+      return {
+        id: app.appId,
+        displayName: app.displayName,
+        bytes: html.length,
+        createdAt: app.createdAt,
+        ...(app.installSource !== undefined ? { installSource: app.installSource } : {}),
+      };
+    },
+    async findByInstallSource(source) {
+      const db = await getDb();
+      const app = db.getAppByInstallSource(source);
+      if (app === undefined) return undefined;
+      return {
+        id: app.appId,
+        displayName: app.displayName,
+        bytes: db.getAppHtml(app.appId)?.length ?? 0,
+        createdAt: app.createdAt,
+        installSource: source,
+      };
     },
   };
 }

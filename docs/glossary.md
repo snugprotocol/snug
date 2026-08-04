@@ -12,7 +12,10 @@
 - **Dual-layer auth** — publisher/org credentials (client_id/secret) + per-user OAuth tokens, resolved server-side.
 - **Spec-sync** — the process by which this repo publishes protocol changes to `snugprotocol/spec` (SPEC_SYNC.md).
 - **Playground** — the hosted demo app (chat → build → run), bring-your-own-API-key.
-- **User DB / snug file** — the single portable SQLite file per user: apps + versions, per-app data (blob-embedded databases), chats, settings, secrets, sync config (ADR-0007; spec v0.2 draft).
+- **User DB / snug file** — the single portable SQLite file per user: apps + versions (factory pinned), per-app data as native `app_<token>__*` tables with a verbatim-DDL schema registry, per-app wiki docs, chats (bootstrap pinned), settings, secrets, sync config (ADR-0007/0010; spec v0.2 draft schema v2).
+- **Materializer** — the userdb driver backend (ADR-0010): at app load it replays the registry DDL into the app's OWN runtime DB (natural names, physical isolation); at write-back it recreates rest tables via `legacy_alter_table` RENAME inside one synchronous transaction, fail-closed on the object-name gate.
+- **App wiki / docs** — per-app compounding memory in `snug_app_docs` (vision · requirements · plan · lessons · memory · next-tasks), maintained by the agent on every app change via the `app_doc_write` tool.
+- **Factory version** — v1 of a built or installed app, `pinned` and never pruned; "reset to factory" copy-forwards it.
 - **Hub provider** — a multi-tenant service provisioning Snug apps per user; optional by construction — apps run from the browser copy of the user DB with no hub backend.
 - **Sync origin** — where the user DB replicates (hub `/userdb`, Dropbox, …) via the `SyncProvider` contract; OPFS is authoritative, divergence resolves only by explicit user action (ADR-0009).
 - **Execution mode** — `byok` (browser-direct frontier API), `local` (browser-direct localhost LLM), or `subscription` (hub-mediated /invoke); the user DB is client-authoritative in all three (ADR-0008).

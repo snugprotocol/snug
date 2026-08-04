@@ -61,7 +61,8 @@ export interface SnugDbDriver {
   close(): Promise<void>;
 }
 
-const KV_TABLE_DDL = 'CREATE TABLE IF NOT EXISTS snug_kv (key TEXT PRIMARY KEY, value TEXT)';
+/** Exported for the userdb materializer: the kv table must be byte-identical on both sides. */
+export const KV_TABLE_DDL = 'CREATE TABLE IF NOT EXISTS snug_kv (key TEXT PRIMARY KEY, value TEXT)';
 /** Headroom for the db-response envelope fields when checking payloads against the frame class. */
 const FRAME_OVERHEAD_BYTES = 1024;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
