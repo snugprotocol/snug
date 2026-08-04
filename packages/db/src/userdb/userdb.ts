@@ -748,9 +748,26 @@ function construct(
 
   let inner = makeInnerDriver();
 
+  /**
+   * Apps deleted in this session. A running iframe does NOT stop when its app is deleted,
+   * and its next db frame used to re-register the namespace (noteNamespace) and re-create
+   * the app's tables plus an ORPHANED snug_app_schemas row on the following write-back —
+   * the app looked deleted in listApps() while its data quietly lived on in the file.
+   * Deletion is terminal: frames for a dead app are refused rather than resurrecting it.
+   */
+  const deletedApps = new Set<string>();
+
   /** Stable facade so `userDb.driver` survives importUserDb swapping the inner driver. */
   const driver: SnugDbDriver = {
     handle: (namespace, request) => {
+      if (deletedApps.has(namespace)) {
+        return Promise.resolve({
+          ok: false as const,
+          code: USERDB_ERROR_CODES.NOT_FOUND,
+          message: `app "${namespace}" was deleted`,
+          retryable: false,
+        });
+      }
       noteNamespace(namespace);
       return inner.handle(namespace, request);
     },
@@ -936,10 +953,17 @@ function construct(
       const token = appDataToken(appId);
       const blobFile = namespaceToFileName(appId);
 
-      // Evict BEFORE the transaction: the driver holds an open sql.js copy of this app's
-      // runtime, and its pending write-back is the resurrection hazard. Eviction discards
-      // that copy without persisting it. Done first so a failure here aborts before any
-      // rows are touched (the app is still fully intact at this point).
+      // Flush BEFORE evicting. `evict` discards the app's in-memory runtime without
+      // persisting, so anything written since the last write-back would be gone — and if
+      // the transaction below then rolls back, the app survives having SILENTLY lost its
+      // most recent writes (ROLLBACK restores the rest tables, but that delta was never
+      // in them). Flushing first puts the delta into the rest tables, where the rollback
+      // covers it; the delete then drops those tables anyway on the success path.
+      await inner.flush();
+
+      // Then evict: the driver holds an open sql.js copy of this app's runtime, and its
+      // write-back is the resurrection hazard. Both happen before BEGIN IMMEDIATE, so a
+      // failure in either aborts with the app fully intact.
       await inner.evict(appId);
 
       db.run('BEGIN IMMEDIATE');
@@ -986,13 +1010,26 @@ function construct(
       // Keep both.
       namespaceByFile.delete(blobFile);
       lastSavedHash.delete(blobFile);
+      // Terminal: a still-running iframe's next frame must not re-register this namespace.
+      deletedApps.add(appId);
+      // Durability BEFORE the space reclaim: the delete is already committed in memory, so
+      // it must reach the backend even if the VACUUM below fails. Ordering these the other
+      // way round left a committed-but-unpersisted delete whenever VACUUM threw.
+      markDirty();
       // VACUUM outside the transaction (SQLite forbids it inside one). Dropping the
       // rows only marks their pages free — the app's HTML, chat and docs would still sit
       // in the file, readable in the exported bytes. The same reasoning already applies
       // to stripped secrets in exportUserDb; here it must happen at the source so EVERY
       // export path benefits, including includeSecrets.
-      db.run('VACUUM');
-      markDirty();
+      // Best-effort: VACUUM allocates a full second copy of the database, so it is the one
+      // statement here likely to fail under memory pressure — exactly the condition a large
+      // delete creates. A failed space reclaim must never fail an already-committed delete;
+      // the freed pages just get reused later instead.
+      try {
+        db.run('VACUUM');
+      } catch {
+        /* space reclaim is an optimization, not part of the delete's contract */
+      }
       await persistNow();
     },
 

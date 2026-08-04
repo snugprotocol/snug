@@ -1,6 +1,6 @@
 # TASK-20260803-hub-ops: long-run builds, build observability, app delete, LLM-free apps
 
-- **Status**: in-progress — **ALL PHASES (0–6) done and committed; ADR-0011 accepted.** Remaining: Playwright + independent adversarial review (Gate 5), then Gate 6.  
+- **Status**: in-progress — **ALL PHASES (0–6) done; ADR-0011 accepted; Gate 5 COMPLETE** (tests + validator + Playwright + independent adversarial review, whose findings are fixed). Remaining: Gate 6 (`/close-session`) and merge.
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point; `packages/db` gains a destructive cascade delete; `apps/server` request/timeout config)
 - **Branch**: `feat/TASK-20260803-hub-ops`
@@ -209,6 +209,28 @@ The remaining four are real work.
 - Next step: **remaining Gate 5** — the Playwright suite (`pnpm --filter playground test:e2e`) and, per the high tier, an independent adversarial review before merge. Then Gate 6 (`/close-session`): lessons, doc drift (`architecture.md`, `code-map.md`, `next-steps.md`), and move this file to `done/` on merge. **No spec-changelog entry — `packages/protocol` deliberately untouched.**
 - Open questions: none blocking.
 
+### 2026-08-03 — Jeetu — session (Gate 5: adversarial review + fixes)
+
+Two independent fresh-context reviewers (high-tier requirement) audited the db cascade and the C1/inspector/UI surface. **Both found real, merge-blocking defects.** Every finding below was reproduced empirically before being fixed, and each fix has a regression test that was mutation-checked (reverting the fix makes the test fail).
+
+**F1 — HIGH, data resurrection.** An app's iframe does not stop when the app is deleted. Its next db frame hit `noteNamespace`, which unconditionally re-registered the namespace, and the following write-back re-created the app's data tables **plus an orphaned `snug_app_schemas` row with no parent**. The app looked deleted in `listApps()` while its data lived on in the file and every export. Verified: `REST: [app_…__zombie2] APPS: [] SCHEMAS: [<appId>]`. **Fixed** with a `deletedApps` tombstone consulted by `driver.handle` — deletion is terminal; frames for a dead app are refused. My AC18 sweep could never have caught this because it ran with no intervening `handle()`.
+
+**F2 — HIGH, silent data loss.** `evict` deliberately discards the app's in-memory runtime without persisting. If the transaction then rolled back, the app survived **having silently lost its most recent writes** — `ROLLBACK` restores the rest tables, but that delta was never in them. Verified: `UNFLUSHED-PRECIOUS` gone, app still installed. My comment claimed "a failure here aborts before any rows are touched", which reasoned about failures *inside* evict, not about the transaction failing *after* it. **Fixed** by flushing before evicting, so the delta lands in the rest tables where the rollback covers it.
+
+**F3 — MEDIUM.** `markDirty()`/`persistNow()` ran *after* `VACUUM`, so a throwing VACUUM left a committed-but-unpersisted delete while `getApp()` already returned undefined. **Fixed**: `markDirty()` first, VACUUM wrapped in try/catch — a failed space reclaim must never fail a committed delete.
+
+**C1 redaction was narrower than its own comment claimed.** I probed it: `sk-*`/`Bearer`/`AIza` were covered, but GitHub PATs, AWS key ids, Basic auth, `x-api-key:` pairs and bare hex all rendered verbatim. The user's own BYOK key is genuinely safe (it rides in an HTTP header, never in a request body — so C1 proper was never breached), but the app-context block injects the app's own HTML into `system`, so a third-party key a user pasted into chat *would* render. **Fixed**: broader patterns incl. a name/value rule that masks the VALUE and keeps the key NAME readable, plus tests for every shape and every arrival path (tool results, error paths, deeply nested tool inputs).
+
+**Memory bound was nominal.** 60 entries with unbounded per-entry size is unbounded — `system` carries up to 140 KB of app HTML and `messages` is a full conversation snapshot per iteration; with the raised 48-iteration ceiling that is hundreds of MB. Worse, **`'reset'` was never dispatched** — entries accumulated across the whole session, not per turn, and the buffer retained the *largest* entries by construction. **Fixed**: `LLM_INSPECTOR_MAX_FIELD_CHARS` truncation at ingest (which also shrinks the credential surface) and a real `onTurnStart` → `'reset'` dispatch.
+
+**A test of mine was vacuous.** `llmInspectorPersistence.test.tsx` ran in subscription mode, where `onRoundTrip` never fires at all — it asserted that a marker which was never fed to the inspector didn't reach disk, and would have passed against an inspector that wrote everything to the DB. **Fixed** with a test that feeds a round trip through the reducer directly and then checks the DB bytes, localStorage and sessionStorage. (Second time this session a test passed for the wrong reason; both were caught only by asking "would this fail if the code were wrong?")
+
+**Out-of-scope catch, real regression.** Phase 1 made `openaiAdapter` always send `max_completion_tokens: 128_000`, and `localAdapter` delegates straight through to Ollama/llama.cpp — 128K exceeds what a local 7B-class model can emit and some servers reject it with a 400, which would have failed **every local-mode turn**. **Fixed** with `LOCAL_DEFAULT_MAX_TOKENS = 8192` on the local adapter only (the OpenAI wire contract is unchanged), plus two tests.
+
+- State: 9 commits + this one. Suite 718 → **727** (db 160→163, adapters 72→74, playground 102→106). Build 9/9, validator 18/18, **Playwright 26/26**.
+- Next step: **Gate 6 (`/close-session`)** — lessons, doc drift (`architecture.md`, `code-map.md`, `next-steps.md`), move this file to `done/` on merge. No spec-changelog entry.
+- Open questions: the reviewer noted `importUserDb` clears `lastSavedHash` but not `namespaceByFile` — same cache-coherence family as F1, **pre-existing** and out of this task's scope. Queue it in `next-steps.md` at Gate 6.
+
 ---
 
 ## HANDOFF — resume here (written 2026-08-03, end of session)
@@ -222,7 +244,7 @@ a5454f8 Phase 1 — adapters: the real long-build fix
 d4a5bc5 Gate 1-2 — spec, interview, plan, ADR-0011 draft
 ```
 
-**Baseline to preserve**: `pnpm test` → 19/19 tasks, **718 tests**. Per-package: protocol 103 · knowledge **61** · runner 91 · db 160 · sdk **35** · server 94 · adapters 72 · playground 102. Plus `node --test examples/validate.test.mjs` 18/18 and `pnpm build` 9/9. Note there is **no root `lint` task**; typecheck rides on `build`.
+**Baseline to preserve**: `pnpm test` → 19/19 tasks, **727 tests**. Per-package: protocol 103 · knowledge 61 · runner 91 · db **163** · sdk 35 · server 94 · adapters **74** · playground **106**. Plus `node --test examples/validate.test.mjs` 18/18, `pnpm build` 9/9, and Playwright 26/26.
 
 ### What is DONE (do not redo)
 

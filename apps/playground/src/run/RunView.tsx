@@ -83,9 +83,11 @@ export default function RunView(): ReactElement {
   // place round trips live, and it dies with the view.
   const [llmInspector, dispatchRoundTrip] = useReducer(llmInspectorReduce, initialLlmInspectorState as LlmInspectorState);
   const onRoundTrip = useCallback((trip: AgentRoundTrip): void => dispatchRoundTrip(trip), []);
+  const onTurnStart = useCallback((): void => dispatchRoundTrip('reset'), []);
   const chat = useBuilderChat(threadId, {
     ...(isStarterId(id) ? {} : { pinnedAppId: id }),
     onRoundTrip,
+    onTurnStart,
   });
 
   // Thread list for the picker — refreshed when the turn settles (new threads get

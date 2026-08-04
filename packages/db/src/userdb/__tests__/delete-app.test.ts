@@ -308,3 +308,83 @@ describe('deleteApp — kv-only app (no schema)', () => {
     expect(db.getApp(app.appId)).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------------
+// Adversarial-review regressions (Gate 5, 2026-08-03). All three were verified to
+// reproduce against the first implementation before being fixed.
+// ---------------------------------------------------------------------------------
+
+describe('deleteApp — deletion is terminal (review F1)', () => {
+  it('a still-running app cannot resurrect itself with a post-delete write', async () => {
+    const appId = await seedFullApp();
+    const token = appDataToken(appId);
+
+    await db.deleteApp(appId);
+
+    // The app's iframe does not stop when the app is deleted. Its next db frame used to
+    // re-register the namespace and re-create the data tables on the following
+    // write-back, leaving an ORPHANED snug_app_schemas row with no parent app.
+    const afterWrite = await db.driver.handle(appId, execFrame('CREATE TABLE zombie (id INTEGER PRIMARY KEY)'));
+    expect(afterWrite.ok, 'a deleted app must not accept further db frames').toBe(false);
+    await db.driver.flush();
+    await db.flush();
+
+    const after = await readUserDbTables();
+    expect(
+      after.query(`SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'app_${token}__*'`),
+      'the app resurrected its data tables',
+    ).toHaveLength(0);
+    expect(
+      after.query(`SELECT app_id FROM ${USERDB_TABLES.appSchemas} WHERE app_id = ?`, [appId]),
+      'orphaned schema row with no parent app',
+    ).toHaveLength(0);
+    expect(after.query(`SELECT app_id FROM ${USERDB_TABLES.apps} WHERE app_id = ?`, [appId])).toHaveLength(0);
+  });
+
+  it('other apps keep working after a sibling is deleted', async () => {
+    const keep = await seedFullApp('keeper', 'src-keep');
+    const drop = await seedFullApp('goner', 'src-drop');
+    await db.deleteApp(drop);
+    const ok = await db.driver.handle(keep, execFrame(`INSERT INTO games (result) VALUES ('still works')`));
+    expect(ok.ok).toBe(true);
+  });
+});
+
+describe('deleteApp — rollback preserves unflushed app data (review F2)', () => {
+  it('a failed delete does not silently discard the app’s most recent writes', async () => {
+    // A long debounce keeps the write UNFLUSHED at delete time. With the suite-default
+    // 1ms the timer fires first, the delta is already in the rest tables, and this test
+    // would pass without exercising the bug at all.
+    const slow = await openUserDb({ backend: createMemoryBackend(), locateWasm, persistDebounceMs: 60_000 });
+    if (slow.status !== 'ok') throw new Error('open failed');
+    db = slow.userDb;
+
+    const appId = await seedFullApp();
+
+    // Inject the abort trigger FIRST: importUserDb rebuilds the inner driver, which would
+    // otherwise destroy the very unflushed delta this test is about.
+    const bytes = await db.exportUserDb({ includeSecrets: true });
+    const SQL = await initSqlJs({ locateFile: locateWasm });
+    const doctored = new SQL.Database(bytes);
+    doctored.run(
+      `CREATE TRIGGER test_block_rollback BEFORE DELETE ON ${USERDB_TABLES.apps} BEGIN SELECT RAISE(ABORT, 'injected'); END`,
+    );
+    const doctoredBytes = doctored.export();
+    doctored.close();
+    await db.importUserDb(doctoredBytes);
+
+    // NOW write without flushing: this delta lives only in the app's in-memory runtime,
+    // and the 60s debounce guarantees no timer rescues it.
+    await db.driver.handle(appId, execFrame(`INSERT INTO games (result) VALUES ('UNFLUSHED-PRECIOUS')`));
+
+    await expect(db.deleteApp(appId)).rejects.toThrow();
+
+    // The app is still installed AND still has the row it wrote before the failed delete.
+    expect(db.getApp(appId)).toBeDefined();
+    const read = await db.driver.handle(appId, execFrame('SELECT result FROM games'));
+    expect(read.ok).toBe(true);
+    if (read.ok && read.rows !== undefined) {
+      expect(read.rows.flat().map(String)).toContain('UNFLUSHED-PRECIOUS');
+    }
+  });
+});

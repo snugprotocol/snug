@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserDb } from '@snugprotocol/db';
 
 import { useBuilderChat, type BuilderChat } from '../agent/useBuilderChat.js';
+import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
 import { modeStore } from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -104,6 +105,26 @@ describe('LLM inspector persistence boundary (AC14)', () => {
     expect(text).not.toContain(ROUND_TRIP_MARKER);
     // The legitimate chat content DID persist — proving the export is not simply empty.
     expect(text).toContain('visible reply');
+  });
+
+  it('a round trip fed through the inspector still reaches no storage', async () => {
+    // The tests above run in subscription mode, where onRoundTrip never fires at all —
+    // so on their own they would pass even against an inspector that wrote every round
+    // trip to disk. This one feeds a round trip through the reducer directly, with the
+    // marker in the request body, and then checks every storage surface.
+    const state = llmInspectorReduce(initialLlmInspectorState as LlmInspectorState, {
+      index: 0,
+      request: { system: `system ${ROUND_TRIP_MARKER}`, messages: [{ role: 'user', content: ROUND_TRIP_MARKER }] },
+      response: { ok: true, text: ROUND_TRIP_MARKER, toolCalls: [], stopReason: 'end' },
+      durationMs: 5,
+    });
+    expect(state.entries).toHaveLength(1); // it really was ingested
+
+    await db.flush();
+    const text = new TextDecoder().decode(await db.exportUserDb({ includeSecrets: true }));
+    expect(text).not.toContain(ROUND_TRIP_MARKER);
+    expect(JSON.stringify(localStorage)).not.toContain(ROUND_TRIP_MARKER);
+    expect(JSON.stringify(sessionStorage)).not.toContain(ROUND_TRIP_MARKER);
   });
 
   it('adds no inspector table to the schema', async () => {

@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MAX_ITERATIONS, runAgentTurn, type AgentTool, type AgentTurnEvent } from '../agent-turn.js';
 import { anthropicAdapter } from '../anthropic.js';
 import { mockAdapter, type MockTurn } from '../mock.js';
+import { localAdapter } from '../local.js';
 import { openaiAdapter } from '../openai.js';
 import { block, fakeFetch, sseResponse } from './helpers.js';
 
@@ -222,5 +223,32 @@ describe('token usage is captured for the inspector', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.usage).toEqual({ inputTokens: 1234, outputTokens: 567 });
+  });
+});
+
+describe('local adapter output cap (Gate-5 review)', () => {
+  it('does not send the frontier 128K cap to a local server', async () => {
+    const { calls, fetchImpl } = fakeFetch(() =>
+      sseResponse(block(null, '{"choices":[{"delta":{},"finish_reason":"stop"}]}')),
+    );
+    const adapter = localAdapter({ fetch: fetchImpl });
+
+    await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+
+    // 128_000 exceeds what a local 7B-class model can emit, and some OpenAI-compatible
+    // servers reject a cap above the model's context with a 400 — that would fail EVERY
+    // local-mode turn.
+    expect(calls[0]?.bodyJson.max_completion_tokens).toBe(8192);
+  });
+
+  it('still honours an explicit override', async () => {
+    const { calls, fetchImpl } = fakeFetch(() =>
+      sseResponse(block(null, '{"choices":[{"delta":{},"finish_reason":"stop"}]}')),
+    );
+    const adapter = localAdapter({ maxTokens: 512, fetch: fetchImpl });
+
+    await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(calls[0]?.bodyJson.max_completion_tokens).toBe(512);
   });
 });

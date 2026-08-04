@@ -83,6 +83,12 @@ export interface UseBuilderChatOptions {
    * inspector's feed. IN-MEMORY ONLY: the hook never persists these (AC14).
    */
   onRoundTrip?: (trip: AgentRoundTrip) => void;
+  /**
+   * Called at the START of every turn so the inspector can clear the previous turn.
+   * Without it the ring buffer accumulates across a whole session rather than showing
+   * one turn, and retains the largest entries by construction.
+   */
+  onTurnStart?: () => void;
 }
 
 /** Persisted message meta shape (owned here; the DB stores it as opaque JSON). */
@@ -145,7 +151,7 @@ function metaToArtifact(meta: unknown): ArtifactEvent | undefined {
 }
 
 export function useBuilderChat(threadId: string, options: UseBuilderChatOptions = {}): BuilderChat {
-  const { pinnedAppId, onRoundTrip } = options;
+  const { pinnedAppId, onRoundTrip, onTurnStart } = options;
   const mode = useMode();
   const provider = useProvider();
   const model = useModel();
@@ -266,6 +272,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       setActivity(mode === 'subscription' ? 'it’s thinking…' : 'warming up…');
       // The timeline is per-turn: the previous turn's steps are history, not progress.
       setSteps([]);
+      // Same for the LLM inspector — without this its ring buffer accumulates across the
+      // whole session and retains the largest (latest) entries by construction.
+      onTurnStart?.();
       streamAccumRef.current = '';
       const controller = new AbortController();
       abortRef.current = controller;
@@ -382,7 +391,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           abortRef.current = null;
         });
     },
-    [agent, busy, messages.length, mode, onRoundTrip, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
+    [agent, busy, messages.length, mode, onRoundTrip, onTurnStart, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
   );
 
   const stop = useCallback((): void => {

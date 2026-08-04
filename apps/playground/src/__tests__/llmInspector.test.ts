@@ -118,6 +118,63 @@ describe('llmInspector', () => {
     }
   });
 
+  it('also masks non-provider secrets a user might paste into a prompt (defence in depth)', () => {
+    // The host only ever handles anthropic/openai BYOK keys, and those ride in an HTTP
+    // header the inspector never sees. These shapes can still reach it the moment a user
+    // pastes one into chat — and this panel renders bodies verbatim.
+    const secrets = [
+      'ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234',
+      'AKIAIOSFODNN7EXAMPLE',
+      'Basic dXNlcjpwYXNzd29yZA==',
+      'Bearer abcdefghijklmnopqrstuvwx',
+      'xoxb-1234567890-abcdefghij',
+      'AIzaSyAbCdEfGhIjKlMnOpQrStUvWx',
+    ];
+    for (const secret of secrets) {
+      const state = feed([roundTrip({ request: { system: `auth ${secret}`, messages: [{ role: 'user', content: secret }] } })]);
+      expect(JSON.stringify(state.entries), `leaked ${secret}`).not.toContain(secret);
+    }
+  });
+
+  it('masks the VALUE of a key/value secret pair but keeps the key NAME readable', () => {
+    const state = feed([
+      roundTrip({
+        request: { system: 'x-api-key: abcdef1234567890abcdef', messages: [{ role: 'user', content: '"apiKey": "s3cret-value-here-9999"' }] },
+      }),
+    ]);
+    const rendered = JSON.stringify(state.entries);
+    expect(rendered).not.toContain('abcdef1234567890abcdef');
+    expect(rendered).not.toContain('s3cret-value-here-9999');
+    // The shape of the request must survive redaction — otherwise the panel is useless.
+    expect(rendered).toContain('x-api-key');
+    expect(rendered).toContain('apiKey');
+  });
+
+  it('redacts through every path a secret can arrive by (tool results, errors, nested inputs)', () => {
+    const key = 'sk-ant-api03-EveryPathKey1234567';
+    const viaToolResult = feed([
+      roundTrip({ request: { system: 'x', messages: [{ role: 'tool', toolCallId: 't1', content: `result ${key}` }] } }),
+    ]);
+    expect(JSON.stringify(viaToolResult.entries)).not.toContain(key);
+
+    const viaError = feed([
+      roundTrip({ response: { ok: false, code: 'AUTH', message: `rejected ${key}`, retryable: false, partialText: `wrote ${key}` } }),
+    ]);
+    expect(JSON.stringify(viaError.entries)).not.toContain(key);
+
+    const viaNestedInput = feed([
+      roundTrip({
+        response: {
+          ok: true,
+          text: '',
+          toolCalls: [{ id: 'c1', name: 'schema_apply', input: { deep: { nested: [{ credential: key }] } } }],
+          stopReason: 'tool_use',
+        },
+      }),
+    ]);
+    expect(JSON.stringify(viaNestedInput.entries)).not.toContain(key);
+  });
+
   it('resets between turns without leaking the previous turn (AC14)', () => {
     const state = feed([roundTrip(), roundTrip({ index: 1 })]);
     const cleared = llmInspectorReduce(state, 'reset');

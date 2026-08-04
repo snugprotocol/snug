@@ -55,6 +55,25 @@ export const initialLlmInspectorState: LlmInspectorState = { entries: [], totalD
 export const LLM_INSPECTOR_MAX_ENTRIES = 60;
 
 /**
+ * Per-field character cap, applied AT INGEST (AC14).
+ *
+ * Capping entry COUNT alone is not a memory bound: the per-turn app context injects the
+ * app's whole HTML into `system`, `messages` is a full snapshot of the conversation at
+ * that iteration, and `artifact_write` inputs carry entire app files — so 60 entries of an
+ * unbounded size is unbounded. With the raised 48-iteration ceiling a single build could
+ * retain hundreds of MB in a tab that is also running an app iframe and a sql.js database.
+ *
+ * Truncating on the way in also shrinks the credential surface: a secret buried in the
+ * tail of a 140 KB prompt is dropped rather than redacted.
+ */
+export const LLM_INSPECTOR_MAX_FIELD_CHARS = 4000;
+
+const truncate = (value: string): string =>
+  value.length <= LLM_INSPECTOR_MAX_FIELD_CHARS
+    ? value
+    : `${value.slice(0, LLM_INSPECTOR_MAX_FIELD_CHARS)}\n…[truncated ${value.length - LLM_INSPECTOR_MAX_FIELD_CHARS} chars]`;
+
+/**
  * Credential shapes that must never render (C1, AC15). Bodies are shown verbatim
  * otherwise, so redaction happens on the way IN — an un-redacted value is never stored
  * in state, which is what the marker test asserts.
@@ -64,18 +83,39 @@ export const LLM_INSPECTOR_MAX_ENTRIES = 60;
  */
 const KEY_PATTERNS: RegExp[] = [
   // Anthropic / OpenAI style keys, including the sk-ant-/sk-proj- prefixed variants.
+  // These are the ONLY credentials the host itself handles (BYOK is anthropic|openai),
+  // and they never ride in a request BODY — the key travels in an HTTP header the
+  // inspector never sees. They are matched anyway: a user who pastes their own key into
+  // chat must not have it rendered back at them.
   /\bsk-[A-Za-z0-9_-]{8,}/g,
-  // Bearer tokens in an authorization header that got echoed into a prompt.
-  /\bBearer\s+[A-Za-z0-9._-]{8,}/gi,
-  // Google/GCP style.
+  // Bearer / Basic credentials echoed into a prompt.
+  /\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi,
+  /\bBasic\s+[A-Za-z0-9+/]{12,}=*/gi,
+  // Google/GCP.
   /\bAIza[A-Za-z0-9_-]{10,}/g,
+  // The rest are defence-in-depth for secrets a USER pastes into a prompt. The host never
+  // holds these, but the inspector renders bodies verbatim, so anything key-shaped that
+  // shows up is masked rather than displayed.
+  /\bgh[pousr]_[A-Za-z0-9]{16,}/g, // GitHub PATs
+  /\b(?:AKIA|ASIA)[A-Z0-9]{12,}/g, // AWS access key ids
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, // Slack
+  // `api-key: <value>` / `x-api-key=<value>` / `"apiKey": "<value>"` style pairs — mask
+  // the VALUE, keep the key name so the shape of the request stays readable.
+  /((?:api[_-]?key|apikey|access[_-]?token|secret|password|authorization)["']?\s*[:=]\s*["']?)([A-Za-z0-9._~+/-]{8,}=*)/gi,
 ];
 
 const REDACTED = '«redacted»';
 
 function redactText(value: string): string {
-  let out = value;
-  for (const pattern of KEY_PATTERNS) out = out.replace(pattern, REDACTED);
+  // Truncate BEFORE redacting: bounds the work the regexes do on a 140 KB prompt, and
+  // means the retained bytes are the only ones that ever need scrubbing.
+  let out = truncate(value);
+  for (const pattern of KEY_PATTERNS) {
+    // `$1` keeps a leading capture group when the pattern has one (the `key:` half of a
+    // name/value pair), so the request stays readable with only the VALUE masked. Patterns
+    // without a group have no `$1` to substitute and are replaced whole.
+    out = out.replace(pattern, (match, prefix?: string) => (prefix === undefined ? REDACTED : `${prefix}${REDACTED}`));
+  }
   return out;
 }
 
