@@ -3,7 +3,7 @@
 - **Status**: planned — **Gate 1–2 complete, awaiting plan approval. No implementation code written.**
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `apps/server` auth/session surface + a `users` table migration; `packages/db` sync provider conflict handling. `packages/db` is a widely-depended package)
-- **Branch**: `feat/TASK-20260804-hub-polish`, to be cut off `main` **after Phase A merges TASK-20260803-hub-ops** (see D1)
+- **Branch**: `feat/TASK-20260804-hub-polish` — **created 2026-08-04 off `main` at `f37feff`**, after Phase A merged TASK-20260803-hub-ops (see D1)
 - **Packages touched**: `apps/playground`, `apps/server`, `packages/db` (sync), `packages/knowledge` (prompts, item 7 only)
 - **Spec impact**: **none intended** — no `packages/protocol` schema change (see D2). The server-side `users` table is hub-private, not the portable user DB, so no spec-changelog entry.
 - **Related**: TASK-20260803-hub-ops (unmerged, direct parent), ADR-0009 (sync origins), ADR-0010 (native app schemas), ADR-0011 (LLM-optional apps), `docs/lessons.md` 2026-08-03 (pinned rows; shared wire literals)
@@ -164,3 +164,16 @@ Gate 5 will run `pnpm test` at root (the parent task's baseline is **727 tests**
 - State: **awaiting plan approval — no implementation code written.** Branch not yet created (Phase A must land first).
 - Next step: on approval, Phase A (close out + merge TASK-20260803-hub-ops, including its outstanding `vite.config.ts` change), then branch off the updated `main` and run Phases B→G, tests first. High tier also wants a fresh-context review of this plan before implementation.
 - Open questions: none blocking. Logo variants will be shown in Phase D before they are wired in.
+
+### 2026-08-04 — Jeetu — session (plan approved; Phase A done)
+
+- **Plan approved** by the owner with one simplification: **D3 — no data migration.** *"don't worry about data migration. you can simply clear the existing and build new db for now. im ok losing everything."* AC5 is rewritten (schema declares `picture` in `CREATE TABLE`; the hub DB file is deleted and rebuilt), R1 is retired, and the scope of the loss is written into D3 so it is on the record: the hub-side `users`, `artifacts`, `thread_messages` and `userdbs` stores. The portable user DB in browser OPFS — the actual source of truth — is untouched.
+- Done: **Phase A.** Closed out TASK-20260803-hub-ops (Gate 6) and merged it to `main`:
+  - Re-verified Gate 5 from a clean tree first: **727 tests / 19-of-19 tasks**, validator **18/18**, build **9/9**. ADR-0011 was already accepted.
+  - Doc drift fixed in that branch (architecture status, three new code-map rows, every stale per-package test count corrected against a measured run, next-steps entries incl. the reviewer's queued `importUserDb`/`namespaceByFile` item and this task's deferred subscription parity).
+  - Promoted **two lessons**: *"would this fail if the code were wrong?"* (three tests passed for the wrong reason in one session) and the single-use `ReadableStream` mock trap.
+  - Committed the outstanding `vite.config.ts` **to the parent branch where it belonged** (its AC5 proxy timeouts + the `changeOrigin: false` OAuth cookie fix), rather than letting it leak into this task.
+  - Merged with `--no-ff` at `f37feff`, matching how every prior task merged. **`main` re-verified green after the merge (727 tests).** Note: prior task branches were never pushed to `origin` — I followed that established local-merge pattern rather than pushing.
+- State: branch `feat/TASK-20260804-hub-polish` cut off `main` at `f37feff`; this task file committed at `fff2632`. No implementation code yet.
+- Next step: **Phase B** — sync 412 (AC21–23) in `packages/db`/`apps/server`, tests first. Smallest and highest-confidence, and it touches the most widely-depended package, so its dependents (`sdk`, `playground`) run early.
+- Open questions: none blocking.
