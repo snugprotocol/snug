@@ -23,6 +23,11 @@ export interface LibraryStore {
   /** With `installSource`, save is find-or-create on that identity — never a duplicate (AC8). */
   save(html: string, displayName?: string, installSource?: string): Promise<LibraryEntry>;
   findByInstallSource(source: string): Promise<LibraryEntry | undefined>;
+  /**
+   * Uninstall: cascades to the app's data, schema, docs, versions and chat, and frees
+   * its `installSource` for reinstall. Irreversible — there is no trash (out of scope).
+   */
+  delete(id: string): Promise<void>;
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -69,6 +74,10 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
         createdAt: app.createdAt,
         ...(app.installSource !== undefined ? { installSource: app.installSource } : {}),
       };
+    },
+    async delete(id) {
+      const db = await getDb();
+      await db.deleteApp(id);
     },
     async findByInstallSource(source) {
       const db = await getDb();

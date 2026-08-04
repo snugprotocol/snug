@@ -154,6 +154,14 @@ export interface UserDb {
     patch: Partial<Pick<AppRecord, 'displayName' | 'description' | 'iconEmoji' | 'iconColor' | 'usesDb'>>,
   ): void;
   listApps(): AppRecord[];
+  /**
+   * Delete an installed app and cascade to every referencing row in one transaction:
+   * its `app_<token>__*` data tables, schema, migrations, docs, versions, threads and
+   * their chat messages, then the app row. IGNORES `pinned` — the factory version and
+   * bootstrap message go too. Throws NOT_FOUND for an unknown app; rolls back whole on
+   * any failure. Marks dirty and flushes, so the delete reaches the exported bytes.
+   */
+  deleteApp(appId: string): Promise<void>;
   getApp(appId: string): AppRecord | undefined;
   getAppByInstallSource(source: string): AppRecord | undefined;
   getAppHtml(appId: string, version?: number): string | undefined;
@@ -750,6 +758,7 @@ function construct(
       return inner.persistence;
     },
     flush: () => inner.flush(),
+    evict: (namespace) => inner.evict(namespace),
     close: () => inner.close(),
   };
 
@@ -901,6 +910,91 @@ function construct(
 
     getApp,
     getAppByInstallSource,
+
+    /**
+     * Remove an installed app and everything that references it, in ONE transaction.
+     *
+     * There are NO foreign keys in the user DB and `PRAGMA foreign_keys` is never set,
+     * so this cascade is entirely hand-written: every referencing table is named below.
+     * A table missing from that list is a SILENT orphan — the delete-app tests sweep all
+     * of them independently rather than trusting this list.
+     *
+     * Two things this deliberately does NOT do:
+     *  - It does not honour `pinned`. The factory version and the bootstrap chat message
+     *    are removed with everything else (owner-confirmed). That is exactly why the
+     *    retention helpers (`pruneChatMessages`, version retention) are NOT reused here:
+     *    both refuse pinned rows by design.
+     *  - It does not persist the app's runtime copy on the way out. The materializer's
+     *    `writeBack` rebuilds rest tables from the still-open runtime database on flush,
+     *    so a normal close/flush would RESURRECT the app. The namespace is evicted (not
+     *    flushed) and its cached mappings dropped before the transaction commits.
+     */
+    async deleteApp(appId) {
+      assertOpen();
+      const app = getApp(appId);
+      if (app === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
+      const token = appDataToken(appId);
+      const blobFile = namespaceToFileName(appId);
+
+      // Evict BEFORE the transaction: the driver holds an open sql.js copy of this app's
+      // runtime, and its pending write-back is the resurrection hazard. Eviction discards
+      // that copy without persisting it. Done first so a failure here aborts before any
+      // rows are touched (the app is still fully intact at this point).
+      await inner.evict(appId);
+
+      db.run('BEGIN IMMEDIATE');
+      try {
+        // 1. The app's native data tables (app_<token>__*), read from sqlite_master.
+        for (const rest of restTablesFor(token)) {
+          db.run(`DROP TABLE IF EXISTS ${quoteIdent(rest)}`);
+        }
+        // 2. Chat messages first — they join through thread_id, so the threads they
+        //    depend on must still be present to resolve them.
+        db.run(
+          `DELETE FROM ${USERDB_TABLES.chatMessages} WHERE thread_id IN (SELECT thread_id FROM ${USERDB_TABLES.chatThreads} WHERE app_id = ?)`,
+          [appId],
+        );
+        // 3. Every remaining app_id-keyed table. Unconditional — `pinned` is ignored.
+        for (const table of [
+          USERDB_TABLES.chatThreads,
+          USERDB_TABLES.appDocs,
+          USERDB_TABLES.appVersions,
+          USERDB_TABLES.appMigrations,
+          USERDB_TABLES.appSchemas,
+        ]) {
+          db.run(`DELETE FROM ${table} WHERE app_id = ?`, [appId]);
+        }
+        // 4. The app row last, so a failure above leaves a consistent, still-installed app.
+        db.run(`DELETE FROM ${USERDB_TABLES.apps} WHERE app_id = ?`, [appId]);
+        db.run('COMMIT');
+      } catch (err) {
+        try {
+          db.run('ROLLBACK');
+        } catch {
+          /* nothing to roll back */
+        }
+        throw err;
+      }
+
+      // Drop the materializer's caches for this namespace only AFTER the commit: while
+      // the transaction could still roll back, these mappings must stay valid.
+      // Second, independent guard against R1. Mutation-tested: the eviction above and
+      // this invalidation each stop the resurrection ON THEIR OWN — the app data tables
+      // only come back if BOTH are removed. Deliberately redundant, because they fail in
+      // different directions: eviction drops the driver's cached runtime copy, while
+      // this makes the materializer's `save` a no-op for a namespace it no longer knows.
+      // Keep both.
+      namespaceByFile.delete(blobFile);
+      lastSavedHash.delete(blobFile);
+      // VACUUM outside the transaction (SQLite forbids it inside one). Dropping the
+      // rows only marks their pages free — the app's HTML, chat and docs would still sit
+      // in the file, readable in the exported bytes. The same reasoning already applies
+      // to stripped secrets in exportUserDb; here it must happen at the source so EVERY
+      // export path benefits, including includeSecrets.
+      db.run('VACUUM');
+      markDirty();
+      await persistNow();
+    },
 
     getAppHtml(appId, version) {
       assertOpen();

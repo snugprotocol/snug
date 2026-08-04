@@ -1,6 +1,6 @@
 # TASK-20260803-hub-ops: long-run builds, build observability, app delete, LLM-free apps
 
-- **Status**: in-progress — **Phases 0–3 done and committed; resume at Phase 4** (see the handoff at the bottom of this file)
+- **Status**: in-progress — **Phases 0–4 done and committed; resume at Phase 5** (see the handoff at the bottom of this file)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point; `packages/db` gains a destructive cascade delete; `apps/server` request/timeout config)
 - **Branch**: `feat/TASK-20260803-hub-ops`
@@ -162,6 +162,22 @@ The remaining four are real work.
 - Next step: **Phase 4** — `packages/db` cascade delete (AC16–21, AC23). Highest-risk item in the task; see the handoff notes below, especially R1 (resurrection via `writeBack`).
 - Open questions: none blocking.
 
+### 2026-08-03 — Jeetu — session (Phase 4 implemented)
+
+- Done: **Phase 4** (AC16–21, AC23) test-first, plus plan step 14. 17 new tests; suite 685 → **702** (db 145 → 160, playground 92 → 94).
+  - `UserDb.deleteApp(appId)`: one `BEGIN IMMEDIATE` transaction — drop `app_<token>__*`, delete chat messages via the `thread_id` subquery, then threads/docs/versions/migrations/schemas, then the app row last. Unconditional on `pinned`. `ROLLBACK` on any throw.
+  - New `SnugDbDriver.evict(namespace)`: cancels the debounce, **discards** pending writes, closes the handle, drops the cache entry. Deliberately does not persist — persisting is the resurrection.
+  - `LibraryStore.delete` added (plan step 14).
+- **R1 resolved, and the guard is redundant on purpose.** Mutation-tested all three ways: eviction alone stops the resurrection, cache invalidation (`namespaceByFile`/`lastSavedHash`) alone stops it, and the app's data tables only come back when **both** are removed. Kept both and said so in a comment, because they fail in different directions. If someone later "cleans up" one of them, the tests stay green and the hazard silently returns — that is the trap this note exists to prevent.
+- Surprises worth keeping:
+  - **My first AC20 test was vacuous.** It deleted a namespace that was already clean, and `persist` skips clean states — so it passed even with eviction AND cache invalidation both disabled. The test now writes without flushing first, so a pending write-back is genuinely outstanding at delete time. With both guards off it fails with "app data tables came back after flush" (2 tables rebuilt). **Any future test of the materializer must dirty the namespace first or it proves nothing.**
+  - Same lesson hit the driver tests twice: an assertion behind `backend.list?.()` never ran (`MemoryBackend` has no `list()` — it exposes `files` directly), and a debounce-only assertion passed for the wrong reason because `state.db.export()` on a closed handle throws into a swallowed `.catch`. Both now assert through an explicit post-evict `flush()`.
+  - **Deleted data survived in the exported bytes.** Dropping rows only marks pages free; the app id, chat and docs were still readable in `exportUserDb({includeSecrets: true})`, which skips the VACUUM that the secret-stripping path does. `deleteApp` now VACUUMs after the transaction (SQLite forbids it inside one) so every export path benefits. This was caught by AC23, not designed in.
+  - Rejected a `failAfterFirstStepForTests` option on the public API for the AC21 rollback test. Injected a real SQLite failure instead — a `BEFORE DELETE` trigger with `RAISE(ABORT)` on `snug_apps`, installed by round-tripping the file through `importUserDb` (the pattern `userdb-v2.test.ts` already uses). Verified against sql.js that ROLLBACK restores even already-DROPped tables.
+- State: 6 commits + this one; `pnpm test` 19/19 tasks / **702 tests**; `pnpm build` 9/9 clean.
+- Next step: **Phase 5** — hub UI delete (AC22): inline two-step confirm, no `window.confirm`, tile restructured out of the `<Link>`, double-click latched.
+- Open questions: none blocking.
+
 ---
 
 ## HANDOFF — resume here (written 2026-08-03, end of session)
@@ -175,7 +191,7 @@ a5454f8 Phase 1 — adapters: the real long-build fix
 d4a5bc5 Gate 1-2 — spec, interview, plan, ADR-0011 draft
 ```
 
-**Baseline to preserve**: `pnpm test` → 19/19 tasks, **685 tests** (was 666 after Phase 2). Per-package: protocol 103 · knowledge 55 · runner 91 · db 145 · sdk 33 · server 94 · adapters 72 · playground **92**. (Deltas so far: adapters 56→72, server 91→94, playground 67→73→92.) `pnpm build` 9/9 clean. Note there is **no root `lint` task** — turbo reports "No tasks were executed"; typecheck rides on `build`.
+**Baseline to preserve**: `pnpm test` → 19/19 tasks, **702 tests**. Per-package: protocol 103 · knowledge 55 · runner 91 · db **160** · sdk 33 · server 94 · adapters 72 · playground **94**. (Deltas: adapters 56→72, server 91→94, playground 67→73→92→94, db 145→160.) `pnpm build` 9/9 clean. Note there is **no root `lint` task** — turbo reports "No tasks were executed"; typecheck rides on `build`.
 
 ### What is DONE (do not redo)
 

@@ -266,3 +266,55 @@ describe('createDbDriver — the runner DbDriver seam', () => {
     expect(result.ok).toBe(false);
   });
 });
+
+describe('evict (TASK-20260803-hub-ops — app delete, R1)', () => {
+  it('discards pending writes instead of persisting them', async () => {
+    const backend = createMemoryBackend();
+    const d = createDbDriver({ backend, locateWasm, persistDebounceMs: 5 });
+    expectOk(await d.handle(NS, kvSetFrame('doomed', 'value')));
+
+    // Evict BEFORE the debounce fires: the pending bytes must never reach the backend.
+    // This is the whole point — persisting here would resurrect a deleted app.
+    await d.evict(NS);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    // An explicit flush AFTER eviction must not write the evicted namespace either —
+    // this is the assertion that actually pins the guarantee, since a cancelled timer
+    // alone would make the debounce path pass for the wrong reason.
+    await d.flush();
+
+    expect([...backend.files.keys()]).toHaveLength(0);
+  });
+
+  it('leaves other namespaces persisting normally', async () => {
+    const backend = createMemoryBackend();
+    const d = createDbDriver({ backend, locateWasm, persistDebounceMs: 1 });
+    expectOk(await d.handle('doomed-app', kvSetFrame('a', 1)));
+    expectOk(await d.handle('kept-app', kvSetFrame('b', 2)));
+
+    await d.evict('doomed-app');
+    await d.flush();
+
+    const files = [...backend.files.keys()];
+    expect(files.some((f) => f.includes('kept-app'))).toBe(true);
+    expect(files.some((f) => f.includes('doomed-app'))).toBe(false);
+  });
+
+  it('re-opens the namespace from the backend after eviction', async () => {
+    const backend = createMemoryBackend();
+    const d = createDbDriver({ backend, locateWasm, persistDebounceMs: 1 });
+    expectOk(await d.handle(NS, kvSetFrame('kept', 'persisted')));
+    await d.flush(); // this one DOES reach the backend
+
+    await d.evict(NS);
+
+    // A fresh handle re-materializes from the backend rather than staying dead.
+    const read = await d.handle(NS, kvGetFrame('kept'));
+    expectOk(read);
+    expect(read.value).toBe('persisted');
+  });
+
+  it('is a no-op for a namespace that was never opened', async () => {
+    const d = driver();
+    await expect(d.evict('never-touched')).resolves.toBeUndefined();
+  });
+});
