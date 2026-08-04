@@ -189,6 +189,7 @@ export interface UserDb {
   /** Deletes unpinned messages beyond the newest `keepUnpinned`; pinned rows always survive. */
   pruneChatMessages(threadId: string, keepUnpinned: number): void;
   listThreads(): ChatThread[];
+  getThread(threadId: string): ChatThread | undefined;
   listChatMessages(threadId: string): ChatMessage[];
 
   getSetting(key: string): unknown;
@@ -1115,6 +1116,22 @@ function construct(
            SELECT id FROM ${USERDB_TABLES.chatMessages} WHERE thread_id = ? AND pinned = 0 ORDER BY id DESC LIMIT ?)`,
         [threadId, threadId, keepUnpinned],
       );
+    },
+
+    getThread(threadId) {
+      assertOpen();
+      const row = select(
+        `SELECT thread_id, app_id, title, created_at, updated_at FROM ${USERDB_TABLES.chatThreads} WHERE thread_id = ?`,
+        [threadId],
+      )[0];
+      if (row === undefined) return undefined;
+      return {
+        threadId: String(row[0]),
+        ...(row[1] !== null && row[1] !== undefined ? { appId: String(row[1]) } : {}),
+        ...(row[2] !== null && row[2] !== undefined ? { title: String(row[2]) } : {}),
+        createdAt: String(row[3]),
+        updatedAt: String(row[4]),
+      };
     },
 
     listThreads() {

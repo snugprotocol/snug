@@ -26,7 +26,20 @@ function threadIdForTab(): string {
 export function BuilderView(): ReactElement {
   const [searchParams, setSearchParams] = useSearchParams();
   const prompt = useMemo(() => parseBuildPrompt(), []);
-  const chat = useBuilderChat(useMemo(threadIdForTab, []));
+  // The thread→app pin is durable now (F10): returning to /build resumes the SAME
+  // app. "new app" mints a fresh thread — the explicit escape hatch.
+  const [threadId, setThreadId] = useState(threadIdForTab);
+  const chat = useBuilderChat(threadId);
+  const startNewApp = useCallback((): void => {
+    const minted = `thr-${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
+    try {
+      sessionStorage.setItem('snug:thread', minted);
+    } catch {
+      /* per-tab continuity is best-effort */
+    }
+    setThreadId(minted);
+    setDraft('');
+  }, []);
   const [draft, setDraft] = useState('');
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const sentInitial = useRef(false);
@@ -86,7 +99,17 @@ export function BuilderView(): ReactElement {
           lesson="describe the little app you want — the agent writes it and hands you a run button."
         />
       ) : (
-        <ChatLog messages={chat.messages} activity={chat.activity} />
+        <>
+          {chat.attachedAppId !== undefined && !chat.busy ? (
+            <div className="builder-resume" role="note">
+              <span>this thread keeps building the same app — its context travels with it.</span>
+              <Button variant="ghost" onClick={startNewApp} title="start a fresh thread for a brand-new app">
+                new app
+              </Button>
+            </div>
+          ) : null}
+          <ChatLog messages={chat.messages} activity={chat.activity} />
+        </>
       )}
 
       {draft === '' && !chat.busy ? (

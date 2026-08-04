@@ -34,6 +34,13 @@ export interface ArtifactSink {
 export interface CreateAppTargetSinkOptions {
   /** Per-app chat: the app every write versions. Absent → builder-thread rule. */
   pinnedAppId?: string;
+  /**
+   * Durable builder-thread pin (review F10): the app id the thread's row already
+   * records. A resumed thread versions the SAME app instead of installing a duplicate.
+   */
+  initialTargetId?: string;
+  /** Fired when a write INSTALLS (v1) — the caller persists the thread→app pin. */
+  onInstall?: (appId: string) => void;
   /** Injectable for tests; defaults to the page user DB. */
   getDb?: () => Promise<UserDb>;
 }
@@ -47,7 +54,8 @@ export function createAppTargetSink(options: CreateAppTargetSinkOptions = {}): A
    * artifact write then installs under it, and any writer that finds no row after the
    * await installs synchronously — later continuations see the row and version it.
    */
-  let threadTargetId: Promise<string> | undefined;
+  let threadTargetId: Promise<string> | undefined =
+    options.initialTargetId !== undefined ? Promise.resolve(options.initialTargetId) : undefined;
 
   const ensureThreadTargetId = (): Promise<string> => {
     threadTargetId ??= Promise.resolve(crypto.randomUUID());
@@ -75,6 +83,7 @@ export function createAppTargetSink(options: CreateAppTargetSinkOptions = {}): A
       // schema, docs, and app all agree on identity. Synchronous after the awaits
       // above, so a concurrent second write sees the row and versions it.
       const installed = db.installApp({ appId: targetId, displayName: deriveDisplayName(html, title), html });
+      options.onInstall?.(installed.appId);
       return { id: installed.appId, displayName: installed.displayName, version: 1 };
     },
   };

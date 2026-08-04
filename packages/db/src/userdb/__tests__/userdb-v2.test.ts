@@ -59,6 +59,12 @@ describe('bootstrap message pinning + prune (AC5)', () => {
     expect(kept.slice(2).every((m) => m.content.startsWith('chatter 1'))).toBe(true);
   });
 
+  it('getThread returns the durable thread row (app pin) or undefined', () => {
+    db.upsertThread('thr-9', { appId: 'app-1', title: 'portfolio build' });
+    expect(db.getThread('thr-9')).toMatchObject({ threadId: 'thr-9', appId: 'app-1', title: 'portfolio build' });
+    expect(db.getThread('missing')).toBeUndefined();
+  });
+
   it('meta JSON rides the message (artifact cards, wire text)', () => {
     const msg = db.appendChatMessage('thr-1', 'assistant', 'done', {
       meta: { artifact: { appId: 'a-1', version: 2, displayName: 'Portfolio' } },

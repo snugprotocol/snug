@@ -27,6 +27,7 @@ import { Rail } from '../ui/Rail.js';
 import { Sheet } from '../ui/Sheet.js';
 import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
+import { DocsPanel } from './DocsPanel.js';
 import { downloadBlob, exportDatabase } from './exportDb.js';
 import { InspectorPanel } from './InspectorPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
@@ -37,7 +38,7 @@ import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
 
-type RailTab = 'inspector' | 'chat' | 'versions';
+type RailTab = 'chat' | 'inspector' | 'docs' | 'versions';
 
 /** How long after host-ready the header keeps shimmering before falling back to the library name. */
 const ANNOUNCE_FALLBACK_MS = 1500;
@@ -59,15 +60,42 @@ export default function RunView(): ReactElement {
   const [readySeen, setReadySeen] = useState(false);
   const [announceTimedOut, setAnnounceTimedOut] = useState(false);
   const [fallbackName, setFallbackName] = useState<string | undefined>(undefined);
-  const [railTab, setRailTab] = useState<RailTab>('inspector');
+  // The chat IS the app's workbench now: installed apps open on it (the attached
+  // conversation with full context); starters keep the inspector front.
+  const [railTab, setRailTab] = useState<RailTab>(isStarterId(id) ? 'inspector' : 'chat');
   const [sheetOpen, setSheetOpen] = useState(false);
   const isMobile = useMediaQuery('(max-width: 760px)');
   const controlsRef = useRef<RunnerHost | null>(null);
   /** Bumped when a chat edit or revert lands a new version — reloads html + frame. */
   const [contentEpoch, setContentEpoch] = useState(0);
-  // Stable per-app thread (persists across sessions) pinned to this app: every
-  // artifact_write in this rail versions THIS app (F9).
-  const chat = useBuilderChat(`app:${id}`, isStarterId(id) ? {} : { pinnedAppId: id });
+  // Threads: the stable per-app thread (`app:<id>`) is the main line; extra threads
+  // (`thr-<uuid>`, app_id set on the row) let the user branch without losing the
+  // bootstrap context. All of them pin artifact writes to THIS app (F9).
+  const [threadOverride, setThreadOverride] = useState<string | undefined>(undefined);
+  const threadId = threadOverride ?? `app:${id}`;
+  const [appThreads, setAppThreads] = useState<Array<{ threadId: string; title?: string }>>([]);
+  const chat = useBuilderChat(threadId, isStarterId(id) ? {} : { pinnedAppId: id });
+
+  // Thread list for the picker — refreshed when the turn settles (new threads get
+  // their row on the first message).
+  useEffect(() => {
+    if (isStarterId(id) || chat.busy) return;
+    let cancelled = false;
+    void getUserDb().then((db) => {
+      if (cancelled) return;
+      const rows = db
+        .listThreads()
+        .filter((thread) => thread.appId === id || thread.threadId === `app:${id}`)
+        .map((thread) => ({
+          threadId: thread.threadId,
+          ...(thread.title !== undefined ? { title: thread.title } : {}),
+        }));
+      setAppThreads(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, chat.busy, threadId]);
 
   // A chat edit for this app landed a new version → reload the code and remount.
   useEffect(() => {
@@ -79,8 +107,8 @@ export default function RunView(): ReactElement {
 
   // Identity seams — captured per app id (SnugAppFrame mount-captures them via key).
   const transport = useMemo(() => createAppTransport(mode, provider), [mode, provider]);
-  // The db driver is the SHARED user DB's blob-backed face (ADR-0007) — never closed
-  // here; it lives as long as the page. App data lands in snug_app_data rows.
+  // The db driver is the SHARED user DB's materialized face (ADR-0010) — never closed
+  // here; it lives as long as the page. App data lands as native app_* tables.
   const [db, setDb] = useState<SnugDbDriver | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -190,20 +218,27 @@ export default function RunView(): ReactElement {
   const railContent = (
     <>
       <div className="seg" role="group" aria-label="rail tabs" style={{ margin: '0 0 var(--space-3)' }}>
-        <button type="button" aria-pressed={railTab === 'inspector'} onClick={() => setRailTab('inspector')}>
-          inspector
-        </button>
         <button type="button" aria-pressed={railTab === 'chat'} onClick={() => setRailTab('chat')}>
           chat
         </button>
+        <button type="button" aria-pressed={railTab === 'inspector'} onClick={() => setRailTab('inspector')}>
+          inspector
+        </button>
         {!isStarterId(id) ? (
-          <button type="button" aria-pressed={railTab === 'versions'} onClick={() => setRailTab('versions')}>
-            versions
-          </button>
+          <>
+            <button type="button" aria-pressed={railTab === 'docs'} onClick={() => setRailTab('docs')}>
+              docs
+            </button>
+            <button type="button" aria-pressed={railTab === 'versions'} onClick={() => setRailTab('versions')}>
+              versions
+            </button>
+          </>
         ) : null}
       </div>
       {railTab === 'inspector' ? (
         <InspectorPanel entries={inspector.entries} />
+      ) : railTab === 'docs' ? (
+        <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} />
       ) : railTab === 'versions' ? (
         <VersionsPanel
           appId={id}
@@ -214,13 +249,46 @@ export default function RunView(): ReactElement {
           }}
         />
       ) : (
-        <RailChat
-          messages={chat.messages}
-          activity={chat.activity}
-          busy={chat.busy}
-          onSend={chat.send}
-          onStop={chat.stop}
-        />
+        <>
+          {!isStarterId(id) && (appThreads.length > 1 || threadOverride !== undefined) ? (
+            <div className="thread-picker" role="group" aria-label="conversation threads">
+              <select
+                value={threadId}
+                aria-label="switch thread"
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setThreadOverride(next === `app:${id}` ? undefined : next);
+                }}
+              >
+                {appThreads.map((thread) => (
+                  <option key={thread.threadId} value={thread.threadId}>
+                    {thread.threadId === `app:${id}` ? 'main thread' : (thread.title ?? thread.threadId)}
+                  </option>
+                ))}
+                {appThreads.every((thread) => thread.threadId !== threadId) ? (
+                  <option value={threadId}>new thread</option>
+                ) : null}
+              </select>
+              <Button variant="ghost" onClick={() => setThreadOverride(`thr-${crypto.randomUUID()}`)} title="start a fresh thread about this app">
+                + new
+              </Button>
+            </div>
+          ) : !isStarterId(id) ? (
+            <div className="thread-picker">
+              <span className="thread-picker-label">main thread</span>
+              <Button variant="ghost" onClick={() => setThreadOverride(`thr-${crypto.randomUUID()}`)} title="start a fresh thread about this app">
+                + new
+              </Button>
+            </div>
+          ) : null}
+          <RailChat
+            messages={chat.messages}
+            activity={chat.activity}
+            busy={chat.busy}
+            onSend={chat.send}
+            onStop={chat.stop}
+          />
+        </>
       )}
     </>
   );
