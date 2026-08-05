@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { parseBuildPrompt } from '../agent/chips.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary, type LibraryEntry } from '../state/library.js';
-import { listStarterApps, loadStarterHtml, STARTER_PREFIX } from '../starter/starterApps.js';
+import { listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { Chip } from '../ui/Chip.js';
@@ -97,9 +97,22 @@ export function HubView(): ReactElement {
   // Starter "install" is find-or-open now (AC8): the starter's identity travels as
   // `install_source`, so clicking an installed tile opens the EXISTING app — the
   // duplicate-copies bug is dead at the UI, the store, and the DB unique index.
+  /**
+   * Open a starter WITHOUT installing it (owner-reported: clicking a starter did
+   * nothing but install). If the user already has their own copy, go straight there —
+   * the install_source map is the single identity rule, so a starter can never be
+   * opened twice into two different apps. Otherwise open the read-only starter route,
+   * which offers Install from inside the run view.
+   */
+  const openStarter = (starterId: string): void => {
+    const source = starterInstallSource(starterId);
+    const existing = installedBySource.get(source);
+    navigate(existing !== undefined ? `/run/${existing}` : `/run/${starterId}`);
+  };
+
   const installStarter = (starterId: string, name: string): void => {
     if (installing !== undefined) return;
-    const source = `starter:${starterId.slice(STARTER_PREFIX.length)}`;
+    const source = starterInstallSource(starterId);
     const existing = installedBySource.get(source);
     if (existing !== undefined) {
       navigate(`/run/${existing}`);
@@ -248,32 +261,54 @@ export function HubView(): ReactElement {
               STARTER_LOOKS[starter.name.replace(/ /g, '-')] ??
               ({ emoji: '⬡', color: 'var(--ember)', blurb: 'curated example — runs without a server' } as const);
             const style = { '--tile-color': look.color } as CSSProperties;
-            const source = `starter:${starter.id.slice(STARTER_PREFIX.length)}`;
+            const source = starterInstallSource(starter.id);
             const installed = installedBySource.has(source);
+            // AC18: installing is now an EXPLICIT act. The tile itself no longer
+            // installs on click — an uninstalled starter offers "install", an installed
+            // one offers "open" and routes to the user's OWN copy. Clicking a starter
+            // must never quietly write into the user's snug file.
             return (
-              <button
+              <Card
                 key={starter.id}
-                type="button"
-                onClick={() => installStarter(starter.id, starter.name)}
-                disabled={installing !== undefined && installing !== starter.id}
-                style={{ all: 'unset', display: 'block', cursor: 'pointer', position: 'relative' }}
-                aria-label={installed ? `open ${starter.name}` : `install ${starter.name}`}
+                interactive
+                className="app-tile"
+                style={style}
+                data-testid="starter-tile"
+                data-starter-name={starter.name}
               >
-                <Card interactive className="app-tile" style={style}>
-                  {installed ? <span className="tile-installed-badge">installed</span> : null}
-                  <span className="tile-emoji" aria-hidden="true">
-                    {look.emoji}
-                  </span>
-                  <span className="tile-name">{starter.name}</span>
-                  <span className="tile-sub">
-                    {installed
-                      ? `${look.blurb} — already in your snug file, opens your copy`
-                      : installing === starter.id
-                        ? 'installing…'
-                        : `${look.blurb} — installs into your snug file`}
-                  </span>
-                </Card>
-              </button>
+                {installed ? <span className="tile-installed-badge">installed</span> : null}
+                <span className="tile-emoji" aria-hidden="true">
+                  {look.emoji}
+                </span>
+                <span className="tile-name">{starter.name}</span>
+                <span className="tile-sub">
+                  {installed
+                    ? `${look.blurb} — already in your snug file, opens your copy`
+                    : `${look.blurb} — try it first, install it if you like it`}
+                </span>
+                {/*
+                  Opening a starter is BROWSING, not installing (owner: "it should open
+                  the starter app without installing and also show Install button when
+                  opened on the UI"). An installed starter routes to the user's own copy
+                  via install_source, so re-opening never mints a second app; an
+                  uninstalled one opens the read-only starter route, which offers Install
+                  from inside the run view.
+                */}
+                <Button
+                  variant={installed ? 'ghost' : 'primary'}
+                  className="tile-install"
+                  data-testid={installed ? 'starter-open' : 'starter-try'}
+                  onClick={() => openStarter(starter.id)}
+                  aria-label={installed ? `open ${starter.name}` : `open ${starter.name}`}
+                  title={
+                    installed
+                      ? `open your copy of ${starter.name}`
+                      : `open ${starter.name} — it stays read-only until you install it`
+                  }
+                >
+                  {installed ? 'open' : 'open'}
+                </Button>
+              </Card>
             );
           })}
         </div>

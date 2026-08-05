@@ -55,9 +55,17 @@ test.describe('375px viewport', () => {
     await toggle.tap();
     const sheet = page.getByRole('dialog', { name: 'watch it think' });
     await expect(sheet).toBeVisible();
-    // Rail tabs are reachable inside the sheet.
+    // Rail tabs are reachable inside the sheet, and still carry their text as the
+    // ACCESSIBLE NAME after AC12 replaced the visible labels with icons — this
+    // getByRole lookup is what proves the icons did not cost us the name.
     await expect(sheet.getByRole('button', { name: 'inspector' })).toBeVisible();
-    await expect(sheet.getByRole('button', { name: 'chat' })).toBeVisible();
+    // NOT 'chat': an UNINSTALLED starter has no chat tab (AC18). Editing a starter
+    // used to fork a hidden app under a random uuid, so the chat surface is gated
+    // until the user installs their own copy. `docs`/`versions` are likewise
+    // installed-app-only, leaving `inspector` as the one tab a starter shows —
+    // hence the count assertion rather than a second name lookup.
+    await expect(sheet.getByRole('button', { name: 'chat' })).toHaveCount(0);
+    await expect(sheet.locator('.seg button')).toHaveCount(1);
     await expectNoHorizontalScroll(page);
   });
 });

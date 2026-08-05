@@ -24,7 +24,6 @@ import {
   importUserFile,
   pushLocal,
   setSyncOrigin,
-  signOut,
   useSyncStatus,
   type SyncOriginKind,
 } from '../state/sync.js';
@@ -226,7 +225,8 @@ export function AccountCard(): ReactElement | null {
                 <Button onClick={() => void setSyncOrigin('hub')}>sync to this hub</Button>
               </div>
             ) : null}
-            <Button onClick={() => void signOut()}>sign out</Button>
+            {/* sign out lives in the header identity menu (AC3) — reachable from every
+                page there, rather than only from this card. */}
           </>
         ) : (
           <>
@@ -286,7 +286,9 @@ function DataCard(): ReactElement {
         </div>
         {sync.state === 'divergence' ? (
           <div className="error-note" role="alert">
-            the origin holds a different copy of your file. pick which one wins:
+            {/* detail is set by onSyncEvent and distinguishes "different copy" from
+                "the origin lost its copy" — the resolver is the same either way. */}
+            {sync.detail ?? 'the origin holds a different copy of your file'}. pick which one wins:
             <div className="field-row">
               <Button onClick={() => void applyRemote()}>use the origin copy</Button>
               <Button onClick={() => void pushLocal()}>keep this device’s copy</Button>

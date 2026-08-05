@@ -9,6 +9,7 @@ import type { ReactElement } from 'react';
 import type { AppDocRecord } from '@snugprotocol/db';
 
 import { getUserDb } from '../state/userdb.js';
+import type { PlaygroundMode } from '../state/mode.js';
 import { Button } from '../ui/Button.js';
 import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -17,9 +18,35 @@ export interface DocsPanelProps {
   appId: string;
   /** Bumped by the parent whenever the agent writes a doc — triggers a reload. */
   refreshToken: number;
+  /** The ACTIVE mode — the empty copy branches on this value, never on a guess (AC15, R4). */
+  mode: PlaygroundMode;
 }
 
-export function DocsPanel({ appId, refreshToken }: DocsPanelProps): ReactElement {
+/**
+ * The honest empty state (AC15). "no wiki yet" implies waiting will fix it; in
+ * subscription mode nothing ever will. `buildServerTools` (apps/server/src/tools.ts)
+ * ships exactly two tools and `app_doc_write` is not one of them, so the model is never
+ * offered the doc tool and no page can be written. Direct mode's `buildByokTools` does
+ * ship it.
+ *
+ * R4: branches on the MODE VALUE — when the server gains the tool, only this switch
+ * changes.
+ */
+function emptyCopy(mode: PlaygroundMode): { title: string; lesson: string } {
+  if (mode === 'subscription') {
+    return {
+      title: 'no wiki in subscription mode',
+      lesson:
+        'the hub’s agent is not offered the doc tool, so it cannot write these pages however long you build — switch to byok or local mode in settings to get a wiki.',
+    };
+  }
+  return {
+    title: 'no wiki yet',
+    lesson: 'the agent writes this app’s vision, plan, and lessons as you build — ask for a change and the pages appear.',
+  };
+}
+
+export function DocsPanel({ appId, refreshToken, mode }: DocsPanelProps): ReactElement {
   const [docs, setDocs] = useState<AppDocRecord[]>([]);
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [draft, setDraft] = useState<string | undefined>(undefined);
@@ -53,13 +80,8 @@ export function DocsPanel({ appId, refreshToken }: DocsPanelProps): ReactElement
   }, [appId, doc, draft]);
 
   if (docs.length === 0) {
-    return (
-      <EmptyState
-        glyph="✧"
-        title="no wiki yet"
-        lesson="the agent writes this app’s vision, plan, and lessons as you build — ask for a change and the pages appear."
-      />
-    );
+    const { title, lesson } = emptyCopy(mode);
+    return <EmptyState glyph="✧" title={title} lesson={lesson} />;
   }
 
   return (

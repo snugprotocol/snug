@@ -25,21 +25,25 @@ export interface CreateHubOriginProviderOptions {
   csrfToken?: string;
 }
 
-/** Reads a conflict's remote revision: etag header first, JSON `revision` body second. */
-async function conflictRevision(response: Response): Promise<string> {
+/**
+ * Reads a conflict's remote revision: etag header first, JSON `revision` body second.
+ *
+ * Resolves undefined when the hub names NEITHER — which is not a malformed response but
+ * a meaningful one: the server answers a bare 412 when `if-match` arrives and the user
+ * has no row at all (a wiped hub DB, a re-login under a new userId), because it has no
+ * revision to report and will not invent one. A conflict without a nameable revision is
+ * still a conflict, so it stays DATA — divergence for the resolver, never a thrown error.
+ */
+async function conflictRevision(response: Response): Promise<string | undefined> {
   const etag = response.headers.get('etag');
   if (etag !== null && etag !== '') return etag;
   try {
     const body = (await response.json()) as { revision?: unknown };
     if (typeof body.revision === 'string') return body.revision;
   } catch {
-    // fall through — a conflict without a readable revision is still a conflict
+    // an unreadable body is not a reason to escalate: the 412 itself is the signal
   }
-  throw new SyncProviderError(
-    SYNC_ERROR_CODES.BAD_RESPONSE,
-    `hub reported a conflict (${response.status}) but no remote revision`,
-    response.status,
-  );
+  return undefined;
 }
 
 function throwHttpError(response: Response, doing: string): never {
@@ -87,7 +91,8 @@ export function createHubOriginProvider(options: CreateHubOriginProviderOptions)
         body: bytes.slice(),
       });
       if (response.status === 409 || response.status === 412) {
-        return { ok: false, conflict: true, remoteRevision: await conflictRevision(response) };
+        const remoteRevision = await conflictRevision(response);
+        return { ok: false, conflict: true, ...(remoteRevision !== undefined ? { remoteRevision } : {}) };
       }
       if (!response.ok) throwHttpError(response, 'push');
       const revision = response.headers.get('etag');

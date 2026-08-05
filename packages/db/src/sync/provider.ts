@@ -30,7 +30,14 @@ export type SyncPushResult =
       /** The origin moved past `baseRevision` — surfaced as divergence, never auto-resolved. */
       ok: false;
       conflict: true;
-      remoteRevision: string;
+      /**
+       * The revision the origin actually holds, when it can be named. ABSENT means the
+       * origin refused the conditional write but could not name a revision — in practice
+       * "the origin holds no image at all" (a hub whose row was wiped answers a bare 412
+       * while our sidecar still remembers a revision). It is still a conflict: the write
+       * did not land, and resolution stays an explicit user action either way.
+       */
+      remoteRevision?: string;
     };
 
 export interface SyncProvider {

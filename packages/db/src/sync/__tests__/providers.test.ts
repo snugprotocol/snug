@@ -260,6 +260,33 @@ describe('hub origin provider specifics', () => {
     expect(result).toEqual({ ok: false, conflict: true, remoteRevision: '"r9"' });
   });
 
+  // TASK-20260804-hub-polish AC21: the server answers If-Match-with-no-row as a bare
+  // 412 (stores/userdbs.ts returns current: undefined, so routes/userdb.ts omits the
+  // etag) — reachable after a hub DB reset or a re-login under a new userId. That is a
+  // DIVERGENCE the resolver must see, never a SYNC_BAD_RESPONSE throw.
+  it('reports a 412 with neither etag nor body revision as a conflict with an unknown remote revision (AC21)', async () => {
+    const provider = createHubOriginProvider({
+      baseUrl: 'https://hub.test/api',
+      fetch: () =>
+        Promise.resolve(
+          json({ code: 'REVISION_MISMATCH', message: 'no user DB exists yet — first write must use If-None-Match: *' }, 412),
+        ),
+    });
+    const result = await provider.push(payload('x'), 'r1-stale');
+    expect(result).toEqual({ ok: false, conflict: true });
+    if (result.ok) return;
+    expect(result.remoteRevision).toBeUndefined();
+  });
+
+  it('reports a revision-less 412 with an unreadable (non-JSON) body as a conflict too (AC21)', async () => {
+    const provider = createHubOriginProvider({
+      baseUrl: 'https://hub.test/api',
+      fetch: () => Promise.resolve(new Response('<html>gateway</html>', { status: 412 })),
+    });
+    const result = await provider.push(payload('x'), 'r1-stale');
+    expect(result).toMatchObject({ ok: false, conflict: true });
+  });
+
   it('surfaces a missing etag on a successful pull as a typed BAD_RESPONSE error', async () => {
     const provider = createHubOriginProvider({
       baseUrl: 'https://hub.test/api',

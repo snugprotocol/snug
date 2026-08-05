@@ -63,7 +63,11 @@ describe('IdentityChip', () => {
   it('shows the account identity once signed in, not a sign-in button', () => {
     const text = render(<IdentityChip />, { state: 'signed-in', user: { userId: 'u-1', name: 'Ada' } });
     expect(text).toContain('Ada');
-    expect(container?.querySelector('button')).toBeNull();
+    // The chip became a menu trigger in TASK-20260804-hub-polish (AC1), so "no <button>
+    // at all" no longer expresses this test's point. What must stay true is that the
+    // signed-in state offers no sign-IN affordance — asserted on the label, not the tag.
+    const buttons = [...(container?.querySelectorAll('button') ?? [])];
+    expect(buttons.some((el) => (el.textContent ?? '').includes('sign in'))).toBe(false);
   });
 });
 

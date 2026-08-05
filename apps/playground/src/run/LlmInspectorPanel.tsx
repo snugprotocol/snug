@@ -7,11 +7,14 @@
 
 import { useState, type ReactElement } from 'react';
 
+import type { PlaygroundMode } from '../state/mode.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import type { LlmInspectorEntry, LlmInspectorState } from './llmInspector.js';
 
 export interface LlmInspectorPanelProps {
   state: LlmInspectorState;
+  /** The ACTIVE mode — the empty copy branches on this value, never on a guess (AC15, R4). */
+  mode: PlaygroundMode;
 }
 
 const ms = (value: number): string => (value < 1000 ? `${Math.round(value)}ms` : `${(value / 1000).toFixed(1)}s`);
@@ -63,15 +66,43 @@ function RoundTrip({ entry }: { entry: LlmInspectorEntry }): ReactElement {
   );
 }
 
-export function LlmInspectorPanel({ state }: LlmInspectorPanelProps): ReactElement {
+/**
+ * The honest empty state (AC15). The old copy — "every call to the model shows up
+ * here" — is FALSE in subscription mode: `apps/server/src/routes/invoke.ts` forwards
+ * tool name + phase only and keeps `round_trip` server-side, so this surface can never
+ * populate there however long you wait.
+ *
+ * R4: this branches on the MODE VALUE. If subscription mode later gains a round-trip
+ * wire event, only this switch has to change — the wrong copy cannot silently persist
+ * behind a hardcoded assumption.
+ */
+function emptyCopy(mode: PlaygroundMode): { title: string; lesson: string } {
+  switch (mode) {
+    case 'subscription':
+      return {
+        title: 'nothing to show in subscription mode',
+        lesson:
+          'the hub runs the model server-side and never sends the round trip back, so this stays empty by design — switch to byok or local mode in settings to watch the prompts.',
+      };
+    case 'byok':
+      return {
+        title: 'no round trips yet',
+        lesson:
+          'your browser calls the model directly in byok mode, so each prompt, reply, token count and timing lands here the moment a turn runs. in-memory only.',
+      };
+    case 'local':
+      return {
+        title: 'no round trips yet',
+        lesson:
+          'your browser calls your local endpoint directly, so each prompt, reply, token count and timing lands here the moment a turn runs. in-memory only.',
+      };
+  }
+}
+
+export function LlmInspectorPanel({ state, mode }: LlmInspectorPanelProps): ReactElement {
   if (state.entries.length === 0) {
-    return (
-      <EmptyState
-        glyph="↯"
-        title="no round trips yet"
-        lesson="every call to the model shows up here — prompt, reply, tokens, timing. this view is in-memory only."
-      />
-    );
+    const { title, lesson } = emptyCopy(mode);
+    return <EmptyState glyph="↯" title={title} lesson={lesson} />;
   }
   const { inputTokens, outputTokens } = state.totalUsage;
   return (

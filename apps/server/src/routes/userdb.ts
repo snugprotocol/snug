@@ -108,8 +108,17 @@ export function registerUserDbRoutes(app: FastifyInstance, deps: UserDbRouteDeps
         if (result.code === 'USERDB_TOO_LARGE') {
           return reply.status(413).send({ code: result.code, message: result.message, retryable: false });
         }
+        // The conflict contract is machine-readable in BOTH places (AC22): the etag header
+        // and a body `revision`, so a client that can read only one still agrees with us.
+        // When no row exists there is no revision — say nothing rather than invent one;
+        // the client reads the absence as "the origin is empty" and surfaces divergence.
         if (result.current !== undefined) void reply.header('etag', result.current);
-        return reply.status(412).send({ code: result.code, message: result.message, retryable: true });
+        return reply.status(412).send({
+          code: result.code,
+          message: result.message,
+          retryable: true,
+          ...(result.current !== undefined ? { revision: result.current } : {}),
+        });
       }
       return reply.status(204).header('etag', result.revision).send();
     },

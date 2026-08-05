@@ -110,3 +110,17 @@ radius is intended, then update the snapshot in the same PR.
 The prompt-eval harness will address prompts by their stable paths in this tree — keep file
 paths stable; prefer editing content over renaming files. If a rename is unavoidable,
 update loaders, goldens, and this README in the same change.
+
+## External references
+
+Read before authoring or restructuring anything in this tree — these are upstream guidance,
+not Snug rules, so where they conflict with a hard constraint (C1–C5) or ADR-0004, this repo
+wins. Treat them as the default technique unless there is a recorded reason to deviate.
+
+| Reference | Use it for |
+|---|---|
+| [Anthropic — Best practices for prompt engineering](https://claude.com/blog/best-practices-for-prompt-engineering) | Authoring or revising any prompt layer here: system blocks, tool + parameter descriptions, KB sections, skill prompts. The canonical technique reference for this repo. |
+
+Anything added to this table should be durable guidance a future session would want at
+Gate 2 — not a one-off article. Version-specific or model-specific advice belongs in the
+prompt file it applies to, next to the text it explains.

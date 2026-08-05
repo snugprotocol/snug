@@ -180,6 +180,47 @@ describe('/userdb revisions and preconditions (AC3)', () => {
     expect(stale.headers.etag).toBe(rev2);
   });
 
+  // TASK-20260804-hub-polish AC22: every 412 the server CAN name a revision for carries
+  // it machine-readably — in the etag header AND in the JSON body, so a client that lost
+  // one still agrees with the server on the conflict contract.
+  it('carries the current revision on every 412 that has one — etag header and body (AC22)', async () => {
+    app = await buildTestApp({ config: authTestConfig() });
+    const first = await putFirst(app);
+    const rev1 = first.headers.etag as string;
+
+    const staleIfMatch = await app.inject({
+      method: 'PUT',
+      url: '/userdb',
+      headers: authedHeaders('user-1', { 'if-match': 'r0-nonsense' }),
+      payload: sqliteBytes(),
+    });
+    expect(staleIfMatch.statusCode).toBe(412);
+    expect(staleIfMatch.headers.etag).toBe(rev1);
+    expect(staleIfMatch.json()).toMatchObject({ code: 'REVISION_MISMATCH', revision: rev1 });
+
+    const dupeFirstWrite = await putFirst(app);
+    expect(dupeFirstWrite.statusCode).toBe(412);
+    expect(dupeFirstWrite.headers.etag).toBe(rev1);
+    expect(dupeFirstWrite.json()).toMatchObject({ revision: rev1 });
+  });
+
+  // AC22, the other half: when NO row exists the server has no revision — it must say so
+  // plainly rather than fabricate one. The client reads the absence as "origin is empty".
+  it('omits the revision (never fabricates one) on a 412 for a user with no row yet (AC22)', async () => {
+    app = await buildTestApp({ config: authTestConfig() });
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/userdb',
+      headers: authedHeaders('user-never-pushed', { 'if-match': 'r7-from-a-wiped-hub' }),
+      payload: sqliteBytes(),
+    });
+    expect(response.statusCode).toBe(412);
+    expect(response.headers.etag).toBeUndefined();
+    const body = response.json() as Record<string, unknown>;
+    expect(body.code).toBe('REVISION_MISMATCH');
+    expect('revision' in body).toBe(false);
+  });
+
   it('accepts a quoted If-Match etag (HTTP-style)', async () => {
     app = await buildTestApp({ config: authTestConfig() });
     const first = await putFirst(app);

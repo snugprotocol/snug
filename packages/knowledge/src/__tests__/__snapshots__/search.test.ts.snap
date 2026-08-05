@@ -104,6 +104,7 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
       "### If no browser build exists — inline the logic",
       "### CommonJS shim (last resort)",
       "## DATA: Pinned Known-Good CDN Builds",
+      "### A CSP console error for a \`.map\` file is EXPECTED, not a bug",
     ],
   },
 ]

@@ -12,6 +12,8 @@ export interface FakeIdentity {
   sub: string;
   email: string;
   name: string;
+  /** Google's avatar claim — part of the `profile` scope; absent for some accounts. */
+  picture?: string;
 }
 
 interface PendingCode {
@@ -48,7 +50,13 @@ export async function startFakeOidcIssuer(identity?: Partial<FakeIdentity>): Pro
 
   const state: { url: string; identity: FakeIdentity } = {
     url: '',
-    identity: { sub: 'google-sub-1', email: 'jeetu@example.com', name: 'Jeetu Maker', ...identity },
+    identity: {
+      sub: 'google-sub-1',
+      email: 'jeetu@example.com',
+      name: 'Jeetu Maker',
+      picture: 'https://lh3.googleusercontent.com/a/default=s96-c',
+      ...identity,
+    },
   };
 
   const app: FastifyInstance = Fastify({ logger: false });
@@ -115,6 +123,9 @@ export async function startFakeOidcIssuer(identity?: Partial<FakeIdentity>): Pro
       sub: pending.identity.sub,
       email: pending.identity.email,
       name: pending.identity.name,
+      // Omitted from the token entirely when absent — exactly how Google behaves for
+      // an account with no avatar (never `"picture": null`).
+      ...(pending.identity.picture !== undefined ? { picture: pending.identity.picture } : {}),
       iat: now,
       exp: now + 3600,
       ...(pending.nonce !== undefined ? { nonce: pending.nonce } : {}),

@@ -18,6 +18,12 @@ export interface OidcIdentity {
   sub: string;
   email: string;
   name: string;
+  /**
+   * Google's avatar URL, from the `picture` claim of the `profile` scope (already
+   * requested). Optional rather than '' because "no avatar" must stay distinguishable
+   * from "empty avatar" all the way out to /auth/me, which omits the field entirely.
+   */
+  picture?: string;
 }
 
 export interface OidcClient {
@@ -85,6 +91,11 @@ export function createOidcClient(options: OidcClientOptions): OidcClient {
         sub: claims.sub,
         email: typeof claims.email === 'string' ? claims.email : '',
         name: typeof claims.name === 'string' ? claims.name : '',
+        // Key omitted (not '') when the claim is missing or empty, so downstream can
+        // tell "no avatar" from "avatar at an empty URL".
+        ...(typeof claims.picture === 'string' && claims.picture !== ''
+          ? { picture: claims.picture }
+          : {}),
       };
     },
   };
