@@ -125,7 +125,14 @@ export function BuilderView(): ReactElement {
               </Button>
             </div>
           ) : null}
-          <ChatLog messages={chat.messages} steps={chat.steps} activity={chat.activity} />
+          {/* An attached app means this turn EDITS something that already works; without
+              one it is a first build. The status copy differs accordingly (AC10). */}
+          <ChatLog
+            messages={chat.messages}
+            steps={chat.steps}
+            activity={chat.activity}
+            phase={chat.attachedAppId !== undefined ? 'edit' : 'build'}
+          />
         </>
       )}
 

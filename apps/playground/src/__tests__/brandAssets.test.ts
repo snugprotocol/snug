@@ -73,9 +73,12 @@ describe('brand assets (AC8)', () => {
 });
 
 describe('brand sizing (AC9)', () => {
-  it('doubles the wordmark to 2.5rem via a token rather than a hardcoded value', () => {
+  it('sizes the wordmark via a token rather than a hardcoded value', () => {
+    // The exact size was 2.5rem here and is now 2rem (AC3 of the observability-caching
+    // task reduced it 20%). The value lives in starterCardBrand.test.tsx, which owns
+    // that decision; the durable assertion HERE is that a token is what carries it.
     const tokens = read('src/theme/tokens.css');
-    expect(tokens).toMatch(/--text-brand:\s*2\.5rem/);
+    expect(tokens).toMatch(/--text-brand:\s*[0-9.]+rem/);
     const css = read('src/theme/app.css');
     // .brand must consume the token, not restate the number.
     expect(css).toMatch(/\.brand\s*\{[^}]*font-size:\s*var\(--text-brand\)/);

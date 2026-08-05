@@ -589,7 +589,11 @@
   }
 }
 
-.reasoning-pill {
+/* The rotating status line — replaces BOTH the last-write-wins reasoning pill and the
+   build-step timeline (AC9). The factual per-tool record lives in the LLM inspector,
+   nested under the round trip that requested each tool, so this surface is ambient
+   progress only and does not need to enumerate anything. */
+.status-line {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -602,36 +606,11 @@
   min-height: 28px;
 }
 
-.reasoning-pill .pulse-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ember);
-  animation: caret-breathe 0.9s var(--ease-out) infinite alternate;
-}
-
-/* Build step timeline — replaces the single last-write-wins reasoning pill. Steps
-   accumulate in order and complete in place, so a long build shows its whole path. */
-.build-steps {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.build-step {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--fg-muted);
-  font-size: var(--text-xs);
-  padding: var(--space-1) var(--space-2);
+.status-line.is-animated {
   animation: reveal-in var(--dur-1) var(--ease-out);
 }
 
-.build-step .pulse-dot {
+.status-line .pulse-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -639,15 +618,13 @@
   animation: caret-breathe 0.9s var(--ease-out) infinite alternate;
 }
 
-.build-step .step-check {
-  width: 6px;
-  color: var(--ok);
-  font-size: var(--text-xs);
-  line-height: 1;
-}
-
-.build-step.is-done {
-  opacity: 0.65;
+/* AC11: reduced motion removes the animation as well as the rotation. The component
+   also stops rotating and drops the dot, so this is belt-and-braces for the fade-in. */
+@media (prefers-reduced-motion: reduce) {
+  .status-line,
+  .status-line .pulse-dot {
+    animation: none;
+  }
 }
 
 .artifact-card {
