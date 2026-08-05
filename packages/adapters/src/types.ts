@@ -51,10 +51,20 @@ export interface AdapterError {
   partialText?: string;
 }
 
-/** Token accounting, when the provider reports it. Observation only — never persisted. */
+/**
+ * Token accounting, when the provider reports it. Observation only — never persisted.
+ *
+ * The cache fields are OPTIONAL AND ABSENT when the provider said nothing about caching
+ * — never coerced to 0. The UI distinguishes "cached 0%" from "this provider does not
+ * report caching", so an absent field and a zero mean different things (AC13).
+ */
 export interface TokenUsage {
   inputTokens?: number;
   outputTokens?: number;
+  /** Tokens written to the cache this request (paid at the ~1.25x write premium). */
+  cacheCreationTokens?: number;
+  /** Tokens served from the cache this request (paid at ~0.1x). */
+  cacheReadTokens?: number;
 }
 
 export type AdapterResult =
@@ -64,6 +74,12 @@ export type AdapterResult =
       toolCalls: ToolCall[];
       stopReason: 'end' | 'tool_use';
       usage?: TokenUsage;
+      /**
+       * The model as reported ON THE WIRE by the provider — not the configured id, which
+       * can be an alias the provider resolves to something else. Absent when the provider
+       * did not say; the UI shows what was reported rather than guessing (AC4).
+       */
+      model?: string;
     }
   | AdapterError;
 

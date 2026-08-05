@@ -111,3 +111,11 @@ The parent task (`feat/TASK-20260804-hub-polish`) is **not yet merged** and this
 - State: **awaiting plan approval — no implementation code written.** Branch not yet created (Phase A must merge the parent task first).
 - Next step: on approval, Phase A (merge `feat/TASK-20260804-hub-polish`), then B→E test-first. High tier also wants a fresh-context review of this plan before implementation.
 - Open questions: none blocking.
+
+### 2026-08-04 — Jeetu — session (Gate 3 start)
+
+- **Plan approved** by the owner; instruction: go through all phases.
+- **Phase A is a no-op — already done outside this task.** `feat/TASK-20260804-hub-polish` merged as `8e0a792` (PR #3) before this session started, so `main` already carries the LLM inspector, `ThinkPanel` and starter flow this task builds on. D1's "branch off the parent branch" is therefore stale: branch cut off `main` instead. No work lost; recording it because the plan text still describes the pre-merge world.
+- Baseline verified on `main` before branching: clean tree, in sync with `origin/main`, **826 tests green** (protocol 103, knowledge 61, runner 91, adapters 74, db 168, sdk 35, server 104, playground 190) — matches the parent task's recorded baseline exactly.
+- Branch created: `feat/TASK-20260804-observability-caching`.
+- Next step: Phase B (adapters) test-first.

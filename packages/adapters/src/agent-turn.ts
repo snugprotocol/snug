@@ -32,9 +32,21 @@ export interface AgentRoundTrip {
   durationMs: number;
 }
 
+/**
+ * A round trip that has STARTED but not returned. Emitted before `adapter.complete()`
+ * is awaited, so the surface can show the call in flight with a live timer instead of
+ * nothing at all until it finishes (AC8). Carries the request as sent; the response and
+ * duration arrive later on the matching `round_trip`, correlated by `index`.
+ */
+export interface AgentRoundTripStart {
+  index: number;
+  request: { system: string; messages: AdapterMessage[]; tools?: ToolDef[] };
+}
+
 export type AgentTurnEvent =
   | { type: 'tool_call'; call: ToolCall }
   | { type: 'tool_result'; call: ToolCall; output: string }
+  | ({ type: 'round_trip_start' } & AgentRoundTripStart)
   | ({ type: 'round_trip' } & AgentRoundTrip);
 
 export interface RunAgentTurnOptions {
@@ -82,6 +94,9 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
     // keeps growing, so a live reference would show the wrong thing later.
     const request = { system, messages: [...conversation], ...(defs !== undefined ? { tools: defs } : {}) };
     const startedAt = now();
+    // Emitted BEFORE the await: a 30-minute build must show the call in flight, not an
+    // empty panel until it returns. Same `index` correlates it with the `round_trip`.
+    onEvent?.({ type: 'round_trip_start', index: iteration, request });
     const result = await adapter.complete({ system, messages: conversation, tools: defs, signal, onDelta });
     onEvent?.({ type: 'round_trip', index: iteration, request, response: result, durationMs: now() - startedAt });
     if (!result.ok) {

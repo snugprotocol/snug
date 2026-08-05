@@ -37,8 +37,29 @@ export interface AnthropicAdapterOptions {
   model?: string;
   baseUrl?: string;
   maxTokens?: number;
+  /**
+   * Opt in to prompt caching on the STABLE PREFIX (tools + system). Off by default:
+   * caching is only worth its 1.25x write premium on the large, repeated builder/agent
+   * turns, and an unknown field is fatal on endpoints that do not support it — so the
+   * caller opts in per adapter rather than the adapter guessing (AC12, D0/Q2).
+   */
+  cache?: boolean;
   /** Injectable for fixture-based tests — adapter tests never hit the network. */
   fetch?: FetchLike;
+}
+
+/**
+ * Caching is an Anthropic-API feature. A `baseUrl` pointing anywhere else is an
+ * OpenAI-compatible or local server that will reject `cache_control` as an unknown
+ * field — the same failure class that `max_completion_tokens` caused on local turns in
+ * the parent task. Opting in cannot override this (AC14).
+ */
+function supportsCaching(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname.endsWith('api.anthropic.com');
+  } catch {
+    return false;
+  }
 }
 
 type WireMessage = { role: 'user' | 'assistant'; content: string | Record<string, unknown>[] };
@@ -83,6 +104,8 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
   const model = options.model ?? ANTHROPIC_DEFAULT_MODEL;
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
+  const caching = options.cache === true && supportsCaching(baseUrl);
+
   return {
     async complete({ system, messages, tools, signal, onDelta }): Promise<AdapterResult> {
       let response: Response;
@@ -100,7 +123,11 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
           body: JSON.stringify({
             model,
             max_tokens: maxTokens,
-            system,
+            // Render order is tools -> system -> messages, so ONE breakpoint on the last
+            // system block caches tools+system together — the whole stable prefix. The
+            // volatile tail (messages) deliberately carries none: a breakpoint there
+            // would write a fresh entry per request and never read one.
+            system: caching ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system,
             stream: true,
             messages: toAnthropicMessages(messages),
             ...(tools !== undefined && tools.length > 0
@@ -124,6 +151,7 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
       const toolCalls: ToolCall[] = [];
       const pending = new Map<number, { id: string; name: string; json: string }>();
       let completed = false;
+      let wireModel: string | undefined;
       const usage: TokenUsage = {};
       try {
         for await (const event of parseSse(response.body)) {
@@ -165,9 +193,20 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
               ...(text !== '' ? { partialText: text } : {}),
             };
           } else if (type === 'message_start') {
-            // Usage rides here (input) and on message_delta (output) — observation only.
-            const usageRecord = asRecord(asRecord(payload.message)?.usage);
+            // Usage rides here (input + cache) and on message_delta (output) — observation
+            // only. The cache fields are set ONLY when the provider reported them, so an
+            // absent field stays absent rather than becoming a misleading 0 (AC13).
+            const message = asRecord(payload.message);
+            // The model as the provider resolved it — an alias may differ from what we sent.
+            if (typeof message?.model === 'string') wireModel = message.model;
+            const usageRecord = asRecord(message?.usage);
             if (typeof usageRecord?.input_tokens === 'number') usage.inputTokens = usageRecord.input_tokens;
+            if (typeof usageRecord?.cache_creation_input_tokens === 'number') {
+              usage.cacheCreationTokens = usageRecord.cache_creation_input_tokens;
+            }
+            if (typeof usageRecord?.cache_read_input_tokens === 'number') {
+              usage.cacheReadTokens = usageRecord.cache_read_input_tokens;
+            }
           } else if (type === 'message_delta') {
             const usageRecord = asRecord(payload.usage);
             if (typeof usageRecord?.output_tokens === 'number') usage.outputTokens = usageRecord.output_tokens;
@@ -186,7 +225,8 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
         text,
         toolCalls,
         stopReason: toolCalls.length > 0 ? 'tool_use' : 'end',
-        ...(usage.inputTokens !== undefined || usage.outputTokens !== undefined ? { usage } : {}),
+        ...(Object.keys(usage).length > 0 ? { usage } : {}),
+        ...(wireModel !== undefined ? { model: wireModel } : {}),
       };
     },
   };

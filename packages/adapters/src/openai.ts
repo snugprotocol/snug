@@ -9,7 +9,7 @@ import {
   streamDroppedResult,
 } from './errors.js';
 import { parseSse, tryParseJsonRecord } from './sse.js';
-import type { AdapterMessage, AdapterResult, AgentAdapter, FetchLike, ToolCall } from './types.js';
+import type { AdapterMessage, AdapterResult, AgentAdapter, FetchLike, TokenUsage, ToolCall } from './types.js';
 
 export const OPENAI_DEFAULT_MODEL = 'gpt-4o';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
@@ -97,6 +97,8 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
 
       let text = '';
       let finishReason: string | null = null;
+      let wireModel: string | undefined;
+      const usage: TokenUsage = {};
       const pending = new Map<number, { id: string; name: string; args: string }>();
       try {
         for await (const event of parseSse(response.body)) {
@@ -130,6 +132,17 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
           if (typeof choice.finish_reason === 'string' && choice.finish_reason !== '') {
             finishReason = choice.finish_reason;
           }
+          if (typeof chunk.model === 'string') wireModel = chunk.model;
+          // Usage rides on the final chunk. OpenAI reports cache reads as
+          // `prompt_tokens_details.cached_tokens` — normalized to the same TokenUsage
+          // shape as Anthropic's so the UI has one contract. Absent stays absent (AC13).
+          const usageRecord = asRecord(chunk.usage);
+          if (usageRecord !== null) {
+            if (typeof usageRecord.prompt_tokens === 'number') usage.inputTokens = usageRecord.prompt_tokens;
+            if (typeof usageRecord.completion_tokens === 'number') usage.outputTokens = usageRecord.completion_tokens;
+            const details = asRecord(usageRecord.prompt_tokens_details);
+            if (typeof details?.cached_tokens === 'number') usage.cacheReadTokens = details.cached_tokens;
+          }
         }
       } catch (err) {
         if (isAbortError(err) || signal?.aborted === true) return cancelledResult();
@@ -152,6 +165,8 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
         text,
         toolCalls,
         stopReason: finishReason === 'tool_calls' || toolCalls.length > 0 ? 'tool_use' : 'end',
+        ...(Object.keys(usage).length > 0 ? { usage } : {}),
+        ...(wireModel !== undefined ? { model: wireModel } : {}),
       };
     },
   };
