@@ -141,6 +141,7 @@ describe('the two inspector modules stay separate (AC11)', () => {
     // reducer (bodies are the feature) and is erased by the structural one.
     const MARKER = 'RAILTABMARKER-b91f';
     const llm = llmInspectorReduce(initialLlmInspectorState as LlmInspectorState, {
+      type: 'round_trip',
       index: 0,
       request: { system: `system ${MARKER}`, messages: [] },
       response: { ok: true, text: MARKER, toolCalls: [], stopReason: 'end' },
@@ -165,6 +166,7 @@ describe('the two inspector modules stay separate (AC11)', () => {
 
 describe('merged think surface (AC10)', () => {
   const llmState = llmInspectorReduce(initialLlmInspectorState as LlmInspectorState, {
+    type: 'round_trip',
     index: 0,
     request: { system: 'you are snug', messages: [{ role: 'user', content: 'hi' }] },
     response: { ok: true, text: 'hello', toolCalls: [], stopReason: 'end' },

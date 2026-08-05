@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { KeyboardEvent, ReactElement } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import type { AgentRoundTrip } from '@snugprotocol/adapters';
+import type { AgentTurnEvent } from '@snugprotocol/adapters';
 
 import { buildUserMessage, parseBuildPrompt } from '../agent/chips.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
@@ -36,7 +36,7 @@ export function BuilderView(): ReactElement {
   const [threadId, setThreadId] = useState(threadIdForTab);
   const mode = useMode();
   // Build observability (AC13). Before this, useBuilderChat was called with NO options,
-  // so onRoundTrip/onTurnStart were undefined and every round trip was DROPPED — the
+  // so onLlmEvent/onTurnStart were undefined and every round trip was DROPPED — the
   // build turn was the one place you could not watch it think.
   //
   // In-memory only (AC14): this reducer state is the ONLY place round trips live and it
@@ -44,9 +44,9 @@ export function BuilderView(): ReactElement {
   const [llmInspector, dispatchRoundTrip] = useReducer(llmInspectorReduce, initialLlmInspectorState as LlmInspectorState);
   // Stable ([]) deps are load-bearing, not style: useBuilderChat's send() dep array
   // includes both callbacks, so inline arrows would rebuild send() on every render.
-  const onRoundTrip = useCallback((trip: AgentRoundTrip): void => dispatchRoundTrip(trip), []);
+  const onLlmEvent = useCallback((event: AgentTurnEvent): void => dispatchRoundTrip(event), []);
   const onTurnStart = useCallback((): void => dispatchRoundTrip('reset'), []);
-  const chat = useBuilderChat(threadId, { onRoundTrip, onTurnStart });
+  const chat = useBuilderChat(threadId, { onLlmEvent, onTurnStart });
   const startNewApp = useCallback((): void => {
     const minted = `thr-${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
     try {

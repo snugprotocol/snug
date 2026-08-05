@@ -35,8 +35,14 @@ const roundTrip = (overrides: Partial<AgentRoundTrip> = {}): AgentRoundTrip => (
   ...overrides,
 });
 
+// The reducer takes the whole AgentTurnEvent union now (it also renders in-flight calls
+// and nested tools), so a completed round trip is fed as a tagged `round_trip` event.
+// Every assertion below is unchanged.
 const feed = (trips: AgentRoundTrip[]): LlmInspectorState =>
-  trips.reduce((state, trip) => llmInspectorReduce(state, trip), initialLlmInspectorState as LlmInspectorState);
+  trips.reduce(
+    (state, trip) => llmInspectorReduce(state, { type: 'round_trip', ...trip }),
+    initialLlmInspectorState as LlmInspectorState,
+  );
 
 describe('llmInspector', () => {
   it('captures request, response, usage and duration per round trip (AC13)', () => {

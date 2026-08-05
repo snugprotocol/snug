@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { AgentRoundTrip } from '@snugprotocol/adapters';
+import type { AgentTurnEvent } from '@snugprotocol/adapters';
 
 import { createServerArtifactFetch } from '../state/library.js';
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
@@ -79,10 +79,11 @@ export interface UseBuilderChatOptions {
   /** Per-app chat: every artifact_write versions THIS app (F9 pinning). */
   pinnedAppId?: string;
   /**
-   * Observation sink for completed LLM round trips (direct mode only) — the LLM
-   * inspector's feed. IN-MEMORY ONLY: the hook never persists these (AC14).
+   * Observation sink for LLM activity (direct mode only) — the inspector's feed.
+   * Carries starts as well as completions so the surface can render a call while it is
+   * still running. IN-MEMORY ONLY: the hook never persists these (AC7/AC14).
    */
-  onRoundTrip?: (trip: AgentRoundTrip) => void;
+  onLlmEvent?: (event: AgentTurnEvent) => void;
   /**
    * Called at the START of every turn so the inspector can clear the previous turn.
    * Without it the ring buffer accumulates across a whole session rather than showing
@@ -151,7 +152,7 @@ function metaToArtifact(meta: unknown): ArtifactEvent | undefined {
 }
 
 export function useBuilderChat(threadId: string, options: UseBuilderChatOptions = {}): BuilderChat {
-  const { pinnedAppId, onRoundTrip, onTurnStart } = options;
+  const { pinnedAppId, onLlmEvent, onTurnStart } = options;
   const mode = useMode();
   const provider = useProvider();
   const model = useModel();
@@ -339,7 +340,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             },
             onActivity: (label) => setActivity(label),
             onStep: (step: BuildStep) => setSteps((current) => applyStep(current, step)),
-            onRoundTrip: (trip) => onRoundTrip?.(trip),
+            onLlmEvent: (event) => onLlmEvent?.(event),
           },
           controller.signal,
         );
@@ -391,7 +392,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           abortRef.current = null;
         });
     },
-    [agent, busy, messages.length, mode, onRoundTrip, onTurnStart, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
+    [agent, busy, messages.length, mode, onLlmEvent, onTurnStart, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
   );
 
   const stop = useCallback((): void => {

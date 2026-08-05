@@ -1,13 +1,13 @@
 // builderObservability.test.tsx — TASK-20260804-hub-polish, Phase F.
 //
 // AC13 — BuilderView renders the LLM round-trip surface, fed the same way RunView
-//        feeds it (onRoundTrip + onTurnStart passed into useBuilderChat). Today
+//        feeds it (onLlmEvent + onTurnStart passed into useBuilderChat). Today
 //        BuilderView calls useBuilderChat(threadId) with NO options, so round trips
 //        are silently DROPPED — that is the item-10 bug.
 // AC14 — nothing from the round-trip surface reaches the user DB, localStorage or
 //        sessionStorage, asserted at the BYTE level with a round trip fed through the
 //        reducer FOR REAL (the sibling llmInspectorPersistence test was found vacuous
-//        in the previous task because subscription mode never fires onRoundTrip).
+//        in the previous task because subscription mode never fires onLlmEvent).
 // AC15 — the round-trip surface AND the docs panel say WHY they are empty in a mode
 //        that cannot produce their data, and what to switch to. The copy branches on
 //        the MODE VALUE, not a hardcoded string (task R4).
@@ -98,7 +98,7 @@ describe('BuilderView round-trip surface (AC13)', () => {
     expect(el.querySelector('[data-testid="builder-llm"]')).not.toBeNull();
   });
 
-  it('feeds useBuilderChat an onRoundTrip AND an onTurnStart handler', async () => {
+  it('feeds useBuilderChat an onLlmEvent AND an onTurnStart handler', async () => {
     // The item-10 bug, asserted at the seam: BuilderView must pass BOTH callbacks. A
     // spy on the hook proves it, since the handlers are otherwise unobservable until a
     // real round trip flows.
@@ -108,7 +108,7 @@ describe('BuilderView round-trip surface (AC13)', () => {
     expect(spy).toHaveBeenCalled();
     const options = spy.mock.calls[0]?.[1];
     expect(options, 'BuilderView called useBuilderChat with no options object').toBeDefined();
-    expect(typeof options?.onRoundTrip).toBe('function');
+    expect(typeof options?.onLlmEvent).toBe('function');
     expect(typeof options?.onTurnStart).toBe('function');
   });
 
@@ -129,7 +129,7 @@ describe('BuilderView round-trip surface (AC13)', () => {
     await settle();
     const latest = spy.mock.calls.at(-1)?.[1];
     expect(spy.mock.calls.length).toBeGreaterThan(1);
-    expect(latest?.onRoundTrip).toBe(first?.onRoundTrip);
+    expect(latest?.onLlmEvent).toBe(first?.onLlmEvent);
     expect(latest?.onTurnStart).toBe(first?.onTurnStart);
   });
 
@@ -140,7 +140,8 @@ describe('BuilderView round-trip surface (AC13)', () => {
     const options = spy.mock.calls[0]?.[1];
 
     act(() => {
-      options?.onRoundTrip?.({
+      options?.onLlmEvent?.({
+        type: 'round_trip',
         index: 0,
         request: { system: 'you are snug', messages: [{ role: 'user', content: 'hi' }] },
         response: { ok: true, text: 'hello', toolCalls: [], stopReason: 'end' },
@@ -164,10 +165,11 @@ describe('builder round trips reach no storage (AC14)', () => {
     const spy = vi.spyOn(hook, 'useBuilderChat');
     const el = mountBuilder();
     const options = spy.mock.calls[0]?.[1];
-    expect(typeof options?.onRoundTrip).toBe('function');
+    expect(typeof options?.onLlmEvent).toBe('function');
 
     act(() => {
-      options!.onRoundTrip!({
+      options!.onLlmEvent!({
+        type: 'round_trip',
         index: 0,
         request: {
           system: `system ${BUILDER_MARKER}`,
@@ -215,7 +217,8 @@ describe('builder round trips reach no storage (AC14)', () => {
 
     // The round trip arrives through the handler the same way a direct-mode turn would.
     act(() => {
-      options!.onRoundTrip!({
+      options!.onLlmEvent!({
+        type: 'round_trip',
         index: 0,
         request: { system: BUILDER_MARKER, messages: [] },
         response: { ok: true, text: BUILDER_MARKER, toolCalls: [], stopReason: 'end' },
@@ -316,6 +319,7 @@ describe('mode-aware empty states (AC15)', () => {
 
   it('a populated surface shows data, never the empty copy, in any mode', () => {
     const populated = llmInspectorReduce(initialLlmInspectorState as LlmInspectorState, {
+      type: 'round_trip',
       index: 0,
       request: { system: 's', messages: [] },
       response: { ok: true, text: 't', toolCalls: [], stopReason: 'end' },

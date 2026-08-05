@@ -967,12 +967,56 @@
   flex-shrink: 0;
 }
 
+/* An in-flight round trip: the ember rule marks the call the user is waiting on. */
+.llm-entry.is-pending {
+  border-color: var(--ember);
+}
+
+.llm-entry .llm-model {
+  color: var(--fg-muted);
+}
+
+.llm-entry .llm-pending {
+  color: var(--ember);
+}
+
+/* Tools nested under the round trip that requested them (AC5). */
+.llm-tool-list {
+  border-top: 1px dashed var(--border);
+}
+
+.llm-tool {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.llm-tool-name {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.llm-tool-meta {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
 .llm-entry-body {
   border-top: 1px solid var(--border);
   padding: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* Byte size beside a section heading — payloads are whole now, so size is worth showing. */
+.llm-entry-body .llm-size {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-weight: 400;
 }
 
 .llm-entry-body h4 {

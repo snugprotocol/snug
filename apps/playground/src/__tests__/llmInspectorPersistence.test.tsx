@@ -113,6 +113,7 @@ describe('LLM inspector persistence boundary (AC14)', () => {
     // trip to disk. This one feeds a round trip through the reducer directly, with the
     // marker in the request body, and then checks every storage surface.
     const state = llmInspectorReduce(initialLlmInspectorState as LlmInspectorState, {
+      type: 'round_trip',
       index: 0,
       request: { system: `system ${ROUND_TRIP_MARKER}`, messages: [{ role: 'user', content: ROUND_TRIP_MARKER }] },
       response: { ok: true, text: ROUND_TRIP_MARKER, toolCalls: [], stopReason: 'end' },

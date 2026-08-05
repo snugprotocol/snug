@@ -20,7 +20,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import type { AgentRoundTrip } from '@snugprotocol/adapters';
+import type { AgentRoundTrip, AgentTurnEvent } from '@snugprotocol/adapters';
 
 import { createDirectAppTransport } from '../agent/transport.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -42,7 +42,12 @@ describe('the app-frame transport reports LLM round trips (owner bug: BYOK + Che
       mode: 'byok',
       provider: 'mock',
       needsConfirm: () => false,
-      onRoundTrip: (trip) => trips.push(trip),
+      onLlmEvent: (event) => {
+        if (event.type === 'round_trip') {
+          const { type: _type, ...trip } = event;
+          trips.push(trip);
+        }
+      },
     });
 
     const result = await transport.send(JSON.stringify({ type: 'chat', text: 'I play e4' }), {
@@ -61,7 +66,12 @@ describe('the app-frame transport reports LLM round trips (owner bug: BYOK + Che
       mode: 'byok',
       provider: 'mock',
       needsConfirm: () => false,
-      onRoundTrip: (trip) => trips.push(trip),
+      onLlmEvent: (event) => {
+        if (event.type === 'round_trip') {
+          const { type: _type, ...trip } = event;
+          trips.push(trip);
+        }
+      },
     });
     await transport.send(JSON.stringify({ type: 'chat', text: 'hello' }), {
       signal: new AbortController().signal,
@@ -74,22 +84,25 @@ describe('the app-frame transport reports LLM round trips (owner bug: BYOK + Che
   });
 
   it('C1: the BYOK key never appears in a round trip (it rides in a header, never a body)', async () => {
-    const trips: AgentRoundTrip[] = [];
+    // Collects EVERY event, not just completed round trips: the feed now also carries
+    // in-flight starts, so the credential check must cover the whole stream. A new
+    // observation point is exactly where a key can start leaking.
+    const events: AgentTurnEvent[] = [];
     const KEY = 'sk-ant-SUPERSECRETKEYVALUE';
     const transport = createDirectAppTransport({
       mode: 'byok',
       provider: 'mock',
       getKey: () => Promise.resolve(KEY),
       needsConfirm: () => false,
-      onRoundTrip: (trip) => trips.push(trip),
+      onLlmEvent: (event) => events.push(event),
     });
     await transport.send(JSON.stringify({ type: 'chat', text: 'hi' }), {
       signal: new AbortController().signal,
     });
 
-    // Wiring a new observation point is exactly when a credential can start leaking,
-    // so assert it at the seam rather than trusting the downstream redactor.
-    expect(JSON.stringify(trips), 'C1: a BYOK key must never reach the round-trip feed').not.toContain(KEY);
+    expect(events, 'the feed must actually have fired').not.toHaveLength(0);
+    // Assert at the seam rather than trusting the downstream redactor.
+    expect(JSON.stringify(events), 'C1: a BYOK key must never reach the LLM feed').not.toContain(KEY);
   });
 
   it('stays optional — a transport built without the callback still works', async () => {
