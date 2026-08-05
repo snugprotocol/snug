@@ -1,6 +1,6 @@
 # TASK-20260804-hub-polish: identity & brand, watch-it-think observability, build-fork and thread-continuity fixes
 
-- **Status**: planned — **Gate 1–2 complete, awaiting plan approval. No implementation code written.**
+- **Status**: **done** — all phases (A–G) complete, adversarial review round applied, four owner-reported runtime bugs fixed, **Gate 6 closed 2026-08-04** (lessons, doc drift, next-steps; merged to `main` via PR).
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `apps/server` auth/session surface + a `users` table migration; `packages/db` sync provider conflict handling. `packages/db` is a widely-depended package)
 - **Branch**: `feat/TASK-20260804-hub-polish` — **created 2026-08-04 off `main` at `f37feff`**, after Phase A merged TASK-20260803-hub-ops (see D1)
@@ -194,3 +194,17 @@ Gate 5 will run `pnpm test` at root (the parent task's baseline is **727 tests**
 - State: all phases implemented and reviewed; suite green. **Not yet committed at the time of writing this entry.**
 - Next step: commit, then Gate 6 (`/close-session`) — lessons (the vacuous-reachability-probe rule and the shared-tree reviewer collision are both worth promoting), doc drift, and the D3 hub-DB deletion as an announced step.
 - Open questions: none blocking.
+
+### 2026-08-04 — Jeetu — session (Gate 6 — closed)
+
+- Done: **Gate 6.** Re-verified Gate 5 from a clean tree first: `pnpm test` **19/19 tasks, 826 tests** (protocol 103 · runner 91 · knowledge 61 · db 168 · adapters 74 · sdk 35 · server 104 · playground 190), validator **18/18**, build **9/9**, Playwright **30/30**.
+  - Playwright initially failed to start — a **stale `dist/server.js` from my own earlier build** still held port 8787. Not a test failure; cleared the process and the suite ran clean. Flagging because "port already in use" reads like a broken suite and is one `lsof` away from being obviously not.
+- **Two lessons promoted**, both earned by the reviewer round rather than by the suite:
+  - *A guard test must assert the OUTCOME, not a property that merely correlates with it* — the AC18 guard measured **reachability**, but a forked app IS reachable; what made it the bug was being a second, unwanted row. Reverting the fix left all three tests green.
+  - *Give each adversarial reviewer its own worktree* — five reviewers mutating one shared tree produced a **false** flaky-suite report (3 full + 3 targeted runs were green). That was a flaw in how I ran the review, not in the code, and the dangerous part is that it teaches everyone to discount the next red suite.
+- Doc drift fixed in-branch: `architecture.md` status now names hub-polish and its seven additions; `code-map.md` gained rows for the **think panel**, the **identity menu + brand assets**, the **single starter identity rule**, and — most importantly — an explicit row recording that there are **TWO `runAgentTurn` call sites**, because wiring only the builder's is exactly the bug the owner hit; per-package counts re-baselined against a measured run (server 94→104, playground 106→190, Playwright 26→30). `next-steps.md` gained the ✅ line plus two queued items (sync resolver copy; a script to regenerate code-map's test-count column, which drifts every single task).
+- **D3 executed**: the hub DB was deleted and rebuilt. Necessary, not merely tidy — the pre-`picture` `users.sqlite` made `createUserStore` throw **in its constructor**, so a stale file meant the server would not boot at all. Backup at `/tmp/snug-hubdb-backup-20260804`.
+- **No spec-changelog entry** — `packages/protocol` deliberately untouched.
+- State: merged to `main` via PR; task file moved to `docs/tasks/done/`.
+- Next step: none for this task. Successor **TASK-20260804-observability-caching** is specced and plan-approved-pending, branching off the updated `main`.
+- Open questions: none.
