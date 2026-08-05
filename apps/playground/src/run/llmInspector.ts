@@ -150,10 +150,18 @@ function redactText(value: string): string {
   // shortcut is available any more, so every byte is scrubbed.
   let out = value;
   for (const pattern of KEY_PATTERNS) {
-    // `$1` keeps a leading capture group when the pattern has one (the `key:` half of a
-    // name/value pair), so the request stays readable with only the VALUE masked. Patterns
-    // without a group have no `$1` to substitute and are replaced whole.
-    out = out.replace(pattern, (match, prefix?: string) => (prefix === undefined ? REDACTED : `${prefix}${REDACTED}`));
+    // Keep a leading capture group when the pattern has one (the `key:` half of a
+    // name/value pair) so the request stays readable with only the VALUE masked;
+    // patterns without a group are replaced whole.
+    //
+    // The group must be detected by TYPE, not by `=== undefined`. String.replace calls a
+    // group-less pattern's callback as (match, offset, string), so a naive `prefix`
+    // parameter binds to the offset NUMBER and spliced it into the output —
+    // 'key sk-ant-…' rendered as 'key 4«redacted»' (Gate-5 review, 2026-08-05).
+    out = out.replace(pattern, (_match, ...args: unknown[]) => {
+      const first = args[0];
+      return typeof first === 'string' ? `${first}${REDACTED}` : REDACTED;
+    });
   }
   return out;
 }
@@ -199,7 +207,11 @@ function addUsage(total: TokenUsage, next: TokenUsage | undefined): TokenUsage {
  * that is actually retained.
  */
 function entryBytes(entry: LlmInspectorEntry): number {
-  let bytes = entry.system.length + entry.text.length;
+  // EVERY retained string counts. Omitting one makes the budget a lie: `toolNames` and
+  // `message` were both missed originally, and 60 entries offering 20 tools with long
+  // names reported 360 bytes while retaining ~60 MB (Gate-5 review, 2026-08-05).
+  let bytes = entry.system.length + entry.text.length + (entry.message?.length ?? 0);
+  for (const name of entry.toolNames) bytes += name.length;
   for (const message of entry.messages) bytes += JSON.stringify(message).length;
   for (const call of entry.toolCalls) bytes += JSON.stringify(call).length;
   for (const tool of entry.tools) bytes += JSON.stringify(tool.input).length + (tool.output?.length ?? 0);
@@ -207,14 +219,51 @@ function entryBytes(entry: LlmInspectorEntry): number {
 }
 
 /**
- * Apply both bounds: the entry-count ceiling and the total-bytes budget (AC7). Oldest
- * entries are evicted first — a build's most recent activity is what the user is looking
- * at. The newest entry is ALWAYS kept, even if it alone exceeds the budget: evicting it
- * would leave an empty panel for the call the user just made.
+ * Elide the payloads of a single entry that is too big to retain whole.
+ *
+ * The last resort when dropping older entries cannot get under the budget — an entry
+ * can keep GROWING after it is admitted (each `artifact_write` tool result appends a
+ * whole app file), so "always keep the newest" cannot mean "keep it at any size".
+ *
+ * The entry survives as a record of what ran — index, model, timing, tool names — with
+ * its bodies replaced by a marker. That is a real weakening of AC6 for this one entry,
+ * and it is the honest trade: the alternative is an unbounded tab.
+ */
+const ELIDED = '…[elided: payload exceeded the inspector memory budget]';
+
+function elide(entry: LlmInspectorEntry): LlmInspectorEntry {
+  return {
+    ...entry,
+    system: ELIDED,
+    messages: [],
+    text: entry.text === '' ? '' : ELIDED,
+    toolCalls: [],
+    ...(entry.message !== undefined ? { message: ELIDED } : {}),
+    tools: entry.tools.map((tool) => ({ ...tool, input: {}, ...(tool.output !== undefined ? { output: ELIDED } : {}) })),
+  };
+}
+
+/**
+ * Apply both bounds: the entry-count ceiling and the total-bytes budget (AC7).
+ *
+ * Oldest entries are evicted first — a build's most recent activity is what the user is
+ * looking at. If the newest entry ALONE still blows the budget, its payloads are elided
+ * rather than the entry dropped: an empty panel for the call you just made is useless,
+ * and (the bug this replaced) draining the whole history for an entry that can never fit
+ * loses the build record while still leaving the bound broken.
  */
 function evict(entries: LlmInspectorEntry[]): { entries: LlmInspectorEntry[]; totalBytes: number } {
   let kept = entries.slice(-LLM_INSPECTOR_MAX_ENTRIES);
   let total = kept.reduce((sum, entry) => sum + entryBytes(entry), 0);
+  if (total <= LLM_INSPECTOR_MAX_BYTES) return { entries: kept, totalBytes: total };
+
+  // If the newest entry cannot fit even on its own, elide it FIRST — otherwise the loop
+  // below would evict every older entry chasing a target it can never reach.
+  const newest = kept.at(-1);
+  if (newest !== undefined && entryBytes(newest) > LLM_INSPECTOR_MAX_BYTES) {
+    kept = [...kept.slice(0, -1), elide(newest)];
+    total = kept.reduce((sum, entry) => sum + entryBytes(entry), 0);
+  }
   while (kept.length > 1 && total > LLM_INSPECTOR_MAX_BYTES) {
     total -= entryBytes(kept[0]!);
     kept = kept.slice(1);

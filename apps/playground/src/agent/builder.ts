@@ -228,6 +228,13 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         system: contextBlock !== undefined ? `${system}${CONTEXT_SEPARATOR}${contextBlock}` : system,
         messages: [...(history ?? []), { role: 'user', content: message }],
         tools,
+        // AC12's direct-mode half: this is the BUILDER turn — a large system prompt plus
+        // a fixed tool list, repeated across a build. The app-frame transport (the other
+        // runAgentTurn call site) deliberately does not opt in (D0/Q2).
+        //
+        // Note the per-turn context suffix above lands at the END of `system`, after the
+        // byte-stable base layers, so the cached prefix survives it.
+        cache: true,
         signal,
         onDelta: (delta) => handlers.onDelta?.(delta),
         onEvent: (event) => {

@@ -193,13 +193,25 @@ describe('AC7 — the memory bound survives the no-truncation rule', () => {
     expect(state.entries[0]?.index).toBeGreaterThan(0);
   });
 
-  it('keeps at least the newest entry even when it alone exceeds the budget', () => {
+  it('keeps the newest entry when it alone exceeds the budget, but ELIDES its payload', () => {
     // A single round trip larger than the whole budget must not evict itself into an
-    // empty panel — the user would see nothing at all for the call they just made.
+    // empty panel — the user would see nothing for the call they just made. But it must
+    // not be retained whole either: that is unbounded memory, which is what AC7 forbids.
+    //
+    // This assertion originally read `system).toBe(monster)` — "still whole (AC6)" —
+    // which made the test a proof of the very bug the Gate-5 review found. AC6's
+    // no-truncation promise holds for every entry the budget can afford; an entry that
+    // cannot fit at all is the documented exception, and it survives as a RECORD (index,
+    // timing, tool names) rather than as bytes.
     const monster = 'q'.repeat(LLM_INSPECTOR_MAX_BYTES * 2);
     const state = feed([{ type: 'round_trip', ...trip({ request: { system: monster, messages: [] } }) }]);
     expect(state.entries).toHaveLength(1);
-    expect(state.entries[0]?.system).toBe(monster); // still whole (AC6)
+    expect(state.entries[0]?.system).not.toBe(monster);
+    expect(state.entries[0]?.system).toContain('elided');
+    expect(state.totalBytes).toBeLessThanOrEqual(LLM_INSPECTOR_MAX_BYTES);
+    // The record survives even though the bytes did not.
+    expect(state.entries[0]?.index).toBe(0);
+    expect(state.entries[0]?.durationMs).toBe(10);
   });
 
   it('still enforces the entry-count ceiling for many small round trips', () => {
@@ -305,5 +317,134 @@ describe('AC4 — the model name comes from the wire', () => {
   it('leaves the model undefined rather than guessing when the provider was silent', () => {
     const state = feed([{ type: 'round_trip', ...trip() }]);
     expect(state.entries[0]?.model).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions found by the Gate-5 fresh-context review (2026-08-05). Each is a
+// growth path AC7's original tests did not exercise: the first eviction tests only
+// covered growth via `system` on completed round trips, so every other route to
+// unbounded memory escaped.
+// ---------------------------------------------------------------------------
+
+describe('AC7 (review) — every retained field counts toward the budget', () => {
+  it('counts toolNames, which are retained and rendered', () => {
+    // 60 round trips x 20 tools x 50KB names was reported as totalBytes=360 while
+    // retaining ~60MB — the budget was wrong by ~166,000x and never evicted.
+    const bigTools = Array.from({ length: 20 }, (_, i) => ({
+      name: `${'t'.repeat(50_000)}${i}`,
+      description: '',
+      inputSchema: {},
+    }));
+    const state = Array.from({ length: 60 }).reduce<LlmInspectorState>(
+      (acc, _, i) =>
+        llmInspectorReduce(acc, {
+          type: 'round_trip',
+          ...trip({ index: i, request: { system: 's', messages: [], tools: bigTools } }),
+        }),
+      initialLlmInspectorState,
+    );
+    expect(state.totalBytes).toBeLessThanOrEqual(LLM_INSPECTOR_MAX_BYTES);
+    expect(state.entries.length).toBeLessThan(60);
+  });
+
+  it('counts the error message, which is retained and rendered', () => {
+    const huge = 'e'.repeat(1_000_000);
+    const state = Array.from({ length: 60 }).reduce<LlmInspectorState>(
+      (acc, _, i) =>
+        llmInspectorReduce(acc, {
+          type: 'round_trip',
+          ...trip({
+            index: i,
+            response: { ok: false, code: 'HOST_ERROR', message: huge, retryable: false },
+          }),
+        }),
+      initialLlmInspectorState,
+    );
+    expect(state.totalBytes).toBeLessThanOrEqual(LLM_INSPECTOR_MAX_BYTES);
+  });
+});
+
+describe('AC7 (review) — an entry that GROWS after admission stays bounded', () => {
+  it('bounds a single round trip accumulating many large tool results', () => {
+    // 25 artifact_write calls carrying 1MB of app HTML each: the "always keep the
+    // newest" guard exempted the only entry, so it grew to 25MB unchecked.
+    let state = llmInspectorReduce(initialLlmInspectorState, {
+      type: 'round_trip_start',
+      index: 0,
+      request: { system: 's', messages: [] },
+    });
+    for (let i = 0; i < 25; i++) {
+      const call = { id: `t${i}`, name: 'artifact_write', input: { html: 'h'.repeat(1_000_000) } };
+      state = llmInspectorReduce(state, { type: 'tool_call', call, roundTripIndex: 0 });
+      state = llmInspectorReduce(state, {
+        type: 'tool_result',
+        call,
+        output: 'ok',
+        roundTripIndex: 0,
+        durationMs: 1,
+      });
+    }
+    expect(state.totalBytes).toBeLessThanOrEqual(LLM_INSPECTOR_MAX_BYTES);
+  });
+
+  it('does not drain the whole history for one oversized entry', () => {
+    // The old loop evicted all 10 prior round trips trying to make room, then stalled
+    // at length 1 — losing the build history AND still exceeding the budget.
+    let state = Array.from({ length: 10 }).reduce<LlmInspectorState>(
+      (acc, _, i) => llmInspectorReduce(acc, { type: 'round_trip', ...trip({ index: i }) }),
+      initialLlmInspectorState,
+    );
+    state = llmInspectorReduce(state, {
+      type: 'round_trip_start',
+      index: 10,
+      request: { system: 's', messages: [] },
+    });
+    for (let i = 0; i < 25; i++) {
+      const call = { id: `t${i}`, name: 'artifact_write', input: { html: 'h'.repeat(1_000_000) } };
+      state = llmInspectorReduce(state, { type: 'tool_call', call, roundTripIndex: 10 });
+    }
+    expect(state.totalBytes).toBeLessThanOrEqual(LLM_INSPECTOR_MAX_BYTES);
+    // Small, cheap prior entries are still worth keeping — they cost almost nothing.
+    expect(state.entries.length).toBeGreaterThan(1);
+  });
+
+  it('bounds a pending entry that settles much larger than it started', () => {
+    let state = llmInspectorReduce(initialLlmInspectorState, {
+      type: 'round_trip_start',
+      index: 0,
+      request: { system: 'small', messages: [] },
+    });
+    state = llmInspectorReduce(state, {
+      type: 'round_trip',
+      ...trip({ index: 0, request: { system: 'z'.repeat(20_000_000), messages: [] } }),
+    });
+    expect(state.totalBytes).toBeLessThanOrEqual(LLM_INSPECTOR_MAX_BYTES);
+  });
+});
+
+describe('AC15 (review) — redaction does not corrupt the payload', () => {
+  it('does not splice a match offset into group-less redactions', () => {
+    // String.replace hands a group-less pattern (match, offset, string), so the
+    // `prefix` param bound to the offset NUMBER and got spliced into the output:
+    // 'key sk-ant-abcdefghij' rendered as 'key 4«redacted»'. No leak, but corrupt.
+    const state = feed([
+      {
+        type: 'round_trip',
+        ...trip({ request: { system: 'key sk-ant-abcdefghij end', messages: [] } }),
+      },
+    ]);
+    expect(state.entries[0]?.system).toBe('key «redacted» end');
+  });
+
+  it('keeps the key NAME readable for key/value pairs (the one pattern WITH a group)', () => {
+    const state = feed([
+      {
+        type: 'round_trip',
+        ...trip({ request: { system: 'x-api-key: abcdefghijklmnop', messages: [] } }),
+      },
+    ]);
+    expect(state.entries[0]?.system).toContain('x-api-key');
+    expect(state.entries[0]?.system).not.toContain('abcdefghijklmnop');
   });
 });

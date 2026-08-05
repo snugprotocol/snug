@@ -74,18 +74,15 @@ function withDemoAppPath(chat: AgentAdapter): AgentAdapter {
 export function createAdapterFromConfig(config: ServerConfig, fetchImpl?: FetchLike): AgentAdapter {
   switch (config.adapter) {
     case 'anthropic':
+      // Caching is NOT decided here: this one instance serves both /invoke paths, and
+      // only the route knows which turn it is running. The builder path opts in per
+      // request; the app-frame path must not (D0/Q2). See routes/invoke.ts.
       return anthropicAdapter({
         apiKey: config.anthropicApiKey ?? '',
         model: config.model,
-        // The hub's /invoke path is a builder/agent turn (AC12, D0/Q2): a large system
-        // prompt plus a fixed tool list, repeated many times within one build. That is
-        // exactly the shape prompt caching pays off on, and it is the highest-value
-        // caching path in the product — every hub user's turns share the same prefix.
-        cache: true,
         ...(fetchImpl !== undefined ? { fetch: fetchImpl } : {}),
       });
     case 'openai':
-      // No caching opt-in: this is not an Anthropic endpoint (AC14).
       return openaiAdapter({
         apiKey: config.openaiApiKey ?? '',
         model: config.model,

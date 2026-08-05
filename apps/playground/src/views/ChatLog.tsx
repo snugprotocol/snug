@@ -16,8 +16,17 @@ export interface ChatLogProps {
    * the signal that a turn is running.
    */
   steps?: BuildStepView[];
-  /** Tool activity label — now only a turn-is-running signal, not rendered copy. */
+  /** Tool activity label — retained for callers; no longer rendered as copy. */
   activity?: string | undefined;
+  /**
+   * Whether a turn is actually in flight — the ONLY signal the status line keys on.
+   *
+   * Deliberately not `steps.length > 0`: `steps` is cleared at turn START and never at
+   * turn END, so it legitimately outlives the turn as a record of what ran. Keying a
+   * live "in flight" indicator on it left the line rotating forever under a finished
+   * build (Gate-5 review, 2026-08-05). `busy` is cleared in useBuilderChat's `finally`.
+   */
+  busy?: boolean;
   /** Which half of the build the user is in; drives the status copy (AC10). */
   phase?: StatusPhase;
   /** Compact mode for the run-view chat rail (smaller artifact cards). */
@@ -30,6 +39,7 @@ export function ChatLog({
   messages,
   steps = [],
   activity,
+  busy = false,
   phase = 'build',
   compact = false,
 }: ChatLogProps): ReactElement {
@@ -69,7 +79,7 @@ export function ChatLog({
         and neither said as much as the LLM inspector already shows — which is where the
         factual record now lives (AC5, D0/Q1).
       */}
-      <StatusLine phase={phase} active={steps.length > 0 || activity !== undefined} />
+      <StatusLine phase={phase} active={busy} />
     </div>
   );
 }

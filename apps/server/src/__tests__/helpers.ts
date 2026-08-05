@@ -51,18 +51,25 @@ export async function buildTestApp(options: Partial<AppOptions> & { config?: Ser
 
 /** JSON-snapshot spy: records exactly what reaches the adapter (the C1 assertion surface). */
 export function spyAdapter(inner: AgentAdapter): {
-  calls: Array<Pick<AdapterRequest, 'system' | 'messages' | 'tools'>>;
+  calls: Array<Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache'>>;
   adapter: AgentAdapter;
 } {
-  const calls: Array<Pick<AdapterRequest, 'system' | 'messages' | 'tools'>> = [];
+  // `cache` is captured too: it is a per-TURN decision the ROUTE makes, so asserting it
+  // at the adapter alone cannot prove the right paths opt in (Gate-5 review).
+  const calls: Array<Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache'>> = [];
   return {
     calls,
     adapter: {
       complete(request) {
         calls.push(
           JSON.parse(
-            JSON.stringify({ system: request.system, messages: request.messages, tools: request.tools ?? null }),
-          ) as Pick<AdapterRequest, 'system' | 'messages' | 'tools'>,
+            JSON.stringify({
+              system: request.system,
+              messages: request.messages,
+              tools: request.tools ?? null,
+              cache: request.cache ?? false,
+            }),
+          ) as Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache'>,
         );
         return inner.complete(request);
       },

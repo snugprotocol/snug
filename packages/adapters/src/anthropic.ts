@@ -37,13 +37,6 @@ export interface AnthropicAdapterOptions {
   model?: string;
   baseUrl?: string;
   maxTokens?: number;
-  /**
-   * Opt in to prompt caching on the STABLE PREFIX (tools + system). Off by default:
-   * caching is only worth its 1.25x write premium on the large, repeated builder/agent
-   * turns, and an unknown field is fatal on endpoints that do not support it — so the
-   * caller opts in per adapter rather than the adapter guessing (AC12, D0/Q2).
-   */
-  cache?: boolean;
   /** Injectable for fixture-based tests — adapter tests never hit the network. */
   fetch?: FetchLike;
 }
@@ -104,10 +97,12 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
   const model = options.model ?? ANTHROPIC_DEFAULT_MODEL;
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
-  const caching = options.cache === true && supportsCaching(baseUrl);
+  // Whether this endpoint COULD cache; whether a given turn SHOULD is per-request.
+  const endpointSupportsCaching = supportsCaching(baseUrl);
 
   return {
-    async complete({ system, messages, tools, signal, onDelta }): Promise<AdapterResult> {
+    async complete({ system, messages, tools, signal, onDelta, cache }): Promise<AdapterResult> {
+      const caching = cache === true && endpointSupportsCaching;
       let response: Response;
       try {
         response = await fetchImpl(`${baseUrl}/v1/messages`, {

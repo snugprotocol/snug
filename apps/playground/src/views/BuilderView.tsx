@@ -131,6 +131,7 @@ export function BuilderView(): ReactElement {
             messages={chat.messages}
             steps={chat.steps}
             activity={chat.activity}
+            busy={chat.busy}
             phase={chat.attachedAppId !== undefined ? 'edit' : 'build'}
           />
         </>

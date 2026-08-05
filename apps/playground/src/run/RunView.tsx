@@ -642,7 +642,7 @@ function RailChat({ messages, steps, activity, busy, onSend, onStop }: RailChatP
       {messages.length === 0 ? (
         <EmptyState glyph="✎" title="keep talking" lesson="ask for tweaks — the agent can rebuild the app from here." />
       ) : (
-        <ChatLog messages={messages} steps={steps} activity={activity} phase="edit" />
+        <ChatLog messages={messages} steps={steps} activity={activity} busy={busy} phase="edit" />
       )}
       <div className="composer" style={{ position: 'static', padding: 0, background: 'none' }}>
         <textarea

@@ -64,6 +64,13 @@ export interface RunAgentTurnOptions {
   tools?: AgentTool[];
   /** Cap on adapter round-trips (default 6); exceeding it is a terminal error result. */
   maxIterations?: number;
+  /**
+   * Ask for prompt caching on the stable tools+system prefix for this turn (AC12).
+   *
+   * Set by the CALLER, because only it knows the turn's shape: a builder/agent turn has
+   * a large repeated prefix worth caching, an app-frame envelope does not (D0/Q2).
+   */
+  cache?: boolean;
   signal?: AbortSignal;
   /** Streamed deltas from every iteration, in order — callers accumulate. */
   onDelta?: (delta: string) => void;
@@ -104,7 +111,14 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
     // Emitted BEFORE the await: a 30-minute build must show the call in flight, not an
     // empty panel until it returns. Same `index` correlates it with the `round_trip`.
     onEvent?.({ type: 'round_trip_start', index: iteration, request });
-    const result = await adapter.complete({ system, messages: conversation, tools: defs, signal, onDelta });
+    const result = await adapter.complete({
+      system,
+      messages: conversation,
+      tools: defs,
+      signal,
+      onDelta,
+      ...(options.cache === true ? { cache: true } : {}),
+    });
     onEvent?.({ type: 'round_trip', index: iteration, request, response: result, durationMs: now() - startedAt });
     if (!result.ok) {
       // Text from EARLIER completed iterations is real work — a drop on iteration N

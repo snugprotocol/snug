@@ -35,6 +35,17 @@ export interface AdapterRequest {
   signal?: AbortSignal;
   /** Streamed DELTAS (not cumulative) — callers accumulate. */
   onDelta?: (delta: string) => void;
+  /**
+   * Ask for prompt caching on the STABLE PREFIX (tools + system) for THIS turn.
+   *
+   * Per-turn rather than per-adapter because one adapter instance can serve turns of
+   * different shapes: the hub's `/invoke` builds a single adapter that answers both the
+   * builder path (large repeated prefix — worth caching) and the app-frame path (small
+   * self-contained envelopes, below the model-dependent minimum — where a breakpoint
+   * would pay a 1.25x write premium on a prefix that is never read). Only the caller
+   * knows which turn it is running. Providers that do not support caching ignore it.
+   */
+  cache?: boolean;
 }
 
 /** Errors as data — never thrown across the adapter boundary. */

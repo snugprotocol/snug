@@ -120,11 +120,12 @@ describe('AC4 — the wire model name is reported, not guessed', () => {
 describe('AC12/AC13 — prompt caching on the stable prefix', () => {
   it('puts cache_control on the LAST system block and nowhere else (tools+system prefix)', async () => {
     const { calls, fetchImpl } = fakeFetch(() => sseResponse(CACHED_FIXTURE));
-    const adapter = anthropicAdapter({ apiKey: 'k', fetch: fetchImpl, cache: true });
+    const adapter = anthropicAdapter({ apiKey: 'k', fetch: fetchImpl });
     await adapter.complete({
       system: 'STABLE SYSTEM PROMPT',
       messages: [{ role: 'user', content: 'volatile question' }],
       tools: [TOOL],
+      cache: true,
     });
 
     const body = calls[0]!.bodyJson;
@@ -144,8 +145,13 @@ describe('AC12/AC13 — prompt caching on the stable prefix', () => {
 
   it('reports cache-read tokens the provider actually returned (R2: the honest assertion)', async () => {
     const { fetchImpl } = fakeFetch(() => sseResponse(CACHED_FIXTURE));
-    const adapter = anthropicAdapter({ apiKey: 'k', fetch: fetchImpl, cache: true });
-    const result = await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }], tools: [TOOL] });
+    const adapter = anthropicAdapter({ apiKey: 'k', fetch: fetchImpl });
+    const result = await adapter.complete({
+      system: 's',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [TOOL],
+      cache: true,
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.usage).toMatchObject({
@@ -183,18 +189,28 @@ describe('AC14 — caching is never requested from endpoints that do not support
   // local turn. Same failure class: an unknown field on a local/Ollama body is fatal.
   it('sends NO cache_control and no cache field to a local endpoint', async () => {
     const { calls, fetchImpl } = fakeFetch(() => sseResponse(UNCACHED_FIXTURE));
-    const adapter = anthropicAdapter({
-      apiKey: 'k',
-      fetch: fetchImpl,
-      baseUrl: 'http://localhost:11434',
-      cache: true, // even when the caller asks, a local endpoint must not receive it
-    });
-    await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }], tools: [TOOL] });
+    const adapter = anthropicAdapter({ apiKey: 'k', fetch: fetchImpl, baseUrl: 'http://localhost:11434' });
+    // Even when the caller asks, a local endpoint must not receive it.
+    await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }], tools: [TOOL], cache: true });
 
     const raw = calls[0]!.init.body as string;
     expect(raw).not.toContain('cache_control');
     // …and `system` stays a plain string on the local path, not the block array form.
     expect(typeof calls[0]!.bodyJson.system).toBe('string');
+  });
+
+  it('caches or not PER TURN on the same adapter instance (AC12 scope)', async () => {
+    // One adapter, two turns. The hub builds a single adapter that serves both the
+    // builder path and the app-frame path, so an adapter-level opt-in could not express
+    // AC12's scope — it would cache the app-frame envelopes D0/Q2 excludes.
+    const { calls, fetchImpl } = fakeFetch(() => sseResponse(CACHED_FIXTURE));
+    const adapter = anthropicAdapter({ apiKey: 'k', fetch: fetchImpl });
+
+    await adapter.complete({ system: 'builder prompt', messages: [{ role: 'user', content: 'build' }], cache: true });
+    await adapter.complete({ system: 'app-frame prompt', messages: [{ role: 'user', content: '{"action":"move"}' }] });
+
+    expect(JSON.stringify(calls[0]!.bodyJson)).toContain('cache_control');
+    expect(JSON.stringify(calls[1]!.bodyJson)).not.toContain('cache_control');
   });
 
   it('defaults to no caching when the caller does not opt in', async () => {
@@ -209,7 +225,7 @@ describe('AC15 — C1 holds at the new seams', () => {
   it('no credential appears in any emitted record, including the model and cache fields', async () => {
     const SECRET = 'sk-ant-super-secret-key';
     const { fetchImpl } = fakeFetch(() => sseResponse(CACHED_FIXTURE));
-    const adapter = anthropicAdapter({ apiKey: SECRET, fetch: fetchImpl, cache: true });
+    const adapter = anthropicAdapter({ apiKey: SECRET, fetch: fetchImpl });
 
     const events: AgentTurnEvent[] = [];
     await runAgentTurn({
@@ -217,6 +233,7 @@ describe('AC15 — C1 holds at the new seams', () => {
       system: 'sys',
       messages: [{ role: 'user', content: 'go' }],
       tools: [{ def: TOOL, run: () => 'ok' }],
+      cache: true,
       onEvent: (e) => events.push(e),
     });
 

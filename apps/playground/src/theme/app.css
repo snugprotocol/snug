@@ -443,6 +443,21 @@
   text-decoration: none;
 }
 
+/* The starter tile's control is a <button> so it gets focus, Enter/Space activation and
+   role announcement for free — but that also brings UA button chrome (ButtonFace
+   background, outset border, centred text, default cursor), which would render a grey
+   bevelled box inside the themed card. tokens.css resets only `font` and `color`, so
+   the rest is neutralised here, matching what .llm-entry-head does for the same reason. */
+.app-tile .tile-card-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
 /* Revealed on hover/focus so the grid stays calm, but always reachable by keyboard
    and always present on touch, where there is no hover. */
 .app-tile .tile-delete {
