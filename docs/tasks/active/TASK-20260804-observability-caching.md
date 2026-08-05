@@ -1,6 +1,6 @@
 # TASK-20260804-observability-caching: live LLM observability, prompt caching, brand polish
 
-- **Status**: planned — **Gate 1–2 complete, awaiting plan approval. No implementation code written.**
+- **Status**: in progress — **Phases A–E complete, Gate 5 green (890 tests, Playwright 30/30). Awaiting review + PR.**
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point and gains cache-control on every request; `apps/server` request shaping. Widely-depended packages `adapters` + `protocol`-adjacent types)
 - **Branch**: `feat/TASK-20260804-observability-caching`, to be cut off the current branch (`feat/TASK-20260804-hub-polish`) — see D1
@@ -119,3 +119,20 @@ The parent task (`feat/TASK-20260804-hub-polish`) is **not yet merged** and this
 - Baseline verified on `main` before branching: clean tree, in sync with `origin/main`, **826 tests green** (protocol 103, knowledge 61, runner 91, adapters 74, db 168, sdk 35, server 104, playground 190) — matches the parent task's recorded baseline exactly.
 - Branch created: `feat/TASK-20260804-observability-caching`.
 - Next step: Phase B (adapters) test-first.
+
+### 2026-08-04 — Jeetu — session (Phases B–E)
+
+- Done: **Phases B, C, D and E, all test-first.** Suite **826 → 890**; build 9/9; Playwright **30/30**.
+  - **B (adapters)** — `round_trip_start` fires before `complete()` resolves (asserted with a deferred the test releases by hand, not event ordering); wire `model` on the result; `cacheCreationTokens`/`cacheReadTokens` on `TokenUsage`; one `cache_control` breakpoint on the last system block. adapters 74 → 85.
+  - **C (tool timing)** — `roundTripIndex` + `durationMs` on tool events, bracketing the handler. 85 → 89.
+  - **D (surface)** — the AC7 swap, in-flight entries, nested tools, whole payloads with byte sizes, cached %. playground 190 → 223.
+  - **E (status line & brand)** — single card control, brand token −20%, rotating StatusLine replacing pill + timeline. 223 → 239.
+- **Decision — cache opt-in is per adapter, not automatic.** AC12 scopes caching to builder/agent turns (D0/Q2), and the adapter cannot tell which turn it is serving. So `cache` is an option the caller sets, and it is additionally refused for any non-Anthropic `baseUrl` even when set — a local endpoint rejects unknown fields, the `max_completion_tokens` failure class from the parent task.
+- **Surprise — removing ingest truncation removed two things it was doing silently.** It bounded the redaction regexes' work, and it dropped credentials buried past the cap. Both are now explicit: redaction runs over full payloads, with a test for a key in the tail of a 50 KB prompt.
+- **R4 in practice** — `runAgentTurn` measures with `performance.now()`, which Vitest fake timers do **not** drive. Advancing timers left the assertions reading a real ~0.05 ms elapsed. Fixed by stubbing the clock so the elapsed assertions stay exact rather than degrading to `toBeGreaterThan(0)` — the vacuous-test trap `lessons.md` already records.
+- **Seam rename** — `onRoundTrip(trip)` → `onLlmEvent(event)` across builder, transport, `useBuilderChat` and both views. The surface needs starts and tool events, not just completions; renamed rather than widened in place so each call site states the new contract.
+- **Tests changed rather than deleted, in four places, each recorded:** the `agent-turn` tool-event assertion gained the two new fields (`durationMs` via `expect.any(Number)`, everything else still strict); `brandAssets`' 2.5rem pin became "sized via a token" with the value assertion moving to the AC3 test; the two ChatLog step-timeline render tests were rewritten to assert the *replacement* surface; the app-frame C1 test was **widened** to check the whole event stream rather than only completed trips.
+- **Playwright** — 3 failures at first, all from the AC1 change: the E2E matches the starter control by accessible name (`/open chess/i`), which the card's blurb text did not provide. Fixed in the component with an explicit `aria-label`, which is the right answer for screen readers too. A later 1-failure run was a cold-build flake (43 s vs 23 s wall-clock); green 30/30 on a warm build, and `main` also gives 30/30.
+- State: **all five phases complete, Gate 5 green.** Not yet merged.
+- Next step: Gate 5 review (High tier — the plan's fresh-context review has not been run; it needs an explicit ask), then PR and Gate 6.
+- Open questions: none blocking.

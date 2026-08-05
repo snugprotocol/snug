@@ -8,6 +8,7 @@ import {
   mockAdapter,
   openaiAdapter,
   type AgentAdapter,
+  type FetchLike,
   type MockTurn,
 } from '@snugprotocol/adapters';
 import { parseAppRequest } from '@snugprotocol/protocol';
@@ -66,12 +67,30 @@ function withDemoAppPath(chat: AgentAdapter): AgentAdapter {
   };
 }
 
-export function createAdapterFromConfig(config: ServerConfig): AgentAdapter {
+/**
+ * @param fetchImpl Injectable fetch for fixture-based tests — the server's adapter tests
+ *   never hit the network, matching the adapters package's own convention.
+ */
+export function createAdapterFromConfig(config: ServerConfig, fetchImpl?: FetchLike): AgentAdapter {
   switch (config.adapter) {
     case 'anthropic':
-      return anthropicAdapter({ apiKey: config.anthropicApiKey ?? '', model: config.model });
+      return anthropicAdapter({
+        apiKey: config.anthropicApiKey ?? '',
+        model: config.model,
+        // The hub's /invoke path is a builder/agent turn (AC12, D0/Q2): a large system
+        // prompt plus a fixed tool list, repeated many times within one build. That is
+        // exactly the shape prompt caching pays off on, and it is the highest-value
+        // caching path in the product — every hub user's turns share the same prefix.
+        cache: true,
+        ...(fetchImpl !== undefined ? { fetch: fetchImpl } : {}),
+      });
     case 'openai':
-      return openaiAdapter({ apiKey: config.openaiApiKey ?? '', model: config.model });
+      // No caching opt-in: this is not an Anthropic endpoint (AC14).
+      return openaiAdapter({
+        apiKey: config.openaiApiKey ?? '',
+        model: config.model,
+        ...(fetchImpl !== undefined ? { fetch: fetchImpl } : {}),
+      });
     case 'mock':
       return withDemoAppPath(mockAdapter(demoMockScript()));
   }
