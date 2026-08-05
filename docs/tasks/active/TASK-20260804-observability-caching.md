@@ -1,6 +1,6 @@
 # TASK-20260804-observability-caching: live LLM observability, prompt caching, brand polish
 
-- **Status**: in progress — **Phases A–E complete, Gate 5 green (890 tests, Playwright 30/30). Awaiting review + PR.**
+- **Status**: in progress — **Phases A–E complete, Gate 5 green (893 tests, Playwright 30/30). Awaiting review + PR.**
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point and gains cache-control on every request; `apps/server` request shaping. Widely-depended packages `adapters` + `protocol`-adjacent types)
 - **Branch**: `feat/TASK-20260804-observability-caching`, to be cut off the current branch (`feat/TASK-20260804-hub-polish`) — see D1
@@ -133,6 +133,7 @@ The parent task (`feat/TASK-20260804-hub-polish`) is **not yet merged** and this
 - **Seam rename** — `onRoundTrip(trip)` → `onLlmEvent(event)` across builder, transport, `useBuilderChat` and both views. The surface needs starts and tool events, not just completions; renamed rather than widened in place so each call site states the new contract.
 - **Tests changed rather than deleted, in four places, each recorded:** the `agent-turn` tool-event assertion gained the two new fields (`durationMs` via `expect.any(Number)`, everything else still strict); `brandAssets`' 2.5rem pin became "sized via a token" with the value assertion moving to the AC3 test; the two ChatLog step-timeline render tests were rewritten to assert the *replacement* surface; the app-frame C1 test was **widened** to check the whole event stream rather than only completed trips.
 - **Playwright** — 3 failures at first, all from the AC1 change: the E2E matches the starter control by accessible name (`/open chess/i`), which the card's blurb text did not provide. Fixed in the component with an explicit `aria-label`, which is the right answer for screen readers too. A later 1-failure run was a cold-build flake (43 s vs 23 s wall-clock); green 30/30 on a warm build, and `main` also gives 30/30.
-- State: **all five phases complete, Gate 5 green.** Not yet merged.
-- Next step: Gate 5 review (High tier — the plan's fresh-context review has not been run; it needs an explicit ask), then PR and Gate 6.
+- **Gap found and closed while journaling — AC12's server half.** The plan scopes caching to "direct mode **and the hub's `/invoke` path**" and the header lists `apps/server` as touched, but Phases B–E only wired the client: `apps/server/src/adapter.ts` still built its Anthropic adapter with no cache opt-in. That is the *highest-value* caching path in the product — every hub user's builder turns share one large system prompt and repeat many times per build. Fixed with `cache: true` on the anthropic branch plus an injectable fetch so the request body can be asserted without a network call; the openai branch deliberately stays out (AC14). server 104 → 107, suite → **893**.
+- State: **all five phases complete plus AC12's server half. Gate 5 green: 893 tests, build 9/9, Playwright 30/30.** Not yet merged.
+- Next step: Gate 5 review (High tier — the plan's fresh-context review has **not** been run; it needs an explicit ask), then PR and Gate 6.
 - Open questions: none blocking.
