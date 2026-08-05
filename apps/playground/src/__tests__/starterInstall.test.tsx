@@ -121,14 +121,24 @@ function starterTile(el: HTMLElement, name: string): HTMLElement {
   return found;
 }
 
-/** The hub tile's action for an UNINSTALLED starter: it opens, it does not install. */
-const tryButton = (tile: HTMLElement): HTMLButtonElement | null =>
-  tile.querySelector<HTMLButtonElement>('[data-testid="starter-try"]');
+/**
+ * The hub tile's action for an UNINSTALLED starter: it opens, it does not install.
+ *
+ * The separate "open" button is gone — the CARD is now the single control (AC1), so
+ * this resolves to that control. Every outcome assertion below is unchanged: what the
+ * user clicks moved, what it does did not.
+ */
+const tryButton = (tile: HTMLElement): HTMLElement | null =>
+  tile.querySelector<HTMLElement>('[data-testid="starter-open-card"]');
 /** The Install control, which lives in the RUN VIEW now — never on the hub tile. */
 const runInstallButton = (el: HTMLElement): HTMLButtonElement | null =>
   el.querySelector<HTMLButtonElement>('[data-testid="starter-install"]');
-const openButton = (tile: HTMLElement): HTMLButtonElement | null =>
-  tile.querySelector<HTMLButtonElement>('[data-testid="starter-open"]');
+const openButton = (tile: HTMLElement): HTMLElement | null =>
+  tile.querySelector<HTMLElement>('[data-testid="starter-open"]');
+
+/** The single card control, whichever state the starter is in (AC1). */
+const cardControl = (tile: HTMLElement): HTMLElement | null =>
+  tile.querySelector<HTMLElement>('[data-testid="starter-open-card"], [data-testid="starter-open"]');
 
 function tabNames(el: HTMLElement): string[] {
   const group = el.querySelector('[aria-label="rail tabs"]');
@@ -158,6 +168,50 @@ afterEach(() => {
   root = undefined;
   container = undefined;
   vi.restoreAllMocks();
+});
+
+// TASK-20260804-observability-caching AC1/AC2: the tile is ONE control, matching the
+// installed-app tiles. The outcome tests below (opens, does not install) are the AC2
+// half and must keep passing through that change.
+describe('the starter tile is a single card control (AC1)', () => {
+  it('has no separate open button — the card itself is the control', async () => {
+    const { el } = await renderHub();
+    const tile = starterTile(el, STARTER_NAME);
+    expect(tile.querySelector('[data-testid="starter-try"]'), 'the separate try button is retired').toBeNull();
+    expect(cardControl(tile), 'the card must be the control').not.toBeNull();
+  });
+
+  it('gives the control a discernible accessible name', async () => {
+    const { el } = await renderHub();
+    const tile = starterTile(el, STARTER_NAME);
+    const control = cardControl(tile)!;
+    // Either an explicit label or the tile's own text content — but not nothing, which
+    // is what a bare clickable <div> would give a screen reader.
+    const name = control.getAttribute('aria-label') ?? control.textContent ?? '';
+    expect(name.trim().length).toBeGreaterThan(0);
+    expect(name.toLowerCase()).toContain(STARTER_NAME.toLowerCase());
+  });
+
+  it('is a natively keyboard-activatable element, not a clickable div', async () => {
+    const { el, path } = await renderHub();
+    const control = cardControl(starterTile(el, STARTER_NAME))!;
+
+    // The real AC11 requirement is that Enter/Space work. Asserting the ELEMENT KIND is
+    // the honest way to test that here: a <button> or <a href> gets Enter/Space
+    // activation, focusability and role announcement from the browser, and jsdom does
+    // not synthesize the click that a real browser fires from those keys — so a keydown
+    // assertion would test jsdom, not the app. Playwright covers the live keystroke.
+    const nativelyActivatable = control.tagName === 'BUTTON' || (control.tagName === 'A' && control.hasAttribute('href'));
+    expect(nativelyActivatable, `expected a button or link, got <${control.tagName.toLowerCase()}>`).toBe(true);
+    expect(control.hasAttribute('disabled')).toBe(false);
+
+    // …and the activation it inherits does open the starter.
+    act(() => {
+      control.click();
+    });
+    await settle();
+    expect(path(), 'activating the card must open the starter').not.toBe('/');
+  });
 });
 
 describe('an uninstalled starter OPENS read-only; Install lives in the run view (AC18)', () => {
@@ -231,7 +285,9 @@ describe('an installed starter opens the user’s copy, never a second one (AC18
     const copy = db.installApp({ displayName: 'chess', html: '<html>copy</html>', installSource: STARTER_SOURCE });
     const { el, path } = await renderHub();
     const tile = starterTile(el, STARTER_NAME);
-    expect(tryButton(tile), 'an installed starter shows Open, not the try control').toBeNull();
+    // Both states are now a single card control (AC1); the badge and the testid are what
+    // distinguish "opens your installed copy" from "opens the read-only starter".
+    expect(tryButton(tile), 'an installed starter routes via the installed-open control').toBeNull();
     expect(tile.querySelector('.tile-installed-badge')).not.toBeNull();
 
     act(() => {

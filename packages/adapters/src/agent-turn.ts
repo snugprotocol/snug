@@ -32,9 +32,28 @@ export interface AgentRoundTrip {
   durationMs: number;
 }
 
+/**
+ * A round trip that has STARTED but not returned. Emitted before `adapter.complete()`
+ * is awaited, so the surface can show the call in flight with a live timer instead of
+ * nothing at all until it finishes (AC8). Carries the request as sent; the response and
+ * duration arrive later on the matching `round_trip`, correlated by `index`.
+ */
+export interface AgentRoundTripStart {
+  index: number;
+  request: { system: string; messages: AdapterMessage[]; tools?: ToolDef[] };
+}
+
 export type AgentTurnEvent =
-  | { type: 'tool_call'; call: ToolCall }
-  | { type: 'tool_result'; call: ToolCall; output: string }
+  /**
+   * `roundTripIndex` is the round trip that REQUESTED the tool. Note this is not literal
+   * containment: the model requests tools at the end of round trip N, and they execute
+   * between N and N+1. Attributing them to N is a deliberate presentation choice so the
+   * UI can nest tools under the call that asked for them (D0/Q3).
+   */
+  | { type: 'tool_call'; call: ToolCall; roundTripIndex: number }
+  /** `durationMs` brackets the TOOL HANDLER, not the LLM call. */
+  | { type: 'tool_result'; call: ToolCall; output: string; roundTripIndex: number; durationMs: number }
+  | ({ type: 'round_trip_start' } & AgentRoundTripStart)
   | ({ type: 'round_trip' } & AgentRoundTrip);
 
 export interface RunAgentTurnOptions {
@@ -45,6 +64,13 @@ export interface RunAgentTurnOptions {
   tools?: AgentTool[];
   /** Cap on adapter round-trips (default 6); exceeding it is a terminal error result. */
   maxIterations?: number;
+  /**
+   * Ask for prompt caching on the stable tools+system prefix for this turn (AC12).
+   *
+   * Set by the CALLER, because only it knows the turn's shape: a builder/agent turn has
+   * a large repeated prefix worth caching, an app-frame envelope does not (D0/Q2).
+   */
+  cache?: boolean;
   signal?: AbortSignal;
   /** Streamed deltas from every iteration, in order — callers accumulate. */
   onDelta?: (delta: string) => void;
@@ -82,7 +108,17 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
     // keeps growing, so a live reference would show the wrong thing later.
     const request = { system, messages: [...conversation], ...(defs !== undefined ? { tools: defs } : {}) };
     const startedAt = now();
-    const result = await adapter.complete({ system, messages: conversation, tools: defs, signal, onDelta });
+    // Emitted BEFORE the await: a 30-minute build must show the call in flight, not an
+    // empty panel until it returns. Same `index` correlates it with the `round_trip`.
+    onEvent?.({ type: 'round_trip_start', index: iteration, request });
+    const result = await adapter.complete({
+      system,
+      messages: conversation,
+      tools: defs,
+      signal,
+      onDelta,
+      ...(options.cache === true ? { cache: true } : {}),
+    });
     onEvent?.({ type: 'round_trip', index: iteration, request, response: result, durationMs: now() - startedAt });
     if (!result.ok) {
       // Text from EARLIER completed iterations is real work — a drop on iteration N
@@ -95,9 +131,12 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
 
     conversation.push({ role: 'assistant', content: result.text, toolCalls: result.toolCalls });
     for (const call of result.toolCalls) {
-      onEvent?.({ type: 'tool_call', call });
+      onEvent?.({ type: 'tool_call', call, roundTripIndex: iteration });
+      // The timing seam is the handler. `dispatch` turns a thrown error into an error
+      // string rather than rethrowing, so a failed tool is timed like any other.
+      const toolStartedAt = now();
       const output = await dispatch(tools, call);
-      onEvent?.({ type: 'tool_result', call, output });
+      onEvent?.({ type: 'tool_result', call, output, roundTripIndex: iteration, durationMs: now() - toolStartedAt });
       conversation.push({ role: 'tool', toolCallId: call.id, content: output });
     }
   }

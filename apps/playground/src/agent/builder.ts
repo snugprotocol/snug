@@ -4,7 +4,7 @@
 //   byok   → runAgentTurn in-browser with the KB + artifact tools; SSE-shaped events
 //            are SYNTHESIZED from the turn callbacks so the view code is identical.
 
-import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentRoundTrip, type AgentTool } from '@snugprotocol/adapters';
+import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentTool, type AgentTurnEvent } from '@snugprotocol/adapters';
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
@@ -63,11 +63,12 @@ export interface BuildHandlers {
   /** The app's schema or wiki docs changed (direct-mode tools) — refresh panels. */
   onKnowledge?: () => void;
   /**
-   * One completed LLM round trip — the LLM inspector's only feed (AC13). Direct mode
-   * only: subscription-mode round trips happen on the hub and are never serialized to
-   * the client, by design.
+   * The LLM inspector's only feed. Carries the WHOLE agent-turn event union, not just
+   * completed round trips: the surface renders calls and tools as they START, with a
+   * live timer, and settles them on completion. Direct mode only — subscription-mode
+   * round trips happen on the hub and are never serialized to the client, by design.
    */
-  onRoundTrip?: (trip: AgentRoundTrip) => void;
+  onLlmEvent?: (event: AgentTurnEvent) => void;
 }
 
 export type BuildResult =
@@ -227,6 +228,13 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         system: contextBlock !== undefined ? `${system}${CONTEXT_SEPARATOR}${contextBlock}` : system,
         messages: [...(history ?? []), { role: 'user', content: message }],
         tools,
+        // AC12's direct-mode half: this is the BUILDER turn — a large system prompt plus
+        // a fixed tool list, repeated across a build. The app-frame transport (the other
+        // runAgentTurn call site) deliberately does not opt in (D0/Q2).
+        //
+        // Note the per-turn context suffix above lands at the END of `system`, after the
+        // byte-stable base layers, so the cached prefix survives it.
+        cache: true,
         signal,
         onDelta: (delta) => handlers.onDelta?.(delta),
         onEvent: (event) => {
@@ -237,10 +245,10 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
             // Previously received and dropped — completion is what makes the timeline
             // a timeline rather than a list of things that merely started (AC10).
             handlers.onStep?.({ tool: event.call.name, phase: 'end' });
-          } else if (event.type === 'round_trip') {
-            const { type: _type, ...trip } = event;
-            handlers.onRoundTrip?.(trip satisfies AgentRoundTrip);
           }
+          // Every event reaches the inspector, including the tool ones above: tools
+          // nest under the round trip that requested them, each with its own time (AC5).
+          handlers.onLlmEvent?.(event);
         },
       });
       if (signal.aborted) return cancelled();

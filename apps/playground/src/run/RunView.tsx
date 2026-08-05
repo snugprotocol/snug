@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import type { AgentRoundTrip } from '@snugprotocol/adapters';
+import type { AgentTurnEvent } from '@snugprotocol/adapters';
 import type { SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
@@ -161,11 +161,11 @@ export default function RunView(): ReactElement {
   // The LLM inspector's feed. In-memory only (AC14) — this reducer state is the ONLY
   // place round trips live, and it dies with the view.
   const [llmInspector, dispatchRoundTrip] = useReducer(llmInspectorReduce, initialLlmInspectorState as LlmInspectorState);
-  const onRoundTrip = useCallback((trip: AgentRoundTrip): void => dispatchRoundTrip(trip), []);
+  const onLlmEvent = useCallback((event: AgentTurnEvent): void => dispatchRoundTrip(event), []);
   const onTurnStart = useCallback((): void => dispatchRoundTrip('reset'), []);
   const chat = useBuilderChat(threadId, {
     ...(isStarterId(id) ? {} : { pinnedAppId: id }),
-    onRoundTrip,
+    onLlmEvent,
     onTurnStart,
   });
 
@@ -201,10 +201,10 @@ export default function RunView(): ReactElement {
   }, [chat.lastArtifact, id]);
 
   // Identity seams — captured per app id (SnugAppFrame mount-captures them via key).
-  // onRoundTrip is stable (useCallback with [] deps), so threading it here does not
+  // onLlmEvent is stable (useCallback with [] deps), so threading it here does not
   // rebuild the transport on every render. This is what makes an APP's LLM turn —
   // e.g. a Chess move — visible in the LLM surface alongside the builder's turns.
-  const transport = useMemo(() => createAppTransport(mode, provider, onRoundTrip), [mode, provider, onRoundTrip]);
+  const transport = useMemo(() => createAppTransport(mode, provider, onLlmEvent), [mode, provider, onLlmEvent]);
   // The db driver is the SHARED user DB's materialized face (ADR-0010) — never closed
   // here; it lives as long as the page. App data lands as native app_* tables.
   const [db, setDb] = useState<SnugDbDriver | null>(null);
@@ -635,12 +635,14 @@ function RailChat({ messages, steps, activity, busy, onSend, onStop }: RailChatP
       submit();
     }
   };
+  // The run view always works on an app that already exists, so its status copy is the
+  // "adjusting" set, never the first-build one (AC10).
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minHeight: '100%' }}>
       {messages.length === 0 ? (
         <EmptyState glyph="✎" title="keep talking" lesson="ask for tweaks — the agent can rebuild the app from here." />
       ) : (
-        <ChatLog messages={messages} steps={steps} activity={activity} />
+        <ChatLog messages={messages} steps={steps} activity={activity} busy={busy} phase="edit" />
       )}
       <div className="composer" style={{ position: 'static', padding: 0, background: 'none' }}>
         <textarea

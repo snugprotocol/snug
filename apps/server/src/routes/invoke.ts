@@ -141,6 +141,19 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
 interface TurnPlan {
   system: string;
   messages: AdapterMessage[];
+  /**
+   * Tools offered on this turn — and, because the two coincide exactly, the
+   * discriminator for prompt caching (AC12).
+   *
+   * `true` is the BUILDER path: a large system prompt plus a fixed tool list, repeated
+   * many times within one build — the shape caching pays off on, and the highest-value
+   * caching path in the product since every hub user's turns share that prefix.
+   * `false` is the APP-FRAME path: short self-contained envelopes (a Chess move) below
+   * the model-dependent minimum, where a breakpoint would pay a 1.25x write premium on a
+   * prefix that is never read (D0/Q2).
+   *
+   * Derived rather than a separate flag so the two can never drift apart.
+   */
   withTools: boolean;
   /** Called with the final text on success (chat path with a threadId). */
   persist?: (text: string) => void;
@@ -180,6 +193,8 @@ async function streamTurn(reply: FastifyReply, deps: InvokeRouteDeps, plan: Turn
           })
         : [],
       maxIterations: deps.maxIterations,
+      // Builder turns only — never the app-frame envelopes (AC12, D0/Q2).
+      ...(plan.withTools ? { cache: true } : {}),
       signal: abort.signal,
       onDelta: (delta) => send('delta', { text: delta }),
       // Progress for the client's step timeline. Tool NAME and phase only — never the

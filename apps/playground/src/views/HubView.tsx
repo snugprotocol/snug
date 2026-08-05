@@ -277,16 +277,12 @@ export function HubView(): ReactElement {
                 data-starter-name={starter.name}
               >
                 {installed ? <span className="tile-installed-badge">installed</span> : null}
-                <span className="tile-emoji" aria-hidden="true">
-                  {look.emoji}
-                </span>
-                <span className="tile-name">{starter.name}</span>
-                <span className="tile-sub">
-                  {installed
-                    ? `${look.blurb} — already in your snug file, opens your copy`
-                    : `${look.blurb} — try it first, install it if you like it`}
-                </span>
                 {/*
+                  The CARD is the control (AC1), matching the installed-app tiles above —
+                  a separate "open" button on a card that already looks clickable was two
+                  affordances for one action. A <button> rather than a <div> so it is
+                  focusable, Enter/Space-activated and announced, for free.
+
                   Opening a starter is BROWSING, not installing (owner: "it should open
                   the starter app without installing and also show Install button when
                   opened on the UI"). An installed starter routes to the user's own copy
@@ -294,20 +290,31 @@ export function HubView(): ReactElement {
                   uninstalled one opens the read-only starter route, which offers Install
                   from inside the run view.
                 */}
-                <Button
-                  variant={installed ? 'ghost' : 'primary'}
-                  className="tile-install"
-                  data-testid={installed ? 'starter-open' : 'starter-try'}
+                <button
+                  type="button"
+                  className="tile-link tile-card-button"
+                  data-testid={installed ? 'starter-open' : 'starter-open-card'}
                   onClick={() => openStarter(starter.id)}
-                  aria-label={installed ? `open ${starter.name}` : `open ${starter.name}`}
+                  // An explicit name: the card's own text is the blurb, which reads as
+                  // a description rather than an action. "open chess" says what the
+                  // control DOES, which is what a screen reader (and the E2E) needs.
+                  aria-label={`open ${starter.name}`}
                   title={
                     installed
                       ? `open your copy of ${starter.name}`
                       : `open ${starter.name} — it stays read-only until you install it`
                   }
                 >
-                  {installed ? 'open' : 'open'}
-                </Button>
+                  <span className="tile-emoji" aria-hidden="true">
+                    {look.emoji}
+                  </span>
+                  <span className="tile-name">{starter.name}</span>
+                  <span className="tile-sub">
+                    {installed
+                      ? `${look.blurb} — already in your snug file, opens your copy`
+                      : `${look.blurb} — try it first, install it if you like it`}
+                  </span>
+                </button>
               </Card>
             );
           })}

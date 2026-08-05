@@ -8,6 +8,7 @@ import {
   mockAdapter,
   openaiAdapter,
   type AgentAdapter,
+  type FetchLike,
   type MockTurn,
 } from '@snugprotocol/adapters';
 import { parseAppRequest } from '@snugprotocol/protocol';
@@ -66,12 +67,27 @@ function withDemoAppPath(chat: AgentAdapter): AgentAdapter {
   };
 }
 
-export function createAdapterFromConfig(config: ServerConfig): AgentAdapter {
+/**
+ * @param fetchImpl Injectable fetch for fixture-based tests — the server's adapter tests
+ *   never hit the network, matching the adapters package's own convention.
+ */
+export function createAdapterFromConfig(config: ServerConfig, fetchImpl?: FetchLike): AgentAdapter {
   switch (config.adapter) {
     case 'anthropic':
-      return anthropicAdapter({ apiKey: config.anthropicApiKey ?? '', model: config.model });
+      // Caching is NOT decided here: this one instance serves both /invoke paths, and
+      // only the route knows which turn it is running. The builder path opts in per
+      // request; the app-frame path must not (D0/Q2). See routes/invoke.ts.
+      return anthropicAdapter({
+        apiKey: config.anthropicApiKey ?? '',
+        model: config.model,
+        ...(fetchImpl !== undefined ? { fetch: fetchImpl } : {}),
+      });
     case 'openai':
-      return openaiAdapter({ apiKey: config.openaiApiKey ?? '', model: config.model });
+      return openaiAdapter({
+        apiKey: config.openaiApiKey ?? '',
+        model: config.model,
+        ...(fetchImpl !== undefined ? { fetch: fetchImpl } : {}),
+      });
     case 'mock':
       return withDemoAppPath(mockAdapter(demoMockScript()));
   }

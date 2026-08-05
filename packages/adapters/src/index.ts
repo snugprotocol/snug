@@ -37,6 +37,7 @@ export {
   DEFAULT_MAX_ITERATIONS,
   runAgentTurn,
   type AgentRoundTrip,
+  type AgentRoundTripStart,
   type AgentTool,
   type AgentTurnEvent,
   type AgentTurnResult,

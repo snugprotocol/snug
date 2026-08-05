@@ -6,7 +6,7 @@
 // F15 guard: after an import/first-pull, byok/local turns are refused until the user
 // re-confirms endpoint settings — an imported DB is executable config.
 
-import { createHttpTransport, runAgentTurn, type AgentRoundTrip } from '@snugprotocol/adapters';
+import { createHttpTransport, runAgentTurn, type AgentTurnEvent } from '@snugprotocol/adapters';
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
@@ -46,7 +46,7 @@ export interface DirectTransportOptions {
    * which is what a Chess move is — was invisible. Direct mode only: subscription
    * round trips happen on the hub and are never serialized to the client.
    */
-  onRoundTrip?: (trip: AgentRoundTrip) => void;
+  onLlmEvent?: (event: AgentTurnEvent) => void;
 }
 
 export function createDirectAppTransport(options: DirectTransportOptions): AgentTransport {
@@ -81,18 +81,11 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
         messages: [{ role: 'user', content: wire }],
         signal,
         ...(onDelta !== undefined ? { onDelta } : {}),
-        // The app-frame LLM feed. `round_trip` is the only event we forward: the
-        // others describe tool activity this path does not have (no tools are
-        // offered to an app turn), and forwarding nothing was the bug.
-        ...(options.onRoundTrip !== undefined
-          ? {
-              onEvent: (event): void => {
-                if (event.type !== 'round_trip') return;
-                const { type: _type, ...trip } = event;
-                options.onRoundTrip?.(trip satisfies AgentRoundTrip);
-              },
-            }
-          : {}),
+        // The app-frame LLM feed. Every event is forwarded — an app turn offers no
+        // tools, so in practice this is the start/complete pair, which is exactly what
+        // makes the call visible WHILE it runs rather than only after (AC8).
+        // Forwarding nothing at all was the original bug.
+        ...(options.onLlmEvent !== undefined ? { onEvent: options.onLlmEvent } : {}),
       });
       return result.ok
         ? { ok: true, text: result.text }
@@ -104,7 +97,7 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
 /**
  * The active transport for the current settings (stores read at creation time).
  *
- * `onRoundTrip` is threaded through so the Run view's LLM surface sees the turns an
+ * `onLlmEvent` is threaded through so the Run view's LLM surface sees the turns an
  * APP makes, not just the ones the builder chat makes — the owner-reported gap where
  * a Chess move populated the frame inspector and nothing else. Subscription mode
  * ignores it: those round trips never leave the hub.
@@ -112,7 +105,7 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
 export function createAppTransport(
   mode: PlaygroundMode,
   provider: ByokProvider,
-  onRoundTrip?: (trip: AgentRoundTrip) => void,
+  onLlmEvent?: (event: AgentTurnEvent) => void,
 ): AgentTransport {
   const model = modelStore.get();
   if (mode === 'subscription') return createServerAppTransport(model);
@@ -121,6 +114,6 @@ export function createAppTransport(
     provider,
     ...(model !== undefined ? { model } : {}),
     localUrl: localUrlStore.get(),
-    ...(onRoundTrip !== undefined ? { onRoundTrip } : {}),
+    ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
   });
 }

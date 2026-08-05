@@ -1,6 +1,6 @@
 # TASK-20260804-observability-caching: live LLM observability, prompt caching, brand polish
 
-- **Status**: planned — **Gate 1–2 complete, awaiting plan approval. No implementation code written.**
+- **Status**: in progress — **Phases A–E complete, Gate 5 green after fresh-context review (906 tests, Playwright 30/30). Awaiting PR.**
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point and gains cache-control on every request; `apps/server` request shaping. Widely-depended packages `adapters` + `protocol`-adjacent types)
 - **Branch**: `feat/TASK-20260804-observability-caching`, to be cut off the current branch (`feat/TASK-20260804-hub-polish`) — see D1
@@ -111,3 +111,43 @@ The parent task (`feat/TASK-20260804-hub-polish`) is **not yet merged** and this
 - State: **awaiting plan approval — no implementation code written.** Branch not yet created (Phase A must merge the parent task first).
 - Next step: on approval, Phase A (merge `feat/TASK-20260804-hub-polish`), then B→E test-first. High tier also wants a fresh-context review of this plan before implementation.
 - Open questions: none blocking.
+
+### 2026-08-04 — Jeetu — session (Gate 3 start)
+
+- **Plan approved** by the owner; instruction: go through all phases.
+- **Phase A is a no-op — already done outside this task.** `feat/TASK-20260804-hub-polish` merged as `8e0a792` (PR #3) before this session started, so `main` already carries the LLM inspector, `ThinkPanel` and starter flow this task builds on. D1's "branch off the parent branch" is therefore stale: branch cut off `main` instead. No work lost; recording it because the plan text still describes the pre-merge world.
+- Baseline verified on `main` before branching: clean tree, in sync with `origin/main`, **826 tests green** (protocol 103, knowledge 61, runner 91, adapters 74, db 168, sdk 35, server 104, playground 190) — matches the parent task's recorded baseline exactly.
+- Branch created: `feat/TASK-20260804-observability-caching`.
+- Next step: Phase B (adapters) test-first.
+
+### 2026-08-04 — Jeetu — session (Phases B–E)
+
+- Done: **Phases B, C, D and E, all test-first.** Suite **826 → 890**; build 9/9; Playwright **30/30**.
+  - **B (adapters)** — `round_trip_start` fires before `complete()` resolves (asserted with a deferred the test releases by hand, not event ordering); wire `model` on the result; `cacheCreationTokens`/`cacheReadTokens` on `TokenUsage`; one `cache_control` breakpoint on the last system block. adapters 74 → 85.
+  - **C (tool timing)** — `roundTripIndex` + `durationMs` on tool events, bracketing the handler. 85 → 89.
+  - **D (surface)** — the AC7 swap, in-flight entries, nested tools, whole payloads with byte sizes, cached %. playground 190 → 223.
+  - **E (status line & brand)** — single card control, brand token −20%, rotating StatusLine replacing pill + timeline. 223 → 239.
+- **Decision — cache opt-in is per adapter, not automatic.** AC12 scopes caching to builder/agent turns (D0/Q2), and the adapter cannot tell which turn it is serving. So `cache` is an option the caller sets, and it is additionally refused for any non-Anthropic `baseUrl` even when set — a local endpoint rejects unknown fields, the `max_completion_tokens` failure class from the parent task.
+- **Surprise — removing ingest truncation removed two things it was doing silently.** It bounded the redaction regexes' work, and it dropped credentials buried past the cap. Both are now explicit: redaction runs over full payloads, with a test for a key in the tail of a 50 KB prompt.
+- **R4 in practice** — `runAgentTurn` measures with `performance.now()`, which Vitest fake timers do **not** drive. Advancing timers left the assertions reading a real ~0.05 ms elapsed. Fixed by stubbing the clock so the elapsed assertions stay exact rather than degrading to `toBeGreaterThan(0)` — the vacuous-test trap `lessons.md` already records.
+- **Seam rename** — `onRoundTrip(trip)` → `onLlmEvent(event)` across builder, transport, `useBuilderChat` and both views. The surface needs starts and tool events, not just completions; renamed rather than widened in place so each call site states the new contract.
+- **Tests changed rather than deleted, in four places, each recorded:** the `agent-turn` tool-event assertion gained the two new fields (`durationMs` via `expect.any(Number)`, everything else still strict); `brandAssets`' 2.5rem pin became "sized via a token" with the value assertion moving to the AC3 test; the two ChatLog step-timeline render tests were rewritten to assert the *replacement* surface; the app-frame C1 test was **widened** to check the whole event stream rather than only completed trips.
+- **Playwright** — 3 failures at first, all from the AC1 change: the E2E matches the starter control by accessible name (`/open chess/i`), which the card's blurb text did not provide. Fixed in the component with an explicit `aria-label`, which is the right answer for screen readers too. A later 1-failure run was a cold-build flake (43 s vs 23 s wall-clock); green 30/30 on a warm build, and `main` also gives 30/30.
+- **Gap found and closed while journaling — AC12's server half.** The plan scopes caching to "direct mode **and the hub's `/invoke` path**" and the header lists `apps/server` as touched, but Phases B–E only wired the client: `apps/server/src/adapter.ts` still built its Anthropic adapter with no cache opt-in. That is the *highest-value* caching path in the product — every hub user's builder turns share one large system prompt and repeat many times per build. Fixed with `cache: true` on the anthropic branch plus an injectable fetch so the request body can be asserted without a network call; the openai branch deliberately stays out (AC14). server 104 → 107, suite → **893**.
+- State: **all five phases complete plus AC12's server half. Gate 5 green: 893 tests, build 9/9, Playwright 30/30.** Not yet merged.
+- Next step: Gate 5 review (High tier — the plan's fresh-context review has **not** been run; it needs an explicit ask), then PR and Gate 6.
+- Open questions: none blocking.
+
+### 2026-08-05 — Jeetu — session (Gate 5 fresh-context review)
+
+- Done: the High-tier **fresh-context review** the plan asked for. Three reviewers (adapters+caching, inspector memory bound, UI+seam), each told to falsify rather than confirm and to prove findings by writing a failing test or showing a test survives reverted implementation. **Six confirmed defects, all fixed.** Suite **893 → 906**; build 9/9; Playwright 30/30.
+- **The two caching defects were mirror images of one root cause: I decided caching per ADAPTER when it is per TURN.** The server builds one adapter serving both `/invoke` paths, so `cache: true` on it hit the app-frame path that D0/Q2 explicitly excludes — a 1.25× write premium on every Chess move forever, for a prefix below the cacheable minimum that is never read. Meanwhile direct mode was never wired at all. `cache` now lives on `AdapterRequest`, and the route derives it from `withTools`, which already discriminates the two paths exactly.
+- **My journal's earlier gap analysis was inverted.** The 2026-08-04 entry recorded "AC12's server half" as the gap. The server half was the one that *was* done (via the adapter default, over-broadly); the **client** half was missing. Correcting the record here rather than editing the earlier entry, which is append-only.
+- **AC7 did not actually hold — three ways.** `entryBytes` omitted `toolNames` and `message` (60 entries × 20 long tool names reported 360 bytes while retaining ~60 MB); and the "always keep the newest" guard exempted entries that keep *growing* after admission, so 25 `artifact_write` results reached 25 MB on one entry — and the loop drained all prior history chasing a target it could never reach. That is the parent reviewer's "unbounded per-entry size" finding, reintroduced through a different door. An entry too big to fit alone now has its payloads **elided**, keeping the record without the bytes.
+- **One of my own tests was a proof of the bug.** `keeps at least the newest entry even when it alone exceeds the budget` asserted `system).toBe(monster)` — "still whole (AC6)" — which is exactly the unbounded retention AC7 forbids. Rewritten to assert elision plus the surviving record.
+- **The status line never stopped.** `steps` is cleared at turn start but never at turn end; the old timeline rendered that lingering array as *completed* steps (correct), the new surface renders "in flight" (a lie), so after any build the user saw it rotating forever. Now keyed on `busy`. My test passed a hand-built `steps` array and never exercised the end-of-turn transition — the gap that let it through.
+- Also fixed, **pre-existing on `main`** and in scope: the redaction callback spliced a match *offset* into output for all seven group-less patterns (`String.replace` calls them as `(match, offset, string)`), so `key sk-ant-…` rendered as `key 4«redacted»`. No credential leaked — the payload was corrupted. The existing tests only asserted the secret was absent.
+- **Lesson for `lessons.md` at Gate 6:** *"a test that asserts at the wrong altitude proves nothing about scope."* Every AC12 test asserted at the adapter and none at the call site deciding which turns get cached — which is why two opposite scope bugs both passed. Likewise the AC7 tests only exercised growth via `system` on completed round trips, so every other growth path escaped.
+- Reviewers confirmed sound, having tried to break them: AC8 ordering on the error/max-iteration/abort paths, breakpoint placement, C1 at every new seam, R5 memoization, AC13 cached-% math, AC11 reduced-motion, and no ReDoS from unbounded redaction input (5 MB redacts in 20 ms).
+- State: **Gate 5 green after review fixes.** 906 tests, build 9/9, Playwright 30/30.
+- Next step: PR, merge, Gate 6.

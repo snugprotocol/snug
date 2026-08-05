@@ -225,22 +225,25 @@ describe('ChatLog step timeline rendering', () => {
     { tool: 'artifact_write', label: 'writing the app file…', done: false },
   ];
 
-  it('renders the steps in order with completion state (AC9, AC10)', () => {
+  // TASK-20260804-observability-caching AC9 retired the always-visible step timeline in
+  // favour of one rotating status line. Per D0/Q1 that is a REPLACEMENT of the duplicate
+  // surface, not a deletion of the record: the per-tool facts (which tool, how long) now
+  // live in the LLM inspector, nested under the round trip that requested each tool —
+  // covered by llmInspectorLive.test.ts and llmInspectorPanel.test.tsx.
+  //
+  // The reducer tests above still assert that `steps` is modelled correctly; these two
+  // now assert what the user sees in its place.
+  it('shows a status line while a turn is running, not a step timeline (AC9)', () => {
     const el = mount(
       <MemoryRouter>
-        <ChatLog messages={[{ id: 1, role: 'agent', displayText: 'working', streaming: true }]} steps={steps} />
+        <ChatLog messages={[{ id: 1, role: 'agent', displayText: 'working', streaming: true }]} steps={steps} busy />
       </MemoryRouter>,
     );
-    const items = [...el.querySelectorAll('[data-testid="build-step"]')];
-    expect(items).toHaveLength(3);
-    expect(items.map((n) => n.textContent)).toEqual([
-      expect.stringContaining('knowledge base'),
-      expect.stringContaining('database'),
-      expect.stringContaining('app file'),
-    ]);
-    // Completion is visible, not just modelled.
-    expect(items[0]?.getAttribute('data-done')).toBe('true');
-    expect(items[2]?.getAttribute('data-done')).toBe('false');
+    expect(el.querySelectorAll('[data-testid="build-step"]'), 'the duplicate timeline is retired').toHaveLength(0);
+    expect(el.querySelector('.reasoning-pill'), 'and so is the pill it duplicated').toBeNull();
+    const line = el.querySelector('[data-testid="status-line"]');
+    expect(line, 'a running turn must still say something').not.toBeNull();
+    expect((line?.textContent ?? '').trim().length).toBeGreaterThan(0);
   });
 
   it('renders nothing extra when there are no steps', () => {
@@ -250,15 +253,68 @@ describe('ChatLog step timeline rendering', () => {
       </MemoryRouter>,
     );
     expect(el.querySelectorAll('[data-testid="build-step"]')).toHaveLength(0);
+    // An idle turn says nothing at all — the status line is for work in progress.
+    expect(el.querySelector('[data-testid="status-line"]')).toBeNull();
   });
 
-  it('renders the streamed text and the timeline at the same time (AC12)', () => {
+  it('renders the streamed text and the status line at the same time (AC12)', () => {
     const el = mount(
       <MemoryRouter>
-        <ChatLog messages={[{ id: 1, role: 'agent', displayText: 'let me check the docs', streaming: true }]} steps={steps} />
+        <ChatLog messages={[{ id: 1, role: 'agent', displayText: 'let me check the docs', streaming: true }]} steps={steps} busy />
       </MemoryRouter>,
     );
+    // The point of AC12 survives the surface change: streamed text and progress coexist.
     expect(el.textContent).toContain('let me check the docs');
-    expect(el.querySelectorAll('[data-testid="build-step"]')).toHaveLength(3);
+    expect(el.querySelector('[data-testid="status-line"]')).not.toBeNull();
+  });
+});
+
+// Gate-5 fresh-context review (2026-08-05): the status line stayed on screen forever
+// after a turn ended. `steps` is cleared at turn START but never at turn END, and the
+// swap from timeline to live indicator turned that lingering array into a lie — the old
+// timeline rendered completed steps with checkmarks (correct), the new surface renders
+// "in flight" (wrong). The fix drives `active` off `busy`, which IS cleared.
+describe('the status line stops when the turn stops (AC9 regression)', () => {
+  it('shows nothing once the turn has settled, even though steps remain', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      sseResponse([
+        'event: step\ndata: {"phase":"start","tool":"snug_knowledge"}\n\n',
+        'event: step\ndata: {"phase":"end","tool":"snug_knowledge"}\n\n',
+        'event: done\ndata: {"text":"built it"}\n\n',
+      ]),
+    );
+    const r = renderChat();
+    act(() => {
+      r.chat().send('build me a chess app');
+    });
+    await settle();
+
+    // The turn is over…
+    expect(r.chat().busy).toBe(false);
+    // …and the steps array legitimately still holds the record of what ran.
+    expect(r.chat().steps.length).toBeGreaterThan(0);
+
+    // So a surface keyed on `steps` would still claim work is in progress.
+    const el = mount(
+      <MemoryRouter>
+        <ChatLog
+          messages={r.chat().messages}
+          steps={r.chat().steps}
+          activity={r.chat().activity}
+          busy={r.chat().busy}
+        />
+      </MemoryRouter>,
+    );
+    expect(el.querySelector('[data-testid="status-line"]'), 'a finished turn must not show a live status line').toBeNull();
+  });
+
+  it('shows the status line while the turn IS running', () => {
+    const el = mount(
+      <MemoryRouter>
+        <ChatLog messages={[{ id: 1, role: 'agent', displayText: '', streaming: true }]} steps={[]} busy />
+      </MemoryRouter>,
+    );
+    // Busy with no steps yet — the gap the old `activity` pill used to cover.
+    expect(el.querySelector('[data-testid="status-line"]')).not.toBeNull();
   });
 });

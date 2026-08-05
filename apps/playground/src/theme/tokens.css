@@ -89,8 +89,10 @@
      sized against the header, not the type scale (AC9 doubled it from --text-l).
      --text-brand-narrow is what it falls back to under 760px so a 2x wordmark plus
      the logo mark cannot push the nav off a phone screen. */
-  --text-brand: 2.5rem;
-  --text-brand-narrow: 1.5rem;
+  /* Reduced 20% (2.5 -> 2, 1.5 -> 1.2) — the wordmark was crowding the nav. Both steps
+     move together so the narrow fallback stays proportional to the full size. */
+  --text-brand: 2rem;
+  --text-brand-narrow: 1.2rem;
 
   /* shape — generous radius, soft edges */
   --radius-s: 8px;
