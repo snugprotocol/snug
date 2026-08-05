@@ -1,6 +1,6 @@
 # TASK-20260804-observability-caching: live LLM observability, prompt caching, brand polish
 
-- **Status**: in progress — **Phases A–E complete, Gate 5 green after fresh-context review (906 tests, Playwright 30/30). Awaiting PR.**
+- **Status**: ✅ done — merged to `main` via PR #4 (`db12419`) on 2026-08-05. 906 tests, build 9/9, Playwright 30/30.
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated: `packages/adapters` is the C1 LLM choke point and gains cache-control on every request; `apps/server` request shaping. Widely-depended packages `adapters` + `protocol`-adjacent types)
 - **Branch**: `feat/TASK-20260804-observability-caching`, to be cut off the current branch (`feat/TASK-20260804-hub-polish`) — see D1
@@ -151,3 +151,14 @@ The parent task (`feat/TASK-20260804-hub-polish`) is **not yet merged** and this
 - Reviewers confirmed sound, having tried to break them: AC8 ordering on the error/max-iteration/abort paths, breakpoint placement, C1 at every new seam, R5 memoization, AC13 cached-% math, AC11 reduced-motion, and no ReDoS from unbounded redaction input (5 MB redacts in 20 ms).
 - State: **Gate 5 green after review fixes.** 906 tests, build 9/9, Playwright 30/30.
 - Next step: PR, merge, Gate 6.
+
+### 2026-08-05 — Jeetu — session (Gate 6 — close)
+
+- Done: **merged.** PR [#4](https://github.com/snugprotocol/snug/pull/4) → `main` as `db12419`; branch deleted. Re-verified on merged `main`: **906 tests** (protocol 103 · knowledge 61 · runner 91 · adapters 90 · db 168 · sdk 35 · server 110 · playground 248), build 9/9, Playwright 30/30.
+- Done: **Gate 6.** Three lessons written to `docs/lessons.md` (test altitude · re-deriving a bound · re-checking signals when a surface changes meaning). **ADR-0012** records the per-turn caching contract — written because the review proved this is easy to get wrong in *both* directions, so the constraint needs to outlive the task file. Docs drift fixed in `architecture.md` (status line + ADR ref), `code-map.md` (six rows: adapter events + per-turn cache, server caching scope, the `onLlmEvent` seam rename, the inspector's new bound, the retired step timeline, and per-package test counts), `next-steps.md` (shipped entry + three dated follow-ups), `decisions/README.md` (ADR index).
+- **No spec-sync.** `packages/protocol` is byte-unchanged (`git diff 8e0a792..HEAD -- packages/protocol` is empty), so C3 is not engaged: `AgentRoundTrip`/`TokenUsage`/`AdapterRequest.cache` are adapter-level types consumed in-process and never cross the app-iframe wire. No `docs/spec-changelog.md` entry.
+- **Root-file sync rule honored** — only `docs/` was edited; `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` untouched and their shared bodies still byte-identical.
+- Carried forward as dated backlog rather than fixed here (each is out of this task's scope and none is reachable today): `supportsCaching()` should be `===` not `endsWith` before any `baseUrl` config surface exists · OpenAI's always-present `cached_tokens: 0` renders "0% cached" where Anthropic renders nothing — both correct under absent-vs-zero, but inconsistent side by side · AC6's elision exception is invisible in the UI beyond the marker.
+- State: **closed.** Merged, verified green on `main`, task file moved to `docs/tasks/done/`.
+- Next step: none for this task. Queue is `docs/next-steps.md`.
+- Open questions: none.
