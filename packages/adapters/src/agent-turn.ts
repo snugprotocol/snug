@@ -44,8 +44,15 @@ export interface AgentRoundTripStart {
 }
 
 export type AgentTurnEvent =
-  | { type: 'tool_call'; call: ToolCall }
-  | { type: 'tool_result'; call: ToolCall; output: string }
+  /**
+   * `roundTripIndex` is the round trip that REQUESTED the tool. Note this is not literal
+   * containment: the model requests tools at the end of round trip N, and they execute
+   * between N and N+1. Attributing them to N is a deliberate presentation choice so the
+   * UI can nest tools under the call that asked for them (D0/Q3).
+   */
+  | { type: 'tool_call'; call: ToolCall; roundTripIndex: number }
+  /** `durationMs` brackets the TOOL HANDLER, not the LLM call. */
+  | { type: 'tool_result'; call: ToolCall; output: string; roundTripIndex: number; durationMs: number }
   | ({ type: 'round_trip_start' } & AgentRoundTripStart)
   | ({ type: 'round_trip' } & AgentRoundTrip);
 
@@ -110,9 +117,12 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
 
     conversation.push({ role: 'assistant', content: result.text, toolCalls: result.toolCalls });
     for (const call of result.toolCalls) {
-      onEvent?.({ type: 'tool_call', call });
+      onEvent?.({ type: 'tool_call', call, roundTripIndex: iteration });
+      // The timing seam is the handler. `dispatch` turns a thrown error into an error
+      // string rather than rethrowing, so a failed tool is timed like any other.
+      const toolStartedAt = now();
       const output = await dispatch(tools, call);
-      onEvent?.({ type: 'tool_result', call, output });
+      onEvent?.({ type: 'tool_result', call, output, roundTripIndex: iteration, durationMs: now() - toolStartedAt });
       conversation.push({ role: 'tool', toolCallId: call.id, content: output });
     }
   }
