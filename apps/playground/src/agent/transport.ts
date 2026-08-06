@@ -20,7 +20,8 @@ import {
   type ByokProvider,
   type PlaygroundMode,
 } from '../state/mode.js';
-import { createTurnAdapter } from './adapter.js';
+import { currentBrain } from '../state/webllm.js';
+import { createTurnAdapter, type DirectMode } from './adapter.js';
 
 export function createServerAppTransport(model?: string): AgentTransport {
   // App-path requests are self-contained envelopes — no threadId, no history.
@@ -28,7 +29,7 @@ export function createServerAppTransport(model?: string): AgentTransport {
 }
 
 export interface DirectTransportOptions {
-  mode: Exclude<PlaygroundMode, 'subscription'>;
+  mode: DirectMode;
   provider: ByokProvider;
   /** Injectable for tests; default reads the user DB secret for the provider. */
   getKey?: (provider: ByokProvider) => Promise<string | undefined>;
@@ -64,7 +65,9 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
           retryable: false,
         };
       }
-      const key = options.mode === 'local' ? undefined : await readKey(options.provider);
+      // local talks to an unauthenticated endpoint; webllm runs IN the page — neither
+      // reads a provider key (webllm must not touch snug_secrets at all).
+      const key = options.mode === 'local' || options.mode === 'webllm' ? undefined : await readKey(options.provider);
       const adapter = createTurnAdapter(
         {
           mode: options.mode,
@@ -107,6 +110,25 @@ export function createAppTransport(
   provider: ByokProvider,
   onLlmEvent?: (event: AgentTurnEvent) => void,
 ): AgentTransport {
+  // AL-07: the experimental webllm brain OVERRIDES the configured mode entirely —
+  // including subscription. `'webllm'` runs the in-page engine; `'demo'` is the
+  // graceful no-WebGPU fallback (the shell banner explains it). `'settings'` is the
+  // pre-existing behavior, byte-for-byte.
+  const brain = currentBrain();
+  if (brain.kind === 'webllm') {
+    return createDirectAppTransport({
+      mode: 'webllm',
+      provider,
+      ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+    });
+  }
+  if (brain.kind === 'demo') {
+    return createDirectAppTransport({
+      mode: 'byok',
+      provider: 'mock',
+      ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+    });
+  }
   const model = modelStore.get();
   if (mode === 'subscription') return createServerAppTransport(model);
   return createDirectAppTransport({

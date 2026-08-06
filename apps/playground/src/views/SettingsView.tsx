@@ -28,6 +28,7 @@ import {
   type SyncOriginKind,
 } from '../state/sync.js';
 import { setTheme, useTheme } from '../state/theme.js';
+import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { downloadBlob } from '../run/exportDb.js';
 import { Button } from '../ui/Button.js';
@@ -98,6 +99,8 @@ export function SettingsView(): ReactElement {
           </span>
         </div>
       </Card>
+
+      <WebllmExperimentCard />
 
       {mode === 'byok' ? (
         <Card>
@@ -195,6 +198,34 @@ export function SettingsView(): ReactElement {
       </Card>
 
     </div>
+  );
+}
+
+/**
+ * AL-07 experimental webllm surface — rendered ONLY while the `?webllm=1` flag is on
+ * (AC1: flag-off has zero webllm footprint). Deliberately NOT a mode button: the
+ * in-browser brain must not read as a first-class equal of byok/local/subscription
+ * until GA (1.2). The card explains that the flag overrides the mode choice above.
+ */
+function WebllmExperimentCard(): ReactElement | null {
+  const flagOn = useWebllmFlag();
+  const brain = useBrain();
+  if (!flagOn) return null;
+  return (
+    <Card>
+      <div className="field" data-testid="webllm-experimental-card">
+        <label>experimental — in-browser model</label>
+        <span className="hint">
+          {brain.kind === 'webllm'
+            ? `the ?webllm=1 flag is on: builds and app turns run through ${brain.model} on WebGPU, inside this tab, ` +
+              'overriding the choice above. the model downloads on first use (GBs, cached by the browser). ' +
+              'remove the flag from the URL to leave the experiment.'
+            : brain.kind === 'demo' && brain.reason === 'no-webgpu'
+              ? `the ?webllm=1 flag is on, but ${WEBLLM_FALLBACK_BANNER}.`
+              : 'the ?webllm=1 flag is on — checking whether this browser can run WebGPU…'}
+        </span>
+      </div>
+    </Card>
   );
 }
 

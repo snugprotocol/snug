@@ -8,10 +8,11 @@ import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentTool, type AgentT
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
-import { endpointsNeedConfirmStore, getByokKey, type ByokProvider, type PlaygroundMode } from '../state/mode.js';
-import { createTurnAdapter } from './adapter.js';
+import { endpointsNeedConfirmStore, getByokKey, type ByokProvider } from '../state/mode.js';
+import { createTurnAdapter, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
+import { extractAppHtml, WEBLLM_BUILD_SUFFIX } from './webllm/appHtml.js';
 
 export interface ArtifactEvent {
   artifactId: string;
@@ -170,7 +171,8 @@ export function createServerBuilder(threadId: string, fetchImpl?: FetchLike, mod
 // ------------------------------------------------- direct mode (byok / local)
 
 export interface DirectBuilderOptions {
-  mode: Exclude<PlaygroundMode, 'subscription'>;
+  /** byok/local, or the experimental 'webllm' brain (never a persisted mode — AL-07). */
+  mode: DirectMode;
   provider: ByokProvider;
   /** Where artifact_write lands — the sink pins the target app host-side (F9). */
   sink: ArtifactSink;
@@ -185,7 +187,15 @@ export interface DirectBuilderOptions {
 export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent {
   const readKey = options.getKey ?? getByokKey;
   const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
-  const system = buildHostSystemPrompt({ appBuilder: true, artifacts: true });
+  const isWebllm = options.mode === 'webllm';
+  // webllm builds run TOOL-FREE (web-llm 0.2.84 function calling is 8B-Hermes-only and
+  // forbids custom system prompts — see webllmAdapter.ts): the file-creation layer is
+  // replaced by the fenced-HTML instruction, and the artifact is extracted from the
+  // reply text after the turn. Blast radius (no KB consult round trip, no
+  // schema_apply/app_doc_write) is documented in the task file.
+  const system = isWebllm
+    ? `${buildHostSystemPrompt({ appBuilder: true, artifacts: false })}${CONTEXT_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`
+    : buildHostSystemPrompt({ appBuilder: true, artifacts: true });
   return {
     async send(turn, handlers, signal) {
       const { message, contextBlock, history } = asTurn(turn);
@@ -199,7 +209,9 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
           retryable: false,
         };
       }
-      const key = options.mode === 'local' ? undefined : await readKey(options.provider);
+      // local talks to an unauthenticated endpoint; webllm runs IN the page — neither
+      // reads a provider key.
+      const key = options.mode === 'local' || isWebllm ? undefined : await readKey(options.provider);
       const adapter = createTurnAdapter(
         {
           mode: options.mode,
@@ -210,12 +222,16 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         },
         'chat',
       );
-      const tools: AgentTool[] = buildByokTools(options.sink, {
-        onArtifact: (artifact) =>
-          handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName, version: artifact.version }),
-        onSchemaApplied: () => handlers.onKnowledge?.(),
-        onDocWritten: () => handlers.onKnowledge?.(),
-      });
+      // Tool-free in webllm mode: `runAgentTurn` treats an empty list as JSON-only
+      // mode and offers the adapter NO tools (which would refuse them anyway).
+      const tools: AgentTool[] = isWebllm
+        ? []
+        : buildByokTools(options.sink, {
+            onArtifact: (artifact) =>
+              handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName, version: artifact.version }),
+            onSchemaApplied: () => handlers.onKnowledge?.(),
+            onDocWritten: () => handlers.onKnowledge?.(),
+          });
       const activityLabels: Record<string, string> = {
         artifact_write: 'writing the app file…',
         schema_apply: 'designing the app’s database…',
@@ -252,6 +268,24 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         },
       });
       if (signal.aborted) return cancelled();
+      if (result.ok && isWebllm) {
+        // The webllm "artifact_write": a complete single-file document in the reply
+        // is the app (see appHtml.ts). A failed sink write must not destroy the reply
+        // text — the user keeps the code in chat, and the next build can retry.
+        const extracted = extractAppHtml(result.text);
+        if (extracted !== undefined) {
+          try {
+            const written = await options.sink.write(extracted.html, extracted.title);
+            handlers.onArtifact?.({
+              artifactId: written.id,
+              displayName: written.displayName,
+              version: written.version,
+            });
+          } catch {
+            // Reply text survives; the artifact card simply does not appear.
+          }
+        }
+      }
       return result.ok
         ? { ok: true, text: result.text }
         : { ok: false, code: result.code, message: result.message, retryable: result.retryable };

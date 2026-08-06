@@ -18,6 +18,7 @@ import type { AgentTurnEvent } from '@snugprotocol/adapters';
 
 import { createServerArtifactFetch } from '../state/library.js';
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
+import { useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { buildAppTurnContext } from './appContext.js';
 import { createAppTargetSink } from './artifactSink.js';
@@ -157,6 +158,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   const provider = useProvider();
   const model = useModel();
   const localUrl = useLocalUrl();
+  const brain = useBrain();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState<string | undefined>(undefined);
@@ -197,19 +199,28 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   );
   const hubArtifacts = useMemo(() => createServerArtifactFetch(), []);
 
-  const agent: BuilderAgent = useMemo(
-    () =>
-      mode === 'subscription'
-        ? createServerBuilder(threadId, undefined, model)
-        : createDirectBuilder({
-            mode,
-            provider,
-            sink,
-            ...(model !== undefined ? { model } : {}),
-            localUrl,
-          }),
-    [mode, provider, model, localUrl, threadId, sink],
-  );
+  // AL-07: the experimental webllm brain overrides the configured mode entirely
+  // (subscription included) — same rule as agent/transport.ts. EVERY later branch on
+  // "is this a server turn?" must use serverTurn, never `mode === 'subscription'`
+  // alone: with the brain overriding, the configured mode and the turn's actual path
+  // disagree, and branching on the configured mode routed a demo-fallback artifact
+  // through the hub fetch (found by webllmBuilderChat.test.tsx; the exact defect
+  // class of lessons 2026-08-05 — switch on the call, not the stale discriminator).
+  const serverTurn = brain.kind === 'settings' && mode === 'subscription';
+
+  const agent: BuilderAgent = useMemo(() => {
+    if (brain.kind === 'webllm') return createDirectBuilder({ mode: 'webllm', provider, sink, localUrl });
+    if (brain.kind === 'demo') return createDirectBuilder({ mode: 'byok', provider: 'mock', sink, localUrl });
+    return mode === 'subscription'
+      ? createServerBuilder(threadId, undefined, model)
+      : createDirectBuilder({
+          mode,
+          provider,
+          sink,
+          ...(model !== undefined ? { model } : {}),
+          localUrl,
+        });
+  }, [brain, mode, provider, model, localUrl, threadId, sink]);
 
   // AC4: a fresh session over the same user DB re-renders the persisted thread —
   // including artifact cards (from message meta) and the durable app pin.
@@ -270,7 +281,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         { id: agentId, role: 'agent', displayText: '', streaming: true },
       ]);
       setBusy(true);
-      setActivity(mode === 'subscription' ? 'it’s thinking…' : 'warming up…');
+      setActivity(serverTurn ? 'it’s thinking…' : 'warming up…');
       // The timeline is per-turn: the previous turn's steps are history, not progress.
       setSteps([]);
       // Same for the LLM inspector — without this its ring buffer accumulates across the
@@ -313,7 +324,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             },
             onKnowledge: () => setKnowledgeEpoch((epoch) => epoch + 1),
             onArtifact: (artifact) => {
-              if (mode === 'subscription') {
+              if (serverTurn) {
                 // F4 client-authoritative: the hub's artifact store is a transient
                 // cache — pull the HTML and write it into the user DB ourselves.
                 setActivity('saving the app into your snug file…');
@@ -392,7 +403,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           abortRef.current = null;
         });
     },
-    [agent, busy, messages.length, mode, onLlmEvent, onTurnStart, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
+    [agent, busy, messages.length, serverTurn, onLlmEvent, onTurnStart, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
   );
 
   const stop = useCallback((): void => {
