@@ -21,52 +21,19 @@ import {
   authSpecSchema,
   type AuthField,
   type AuthSpec,
+  type AuthSpecHints,
   type Oauth2AuthCodeSpec,
 } from '@snugprotocol/protocol';
-import type { AuthMode } from './auth-mode.js';
 import { lookupWellKnownProvider } from './well-known-providers.js';
 
-export interface ParamsToAuthSpecInput {
-  /** Auth kind. Required — without it no shape can be picked. */
-  kindHint?: string;
-  /** Provider display name. Required; also the well-known-registry lookup key. */
-  providerName: string;
-  docsUrl?: string;
-  homepageUrl?: string;
-  /** Where the user goes to mint credentials — `registration.consoleUrl`. */
-  registrationConsoleUrl?: string;
-  /** Plain-English numbered steps surfaced verbatim by the wizard. */
-  registrationInstructions?: string[];
-
-  /** Field definitions the user must paste in; per-kind defaults apply when omitted. */
-  fields?: AuthField[];
-  /** Non-standard header placement for static kinds (values may use `{{field_key}}`). */
-  headerTemplate?: Record<string, string>;
-  /** The API hosts the spec asks to call (plan D2). See module doc for per-kind rules. */
-  declaredApiHosts?: string[];
-
-  /** OAuth endpoints. Registry defaults apply for well-known providers. */
-  endpoints?: {
-    authorizeUrl?: string;
-    tokenUrl?: string;
-    refreshUrl?: string;
-    revokeUrl?: string;
-  };
-  scopes?: string[];
-  pkce?: boolean;
-
-  /** @draft two-layer synthesis — runtime resolution deferred (TWO_LAYER_RESOLUTION_DEFERRED). */
-  authMode?: AuthMode;
-  userLayerEndpoints?: {
-    authorizeUrl?: string;
-    tokenUrl?: string;
-    refreshUrl?: string;
-    revokeUrl?: string;
-  };
-  userLayerScopes?: string[];
-  userLayerPkce?: boolean;
-  userLayerFields?: AuthField[];
-}
+/**
+ * The transformer input, RE-DERIVED from the protocol's single-source-of-truth hints
+ * schema (AL-04 plan D1/M8): `AuthSpecHints = z.infer<typeof authSpecHintsSchema>`.
+ * TYPE-ONLY change — runtime behavior is unchanged and locked by this module's
+ * existing test suite (risk R7). Hand-maintained drift between the directive/inferrer
+ * boundary shape and this input is now a compile error, never a runtime surprise.
+ */
+export type ParamsToAuthSpecInput = AuthSpecHints;
 
 export interface ParamsToAuthSpecResult {
   spec: AuthSpec | null;

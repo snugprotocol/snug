@@ -64,6 +64,7 @@ export {
   isAuthSpecUnknownKeysOnlyFailure,
   isOrgEligibleAuthSpec,
   normalizeAuthHost,
+  authSpecHintsSchema,
   oauth2AuthCodeSchema,
   oauth2ClientCredsSchema,
   resolveAuthCodeLayer,
@@ -75,6 +76,7 @@ export {
   type AuthRegistration,
   type AuthRequest,
   type AuthSpec,
+  type AuthSpecHints,
   type AuthSpecStatus,
   type BasicAuthSpec,
   type BearerTokenSpec,
@@ -128,6 +130,23 @@ export {
 } from './envelope.js';
 
 export { parseAgentReply, type AgentReplyResult } from './reply.js';
+
+export {
+  AUTH_EVIDENCE_MAX_CHARS,
+  AUTH_EVIDENCE_MAX_ITEMS,
+  AUTH_PROVENANCES,
+  authRequiredPayloadSchema,
+  authWizardDirectiveSchema,
+  inferrerProposalSchema,
+  llmProposalSchema,
+  renderDirectiveSchema,
+  type AuthProvenance,
+  type AuthRequiredPayload,
+  type AuthWizardDirective,
+  type InferrerProposal,
+  type LlmProposal,
+  type RenderDirective,
+} from './render-directive.js';
 
 export {
   scanForCredentialValues,
