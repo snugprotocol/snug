@@ -106,6 +106,13 @@ export interface WizardChannelLike {
 export interface WizardPopupLike {
   closed: boolean;
   close?: () => void;
+  /**
+   * Point an already-open popup at a URL. Present when the popup was opened
+   * SYNCHRONOUSLY from the user's click (popup-blocker escape, D6): the window is
+   * created on `about:blank` inside the gesture, then navigated here once the async
+   * `generateAuthUrl` resolves. Absent for the legacy open-with-url path.
+   */
+  navigate?: (url: string) => void;
 }
 
 /** The OAuthService surface the wizard drives (injectable fake in tests). */
@@ -125,6 +132,11 @@ export interface WizardInferenceInput {
 interface WizardHooks {
   channelFactory?: (name: string) => WizardChannelLike;
   openPopup?: (url: string) => WizardPopupLike | null;
+  /**
+   * Open a BLANK popup synchronously (no URL yet) — the click-gesture handle the
+   * popup-blocker fix opens before any await, later navigated via `navigate` (D6).
+   */
+  openBlankPopup?: () => WizardPopupLike | null;
   service?: WizardOAuthServiceLike;
   /** Injectable fetch for the REAL OAuthService (tests drive the full exchange offline). */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
@@ -337,18 +349,60 @@ function defaultOpenPopup(url: string): WizardPopupLike | null {
 }
 
 /**
+ * Open the popup SYNCHRONOUSLY on the user's click — `about:blank`, no URL yet — so
+ * the window rides the gesture and a default popup blocker lets it through. It is
+ * navigated to the authorize URL later (D6, `navigate`), once `generateAuthUrl`
+ * resolves. This is the popup-blocker fix: `startOAuthFlow` awaits `getUserDb` +
+ * `requireApprovedSpecScope` + `generateAuthUrl` before the URL exists, and a
+ * `window.open` after those awaits is no longer gesture-associated → blocked.
+ */
+export function openBlankOAuthPopup(): WizardPopupLike | null {
+  const win = window.open('about:blank', 'snug-oauth', 'popup,width=480,height=720');
+  if (win === null) return null;
+  return {
+    get closed() {
+      return win.closed;
+    },
+    close: () => win.close(),
+    navigate: (url: string) => {
+      win.location.href = url;
+    },
+  };
+}
+
+/**
  * Start the 3-legged flow for the CURRENT session. Precondition (B1): the spec row
  * is `approved` — the SpecScope comes from `requireApprovedSpecScope` and this
  * throws (flow never starts, no popup, no wire) otherwise.
+ *
+ * `preOpened` is the blank popup the CLICK HANDLER opened synchronously (popup-blocker
+ * escape): when present it is navigated to the authorize URL here; when absent (the
+ * legacy/test-direct path) the popup is opened with the URL the old way. If the flow
+ * aborts before it starts (e.g. the B1 approval gate throws), the pre-opened popup is
+ * closed so a blank window is never orphaned.
  */
-export async function startOAuthFlow(clientCreds: Record<string, string>): Promise<void> {
+export async function startOAuthFlow(
+  clientCreds: Record<string, string>,
+  preOpened?: WizardPopupLike | null,
+): Promise<void> {
   const session = wizardStore.get();
-  if (session === null) throw new Error('no wizard session');
-  const db = await getUserDb();
-  const scope = await requireApprovedSpecScope(specReaderFor(db), session.appId); // B1 wall
-  const service = wizardService(db);
-
-  const start = await service.generateAuthUrl({ appId: scope.appId, spec: scope.spec, clientCreds });
+  if (session === null) {
+    preOpened?.close?.();
+    throw new Error('no wizard session');
+  }
+  let start: OAuthStartResult;
+  let scope: Awaited<ReturnType<typeof requireApprovedSpecScope>>;
+  let service: WizardOAuthServiceLike;
+  try {
+    const db = await getUserDb();
+    scope = await requireApprovedSpecScope(specReaderFor(db), session.appId); // B1 wall
+    service = wizardService(db);
+    start = await service.generateAuthUrl({ appId: scope.appId, spec: scope.spec, clientCreds });
+  } catch (err) {
+    // The approval gate (B1) or the URL mint failed — never orphan the blank window.
+    preOpened?.close?.();
+    throw err;
+  }
 
   // The initiating context knows the channel name because it HOLDS the flowId —
   // the payload can never teach it (D6).
@@ -357,7 +411,16 @@ export async function startOAuthFlow(clientCreds: Record<string, string>): Promi
     void handleDelivery(event.data);
   };
 
-  const popup = (hooks.openPopup ?? defaultOpenPopup)(start.authorizeUrl);
+  // Navigate the gesture-opened popup if we have one (the fix path); otherwise open
+  // one with the URL directly (legacy path — direct callers/tests that pass no popup).
+  let popup: WizardPopupLike | null;
+  if (preOpened != null && preOpened.navigate !== undefined) {
+    preOpened.navigate(start.authorizeUrl);
+    popup = preOpened;
+  } else {
+    preOpened?.close?.(); // a pre-opened popup that can't navigate is unusable — don't leak it
+    popup = (hooks.openPopup ?? defaultOpenPopup)(start.authorizeUrl);
+  }
   // Popup-closed polling backstop: BroadcastChannel delivery has no failure signal.
   const poll =
     popup !== null

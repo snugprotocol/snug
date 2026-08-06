@@ -38,6 +38,7 @@ import { useStore } from '../state/store.js';
 import {
   approveWizardSpec,
   forceCloseWizard,
+  openBlankOAuthPopup,
   requestCloseWizard,
   runWizardInference,
   saveWizardClientCreds,
@@ -447,8 +448,14 @@ function CredentialsStep({ session, row }: { session: WizardSession; row: AuthSp
 
   const connectAccount = async (): Promise<void> => {
     setError(undefined);
+    // Open the popup SYNCHRONOUSLY, inside the click gesture, so a default popup
+    // blocker lets it through (D6). `startOAuthFlow` awaits the URL mint before the
+    // authorize URL exists — a `window.open` after those awaits would be blocked.
+    // By the time this button is reachable the spec is already approved (B1: the
+    // credentials step is unreachable while unapproved), so opening here is post-gate.
+    const popup = openBlankOAuthPopup();
     try {
-      await startOAuthFlow({ ...values });
+      await startOAuthFlow({ ...values }, popup);
       setValues({});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

@@ -185,3 +185,58 @@ describe('B1 — generateAuthUrl is unreachable pre-approval (M13)', () => {
     expect(openPopup).not.toHaveBeenCalled();
   });
 });
+
+describe('popup-blocker escape (D6): a pre-opened gesture popup is NAVIGATED, never re-opened', () => {
+  // A blank popup the CLICK HANDLER opened synchronously — with a `navigate` seam,
+  // exactly the shape `openBlankOAuthPopup` returns.
+  function fakePreOpened(): WizardPopupLike & { navigated: string[]; closeCalls: number } {
+    const p = {
+      closed: false,
+      navigated: [] as string[],
+      closeCalls: 0,
+      navigate(url: string) {
+        p.navigated.push(url);
+      },
+      close() {
+        p.closeCalls += 1;
+      },
+    };
+    return p;
+  }
+
+  it('the pre-opened popup is navigated to the authorize URL; window.open (openPopup) is NEVER called for the URL', async () => {
+    await seedApproved();
+    const channels: FakeChannel[] = [];
+    // If the code falls back to opening a NEW popup with the URL, this spy trips —
+    // that is the pre-fix behavior a real blocker would kill.
+    const openPopup = vi.fn(() => ({ closed: false }));
+    __setWizardHooksForTests({
+      channelFactory: fakeChannelFactory(channels),
+      openPopup,
+      fetchImpl: tokenFetch,
+    });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+
+    const popup = fakePreOpened();
+    await startOAuthFlow({ client_id: 'cid-1' }, popup);
+
+    // The gesture-opened window was navigated — the URL never came from a post-await open.
+    expect(popup.navigated).toHaveLength(1);
+    expect(new URL(popup.navigated[0]!).origin).toBe('https://idp.example');
+    expect(openPopup).not.toHaveBeenCalled();
+    expect(wizardFlowStatusStore.get()).toMatchObject({ state: 'awaiting_callback' });
+  });
+
+  it('the flow aborts at the B1 approval gate: the pre-opened popup is CLOSED, never orphaned', async () => {
+    const db = await getUserDb();
+    db.installApp({ appId: APP, displayName: 'OAuth App', html: '<p>x</p>' });
+    db.putAuthSpec(APP, oauthSpec); // NOT approved — the gate throws
+    __setWizardHooksForTests({ channelFactory: fakeChannelFactory([]), fetchImpl: tokenFetch });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+
+    const popup = fakePreOpened();
+    await expect(startOAuthFlow({ client_id: 'cid-1' }, popup)).rejects.toMatchObject({ code: 'spec_not_approved' });
+    expect(popup.navigated).toHaveLength(0); // never navigated
+    expect(popup.closeCalls).toBeGreaterThan(0); // the blank window was closed, not left open
+  });
+});
