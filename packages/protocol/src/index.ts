@@ -7,13 +7,20 @@ export {
   ERROR_CODES,
   FRAME_TYPES,
   LIMITS,
+  NET_ERROR_CODES,
+  NET_METHODS,
+  NET_MUTATING_METHODS,
+  NET_RESPONSE_HEADER_WHITELIST,
   PROTOCOL_VERSION,
   SNUG_APP_REQUEST_TAG,
   STRIP_HEADERS,
   classifyErrorCode,
   isKnownErrorCode,
+  isWhitelistedNetResponseHeader,
   type FrameType,
   type KnownErrorCode,
+  type NetErrorCode,
+  type NetMethod,
 } from './constants.js';
 
 export {
@@ -88,6 +95,8 @@ export {
   frameWithinLimits,
   hostEventSchema,
   hostReadySchema,
+  netRequestSchema,
+  netResponseSchema,
   parseFrame,
   respondTo,
   responseErrorSchema,
@@ -102,6 +111,8 @@ export {
   type FrameParseResult,
   type HostEventFrame,
   type HostReadyFrame,
+  type NetRequestFrame,
+  type NetResponseFrame,
   type Responder,
   type ResponseError,
 } from './frames.js';
