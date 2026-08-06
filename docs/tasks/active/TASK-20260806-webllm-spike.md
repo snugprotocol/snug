@@ -127,3 +127,16 @@ The mode must ride the existing seams unchanged: the `AgentAdapter` contract, th
 ```
 
 - State: review fixes complete and green locally; next — rebase onto current origin/main (4 merges ahead; expected conflicts: e2e helpers/vite SNUG_SERVER_PORT vs AL-08's version, next-steps, code-map), then full suites + 3 consecutive full Playwright runs.
+
+### 2026-08-06 09:5x — Claude (Fable 5) — rebase + post-review verification
+- **Rebased onto current origin/main** (4 merges landed since branch: AL-02 auth-core, AL-08 starters-pillars, spec-push, AL-14 flip-prep). Conflicts resolved:
+  - `e2e/helpers.ts` — comment-only conflict; AL-08 had independently shipped the IDENTICAL `Number(env ?? '') || 8787` expression (the 2026-08-03 parallel-invention lesson, in the wild again). Adopted mainline's comment.
+  - `vite.config.ts` — adopted mainline's comment; kept the empty-string-safe `|| 8787` expression as the one deliberate delta: mainline's `?? '8787'` form breaks on a set-but-empty var (the 2026-08-02 lesson) AND would desync from helpers' `||` form, sending the proxy to port '' while the reference server falls back to 8787. Rationale in the file comment.
+  - `docs/code-map.md` (twice) — merged the playground row (mainline's starters + this task's webllm additions); counts regenerated after rebase via `pnpm run update-code-map` (playground vitest 302 = 250 mainline + 52 webllm; webllm row updated to 52).
+  - `docs/lessons.md` — append-only: kept BOTH 2026-08-06 entries (starters' sandbox-forms lesson + this task's secure-context probe lesson).
+  - `docs/next-steps.md` auto-merged cleanly, both sides date-ordered. Bonus: AL-08's journal explains this task's earlier one-off dedup.spec failure — a known URL race, fixed on main.
+- **Verification post-rebase:** root `pnpm build` green · root `pnpm test` green (19/19 turbo tasks) · **three consecutive full Playwright runs: 42 passed + 1 deliberate skip, three times** (AL-08's flake bar).
+- **Mutation evidence, post-rebase round:** F1 creation-time-brain mutation → exactly the per-send test red (1/14); F4 re-check removal → exactly the abort-during-load test red (1/16); F3 RunView raw-mode mutation → exactly the rail-copy e2e red (1 failed / 4 passed); all restored green.
+- State: review fixes + rebase complete; branch green at the flake bar. Stopping before PR/push per instructions.
+- Next step (orchestrator): merge per umbrella DoD; move this file to `done/` after merge.
+
