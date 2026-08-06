@@ -80,3 +80,9 @@ Test plan summary: AC3 → node:test units (parse + rewrite + idempotence + leav
 - Verification: `node --test scripts/update-code-map-counts.test.mjs` 8/8 green; `pnpm build` exit 0. Orchestrator ran the full Playwright suite on this branch green (exit 0) — DoD (b) satisfied without this session touching `apps/playground` or the running dev server.
 - State: review fixes committed on the branch; still no push, no PR.
 - Next step: orchestrator merge flow.
+
+### 2026-08-06 — Claude (Fable 5, orchestrator) — live sweep verdict + close
+- Live agent-browser sweep (DoD c) on this branch: **ZERO launch-blockers.** Verified live: cold load clean; starter install; a real byok build (6 Anthropic round trips) with per-turn cache hits 43%→10% (supportsCaching exact-host gate working on the wire); **the affected flow green** — export → delete → import restores the app WITH state and it accepts frames (pre-fix refusal gone); no ghost rows importing an older file; F15 endpoint re-confirm guard fired as designed. Security: no key material in export bytes (3 probes), DOM, localStorage/sessionStorage, or network; LLM traffic only to api.anthropic.com; iframe deps only from the fixed CDN allowlist.
+- 4 non-blockers logged in next-steps (2026-08-06): settings echoes the stored key into a DOM value attribute (→ AL-10 secrets-path review); uninstalled-starter play writes an orphaned kv table; raw markdown in builder chat; signed-out hub-sync 401 copy.
+- All DoD gates satisfied: (a) root suites 910 green, (b) Playwright 30 green, (c) live sweep clean, (d) adversarial review MERGE-AFTER-FIXES with fixes applied + mutation-checked, (e) docs/ADRs/next-steps in-branch, (f) merging now.
+- Status → done on merge; task file moves to done/ on the AL-02 branch.
