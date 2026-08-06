@@ -4,10 +4,13 @@
 // - this module form: typed ESM hooks for bundler-built apps.
 // Browser-safe: protocol constants + react peer dependency only, no node: imports.
 
-export { useAppDB, usePersistedState, useSnugApp } from './hooks.js';
+export { useAppDB, useConnectedFetch, usePersistedState, useSnugApp } from './hooks.js';
 
 export type {
   AppDb,
+  ConnectedFetch,
+  ConnectedFetchOptions,
+  ConnectedFetchResult,
   DbExecResult,
   HostCapabilities,
   SendMessageOptions,

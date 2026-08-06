@@ -12,8 +12,9 @@ const EMBEDDED_PATH = path.resolve(process.cwd(), 'embedded/snug-hooks.js');
 
 /**
  * The hook portion of the rendered template: the `<script type="text/babel">` body of
- * the ```html fence, cut before the section-5 banner (RESPONSE SCHEMA — app-authored,
- * not SDK). Throws loudly on structural drift so the extraction never silently shrinks.
+ * the ```html fence, cut before the RESPONSE SCHEMA banner (app-authored, not SDK — now
+ * section 6 after useConnectedFetch was added as section 5). Throws loudly on structural
+ * drift so the extraction never silently shrinks.
  */
 function renderedHookBlock(): string {
   const doc = getKnowledgeBase().find((s) => s.file === TEMPLATE_FILE);
@@ -23,8 +24,8 @@ function renderedHookBlock(): string {
   const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1];
   if (script === undefined) throw new Error('template has no <script type="text/babel"> block');
   const lines = script.split('\n');
-  const bannerIndex = lines.findIndex((line) => line.includes('5. RESPONSE SCHEMA'));
-  if (bannerIndex < 1) throw new Error('template script has no section-5 RESPONSE SCHEMA banner');
+  const bannerIndex = lines.findIndex((line) => /\d+\. RESPONSE SCHEMA/.test(line));
+  if (bannerIndex < 1) throw new Error('template script has no RESPONSE SCHEMA banner');
   return lines.slice(0, bannerIndex - 1).join('\n'); // also drops the ==== line above the banner
 }
 
@@ -49,12 +50,12 @@ describe('KB ≡ SDK sync (20-html-template.md ↔ embedded/snug-hooks.js)', () 
     expect(embedded).toContain("'snug:host-ready'"); // frame literals injected from protocol constants
   });
 
-  it('the embedded file covers all four copy-exactly sections and nothing app-authored', () => {
+  it('the embedded file covers all five copy-exactly sections and nothing app-authored', () => {
     const embedded = readFileSync(EMBEDDED_PATH, 'utf8');
-    for (const name of ['SnugBridge', 'function useSnugApp', 'function usePersistedState', 'function useAppDB']) {
+    for (const name of ['SnugBridge', 'function useSnugApp', 'function usePersistedState', 'function useAppDB', 'function useConnectedFetch']) {
       expect(embedded).toContain(name);
     }
-    expect(embedded).not.toContain('RESPONSE_SCHEMA'); // section 5+ stays in the KB only
+    expect(embedded).not.toContain('RESPONSE_SCHEMA'); // section 6+ stays in the KB only
     expect(embedded).not.toContain('ReactDOM');
   });
 });

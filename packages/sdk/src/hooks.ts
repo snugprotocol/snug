@@ -2,9 +2,11 @@
 // in embedded/snug-hooks.js (locked together by the shared contract test suite).
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { FRAME_TYPES } from '@snugprotocol/protocol';
-import { bridge, dbRequest, ensureListener, notConnectedResult, postToHost } from './bridge.js';
+import { bridge, dbRequest, ensureListener, netRequest, notConnectedResult, postToHost } from './bridge.js';
 import type {
   AppDb,
+  ConnectedFetch,
+  ConnectedFetchOptions,
   SendMessageOptions,
   SendMessageResult,
   SnugAppMeta,
@@ -124,6 +126,29 @@ export function usePersistedState<T>(key: string, initialValue: T): [T, Dispatch
   }, [hydratedKey, key, state]);
 
   return [state, setState];
+}
+
+/**
+ * Host-brokered network access to the app's APPROVED hosts (AL-03). The sandboxed app
+ * has no network of its own (C2); this posts a net-request and resolves the terminal
+ * net-response. The host validates the frozen host ceiling, injects credentials, blocks
+ * private ranges, caps sizes, gates mutating calls behind user confirmation, and scrubs
+ * the response — the app never sees a credential value. ALWAYS resolves (errors as data).
+ */
+export function useConnectedFetch(): ConnectedFetch {
+  return useMemo<ConnectedFetch>(() => {
+    ensureListener(); // useConnectedFetch may be the first hook to mount
+    return {
+      fetch(url: string, opts?: ConnectedFetchOptions) {
+        return netRequest({
+          url,
+          method: (opts && opts.method) || 'GET',
+          ...(opts && opts.headers ? { headers: opts.headers } : {}),
+          ...(opts && opts.body !== undefined ? { body: opts.body } : {}),
+        });
+      },
+    };
+  }, []);
 }
 
 /** Host-brokered SQL access to the app's namespace database. Failures throw (unlike sendMessage). */

@@ -36,6 +36,18 @@ export interface ContractHookApi {
     exportDb(): Promise<string>;
     importDb(bytesBase64: string): Promise<void>;
   };
+  useConnectedFetch(): {
+    fetch(url: string, opts?: Record<string, unknown>): Promise<ContractNetResult>;
+  };
+}
+
+export interface ContractNetResult {
+  ok: boolean;
+  status?: number;
+  headers?: Record<string, string>;
+  body?: string;
+  truncated?: boolean;
+  error?: { code: string; message: string; retryable: boolean; [k: string]: unknown };
 }
 
 const META: ContractMeta = {
@@ -272,6 +284,69 @@ export function registerContractSuite(formName: string, freshHooks: () => Contra
       const failedRequest = host.dbRequests('exec')[1];
       host.dbFail(failedRequest!.requestId!, { code: 'DB_SQL_ERROR', message: 'no such table: nope' });
       await expect(failing).rejects.toThrow('no such table: nope');
+    });
+
+    it('useConnectedFetch posts a net-request and resolves the terminal net-response (AL-03)', async () => {
+      const hooks = freshHooks();
+      const probe = await mount(() => hooks.useConnectedFetch());
+      host.ready();
+      await flush();
+      const promise = probe.result.current.fetch('https://api.example.com/v1/data', {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+        body: '{"a":1}',
+      });
+      await flush();
+      const request = host.netRequests()[0];
+      expect(request).toMatchObject({
+        v: PROTOCOL_VERSION,
+        instanceId: 'ins-1',
+        type: FRAME_TYPES.netRequest,
+        url: 'https://api.example.com/v1/data',
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+        body: '{"a":1}',
+      });
+      // R5: the app-side hook never stamps an appId onto the frame (host-assigned binding).
+      expect(request!.appId).toBeUndefined();
+      expect(typeof request!.requestId).toBe('string');
+
+      host.netSucceed(request!.requestId!, { status: 201, headers: { 'content-type': 'application/json' }, body: '{"ok":true}' });
+      await expect(promise).resolves.toEqual({
+        ok: true,
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+        body: '{"ok":true}',
+      });
+    });
+
+    it('useConnectedFetch defaults to GET and passes an envelope error through as {ok:false, error}', async () => {
+      const hooks = freshHooks();
+      const probe = await mount(() => hooks.useConnectedFetch());
+      host.ready();
+      await flush();
+      const promise = probe.result.current.fetch('https://api.example.com/v1/data');
+      await flush();
+      const request = host.netRequests()[0];
+      expect(request).toMatchObject({ method: 'GET', url: 'https://api.example.com/v1/data' });
+      expect(request!.body).toBeUndefined();
+
+      host.netFail(request!.requestId!, { code: 'NET_HOST_BLOCKED', message: 'off ceiling', retryable: false });
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatchObject({ code: 'NET_HOST_BLOCKED', message: 'off ceiling', retryable: false });
+    });
+
+    it('useConnectedFetch resolves a retryable HOST_ERROR before host-ready — nothing posted', async () => {
+      const hooks = freshHooks();
+      const probe = await mount(() => hooks.useConnectedFetch());
+      await flush();
+      const result = await probe.result.current.fetch('https://api.example.com/v1/data');
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe(ERROR_CODES.HOST_ERROR);
+      expect(result.error?.retryable).toBe(true);
+      await flush();
+      expect(host.netRequests()).toHaveLength(0);
     });
 
     it('useAppDB exportDb/importDb resolve bytesBase64/void; failures throw Error(message)', async () => {
