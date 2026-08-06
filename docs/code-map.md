@@ -4,7 +4,7 @@
 
 | Area / concept | Location | Tests |
 |---|---|---|
-| Envelope message types, zod schemas, JSON Schema export | `packages/protocol/src` ✅ (frames/envelope/reply/security/json-schemas) | `packages/protocol` vitest (168) |
+| Envelope message types, zod schemas, JSON Schema export | `packages/protocol/src` ✅ (frames/envelope/reply/security/json-schemas) | `packages/protocol` vitest (149) |
 | **Net frames** (AL-03, internal draft — OUT of `schemas/` SOURCES: strict `net-request`/`net-response`, own size class `MAX_NET_FRAME_BYTES` (1 MiB+64 KiB margin — no silent drop, B1), `NET_ERROR_CODES`, response-header whitelist + `x-ratelimit-*` glob, `NET_METHODS`; GET/HEAD body strict-reject (R2), NO appId (R5), credential-header reject (C1); `normalizeAuthHost` retrofitted to punycode both sides (B3)) | `packages/protocol/src/{frames,constants,auth-schema}.ts` ✅ | `packages/protocol` `net-frames.test.ts` + `punycode-hosts.test.ts` |
 | Iframe runner, CSP/sandbox, bridge host, transport/db-driver seams, browser-CSP suite template | `packages/runner/src` ✅ | `packages/runner` vitest (108) + child-6 Playwright |
 | **NetHandler seam** (AL-03: host-assigned `netAppId` binding — never app-claimed, mirrors `dbNamespace` F5/R5; routes net-request → handler, posts net-response; value-blind lint proves the runner imports no fetch-calling module, R4; oversized net-response → terminal `NET_SIZE_EXCEEDED`, B1; `net` capability flag) | `packages/runner/src/{host,transport}.ts` ✅ | `packages/runner` `host-net.test.ts` + `net-value-blind.test.ts` |
