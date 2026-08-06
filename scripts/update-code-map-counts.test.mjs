@@ -5,13 +5,16 @@ import { test } from 'node:test';
 
 import { locationPackage, parseTestLog, rewriteCodeMap } from './update-code-map-counts.mjs';
 
+// Fixture invariant (enforced by the anti-spoof cross-check): each vitest package's
+// summary total equals the sum of its per-file counts, exactly as in a real run.
 const LOG = [
   '@snugprotocol/db:test:  ✓ src/userdb/__tests__/materializer.test.ts (17 tests) 834ms',
   '@snugprotocol/db:test:  ✓ src/sync/__tests__/loop.test.ts (30 tests) 12ms',
   '@snugprotocol/db:test:  ✓ src/sync/__tests__/providers.test.ts (14 tests) 9ms',
-  '@snugprotocol/db:test:       Tests  170 passed (170)',
+  '@snugprotocol/db:test:       Tests  61 passed (61)',
   'playground:test:  ✓ src/run/__tests__/railTabs.test.tsx (9 tests) 40ms',
-  'playground:test:       Tests  248 passed (248)',
+  'playground:test:  ✓ src/views/__tests__/hub.test.tsx (239 tests | 2 skipped) 90ms',
+  'playground:test:       Tests  246 passed | 2 skipped (248)',
   'examples:test: # Subtest: chess: single-file HTML',
   'examples:test: # tests 18',
   'examples:test: # pass 18',
@@ -26,7 +29,7 @@ const DIR_TO_NAME = new Map([
 
 test('parseTestLog: per-package totals, per-file counts, TAP totals', () => {
   const parsed = parseTestLog(LOG);
-  assert.equal(parsed.get('@snugprotocol/db').total, 170);
+  assert.equal(parsed.get('@snugprotocol/db').total, 61);
   assert.equal(parsed.get('@snugprotocol/db').files.get('src/userdb/__tests__/materializer.test.ts'), 17);
   assert.equal(parsed.get('playground').total, 248);
   assert.equal(parsed.get('examples').total, 18);
@@ -50,7 +53,7 @@ test('rewriteCodeMap: total-marker, sub-tree, per-file, and suite counts are ref
     '| Examples | `examples/{chess}` ✅ | `examples` validate suite (12) |',
   ].join('\n');
   const { content, changes } = rewriteCodeMap(table, parseTestLog(LOG), DIR_TO_NAME);
-  assert.ok(content.includes('vitest (170 total)'), 'package total from the summary line');
+  assert.ok(content.includes('vitest (61 total)'), 'package total from the summary line');
   assert.ok(content.includes('vitest (44)'), 'sub-tree sum 30+14 for src/sync');
   assert.ok(content.includes('`materializer.test.ts` (17)'), 'per-file count by basename');
   assert.ok(content.includes('validate suite (18)'), 'TAP total for node:test packages');
@@ -94,4 +97,39 @@ test('rewriteCodeMap: idempotent — a second pass changes nothing', () => {
   const twice = rewriteCodeMap(once.content, parsed, DIR_TO_NAME);
   assert.equal(twice.content, once.content);
   assert.equal(twice.changes.length, 0);
+});
+
+// --- anti-spoofing regressions (adversarial-review fix #1) --------------------------
+// Test code can print arbitrary lines that land under the package's turbo prefix; a
+// loose "anything ending in (N)" summary match was forgeable, last-match-wins.
+
+const TOTAL_ROW = [
+  '| Area | Location | Tests |',
+  '|---|---|---|',
+  '| User DB | `packages/db/src/userdb` ✅ | `packages/db` vitest (163 total) |',
+].join('\n');
+
+test('spoof: a printed line merely ending in (N) is not a summary and cannot win', () => {
+  const spoofed = `${LOG}\n@snugprotocol/db:test:       Tests like these are great (999)`;
+  const refusals = [];
+  const parsed = parseTestLog(spoofed, (pkg, detail) => refusals.push([pkg, detail]));
+  assert.equal(parsed.get('@snugprotocol/db').total, 61, 'the real summary still wins');
+  assert.equal(refusals.length, 0);
+
+  const { content } = rewriteCodeMap(TOTAL_ROW, parsed, DIR_TO_NAME);
+  assert.ok(content.includes('vitest (61 total)'));
+  assert.ok(!content.includes('999'), 'the spoofed number must never reach the code map');
+});
+
+test('spoof: a shape-valid forged summary that disagrees with the per-file sum refuses the package', () => {
+  // Forged line is LAST (the last-match-wins probe) and matches the real vitest shape.
+  const spoofed = `${LOG}\n@snugprotocol/db:test:       Tests  1 passed (999)`;
+  const refusals = [];
+  const parsed = parseTestLog(spoofed, (pkg, detail) => refusals.push([pkg, detail]));
+  assert.equal(parsed.has('@snugprotocol/db'), false, 'inconsistent package dropped wholesale');
+  assert.deepEqual(refusals, [['@snugprotocol/db', { total: 999, fileSum: 61 }]]);
+
+  const { content, changes } = rewriteCodeMap(TOTAL_ROW, parsed, DIR_TO_NAME);
+  assert.equal(changes.length, 0, 'refused package rewrites nothing');
+  assert.ok(content.includes('vitest (163 total)'), 'row left byte-identical');
 });

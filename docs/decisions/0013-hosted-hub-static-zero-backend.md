@@ -18,7 +18,7 @@ Three forces decide it:
 
 **The hosted playground is static files only.** Concretely:
 
-1. The hosted instance offers exactly the client-side modes: **demo** (mock adapter), **WebLLM** (in-browser model), **BYOK** (user's own key, browser-direct), and **local** (localhost endpoint, e.g. Ollama).
+1. The hosted instance offers exactly the client-side modes: **demo** (mock adapter), **WebLLM** (in-browser model — not yet built; lands with the A7 spike, GA at 1.2), **BYOK** (user's own key, browser-direct), and **local** (localhost endpoint, e.g. Ollama).
 2. **No subscription mode, no OIDC login, and no hub-origin sync on the hosted instance.** The `/invoke`, auth, and `/userdb` surfaces are simply not deployed there.
 3. Personal sync on the hosted instance is **Dropbox (or another user-held origin) or file export/import** — origins the user owns, per ADR-0009.
 4. **The full server remains a first-class OSS artifact for self-hosters.** `apps/server` keeps its tests, docs, and parity work (e.g. the queued subscription-mode tool twins); "static only" is a statement about the instance the project hosts, never about the codebase.

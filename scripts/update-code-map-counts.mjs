@@ -29,19 +29,34 @@ import { fileURLToPath } from 'node:url';
 /**
  * Parse combined turbo output (`pnpm test` at root) into per-package measurements.
  * Turbo prefixes every line with `<packageName>:test: `. Recognized inside a package's
- * stream: vitest per-file lines (`✓ path (N tests…)`), the vitest summary
- * (`Tests … (N)`), and node:test TAP totals (`# tests N`).
+ * stream: vitest per-file lines (`✓ path (N tests…)`), the vitest summary line, and
+ * node:test TAP totals (`# tests N`).
  *
+ * Anti-spoofing (review fix): test code can print arbitrary lines that end up under the
+ * same turbo prefix, so a loose summary match is forgeable. Two defenses, both required:
+ *   1. The summary regex demands vitest's exact shape — `N word` segments joined by
+ *      " | ", one of them "N passed", then "(total)" — not just "anything ending in (N)".
+ *   2. Where per-file lines exist for a package, the summary total must EQUAL their sum;
+ *      on mismatch the whole package is refused (reported via onRefuse) rather than
+ *      trusted — preserving the "never writes a guessed count" guarantee.
+ * A forged line that matches the real shape AND the real sum writes the true number, so
+ * there is nothing left to win. TAP packages have no per-file lines to check (node:test
+ * subtest output is not parsed); their totals are shape-matched only.
+ *
+ * @param log combined run output
+ * @param onRefuse called per refused package: (pkgName, { total, fileSum })
  * @returns Map<packageName, { total: number|undefined, files: Map<relPath, count> }>
  */
-export function parseTestLog(log) {
+export function parseTestLog(log, onRefuse = () => {}) {
   const packages = new Map();
   const entry = (name) => {
-    if (!packages.has(name)) packages.set(name, { total: undefined, files: new Map() });
+    if (!packages.has(name)) {
+      packages.set(name, { total: undefined, files: new Map(), source: undefined });
+    }
     return packages.get(name);
   };
   for (const rawLine of log.split('\n')) {
-    const line = rawLine.replace(/\[[0-9;]*m/g, ''); // strip ANSI, defensively
+    const line = rawLine.replace(/\x1b\[[0-9;]*m/g, ''); // strip ANSI escapes, defensively
     const prefixed = /^([^\s:]+):test:\s?(.*)$/.exec(line);
     if (prefixed === null) continue;
     const [, pkg, rest] = prefixed;
@@ -50,14 +65,29 @@ export function parseTestLog(log) {
       entry(pkg).files.set(fileLine[1], Number(fileLine[2]));
       continue;
     }
-    const vitestTotal = /^\s*Tests\s+.*\((\d+)\)\s*$/.exec(rest);
-    if (vitestTotal !== null) {
-      entry(pkg).total = Number(vitestTotal[1]);
+    // Vitest summary, exact shape: `Tests  246 passed | 2 skipped (248)` etc.
+    const vitestTotal = /^\s*Tests\s+(\d+ \w+(?: \| \d+ \w+)*) \((\d+)\)\s*$/.exec(rest);
+    if (vitestTotal !== null && /(?:^| \| )\d+ passed(?: \| |$)/.test(vitestTotal[1])) {
+      const record = entry(pkg);
+      record.total = Number(vitestTotal[2]);
+      record.source = 'vitest';
       continue;
     }
     const tapTotal = /^\s*# tests (\d+)\s*$/.exec(rest);
     if (tapTotal !== null) {
-      entry(pkg).total = Number(tapTotal[1]);
+      const record = entry(pkg);
+      record.total = Number(tapTotal[1]);
+      record.source = 'tap';
+    }
+  }
+  // Cross-check: a vitest total that disagrees with the per-file sum is a forged or
+  // corrupted stream — refuse the whole package rather than rewrite from it.
+  for (const [pkg, record] of [...packages]) {
+    if (record.source !== 'vitest' || record.total === undefined || record.files.size === 0) continue;
+    const fileSum = [...record.files.values()].reduce((sum, count) => sum + count, 0);
+    if (fileSum !== record.total) {
+      packages.delete(pkg);
+      onRefuse(pkg, { total: record.total, fileSum });
     }
   }
   return packages;
@@ -190,7 +220,11 @@ function main() {
     log = `${run.stdout}\n${run.stderr}`;
   }
 
-  const measurements = parseTestLog(log);
+  const measurements = parseTestLog(log, (pkg, { total, fileSum }) => {
+    console.warn(
+      `WARNING: ${pkg}: summary total (${total}) != per-file sum (${fileSum}) — refusing to update this package's counts.`,
+    );
+  });
   if (measurements.size === 0) {
     console.error('No per-package test output recognized in the run log — nothing rewritten.');
     process.exit(1);
