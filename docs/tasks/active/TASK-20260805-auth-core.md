@@ -88,10 +88,50 @@ Protocol touched → spec-changelog entry (internal draft, v3 storage schema + a
 
 ## Decisions & surprises
 
-(running)
+- **Registry `apiHosts` choices (D2, human-reviewed, kept minimal — each host receives the credential at runtime):** spotify → `api.spotify.com`; github → `api.github.com`; gmail → `gmail.googleapis.com` (the Gmail API's own host, narrower than the generic Google one); google + googledrive → `www.googleapis.com` (Drive v3 + most Google REST APIs; upload paths share the host); slack → `slack.com` (the Web API is `slack.com/api/*` — no separate api host exists); applemusic → `api.music.apple.com`. Deliberately NOT included: regional/CDN mirrors, `*.googleusercontent.com` download hosts, Slack file hosts — widening is a per-spec user decision via `declaredApiHosts` + re-approval, never a registry default.
+- **Consent params as spec data:** registry `authorizeParams` (Google-only `access_type=offline&prompt=consent`) are copied into the SPEC by the transformer; the OAuth service applies only what the spec carries. The derived-host union is therefore computable from the spec alone — which is what lets the freeze live in packages/db with no auth→db cycle (the transformer folds registry `apiHosts` into `declaredApiHosts` at build time).
+- **Flow rows are keyed by `flowId`, carrying a nonce echoed in the signed state.** The spilled-row key `auth:_flow:<flowId>` (N3) forced the choice; the nonce binds one state token to one row, and `handleCallback` compares the caller's `expectedFlowId` against the SIGNED payload's flowId — both values the system owns. A mismatched delivery burns the flow row (fail closed).
+- **Surprise — whole-file byte equality is unattainable for the N3 state-placement test:** SQLite's header change counter moves on ANY transaction, so two default exports around a secret-only write differ in bytes even though every stripped table is identical. The test asserts the `snug_auth_specs` CONTENT of the export instead (plus absence of the dynamic-state bytes). Side observation for the sync loop: ANY secret write (BYOK key too, not just auth) makes the next hub-push hash differ despite identical stripped content — a pre-existing, benign inefficiency (one redundant push), noted for a future content-hash-on-stripped-image tweak.
+- **`importUserDb` now returns a `UserDbImportReport`** (dropped auth-spec rows + reasons) — the "surfaced" half of drop-and-surface. `SyncableUserDb`/`RestorableUserDb` signatures widened to `Promise<unknown>` (TS's void-return covariance doesn't apply inside `Promise<>`).
+- **`deleteApp` cascade extended** to `snug_auth_specs` + the `auth:<appId>:*` secret slice (the existing "every referencing table is named or it's a silent orphan" contract left no choice); `auth:_state_hmac` and `auth:_flow:*` survive by design (not app-keyed).
+- **Ordinary `putAuthSpec` on an approved row keeps the approval when the derived union is unchanged** (per D5 — only union CHANGES are rejected). A scope edit therefore doesn't demote; scope changes surface to the user at the OAuth consent screen instead. If the owner wants same-union edits to demote too, it is a one-line change in the accessor.
+- **Unknown-keys-preserved rows are readable but unapprovable:** `getAuthSpec` returns them (JSON.parse, not zod — R2 preservation must stay readable), while `approveAuthSpec` re-validates strictly and refuses — an older hub can hold but never bless data it cannot understand.
+- **AC5 lint ate its own comments:** the no-`Buffer` regex flagged the word in doc comments; prose reworded ("node byte-buffer API") rather than weakening the lint to skip comments.
+
+### Mutation-check evidence (every guard: mutate → RED → restore → green)
+
+| # | Mutation (reverted fix) | RED test(s) |
+|---|---|---|
+| M1 | drop `refreshUrl` from `deriveAuthAllowedHosts` | protocol `derived host union … INCLUDING refreshUrl` |
+| M2 | add auth schema to `json-schemas.ts` SOURCES | protocol `export set … no auth-* entry` |
+| M3 | relax `declaredApiHosts` to optional for the 4 kinds | protocol `REQUIRED non-empty for api_key/…` |
+| M4 | disable union-equality freeze check in `putAuthSpec` | db freeze ×2 (endpoint edit; declared/refresh widen) |
+| M5 | reconciliation honors imported rows as-is | db doctored-column, changed-spec, new-row, sync-restore (×4) |
+| M6 | disable byte-identical restore branch | db `byte-identical re-import: approval SURVIVES` |
+| M7 | loop ignores provider `secretsAllowed` | db `custody-line.hub-push-carries-no-auth-bytes` |
+| M8 | loop ignores embedder `includeSecrets` opt-in | db `custody-line.dropbox-carries-secrets-by-design` (both-gates arm) |
+| M9 | remove `postForm` ceiling check | auth N2b ×3 (exchange, refresh, cc-mint) |
+| M10 | drop `expectedFlowId` comparison | auth `bug-2: flow A's callback cannot complete against flow B` |
+| M11 | `consume()` stops deleting | auth `state is single-use` + flow-store test |
+| M12 | skip state signature verification | auth `tampered` + `forged under ANY other key` |
+| M13 | stop unwrapping `userLayer` (reintroduce bug 1) | auth bug-1 start + callback tests |
+| M14 | plant a long-lived plaintext token cache | auth `read from the store PER USE, never a cache` |
+| M15 | plant `skipValidation` knob + `node:os` import in src | auth AC5 ×2 (node-import lint; knob lint) |
+| M16 | drop the `auth:<appId>:*` delete from `deleteApp` | db `deleteApp cascades the auth surface` |
+
+The finding-14 canary carries a PERMANENT self-check arm (`canary.probe-detects-planted-secret` writes a secret into chat meta and requires the probe to find it) — the probe is proven live on every run, not just once. The N3 state-placement invariant has no disabling mutation (no code path writes dynamic state into the spec table exists to disable); its test guards against a future one appearing.
 
 ## Session journal (append-only, newest last)
 
 ### 2026-08-06 — Claude (Fable 5, orchestrator) — task instantiated
 - Plan v3 (above) instantiated post-review; AL-01 merged (PR #5) so ADR-0014 exists on main — implementer must run the D3-vs-ADR-0014 check FIRST (escalation clause).
 - Next step: implementation, tests first.
+
+### 2026-08-06 — Claude (Fable 5, implementer) — implementation complete, all ACs green
+- **STEP 0 (escalation clause): D3-vs-ADR-0014 custody check ran FIRST — the merged ADR is NOT weaker than D3 in any respect.** Clause-by-clause: hub-never (ADR 2.1, "Unconditional — no option can override it") ≥ D3; personal-origin full-file (ADR 2.2, explicitly "both required" gating) ≥ D3; default-export strip + named opt-in (ADR 2.3) = D3; claim discipline (ADR 5, hub-custody claim only) = D3; and ADR clause 6 binds the `auth:` namespace to the identical line "no weaker". No halt; proceeded.
+- Implemented in the plan's files-to-touch order, TDD per file (every module's tests shown failing before implementation; source-system tests adapted where D7 says so). Commits (all task-id-prefixed): protocol schema+v3 → db accessors/freeze/reconciliation/custody → auth base64url/store/mode/registry/template → transformer+freeze-predicates → oauth-service+AC5 → docs (this commit).
+- AC→test mapping: AC1 protocol `auth-schema.test.ts` (19) + `userdb-schema.test.ts` v3 rows; AC2 db `auth-custody.test.ts` (8, four byte-probe paths + hmac-key absence + N3 + canary pair); AC3 db `auth-specs.test.ts` (17: accessor/freeze/migration/cascade/reconciliation incl. sync-restore-same-pass) — approval-display completeness asserted at the accessor seam (decision altitude: the accessor RETURNS the full frozen list; rendering it is AL-04); AC4 auth `oauth-service.test.ts` (35) + `credential-store` (9) + `template-engine` (8) + `base64url` (6); AC5 `browser-safe.test.ts` (5).
+- Root suites green at **1051** (was 910): protocol 103→123, db 170→200, auth 0→91; all other packages untouched and green. `pnpm build` green. 16 guard mutations checked RED→restored (table above).
+- Docs updated in-branch: code-map rows (regenerated counts + 3 hand-added rows), architecture component/graph lines for the local-first auth package, spec-changelog INTERNAL-DRAFT v3 entry (excluded from AL-13), spec-v0.2 version-note annotation, next-steps ✅ entry.
+- **High-tier self-sign-off (PROCESS):** C1 — no strictness knob exists in `packages/auth` (AC5 lint + mutation M15); negative tests present for every custody path and both audit bugs; C4 — no source-system name/path appears in any tracked file (codenames only); C5 — no secrets in code/config, no env reads in packages. NO push, NO PR per the run's rules — stopped after the final commit; fresh-context diff review is the next gate.
+- Forward constraints re-confirmed for the next children (copy into their task files at creation): AL-03 — always-strict host injection BY CONSTRUCTION (no env/flag/config), injection barred unless `status === AUTH_SPEC_STATUS.approved`, ceiling = the row's `allowed_hosts`; AL-04 — credential values never in chat rows (canary is armed), `expectedFlowId` from the caller's own held copy, redirect URI shapes via `RedirectUriProvider`, full frozen host list displayed at approve/reapprove.

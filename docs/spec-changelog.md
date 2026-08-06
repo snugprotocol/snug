@@ -4,6 +4,20 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-06 — INTERNAL DRAFT, not staged for any push — TASK-20260805-auth-core (AL-02)
+**Excluded from the AL-13 v0.1+v0.2 push by owner decision (2026-08-05 spec-gating):**
+storage schema moves to **v3** — new table `snug_auth_specs` (Dynamic Auth spec metadata:
+`app_id` PK, `spec_json`, `status` ∈ {unapproved, approved, imported_unapproved},
+`allowed_hosts` = the FROZEN derived host union computed at approval (declared ∪ registry
+∪ OAuth endpoint hosts INCLUDING refreshUrl), `approved_at`, timestamps). v2→v3 migration
+is additive. Credential VALUES never enter the table: they live in `snug_secrets` under
+the `auth:` namespace (`auth:<appId>:<field>`, `auth:<appId>:_connection`,
+`auth:_flow:<flowId>`, `auth:_state_hmac`) governed by ADR-0014's custody line. The auth
+Zod schemas (5-kind strict union in `packages/protocol/src/auth-schema.ts`) are
+deliberately NOT added to the `json-schemas.ts` SOURCES export — the publishes-to-spec
+line is unchanged and a test pins the export set. Wire frames/envelope UNCHANGED at v1.
+Publication of the auth surface is gated at Beta exit (staged v0.3 prose is AL-12).
+
 ## 2026-08-03 — spec v0.2 DRAFT amended in place (staged, not pushed) — TASK-20260803-living-apps
 The still-unpushed v0.2 draft's storage layer moves to **schema v2** (ADR-0010): per-app
 data becomes REAL namespaced tables — `app_<token>__<name>` with a NORMATIVE total
