@@ -1,6 +1,6 @@
 # TASK-20260806-flip-prep: Flip-public prep — community files, real good-first-issues, staged runbook (AL-14, A11)
 
-- **Status**: in-progress
+- **Status**: in-review (final commit made in the isolated worktree; parent orchestrator raises the PR — no push from this task)
 - **Owner**: Jeetu (autonomous run; Claude implements — umbrella TASK-20260805-alpha-umbrella, child AL-14; plan pre-approved by Phase-0 decision 6)
 - **Risk tier**: low (docs + `.github/` metadata; no package code). Gates still apply.
 - **Branch**: `feat/TASK-20260806-flip-prep`
@@ -76,3 +76,10 @@ Kept deliberately: source-system codenames (approved indirection, stay per instr
 - Done: Gate-1/2 reads (umbrella AL-14 row + Phase-0 decision 5, LAUNCH_OPS, roadmap A11, PROCESS, next-steps queued entries, current README/SECURITY/CONTRIBUTING/CoC/templates, all staged drafts); verified every draft claim and all 13 GFI candidates against current main (greps + file reads recorded above); this spec/plan.
 - State: plan approved by umbrella pre-approval; executing.
 - Next step: place corrected community files.
+
+### 2026-08-06 03:05 — Claude (Fable 5) — session close (Gate 6)
+- Done: community set placed + corrected (commit 17f0bca); good-first-issues rewritten to a verified 10 (e034a3d); labels ensured + **issues #9–#18 opened for real** on `snugprotocol/snug` (~09:55 UTC, `gh label create --force` ×3 + `gh issue create` ×10 — the only remote actions taken, per authorization); breadcrumb sweep executed + scrubs committed (ec6a094); README flip-critical patches (5d4733c); runbook finalized into this worktree's untracked `internal/RUNBOOK-flip-public.md` (stages 2–3 marked ✅ DONE, PR/issue numbers current, branch-protection JSON moved to the non-deprecated `checks:[{context}]` form, `gh repo delete --yes` + `delete_repo` scope noted, purge recommendation flipped to Support-ticket now that issues exist, breadcrumb sweep added as permanent stage-1.6, LAUNCH_OPS diff folded in: trademark check + org 2FA/second-owner + footer-link check added to gates); code-map community row + INDEX row + next-steps ✅ entries; root `pnpm build` + `pnpm test` green (counts in the close commit message).
+- **AC5 note (runbook custody):** `internal/` is gitignored, so the runbook exists ONLY in the AL-14 worktree's `internal/` — the owner must copy it to the canonical repo's `internal/` (called out in the runbook header). The tracked deliverable is everything else on this branch.
+- State: all ACs met; branch ready for PR + AI review (Gate 5 by parent).
+- Next step (parent): PR, review, merge; owner copies the runbook file; morning report lists issues #9–#18.
+- Open questions: none blocking. Residue parked in the runbook footer (purge option, codenames-in-done-tasks, npm org status).
