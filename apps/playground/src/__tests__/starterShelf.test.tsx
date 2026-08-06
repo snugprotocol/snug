@@ -1,0 +1,104 @@
+// starterShelf.test.tsx — TASK-20260806-starters-pillars AC3.
+//
+// The five pillar starters (roadmap §5) reach the hub shelf through the ONE
+// definition — the `import.meta.glob` over `examples/*/app.html` in starterApps.ts —
+// with no second registry. This file pins (a) that the glob really carries them
+// (a missing examples/ folder is invisible to typecheck and only fails here), and
+// (b) that each gets its own kid-first look on the hub tile rather than the generic
+// `⬡` fallback — an 11-year-old navigates the shelf by icon.
+
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { listStarterApps, STARTER_PREFIX } from '../starter/starterApps.js';
+import { HubView } from '../views/HubView.js';
+import { modeStore } from '../state/mode.js';
+import { installTestUserDb } from './userdbTestHelper.js';
+
+declare global {
+  // eslint-disable-next-line no-var
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+/** Folder names are the pinned contract literals (task file, "shared literals"). */
+const PILLAR_FOLDERS = ['adventure-quest', 'quiz-me', 'trivia-night', 'trip-planner', 'pocket-ledger'];
+const ORIGINAL_FOLDERS = ['chess', 'flying-pig', 'habit-tracker'];
+
+let container: HTMLDivElement | undefined;
+let root: Root | undefined;
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+}
+
+async function renderHub(): Promise<HTMLDivElement> {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  act(() => {
+    root!.render(
+      <MemoryRouter initialEntries={['/']}>
+        <HubView />
+      </MemoryRouter>,
+    );
+  });
+  await settle();
+  return container;
+}
+
+beforeEach(async () => {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }),
+  });
+  localStorage.clear();
+  sessionStorage.clear();
+  modeStore.set('subscription');
+  await installTestUserDb();
+});
+
+afterEach(() => {
+  if (root !== undefined) act(() => root?.unmount());
+  container?.remove();
+  root = undefined;
+  container = undefined;
+});
+
+describe('the five pillar starters register through the ONE definition (AC3)', () => {
+  it('listStarterApps() carries all eight starters straight from the examples/ glob', () => {
+    const ids = listStarterApps().map((starter) => starter.id);
+    for (const folder of [...ORIGINAL_FOLDERS, ...PILLAR_FOLDERS]) {
+      expect(ids, `examples/${folder}/app.html must be bundled on the shelf`).toContain(`${STARTER_PREFIX}${folder}`);
+    }
+  });
+
+  it('every pillar starter tile has its own look, not the ⬡ fallback', async () => {
+    const el = await renderHub();
+    const emojis: string[] = [];
+    for (const folder of PILLAR_FOLDERS) {
+      const name = folder.replace(/-/g, ' ');
+      const tile = [...el.querySelectorAll<HTMLElement>('[data-testid="starter-tile"]')].find(
+        (candidate) => candidate.getAttribute('data-starter-name') === name,
+      );
+      expect(tile, `a hub tile for "${name}"`).toBeDefined();
+      const emoji = tile!.querySelector('.tile-emoji')?.textContent?.trim() ?? '';
+      expect(emoji, `${name} needs a real look (STARTER_LOOKS row)`).not.toBe('⬡');
+      expect(emoji).not.toBe('');
+      const blurb = tile!.querySelector('.tile-sub')?.textContent ?? '';
+      expect(blurb, `${name} needs its own blurb`).not.toContain('curated example — runs without a server');
+      emojis.push(emoji);
+    }
+    // Kids find tiles by icon — five identical icons would defeat the shelf.
+    expect(new Set(emojis).size, 'each pillar starter gets a distinct emoji').toBe(PILLAR_FOLDERS.length);
+  });
+});

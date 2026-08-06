@@ -21,7 +21,25 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
 const EMBEDDED_HOOKS = path.join(REPO_ROOT, 'packages', 'sdk', 'embedded', 'snug-hooks.js');
-const APPS = ['chess', 'flying-pig', 'habit-tracker'];
+const APPS = [
+  'chess',
+  'flying-pig',
+  'habit-tracker',
+  // The five pillar starters (TASK-20260806-starters-pillars, roadmap §5).
+  'adventure-quest',
+  'quiz-me',
+  'trivia-night',
+  'trip-planner',
+  'pocket-ledger',
+];
+
+/**
+ * ADR-0011 posture, declared per app and enforced here (TASK-20260806 AC2): an
+ * LLM-free app sets `RESPONSE_SCHEMA = null` and never calls `sendMessage` in its
+ * authored code; an agent-driven app calls `sendMessage` WITH a `responseSchema`.
+ * Everything not in this set is agent-driven.
+ */
+const LLM_FREE_APPS = new Set(['flying-pig', 'trivia-night', 'trip-planner', 'pocket-ledger']);
 const CDN_ALLOWLIST = ['https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://unpkg.com'];
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 
@@ -120,5 +138,23 @@ for (const app of APPS) {
 
   test(`${app}: within the ${MAX_ARTIFACT_BYTES / (1024 * 1024)} MB artifact limit`, () => {
     assert.ok(statSync(file).size <= MAX_ARTIFACT_BYTES, 'app.html is within the artifact size limit');
+  });
+
+  test(`${app}: declares its ADR-0011 LLM posture honestly`, () => {
+    // The authored region: everything from the section-5 banner to the end of the
+    // babel script — the hook block above it is contract code and legitimately
+    // DEFINES sendMessage, so posture is only meaningful below the banner.
+    const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1] ?? '';
+    const lines = script.split('\n');
+    const bannerIndex = lines.findIndex((line) => line.includes('5. RESPONSE SCHEMA'));
+    assert.ok(bannerIndex >= 0, 'has the section-5 banner');
+    const authored = lines.slice(bannerIndex).join('\n');
+    if (LLM_FREE_APPS.has(app)) {
+      assert.match(authored, /const RESPONSE_SCHEMA = null/, 'LLM-free: RESPONSE_SCHEMA is null');
+      assert.doesNotMatch(authored, /\bsendMessage\s*\(/, 'LLM-free: authored code never calls sendMessage');
+    } else {
+      assert.match(authored, /\bsendMessage\s*\(/, 'agent-driven: authored code calls sendMessage');
+      assert.match(authored, /responseSchema:/, 'agent-driven: a responseSchema travels with the request');
+    }
   });
 }
