@@ -33,3 +33,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0012 — Prompt caching is a per-turn decision, scoped to builder/agent turns](0012-prompt-caching-scope.md)
 - [0013 — Hosted hub is static files only (zero-backend doctrine)](0013-hosted-hub-static-zero-backend.md)
 - [0014 — Credentials are local-first (custody doctrine)](0014-credentials-local-first.md)
+- [0015 — WebLLM experimental mode: engine, model default, fallback](0015-webllm-experimental-mode.md)

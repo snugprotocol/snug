@@ -9,7 +9,7 @@ import type { ReactElement } from 'react';
 import type { AppDocRecord } from '@snugprotocol/db';
 
 import { getUserDb } from '../state/userdb.js';
-import type { PlaygroundMode } from '../state/mode.js';
+import type { TurnMode } from '../state/webllm.js';
 import { Button } from '../ui/Button.js';
 import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -18,8 +18,11 @@ export interface DocsPanelProps {
   appId: string;
   /** Bumped by the parent whenever the agent writes a doc — triggers a reload. */
   refreshToken: number;
-  /** The ACTIVE mode — the empty copy branches on this value, never on a guess (AC15, R4). */
-  mode: PlaygroundMode;
+  /**
+   * The EFFECTIVE turn mode (`useTurnMode()`), never the raw mode — the webllm brain
+   * override makes the raw mode lie about where turns execute (AC15, R4; review F3).
+   */
+  mode: TurnMode;
 }
 
 /**
@@ -32,12 +35,21 @@ export interface DocsPanelProps {
  * R4: branches on the MODE VALUE — when the server gains the tool, only this switch
  * changes.
  */
-function emptyCopy(mode: PlaygroundMode): { title: string; lesson: string } {
+function emptyCopy(mode: TurnMode): { title: string; lesson: string } {
   if (mode === 'subscription') {
     return {
       title: 'no wiki in subscription mode',
       lesson:
         'the hub’s agent is not offered the doc tool, so it cannot write these pages however long you build — switch to byok or local mode in settings to get a wiki.',
+    };
+  }
+  if (mode === 'webllm') {
+    // The webllm builder path is TOOL-FREE by design (web-llm function calling is
+    // 8B-Hermes-only) — no doc tool, so no page can ever be written here.
+    return {
+      title: 'no wiki in webllm mode',
+      lesson:
+        'the experimental in-browser model runs without tools, so it cannot write these pages however long you build — switch to byok or local mode in settings to get a wiki.',
     };
   }
   return {

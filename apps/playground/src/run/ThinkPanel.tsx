@@ -10,7 +10,7 @@
 
 import type { ReactElement, ReactNode } from 'react';
 
-import type { PlaygroundMode } from '../state/mode.js';
+import type { TurnMode } from '../state/webllm.js';
 import type { InspectorEntry } from './inspector.js';
 import { InspectorPanel } from './InspectorPanel.js';
 import { LlmInspectorPanel } from './LlmInspectorPanel.js';
@@ -19,8 +19,8 @@ import type { LlmInspectorState } from './llmInspector.js';
 export interface ThinkPanelProps {
   llm: LlmInspectorState;
   frames: InspectorEntry[];
-  /** Drives the honest, mode-branched empty copy in the LLM section (AC15). */
-  mode: PlaygroundMode;
+  /** Drives the honest empty copy in the LLM section — the EFFECTIVE turn mode (AC15). */
+  mode: TurnMode;
 }
 
 function Section({ id, title, hint, children }: { id: string; title: string; hint: string; children: ReactNode }): ReactElement {

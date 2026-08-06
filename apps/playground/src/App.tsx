@@ -5,6 +5,7 @@ import { Link, NavLink, Route, Routes } from 'react-router-dom';
 import { refreshAppMeta } from './state/appMeta.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
+import { initWebllm } from './state/webllm.js';
 import { initSync, signOut } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
 import { bootUserDb, recoverFresh, useUserDbStatus } from './state/userdb.js';
@@ -14,6 +15,7 @@ import { Skeleton } from './ui/Skeleton.js';
 import { BuilderView } from './views/BuilderView.js';
 import { HubView } from './views/HubView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { WebllmBanner } from './views/WebllmBanner.js';
 
 // The Run view carries the runner + sql.js driver — code-split so the hub stays light.
 const RunView = lazy(() => import('./run/RunView.js'));
@@ -27,6 +29,8 @@ export function App(): ReactElement {
   useEffect(() => {
     bootUserDb();
     void initSettings();
+    // AL-07: the experimental webllm flag + WebGPU probe (idempotent, flag-gated).
+    void initWebllm();
     void refreshAppMeta();
     void initSync();
     void refreshAuth();
@@ -88,6 +92,7 @@ export function App(): ReactElement {
           <IdentityChip />
         </nav>
       </header>
+      <WebllmBanner />
       <main className="shell-main">
         <Routes>
           <Route path="/" element={<HubView />} />

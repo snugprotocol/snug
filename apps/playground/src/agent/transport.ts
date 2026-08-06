@@ -20,7 +20,8 @@ import {
   type ByokProvider,
   type PlaygroundMode,
 } from '../state/mode.js';
-import { createTurnAdapter } from './adapter.js';
+import { currentBrain } from '../state/webllm.js';
+import { createTurnAdapter, type DirectMode } from './adapter.js';
 
 export function createServerAppTransport(model?: string): AgentTransport {
   // App-path requests are self-contained envelopes — no threadId, no history.
@@ -28,7 +29,7 @@ export function createServerAppTransport(model?: string): AgentTransport {
 }
 
 export interface DirectTransportOptions {
-  mode: Exclude<PlaygroundMode, 'subscription'>;
+  mode: DirectMode;
   provider: ByokProvider;
   /** Injectable for tests; default reads the user DB secret for the provider. */
   getKey?: (provider: ByokProvider) => Promise<string | undefined>;
@@ -64,7 +65,9 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
           retryable: false,
         };
       }
-      const key = options.mode === 'local' ? undefined : await readKey(options.provider);
+      // local talks to an unauthenticated endpoint; webllm runs IN the page — neither
+      // reads a provider key (webllm must not touch snug_secrets at all).
+      const key = options.mode === 'local' || options.mode === 'webllm' ? undefined : await readKey(options.provider);
       const adapter = createTurnAdapter(
         {
           mode: options.mode,
@@ -95,18 +98,62 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
 }
 
 /**
- * The active transport for the current settings (stores read at creation time).
+ * The active transport for the current settings.
  *
  * `onLlmEvent` is threaded through so the Run view's LLM surface sees the turns an
  * APP makes, not just the ones the builder chat makes — the owner-reported gap where
  * a Chess move populated the frame inspector and nothing else. Subscription mode
  * ignores it: those round trips never leave the hub.
+ *
+ * The brain and settings stores are read PER SEND, not at creation (adversarial
+ * review 2026-08-06, finding 1): RunView memoizes this transport on [mode, provider],
+ * and on a hard load of /run/:id?webllm=1 it is constructed BEFORE the async
+ * `initWebllm()` probe lands — a creation-time `currentBrain()` froze the brain at
+ * 'settings' for the lifetime of the view, so every app turn routed on the configured
+ * mode while the banner claimed in-tab thinking. Same defect class as the
+ * useBuilderChat stale-discriminator bug this task already fixed once: when a
+ * behavior is conditional, evaluate the condition where the CALL happens.
  */
 export function createAppTransport(
   mode: PlaygroundMode,
   provider: ByokProvider,
   onLlmEvent?: (event: AgentTurnEvent) => void,
 ): AgentTransport {
+  return {
+    send(wire, options) {
+      return resolveAppTransport(mode, provider, onLlmEvent).send(wire, options);
+    },
+  };
+}
+
+/**
+ * The brain/settings decision, evaluated per send (see createAppTransport).
+ * Exported for the consumer-altitude tests only.
+ */
+export function resolveAppTransport(
+  mode: PlaygroundMode,
+  provider: ByokProvider,
+  onLlmEvent?: (event: AgentTurnEvent) => void,
+): AgentTransport {
+  // AL-07: the experimental webllm brain OVERRIDES the configured mode entirely —
+  // including subscription. `'webllm'` runs the in-page engine; `'demo'` is the
+  // graceful no-WebGPU fallback (the shell banner explains it). `'settings'` is the
+  // pre-existing behavior, byte-for-byte.
+  const brain = currentBrain();
+  if (brain.kind === 'webllm') {
+    return createDirectAppTransport({
+      mode: 'webllm',
+      provider,
+      ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+    });
+  }
+  if (brain.kind === 'demo') {
+    return createDirectAppTransport({
+      mode: 'byok',
+      provider: 'mock',
+      ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+    });
+  }
   const model = modelStore.get();
   if (mode === 'subscription') return createServerAppTransport(model);
   return createDirectAppTransport({

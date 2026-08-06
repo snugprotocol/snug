@@ -60,7 +60,13 @@ test.describe('AC2 — serverless execution', () => {
     // copy is a deliberate two-step act (owner request, 2026-08-04).
     await page.getByRole('button', { name: /open chess/i }).click();
     await page.getByTestId('starter-install').click();
-      await expect(page).toHaveURL(/\/run\//, { timeout: 20_000 });
+      // The INSTALLED copy's route, not the read-only starter view: /run/starter--chess
+      // also matches a bare /\/run\// — under machine load the install navigation can
+      // lag the click, and capturing the URL too early made the reload assertion look
+      // for a link the hub never renders (starters are buttons). Same pattern as
+      // owner-report.spec.ts. (Latent race surfaced 2026-08-06; OPFS persistence
+      // itself was fine — the failure page showed the installed app present.)
+      await expect(page).toHaveURL(/\/run\/(?!starter--)[0-9a-f-]{8,}/, { timeout: 20_000 });
       const runUrl = page.url();
       const appPath = new URL(runUrl).pathname;
       const appId = appPath.split('/').pop() ?? '';

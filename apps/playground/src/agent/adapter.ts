@@ -15,12 +15,20 @@ import {
 import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
 import { DEMO_APP_HTML, DEMO_APP_REPLY, DEMO_APP_TITLE } from './demoApp.js';
 import { ARTIFACT_WRITE_TOOL_NAME } from './tools.js';
+import { webllmAdapter } from './webllm/webllmAdapter.js';
 import { APP_BUILDER_TOOL_NAME } from '@snugprotocol/knowledge';
 
 export type ByokPurpose = 'chat' | 'app';
 
+/**
+ * `'webllm'` is a DIRECT mode here but NOT a `PlaygroundMode`: it is reachable only
+ * through the experimental `?webllm=1` brain override (state/webllm.ts) and must not
+ * join the persisted mode union until GA (AL-07).
+ */
+export type DirectMode = Exclude<PlaygroundMode, 'subscription'> | 'webllm';
+
 export interface TurnAdapterConfig {
-  mode: Exclude<PlaygroundMode, 'subscription'>;
+  mode: DirectMode;
   provider: ByokProvider;
   key?: string;
   model?: string;
@@ -57,6 +65,12 @@ function demoAppScript(): MockTurn[] {
  * local mode ignores provider/key; byok needs a key for anthropic/openai.
  */
 export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpose): AgentAdapter {
+  if (config.mode === 'webllm') {
+    // The shared `model` setting holds byok/local wire ids (e.g. "llama3.2") — a
+    // different namespace from web-llm prebuilt ids, so it is deliberately IGNORED:
+    // the spike always loads the ADR-0015 default; the model picker is GA scope.
+    return webllmAdapter();
+  }
   if (config.mode === 'local') {
     return localAdapter({
       ...(config.localUrl !== undefined ? { baseUrl: config.localUrl } : {}),
