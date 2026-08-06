@@ -48,16 +48,18 @@ Recorded after `gh issue create`:
 
 | # | GFI | Issue |
 |---|---|---|
-| 1 | OpenAI "0% cached" chip | _pending_ |
-| 2 | Sync divergence buttons state consequences | _pending_ |
-| 3 | Signed-out "this hub" sync → "sign in first" | _pending_ |
-| 4 | Builder chat renders raw markdown | _pending_ |
-| 5 | StrictMode kills the `?idea=` handoff on dev | _pending_ |
-| 6 | Examples validator discovers apps | _pending_ |
-| 7 | Inspector says *why* payloads are elided | _pending_ |
-| 8 | `check-spec-sync` script | _pending_ |
-| 9 | Dead-link check for docs/ | _pending_ |
-| 10 | Glossary entries for the observability era | _pending_ |
+| 1 | Stop rendering "0% cached" as if it were information | [#9](https://github.com/snugprotocol/snug/issues/9) |
+| 2 | Sync divergence buttons should state their consequence | [#10](https://github.com/snugprotocol/snug/issues/10) |
+| 3 | Signed-out "this hub" sync should say "sign in first", not "(401)" | [#11](https://github.com/snugprotocol/snug/issues/11) |
+| 4 | Builder chat renders raw markdown | [#12](https://github.com/snugprotocol/snug/issues/12) |
+| 5 | StrictMode double-mount kills the hub → builder `?idea=` handoff on dev | [#13](https://github.com/snugprotocol/snug/issues/13) |
+| 6 | Example validator should discover apps, not hardcode them | [#14](https://github.com/snugprotocol/snug/issues/14) |
+| 7 | Surface *why* an inspector entry's payloads are missing | [#15](https://github.com/snugprotocol/snug/issues/15) |
+| 8 | Script: `check-spec-sync` guard | [#16](https://github.com/snugprotocol/snug/issues/16) |
+| 9 | Script: dead-link check for `docs/` | [#17](https://github.com/snugprotocol/snug/issues/17) |
+| 10 | Glossary entries for the observability era | [#18](https://github.com/snugprotocol/snug/issues/18) |
+
+Labels ensured via `gh label create --force`: `good first issue` (7057ff), `bug` (d73a4a), `enhancement` (a2eeef) — the two template labels + the curated one. Issue bodies = the corresponding `docs/good-first-issues.md` entries.
 
 ### Breadcrumb sweep results (AC4)
 
