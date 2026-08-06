@@ -31,3 +31,5 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0010 — Per-app data as LLM-designed native tables; materialized runtime DB for isolation](0010-app-native-schemas-materialized-runtime.md)
 - [0011 — Apps are LLM-optional: the agent is a capability, not a requirement](0011-llm-optional-apps.md)
 - [0012 — Prompt caching is a per-turn decision, scoped to builder/agent turns](0012-prompt-caching-scope.md)
+- [0013 — Hosted hub is static files only (zero-backend doctrine)](0013-hosted-hub-static-zero-backend.md)
+- [0014 — Credentials are local-first (custody doctrine)](0014-credentials-local-first.md)
