@@ -131,8 +131,16 @@ export function AuthWizardSheet(): ReactElement | null {
     requestCloseWizard();
   };
 
+  // AC7 (fix-first 1): the re-approval presentation is keyed off the ROW, never
+  // just the session mode — a directive/error-CTA session over an already-approved
+  // row re-freezes the ceiling via reapproveAuthSpec (approveWizardSpec routes on
+  // row status), so the sheet must SAY re-approval on exactly that condition. Gated
+  // on the review step so a fresh connect flow doesn't relabel itself after its own
+  // approval advances the step (the row is approved by then).
+  const reapproving = session.mode === 'reapprove' || (step === 'review' && row?.status === AUTH_SPEC_STATUS.approved);
+
   return (
-    <Sheet title={session.mode === 'reapprove' ? 're-approve connection' : 'connect this app'} open onClose={onClose}>
+    <Sheet title={reapproving ? 're-approve connection' : 'connect this app'} open onClose={onClose}>
       {note !== null ? <div className="hint">{note}</div> : null}
       {closeConfirm ? (
         <div className="field" role="alertdialog" aria-label="confirm close">
@@ -208,7 +216,11 @@ function ReviewStep({
   }, [proposalDriven, row, draft.hostsCsv, draft.providerName]);
 
   const hosts = pendingSpec !== undefined ? deriveAuthAllowedHosts(pendingSpec) : [];
-  const frozen = session.mode === 'reapprove' ? (row?.allowedHosts ?? []).map(normalizeAuthHost) : undefined;
+  // AC7 (fix-first 1): the union diff is keyed off the ROW status — the same
+  // condition approveWizardSpec routes to reapproveAuthSpec on — so a directive
+  // session (mode 'connect') over an approved row still renders NEW/removed flags.
+  const reapproving = session.mode === 'reapprove' || row?.status === AUTH_SPEC_STATUS.approved;
+  const frozen = reapproving ? (row?.allowedHosts ?? []).map(normalizeAuthHost) : undefined;
   const removed = frozen !== undefined ? frozen.filter((h) => !hosts.includes(h)) : [];
 
   const approve = async (): Promise<void> => {
@@ -271,7 +283,7 @@ function ReviewStep({
       ) : null}
 
       <Button onClick={() => void approve()} disabled={hosts.length === 0}>
-        {session.mode === 'reapprove' ? 're-approve connection' : 'approve connection'}
+        {reapproving ? 're-approve connection' : 'approve connection'}
       </Button>
     </div>
   );

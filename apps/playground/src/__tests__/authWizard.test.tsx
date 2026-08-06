@@ -245,6 +245,29 @@ describe('AC7/M4 — wizard.reapproval-diff-flags-new-hosts (M20)', () => {
     expect(after).toContain('api.example.com'); // still listed, flagged as removed
   });
 
+  it('a DIRECTIVE over an already-approved row presents the re-approval diff — keyed off the ROW, not the session mode', async () => {
+    // The adversary-controlled mount (fixFirst 1): openWizard({source:'directive'})
+    // over an approved row gets mode 'connect', yet approveWizardSpec routes it
+    // through reapproveAuthSpec (row-status keyed) — so the union diff and the
+    // re-approve framing MUST render on exactly that same row condition.
+    await seedRow({ ...apiKeySpec, declaredApiHosts: ['api.old.example'] }, true);
+    openWizard({
+      source: 'directive',
+      appId: APP,
+      directive: directive({ providerName: 'Unknown Corp', kindHint: 'api_key', declaredApiHosts: ['api.new.example'] }),
+    });
+    await renderSheet();
+
+    const hosts = container.querySelector('[data-testid="wizard-hosts"]')?.textContent ?? '';
+    expect(hosts).toContain('api.new.example');
+    expect(hosts).toMatch(/NEW — not previously approved/);
+    expect(hosts).toContain('api.old.example'); // the previously-frozen host stays visible…
+    expect(hosts).toMatch(/removed by this re-approval/); // …flagged as dropped by this re-approval
+    // And the sheet SAYS it is a re-approval before the action is available.
+    expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('re-approve connection');
+    expect(button(/re-approve connection/i)).toBeDefined();
+  });
+
   it('re-approve routes through reapproveAuthSpec with the edited spec and drops remembered grants (AC9)', async () => {
     await seedRow(apiKeySpec, true);
     const db = await getUserDb();

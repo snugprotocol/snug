@@ -39,10 +39,17 @@ async function seed(status: 'unapproved' | 'approved' | 'imported_unapproved' = 
   db.putAuthSpec(APP, spec);
   if (status === 'approved') db.approveAuthSpec(APP);
   if (status === 'imported_unapproved') {
-    // simulate an imported row: put + demote via the accessor's status
+    // The REAL AL-02 import machinery, no stub: approve, export the db bytes, drop
+    // the local row (so no byte-identical locally-approved twin exists), then
+    // import — reconciliation demotes the incoming row to `imported_unapproved`
+    // with approved_at cleared (userdb.ts reconcileImportedAuthSpecs).
     db.approveAuthSpec(APP);
-    // there is no public demote; the panel only needs a non-approved row to show Approve,
-    // so leave it approved for that path and use the dedicated imported case elsewhere.
+    const bytes = await db.exportUserDb();
+    db.deleteAuthSpec(APP);
+    await db.importUserDb(bytes);
+    if (db.getAuthSpec(APP)?.status !== 'imported_unapproved') {
+      throw new Error('seed failed: import machinery did not demote the row to imported_unapproved');
+    }
   }
 }
 
@@ -159,6 +166,20 @@ describe('ConnectionsCard', () => {
     // re-approved spec for the same appId would resume injecting the OLD credential
     // without re-entry (probe-confirmed by AL-03's live sweep). Fail closed: gone.
     expect(await store.getCredential(APP, 'api_key')).toBeUndefined();
+  });
+
+  it('a REAL imported_unapproved row (AL-02 import machinery) opens the wizard in REAPPROVE mode (AC9 ternary)', async () => {
+    await seed('imported_unapproved');
+    await renderPanel();
+    expect(container.textContent ?? '').toContain('imported — needs re-approval');
+    const approveButton = [...container.querySelectorAll('button')].find((b) => /approve/i.test(b.textContent ?? ''));
+    expect(approveButton).toBeDefined();
+    await act(async () => {
+      approveButton!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // The SettingsView mode ternary: imported_unapproved → 'reapprove' (union diff shown).
+    expect(wizard.wizardStore.get()).toMatchObject({ appId: APP, mode: 'reapprove', source: 'settings' });
   });
 
   it('an approved row offers Re-approve, which opens the wizard in reapprove mode (AC9)', async () => {
