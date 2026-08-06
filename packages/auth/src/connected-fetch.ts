@@ -8,7 +8,7 @@
  * the embedder wires it in.
  *
  * Enforcement order is pinned by plan D3 and each gate is tested at this altitude:
- *   1. shape (zod, fail closed; GET/HEAD body rejected per R2; byte cap on the body)
+ *   1. shape (hand-written, fail closed; GET/HEAD body rejected per R2; byte cap on the body)
  *   2. binding — `appId` is HOST-assigned (R5); the input carries no identity field
  *   3. spec exists AND status === approved (AL-02 status contract; imported rows
  *      barred with the distinct NET_IMPORTED_UNAPPROVED)
@@ -37,7 +37,6 @@ import {
   type AuthSpecStatus,
   type NetMethod,
 } from '@snugprotocol/protocol';
-import { z } from 'zod';
 import { isHostAllowed } from './app-host-freeze.js';
 import { utf8ToBase64 } from './base64url.js';
 import type { CredentialStore } from './credential-store.js';
@@ -94,20 +93,52 @@ export interface ConnectedFetch {
 // -------------------------------------------------------------------- internals
 
 const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_URL_CHARS = 4096;
+const MAX_HEADER_NAME_CHARS = 128;
+const MAX_HEADER_VALUE_CHARS = 4096;
+const NET_METHOD_SET = new Set<string>(NET_METHODS);
 
-const inputSchema = z
-  .strictObject({
-    url: z.string().min(1).max(4096),
-    method: z.enum(NET_METHODS).optional(),
-    headers: z.record(z.string().min(1).max(128), z.string().max(4096)).optional(),
-    body: z.string().optional(),
-  })
-  .superRefine((input, ctx) => {
-    const method = input.method ?? 'GET';
-    if ((method === 'GET' || method === 'HEAD') && input.body !== undefined) {
-      ctx.addIssue({ code: 'custom', path: ['body'], message: `body is not allowed on ${method}` });
+/**
+ * Hand-written input validation — DELIBERATELY not zod (this package declares only
+ * @snugprotocol/{db,protocol} as runtime deps; the AC5 lint pins that set, and a phantom
+ * zod import made the executor unloadable from a clean checkout). These checks are
+ * DEFENSE IN DEPTH: the strict `netRequestSchema` at the protocol bridge already parsed
+ * and rejected malformed frames BEFORE the runner routed to this executor. Returns a
+ * human-readable reason on failure, `null` when the shape is acceptable.
+ */
+function validateInputShape(input: unknown): string | null {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return '(root): expected an object';
+  const { url, method, headers, body } = input as Record<string, unknown>;
+  // Reject unknown top-level fields (strict — matches the netRequestSchema posture).
+  for (const key of Object.keys(input as object)) {
+    if (key !== 'url' && key !== 'method' && key !== 'headers' && key !== 'body') {
+      return `${key}: unexpected field`;
     }
-  });
+  }
+  if (typeof url !== 'string' || url.length < 1 || url.length > MAX_URL_CHARS) {
+    return 'url: must be a non-empty string within the length cap';
+  }
+  const resolvedMethod = method === undefined ? 'GET' : method;
+  if (typeof resolvedMethod !== 'string' || !NET_METHOD_SET.has(resolvedMethod)) {
+    return `method: must be one of ${NET_METHODS.join(', ')}`;
+  }
+  if (headers !== undefined) {
+    if (typeof headers !== 'object' || headers === null || Array.isArray(headers)) {
+      return 'headers: must be an object';
+    }
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.length < 1 || name.length > MAX_HEADER_NAME_CHARS) return `headers.${name}: name length out of range`;
+      if (typeof value !== 'string' || value.length > MAX_HEADER_VALUE_CHARS) {
+        return `headers.${name}: value must be a string within the length cap`;
+      }
+    }
+  }
+  if (body !== undefined && typeof body !== 'string') return 'body: must be a string';
+  if ((resolvedMethod === 'GET' || resolvedMethod === 'HEAD') && body !== undefined) {
+    return `body: not allowed on ${resolvedMethod}`;
+  }
+  return null;
+}
 
 const STRIP_SET = new Set<string>(STRIP_HEADERS);
 const API_KEY_PATTERN = /api[-_]?key/i;
@@ -246,14 +277,14 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
 
   return {
     async execute(appId, input): Promise<ConnectedFetchResult> {
-      // Gate 1 — shape, fail closed.
-      const parsed = inputSchema.safeParse(input);
-      if (!parsed.success) {
-        const detail = parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
-        return failure(NET_ERROR_CODES.NET_INVALID_REQUEST, `invalid net request: ${detail}`);
+      // Gate 1 — shape, fail closed (hand-written; defense in depth over the bridge's
+      // strict netRequestSchema).
+      const shapeError = validateInputShape(input);
+      if (shapeError !== null) {
+        return failure(NET_ERROR_CODES.NET_INVALID_REQUEST, `invalid net request: ${shapeError}`);
       }
-      const method = parsed.data.method ?? 'GET';
-      const body = parsed.data.body;
+      const method = input.method ?? 'GET';
+      const body = input.body;
       if (body !== undefined && encoder.encode(body).byteLength > LIMITS.MAX_NET_REQUEST_BODY_BYTES) {
         return failure(
           NET_ERROR_CODES.NET_SIZE_EXCEEDED,
@@ -279,7 +310,7 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // Gate 4 — URL parse, https-only scheme (A1), frozen-host ceiling (B3 both sides).
       let url: URL;
       try {
-        url = new URL(parsed.data.url);
+        url = new URL(input.url);
       } catch {
         return failure(NET_ERROR_CODES.NET_INVALID_REQUEST, 'url does not parse');
       }
@@ -308,7 +339,7 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       }
 
       // Gate 7 — app-supplied credential-shaped headers are ALWAYS stripped (C1).
-      const appHeaders = stripCredentialShapedHeaders(parsed.data.headers ?? {});
+      const appHeaders = stripCredentialShapedHeaders(input.headers ?? {});
 
       const performFetch = async (forceRefresh: boolean): Promise<ConnectedFetchResult> => {
         // Gate 8 — injection (per kind; OAuth paths are ceiling-checked internally, N2b).
