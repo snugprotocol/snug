@@ -62,7 +62,8 @@ export function webllmAdapter(options: WebllmAdapterOptions = {}): AgentAdapter 
           retryable: false,
         };
       }
-      if (signal?.aborted === true) return cancelled('');
+      const isAborted = (): boolean => signal?.aborted === true;
+      if (isAborted()) return cancelled('');
 
       let engine: WebllmEngineLike;
       try {
@@ -97,7 +98,7 @@ export function webllmAdapter(options: WebllmAdapterOptions = {}): AgentAdapter 
           stream_options: { include_usage: true },
         });
         for await (const chunk of stream) {
-          if (signal?.aborted === true) break;
+          if (isAborted()) break;
           if (typeof chunk.model === 'string' && chunk.model !== '') wireModel = chunk.model;
           const choice = chunk.choices?.[0];
           const content = choice?.delta?.content;
@@ -116,7 +117,7 @@ export function webllmAdapter(options: WebllmAdapterOptions = {}): AgentAdapter 
           }
         }
       } catch (err) {
-        if (signal?.aborted === true) return cancelled(text);
+        if (isAborted()) return cancelled(text);
         return {
           ok: false,
           code: STREAM_DROPPED_CODE,
@@ -128,7 +129,7 @@ export function webllmAdapter(options: WebllmAdapterOptions = {}): AgentAdapter 
         signal?.removeEventListener('abort', onAbort);
       }
 
-      if (signal?.aborted === true) return cancelled(text);
+      if (isAborted()) return cancelled(text);
       if (finishReason === null) {
         // The stream ended without a finish_reason — treat like a dropped stream and
         // keep what was already written (same rule as the network adapters).

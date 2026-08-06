@@ -7,8 +7,11 @@ import { defineConfig } from 'vite';
 
 // Default 8787; SNUG_SERVER_PORT overrides it so a parallel worktree can run the
 // Playwright suite while another checkout's dev server holds the default port. The
-// e2e config (e2e/helpers.ts SERVER_PORT) honors the same variable — they must agree.
-const SERVER = `http://127.0.0.1:${process.env.SNUG_SERVER_PORT ?? '8787'}`;
+// e2e config (e2e/helpers.ts SERVER_PORT) honors the same variable — they must agree,
+// which is why this uses the SAME empty-string-safe form as helpers.ts (`?? '8787'`
+// would send the proxy to port '' when the var is set-but-empty while helpers falls
+// back to 8787 — the 2026-08-02 lesson's exact foot-gun, desynced across the pair).
+const SERVER = `http://127.0.0.1:${Number(process.env.SNUG_SERVER_PORT ?? '') || 8787}`;
 
 /**
  * Dev proxy options.
