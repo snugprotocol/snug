@@ -109,7 +109,7 @@ Child 1 produces spec v0.1 draft (SPEC.md prose + schemas) staged in this repo; 
 
 - 2026-07-31 **interview (owner-approved)**: (a) **umbrella + child tasks** — this file is the umbrella; each phase gets a child task file + branch + PR; (b) **central prompt location = `packages/knowledge/prompts/**`** (publishes with the package, typed loaders, eval-addressable; README points at it); (c) **Playground = Vite + React SPA** (BYOK static, supersedes internal/01 §5 "Next.js" — record as ADR); (d) **auth stays v1.1** — protocol reserves `auth_required`; Playground ships an inert "Connect account" teaser only.
 - 2026-07-31: IP clearance already recorded (internal/00 §OPEN DECISIONS) — direct extraction permitted, no clean-room constraint.
-- Source repos sit on different branches than the material (guardian repos on `main`, indranet on `feat/skill-auth-two-layer`); all extraction reads use `git show <branch>:<path>` — never checkout/switch in the source trees.
+- Source repos sit on different branches than the material (repo/branch names live only in `internal/.env.local`, per C4/C5); all extraction reads use `git show <branch>:<path>` — never checkout/switch in the source trees.
 
 ## Session journal (append-only, newest last)
 
