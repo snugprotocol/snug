@@ -1,6 +1,6 @@
 # TASK-20260806-webllm-spike: WebLLM adapter spike — in-browser brain behind a flag (AL-07 / roadmap A7)
 
-- **Status**: in-review (complete on branch; PR/merge deliberately left to the umbrella orchestrator)
+- **Status**: done — merged to main via PR #20 (2026-08-06)
 - **Owner**: Jeetu (autonomous — child of TASK-20260805-alpha-umbrella; child plans pre-approved by Phase-0 decision 6)
 - **Risk tier**: medium (playground logic + a new adapter; no protocol change, no C1/C2 surface)
 - **Branch**: `feat/TASK-20260806-webllm-spike`

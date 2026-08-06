@@ -1,6 +1,6 @@
 # TASK-20260806-flip-prep: Flip-public prep — community files, real good-first-issues, staged runbook (AL-14, A11)
 
-- **Status**: in-review (final commit made in the isolated worktree; parent orchestrator raises the PR — no push from this task)
+- **Status**: done — merged to main via PR #19 (2026-08-06)
 - **Owner**: Jeetu (autonomous run; Claude implements — umbrella TASK-20260805-alpha-umbrella, child AL-14; plan pre-approved by Phase-0 decision 6)
 - **Risk tier**: low (docs + `.github/` metadata; no package code). Gates still apply.
 - **Branch**: `feat/TASK-20260806-flip-prep`
