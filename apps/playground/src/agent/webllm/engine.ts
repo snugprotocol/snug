@@ -31,6 +31,8 @@ export interface WebllmChatRequest {
   messages: WebllmChatMessage[];
   stream: true;
   stream_options: { include_usage: true };
+  /** Qwen3-family only: `enable_thinking: false` prefills the empty think block. */
+  extra_body?: { enable_thinking: boolean };
 }
 
 export interface WebllmEngineLike {

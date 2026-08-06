@@ -96,6 +96,10 @@ export function webllmAdapter(options: WebllmAdapterOptions = {}): AgentAdapter 
           messages: wireMessages,
           stream: true,
           stream_options: { include_usage: true },
+          // Qwen3-family models think by default; a 4K context building a whole app
+          // cannot afford think tokens, so the empty-think prefill is requested. The
+          // knob is a Qwen3 template convention — never sent to other families.
+          ...(model.startsWith('Qwen3') ? { extra_body: { enable_thinking: false } } : {}),
         });
         for await (const chunk of stream) {
           if (isAborted()) break;

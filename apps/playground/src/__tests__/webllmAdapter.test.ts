@@ -145,6 +145,28 @@ describe('webllmAdapter — contract (AC4)', () => {
   });
 });
 
+describe('webllmAdapter — Qwen3 thinking disabled (context budget)', () => {
+  it('a Qwen3-family model id gets extra_body.enable_thinking=false (a 4K context cannot afford think tokens)', async () => {
+    const fake = fakeEngine([delta('x'), finish()]);
+    setWebllmEngineLoaderForTests(() => Promise.resolve(fake.engine));
+    await webllmAdapter({ model: 'Qwen3-1.7B-q4f16_1-MLC' }).complete({
+      system: 's',
+      messages: [{ role: 'user', content: 'u' }],
+    });
+    expect(fake.requests[0]?.extra_body).toEqual({ enable_thinking: false });
+  });
+
+  it('non-Qwen3 ids send NO extra_body (the empty-think prefill is a Qwen3 convention)', async () => {
+    const fake = fakeEngine([delta('x'), finish()]);
+    setWebllmEngineLoaderForTests(() => Promise.resolve(fake.engine));
+    await webllmAdapter({ model: 'Llama-3.2-3B-Instruct-q4f16_1-MLC' }).complete({
+      system: 's',
+      messages: [{ role: 'user', content: 'u' }],
+    });
+    expect(fake.requests[0]).not.toHaveProperty('extra_body');
+  });
+});
+
 describe('webllmAdapter — wire model name (AC5)', () => {
   it('reports the engine-REPORTED model id, not the configured one', async () => {
     const fake = fakeEngine([delta('x', 'ENGINE-REPORTED-ID'), finish('ENGINE-REPORTED-ID')]);
