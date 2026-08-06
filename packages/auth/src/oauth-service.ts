@@ -54,6 +54,7 @@ export type SnugAuthErrorCode =
   | 'no_connection'
   | 'unsupported_kind'
   | 'host_not_allowed'
+  | 'redirect_blocked'
   | 'missing_credential';
 
 export class SnugAuthError extends Error {
@@ -408,7 +409,7 @@ export class OAuthService {
     try {
       tokens = await this.postForm(layer.endpoints.tokenUrl, body, input.allowedHosts, POST_TIMEOUT_MS);
     } catch (err) {
-      if (err instanceof SnugAuthError && err.code === 'host_not_allowed') throw err;
+      if (err instanceof SnugAuthError && (err.code === 'host_not_allowed' || err.code === 'redirect_blocked')) throw err;
       const message = err instanceof Error ? err.message : String(err);
       await this.deps.store.setConnectionState(appId, { status: 'error', lastError: `Token exchange failed: ${message}` });
       throw new SnugAuthError(`Token exchange failed: ${message}`, 'token_exchange_failed');
@@ -467,7 +468,7 @@ export class OAuthService {
     try {
       tokens = await this.postForm(refreshEndpoint, body, scope.allowedHosts, POST_TIMEOUT_MS);
     } catch (err) {
-      if (err instanceof SnugAuthError && err.code === 'host_not_allowed') throw err;
+      if (err instanceof SnugAuthError && (err.code === 'host_not_allowed' || err.code === 'redirect_blocked')) throw err;
       const message = err instanceof Error ? err.message : String(err);
       await this.deps.store.setConnectionState(appId, { status: 'expired', lastError: `Refresh failed: ${message}` });
       throw new SnugAuthError(`Refresh failed: ${message}`, 'refresh_failed');
@@ -490,6 +491,7 @@ export class OAuthService {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ token: accessToken }),
+          redirect: 'manual', // B2: best-effort or not, a credential POST never follows a redirect
           signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS),
         });
       } catch {
@@ -547,7 +549,7 @@ export class OAuthService {
     try {
       tokens = await this.postForm(spec.endpoints.tokenUrl, body, allowedHosts, POST_TIMEOUT_MS);
     } catch (err) {
-      if (err instanceof SnugAuthError && err.code === 'host_not_allowed') throw err;
+      if (err instanceof SnugAuthError && (err.code === 'host_not_allowed' || err.code === 'redirect_blocked')) throw err;
       const message = err instanceof Error ? err.message : String(err);
       await this.deps.store.setConnectionState(appId, {
         status: 'expired',
@@ -585,6 +587,9 @@ export class OAuthService {
   /**
    * Every outbound credential-bearing POST funnels through here: the frozen-host
    * ceiling check (N2b) runs FIRST — a host outside the ceiling never sees a packet.
+   * Redirect posture (AL-03 amendment B2): `redirect: 'manual'` — a 30x from a
+   * token/refresh/revoke endpoint is a TYPED error, never followed; before this fix a
+   * misconfigured/compromised endpoint could 302 the credential-bearing body onward.
    */
   private async postForm(
     url: string,
@@ -602,8 +607,15 @@ export class OAuthService {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
       body,
+      redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
     });
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      throw new SnugAuthError(
+        `endpoint answered with a redirect (${response.status || 'opaque'}) — credential POSTs are never redirected`,
+        'redirect_blocked',
+      );
+    }
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
