@@ -2,7 +2,7 @@
 
 Snug's security claims are meant to be falsifiable. The two load-bearing ones:
 
-- **C1 — Token boundary.** Credentials never enter an app iframe, never reach the LLM, and never reach an app publisher. In the current architecture every secret lives in `snug_secrets` inside the user's own SQLite file — stripped from sync pushes and default exports (and VACUUMed so deleted values don't linger in free pages).
+- **C1 — Token boundary.** Credentials never enter an app iframe, never reach the LLM, and never reach an app publisher. In the current architecture every secret lives in `snug_secrets` inside the user's own SQLite file — stripped from hub-bound sync pushes and default exports (and VACUUMed so deleted values don't linger in free pages). A personal sync origin you explicitly connect (e.g. your own Dropbox) carries the full file, secrets included — that is how credentials travel between your own devices (ADR-0014).
 - **C2 — Sandbox integrity.** App iframes run `sandbox="allow-scripts"` only (never `allow-same-origin`), with `connect-src 'none'` for app-originated traffic and a fixed CDN allowlist. LLM calls originate from the host page only — an app has no network of its own.
 
 Anything that makes either claim false is a critical finding, and we want to hear it.
@@ -26,7 +26,7 @@ Please include a reproduction — a Playground sequence, a single-file app HTML,
 **In scope**
 
 - Escaping or weakening the iframe sandbox (C2): executing with same-origin privileges, reaching the network from app code, loading from outside the CDN allowlist.
-- Breaking the token boundary (C1): extracting anything from `snug_secrets` into an app, an envelope payload, an LLM prompt, a sync push, or a default export.
+- Breaking the token boundary (C1): extracting anything from `snug_secrets` into an app, an envelope payload, an LLM prompt, a hub-bound sync push, or a default export.
 - Envelope-boundary validation gaps in `packages/protocol` / `packages/runner` (frames that bypass zod validation, smuggle capabilities, or confuse the bridge).
 - The reference server (`apps/server`): `/invoke`, session/CSRF handling, `/userdb` compare-and-swap endpoints, artifact cache.
 - Prompt-injection **with a boundary consequence** — LLM output or app content that causes the host to violate C1/C2. (Prompt injection that merely makes the LLM say something silly inside its existing permissions is a quality issue, not a security one.)
@@ -37,6 +37,7 @@ Please include a reproduction — a Playground sequence, a single-file app HTML,
 
 - Vulnerabilities in LLM providers, browsers, or OS/WebView internals (report upstream; we'll mitigate where we can).
 - A user deliberately exporting **with secrets included** or pasting their own key into an unrelated malicious site.
+- Secrets present in a personal sync origin you connected — that is by design (ADR-0014; see the token-boundary claim above).
 - Denial of service against your own browser tab or your own self-hosted server.
 - Infrastructure misconfiguration of third-party self-hosted deployments.
 - Social engineering of the maintainer, and anything requiring an already-compromised machine.

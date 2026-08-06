@@ -9,4 +9,4 @@
 /packages/protocol/ @jeetumaker
 /packages/runner/ @jeetumaker
 /packages/auth/ @jeetumaker
-/.github/workflows/ @jeetumaker
+/.github/workflows/ @jeetumaker # (future — CI lands with the hardening task)

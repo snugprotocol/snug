@@ -44,7 +44,7 @@ pnpm --filter server build && SNUG_ADAPTER=mock node apps/server/dist/server.js 
 pnpm --filter playground dev       # open the printed URL → click a suggestion chip → build → run
 ```
 
-Bring your own key instead: open **settings** in the Playground, pick BYOK, paste an Anthropic or OpenAI key (stored in `snug_secrets` inside your own local user-DB file — stripped from sync pushes and default exports, sent only to the provider). The starter apps run with zero setup.
+Bring your own key instead: open **settings** in the Playground, pick BYOK, paste an Anthropic or OpenAI key (stored in `snug_secrets` inside your own local user-DB file — stripped from hub sync and default exports, sent only to the provider). The starter apps run with zero setup.
 
 ## Working in this repo
 
