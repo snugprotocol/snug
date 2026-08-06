@@ -125,6 +125,12 @@ describe('AC5/R5 — pasted docs and inferrer evidence are wizard-ephemeral (M10
     // Wizard-ephemeral: the session HOLDS the evidence for spec_confirm display …
     expect(JSON.stringify(wizardStore.get()?.evidence)).toContain(EVIDENCE_CANARY);
 
+    // … through the FULL realistic flow: the user completes the review and approves
+    // while the session still holds evidence (the exact moment an M17-shaped bug
+    // would leak it into a persisted row).
+    const approvedAfterInference = await approveWizardSpec({ ...apiKeySpec, provider: { name: 'Canary API' } });
+    expect(approvedAfterInference.ok).toBe(true);
+
     // … and the FULL export (secrets included) holds none of it: not the evidence,
     // not the pasted docs — no table, no meta, no column (M10/M17).
     const bytes = await db.exportUserDb({ includeSecrets: true });
