@@ -5,6 +5,14 @@
 > `packages/protocol/src/userdb-schema.ts` (locked by the DDL snapshot test).
 > Wire protocol (frames + envelope) is UNCHANGED at v1 — v0.2 adds a storage and
 > hub-behavior layer on top of v0.1.
+>
+> **Version note (AL-02, 2026-08-06):** the reference implementation now carries an
+> **internal v3 draft** of the storage schema (`PRAGMA user_version = 3`, adding the
+> `snug_auth_specs` table for Dynamic Auth — see the spec-changelog internal-draft
+> entry). **This v0.2 document describes v2 and is published as such**; the v3 auth
+> surface is deliberately excluded from the AL-13 push and publishes no earlier than
+> Beta exit (staged v0.3 prose is AL-12). A v3 file is a superset of v2: the v2→v3
+> migration is purely additive.
 
 ## 1. The three actors
 

@@ -7,7 +7,7 @@ import type { SyncProvider, SyncPullResult } from './provider.js';
 
 /** The subset of UserDb recovery needs — matches what openFresh() hands back. */
 export interface RestorableUserDb {
-  importUserDb(bytes: Uint8Array): Promise<void>;
+  importUserDb(bytes: Uint8Array): Promise<unknown>;
   flush(): Promise<void>;
   close(): Promise<void>;
 }

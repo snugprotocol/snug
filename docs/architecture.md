@@ -24,9 +24,13 @@
 │      ▼                                                                                   │
 │  packages/db sync (ADR-0009): SyncProvider → hub origin (/userdb CAS) | Dropbox | …      │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
-   packages/protocol = envelope/frames (v1) + userdb-schema.ts (spec v0.2 storage surface)
+   packages/protocol = envelope/frames (v1) + userdb-schema.ts (spec v0.2 storage surface;
+     v3 internal draft adds snug_auth_specs) + auth-schema.ts (internal, NOT in schemas/)
    apps/server (OPTIONAL hub) = /invoke + artifact cache + Google OIDC + /userdb + static
-   packages/auth (v1.1) = server-side APP-credential broker (C1) — untouched by the hub login
+   packages/auth (AL-02, ADR-0014) = Dynamic Auth pure core, LOCAL-FIRST: browser-safe
+     DI-pure OAuth service + CredentialStore over the user file's snug_secrets `auth:` keys
+     — credentials live in the USER'S file, never a server vault; host ceiling always
+     strict (C1, no knob). Connected-fetch runtime lands in AL-03, wizard/UI in AL-04.
 ```
 
 Key invariants: the user DB is the single source of truth in EVERY mode (subscription
@@ -41,7 +45,7 @@ caches); LLM calls originate from the host page only; secrets never reach the hu
 - `knowledge` ← `server`, `playground`
 - `adapters` ← `server`, `playground` (browser-direct byok/local)
 - `runner` ← `playground`
-- `auth` ← `server` (v1.1)
+- `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); no package consumes it yet — `playground` wires it in AL-03/AL-04 (change auth → run `auth` alone today, plus `playground` once wired)
 
 ## External dependencies
 LLM providers: Anthropic + OpenAI via `adapters` — browser-direct in byok mode (CORS opt-in header), any OpenAI-compatible localhost endpoint in local mode (Ollama), hub-side in subscription mode. sql.js (WASM SQLite), OPFS (browser). Hub server: better-sqlite3 stores, openid-client (Google OIDC), @fastify/{cookie,static,cors}. Dropbox HTTP API (example personal sync origin, PKCE public client). No cloud services required for OSS usage.

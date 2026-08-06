@@ -22,7 +22,8 @@ import { loadSidecar, saveSidecar, sha256Hex, type SyncSidecarState } from './si
 /** The subset of UserDb the loop needs — structural, so tests can stub it. */
 export interface SyncableUserDb {
   exportUserDb(opts?: { includeSecrets?: boolean }): Promise<Uint8Array>;
-  importUserDb(bytes: Uint8Array): Promise<void>;
+  /** Result (the import report) is deliberately ignored by the loop. */
+  importUserDb(bytes: Uint8Array): Promise<unknown>;
   listSecretKeys(): string[];
   getSecret(key: string): string | undefined;
   setSecret(key: string, value: string): void;

@@ -1,1 +1,74 @@
-// @snugprotocol/auth — dual-layer credential broker. v1.1 — see internal/03-audit-auth.md build order. Hard constraint C1.
+// @snugprotocol/auth — the Dynamic Auth pure core (AL-02, TASK-20260805-auth-core).
+// Local-first custody per ADR-0014: every credential value lives in the user's own
+// file (`snug_secrets` `auth:` keys via @snugprotocol/db); spec metadata lives in
+// `snug_auth_specs` (@snugprotocol/protocol schema, frozen-host union enforced in
+// @snugprotocol/db). Hard constraint C1: host-bound injection is always strict —
+// nothing in this package exposes a strictness knob, flag, or env read (browser-safe,
+// WebCrypto only). Connected-fetch runtime is AL-03; wizard/UI is AL-04.
+
+export {
+  base64UrlToBytes,
+  base64UrlToUtf8,
+  bytesToBase64Url,
+  bytesToHex,
+  randomBase64Url,
+  utf8ToBase64Url,
+} from './base64url.js';
+
+export {
+  UserDbCredentialStore,
+  type AuthConnectionState,
+  type CredentialStore,
+  type SecretsQuartet,
+} from './credential-store.js';
+
+export {
+  TWO_LAYER_RESOLUTION_DEFERRED,
+  resolveAuthMode,
+  type AuthMode,
+  type AuthModeCaller,
+  type AuthModeResolution,
+} from './auth-mode.js';
+
+export {
+  WELL_KNOWN_PROVIDERS_REGISTRY,
+  lookupWellKnownProvider,
+  type WellKnownOauthProvider,
+} from './well-known-providers.js';
+
+export {
+  AuthTemplateError,
+  renderAuthHeaderTemplate,
+  renderAuthTemplateString,
+  type AuthTemplateContext,
+  type AuthTemplateRequest,
+} from './template-engine.js';
+
+export { paramsToAuthSpec, type ParamsToAuthSpecInput, type ParamsToAuthSpecResult } from './params-to-auth-spec.js';
+
+export { isHostAllowed, isUrlWithinHosts, undeclaredHosts } from './app-host-freeze.js';
+
+export {
+  InMemoryFlowStateStore,
+  OAuthService,
+  SecretSpillFlowStateStore,
+  SnugAuthError,
+  constantTimeEqual,
+  generatePkceVerifier,
+  pkceChallenge,
+  signState,
+  verifyState,
+  type CallbackDelivery,
+  type CallbackSink,
+  type FetchLike,
+  type FlowState,
+  type FlowStateStore,
+  type OAuthCallbackInput,
+  type OAuthCallbackResult,
+  type OAuthServiceDeps,
+  type OAuthStartInput,
+  type OAuthStartResult,
+  type RedirectUriProvider,
+  type SignedStatePayload,
+  type SnugAuthErrorCode,
+} from './oauth-service.js';

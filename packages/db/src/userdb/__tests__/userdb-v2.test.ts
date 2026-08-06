@@ -4,7 +4,7 @@
 // by design — owner-approved).
 import { beforeEach, describe, expect, it } from 'vitest';
 import initSqlJs from 'sql.js';
-import { USERDB_FILE } from '@snugprotocol/protocol';
+import { USERDB_FILE, USERDB_SCHEMA_VERSION } from '@snugprotocol/protocol';
 import { locateWasm } from '../../__tests__/helpers.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
 import { openUserDb, type UserDb } from '../userdb.js';
@@ -178,16 +178,16 @@ describe('v1→v2 structural migration (AC10 — data abandoned by design)', () 
     const raw = new SQL.Database(await migrated.exportUserDb({ includeSecrets: true }));
     expect(raw.exec("SELECT name FROM sqlite_master WHERE name = 'snug_app_data'")).toEqual([]);
     const version = raw.exec('PRAGMA user_version');
-    expect(version[0]?.values).toEqual([[2]]);
+    expect(version[0]?.values).toEqual([[USERDB_SCHEMA_VERSION]]); // v3 as of AL-02 (auth specs)
     raw.close();
     await migrated.close();
   });
 
-  it('a v3-from-the-future file is refused, not migrated or overwritten', async () => {
+  it('a file from a FUTURE schema version is refused, not migrated or overwritten', async () => {
     const SQL = await initSqlJs({ locateFile: locateWasm });
     const future = new SQL.Database();
     future.run('CREATE TABLE snug_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-    future.run('PRAGMA user_version = 3');
+    future.run(`PRAGMA user_version = ${USERDB_SCHEMA_VERSION + 1}`);
     const bytes = future.export();
     future.close();
     const futureBackend = createMemoryBackend();

@@ -27,6 +27,7 @@ export {
 export { namespaceToFileName } from './namespace.js';
 
 export {
+  HostFreezeViolation,
   openUserDb,
   USERDB_ERROR_CODES,
   UserDbError,
@@ -35,6 +36,7 @@ export {
   type AppPersistErrorEvent,
   type AppRecord,
   type AppVersionMeta,
+  type AuthSpecRow,
   type ChatMessage,
   type ChatThread,
   type InstallAppInput,
@@ -42,7 +44,19 @@ export {
   type OpenUserDbResult,
   type UserDb,
   type UserDbErrorCode,
+  type UserDbImportReport,
 } from './userdb/userdb.js';
+
+export {
+  AUTH_CONNECTION_FIELD,
+  AUTH_FLOW_SECRET_PREFIX,
+  AUTH_STATE_HMAC_SECRET_KEY,
+  authAppSecretPrefix,
+  authConnectionSecretKey,
+  authCredentialSecretKey,
+  authFlowSecretKey,
+  isAuthSecretKey,
+} from './userdb/auth-secrets.js';
 
 export {
   acquireUserDbWriterLock,
