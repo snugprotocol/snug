@@ -531,6 +531,68 @@ describe('fix-first 2 — credential field labels come from per-kind defaults, n
   });
 });
 
+// ------------------------------------------- static-branch validation (row 9)
+
+describe('nonBlocking 9 — required-field validation on the static credentials branch', () => {
+  it('a blank required key never shows connected: no write, an error, the step stays', async () => {
+    await seedRow(apiKeySpec, false);
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    await renderSheet();
+    await click(button(/approve connection/i));
+
+    await click(button(/save credentials/i)); // key left blank
+
+    expect(container.textContent).not.toMatch(/connected — this app/i); // no false success
+    expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/API Key/); // names the missing field
+    const store = new UserDbCredentialStore(await getUserDb());
+    expect(await store.getCredential(APP, 'api_key')).toBeUndefined(); // nothing written
+  });
+});
+
+// --------------------------------------------- inference catch/cancel (row 6)
+
+describe('nonBlocking 6 — the inference turn catches rejections and offers cancel (abort)', () => {
+  it('a rejecting inference run surfaces the error and releases busy — never an unhandled rejection', async () => {
+    const runInference = vi.fn(async () => {
+      throw new Error('adapter exploded');
+    });
+    __setWizardHooksForTests({ runInference } as never);
+    openWizard({
+      source: 'directive',
+      appId: APP,
+      directive: directive({ providerName: 'Acme Weather', kindHint: 'api_key' }),
+    });
+    await renderSheet();
+    await click(button(/infer from docs/i));
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/adapter exploded/);
+    expect(button(/infer from docs/i).disabled).toBe(false); // busy released
+  });
+
+  it('cancel aborts the in-flight inference through the plumbed AbortSignal', async () => {
+    const runInference = vi.fn(
+      (input: { signal?: AbortSignal }) =>
+        new Promise<never>((_, reject) => {
+          input.signal?.addEventListener('abort', () => reject(new Error('inference cancelled')));
+        }),
+    );
+    __setWizardHooksForTests({ runInference } as never);
+    openWizard({
+      source: 'directive',
+      appId: APP,
+      directive: directive({ providerName: 'Acme Weather', kindHint: 'api_key' }),
+    });
+    await renderSheet();
+    await click(button(/infer from docs/i)); // hangs until aborted
+    expect(button(/infer from docs/i).disabled).toBe(true); // busy while in flight
+
+    await click(button(/^cancel$/i)); // the cancel affordance
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/cancelled/i);
+    expect(button(/infer from docs/i).disabled).toBe(false); // released for a retry
+  });
+});
+
 // ------------------------------------------------------------- paste tripwire
 
 describe('AC10/D10 — the paste tripwire runs BEFORE the completion seam (M19)', () => {

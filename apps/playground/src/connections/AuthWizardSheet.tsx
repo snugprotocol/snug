@@ -15,7 +15,7 @@
 // with NEW/removed flags (M4). Order is B1: review → approve → only then
 // credentials.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import {
@@ -290,6 +290,9 @@ function ReviewStep({
   );
 }
 
+/** Deadline on the inference turn (nonBlocking 6): a hung provider call must not wedge busy. */
+const INFERENCE_TIMEOUT_MS = 60_000;
+
 function SpecConfirmFields({
   session,
   draft,
@@ -305,18 +308,33 @@ function SpecConfirmFields({
   const [override, setOverride] = useState(false);
   const [tripped, setTripped] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [inferError, setInferError] = useState<string | undefined>(undefined);
+  const abortRef = useRef<AbortController | null>(null);
 
   const infer = async (): Promise<void> => {
     setBusy(true);
+    setInferError(undefined);
+    // nonBlocking 6: the already-plumbed AbortSignal finally has a driver — a
+    // deadline plus a user cancel affordance — and rejections escaping the run are
+    // CAUGHT so busy=true can never wedge and adapter-layer throws are never
+    // unhandled rejections.
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const deadline = setTimeout(() => controller.abort(), INFERENCE_TIMEOUT_MS);
     try {
       const outcome = await runWizardInference({
         providerName: draft.providerName !== '' ? draft.providerName : session.proposal?.providerName ?? '',
         ...(draft.kindHint !== '' ? { kindHint: draft.kindHint } : {}),
         ...(docsText !== '' ? { docsText } : {}),
+        signal: controller.signal,
         override,
       });
       setTripped(outcome.blocked === 'tripwire');
+    } catch (err) {
+      setInferError(err instanceof Error ? err.message : String(err));
     } finally {
+      clearTimeout(deadline);
+      abortRef.current = null;
       setBusy(false);
     }
   };
@@ -391,9 +409,21 @@ function SpecConfirmFields({
             send anyway — this is not a real credential
           </label>
         ) : null}
-        <Button onClick={() => void infer()} disabled={busy}>
-          infer from docs
-        </Button>
+        {inferError !== undefined ? (
+          <div className="error-note" role="alert">
+            {inferError}
+          </div>
+        ) : null}
+        <div className="field-row">
+          <Button onClick={() => void infer()} disabled={busy}>
+            infer from docs
+          </Button>
+          {busy ? (
+            <Button variant="ghost" onClick={() => abortRef.current?.abort()}>
+              cancel
+            </Button>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -439,6 +469,14 @@ function CredentialsStep({ session, row }: { session: WizardSession; row: AuthSp
 
   const saveStatic = async (): Promise<void> => {
     setError(undefined);
+    // nonBlocking 9: a blank required field must never show 'connected' — the old
+    // path silently skipped empty values and reported success, yielding a
+    // NET_AUTH_FAILED round-trip later instead of an answer now.
+    const missing = fields.filter((field) => field.required !== false && (values[field.key] ?? '').trim() === '');
+    if (missing.length > 0) {
+      setError(`enter ${missing.map((field) => field.label).join(', ')} before saving`);
+      return;
+    }
     try {
       const db = await getUserDb();
       const store = new UserDbCredentialStore(db);
