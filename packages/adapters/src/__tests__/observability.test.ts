@@ -219,6 +219,29 @@ describe('AC14 — caching is never requested from endpoints that do not support
     await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }], tools: [TOOL] });
     expect(calls[0]!.init.body as string).not.toContain('cache_control');
   });
+
+  // TASK-20260805-doctrines-devex: the host gate must be EXACT, not a suffix match.
+  // `endsWith('api.anthropic.com')` also matches sibling domains like
+  // `notapi.anthropic.com` — an OpenAI-compatible proxy there would receive
+  // `cache_control` as an unknown field (the fatal-on-local failure class above).
+  // Unreachable today (no config surface exposes baseUrl) but it must be exact
+  // BEFORE one does.
+  it('treats a sibling domain (notapi.anthropic.com) as NOT supporting caching', async () => {
+    const { calls, fetchImpl } = fakeFetch(() => sseResponse(UNCACHED_FIXTURE));
+    const adapter = anthropicAdapter({ apiKey: 'k', fetch: fetchImpl, baseUrl: 'https://notapi.anthropic.com' });
+    await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }], tools: [TOOL], cache: true });
+
+    expect(calls[0]!.init.body as string).not.toContain('cache_control');
+    expect(typeof calls[0]!.bodyJson.system).toBe('string');
+  });
+
+  it('still caches on the exact Anthropic host with a non-default port (hostname gate, port-insensitive)', async () => {
+    const { calls, fetchImpl } = fakeFetch(() => sseResponse(CACHED_FIXTURE));
+    const adapter = anthropicAdapter({ apiKey: 'k', fetch: fetchImpl, baseUrl: 'https://api.anthropic.com:8443' });
+    await adapter.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }], tools: [TOOL], cache: true });
+
+    expect(JSON.stringify(calls[0]!.bodyJson)).toContain('cache_control');
+  });
 });
 
 describe('AC15 — C1 holds at the new seams', () => {
