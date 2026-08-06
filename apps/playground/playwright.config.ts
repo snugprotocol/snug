@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
-import { APP_PORT, APP_URL, FIXTURE_PORT, FIXTURE_URL, SERVER_PORT, SERVER_URL, appIsPresent } from './e2e/helpers';
+import { APP_PORT, APP_URL, FIXTURE_PORT, FIXTURE_URL, NET_STUB_PORT, NET_STUB_URL, SERVER_PORT, SERVER_URL, appIsPresent } from './e2e/helpers';
 
 const hasApp = appIsPresent();
 // Propagated to workers so specs can skip (not fail) before workstream A lands.
@@ -33,6 +33,16 @@ const webServer = [
     env: { SNUG_E2E_FIXTURE_PORT: String(FIXTURE_PORT) },
     reuseExistingServer: false,
     timeout: 30_000,
+  },
+  {
+    // AL-03 net e2e: a self-signed HTTPS provider stub (net.spec scopes ignoreHTTPSErrors
+    // to its own context). Requires the auth+db dist the fixture import map serves.
+    command: 'pnpm --filter @snugprotocol/auth build && pnpm --filter @snugprotocol/db build && node e2e/fixtures/net-stub.mjs',
+    url: `${NET_STUB_URL}/healthz`,
+    env: { SNUG_E2E_NET_STUB_PORT: String(NET_STUB_PORT) },
+    ignoreHTTPSErrors: true,
+    reuseExistingServer: false,
+    timeout: 120_000,
   },
   {
     command: 'pnpm --filter server build && node ../server/dist/server.js',
@@ -77,7 +87,26 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/],
+      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/, /net\.spec\.ts/],
+    },
+    {
+      // AL-03 net e2e: its OWN project so the self-signed-cert allowance and the
+      // stub.snug.test → 127.0.0.1 host-resolver rule stay SCOPED to this spec (A1) and
+      // never touch the app-serving contexts.
+      name: 'net',
+      testMatch: /net\.spec\.ts/,
+      use: {
+        ...devices['Desktop Chrome'],
+        ignoreHTTPSErrors: true,
+        launchOptions: {
+          args: [
+            `--host-resolver-rules=MAP stub.snug.test 127.0.0.1`,
+            // The document-level fetch to the self-signed stub needs the cert error
+            // ignored at the browser level too — scoped to THIS project's browser.
+            '--ignore-certificate-errors',
+          ],
+        },
+      },
     },
     {
       name: 'mobile-chromium',

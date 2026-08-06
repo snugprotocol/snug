@@ -20,6 +20,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export const FIXTURE_PORT = 43117;
+/** The self-signed HTTPS provider stub for the AL-03 net e2e (net-stub.mjs). */
+export const NET_STUB_PORT = 43120;
+export const NET_STUB_URL = `https://127.0.0.1:${NET_STUB_PORT}`;
 /**
  * Default 8787: the app's vite.config.ts dev proxy targets 127.0.0.1:8787. Both sides
  * honor SNUG_SERVER_PORT (the playwright config forwards it to the vite webServer), so
@@ -108,6 +111,60 @@ export function echoAppHtml(opts: { appId?: string; displayName?: string } = {})
     }
     if (d.type === 'snug:host-event' && d.event === 'theme-change' && d.data && d.data.theme) {
       setText('theme', d.data.theme);
+    }
+  });
+})();
+</script>
+</body></html>`;
+}
+
+/**
+ * A single-file app that drives the AL-03 net protocol by hand: on host-ready it fires a
+ * net-request to `netUrl` (method configurable), renders the terminal net-response, and
+ * exposes the raw response body in `#net-out` so the spec can assert the injected key was
+ * SCRUBBED. Deliberately hand-rolled (no SDK bundle) — the production bridge is the thing
+ * under test. CDN-free.
+ */
+export function netAppHtml(opts: { netUrl: string; method?: string; forgeAuth?: boolean } = { netUrl: '' }): string {
+  const method = opts.method ?? 'GET';
+  // A forged Authorization header the app tries to smuggle — the schema rejects it at the
+  // bridge AND the executor strips it, so it must never reach the stub (C1 negative).
+  const headersField = opts.forgeAuth ? ", headers: { 'Authorization': 'Bearer app-forged-token' }" : '';
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>net app</title></head>
+<body>
+<div id="status">connecting</div>
+<div id="net-status"></div>
+<pre id="net-out"></pre>
+<div id="net-headers"></div>
+<script>
+(function () {
+  var V = 1;
+  var instanceId = null;
+  var sent = false;
+  function setText(id, text) { document.getElementById(id).textContent = text; }
+  window.addEventListener('message', function (event) {
+    var d = event.data;
+    if (!d || d.v !== V) return;
+    if (d.type === 'snug:host-ready') {
+      instanceId = d.instanceId;
+      setText('status', 'ready:net=' + (d.capabilities && d.capabilities.net));
+      if (!sent) {
+        sent = true;
+        parent.postMessage({ v: V, type: 'snug:app-announce', appId: 'e2e-net-app',
+          displayName: 'e2e net', iconColor: '#3ba36f' }, '*');
+        parent.postMessage({ v: V, type: 'snug:net-request', requestId: 'net-1',
+          instanceId: instanceId, url: ${JSON.stringify(opts.netUrl)}, method: '${method}'${
+            method === 'GET' || method === 'HEAD' ? '' : ", body: '{}'"
+          }${headersField} }, '*');
+      }
+      return;
+    }
+    if (d.type === 'snug:net-response' && d.requestId === 'net-1') {
+      setText('net-status', d.ok ? ('ok:' + d.status) : ('err:' + d.error.code));
+      setText('net-out', d.ok ? d.body : JSON.stringify(d.error));
+      if (d.ok) setText('net-headers', JSON.stringify(d.headers));
+      return;
     }
   });
 })();

@@ -12,10 +12,12 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
 import { createDbDriver, createMemoryBackend, type SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
-import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
+import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } from '@snugprotocol/runner';
 
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
+import { createNetHandlerFor } from '../state/net.js';
+import { NetConfirmDialog } from './NetConfirmDialog.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
@@ -209,6 +211,14 @@ export default function RunView(): ReactElement {
   // rebuild the transport on every render. This is what makes an APP's LLM turn —
   // e.g. a Chess move — visible in the LLM surface alongside the builder's turns.
   const transport = useMemo(() => createAppTransport(mode, provider, onLlmEvent), [mode, provider, onLlmEvent]);
+  // The envelope net capability (AL-03): a value-blind NetHandler the runner routes
+  // net-request frames to. The executor (in state/net.ts) reads the app's frozen host
+  // ceiling + credentials from the page user DB per use — the runner never sees a token.
+  // Starters get no net: an uninstalled starter has no auth spec, and its ephemeral DB
+  // would carry none anyway. Installed apps bind net to their own id (host-assigned).
+  const netHandler = useMemo(() => (isStarterId(id) ? undefined : createNetHandlerFor()), [id]);
+  const netProps: { net: NetHandler; netAppId: string } | Record<string, never> =
+    netHandler !== undefined ? { net: netHandler, netAppId: id } : {};
   // The db driver is the SHARED user DB's materialized face (ADR-0010) — never closed
   // here; it lives as long as the page. App data lands as native app_* tables.
   //
@@ -463,6 +473,7 @@ export default function RunView(): ReactElement {
 
   return (
     <div className="run-layout" style={stageStyle}>
+      <NetConfirmDialog />
       <div className="run-stage">
         <header className="run-header">
           {meta !== undefined ? (
@@ -563,6 +574,7 @@ export default function RunView(): ReactElement {
               budgetKey={`app:${id}`}
               db={db}
               dbNamespace={id}
+              {...netProps}
               theme={theme}
               title={meta?.displayName ?? 'Snug app'}
               controlsRef={controlsRef}

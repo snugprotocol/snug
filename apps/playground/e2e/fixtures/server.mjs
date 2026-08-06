@@ -28,6 +28,8 @@ const port = Number(process.env.SNUG_E2E_FIXTURE_PORT ?? 43117);
 const MOUNTS = [
   { prefix: '/pkg/runner/', dir: path.join(repoRoot, 'packages/runner/dist') },
   { prefix: '/pkg/protocol/', dir: path.join(repoRoot, 'packages/protocol/dist') },
+  { prefix: '/pkg/auth/', dir: path.join(repoRoot, 'packages/auth/dist') },
+  { prefix: '/pkg/db/', dir: path.join(repoRoot, 'packages/db/dist') },
   { prefix: '/zod/', dir: path.join(repoRoot, 'packages/protocol/node_modules/zod') },
   {
     file: '/vendor/react.js',

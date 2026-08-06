@@ -29,6 +29,9 @@ importers:
       '@snugprotocol/adapters':
         specifier: workspace:*
         version: link:../../packages/adapters
+      '@snugprotocol/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@snugprotocol/db':
         specifier: workspace:*
         version: link:../../packages/db
