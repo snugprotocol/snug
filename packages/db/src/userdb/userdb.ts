@@ -18,6 +18,7 @@ import initSqlJs from 'sql.js';
 import type { Database, SqlJsStatic } from 'sql.js';
 import {
   APP_KV_TABLE,
+  AUTH_SPEC_STATUS,
   FRAME_TYPES,
   PROTOCOL_VERSION,
   USERDB_DDL,
@@ -29,11 +30,18 @@ import {
   USERDB_TABLES,
   appDataToken,
   appRestTableName,
+  authSpecSchema,
+  deriveAuthAllowedHosts,
+  hostSetEquals,
+  isAuthSpecUnknownKeysOnlyFailure,
   isValidAppObjectName,
   type AppSchemaJson,
   type AppSchemaObject,
+  type AuthSpec,
+  type AuthSpecStatus,
   type DbRequestFrame,
 } from '@snugprotocol/protocol';
+import { authAppSecretPrefix } from './auth-secrets.js';
 import { KV_TABLE_DDL, createDbDriver, type DbPersistence, type SnugDbDriver } from '../driver.js';
 import { namespaceToFileName } from '../namespace.js';
 import { detectPersistenceBackend, type PersistenceBackend } from '../persistence.js';
@@ -51,6 +59,10 @@ export const USERDB_ERROR_CODES = {
   INVALID_NAME: 'USERDB_INVALID_NAME',
   /** applyAppDdl failed; the app runtime was restored to its pre-batch snapshot. */
   DDL_FAILED: 'USERDB_DDL_FAILED',
+  /** An auth spec failed strict validation at the write boundary (ingest fail-closed). */
+  INVALID_AUTH_SPEC: 'USERDB_INVALID_AUTH_SPEC',
+  /** An ordinary auth-spec update tried to change the frozen derived host union (plan D5). */
+  HOST_FREEZE: 'USERDB_HOST_FREEZE',
 } as const;
 
 export type UserDbErrorCode = (typeof USERDB_ERROR_CODES)[keyof typeof USERDB_ERROR_CODES];
@@ -62,6 +74,25 @@ export class UserDbError extends Error {
   ) {
     super(message);
     this.name = 'UserDbError';
+  }
+}
+
+/**
+ * Thrown when an ordinary `putAuthSpec` would change the DERIVED HOST UNION of an
+ * approved row (plan D5/N2 — any change, not just the `allowed_hosts` column: the
+ * accessor recomputes the union over the incoming spec's endpoints incl. refreshUrl
+ * plus declared/registry API hosts). Widening happens only via `reapproveAuthSpec()`.
+ */
+export class HostFreezeViolation extends UserDbError {
+  constructor(
+    readonly frozenHosts: readonly string[],
+    readonly attemptedHosts: readonly string[],
+  ) {
+    super(
+      USERDB_ERROR_CODES.HOST_FREEZE,
+      `auth spec update would change the frozen host union [${frozenHosts.join(', ')}] → [${attemptedHosts.join(', ')}]; use reapproveAuthSpec`,
+    );
+    this.name = 'HostFreezeViolation';
   }
 }
 
@@ -122,6 +153,34 @@ export interface AppDocRecord {
   updatedAt: string;
 }
 
+/** One `snug_auth_specs` row (AL-02). Spec metadata ONLY — values live under `auth:` secrets. */
+export interface AuthSpecRow {
+  appId: string;
+  /**
+   * The stored spec. Validated strictly at every WRITE boundary; the single exception
+   * is an imported row preserved under the unknown-keys-only rule (R2) — readable, but
+   * `approveAuthSpec` re-validates and refuses it until a hub that understands it runs.
+   */
+  spec: AuthSpec;
+  status: AuthSpecStatus;
+  /**
+   * `frozenAllowedHosts` for approved rows — the derived host union computed AT
+   * approval (declared ∪ registry ∪ OAuth endpoint hosts incl. refreshUrl), displayed
+   * in full to the user, then frozen. For unapproved rows: the current derived union
+   * (a preview; injection is barred by `status` anyway). Sorted/unique/lowercase.
+   */
+  allowedHosts: string[];
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What `importUserDb` surfaces about the auth-spec reconciliation pass (plan D5/N1). */
+export interface UserDbImportReport {
+  /** Structurally unusable `snug_auth_specs` rows that were dropped, with reasons. */
+  droppedAuthSpecs: Array<{ appId: string; reason: string }>;
+}
+
 export interface AppMigrationRecord {
   seq: number;
   ddl: string;
@@ -180,6 +239,27 @@ export interface UserDb {
   applyAppDdl(appId: string, statements: string[]): Promise<AppSchemaJson>;
   listAppMigrations(appId: string): AppMigrationRecord[];
 
+  /**
+   * Create or ordinary-update an app's auth spec (validated strictly — fail closed).
+   * New rows land `unapproved`. On an APPROVED row, any change to the derived host
+   * union throws `HostFreezeViolation`; same-union edits keep the approval.
+   */
+  putAuthSpec(appId: string, spec: unknown): AuthSpecRow;
+  /**
+   * Freeze the derived host union into `allowed_hosts`, stamp `approved_at`, and
+   * return the row — `allowedHosts` is the COMPLETE list the caller must display to
+   * the user at approval (plan D2). Re-validates the stored spec strictly.
+   */
+  approveAuthSpec(appId: string): AuthSpecRow;
+  /**
+   * The ONLY widening path (plan D5): replace the spec (optional), recompute + freeze
+   * the union, stamp a NEW `approved_at`. Caller re-displays the full host list.
+   */
+  reapproveAuthSpec(appId: string, spec?: unknown): AuthSpecRow;
+  getAuthSpec(appId: string): AuthSpecRow | undefined;
+  listAuthSpecs(): AuthSpecRow[];
+  deleteAuthSpec(appId: string): void;
+
   putAppDoc(appId: string, slug: string, doc: { title?: string; content: string }): void;
   getAppDoc(appId: string, slug: string): AppDocRecord | undefined;
   listAppDocs(appId: string): AppDocRecord[];
@@ -215,8 +295,12 @@ export interface UserDb {
   deriveAppExport(namespace: string): Promise<Uint8Array | undefined>;
   /** Whole-file export. Default strips `snug_secrets` and VACUUMs so freed pages leak nothing. */
   exportUserDb(opts?: { includeSecrets?: boolean }): Promise<Uint8Array>;
-  /** Full replace with validated user-DB bytes (older schemas are migrated forward). */
-  importUserDb(bytes: Uint8Array): Promise<void>;
+  /**
+   * Full replace with validated user-DB bytes (older schemas are migrated forward).
+   * Runs the delta-aware auth-spec reconciliation pass (plan D5/N1) — pull-merge,
+   * applyRemote, recovery restore, and UI import all inherit it through here.
+   */
+  importUserDb(bytes: Uint8Array): Promise<UserDbImportReport>;
 
   flush(): Promise<void>;
   close(): Promise<void>;
@@ -299,7 +383,105 @@ const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
        (SELECT app_id, MIN(version) FROM ${USERDB_TABLES.appVersions} GROUP BY app_id)`,
     );
   },
+  // v2 → v3 (AL-02, internal draft): additive only — `snug_auth_specs` lands via the
+  // idempotent CREATE IF NOT EXISTS replay. No data movement; credential values were
+  // never stored anywhere else.
+  (db) => {
+    for (const ddl of USERDB_DDL) db.run(ddl);
+    for (const ddl of USERDB_INDEX_DDL) db.run(ddl);
+  },
 ];
+
+// ------------------------------------------------------- auth-spec reconciliation
+
+/** Module-level row reader (used against the incoming import candidate too). */
+function selectRows(target: Database, sql: string, params?: unknown[]): unknown[][] {
+  const statement = target.prepare(sql);
+  try {
+    if (params !== undefined && params.length > 0) statement.bind(params as never);
+    const rows: unknown[][] = [];
+    while (statement.step()) rows.push(statement.get() as unknown[]);
+    return rows;
+  } finally {
+    statement.free();
+  }
+}
+
+interface LocalApprovedAuthSpec {
+  specJson: string;
+  allowedHosts: string;
+  approvedAt: string | null;
+}
+
+/**
+ * The DELTA-AWARE import reconciliation pass (plan D5/N1), run on the incoming
+ * database BEFORE it becomes live. For each imported `snug_auth_specs` row:
+ *
+ * - byte-identical `(app_id, spec_json, allowed_hosts)` to a locally-APPROVED
+ *   pre-import row → local `status`/`approved_at` are RESTORED (identical rows carry
+ *   zero attack surface; blanket demotion would nuke approvals on every routine
+ *   two-device pull and train approval fatigue);
+ * - any other row that validates strictly → `imported_unapproved`, `approved_at`
+ *   cleared, and `allowed_hosts` REWRITTEN to the union derived from the spec — a
+ *   doctored widened column is never honored;
+ * - strict failure on unknown keys ONLY → demote-and-preserve (R2: an older hub must
+ *   not destroy a newer hub's additive data; approval stays impossible here because
+ *   `approveAuthSpec` re-validates);
+ * - structurally unusable → dropped + surfaced in the import report.
+ */
+function reconcileImportedAuthSpecs(
+  next: Database,
+  localApproved: ReadonlyMap<string, LocalApprovedAuthSpec>,
+): UserDbImportReport {
+  const dropped: UserDbImportReport['droppedAuthSpecs'] = [];
+  const rows = selectRows(next, `SELECT app_id, spec_json, allowed_hosts FROM ${USERDB_TABLES.authSpecs}`);
+  for (const row of rows) {
+    const appId = String(row[0]);
+    const specJson = String(row[1]);
+    const allowedHostsJson = String(row[2]);
+
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(specJson);
+    } catch {
+      dropped.push({ appId, reason: 'spec_json is not valid JSON' });
+      next.run(`DELETE FROM ${USERDB_TABLES.authSpecs} WHERE app_id = ?`, [appId]);
+      continue;
+    }
+
+    const validated = authSpecSchema.safeParse(parsedJson);
+    if (validated.success) {
+      const local = localApproved.get(appId);
+      if (local !== undefined && local.specJson === specJson && local.allowedHosts === allowedHostsJson) {
+        // Byte-identical to a locally-approved row: approval survives the import.
+        next.run(`UPDATE ${USERDB_TABLES.authSpecs} SET status = ?, approved_at = ? WHERE app_id = ?`, [
+          AUTH_SPEC_STATUS.approved,
+          local.approvedAt,
+          appId,
+        ]);
+        continue;
+      }
+      next.run(
+        `UPDATE ${USERDB_TABLES.authSpecs} SET status = ?, approved_at = NULL, allowed_hosts = ? WHERE app_id = ?`,
+        [AUTH_SPEC_STATUS.importedUnapproved, JSON.stringify(deriveAuthAllowedHosts(validated.data)), appId],
+      );
+      continue;
+    }
+
+    if (isAuthSpecUnknownKeysOnlyFailure(validated.error)) {
+      // Additive fields from a newer hub: preserve the bytes, demote the trust.
+      next.run(`UPDATE ${USERDB_TABLES.authSpecs} SET status = ?, approved_at = NULL WHERE app_id = ?`, [
+        AUTH_SPEC_STATUS.importedUnapproved,
+        appId,
+      ]);
+      continue;
+    }
+
+    dropped.push({ appId, reason: validated.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).slice(0, 3).join('; ') });
+    next.run(`DELETE FROM ${USERDB_TABLES.authSpecs} WHERE app_id = ?`, [appId]);
+  }
+  return { droppedAuthSpecs: dropped };
+}
 
 function migrate(db: Database): void {
   const found = readUserVersion(db);
@@ -495,6 +677,41 @@ function construct(
     assertOpen();
     guardAddedBytes(JSON.stringify(value ?? null).length + key.length, `setting "${key}"`);
     run(`INSERT OR REPLACE INTO ${table} (key, value) VALUES (?, ?)`, [key, JSON.stringify(value ?? null)]);
+  }
+
+  // --------------------------------------------------------- auth-spec helpers (AL-02)
+
+  /** Strict ingest (plan D1): the write boundary fails closed on ANY invalid spec. */
+  function parseAuthSpecStrict(spec: unknown): AuthSpec {
+    const parsed = authSpecSchema.safeParse(spec);
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .slice(0, 3)
+        .map((i) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ');
+      throw new UserDbError(USERDB_ERROR_CODES.INVALID_AUTH_SPEC, `auth spec failed validation: ${issues}`);
+    }
+    return parsed.data;
+  }
+
+  function readAuthSpecRow(appId: string): AuthSpecRow | undefined {
+    const row = select(
+      `SELECT app_id, spec_json, status, allowed_hosts, approved_at, created_at, updated_at
+       FROM ${USERDB_TABLES.authSpecs} WHERE app_id = ?`,
+      [appId],
+    )[0];
+    if (row === undefined) return undefined;
+    return {
+      appId: String(row[0]),
+      // JSON.parse, not zod: rows are validated at every write; the one deliberate
+      // exception (preserved unknown-keys import rows, R2) must stay READABLE.
+      spec: JSON.parse(String(row[1])) as AuthSpec,
+      status: String(row[2]) as AuthSpecStatus,
+      allowedHosts: JSON.parse(String(row[3])) as string[],
+      ...(row[4] !== null && row[4] !== undefined ? { approvedAt: String(row[4]) } : {}),
+      createdAt: String(row[5]),
+      updatedAt: String(row[6]),
+    };
   }
 
   // ------------------------------------- driver face: materializer PersistenceBackend
@@ -985,9 +1202,15 @@ function construct(
           USERDB_TABLES.appVersions,
           USERDB_TABLES.appMigrations,
           USERDB_TABLES.appSchemas,
+          USERDB_TABLES.authSpecs,
         ]) {
           db.run(`DELETE FROM ${table} WHERE app_id = ?`, [appId]);
         }
+        // 3b. The app's slice of the auth secrets namespace (`auth:<appId>:*` —
+        //     credential values + connection state). The per-user `auth:_state_hmac`
+        //     and `auth:_flow:*` keys are NOT app-keyed and survive.
+        const prefix = authAppSecretPrefix(appId).replace(/([!%_])/g, '!$1');
+        db.run(`DELETE FROM ${USERDB_TABLES.secrets} WHERE key LIKE ? ESCAPE '!'`, [`${prefix}%`]);
         // 4. The app row last, so a failure above leaves a consistent, still-installed app.
         db.run(`DELETE FROM ${USERDB_TABLES.apps} WHERE app_id = ?`, [appId]);
         db.run('COMMIT');
@@ -1162,6 +1385,95 @@ function construct(
         `SELECT seq, ddl, applied_at FROM ${USERDB_TABLES.appMigrations} WHERE app_id = ? ORDER BY seq`,
         [appId],
       ).map((row) => ({ seq: Number(row[0]), ddl: String(row[1]), appliedAt: String(row[2]) }));
+    },
+
+    // ------------------------------------------------------------- auth specs (AL-02)
+
+    putAuthSpec(appId, spec) {
+      assertOpen();
+      const validated = parseAuthSpecStrict(spec);
+      const union = deriveAuthAllowedHosts(validated);
+      const unionJson = JSON.stringify(union);
+      const specJson = JSON.stringify(validated);
+      guardAddedBytes(specJson.length + unionJson.length, `auth spec for "${appId}"`);
+      const existing = readAuthSpecRow(appId);
+      const timestamp = now();
+      if (existing === undefined) {
+        run(
+          `INSERT INTO ${USERDB_TABLES.authSpecs} (app_id, spec_json, status, allowed_hosts, approved_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+          [appId, specJson, AUTH_SPEC_STATUS.unapproved, unionJson, timestamp, timestamp],
+        );
+        return readAuthSpecRow(appId)!;
+      }
+      if (existing.status === AUTH_SPEC_STATUS.approved) {
+        // The freeze invariant (plan D5/N2): an ordinary update may not change the
+        // DERIVED HOST UNION — recomputed here from the incoming spec, not read from
+        // any caller-supplied column. Same-union edits keep the approval.
+        if (!hostSetEquals(union, existing.allowedHosts)) {
+          throw new HostFreezeViolation(existing.allowedHosts, union);
+        }
+        run(`UPDATE ${USERDB_TABLES.authSpecs} SET spec_json = ?, updated_at = ? WHERE app_id = ?`, [
+          specJson,
+          timestamp,
+          appId,
+        ]);
+        return readAuthSpecRow(appId)!;
+      }
+      run(
+        `UPDATE ${USERDB_TABLES.authSpecs} SET spec_json = ?, allowed_hosts = ?, updated_at = ? WHERE app_id = ?`,
+        [specJson, unionJson, timestamp, appId],
+      );
+      return readAuthSpecRow(appId)!;
+    },
+
+    approveAuthSpec(appId) {
+      assertOpen();
+      const existing = readAuthSpecRow(appId);
+      if (existing === undefined) {
+        throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `no auth spec for "${appId}"`);
+      }
+      // Re-validate at the trust boundary: a preserved unknown-keys import row stays
+      // unapprovable until a hub that understands it runs (R2 posture, fail closed).
+      const validated = parseAuthSpecStrict(existing.spec);
+      const union = deriveAuthAllowedHosts(validated);
+      run(
+        `UPDATE ${USERDB_TABLES.authSpecs} SET status = ?, allowed_hosts = ?, approved_at = ?, updated_at = ? WHERE app_id = ?`,
+        [AUTH_SPEC_STATUS.approved, JSON.stringify(union), now(), now(), appId],
+      );
+      return readAuthSpecRow(appId)!;
+    },
+
+    reapproveAuthSpec(appId, spec) {
+      assertOpen();
+      const existing = readAuthSpecRow(appId);
+      if (existing === undefined) {
+        throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `no auth spec for "${appId}"`);
+      }
+      const validated = parseAuthSpecStrict(spec ?? existing.spec);
+      const union = deriveAuthAllowedHosts(validated);
+      run(
+        `UPDATE ${USERDB_TABLES.authSpecs} SET spec_json = ?, status = ?, allowed_hosts = ?, approved_at = ?, updated_at = ? WHERE app_id = ?`,
+        [JSON.stringify(validated), AUTH_SPEC_STATUS.approved, JSON.stringify(union), now(), now(), appId],
+      );
+      return readAuthSpecRow(appId)!;
+    },
+
+    getAuthSpec(appId) {
+      assertOpen();
+      return readAuthSpecRow(appId);
+    },
+
+    listAuthSpecs() {
+      assertOpen();
+      return select(`SELECT app_id FROM ${USERDB_TABLES.authSpecs} ORDER BY app_id`).map(
+        (row) => readAuthSpecRow(String(row[0]))!,
+      );
+    },
+
+    deleteAuthSpec(appId) {
+      assertOpen();
+      run(`DELETE FROM ${USERDB_TABLES.authSpecs} WHERE app_id = ?`, [appId]);
     },
 
     // ------------------------------------------------------------------------ docs
@@ -1403,6 +1715,22 @@ function construct(
         );
       }
       migrate(next);
+      // Auth-spec reconciliation (plan D5/N1): snapshot the locally-APPROVED rows from
+      // the still-open handle, then run the delta-aware pass on the candidate BEFORE it
+      // becomes live. Every import path (pull-merge, applyRemote, recovery restore, UI
+      // import) flows through here.
+      const localApproved = new Map<string, LocalApprovedAuthSpec>();
+      for (const row of select(
+        `SELECT app_id, spec_json, allowed_hosts, approved_at FROM ${USERDB_TABLES.authSpecs} WHERE status = ?`,
+        [AUTH_SPEC_STATUS.approved],
+      )) {
+        localApproved.set(String(row[0]), {
+          specJson: String(row[1]),
+          allowedHosts: String(row[2]),
+          approvedAt: row[3] === null || row[3] === undefined ? null : String(row[3]),
+        });
+      }
+      const report = reconcileImportedAuthSpecs(next, localApproved);
       // Close the inner driver FIRST: its cached app databases came from the old handle.
       // Its close-flush writes into the old handle, which is discarded right after.
       await inner.close();
@@ -1426,6 +1754,7 @@ function construct(
         if (rows.length > 0) deletedApps.delete(appId);
       }
       markDirty();
+      return report;
     },
 
     async flush() {
