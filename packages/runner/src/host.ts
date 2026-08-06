@@ -2,6 +2,7 @@ import {
   ERROR_CODES,
   FRAME_TYPES,
   LIMITS,
+  NET_ERROR_CODES,
   PROTOCOL_VERSION,
   buildAppRequest,
   createResponder,
@@ -15,9 +16,19 @@ import {
   type DbRequestFrame,
   type DbResponseFrame,
   type Frame,
+  type NetRequestFrame,
+  type NetResponseFrame,
   type Responder,
 } from '@snugprotocol/protocol';
-import type { AgentTransport, BudgetStore, DbDriver, DbDriverResult, TransportResult } from './transport.js';
+import type {
+  AgentTransport,
+  BudgetStore,
+  DbDriver,
+  DbDriverResult,
+  NetHandler,
+  NetHandlerResult,
+  TransportResult,
+} from './transport.js';
 
 export type FrameDirection = 'inbound' | 'outbound';
 export type ThemeName = 'light' | 'dark';
@@ -64,9 +75,15 @@ export interface RunnerHostBaseOptions extends RunnerHostCallbacks {
   locale?: string;
 }
 
-/** db capability requires BOTH a driver and a host-assigned namespace (F5) — enforced at the type level. */
+/**
+ * db capability requires BOTH a driver and a host-assigned namespace (F5); the net
+ * capability (AL-03) likewise requires BOTH a handler and a host-assigned `netAppId` —
+ * both enforced at the type level so an embedder cannot supply one half. The net
+ * binding mirrors `dbNamespace`: HOST-assigned, never app-claimed.
+ */
 export type RunnerHostOptions = RunnerHostBaseOptions &
-  ({ db: DbDriver; dbNamespace: string } | { db?: undefined; dbNamespace?: undefined });
+  ({ db: DbDriver; dbNamespace: string } | { db?: undefined; dbNamespace?: undefined }) &
+  ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined });
 
 export interface RunnerHost {
   /** Removes listeners/observers, aborts in-flight work, drops all timers. Idempotent. */
@@ -151,6 +168,8 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   const inFlight = new Map<string, InFlight>();
   /** In-flight db requestIds — same duplicate/flood discipline as app messages (Gate-5). */
   const dbInFlight = new Set<string>();
+  /** In-flight net requestIds — same discipline as the db seam (AL-03). */
+  const netInFlight = new Set<string>();
 
   const observer = new MutationObserver((records) => {
     allowedLoads += records.length;
@@ -174,7 +193,7 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       type: FRAME_TYPES.hostReady,
       instanceId,
       protocolVersions: [PROTOCOL_VERSION],
-      capabilities: { streaming: true, db: options.db !== undefined, auth: false },
+      capabilities: { streaming: true, db: options.db !== undefined, auth: false, net: options.net !== undefined },
       theme,
       ...(options.locale !== undefined ? { locale: options.locale } : {}),
     });
@@ -471,6 +490,82 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
     post(response);
   }
 
+  function postNetError(requestId: string, code: string, message: string, retryable: boolean): void {
+    post({
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.netResponse,
+      requestId,
+      ok: false,
+      error: { code, message: clampMessage(message), retryable },
+    });
+  }
+
+  /**
+   * Route a validated net-request to the HOST-assigned handler (AL-03) — the runner is
+   * value-blind (R4): it hands over the frame and posts back whatever the handler
+   * returns, never reading a credential value. The `netAppId` binding is host-assigned,
+   * never app-claimed (mirrors dbNamespace, F5). An oversized net-response can only ever
+   * become a NET_SIZE_EXCEEDED terminal frame, never silence (B1).
+   */
+  async function handleNetRequest(frame: NetRequestFrame): Promise<void> {
+    if (frame.instanceId !== instanceId) return; // stale instance — drop silently
+    if (!frameWithinLimits(frame)) {
+      postNetError(frame.requestId, ERROR_CODES.HOST_ERROR, 'net-request exceeds the net frame size limit', false);
+      return;
+    }
+    if (options.net === undefined) {
+      postNetError(frame.requestId, ERROR_CODES.HOST_ERROR, 'this host has no net capability', false);
+      return;
+    }
+    if (netInFlight.has(frame.requestId)) {
+      postNetError(frame.requestId, ERROR_CODES.HOST_ERROR, `net requestId ${frame.requestId} is already in flight`, false);
+      return;
+    }
+    if (netInFlight.size >= MAX_IN_FLIGHT) {
+      postNetError(frame.requestId, ERROR_CODES.HOST_ERROR, `too many concurrent net requests (max ${MAX_IN_FLIGHT})`, true);
+      return;
+    }
+    netInFlight.add(frame.requestId);
+    const boundInstance = instanceId;
+    let result: NetHandlerResult;
+    try {
+      // The net binding is the HOST-assigned netAppId — never the app-claimed appId (F5/R5).
+      result = await options.net.handle(options.netAppId, frame);
+    } catch (err) {
+      result = {
+        ok: false,
+        code: ERROR_CODES.HOST_ERROR,
+        message: err instanceof Error ? err.message : 'net handler threw',
+        retryable: true,
+      };
+    } finally {
+      netInFlight.delete(frame.requestId);
+    }
+    if (destroyed || navigatedAway || instanceId !== boundInstance) return; // superseded meanwhile
+    if (!result.ok) {
+      postNetError(frame.requestId, result.code, result.message, result.retryable);
+      return;
+    }
+    const response: NetResponseFrame = {
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.netResponse,
+      requestId: frame.requestId,
+      ok: true,
+      status: result.status,
+      headers: result.headers,
+      body: result.body,
+      ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
+    };
+    if (!frameWithinLimits(response)) {
+      // B1: an oversized net-response can NEVER be silently dropped at the bridge — it
+      // becomes a SMALL terminal NET_SIZE_EXCEEDED (the executor caps while reading; this
+      // is the belt to that braces for a handler that returns an over-cap body anyway).
+      postNetError(frame.requestId, NET_ERROR_CODES.NET_SIZE_EXCEEDED, 'net result exceeds the net frame size limit', false);
+      return;
+    }
+    post(response);
+  }
+
   /**
    * Answer UNSUPPORTED_VERSION/MALFORMED on the wire ONLY when a requestId is recoverable
    * (R1) AND the raw `type` is an answerable app-origin request type. Anything else —
@@ -483,6 +578,8 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
     const error = { code, message: clampMessage(detail), retryable: false };
     if (rawType === FRAME_TYPES.dbRequest) {
       post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.dbResponse, requestId, ok: false, error });
+    } else if (rawType === FRAME_TYPES.netRequest) {
+      post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.netResponse, requestId, ok: false, error });
     } else if (rawType === FRAME_TYPES.appMessage) {
       post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.appResponse, requestId, ok: false, error });
     }
@@ -503,6 +600,7 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       case FRAME_TYPES.appMessage:
       case FRAME_TYPES.appCancel:
       case FRAME_TYPES.dbRequest:
+      case FRAME_TYPES.netRequest:
       case FRAME_TYPES.appEvent:
         break;
       default:
@@ -521,6 +619,9 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
         return;
       case FRAME_TYPES.dbRequest:
         void handleDbRequest(frame);
+        return;
+      case FRAME_TYPES.netRequest:
+        void handleNetRequest(frame);
         return;
       case FRAME_TYPES.appEvent:
         options.onAppEvent?.(frame.event, frame.data);

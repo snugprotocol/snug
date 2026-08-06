@@ -23,6 +23,8 @@ export const hostReadySchema = z.object({
     streaming: z.boolean(),
     db: z.boolean(),
     auth: z.boolean(),
+    /** The envelope net capability (AL-03). Optional so pre-AL-03 host-ready frames still parse (R2). */
+    net: z.boolean().optional(),
   }),
   theme: z.enum(['light', 'dark']),
   locale: z.string().max(32).optional(),

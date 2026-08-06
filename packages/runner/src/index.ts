@@ -21,6 +21,8 @@ export {
   type BudgetStore,
   type DbDriver,
   type DbDriverResult,
+  type NetHandler,
+  type NetHandlerResult,
   type TransportResult,
 } from './transport.js';
 
