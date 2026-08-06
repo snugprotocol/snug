@@ -64,6 +64,8 @@ The mode must ride the existing seams unchanged: the `AgentAdapter` contract, th
 - **`modelStore` is NOT consulted** — the shared model setting belongs to byok/local wire ids; a webllm model id is a different namespace. The spike always loads `WEBLLM_DEFAULT_MODEL`; the picker is 1.2-1.
 - **Context reality check:** builder system prompt ≈ 1.2K tokens (measured: 4,951 chars), app-frame ≈ 950 — both fit the 4K default context of the candidates, but a full app build reply can crowd 4K; noted in ADR as a GA consideration (webllm `context_window_size` override costs KV memory).
 - **`cache: true` is passed through and ignored** — per the AdapterRequest contract ("providers that do not support caching ignore it") and ADR-0012; usage cache fields stay ABSENT.
+- **Qwen3's think knob is a lose–lose on this surface** (measured): think OFF → the model mistakes the build request for an app-envelope request (0/3); think ON → chain-of-thought streams into the chat bubble and eats the 4 K context (1 448 tokens for one small app). The `enable_thinking:false` plumbing stays (tested, Qwen3-ids-only, dormant under the Llama default) so the 1.2 picker inherits a documented tradeoff rather than a surprise.
+- **`navigator.gpu` only exists in SECURE contexts** — a WebGPU probe run on about:blank reports absence on every browser. All product probing happens on the app origin (localhost/https), so this bites only tooling — but any future headless test that asserts WebGPU must navigate somewhere real first.
 
 ## Session journal (append-only, newest last)
 
@@ -82,3 +84,15 @@ The mode must ride the existing seams unchanged: the `AgentAdapter` contract, th
 - First real generation CONFIRMED (Llama-3.2-1B-q4f16): load 74.7 s cold, TTFT 2.47 s, 62.7 tok/s decode, 697 tokens — extracted a parseable but THIN app (672 bytes; the 1B split HTML/CSS/JS into separate fences, losing the styles/logic). Prompt = 993 tokens on the wire, so the builder prompt fits 4 K with ~3 K to spare.
 - State: Qwen3-1.7B + Llama-3.2-3B (3 prompts each) benchmarking in the background.
 - Next step: results → model decision → ADR-0015 → docs close-out → full suites → final commit.
+
+### 2026-08-06 02:1x — Claude (Fable 5) — session (model decision, AC9)
+- **Benchmark complete — all four planned runs plus a fairness check actually ran** (nothing scaled down; full JSON preserved below). Product turn shape (real KB system prompt + fenced-HTML suffix = 990–993 wire tokens), 3 app prompts, judged by the real extractor + DOM parse:
+  - **Llama-3.2-1B-q4f16**: 74.7 s cold load / **1.7 s warm** (browser cache hit); 55–65 tok/s. 3/3 extracted but ALL thin (373–672 B) — it splits HTML/CSS/JS into separate fences, so the installed app loses its styles/logic; pomodoro rambled 3 102 tokens.
+  - **Qwen3-1.7B-q4f16 think OFF** (the only config a 4 K context affords): **0/3** — every reply was hallucinated `responseSchema` JSON; it latched onto the system prompt's app-envelope layer and treated the human build request as an app request. Also leaks a literal empty `<think>` block into reply text.
+  - **Qwen3-1.7B think ON** (fairness re-run): 1/1 but thin (982 B), 1 448 tokens / 61.5 s for one small app — and the full chain-of-thought streams into the chat bubble. Broken either way for this product surface.
+  - **Llama-3.2-3B-q4f16**: 141 s cold (1.7 GB); 23–26 tok/s; TTFT 2.6–3.2 s; **3/3 complete single-fence documents** (620–2 280 B, all DOM-parse clean, correct titles); 30–56 s per build.
+- **DECISION (Phase-0 item 3): default = `Llama-3.2-3B-Instruct-q4f16_1-MLC`** — the smallest tested model that reliably keeps the whole app in one fence with substantial output. Constant flipped in `agent/webllm/model.ts`; guard test green. Rationale + table in **ADR-0015** (indexed).
+- What was NOT measured (honest scope): only 1 prompt for Qwen3-think-ON and 1B-cold (their other rows are warm); no Qwen3.5/gemma3/Phi-4-mini runs (time-boxed — queued for the 1.2 picker work); single machine (M-series, fast network); quality judged by extraction + DOM parse + eyeball of heads, not by interacting with every generated app.
+- Environment findings worth keeping: `navigator.gpu` exists only in secure contexts (about:blank probes lie); bundled Playwright Chromium headless = null adapter (validates the requestAdapter-based probe); real Chrome has WebGPU even headless (`channel: 'chrome'`).
+- State: real-model e2e through the actual product UI running in the background (headed bundled Chromium, fresh download).
+- Next step: e2e result → bench scratch cleanup → code-map count regen → full suites → final commit.

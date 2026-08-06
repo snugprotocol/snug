@@ -9,4 +9,4 @@
 // NOTE: this must be a `model_id` present in the PINNED web-llm version's
 // `prebuiltAppConfig.model_list` — bumping the dep can invalidate it; the guard test
 // in webllmModelId.test.ts pins that relationship.
-export const WEBLLM_DEFAULT_MODEL = 'Qwen3-1.7B-q4f16_1-MLC';
+export const WEBLLM_DEFAULT_MODEL = 'Llama-3.2-3B-Instruct-q4f16_1-MLC';
