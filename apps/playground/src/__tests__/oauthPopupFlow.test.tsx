@@ -187,6 +187,81 @@ describe('B1 — generateAuthUrl is unreachable pre-approval (M13)', () => {
   });
 });
 
+describe('fix-first 4 — startOAuthFlow lifecycle guards (double-start / close-during-start)', () => {
+  it('two rapid starts: the first channel closes, its poll clears, and the LIVE flow survives the first popup closing', async () => {
+    await seedApproved();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const channels: FakeChannel[] = [];
+    const popups: Array<{ closed: boolean }> = [];
+    __setWizardHooksForTests({
+      channelFactory: fakeChannelFactory(channels),
+      openPopup: () => {
+        const p = { closed: false };
+        popups.push(p);
+        return p;
+      },
+      fetchImpl: tokenFetch,
+    });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    // The double-click race: both starts in flight before either installs its flow.
+    await Promise.all([startOAuthFlow({ client_id: 'cid-1' }), startOAuthFlow({ client_id: 'cid-1' })]);
+
+    expect(channels).toHaveLength(2);
+    expect(channels[0]!.closeCalls).toBeGreaterThan(0); // the stale flow was torn down…
+    expect(channels[1]!.closeCalls).toBe(0); // …and the live one was not
+
+    // The FIRST popup reporting closed must not kill the live flow: the stale poll
+    // was cleared with its flow (pre-fix it fired, errored the status, and tore
+    // down the LIVE channel — poisoning every later flow).
+    popups[0]!.closed = true;
+    vi.advanceTimersByTime(1200);
+    expect(wizardFlowStatusStore.get().state).toBe('awaiting_callback');
+    expect(channels[1]!.closeCalls).toBe(0);
+  });
+
+  it('requestCloseWizard during a gated generateAuthUrl: the start bails — no popup, no channel, status idle, pre-opened closed', async () => {
+    await seedApproved();
+    const channels: FakeChannel[] = [];
+    const openPopup = vi.fn(() => ({ closed: false }));
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    __setWizardHooksForTests({
+      channelFactory: fakeChannelFactory(channels),
+      openPopup,
+      service: {
+        generateAuthUrl: async () => {
+          await gate;
+          return { authorizeUrl: 'https://idp.example/authorize?g=1', state: 's', flowId: 'flow-z' };
+        },
+        handleCallback: vi.fn(),
+      } as never,
+    });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+
+    const preOpened = {
+      closed: false,
+      closeCalls: 0,
+      navigate: vi.fn(),
+      close(): void {
+        preOpened.closeCalls += 1;
+      },
+    };
+    const inflight = startOAuthFlow({ client_id: 'cid-1' }, preOpened);
+    expect(requestCloseWizard()).toBe('closed'); // nothing in flight YET — close is immediate
+    release();
+    await inflight;
+
+    // The completed mint must not resurrect a zombie flow on the closed wizard.
+    expect(preOpened.navigate).not.toHaveBeenCalled();
+    expect(preOpened.closeCalls).toBeGreaterThan(0); // the blank window was closed on bail
+    expect(openPopup).not.toHaveBeenCalled();
+    expect(channels).toHaveLength(0); // no channel leaked
+    expect(wizardFlowStatusStore.get().state).toBe('idle');
+  });
+});
+
 describe('fix-first 3 — a BLOCKED popup is a visible ERROR, never a parked awaiting_callback', () => {
   it('openPopup returns null: error state carries the authorizeUrl fallback; no flow installed; close is immediate', async () => {
     await seedApproved();

@@ -401,12 +401,30 @@ export async function startOAuthFlow(
     preOpened?.close?.();
     throw new Error('no wizard session');
   }
+  // Lifecycle guard 1 (fix-first 4, entry half): a deliberate restart tears the
+  // previous flow down FIRST — its channel, poll, and popup never outlive a second
+  // start (pre-fix, a double-click leaked flow-1's poll, which then killed EVERY
+  // later flow within 500ms of awaiting_callback once its popup reported closed).
+  if (activeFlow !== null) teardownFlow();
+
+  // Lifecycle guard 2 (staleness): bail after EVERY await if the wizard session
+  // closed or was replaced — a completed mint must never resurrect a zombie flow
+  // (popup over a closed wizard, channel nobody tears down) on a session the user
+  // already dismissed. Identity check: openWizard/forceCloseWizard replace the
+  // session object, so `!==` catches close, replace, and re-open alike.
+  const stale = (): boolean => wizardStore.get() !== session;
+  const bail = (): void => {
+    preOpened?.close?.(); // never orphan the gesture-opened blank window
+  };
+
   let start: OAuthStartResult;
   let scope: Awaited<ReturnType<typeof requireApprovedSpecScope>>;
   let service: WizardOAuthServiceLike;
   try {
     const db = await getUserDb();
+    if (stale()) return bail();
     scope = await requireApprovedSpecScope(specReaderFor(db), session.appId); // B1 wall
+    if (stale()) return bail();
     service = wizardService(db);
     start = await service.generateAuthUrl({ appId: scope.appId, spec: scope.spec, clientCreds });
   } catch (err) {
@@ -414,6 +432,7 @@ export async function startOAuthFlow(
     preOpened?.close?.();
     throw err;
   }
+  if (stale()) return bail();
 
   // The initiating context knows the channel name because it HOLDS the flowId —
   // the payload can never teach it (D6).
@@ -455,6 +474,10 @@ export async function startOAuthFlow(
     }
   }, POPUP_POLL_MS);
 
+  // Lifecycle guard 1 (assignment half): the awaits above may have raced another
+  // start that installed a flow meanwhile — an overwrite must never leak the prior
+  // channel/interval, so ALWAYS tear down immediately before the assignment.
+  teardownFlow();
   activeFlow = { start, channel, popup, poll };
   wizardFlowStatusStore.set({ state: 'awaiting_callback', flowId: start.flowId });
 }

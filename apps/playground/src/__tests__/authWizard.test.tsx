@@ -16,6 +16,7 @@ import {
   applyInferenceResult,
   openWizard,
   saveWizardClientCreds,
+  wizardFlowStatusStore,
   wizardStepStore,
   wizardStore,
 } from '../state/wizard.js';
@@ -421,6 +422,44 @@ describe('fix-first 3 — a blocked popup shows a visible error with a fallback 
     expect(link, 'the authorizeUrl fallback link must render').not.toBeNull();
     expect(container.textContent).not.toMatch(/finish signing in the popup window/i);
     expect(button(/connect account/i).disabled).toBe(false); // re-enabled for the retry
+  });
+});
+
+// ------------------------------------------- click-time busy guard (fix-first 4)
+
+describe('fix-first 4 — the connect button disables at CLICK time, not only at awaiting_callback', () => {
+  it('while the URL mint is still pending, the button is already disabled', async () => {
+    await seedRow(oauthCodeSpec, true);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    __setWizardHooksForTests({
+      channelFactory: () => ({ onmessage: null, close: () => undefined }),
+      openPopup: () => ({ closed: false }),
+      service: {
+        generateAuthUrl: async () => {
+          await gate;
+          return { authorizeUrl: 'https://idp.example/authorize?b=1', state: 's', flowId: 'flow-busy' };
+        },
+        handleCallback: vi.fn(),
+      } as never,
+    });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    await renderSheet();
+    await click(button(/approve connection/i));
+
+    await act(async () => {
+      button(/connect account/i).click(); // do NOT settle — the mint is gated
+    });
+    // Busy from the click itself: a second click has no live target even though
+    // flow status is still 'idle' (pre-fix the button only disabled at awaiting_callback).
+    expect(button(/connect account/i).disabled).toBe(true);
+
+    release();
+    await settle();
+    expect(wizardFlowStatusStore.get().state).toBe('awaiting_callback');
+    expect(button(/connect account/i).disabled).toBe(true); // still held by the flow states
   });
 });
 

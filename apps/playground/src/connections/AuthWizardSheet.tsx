@@ -407,6 +407,10 @@ function CredentialsStep({ session, row }: { session: WizardSession; row: AuthSp
   const flow = useStore(wizardFlowStatusStore);
   const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | undefined>(undefined);
+  // UI busy guard (fix-first 4): the connect button goes dead at CLICK time — not
+  // only once flow status reaches awaiting_callback — so a double-click has no
+  // second live target during the mint awaits.
+  const [connecting, setConnecting] = useState(false);
 
   if (row === undefined) return <span className="hint">loading…</span>;
   if (row.status !== AUTH_SPEC_STATUS.approved) {
@@ -460,7 +464,9 @@ function CredentialsStep({ session, row }: { session: WizardSession; row: AuthSp
   };
 
   const connectAccount = async (): Promise<void> => {
+    if (connecting) return; // busy guard — same-tick double-invoke
     setError(undefined);
+    setConnecting(true);
     // Open the popup SYNCHRONOUSLY, inside the click gesture, so a default popup
     // blocker lets it through (D6). `startOAuthFlow` awaits the URL mint before the
     // authorize URL exists — a `window.open` after those awaits would be blocked.
@@ -472,6 +478,8 @@ function CredentialsStep({ session, row }: { session: WizardSession; row: AuthSp
       setValues({});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConnecting(false);
     }
   };
 
@@ -507,7 +515,10 @@ function CredentialsStep({ session, row }: { session: WizardSession; row: AuthSp
 
       {spec.kind === 'oauth2_auth_code' ? (
         <>
-          <Button onClick={() => void connectAccount()} disabled={flow.state === 'awaiting_callback' || flow.state === 'exchanging'}>
+          <Button
+            onClick={() => void connectAccount()}
+            disabled={connecting || flow.state === 'awaiting_callback' || flow.state === 'exchanging'}
+          >
             connect account
           </Button>
           {flow.state === 'awaiting_callback' ? <span className="hint">finish signing in the popup window…</span> : null}
