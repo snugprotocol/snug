@@ -9,7 +9,11 @@ Render-directive contract + AUTH_REQUIRED payload, INTERNAL protocol surface out
 `schemas/` SOURCES (the AL-02/AL-03 precedent; export-set guard extended; prose staged by
 AL-12): `authSpecHintsSchema` (packages/protocol/src/auth-schema.ts — the single source of
 truth for transformer-input hints; `packages/auth` re-derives `ParamsToAuthSpecInput` via
-the inferred type, type-only) · `packages/protocol/src/render-directive.ts` —
+the inferred type, type-only; evidence-style length bounds added at the fix-first pass
+[nonBlocking 8, 2026-08-06]: providerName ≤120 chars, declaredApiHosts entries ≤253
+chars/≤32 items, scopes+userLayerScopes entries ≤200 chars/≤64 items — the hints shape
+is the chat-persisted directive's proposal surface, so free strings are capped like
+`evidence[]`) · `packages/protocol/src/render-directive.ts` —
 `llmProposalSchema` (hints MINUS registration copy + headerTemplate + credential field
 definitions `fields`/`userLayerFields` [fix-first 2, 2026-08-06]: LLM-authored shapes
 structurally cannot carry phishing registration copy, control secret placement, or author

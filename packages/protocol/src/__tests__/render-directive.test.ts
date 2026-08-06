@@ -12,7 +12,15 @@
 //   - none of it enters json-schemas SOURCES (the publishes-to-spec line, mutation M1
 //     of the AL-04 table — extends the AL-02/AL-03 guard).
 import { describe, expect, it } from 'vitest';
-import { AUTH_KINDS, authSpecHintsSchema } from '../auth-schema.js';
+import {
+  AUTH_HINT_HOSTS_MAX_ITEMS,
+  AUTH_HINT_HOST_MAX_CHARS,
+  AUTH_HINT_SCOPES_MAX_ITEMS,
+  AUTH_HINT_SCOPE_MAX_CHARS,
+  AUTH_KINDS,
+  AUTH_PROVIDER_NAME_MAX_CHARS,
+  authSpecHintsSchema,
+} from '../auth-schema.js';
 import { buildJsonSchemas } from '../json-schemas.js';
 import { PROTOCOL_VERSION } from '../constants.js';
 import {
@@ -161,6 +169,33 @@ describe('AC3 — inferrerProposalSchema: strict confidence + bounded evidence (
 
   it('strict-rejects unknown keys on the inferrer output', () => {
     expect(inferrerProposalSchema.safeParse({ ...valid, note: 'hi' }).success).toBe(false);
+  });
+});
+
+// ------------------------------------- persisted-string bounds (nonBlocking 8)
+
+describe('nonBlocking 8 — evidence-style length bounds on the chat-persisted hint strings', () => {
+  it('bounds providerName / host entries / scope entries at the schema boundary', () => {
+    expect(authSpecHintsSchema.safeParse({ providerName: 'p'.repeat(AUTH_PROVIDER_NAME_MAX_CHARS) }).success).toBe(true);
+    expect(authSpecHintsSchema.safeParse({ providerName: 'p'.repeat(AUTH_PROVIDER_NAME_MAX_CHARS + 1) }).success).toBe(false);
+
+    const withHost = (n: number): unknown => ({ providerName: 'X', declaredApiHosts: ['h'.repeat(n)] });
+    expect(llmProposalSchema.safeParse(withHost(AUTH_HINT_HOST_MAX_CHARS)).success).toBe(true);
+    expect(llmProposalSchema.safeParse(withHost(AUTH_HINT_HOST_MAX_CHARS + 1)).success).toBe(false);
+
+    const withScope = (n: number): unknown => ({ providerName: 'X', scopes: ['s'.repeat(n)] });
+    expect(llmProposalSchema.safeParse(withScope(AUTH_HINT_SCOPE_MAX_CHARS)).success).toBe(true);
+    expect(llmProposalSchema.safeParse(withScope(AUTH_HINT_SCOPE_MAX_CHARS + 1)).success).toBe(false);
+
+    const withUserScope = (n: number): unknown => ({ providerName: 'X', userLayerScopes: ['s'.repeat(n)] });
+    expect(llmProposalSchema.safeParse(withUserScope(AUTH_HINT_SCOPE_MAX_CHARS + 1)).success).toBe(false);
+  });
+
+  it('caps the hosts/scopes array sizes in chat-persisted meta', () => {
+    const hosts = Array.from({ length: AUTH_HINT_HOSTS_MAX_ITEMS + 1 }, (_, i) => `h${i}.example`);
+    expect(llmProposalSchema.safeParse({ providerName: 'X', declaredApiHosts: hosts }).success).toBe(false);
+    const scopes = Array.from({ length: AUTH_HINT_SCOPES_MAX_ITEMS + 1 }, (_, i) => `s${i}`);
+    expect(llmProposalSchema.safeParse({ providerName: 'X', scopes }).success).toBe(false);
   });
 });
 
