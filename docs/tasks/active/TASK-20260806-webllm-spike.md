@@ -1,0 +1,74 @@
+# TASK-20260806-webllm-spike: WebLLM adapter spike — in-browser brain behind a flag (AL-07 / roadmap A7)
+
+- **Status**: in-progress
+- **Owner**: Jeetu (autonomous — child of TASK-20260805-alpha-umbrella; child plans pre-approved by Phase-0 decision 6)
+- **Risk tier**: medium (playground logic + a new adapter; no protocol change, no C1/C2 surface)
+- **Branch**: `feat/TASK-20260806-webllm-spike`
+- **Packages touched**: `apps/playground` only (the adapter lives in the playground, NOT in `packages/adapters` — see Decisions)
+- **Spec impact**: none (roadmap 1.2-5 queues a `webllm` conforming-mode spec note for GA — not this spike)
+- **Related**: umbrella AL-07 row + Phase-0 decision 3 (model decision delegated to this spike) · roadmap A7 / S2 / 1.2-1 · ADR-0008 (host-page LLM calls) · ADR-0012 (per-turn caching — webllm ignores the flag by contract) · ADR-0013 (hosted hub modes incl. WebLLM) · ADR-0015 (written by this task)
+
+## Spec (what & why)
+
+Roadmap A7: an **in-browser WebLLM mode behind an experimental flag, with graceful fallback to demo when WebGPU is absent**. This is the S2 signature move's first cut: apps think inside the browser tab — no key, no signup, no server. It is a SPIKE: the goal is a working, honestly-scoped experimental mode plus the Phase-0-delegated **model decision**; GA polish (model picker, cold-start UX, cache management) is milestone 1.2 and explicitly out of scope.
+
+The mode must ride the existing seams unchanged: the `AgentAdapter` contract, the `runAgentTurn` choke point (so `round_trip_start`/`round_trip` events feed the think panel for free), and the demo brain as the fallback. It must NOT appear as a first-class equal of byok/local/subscription — activation is a URL flag, and the persisted `PlaygroundMode` union is untouched.
+
+**Acceptance criteria** (each becomes at least one test):
+
+1. **Flag-off = invisible.** Without the `?webllm=1` query flag the playground has NO webllm surface: no experimental settings card, no banner, and brain resolution returns "use configured settings" for every webgpu state. *(unit: resolver table; e2e: flag-off page has no `[data-testid^="webllm-"]` element and the mode group still shows exactly the three existing choices)*
+2. **Flag-on + WebGPU → webllm brain on both turn paths.** With the flag on and WebGPU available, the builder chat AND the app-frame transport run their turns through the WebLLM adapter (fake engine receives the request; reply text reaches the caller). *(unit at the wiring altitude: `createAppTransport`/`createDirectBuilder` with stores set + injected fake engine loader)*
+3. **Flag-on + no WebGPU → demo fallback + plain-language banner.** Brain resolution forces the demo brain (mock adapter) on both paths, and the shell shows: "this browser can’t run local models — showing the demo brain". *(unit: resolver + transport wiring proves the demo script answers; e2e: `navigator.gpu` deleted via init script → banner visible, and a demo build still completes)*
+4. **Contract-faithful adapter.** The WebLLM adapter implements `AgentAdapter` and is reached only via `runAgentTurn`: deltas stream through `onDelta`; the event union (`round_trip_start`/`round_trip`) fires with the same shapes the inspector renders; usage maps `prompt_tokens`/`completion_tokens` → `inputTokens`/`outputTokens` with cache fields ABSENT (never coerced to 0); errors are data, never thrown across the boundary. *(unit with fake engine, incl. one through `runAgentTurn` asserting the event feed)*
+5. **Wire model name.** `AdapterResult.model` is the engine-REPORTED loaded model id (chunk `model` field), falling back to the configured id only when chunks carry none — never a UI guess. *(unit: fake chunk reports a different id than configured; result carries the reported one)*
+6. **Tools refused honestly; builder uses the no-tools path + fenced-HTML envelope.** A request carrying tools returns a typed `WEBLLM_TOOLS_UNSUPPORTED` error without touching the engine (see Decisions: WebLLM 0.2.84 function calling is 8B-Hermes-only and forbids custom system prompts). In webllm mode the builder therefore offers NO tools, appends a fenced-HTML output instruction to the system prompt, and a reply containing a complete single-file HTML document is extracted, written through the artifact sink, and fires `onArtifact` (the app installs and runs). *(unit: adapter tool refusal; builder-path test: fake engine sees zero tools + the suffix; fenced reply → sink write + artifact event; extractor edge cases)*
+7. **Engine lifecycle.** The engine is loaded ONCE per model id across turns/adapters (fresh-adapter-per-turn must not re-download GBs); a load failure returns a typed retryable `WEBLLM_LOAD_FAILED` error result. *(unit: loader spy call count across two turns; rejecting loader → error result, second call retries)*
+8. **Abort.** A pre-aborted signal cancels without touching the engine; a mid-stream abort interrupts generation and returns `CANCELLED` with the already-streamed text preserved as `partialText`. *(unit with a controllable fake stream)*
+9. **Model decision recorded.** Candidates from the pinned @mlc-ai/web-llm prebuilt list benchmarked on app-build-shaped prompts as far as this environment allows; what ran and what did NOT run is stated plainly; decision + rationale in this journal AND ADR-0015. *(doc — no test; the default-model constant is asserted by the resolver test)*
+
+**Out of scope**: GA polish (model picker, cold-start/download UX, cache management, PWA — roadmap 1.2); WebLLM in subscription mode semantics beyond "the flag overrides whatever mode is configured" (documented below); a webllm spec note (1.2-5); desktop; KB prompt-size tuning for 4K-context models; changing the persisted `PlaygroundMode` union or the settings mode picker.
+
+## Plan
+
+**Shared literals (pinned before code, lesson 2026-08-03):**
+- URL flag: query param `webllm=1` (exact value `1`).
+- Test ids: `webllm-fallback-banner`, `webllm-experimental-card`.
+- Banner copy (exact): `this browser can’t run local models — showing the demo brain`
+- Error codes: `WEBLLM_TOOLS_UNSUPPORTED` (not retryable), `WEBLLM_LOAD_FAILED` (retryable); both classify to HOST_ERROR at frame boundaries (R5), same pattern as `STREAM_DROPPED`.
+- Engine dep: `@mlc-ai/web-llm@0.2.84` (pinned exact; latest as of 2026-08-06).
+
+**Files (all `apps/playground`):**
+1. `src/state/webllm.ts` — flag parse (`parseWebllmFlag`), WebGPU probe (`detectWebGpu` — `navigator.gpu.requestAdapter()` non-null, try/catch false), stores (`webllmFlagStore`, `webgpuStore: 'unknown'|'yes'|'no'`, `webllmLoadStatusStore` for download progress text), boot `initWebllm()`, and THE decision function `resolveBrain(flagOn, webgpu): {kind:'settings'}|{kind:'webllm';model}|{kind:'demo';reason:'no-webgpu'|'probing'}` + `useBrain()`. The condition lives here and is tested here (lesson 2026-08-05: test where the DECISION is made).
+2. `src/agent/webllm/engine.ts` — engine singleton keyed by model id; default loader dynamic-imports `@mlc-ai/web-llm` (code-split — the main bundle must not swallow the engine); `setWebllmEngineLoaderForTests()` seam; progress → `webllmLoadStatusStore`.
+3. `src/agent/webllm/webllmAdapter.ts` — the `AgentAdapter`; narrow structural engine types (no direct type dep on the lib in the contract surface); `WEBLLM_DEFAULT_MODEL`.
+4. `src/agent/webllm/appHtml.ts` — `extractAppHtml(text)` (last complete single-file HTML fence or bare doctype document + `<title>`), pure.
+5. `src/agent/adapter.ts` — `TurnAdapterConfig.mode` widened with `'webllm'` → returns the webllm adapter.
+6. `src/agent/builder.ts` — webllm branch in `createDirectBuilder`: no tools, system suffix (fenced-HTML instruction), post-turn `extractAppHtml` → `sink.write` + `onArtifact`. Existing byok/local/subscription branches byte-identical in behavior.
+7. `src/agent/transport.ts` + `src/agent/useBuilderChat.ts` — consume `resolveBrain` when picking the agent/adapter (`'demo'` → byok+mock, `'webllm'` → mode `'webllm'`); F15 confirm-guard stays in force for webllm (a synced file's settings remain executable config).
+8. `src/views/WebllmBanner.tsx` + mount in `App.tsx`; experimental card in `SettingsView.tsx` (rendered only when the flag is on).
+9. Tests: `src/__tests__/webllmState.test.ts`, `webllmAdapter.test.ts`, `webllmBuilder.test.ts` (+ transport assertions in it or `webllmTransport.test.ts`); e2e `e2e/webllm.spec.ts`; optional skip-by-default real-load spec.
+10. Benchmark harness (NOT shipped as product code): scratch page + agent-browser/Playwright drive, results into this journal + ADR-0015.
+
+**Order (TDD):** task file → red unit tests for resolver/adapter/extractor → implement 1–4 → wire 5–7 with red wiring tests first → banner/settings + e2e → benchmark/model decision → ADR + docs → full suites.
+
+**Cross-package impact:** none at build time (playground leaf). `packages/adapters` is imported but unchanged. No protocol change → no spec-sync.
+
+**Port note:** the Playwright reference server pins 8787; if this environment has 8787 busy at e2e time, adapt locally (env-var override threaded through helpers + vite proxy) without inventing repo-wide infra.
+
+## Decisions & surprises
+
+- **Adapter lives in `apps/playground`, not `packages/adapters`.** The engine dep is browser-only, ~GB-scale at runtime, experimental, and `packages/adapters` is imported by `apps/server`; an experimental in-browser engine does not belong in the shared package until GA (1.2 can promote it). The CONTRACT still comes from `@snugprotocol/adapters` types, and the turn still runs through `runAgentTurn`.
+- **Tools are off in webllm mode — investigated, not assumed.** @mlc-ai/web-llm 0.2.84 gates `ChatCompletionRequest.tools` on `functionCallingModelIds` = five 8B-class Hermes models (≈4.9–6 GB VRAM — outside the small-model target), and its hardcoded Hermes path THROWS on any custom system message (`CustomSystemPromptError`) and hijacks `response_format`. Snug's builder IS a custom system prompt; the combination is structurally incompatible. Blast radius of the no-tools choice: in webllm mode there is no KB consult round-trip, no `schema_apply`/`app_doc_write` (no native-schema apps, no wiki writes — LLM-optional doctrine unaffected), and artifacts arrive via the fenced-HTML envelope instead of `artifact_write`. App-frame turns are untouched (they were already tool-free JSON-only).
+- **Fenced-HTML envelope over "constrained JSON".** Asking a 1–3B model to emit one fenced HTML document is strictly easier than asking for valid JSON containing an escaped HTML string (escaping is where small models die). The reply text keeps the code visible in chat — ugly, accepted for the spike; queued as 1.2 polish.
+- **The flag overrides the configured mode entirely** (including subscription): `?webllm=1` means "run the webllm experiment". Least-invasive alternative (only overriding direct modes) would make the flag's meaning depend on a second setting — worse to reason about, worse to test.
+- **`modelStore` is NOT consulted** — the shared model setting belongs to byok/local wire ids; a webllm model id is a different namespace. The spike always loads `WEBLLM_DEFAULT_MODEL`; the picker is 1.2-1.
+- **Context reality check:** builder system prompt ≈ 1.2K tokens (measured: 4,951 chars), app-frame ≈ 950 — both fit the 4K default context of the candidates, but a full app build reply can crowd 4K; noted in ADR as a GA consideration (webllm `context_window_size` override costs KV memory).
+- **`cache: true` is passed through and ignored** — per the AdapterRequest contract ("providers that do not support caching ignore it") and ADR-0012; usage cache fields stay ABSENT.
+
+## Session journal (append-only, newest last)
+
+### 2026-08-06 00:3x — Claude (Fable 5) — session (Gate 1+2)
+- Done: mandatory reads (PROCESS/TDD/lessons all, umbrella AL-07 + Phase-0 decision 3, roadmap A7/§1-S2/§2, architecture seams, adapters contract + `runAgentTurn`, playground adapter/transport/builder/mode wiring, ADR-0012/0013); worktree install + root build green; `@mlc-ai/web-llm@0.2.84` pinned and its shipped `prebuiltAppConfig` (163 models) + function-calling gate read from source; spec/plan written.
+- State: plan complete (pre-approved via umbrella Phase-0); starting Gate 3 red tests.
+- Next step: red tests for resolver + adapter + extractor.
+- Open questions: whether headless/headed Chromium on this Mac yields WebGPU for a real generation (AC9 scales honestly if not).
