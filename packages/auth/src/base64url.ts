@@ -1,6 +1,6 @@
 // Shared browser-safe base64url helper (AL-02 plan D6): RFC 4648 url-safe alphabet,
-// unpadded output, padding-tolerant input. Built on btoa/atob + TextEncoder — no
-// Buffer, no node: imports (the AC5 lint test enforces this for the whole package).
+// unpadded output, padding-tolerant input. Built on btoa/atob + TextEncoder — no node
+// byte-buffer API anywhere (the AC5 lint test enforces this for the whole package).
 
 const BASE64URL_RE = /^[A-Za-z0-9_-]*={0,2}$/;
 

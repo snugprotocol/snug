@@ -2,8 +2,8 @@
  * Header-template engine for `request.headerTemplate` strings — ported from OProject
  * (AL-02 plan D7) and rewritten ASYNC-FIRST on WebCrypto (plan D6): every helper and
  * both render functions return Promises, and the PUBLIC signature is async from day
- * one so AL-03 consumes it async with no sync→async break later. No Buffer, no
- * node:crypto (AC5 lint test).
+ * one so AL-03 consumes it async with no sync→async break later. No node crypto or
+ * byte-buffer APIs (AC5 lint test).
  *
  * Supports two forms:
  *   1. Plain field substitution: `{{api_key}}` → `ctx.fields.api_key`
