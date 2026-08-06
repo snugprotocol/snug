@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quiz Me</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #eef6fb; --fg: #123047; --muted: #62809a;
+      --card: #ffffff; --border: #d7e6f1;
+      --accent: #0284c7; --accent-soft: #dff0fb;
+      --good: #15803d; --good-soft: #dcfce7;
+      --bad: #b91c1c; --bad-soft: #fee2e2;
+      --shadow: 0 10px 30px rgba(10, 60, 110, 0.10);
+    }
+    :root[data-theme="dark"] {
+      --bg: #0e1a24; --fg: #e3eef7; --muted: #8aa7bf;
+      --card: #16283a; --border: #27425c;
+      --accent: #38bdf8; --accent-soft: #0f2f44;
+      --good: #4ade80; --good-soft: #14351f;
+      --bad: #f87171; --bad-soft: #3d1717;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh;
+    }
+    .wrap { max-width: 680px; margin: 0 auto; padding: 16px 14px 40px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(1.5rem, 5vw, 2.1rem); margin: 6px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 16px; font-size: 0.92rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+    .topics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+    .topic {
+      min-height: 56px; border-radius: 14px; border: 2px solid var(--border);
+      background: var(--accent-soft); color: var(--fg); font-size: 1.02rem; font-weight: 800;
+      cursor: pointer; padding: 10px;
+    }
+    .topic:hover { border-color: var(--accent); }
+    .freeform { display: flex; gap: 8px; margin-top: 12px; }
+    .freeform input {
+      flex: 1; min-height: 48px; border-radius: 12px; border: 2px solid var(--border);
+      background: var(--bg); color: var(--fg); padding: 0 14px; font-size: 1rem;
+    }
+    .btn {
+      min-height: 48px; border-radius: 999px; border: none; cursor: pointer;
+      background: var(--accent); color: #fff; font-size: 1rem; font-weight: 800; padding: 10px 22px;
+    }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn.ghost { background: none; border: 2px solid var(--border); color: var(--fg); }
+    .note { color: var(--muted); font-size: 0.85rem; font-style: italic; margin: 0 0 10px; }
+    .progress { color: var(--muted); font-weight: 700; font-size: 0.9rem; margin: 0 0 8px; }
+    .question { font-size: 1.15rem; font-weight: 800; line-height: 1.45; margin: 0 0 14px; }
+    .answers { display: grid; gap: 10px; }
+    .answer {
+      min-height: 52px; border-radius: 14px; border: 2px solid var(--border);
+      background: var(--card); color: var(--fg); font-size: 1rem; font-weight: 700;
+      cursor: pointer; padding: 12px 14px; text-align: left;
+    }
+    .answer:hover:not(:disabled) { border-color: var(--accent); }
+    .answer:disabled { cursor: default; }
+    .answer.right { background: var(--good-soft); border-color: var(--good); }
+    .answer.wrong { background: var(--bad-soft); border-color: var(--bad); }
+    .feedback { margin-top: 12px; font-weight: 800; }
+    .feedback .fact { display: block; font-weight: 400; color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
+    .score-big { font-size: 3rem; font-weight: 900; text-align: center; margin: 8px 0; }
+    .stars { text-align: center; font-size: 1.6rem; margin-bottom: 8px; }
+    .center { text-align: center; }
+    .hist-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 0.92rem; }
+    .hist-topic { width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hist-bar-bg { flex: 1; height: 12px; border-radius: 999px; background: var(--accent-soft); overflow: hidden; }
+    .hist-bar { height: 100%; border-radius: 999px; background: var(--accent); }
+    .hist-score { width: 44px; text-align: right; font-weight: 700; }
+    .empty { color: var(--muted); font-size: 0.9rem; }
+    .thinking { color: var(--muted); }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    const RESPONSE_SCHEMA = {
+      questions: 'array of exactly 5 objects, each: { question: string (one kid-friendly question about the requested topic), choices: array of exactly 4 short answer strings, answerIndex: integer 0-3 (which choice is correct), funFact: string (one fun sentence about the answer) }',
+      message: 'string: one short, encouraging line introducing the quiz (ALWAYS include)',
+    };
+
+    // ============================================================
+    // 6. YOUR APP — Quiz Me
+    // ============================================================
+    // Education wow (roadmap §5): the AGENT writes a five-question quiz on any topic
+    // the kid picks; the APP is the referee — it validates the reply shape hard,
+    // runs the quiz locally, and keeps every score in a real SQLite table.
+    // Graceful no-LLM stance (ADR-0011): an off-schema or failed reply (the demo
+    // brain's canned answer is exactly that) swaps in the built-in practice bank
+    // and says so — a keyless first visit still gets a full quiz.
+
+    const TOPICS = [
+      { id: 'space', emoji: '🚀', label: 'space' },
+      { id: 'animals', emoji: '🐾', label: 'animals' },
+      { id: 'earth', emoji: '🌍', label: 'earth' },
+      { id: 'numbers', emoji: '🔢', label: 'numbers' },
+    ];
+
+    const BANK = {
+      space: [
+        { question: 'Which planet is called the Red Planet?', choices: ['Venus', 'Mars', 'Jupiter', 'Mercury'], answerIndex: 1, funFact: 'Mars looks red because its soil is full of rusty iron dust.' },
+        { question: 'What does the Sun mostly burn to shine?', choices: ['Wood', 'Oxygen', 'Hydrogen', 'Coal'], answerIndex: 2, funFact: 'The Sun fuses about 600 million tonnes of hydrogen every second.' },
+        { question: 'How many moons does Earth have?', choices: ['One', 'Two', 'None', 'Five'], answerIndex: 0, funFact: 'Our Moon is slowly drifting away — about 4 cm farther every year.' },
+        { question: 'Which of these is a real spacecraft?', choices: ['Voyager 1', 'Rocket Rita', 'Star Skipper', 'Moon Mole'], answerIndex: 0, funFact: 'Voyager 1 has left the solar system and still phones home.' },
+        { question: 'What do astronauts float because of?', choices: ['No gravity at all', 'Free fall around Earth', 'Special suits', 'Magnet boots'], answerIndex: 1, funFact: 'The station and everyone in it are falling around Earth together.' },
+      ],
+      animals: [
+        { question: 'Which animal sleeps standing up?', choices: ['Horse', 'Cat', 'Penguin', 'Frog'], answerIndex: 0, funFact: 'Horses lock their leg joints so they can nap without falling over.' },
+        { question: 'What is a group of lions called?', choices: ['A pack', 'A pride', 'A herd', 'A flock'], answerIndex: 1, funFact: 'A pride is mostly related lionesses — they do most of the hunting.' },
+        { question: 'Which animal can regrow a lost arm?', choices: ['Starfish', 'Rabbit', 'Owl', 'Goat'], answerIndex: 0, funFact: 'Some starfish can regrow a whole body from a single arm.' },
+        { question: 'How do bees tell each other where flowers are?', choices: ['Buzzing songs', 'A waggle dance', 'Tiny maps', 'Smell trails'], answerIndex: 1, funFact: 'The angle of the waggle dance points at the flowers relative to the sun.' },
+        { question: 'Which bird cannot fly?', choices: ['Sparrow', 'Pigeon', 'Ostrich', 'Swallow'], answerIndex: 2, funFact: 'Ostriches make up for it by sprinting at 70 km/h.' },
+      ],
+      earth: [
+        { question: 'What is the biggest ocean?', choices: ['Atlantic', 'Indian', 'Arctic', 'Pacific'], answerIndex: 3, funFact: 'The Pacific is bigger than all the land on Earth put together.' },
+        { question: 'What makes a volcano erupt?', choices: ['Melted rock rising', 'Strong wind', 'Ocean waves', 'Earth spinning'], answerIndex: 0, funFact: 'The melted rock is called magma — and lava once it is outside.' },
+        { question: 'Which is the tallest mountain above sea level?', choices: ['K2', 'Everest', 'Kilimanjaro', 'Mont Blanc'], answerIndex: 1, funFact: 'Everest grows about 4 mm taller every year.' },
+        { question: 'What are clouds made of?', choices: ['Smoke', 'Cotton', 'Tiny water drops', 'Steam only'], answerIndex: 2, funFact: 'A fluffy summer cloud can weigh as much as 100 elephants.' },
+        { question: 'Where do most earthquakes happen?', choices: ['Plate edges', 'Deserts', 'Islands only', 'Forests'], answerIndex: 0, funFact: 'The Pacific "Ring of Fire" hosts about 90% of the world’s earthquakes.' },
+      ],
+      numbers: [
+        { question: 'What is 7 × 8?', choices: ['54', '56', '64', '48'], answerIndex: 1, funFact: '56 reads "five-six" — and 7×8 famously trips adults up too.' },
+        { question: 'Which number is a prime?', choices: ['9', '15', '13', '21'], answerIndex: 2, funFact: 'A prime only divides by 1 and itself — 13 fits the club.' },
+        { question: 'What is half of 90?', choices: ['40', '55', '35', '45'], answerIndex: 3, funFact: 'Halving is just sharing fairly between two.' },
+        { question: 'A triangle has how many corners?', choices: ['3', '4', '5', '6'], answerIndex: 0, funFact: '"Tri" means three — same as in tricycle.' },
+        { question: 'What comes next: 2, 4, 8, 16…?', choices: ['20', '24', '32', '18'], answerIndex: 2, funFact: 'Doubling gets huge fast — 30 doublings passes a billion.' },
+      ],
+    };
+
+    /** Referee: accept the agent quiz ONLY if the whole shape checks out. */
+    function validateQuiz(data) {
+      if (!data || typeof data !== 'object' || !Array.isArray(data.questions)) return null;
+      const out = [];
+      for (const q of data.questions) {
+        if (!q || typeof q !== 'object') return null;
+        if (typeof q.question !== 'string' || q.question.trim() === '') return null;
+        if (!Array.isArray(q.choices) || q.choices.length !== 4) return null;
+        if (!q.choices.every((c) => typeof c === 'string' && c.trim() !== '')) return null;
+        if (typeof q.answerIndex !== 'number' || !Number.isInteger(q.answerIndex)) return null;
+        if (q.answerIndex < 0 || q.answerIndex > 3) return null;
+        out.push({
+          question: q.question.trim(),
+          choices: q.choices.map((c) => c.trim()),
+          answerIndex: q.answerIndex,
+          funFact: typeof q.funFact === 'string' ? q.funFact.trim() : '',
+        });
+        if (out.length === 5) break;
+      }
+      return out.length === 5 ? out : null;
+    }
+
+    function bankFor(topic) {
+      const key = topic.trim().toLowerCase();
+      if (BANK[key]) return BANK[key].slice();
+      // Unknown topic: a mixed practice round, one from each shelf plus a bonus.
+      const all = Object.values(BANK);
+      const mixed = all.map((list, i) => list[i % list.length]);
+      return mixed.concat([all[0][3]]).slice(0, 5);
+    }
+
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS quiz_scores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        topic TEXT NOT NULL,
+        score INTEGER NOT NULL,
+        total INTEGER NOT NULL,
+        at TEXT NOT NULL
+      )`,
+    ];
+
+    function App() {
+      const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
+        appId: 'quiz-me',
+        displayName: 'Quiz Me',
+        description: 'Pick any topic and the agent writes you a five-question quiz. Scores live in a real SQLite file you own.',
+        iconEmoji: '🧠',
+        iconColor: '#0284c7',
+      });
+      const db = useAppDB();
+      const [phase, setPhase] = useState('topics'); // topics | quiz | results
+      const [topic, setTopic] = useState('');
+      const [freeTopic, setFreeTopic] = useState('');
+      const [questions, setQuestions] = useState([]);
+      const [note, setNote] = useState('');
+      const [intro, setIntro] = useState('');
+      const [index, setIndex] = useState(0);
+      const [picked, setPicked] = useState(null); // chosen answer index for the current question
+      const [score, setScore] = useState(0);
+      const [history, setHistory] = useState([]);
+      const [dbErr, setDbErr] = useState(null);
+      const savedRef = useRef(false);
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const loadHistory = async () => {
+        const res = await db.exec('SELECT topic, score, total FROM quiz_scores ORDER BY id DESC LIMIT 8', []);
+        setHistory(res.rows.map(([t, s, tot]) => ({ topic: t, score: s, total: tot })));
+      };
+
+      useEffect(() => {
+        if (!isReady) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []);
+            if (!cancelled) await loadHistory();
+          } catch (e) {
+            if (!cancelled) setDbErr(String(e && e.message || e));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isReady]);
+
+      const startQuiz = async (chosen) => {
+        const clean = chosen.trim();
+        if (clean === '' || isWaiting) return;
+        setTopic(clean);
+        setNote('');
+        setIntro('');
+        const result = await sendMessage('make_quiz', {
+          topic: clean,
+          count: 5,
+          audience: 'a curious 11-year-old',
+        }, { state: { topic: clean }, responseSchema: RESPONSE_SCHEMA });
+
+        const data = result.ok && result.data && typeof result.data === 'object' ? result.data : {};
+        const agentQuiz = validateQuiz(data);
+        if (agentQuiz !== null) {
+          setQuestions(agentQuiz);
+          setIntro(typeof data.message === 'string' ? data.message : '');
+        } else {
+          setQuestions(bankFor(clean));
+          setNote('the question robot is offline — practice questions loaded instead.');
+        }
+        savedRef.current = false;
+        setIndex(0);
+        setPicked(null);
+        setScore(0);
+        setPhase('quiz');
+      };
+
+      const current = questions[index];
+
+      const pick = (i) => {
+        if (picked !== null) return;
+        setPicked(i);
+        if (i === current.answerIndex) setScore((s) => s + 1);
+      };
+
+      const next = async () => {
+        if (index + 1 < questions.length) {
+          setIndex(index + 1);
+          setPicked(null);
+          return;
+        }
+        // Quiz over — the score goes into the user's own file, exactly once.
+        if (!savedRef.current) {
+          savedRef.current = true;
+          try {
+            await db.exec('INSERT INTO quiz_scores (topic, score, total, at) VALUES (?, ?, ?, ?)',
+              [topic, score, questions.length, new Date().toISOString()]);
+            await loadHistory();
+          } catch (e) { setDbErr(String(e && e.message || e)); }
+        }
+        setPhase('results');
+      };
+
+      if (!isReady) return <div className="connecting">sharpening the pencils…</div>;
+
+      if (phase === 'quiz' && current) {
+        const answered = picked !== null;
+        const right = answered && picked === current.answerIndex;
+        return (
+          <div className="wrap">
+            <h1>Quiz Me</h1>
+            <p className="sub">topic: <b>{topic}</b></p>
+            <div className="card">
+              {note !== '' ? <p className="note" data-testid="quiz-note">{note}</p> : null}
+              {intro !== '' ? <p className="note">🤖 {intro}</p> : null}
+              <p className="progress">question {index + 1} of {questions.length} · score {score}</p>
+              <p className="question">{current.question}</p>
+              <div className="answers">
+                {current.choices.map((choice, i) => (
+                  <button key={i} className={'answer' + (answered ? (i === current.answerIndex ? ' right' : i === picked ? ' wrong' : '') : '')}
+                    data-testid="quiz-answer" onClick={() => pick(i)} disabled={answered}>
+                    {choice}
+                  </button>
+                ))}
+              </div>
+              {answered ? (
+                <div className="feedback" data-testid="quiz-feedback">
+                  {right ? '✓ nailed it!' : '✗ it was “' + current.choices[current.answerIndex] + '”'}
+                  {current.funFact !== '' ? <span className="fact">💡 {current.funFact}</span> : null}
+                </div>
+              ) : null}
+              {answered ? (
+                <div className="center" style={{ marginTop: 14 }}>
+                  <button className="btn" onClick={next}>
+                    {index + 1 < questions.length ? 'next question →' : 'see my score 🏁'}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      }
+
+      if (phase === 'results') {
+        const stars = score >= 5 ? '⭐⭐⭐' : score >= 3 ? '⭐⭐' : score >= 1 ? '⭐' : '🌱';
+        return (
+          <div className="wrap">
+            <h1>Quiz Me</h1>
+            <p className="sub">how did it go?</p>
+            <div className="card center">
+              <div className="stars">{stars}</div>
+              <div className="score-big">{score} / {questions.length}</div>
+              <p className="sub">{score === questions.length ? 'perfect round — you might be the teacher now.' : score >= 3 ? 'strong! one more round and it sticks.' : 'every wrong answer just taught you something.'}</p>
+              <button className="btn" onClick={() => { setPhase('topics'); setFreeTopic(''); }}>another topic 🎯</button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="wrap">
+          <h1>Quiz Me</h1>
+          <p className="sub">pick a topic — the agent writes your quiz, your scores stay in your file.</p>
+          {dbErr && <p className="note">storage hiccup: {dbErr}</p>}
+
+          <div className="card">
+            <h2>🎯 pick a topic</h2>
+            {isWaiting ? <p className="thinking">🤖 writing your quiz…</p> : (
+              <div>
+                <div className="topics">
+                  {TOPICS.map((t) => (
+                    <button key={t.id} className="topic" onClick={() => startQuiz(t.label)}>
+                      {t.emoji} {t.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="freeform">
+                  <input type="text" value={freeTopic} placeholder="or any topic — dinosaurs, volcanoes…"
+                    aria-label="your own quiz topic" maxLength={60}
+                    onChange={(e) => setFreeTopic(e.target.value)} />
+                  <button className="btn" onClick={() => startQuiz(freeTopic)} disabled={freeTopic.trim() === ''}>
+                    make my quiz
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>📈 your last quizzes</h2>
+            {history.length === 0
+              ? <p className="empty">no scores yet — your first quiz starts the chart.</p>
+              : history.map((h, i) => (
+                  <div className="hist-row" key={i}>
+                    <span className="hist-topic">{h.topic}</span>
+                    <span className="hist-bar-bg"><span className="hist-bar" style={{ width: (h.total > 0 ? Math.round(h.score / h.total * 100) : 0) + '%' }} /></span>
+                    <span className="hist-score">{h.score}/{h.total}</span>
+                  </div>
+                ))}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

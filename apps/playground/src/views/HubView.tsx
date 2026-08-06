@@ -16,6 +16,12 @@ const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blu
   chess: { emoji: '♞', color: '#8b5cf6', blurb: 'play an opponent with opinions — no server needed' },
   'flying-pig': { emoji: '🐷', color: '#ec4899', blurb: 'tap to keep a pig airborne — pure offline arcade' },
   'habit-tracker': { emoji: '✅', color: '#22c55e', blurb: 'track streaks in a real sqlite file you can export' },
+  // The five pillar starters (TASK-20260806-starters-pillars, roadmap §5).
+  'adventure-quest': { emoji: '🐉', color: '#7c3aed', blurb: 'the agent tells the tale — your pack lives in a real file' },
+  'quiz-me': { emoji: '🧠', color: '#0284c7', blurb: 'pick any topic, take a five-question quiz, watch scores climb' },
+  'trivia-night': { emoji: '🎉', color: '#d97706', blurb: 'pass one device around — game night with zero setup' },
+  'trip-planner': { emoji: '🧳', color: '#0d9488', blurb: 'dream places, packing and day plans in a file you keep' },
+  'pocket-ledger': { emoji: '💰', color: '#16a34a', blurb: 'money in, money out — honest totals you can export' },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };

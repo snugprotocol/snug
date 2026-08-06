@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adventure Quest</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f3eefc; --fg: #241a3d; --muted: #7b6f99;
+      --card: #fdfbff; --border: #e2d8f5;
+      --accent: #7c3aed; --accent-soft: #ede4ff;
+      --good: #1e9e63; --bad: #c2454f; --gold: #b8860b;
+      --shadow: 0 10px 30px rgba(60, 30, 120, 0.12);
+    }
+    :root[data-theme="dark"] {
+      --bg: #171126; --fg: #ece5fb; --muted: #a396c7;
+      --card: #221937; --border: #37294f;
+      --accent: #a679ff; --accent-soft: #322055;
+      --good: #4ecb8f; --bad: #ef7d84; --gold: #e5b64a;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 16px 14px 40px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(1.5rem, 5vw, 2.1rem); margin: 6px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 14px; font-size: 0.92rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    .hud { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+    .stat {
+      background: var(--card); border: 1px solid var(--border); border-radius: 999px;
+      padding: 8px 16px; font-weight: 700; font-size: 0.95rem; min-height: 44px;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .scene-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .scene-emoji { font-size: 2.4rem; }
+    .scene-title { font-size: 1.2rem; font-weight: 800; margin: 0; }
+    .story { line-height: 1.55; margin: 8px 0; font-size: 1.02rem; }
+    .note { color: var(--muted); font-size: 0.85rem; font-style: italic; margin-top: 6px; }
+    .talk { color: var(--accent); font-size: 0.9rem; margin-top: 6px; }
+    .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 12px; }
+    .choice {
+      min-height: 52px; border-radius: 14px; border: 2px solid var(--border);
+      background: var(--accent-soft); color: var(--fg); font-size: 1rem; font-weight: 700;
+      cursor: pointer; padding: 10px 14px; text-align: left; transition: transform 0.1s;
+    }
+    .choice:hover { transform: translateY(-2px); border-color: var(--accent); }
+    .choice:disabled { opacity: 0.5; cursor: wait; transform: none; }
+    .thinking { color: var(--muted); font-size: 0.9rem; margin-top: 10px; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 620px) { .cols { grid-template-columns: 1fr; } }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+    .pack-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 0.98rem; }
+    .pack-qty { color: var(--muted); font-size: 0.85rem; margin-left: auto; }
+    .log-row { padding: 7px 0; border-bottom: 1px dashed var(--border); font-size: 0.9rem; line-height: 1.4; }
+    .log-row:last-child { border-bottom: none; }
+    .log-place { font-weight: 700; }
+    .empty { color: var(--muted); font-size: 0.9rem; }
+    .btn {
+      min-height: 48px; border-radius: 999px; border: none; cursor: pointer;
+      background: var(--accent); color: #fff; font-size: 1.05rem; font-weight: 800;
+      padding: 12px 28px;
+    }
+    .btn.ghost { background: none; border: 2px solid var(--border); color: var(--fg); font-weight: 700; }
+    .btn.arm { border-color: var(--bad); color: var(--bad); }
+    .intro { text-align: center; padding: 40px 16px; }
+    .intro .big { font-size: 4rem; margin-bottom: 6px; }
+    .win { text-align: center; padding: 30px 16px; }
+    .win .big { font-size: 4rem; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    const RESPONSE_SCHEMA = {
+      narration: 'string: 2-4 short, vivid, kid-friendly sentences narrating what happens on this leg of the quest, in second person (ALWAYS include)',
+      hpDelta: 'integer (optional): change to the hero hearts for this leg, between -3 and 3',
+      goldDelta: 'integer (optional): change to the hero gold for this leg, between -5 and 8',
+      message: 'string (optional): one short line of dungeon-master table talk',
+    };
+
+    // ============================================================
+    // 6. YOUR APP — Adventure Quest
+    // ============================================================
+    // Both pillars in one app (roadmap §5): the AGENT is the dungeon master — it
+    // narrates every leg through sendMessage — while the WORLD lives in the user's
+    // own file: the scene graph outcomes are decided here (the app is the referee,
+    // never the model), and the pack + travel journal are real SQLite tables.
+    // Graceful no-LLM stance (ADR-0011): when the reply errors or is off-schema
+    // (the demo brain's canned reply is exactly that), a local guide narrates the
+    // same leg and says so — the quest never stalls on a missing key.
+
+    const SCENES = {
+      gates: {
+        title: 'Village Gates', emoji: '🏰',
+        local: 'The wooden gates creak open. Beyond them the whole valley waits — a dark line of woods, a glittering river, and market lanterns bobbing in the dusk.',
+        arrive: {},
+        choices: [
+          { label: '🌲 take the forest path', to: 'forest' },
+          { label: '🏮 wander the night market', to: 'market' },
+          { label: '🏞️ follow the silver river', to: 'river' },
+        ],
+      },
+      market: {
+        title: 'Night Market', emoji: '🏮',
+        local: 'Lanterns sway over crowded stalls. A grinning trader presses a shiny apple into your hand and winks. "For luck," she says. "You will need it."',
+        arrive: { item: { name: 'Lucky Apple', emoji: '🍎' } },
+        choices: [
+          { label: '🏰 back to the gates', to: 'gates' },
+          { label: '🌲 slip out toward the woods', to: 'forest' },
+        ],
+      },
+      forest: {
+        title: 'Whispering Woods', emoji: '🌲',
+        local: 'The trees lean close and whisper your name. In the moss at your feet, a mushroom glows softly blue — you pick it, and the dark feels a little friendlier.',
+        arrive: { item: { name: 'Glow Mushroom', emoji: '🍄' } },
+        choices: [
+          { label: '🕳️ squeeze into the echo cave', to: 'cave' },
+          { label: '🏞️ follow the sound of water', to: 'river' },
+          { label: '🏰 head back to the gates', to: 'gates' },
+        ],
+      },
+      river: {
+        title: 'Silver River', emoji: '🏞️',
+        local: 'The river runs bright as a mirror. A perfectly smooth stone rolls to your boot, as if the water is handing it to you on purpose.',
+        arrive: { item: { name: 'Smooth Stone', emoji: '🪨' } },
+        choices: [
+          { label: '⛰️ cross to the windy hill', to: 'hill' },
+          { label: '🌲 duck back into the woods', to: 'forest' },
+        ],
+      },
+      cave: {
+        title: 'Echo Cave', emoji: '🕳️',
+        local: 'Your footsteps answer themselves in the dark. On a stone shelf, warm as sunlight, lies a golden key shaped like a little sun. It hums when you take it.',
+        arrive: { item: { name: 'Sun Key', emoji: '🔑' } },
+        choices: [
+          { label: '⛰️ climb toward the light', to: 'hill' },
+          { label: '🌲 feel your way back out', to: 'forest' },
+        ],
+      },
+      hill: {
+        title: 'Windy Hill', emoji: '⛰️',
+        local: 'Wind combs the long grass. Half-buried by the path you spot a spill of old coins — treasure someone dropped running the other way.',
+        arrive: { gold: 4 },
+        choices: [
+          { label: '🐉 climb to the dragon peak', to: 'peak' },
+          { label: '😴 rest in the grass a while', to: 'hill', rest: true },
+          { label: '🏰 walk down to the gates', to: 'gates' },
+        ],
+      },
+      peak: {
+        title: 'Dragon Peak', emoji: '🐉',
+        local: 'The sun door swings wide. The dragon inside is small, green, and extremely pleased to finally have a visitor. You did it — the quest is complete!',
+        needs: 'Sun Key',
+        blockedLocal: 'A great stone door seals the peak, carved with a blazing sun. It will not budge — you need the Sun Key from somewhere below.',
+        arrive: { gold: 8 },
+        choices: [],
+      },
+    };
+
+    const clampInt = (v, lo, hi) => {
+      const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : 0;
+      return Math.max(lo, Math.min(hi, n));
+    };
+
+    const FRESH_HERO = { started: false, won: false, scene: 'gates', hp: 10, gold: 5 };
+
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS aq_inventory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item TEXT NOT NULL UNIQUE,
+        emoji TEXT NOT NULL,
+        qty INTEGER NOT NULL DEFAULT 1
+      )`,
+      `CREATE TABLE IF NOT EXISTS aq_journal (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        place TEXT NOT NULL,
+        entry TEXT NOT NULL,
+        at TEXT NOT NULL
+      )`,
+    ];
+
+    function App() {
+      const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
+        appId: 'adventure-quest',
+        displayName: 'Adventure Quest',
+        description: 'A tiny quest where the agent is the dungeon master and your pack and travel journal live in a real SQLite file you own.',
+        iconEmoji: '🐉',
+        iconColor: '#7c3aed',
+      });
+      const db = useAppDB();
+      const [hero, setHero] = usePersistedState('aq-hero', FRESH_HERO);
+      const [ready, setReady] = useState(false);
+      const [pack, setPack] = useState([]);       // [{item, emoji, qty}]
+      const [journal, setJournal] = useState([]); // [{place, entry}]
+      const [story, setStory] = useState(null);   // {text, note, talk}
+      const [dbErr, setDbErr] = useState(null);
+      const [armedReset, setArmedReset] = useState(false);
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const reload = async () => {
+        const inv = await db.exec('SELECT item, emoji, qty FROM aq_inventory ORDER BY id', []);
+        setPack(inv.rows.map(([item, emoji, qty]) => ({ item, emoji, qty })));
+        const log = await db.exec('SELECT place, entry FROM aq_journal ORDER BY id DESC LIMIT 6', []);
+        setJournal(log.rows.map(([place, entry]) => ({ place, entry })));
+      };
+
+      useEffect(() => {
+        if (!isReady) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []);
+            if (!cancelled) { await reload(); setReady(true); }
+          } catch (e) {
+            if (!cancelled) setDbErr(String(e && e.message || e));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isReady]);
+
+      const hasItem = (name) => pack.some((p) => p.item === name);
+
+      const addItem = async (item) => {
+        const found = await db.exec('SELECT qty FROM aq_inventory WHERE item = ?', [item.name]);
+        if (found.rows.length > 0) await db.exec('UPDATE aq_inventory SET qty = qty + 1 WHERE item = ?', [item.name]);
+        else await db.exec('INSERT INTO aq_inventory (item, emoji, qty) VALUES (?, ?, 1)', [item.name, item.emoji]);
+      };
+
+      const writeLeg = async (place, entry) => {
+        await db.exec('INSERT INTO aq_journal (place, entry, at) VALUES (?, ?, ?)', [place, entry, new Date().toISOString()]);
+      };
+
+      const begin = async () => {
+        try {
+          await writeLeg('Village Gates', 'The quest begins: find the Sun Key and reach the dragon peak.');
+          await reload();
+        } catch (e) { setDbErr(String(e && e.message || e)); }
+        setStory({ text: SCENES.gates.local, note: '', talk: '' });
+        setHero((prev) => ({ ...prev, started: true }));
+      };
+
+      const onChoice = async (choice) => {
+        if (isWaiting) return;
+        // ── The app is the referee: destination + outcomes are decided HERE. ──
+        const scene = SCENES[hero.scene];
+        let dest = SCENES[choice.to];
+        let blocked = false;
+        if (choice.rest) {
+          setHero((prev) => ({ ...prev, hp: clampInt(prev.hp + 2, 1, 10) }));
+          setStory({ text: 'You flop into the warm grass and watch the clouds until your legs stop aching. That was a good idea.', note: '', talk: '' });
+          try { await writeLeg(scene.title, 'Rested in the grass and got some hearts back.'); await reload(); } catch (e) { setDbErr(String(e && e.message || e)); }
+          return;
+        }
+        if (dest.needs && !hasItem(dest.needs)) { blocked = true; }
+
+        // ── The agent is the dungeon master: it narrates the leg. ──
+        const result = await sendMessage('take_action', {
+          from: scene.title,
+          action: choice.label,
+          to: blocked ? scene.title : dest.title,
+          blocked,
+          blockedReason: blocked ? 'the peak door is sealed and needs the ' + dest.needs : '',
+          hero: { hearts: hero.hp, gold: hero.gold },
+          pack: pack.map((p) => p.item),
+        }, { state: { scene: hero.scene, hearts: hero.hp, gold: hero.gold }, responseSchema: RESPONSE_SCHEMA });
+
+        const d = result.ok && result.data && typeof result.data === 'object' ? result.data : {};
+        const agentTold = typeof d.narration === 'string' && d.narration.trim() !== '';
+
+        if (blocked) {
+          const text = agentTold ? d.narration.trim() : dest.blockedLocal;
+          const note = agentTold ? '' : 'the storyteller is away — your local guide narrated this leg.';
+          setHero((prev) => ({ ...prev, hp: clampInt(prev.hp - 1, 1, 10) }));
+          setStory({ text, note, talk: agentTold && typeof d.message === 'string' ? d.message : '' });
+          try { await writeLeg(dest.title, 'The sun door would not open without the Sun Key.'); await reload(); } catch (e) { setDbErr(String(e && e.message || e)); }
+          return;
+        }
+
+        // Referee outcomes: scripted arrival loot/gold, plus the DM's deltas clamped hard.
+        const hpDelta = agentTold ? clampInt(d.hpDelta, -3, 3) : 0;
+        const goldDelta = (agentTold ? clampInt(d.goldDelta, -5, 8) : 0) + (dest.arrive.gold || 0);
+        const text = agentTold ? d.narration.trim() : dest.local;
+        const note = agentTold ? '' : (result.ok
+          ? 'the storyteller is away — your local guide narrated this leg.'
+          : 'the storyteller did not answer — your local guide narrated this leg.');
+
+        const won = dest.title === SCENES.peak.title;
+        setHero((prev) => ({
+          ...prev,
+          scene: choice.to,
+          won: won || prev.won,
+          hp: clampInt(prev.hp + hpDelta, 1, 10),
+          gold: Math.max(0, prev.gold + goldDelta),
+        }));
+        setStory({ text, note, talk: agentTold && typeof d.message === 'string' ? d.message : '' });
+        try {
+          if (dest.arrive.item) await addItem(dest.arrive.item);
+          await writeLeg(dest.title, text.slice(0, 300));
+          await reload();
+        } catch (e) { setDbErr(String(e && e.message || e)); }
+      };
+
+      const startOver = async () => {
+        if (!armedReset) { setArmedReset(true); return; }
+        setArmedReset(false);
+        try {
+          await db.exec('DELETE FROM aq_inventory', []);
+          await db.exec('DELETE FROM aq_journal', []);
+          await reload();
+        } catch (e) { setDbErr(String(e && e.message || e)); }
+        setStory(null);
+        setHero({ ...FRESH_HERO });
+      };
+
+      if (!isReady) return <div className="connecting">waking the dungeon master…</div>;
+
+      if (!hero.started) return (
+        <div className="wrap intro">
+          <div className="big">🐉</div>
+          <h1>Adventure Quest</h1>
+          <p className="sub">the agent tells the tale — your pack and journal live in a real file you own.</p>
+          <div className="card" style={{ textAlign: 'left', maxWidth: 460, margin: '0 auto 16px' }}>
+            <p className="story">🔑 Somewhere in the valley hides the <b>Sun Key</b>.</p>
+            <p className="story">🐉 It opens the door on <b>Dragon Peak</b>.</p>
+            <p className="story">🎒 Everything you find is saved in <b>your own SQLite file</b> — check the export button up top.</p>
+          </div>
+          <button className="btn" onClick={begin} disabled={!ready}>⚔️ begin the quest</button>
+        </div>
+      );
+
+      const scene = SCENES[hero.scene];
+
+      if (hero.won) return (
+        <div className="wrap win">
+          <div className="big">🏆</div>
+          <h1>You reached the dragon!</h1>
+          <p className="story">{story ? story.text : SCENES.peak.local}</p>
+          {story && story.note ? <p className="note" data-testid="dm-note">{story.note}</p> : null}
+          <p className="sub">final pack: {pack.map((p) => p.emoji + ' ' + p.item).join(' · ') || 'empty'} — 🪙 {hero.gold} gold</p>
+          <button className={'btn ghost' + (armedReset ? ' arm' : '')} onClick={startOver}>
+            {armedReset ? 'sure? this clears the journal' : '🔄 start a new quest'}
+          </button>
+        </div>
+      );
+
+      return (
+        <div className="wrap">
+          <h1>Adventure Quest</h1>
+          <p className="sub">the agent is the dungeon master · your pack is a real database</p>
+          {dbErr && <p className="note">storage hiccup: {dbErr}</p>}
+
+          <div className="hud">
+            <span className="stat">❤️ ×{hero.hp}</span>
+            <span className="stat">🪙 {hero.gold}</span>
+            <span className="stat">{scene.emoji} {scene.title}</span>
+            <button className={'btn ghost' + (armedReset ? ' arm' : '')} style={{ marginLeft: 'auto', minHeight: 44, padding: '8px 16px', fontSize: '0.85rem' }} onClick={startOver}>
+              {armedReset ? 'sure?' : 'start over'}
+            </button>
+          </div>
+
+          <div className="card">
+            <div className="scene-head">
+              <span className="scene-emoji" aria-hidden="true">{scene.emoji}</span>
+              <p className="scene-title">{scene.title}</p>
+            </div>
+            <p className="story">{story ? story.text : scene.local}</p>
+            {story && story.talk ? <p className="talk">🎲 {story.talk}</p> : null}
+            {story && story.note ? <p className="note" data-testid="dm-note">{story.note}</p> : null}
+            {isWaiting
+              ? <p className="thinking">🎲 the dungeon master is thinking…</p>
+              : (
+                <div className="choices">
+                  {scene.choices.map((choice) => (
+                    <button key={choice.label} className="choice" data-testid="quest-choice"
+                      onClick={() => onChoice(choice)} disabled={isWaiting}>
+                      {choice.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+          </div>
+
+          <div className="cols">
+            <section className="card">
+              <h2>🎒 your pack</h2>
+              {pack.length === 0
+                ? <p className="empty">nothing yet — the valley is generous, go look.</p>
+                : pack.map((p) => (
+                    <div className="pack-row" key={p.item}>
+                      <span aria-hidden="true">{p.emoji}</span> {p.item}
+                      <span className="pack-qty">×{p.qty}</span>
+                    </div>
+                  ))}
+            </section>
+            <section className="card">
+              <h2>📜 travel journal</h2>
+              {journal.length === 0
+                ? <p className="empty">your story will be written here.</p>
+                : journal.map((row, i) => (
+                    <div className="log-row" key={i}>
+                      <span className="log-place">{row.place}</span> — {row.entry}
+                    </div>
+                  ))}
+            </section>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
