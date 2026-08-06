@@ -169,6 +169,33 @@ describe('AC3 — review branch is selected by HOST-computed provenance (M4)', (
     expect(byLabel('api hosts (comma-separated)').value).toContain('api.unknown.example');
   });
 
+  for (const provenance of ['inference', 'user_docs'] as const) {
+    it(`AC3 central wall (M4 repair): HOST-HELD confidence 1.0 from a real ${provenance} inference still forces spec_confirm`, async () => {
+      // The ledger's original M4 evidence matched the DIRECTIVE-claim mutant (M16
+      // shape); the planned regression — the branch selector reading the SESSION's
+      // host-held confidence — survived the whole suite. This test pins it: the
+      // confidence lands on the session via applyInferenceResult (a real inference
+      // result), and the review branch must still key on provenance alone.
+      openWizard({
+        source: 'directive',
+        appId: APP,
+        directive: directive({ providerName: 'Unknown Corp', kindHint: 'api_key', declaredApiHosts: ['api.unknown.example'] }),
+      });
+      applyInferenceResult({
+        ok: true,
+        provenance,
+        proposal: { providerName: 'Unknown Corp', kindHint: 'api_key', declaredApiHosts: ['api.unknown.example'] },
+        confidence: 1.0,
+        evidence: [],
+        spec: null,
+        reason: 'r',
+      });
+      await renderSheet();
+      expect(container.textContent).toMatch(/proposed by a model/i); // the forced confirm…
+      expect(byLabel('api hosts (comma-separated)')).toBeDefined(); // …field-by-field, not the light path
+    });
+  }
+
   it('a smuggled host is DISPLAYED in the reviewable list, never silently absent (M27c)', async () => {
     openWizard({
       source: 'directive',
