@@ -182,6 +182,33 @@ describe('AC3 — v2→v3 migration', () => {
     expect(reopened.getAuthSpec(APP)?.status).toBe(AUTH_SPEC_STATUS.unapproved);
     await reopened.close();
   });
+
+  it('persists the migration even when the session performs NO other write (review finding 1)', async () => {
+    // The shipped test above only proved persistence because it WROTE a spec after
+    // reopening. A migration is itself a mutation of the file: opening a v2 file and
+    // closing untouched must still leave v3 bytes on disk.
+    const db = await open(backend);
+    await db.close();
+    const SQL = await initSqlJs({ locateFile: () => locateWasm() });
+    const rewound = new SQL.Database(backend.files.get(USERDB_FILE));
+    rewound.run('DROP TABLE snug_auth_specs');
+    rewound.run('PRAGMA user_version = 2');
+    await backend.save(USERDB_FILE, rewound.export());
+    rewound.close();
+
+    const noOpSession = await open(backend);
+    await noOpSession.close(); // no reads, no writes — just open and close
+
+    const persisted = new SQL.Database(backend.files.get(USERDB_FILE));
+    try {
+      expect(persisted.exec('PRAGMA user_version')[0]?.values).toEqual([[3]]);
+      expect(
+        persisted.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'snug_auth_specs'")[0]?.values,
+      ).toEqual([['snug_auth_specs']]);
+    } finally {
+      persisted.close();
+    }
+  });
 });
 
 // ------------------------------------------------------------- delete cascade

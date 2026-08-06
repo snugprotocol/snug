@@ -483,12 +483,20 @@ function reconcileImportedAuthSpecs(
   return { droppedAuthSpecs: dropped };
 }
 
-function migrate(db: Database): void {
+/**
+ * Forward-migrate to the current schema version. Returns TRUE when the database was
+ * actually advanced — a migration is itself a MUTATION of the file, so the caller
+ * must mark the handle dirty (review finding 1: opening an existing v2 file and
+ * closing without any other write used to lose the migration on disk — the persisted
+ * version lied until an unrelated write happened to flush it).
+ */
+function migrate(db: Database): boolean {
   const found = readUserVersion(db);
   for (let v = found; v < USERDB_SCHEMA_VERSION; v++) {
     MIGRATIONS[v]?.(db);
   }
   db.run(`PRAGMA user_version = ${USERDB_SCHEMA_VERSION}`);
+  return found < USERDB_SCHEMA_VERSION;
 }
 
 interface LifecycleTarget {
@@ -559,8 +567,12 @@ function construct(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let saving: Promise<void> = Promise.resolve();
 
-  migrate(db);
+  const migrated = migrate(db);
   seedMeta();
+  // A migration mutated the file: make it durable even if this session never writes
+  // again (markDirty is hoisted; fresh files are marked dirty by seedMeta's write
+  // anyway, and a current-version file stays clean — no spurious no-op saves).
+  if (migrated) markDirty();
 
   // ------------------------------------------------------------- write-back pipeline
 
@@ -1209,6 +1221,10 @@ function construct(
         // 3b. The app's slice of the auth secrets namespace (`auth:<appId>:*` —
         //     credential values + connection state). The per-user `auth:_state_hmac`
         //     and `auth:_flow:*` keys are NOT app-keyed and survive.
+        //     Known limit (review finding 3, cosmetic): an appId containing a literal
+        //     colon would make this prefix over-match a sibling id sharing that prefix
+        //     — unreachable with crypto.randomUUID() app ids; revisit only if app-id
+        //     shapes ever widen.
         const prefix = authAppSecretPrefix(appId).replace(/([!%_])/g, '!$1');
         db.run(`DELETE FROM ${USERDB_TABLES.secrets} WHERE key LIKE ? ESCAPE '!'`, [`${prefix}%`]);
         // 4. The app row last, so a failure above leaves a consistent, still-installed app.
