@@ -4,6 +4,29 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-06 — spec v0.2 DRAFT — TASK-20260806-spec-push — Portable User Database Format published as an explicitly-marked DRAFT — ed6e596
+First publication of the staged v0.2 draft (owner-authorized, alpha-umbrella Phase-0
+decision 2; roadmap A12). Published as a separate `SPEC-v0.2-draft.md` so `SPEC.md`
+stays authoritative at v0.1; linked from SPEC.md + README. Body from
+`docs/spec-drafts/spec-v0.2-userdb.md` at snug main `6704d95`; the v3-internal-draft
+version note carried from auth-core commit `750ca29` (merged to main unchanged in
+PR #6, so the published note is in sync) with the internal auth table name
+generalized to "a Dynamic Auth storage surface" (the AL-13 zero-auth-literal
+exclusion grep forbids the literal; annotation substance intact — v3 exists
+internally, v0.2 describes v2, v2→v3 purely additive). Exclusion grep on the pushed
+tree: exactly one `AUTH_REQUIRED` hit (the v0.1 R5 reserved code — allowed).
+
+## 2026-08-06 — spec v0.1 — TASK-20260806-spec-push — Wire protocol published: 9 frames + chat envelope, rules R1–R6, 10 normative JSON Schemas — f148c22
+First real spec publication (owner-authorized, Phase-0 decision 2). `SPEC.md` prose
+from `packages/protocol/SPEC-DRAFT.md`; `schemas/*.json` (10 files incl. the chat
+envelope) byte-identical to `packages/protocol/schemas/` at snug main `6704d95`
+(currency locked by `schemas-stable.test.ts`). Editorial deltas: publication header
+replaces the internal staging note; R5's `AUTH_REQUIRED` reservation reworded
+timeline-neutral (roadmap v2 rescheduled the credential layer); the v0.0 skeleton's
+"Authenticated connections (reserved)" section retired with it. Push
+`43f65e0..ed6e596` at 2026-08-06 08:16:37 UTC; verified by fresh clone (tree
+identical to local; schemas byte-identical to `packages/protocol/schemas/`).
+
 ## 2026-08-06 — INTERNAL DRAFT, not staged for any push — TASK-20260805-auth-core (AL-02)
 **Excluded from the AL-13 v0.1+v0.2 push by owner decision (2026-08-05 spec-gating):**
 storage schema moves to **v3** — new table `snug_auth_specs` (Dynamic Auth spec metadata:
@@ -59,7 +82,7 @@ class**: `db-request`/`db-response` frames get `LIMITS.MAX_DB_FRAME_BYTES = 8 Mi
 5 MiB `.sqlite` artifact can round-trip through the db bridge. No JSON-schema shape
 changed — `schemas/*.json` unchanged. Staged in `packages/protocol/SPEC-DRAFT.md`.
 
-## 2026-07-31 — spec v0.0 — TASK-20260731-bootstrap — Initial spec repo scaffold (skeleton SPEC.md, empty schemas) — (SHA recorded at first push)
+## 2026-07-31 — spec v0.0 — TASK-20260731-bootstrap — Initial spec repo scaffold (skeleton SPEC.md, empty schemas) — 43f65e0 (SHA backfilled 2026-08-06 by TASK-20260806-spec-push)
 
 ## 2026-07-31 — spec v0.1 DRAFT (staged, not pushed) — TASK-20260731-protocol-core
 First protocol definition: 9 postMessage frames + chat envelope, rules R1–R6 (versioning,
