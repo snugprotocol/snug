@@ -1409,7 +1409,22 @@ function construct(
       db.close();
       db = next;
       inner = makeInnerDriver();
+      // Import replaces the WORLD, so every session cache keyed on the old handle is
+      // reset as one family (the F1/R1 cache-coherence family — resetting only part of
+      // it is how the restore-after-delete bug happened):
       lastSavedHash.clear(); // foreign bytes: every namespace must re-materialize
+      namespaceByFile.clear(); // stale entries describe files of the discarded handle
+      // Tombstones: an app the imported file CONTAINS is alive again (file-is-truth —
+      // restoring a pre-delete backup must revive it). An app the file does NOT contain
+      // stays tombstoned on purpose: dropping that guard would let a still-running
+      // iframe of a deleted app write orphaned rest tables into the new file (R1).
+      // Known limit (queued 2026-08-06 for the A10 threat model): a CRAFTED import can
+      // occupy a deleted app's id and thereby drop its tombstone — unreachable by
+      // accident with randomUUID ids; untrusted-import hardening owns this surface.
+      for (const appId of [...deletedApps]) {
+        const rows = select(`SELECT 1 FROM ${USERDB_TABLES.apps} WHERE app_id = ?`, [appId]);
+        if (rows.length > 0) deletedApps.delete(appId);
+      }
       markDirty();
     },
 

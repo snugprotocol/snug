@@ -46,10 +46,14 @@ export interface AnthropicAdapterOptions {
  * OpenAI-compatible or local server that will reject `cache_control` as an unknown
  * field — the same failure class that `max_completion_tokens` caused on local turns in
  * the parent task. Opting in cannot override this (AC14).
+ *
+ * EXACT hostname match on purpose: `endsWith` also accepted sibling domains
+ * (`notapi.anthropic.com`), and a proxy there is exactly the unknown-field hazard this
+ * gate exists to avoid. `hostname` (never `host`) keeps the gate port-insensitive.
  */
 function supportsCaching(baseUrl: string): boolean {
   try {
-    return new URL(baseUrl).hostname.endsWith('api.anthropic.com');
+    return new URL(baseUrl).hostname === 'api.anthropic.com';
   } catch {
     return false;
   }

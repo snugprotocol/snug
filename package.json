@@ -9,7 +9,8 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke"
+    "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke",
+    "update-code-map": "node --test scripts/update-code-map-counts.test.mjs && node scripts/update-code-map-counts.mjs"
   },
   "devDependencies": {
     "jsdom": "^30.0.1",
