@@ -54,7 +54,7 @@ Sources (all read before this plan):
 - Skeleton conventions: current spec-repo `SPEC.md`/`README.md` (version header lines,
   section framing, links).
 
-Steps (spec repo, local clone `/Users/jeetu/SnugProtocol/spec`, already on `main`,
+Steps (spec repo, the local spec-repo clone (path per `internal/.env.local` conventions), already on `main`,
 clean, up to date with origin):
 
 1. **Commit 1 — `spec v0.1: …`** (one commit per spec change, SPEC_SYNC invariant):
