@@ -408,8 +408,11 @@ function useAppDB() {
         return () => { cancelled = true; };
       }, [isReady]);
 
-      const addHabit = async (e) => {
-        e.preventDefault();
+      // No form element / onSubmit here: the sandbox is allow-scripts only (no allow-forms),
+      // and Chromium blocks a form submission BEFORE the submit event fires — so an
+      // onSubmit handler never runs in a real browser. Buttons use onClick and the
+      // inputs accept Enter via onKeyDown instead (found live by the AL-08 e2e).
+      const addHabit = async () => {
         const trimmed = name.trim();
         if (!trimmed) return;
         try {
@@ -437,8 +440,7 @@ function useAppDB() {
         } catch (err) { setDbErr(String(err && err.message || err)); }
       };
 
-      const ask = async (e) => {
-        e.preventDefault();
+      const ask = async () => {
         const q = question.trim();
         if (!q || isWaiting) return;
         setAnswer(null);
@@ -513,16 +515,17 @@ function useAppDB() {
 
           <section className="card">
             <h2>add a habit</h2>
-            <form className="addrow" onSubmit={addHabit}>
+            <div className="addrow">
               <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addHabit(); }}
                 placeholder="drink water, read ten pages…" maxLength={60} aria-label="new habit name" />
               <div className="emojis" role="radiogroup" aria-label="pick an emoji">
                 {EMOJIS.map((em) => (
                   <button type="button" key={em} className={em === emoji ? 'on' : ''} onClick={() => setEmoji(em)} aria-label={'emoji ' + em}>{em}</button>
                 ))}
               </div>
-              <button className="btn" type="submit" disabled={!name.trim()}>keep it</button>
-            </form>
+              <button className="btn" type="button" onClick={addHabit} disabled={!name.trim()}>keep it</button>
+            </div>
           </section>
 
           {ready && habits.length > 0 && (
@@ -557,11 +560,12 @@ function useAppDB() {
 
           <section className="card">
             <h2>ask about your habits</h2>
-            <form className="ask" onSubmit={ask}>
+            <div className="ask">
               <input type="text" value={question} onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') ask(); }}
                 placeholder="which habit has my longest streak?" aria-label="question about your habits" />
-              <button className="btn" type="submit" disabled={isWaiting || !question.trim()}>{isWaiting ? '…' : 'ask'}</button>
-            </form>
+              <button className="btn" type="button" onClick={ask} disabled={isWaiting || !question.trim()}>{isWaiting ? '…' : 'ask'}</button>
+            </div>
             <div className="answer" aria-live="polite">
               {isWaiting && <p className="thinking">the agent is writing sql against your file…</p>}
               {!isWaiting && answer && answer.warn && <p className="warn">{answer.warn}</p>}

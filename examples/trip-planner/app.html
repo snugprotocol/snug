@@ -393,8 +393,10 @@ function useAppDB() {
         try { await fn(); await reload(); } catch (e) { setDbErr(String(e && e.message || e)); }
       };
 
-      const addPlace = (e) => {
-        e.preventDefault();
+      // No form element anywhere: the sandbox blocks form submission before the submit
+      // event fires (onSubmit never runs in a real browser) — buttons use onClick and
+      // the inputs accept Enter via onKeyDown.
+      const addPlace = () => {
         const clean = placeName.trim().slice(0, 60);
         if (clean === '') return;
         const emoji = PLACE_EMOJI[places.length % PLACE_EMOJI.length];
@@ -402,16 +404,14 @@ function useAppDB() {
         guard(() => db.exec('INSERT INTO trip_places (name, emoji) VALUES (?, ?)', [clean, emoji]));
       };
 
-      const addPack = (e) => {
-        e.preventDefault();
+      const addPack = () => {
         const clean = packItem.trim().slice(0, 60);
         if (clean === '') return;
         setPackItem('');
         guard(() => db.exec('INSERT INTO trip_packing (item, packed) VALUES (?, 0)', [clean]));
       };
 
-      const addPlan = (e) => {
-        e.preventDefault();
+      const addPlan = () => {
         const clean = planText.trim().slice(0, 120);
         if (clean === '') return;
         setPlanText('');
@@ -456,12 +456,13 @@ function useAppDB() {
           {tab === 'dream' ? (
             <section className="card">
               <h2>🌍 where could we go?</h2>
-              <form className="addrow" onSubmit={addPlace}>
+              <div className="addrow">
                 <input type="text" value={placeName} placeholder="Norway, grandma’s house, the moon…"
                   aria-label="add a dream place" maxLength={60}
-                  onChange={(e) => setPlaceName(e.target.value)} />
-                <button className="btn" type="submit" disabled={placeName.trim() === ''}>add place</button>
-              </form>
+                  onChange={(e) => setPlaceName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addPlace(); }} />
+                <button className="btn" type="button" onClick={addPlace} disabled={!ready || placeName.trim() === ''}>add place</button>
+              </div>
               <div style={{ marginTop: 12 }}>
                 {!ready ? <p className="empty">opening your file…</p>
                   : places.length === 0 ? <p className="empty">no dreams yet — name a place and it’s on the board.</p>
@@ -485,12 +486,13 @@ function useAppDB() {
           ) : tab === 'packing' ? (
             <section className="card">
               <h2>🎒 what do we pack?</h2>
-              <form className="addrow" onSubmit={addPack}>
+              <div className="addrow">
                 <input type="text" value={packItem} placeholder="sunscreen, swimsuit, teddy…"
                   aria-label="add something to pack" maxLength={60}
-                  onChange={(e) => setPackItem(e.target.value)} />
-                <button className="btn" type="submit" disabled={packItem.trim() === ''}>add item</button>
-              </form>
+                  onChange={(e) => setPackItem(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addPack(); }} />
+                <button className="btn" type="button" onClick={addPack} disabled={!ready || packItem.trim() === ''}>add item</button>
+              </div>
               <div style={{ marginTop: 12 }}>
                 {packing.length === 0 ? <p className="empty">the bag is empty — add the first thing.</p>
                   : packing.map((row) => (
@@ -524,12 +526,13 @@ function useAppDB() {
                     aria-label={'day ' + d}>{d}</button>
                 ))}
               </div>
-              <form className="addrow" onSubmit={addPlan}>
+              <div className="addrow">
                 <input type="text" value={planText} placeholder={'day ' + day + ': breakfast pancakes, then…'}
                   aria-label="what’s the plan" maxLength={120}
-                  onChange={(e) => setPlanText(e.target.value)} />
-                <button className="btn" type="submit" disabled={planText.trim() === ''}>add plan</button>
-              </form>
+                  onChange={(e) => setPlanText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addPlan(); }} />
+                <button className="btn" type="button" onClick={addPlan} disabled={!ready || planText.trim() === ''}>add plan</button>
+              </div>
               {DAYS.map((d) => {
                 const dayPlans = plans.filter((p) => p.day === d);
                 if (dayPlans.length === 0) return null;

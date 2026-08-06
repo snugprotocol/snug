@@ -128,7 +128,8 @@ test.describe('pillar starters (AL-08) — open read-only, interact, stay clean'
     await app.getByRole('button', { name: /add place/i }).click();
     await expect(app.getByText('Norway')).toBeVisible();
 
-    await app.getByRole('button', { name: /^packing/i }).click();
+    // The tab's accessible name starts with its emoji ("🎒 packing") — no ^ anchor.
+    await app.getByRole('button', { name: /packing/i }).click();
     await app.getByRole('textbox', { name: /add something to pack/i }).fill('sunscreen');
     await app.getByRole('button', { name: /add item/i }).click();
     const check = app.getByRole('button', { name: /pack sunscreen/i });

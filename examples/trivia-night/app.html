@@ -344,8 +344,20 @@ function useAppDB() {
     }
 
     const rankedOf = (match) => match.order
-      .map((p) => ({ ...p, score: match.scores[p.name] }))
+      .map((p) => ({ ...p, score: match.scores[p.id] }))
       .sort((a, b) => b.score - a.score);
+
+    // The roster is a real table, not key-value state: a kv write that races the
+    // initial hydration gets overwritten when the stored value arrives, so a player
+    // added in the first moments after load could silently vanish. SQL inserts have
+    // no such race — and the roster rides along in the exported .sqlite for free.
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS tn_players (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL
+      )`,
+    ];
 
     function App() {
       const { isReady, theme } = useSnugApp({
@@ -355,15 +367,38 @@ function useAppDB() {
         iconEmoji: '🎉',
         iconColor: '#d97706',
       });
-      // Roster and hall of fame survive reloads through the host-brokered store.
-      const [players, setPlayers] = usePersistedState('tn-players', []);
+      const db = useAppDB();
+      // Roster: SQL (see DDL note). Hall of fame: kv is safe here because it is only
+      // written at podium time, long after hydration has settled.
+      const [players, setPlayers] = useState([]); // [{id, name, emoji}] from tn_players
+      const [ready, setReady] = useState(false);
       const [fame, setFame] = usePersistedState('tn-fame', null); // {name, score, when}
       const [name, setName] = useState('');
       const [armedRemove, setArmedRemove] = useState(null);
       const [match, setMatch] = useState(null);
+      const [dbErr, setDbErr] = useState(null);
       // match: { order:[{name,emoji}], scores:{name:n}, deck:[q], turn:0, phase:'pass'|'ask'|'feedback', picked:null }
 
       useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const reload = async () => {
+        const rows = await db.exec('SELECT id, name, emoji FROM tn_players ORDER BY id', []);
+        setPlayers(rows.rows.map(([id, playerName, emoji]) => ({ id, name: playerName, emoji })));
+      };
+
+      useEffect(() => {
+        if (!isReady) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []);
+            if (!cancelled) { await reload(); setReady(true); }
+          } catch (e) {
+            if (!cancelled) setDbErr(String(e && e.message || e));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isReady]);
 
       // Hall of fame update is a side effect of the game ENDING, never of rendering.
       const gameOver = match !== null && match.turn >= match.deck.length;
@@ -375,23 +410,33 @@ function useAppDB() {
           : prev);
       }, [gameOver]);
 
-      const addPlayer = (e) => {
-        e.preventDefault();
+      // No form element: the sandbox (allow-scripts only) blocks form submission before
+      // the submit event fires, so onSubmit never runs in a real browser. Button
+      // onClick + Enter on the input are the working pattern.
+      const addPlayer = async () => {
         const clean = name.trim().slice(0, 20);
-        if (clean === '' || players.length >= MAX_PLAYERS) return;
-        setPlayers([...players, { name: clean, emoji: PLAYER_EMOJI[players.length % PLAYER_EMOJI.length] }]);
+        if (clean === '' || players.length >= MAX_PLAYERS || !ready) return;
         setName('');
+        try {
+          await db.exec('INSERT INTO tn_players (name, emoji) VALUES (?, ?)',
+            [clean, PLAYER_EMOJI[players.length % PLAYER_EMOJI.length]]);
+          await reload();
+        } catch (err) { setDbErr(String(err && err.message || err)); }
       };
 
-      const removePlayer = (who) => {
-        if (armedRemove !== who) { setArmedRemove(who); return; } // two-tap, never window.confirm
+      const removePlayer = async (player) => {
+        if (armedRemove !== player.id) { setArmedRemove(player.id); return; } // two-tap, never window.confirm
         setArmedRemove(null);
-        setPlayers(players.filter((p) => p.name !== who));
+        try {
+          await db.exec('DELETE FROM tn_players WHERE id = ?', [player.id]);
+          await reload();
+        } catch (err) { setDbErr(String(err && err.message || err)); }
       };
 
       const startGame = () => {
+        // Scores key on the roster id, not the name — two kids named Sam keep separate scores.
         const scores = {};
-        for (const p of players) scores[p.name] = 0;
+        for (const p of players) scores[p.id] = 0;
         setMatch({
           order: players.slice(),
           scores,
@@ -458,7 +503,7 @@ function useAppDB() {
         return (
           <div className="wrap">
             <h1>Trivia Night</h1>
-            <p className="sub">{player.emoji} {player.name} · question {match.turn + 1} of {match.deck.length} · {match.scores[player.name]} point{match.scores[player.name] === 1 ? '' : 's'}</p>
+            <p className="sub">{player.emoji} {player.name} · question {match.turn + 1} of {match.deck.length} · {match.scores[player.id]} point{match.scores[player.id] === 1 ? '' : 's'}</p>
             <div className="card">
               <span className="cat">{q.cat}</span>
               <p className="question" data-testid="tn-question">{q.question}</p>
@@ -470,7 +515,7 @@ function useAppDB() {
                     onClick={() => {
                       if (answered) return;
                       const scores = { ...match.scores };
-                      if (i === q.answerIndex) scores[player.name] += 1;
+                      if (i === q.answerIndex) scores[player.id] += 1;
                       setMatch({ ...match, picked: i, scores, phase: 'feedback' });
                     }}>
                     {choice}
@@ -501,22 +546,25 @@ function useAppDB() {
           <p className="sub">2-4 players, one device, zero setup — pass it around and play.</p>
           <div className="card">
             <h2>👥 who’s playing?</h2>
-            <form className="addrow" onSubmit={addPlayer}>
+            {dbErr && <p className="empty">storage hiccup: {dbErr}</p>}
+            <div className="addrow">
               <input type="text" value={name} placeholder="type a name…" maxLength={20}
-                aria-label="player name" onChange={(e) => setName(e.target.value)} />
-              <button className="btn" type="submit" disabled={name.trim() === '' || players.length >= MAX_PLAYERS}>
+                aria-label="player name" onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addPlayer(); }} />
+              <button className="btn" type="button" onClick={addPlayer}
+                disabled={!ready || name.trim() === '' || players.length >= MAX_PLAYERS}>
                 add player
               </button>
-            </form>
+            </div>
             {players.length === 0
-              ? <p className="empty" style={{ marginTop: 10 }}>add at least two players to start.</p>
+              ? <p className="empty" style={{ marginTop: 10 }}>{ready ? 'add at least two players to start.' : 'setting up game night…'}</p>
               : (
                 <div className="players">
                   {players.map((p) => (
-                    <button key={p.name} className={'player-chip' + (armedRemove === p.name ? ' arm' : '')}
-                      onClick={() => removePlayer(p.name)}
-                      aria-label={armedRemove === p.name ? 'tap again to remove ' + p.name : 'remove ' + p.name}>
-                      {p.emoji} {p.name}{armedRemove === p.name ? ' — sure?' : ''}
+                    <button key={p.id} className={'player-chip' + (armedRemove === p.id ? ' arm' : '')}
+                      onClick={() => removePlayer(p)}
+                      aria-label={armedRemove === p.id ? 'tap again to remove ' + p.name : 'remove ' + p.name}>
+                      {p.emoji} {p.name}{armedRemove === p.id ? ' — sure?' : ''}
                     </button>
                   ))}
                 </div>

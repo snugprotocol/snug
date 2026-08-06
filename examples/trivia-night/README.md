@@ -11,9 +11,12 @@ zero networking, zero accounts, zero setup.
   between hands.
 - **Pass-and-play as a design pattern**: a no-peeking interstitial ("pass the device to
   Maya!") between every turn is what turns a single iframe into a party game.
-- **Host-brokered persistence**: the player roster and the hall-of-fame best score
-  survive reloads via `usePersistedState` — no browser storage exists in the null-origin
-  sandbox.
+- **Persistence picked per write-pattern**: the player roster is a real SQLite table
+  (`tn_players` via `useAppDB`) because a key-value write racing the initial hydration
+  can be silently overwritten when the stored value lands — SQL inserts have no such
+  race, and the roster rides along in the exported `.sqlite`. The hall-of-fame best
+  score stays in `usePersistedState`: it is only written at podium time, long after
+  hydration settles.
 - **Kid-first**: auto-assigned animal emoji per player, big answer buttons, a podium with
   a crown, two-tap player removal, both themes.
 

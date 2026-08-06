@@ -120,6 +120,15 @@ for (const app of APPS) {
     }
   });
 
+  test(`${app}: no <form> elements (sandbox blocks submission BEFORE the submit event fires)`, () => {
+    // C2's sandbox is allow-scripts only — no allow-forms. Chromium blocks a form
+    // submission at initiation ("Blocked form submission to ''…"), so a React
+    // onSubmit handler NEVER RUNS: the pattern looks fine in jsdom and is dead in
+    // every real browser (found live by the AL-08 Playwright spec). Buttons with
+    // onClick + an Enter keydown on the input are the working equivalent.
+    assert.doesNotMatch(html, /<form\b/i, 'no <form> — submission is sandbox-blocked before any handler runs');
+  });
+
   test(`${app}: parses as HTML`, () => {
     assert.match(html, /<html\b[^>]*>/i, 'has <html>');
     assert.match(html, /<\/html>\s*$/i, 'closes </html>');
