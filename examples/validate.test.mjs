@@ -149,6 +149,14 @@ for (const app of APPS) {
     assert.ok(statSync(file).size <= MAX_ARTIFACT_BYTES, 'app.html is within the artifact size limit');
   });
 
+  test(`${app}: SQL at exec() call sites is literal, never string-built`, () => {
+    // Adversarial-review NOTE on AL-08: a statement assembled from strings at the call
+    // site ('DELETE FROM ' + table) is the habit that graduates into injection. Apps
+    // that run agent-authored SQL pass a validated VARIABLE (allowed); apps issuing
+    // their own statements write them as literals.
+    assert.doesNotMatch(html, /\.exec\(\s*['"][^'"]*['"]\s*\+/, 'no concatenated SQL literal at an exec() call site');
+  });
+
   test(`${app}: declares its ADR-0011 LLM posture honestly`, () => {
     // The authored region: everything from the section-5 banner to the end of the
     // babel script — the hook block above it is contract code and legitimately
@@ -167,3 +175,31 @@ for (const app of APPS) {
     }
   });
 }
+
+// ── Behavior checks on money arithmetic (adversarial review of AL-08, fix 2) ────────
+// parseCents is extracted from the shipped source and executed — the one place in the
+// portfolio where a parse bug corrupts a BALANCE, so it gets real cases, not a shape
+// check. "1,000" must be a thousands separator, never one dollar.
+test('pocket-ledger: parseCents handles decimal commas, thousands separators, and rejects ambiguity', () => {
+  const html = readFileSync(path.join(HERE, 'pocket-ledger', 'app.html'), 'utf8');
+  const src = /const parseCents = \(raw\) => \{[\s\S]*?\n {4}\};/.exec(html)?.[0];
+  assert.ok(src, 'parseCents found in the app source');
+  const parseCents = new Function(`${src} return parseCents;`)();
+  const cases = [
+    ['12.50', 1250],
+    ['4', 400],
+    ['1,000', 100000], // thousands separator — NOT one dollar
+    ['1,50', 150], // decimal comma
+    ['1,234.56', 123456], // thousands + decimal dot
+    ['1,000,000', 100000000], // repeated well-formed groups, exactly at the $1M sanity cap
+    ['1,234,567', null], // well-formed groups but over the cap — rejected by design
+    ['1,2,3', null], // ambiguous → rejected (the warn path)
+    ['1,0000', null], // malformed grouping → rejected
+    ['0', null],
+    ['', null],
+    ['-5', null],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(parseCents(input), expected, `parseCents(${JSON.stringify(input)})`);
+  }
+});

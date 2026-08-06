@@ -307,10 +307,27 @@ function useAppDB() {
     // 6. YOUR APP — Pocket Ledger
     // ============================================================
     // All money is INTEGER CENTS in the database — floats never touch a balance.
+    // Comma rules (adversarial review, fix 2): well-formed groups of three are
+    // thousands separators ("1,000" → $1000.00, "1,234.56" → $1234.56); a single
+    // comma with 1-2 trailing digits is a decimal comma ("1,50" → $1.50); anything
+    // ambiguous ("1,2,3", "1,0000") is rejected so the visible warn path fires —
+    // never silently misread as a different amount.
     const parseCents = (raw) => {
-      const cleaned = String(raw).replace(',', '.').replace(/[^0-9.]/g, '');
-      if (cleaned === '' || cleaned.split('.').length > 2) return null;
-      const value = Number(cleaned);
+      if (String(raw).includes('-')) return null; // the in/out buttons carry the sign — reject, don't guess
+      const cleaned = String(raw).replace(/[^0-9.,]/g, '');
+      if (cleaned === '') return null;
+      let normalized = cleaned;
+      if (cleaned.includes(',')) {
+        if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(cleaned)) {
+          normalized = cleaned.replace(/,/g, ''); // thousands separators
+        } else if (/^\d+,\d{1,2}$/.test(cleaned)) {
+          normalized = cleaned.replace(',', '.'); // decimal comma
+        } else {
+          return null; // ambiguous — reject, never guess about money
+        }
+      }
+      if (normalized.split('.').length > 2) return null;
+      const value = Number(normalized);
       if (!Number.isFinite(value) || value <= 0) return null;
       const cents = Math.round(value * 100);
       return cents > 0 && cents <= 100000000 ? cents : null; // sanity cap: one million dollars

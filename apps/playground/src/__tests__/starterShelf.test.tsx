@@ -80,6 +80,10 @@ describe('the five pillar starters register through the ONE definition (AC3)', (
     for (const folder of [...ORIGINAL_FOLDERS, ...PILLAR_FOLDERS]) {
       expect(ids, `examples/${folder}/app.html must be bundled on the shelf`).toContain(`${STARTER_PREFIX}${folder}`);
     }
+    // The COUNT is pinned too (review fix 5a): the validate suite's APPS list and the
+    // vite glob can drift silently — a ninth folder that skips validation, or a listed
+    // app whose folder vanished, both surface here as a length mismatch.
+    expect(ids).toHaveLength(ORIGINAL_FOLDERS.length + PILLAR_FOLDERS.length);
   });
 
   it('every pillar starter tile has its own look, not the ⬡ fallback', async () => {

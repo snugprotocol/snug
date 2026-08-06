@@ -462,7 +462,7 @@ function useAppDB() {
               <div className="crown">👑</div>
               <h3>{isTie ? 'it’s a tie!' : top.emoji + ' ' + top.name + ' wins!'}</h3>
               {ranked.map((p) => (
-                <div className="podium-row" key={p.name}>
+                <div className="podium-row" key={p.id}>
                   <span className="who">{p.emoji} {p.name}</span>
                   <span>{p.score} point{p.score === 1 ? '' : 's'}</span>
                 </div>

@@ -358,6 +358,8 @@ function useAppDB() {
         if (typeof q.question !== 'string' || q.question.trim() === '') return null;
         if (!Array.isArray(q.choices) || q.choices.length !== 4) return null;
         if (!q.choices.every((c) => typeof c === 'string' && c.trim() !== '')) return null;
+        // Duplicate choices make the answer ambiguous (or leak it) — reject wholesale.
+        if (new Set(q.choices.map((c) => c.trim().toLowerCase())).size !== 4) return null;
         if (typeof q.answerIndex !== 'number' || !Number.isInteger(q.answerIndex)) return null;
         if (q.answerIndex < 0 || q.answerIndex > 3) return null;
         out.push({
@@ -563,7 +565,8 @@ function useAppDB() {
                 <div className="freeform">
                   <input type="text" value={freeTopic} placeholder="or any topic — dinosaurs, volcanoes…"
                     aria-label="your own quiz topic" maxLength={60}
-                    onChange={(e) => setFreeTopic(e.target.value)} />
+                    onChange={(e) => setFreeTopic(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') startQuiz(freeTopic); }} />
                   <button className="btn" onClick={() => startQuiz(freeTopic)} disabled={freeTopic.trim() === ''}>
                     make my quiz
                   </button>

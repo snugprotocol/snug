@@ -10,6 +10,8 @@
 // SPA-navigation only (no mid-test page.goto reloads beyond the entry): an
 // ephemeral context's OPFS does not survive hard reloads (lessons 2026-08-03).
 
+import fs from 'node:fs';
+
 import { expect, test, type Page, type FrameLocator } from '@playwright/test';
 import { AWAITS_INTEGRATION } from './helpers';
 
@@ -74,11 +76,15 @@ test.describe('pillar starters (AL-08) — open read-only, interact, stay clean'
     expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
-  test('quiz me — pick a topic, the built-in bank steps in, answering advances the quiz', async ({ page }) => {
+  test('quiz me — type a topic, press Enter, the built-in bank steps in, answering advances the quiz', async ({ page }) => {
     const errors = watchConsole(page);
     const app = await openStarter(page, 'quiz-me');
 
-    await app.getByRole('button', { name: /space/i }).click({ timeout: 20_000 });
+    // Enter on the free-topic input is part of the contract (review fix 4) — the topic
+    // chips share the same startQuiz handler, so this covers both entry points.
+    const topicBox = app.getByRole('textbox', { name: /your own quiz topic/i });
+    await topicBox.fill('dinosaurs', { timeout: 20_000 });
+    await topicBox.press('Enter');
 
     // Demo brain → off-schema → the built-in question bank runs the quiz, visibly.
     await expect(app.getByTestId('quiz-note')).toBeVisible({ timeout: 20_000 });
@@ -162,5 +168,62 @@ test.describe('pillar starters (AL-08) — open read-only, interact, stay clean'
     await expect(page.getByRole('button', { name: 'export .sqlite' })).toBeVisible({ timeout: 20_000 });
 
     expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
+  });
+
+  // ── Adversarial-review finding 1: browsing must leave ZERO trace in the user file ──
+  //
+  // The defect in one sentence: playing an UNINSTALLED starter materialized orphaned
+  // `app_x<hex("starter--…")>__*` tables into the user DB, which rode in every export
+  // with no `snug_apps` row. Per the guard-test lesson (2026-08-04), the assertion is
+  // the OUTCOME at the BYTE level — the exported file's DDL — never "no app row"
+  // (an orphaned table has no app row and still ships the user's export to strangers).
+
+  /** `app_x` + utf8-hex("starter--") — the prefix every starter-namespace table carries. */
+  const STARTER_TABLE_MARK = 'app_x737461727465722d2d';
+
+  test('browsing an uninstalled starter writes NOTHING into the exported user file', async ({ page }) => {
+    const app = await openStarter(page, 'trivia-night');
+
+    // A REAL interaction that lands a SQL INSERT in the starter's namespace.
+    await app.getByRole('textbox', { name: /player name/i }).fill('Ghost', { timeout: 20_000 });
+    await app.getByRole('button', { name: /add player/i }).click();
+    await expect(app.getByRole('button', { name: /remove Ghost/i })).toBeVisible();
+
+    // Export the WHOLE user file and inspect the bytes: no starter-namespace DDL.
+    await page.getByRole('link', { name: 'settings' }).click();
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'export snug file' }).click();
+    const download = await downloadPromise;
+    const path = await download.path();
+    const bytes = fs.readFileSync(path);
+    expect(
+      bytes.toString('latin1').includes(STARTER_TABLE_MARK),
+      'the exported user file must contain NO starter-namespace tables',
+    ).toBe(false);
+  });
+
+  test('install after browsing: the try-out data vanishes, the OWNED copy persists in the user file', async ({ page }) => {
+    const app = await openStarter(page, 'trivia-night');
+    await app.getByRole('textbox', { name: /player name/i }).fill('Ghost', { timeout: 20_000 });
+    await app.getByRole('button', { name: /add player/i }).click();
+    await expect(app.getByRole('button', { name: /remove Ghost/i })).toBeVisible();
+
+    // Install → the owned copy starts FRESH: trying is not owning (documented semantic).
+    await page.getByTestId('starter-install').click();
+    await expect(page).toHaveURL(/\/run\/[0-9a-f-]{36}/, { timeout: 20_000 });
+    const owned = appFrame(page);
+    const ownedName = owned.getByRole('textbox', { name: /player name/i });
+    await expect(ownedName).toBeVisible({ timeout: 20_000 });
+    await expect(owned.getByRole('button', { name: /remove Ghost/i })).toHaveCount(0);
+
+    // Data written in the OWNED copy lands in the user file: survives leaving and returning.
+    await ownedName.fill('Maya');
+    await owned.getByRole('button', { name: /add player/i }).click();
+    await expect(owned.getByRole('button', { name: /remove Maya/i })).toBeVisible();
+    const ownedUrl = page.url();
+    await page.getByRole('link', { name: 'your apps' }).click();
+    await page.getByRole('button', { name: 'open trivia night' }).click();
+    await expect(page).toHaveURL(ownedUrl, { timeout: 20_000 });
+    await expect(appFrame(page).getByRole('button', { name: /remove Maya/i })).toBeVisible({ timeout: 20_000 });
   });
 });
