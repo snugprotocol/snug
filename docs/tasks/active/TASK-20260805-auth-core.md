@@ -144,3 +144,8 @@ The finding-14 canary carries a PERMANENT self-check arm (`canary.probe-detects-
 - **Finding 2 (forward note for AL-03, recorded above in the forward-constraints section):** declared-host vs URL-host punycode asymmetry — fail-closed today; AL-03 punycodes the ceiling.
 - **Finding 3 (cosmetic, comment added):** the `auth:<appId>:*` cascade would over-match an appId containing a literal colon — unreachable with `crypto.randomUUID()` ids; noted at the cascade site in `userdb.ts`.
 - Root suites green at **1052** (was 1051; +1 = the new no-op-session migration test). No push, no PR — stopped after commit.
+
+### 2026-08-06 — Claude (Fable 5, orchestrator) — live sweep verdict + close
+- Focused live sweep (DoD c): **ZERO launch-blockers.** Live-proven: v2→v3 migration in real-browser sql.js on a genuine pre-migration export (apps reappear AND run with prior state; re-exported bytes show `user_version=3` + `snug_auth_specs`, same `db_id`); v3 re-import + reconciliation clean; F15 re-confirm fires correctly on key-stripped imports; real byok build post-bump (6 round trips, caching 43%→12%); custody spot-checks clean (key absent from export bytes across 5 encodings, storage, console; `snug_secrets` 0 rows in default export; sandbox holding).
+- 1 pre-existing dev-only non-blocker logged in next-steps (StrictMode hub→build handoff); this branch touches no playground src.
+- All DoD gates: (a) root 1052 green; (b) Playwright 30 green; (c) sweep clean; (d) adversarial review MERGE-AFTER-FIX → fix landed + mutation-checked (M17); (e) docs/spec-changelog in-branch; (f) merging now. Task file moves to done/ on the next child's branch.
