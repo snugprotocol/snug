@@ -59,6 +59,15 @@ const clientCredsSpec = {
   declaredApiHosts: ['api.b2b.example.com'],
 };
 
+const oauthCodeSpec = {
+  kind: 'oauth2_auth_code' as const,
+  provider: { name: 'Fake IdP' },
+  endpoints: { authorizeUrl: 'https://idp.example/authorize', tokenUrl: 'https://idp.example/token' },
+  pkce: true,
+  clientCreds: [{ key: 'client_id', label: 'Client ID', type: 'text' as const }],
+  declaredApiHosts: ['api.fake-idp.example'],
+};
+
 const directive = (proposal: AuthWizardDirective['proposal']): AuthWizardDirective => ({
   v: PROTOCOL_VERSION,
   kind: 'auth_wizard',
@@ -384,6 +393,34 @@ describe('AC10 — write-only secret fields (M9 value-echo mutation)', () => {
     const store = new UserDbCredentialStore(await getUserDb());
     expect(await store.getCredential(APP, 'username')).toBe('alice');
     expect(await store.getCredential(APP, 'password')).toBe('hunter2');
+  });
+});
+
+// --------------------------------------------- blocked-popup UI (fix-first 3)
+
+describe('fix-first 3 — a blocked popup shows a visible error with a fallback link; connect re-enables', () => {
+  it('error + authorizeUrl anchor render, awaiting-callback copy does NOT, and the connect button is enabled', async () => {
+    await seedRow(oauthCodeSpec, true);
+    __setWizardHooksForTests({
+      channelFactory: () => ({ onmessage: null, close: () => undefined }),
+      openPopup: () => null, // the blocker (jsdom's window.open also yields null for the pre-open)
+      service: {
+        generateAuthUrl: async () => ({ authorizeUrl: 'https://idp.example/authorize?state=s', state: 's', flowId: 'flow-b' }),
+        handleCallback: vi.fn(),
+      } as never,
+    });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    await renderSheet();
+    await click(button(/approve connection/i));
+
+    await click(button(/connect account/i));
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toMatch(/popup was blocked/i);
+    const link = container.querySelector('a[href^="https://idp.example/authorize"]');
+    expect(link, 'the authorizeUrl fallback link must render').not.toBeNull();
+    expect(container.textContent).not.toMatch(/finish signing in the popup window/i);
+    expect(button(/connect account/i).disabled).toBe(false); // re-enabled for the retry
   });
 });
 

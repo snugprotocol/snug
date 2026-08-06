@@ -10,6 +10,7 @@ import {
   __resetWizardStateForTests,
   __setWizardHooksForTests,
   openWizard,
+  requestCloseWizard,
   startOAuthFlow,
   wizardFlowStatusStore,
   type WizardChannelLike,
@@ -183,6 +184,44 @@ describe('B1 — generateAuthUrl is unreachable pre-approval (M13)', () => {
     await expect(startOAuthFlow({ client_id: 'cid-1' })).rejects.toMatchObject({ code: 'spec_not_approved' });
     expect(generateAuthUrl).not.toHaveBeenCalled();
     expect(openPopup).not.toHaveBeenCalled();
+  });
+});
+
+describe('fix-first 3 — a BLOCKED popup is a visible ERROR, never a parked awaiting_callback', () => {
+  it('openPopup returns null: error state carries the authorizeUrl fallback; no flow installed; close is immediate', async () => {
+    await seedApproved();
+    const channels: FakeChannel[] = [];
+    __setWizardHooksForTests({
+      channelFactory: fakeChannelFactory(channels),
+      openPopup: () => null, // the popup blocker
+      fetchImpl: tokenFetch,
+    });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    await startOAuthFlow({ client_id: 'cid-1' });
+
+    const status = wizardFlowStatusStore.get();
+    expect(status.state).toBe('error'); // NOT awaiting_callback — nothing is coming
+    expect((status as { message: string }).message).toMatch(/popup was blocked/i);
+    // The minted authorize URL rides the error state so the UI can render a
+    // gesture-associated fallback link.
+    expect((status as { authorizeUrl?: string }).authorizeUrl).toContain('https://idp.example');
+    // No activeFlow was installed: the channel is closed and close needs NO confirm.
+    expect(channels[0]!.closeCalls).toBeGreaterThan(0);
+    expect(requestCloseWizard()).toBe('closed');
+  });
+
+  it('a null PRE-OPENED popup (blocked at click) with the legacy open also blocked lands in the same error state', async () => {
+    await seedApproved();
+    __setWizardHooksForTests({
+      channelFactory: fakeChannelFactory([]),
+      openPopup: () => null,
+      fetchImpl: tokenFetch,
+    });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    await startOAuthFlow({ client_id: 'cid-1' }, null); // openBlankOAuthPopup() returned null
+
+    expect(wizardFlowStatusStore.get().state).toBe('error');
+    expect(requestCloseWizard()).toBe('closed');
   });
 });
 

@@ -515,6 +515,14 @@ function CredentialsStep({ session, row }: { session: WizardSession; row: AuthSp
           {flow.state === 'error' ? (
             <div className="error-note" role="alert">
               {flow.message}
+              {flow.authorizeUrl !== undefined ? (
+                <>
+                  {' '}
+                  <a href={flow.authorizeUrl} target="_blank" rel="noreferrer">
+                    or open the sign-in page directly
+                  </a>
+                </>
+              ) : null}
             </div>
           ) : null}
         </>

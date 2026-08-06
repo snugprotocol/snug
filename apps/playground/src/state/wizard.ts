@@ -85,7 +85,16 @@ export type WizardFlowStatus =
   | { state: 'awaiting_callback'; flowId: string }
   | { state: 'exchanging' }
   | { state: 'connected'; scopesGranted?: string[] }
-  | { state: 'error'; message: string };
+  | {
+      state: 'error';
+      message: string;
+      /**
+       * Present on the popup-BLOCKED error only (fix-first 3): the minted authorize
+       * URL, so the UI can render a gesture-associated fallback link. Display-only —
+       * no flow is installed for it; the primary repair is allow-popups-and-retry.
+       */
+      authorizeUrl?: string;
+    };
 
 export const wizardStore = createStore<WizardSession | null>(null);
 export const wizardStepStore = createStore<WizardStep>('review');
@@ -358,7 +367,9 @@ function defaultOpenPopup(url: string): WizardPopupLike | null {
  */
 export function openBlankOAuthPopup(): WizardPopupLike | null {
   const win = window.open('about:blank', 'snug-oauth', 'popup,width=480,height=720');
-  if (win === null) return null;
+  // `== null` on purpose: a blocked open is null per spec, but non-conforming
+  // environments (jsdom among them) return undefined — both are "no window".
+  if (win == null) return null;
   return {
     get closed() {
       return win.closed;
@@ -421,16 +432,28 @@ export async function startOAuthFlow(
     preOpened?.close?.(); // a pre-opened popup that can't navigate is unusable — don't leak it
     popup = (hooks.openPopup ?? defaultOpenPopup)(start.authorizeUrl);
   }
+
+  if (popup === null) {
+    // The popup was BLOCKED (fix-first 3): a visible error, never a parked
+    // awaiting_callback — nothing is coming. No activeFlow is installed (close needs
+    // no confirm, the connect button re-enables), the channel is closed, and the
+    // minted authorize URL rides the status so the UI can offer a fallback link.
+    channel.close();
+    wizardFlowStatusStore.set({
+      state: 'error',
+      message: 'the popup was blocked — allow popups for this site and try again',
+      authorizeUrl: start.authorizeUrl,
+    });
+    return;
+  }
+
   // Popup-closed polling backstop: BroadcastChannel delivery has no failure signal.
-  const poll =
-    popup !== null
-      ? setInterval(() => {
-          if (popup.closed && wizardFlowStatusStore.get().state === 'awaiting_callback') {
-            wizardFlowStatusStore.set({ state: 'error', message: 'the sign-in window closed — try again' });
-            teardownFlow();
-          }
-        }, POPUP_POLL_MS)
-      : null;
+  const poll = setInterval(() => {
+    if (popup.closed && wizardFlowStatusStore.get().state === 'awaiting_callback') {
+      wizardFlowStatusStore.set({ state: 'error', message: 'the sign-in window closed — try again' });
+      teardownFlow();
+    }
+  }, POPUP_POLL_MS);
 
   activeFlow = { start, channel, popup, poll };
   wizardFlowStatusStore.set({ state: 'awaiting_callback', flowId: start.flowId });
