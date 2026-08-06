@@ -54,6 +54,15 @@ test.describe('AL-07 AC3 — flag on without WebGPU falls back to the demo brain
   });
 
   test('the demo brain still completes a build under the flag (fallback keeps building alive)', async ({ page }) => {
+    // Same benign set as owner-report.spec.ts: CSP-refused sourcemaps and the
+    // by-design /auth/me 404 on an auth-less harness.
+    const benign = [/\.map['"]? violates the following Content Security Policy/i, /Failed to load resource.*\.map/i, /Failed to load resource.*40[14]/i];
+    const errors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error' && !benign.some((p) => p.test(message.text()))) errors.push(message.text());
+    });
+    page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+
     await page.goto('/build?webllm=1');
     await expect(page.getByTestId('webllm-fallback-banner')).toHaveText(FALLBACK_BANNER);
 
@@ -64,6 +73,10 @@ test.describe('AL-07 AC3 — flag on without WebGPU falls back to the demo brain
     // The demo chat script: KB-consult line streams, then the artifact card lands.
     await expect(page.getByText(/check the app template/i)).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('artifact-card')).toBeVisible({ timeout: 20_000 });
+
+    // The fallback path must be CLEAN, not merely alive — no engine-load attempts, no
+    // unhandled errors behind the banner.
+    expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 });
 
