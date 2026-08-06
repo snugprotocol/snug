@@ -1,0 +1,9 @@
+# Funnel free-form reports away from blank issues; security gets a private route.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/snugprotocol/snug/security/advisories/new
+    about: Sandbox escapes, credential leaks, token-boundary breaks — never public issues. See SECURITY.md.
+  - name: Questions & ideas
+    url: https://github.com/snugprotocol/snug/discussions
+    about: Not sure it's a bug? Want to show an app you built? Start here.

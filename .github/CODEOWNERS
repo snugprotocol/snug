@@ -1,0 +1,12 @@
+# Solo-maintained project: every path routes to the maintainer.
+* @jeetumaker
+
+# High risk-tier paths (docs/engineering/PROCESS.md): the schemas ARE the public
+# spec, the runner is the sandbox (C2), auth is the credential boundary (C1),
+# and workflows are the CI/release surface. Changes here require tests-first
+# with negative security tests and explicit maintainer sign-off — expect the
+# strictest review in the repo.
+/packages/protocol/ @jeetumaker
+/packages/runner/ @jeetumaker
+/packages/auth/ @jeetumaker
+/.github/workflows/ @jeetumaker

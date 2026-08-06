@@ -1,0 +1,56 @@
+name: Bug report
+description: Something broken in a package, the runner, the server, or the Playground
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. One ask up front: **suspected security issues do not belong here** — use [SECURITY.md](https://github.com/snugprotocol/snug/blob/main/SECURITY.md) (private reporting) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Two or three sentences is plenty.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        Steps in the Playground, a single-file app HTML, or a failing test.
+        Bugs with a reproduction get fixed first — the repo's own rule is
+        "failing regression test before the fix", so you're handing us the hard half.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - packages/protocol (envelope, schemas)
+        - packages/runner (sandbox, bridge)
+        - packages/sdk (hooks)
+        - packages/db (per-app DB, user DB, sync)
+        - packages/knowledge (prompts, KB)
+        - packages/adapters (anthropic/openai/mock)
+        - apps/server (reference backend)
+        - apps/playground (hub UI)
+        - examples (starter apps)
+        - docs
+        - not sure
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Browser + version, OS, Node/pnpm versions if server-side, execution mode (byok / local / subscription).
+      placeholder: "Firefox 142 / macOS / byok"
+  - type: checkboxes
+    id: security-check
+    attributes:
+      label: Not a security report
+      options:
+        - label: This does not describe a way to break the sandbox or leak credentials (those go through SECURITY.md, privately).
+          required: true
