@@ -67,7 +67,7 @@ Scope change to this approved umbrella · destructive or 🔑-gated action not p
 
 ### Phase-0 preflight results (2026-08-05 evening)
 
-- `gh` authed as `jeetumaker` (repo/workflow scopes); remotes: `snugprotocol/snug` + `snugprotocol/spec` (both private). Repo root is `/Users/jeetu/SnugProtocol/snug` (workspace parent also holds `spec/`).
+- `gh` authed as `jeetumaker` (repo/workflow scopes); remotes: `snugprotocol/snug` + `snugprotocol/spec` (both private). Repo root verified (the workspace parent directory also holds the `spec/` clone).
 - `main` up to date with origin; one pre-existing uncommitted change (`docs/next-steps.md`, 3 roadmap entries) — will ride AL-01's branch.
 - Baseline green: install + build + root `pnpm test` (906) and playground Playwright (30) all pass, exit 0.
 - Playwright: chromium present; **webkit installed during preflight** (for the A14 mobile pass).
@@ -80,7 +80,7 @@ Scope change to this approved umbrella · destructive or 🔑-gated action not p
 1. **Scope freeze:** A1–A15 confirmed **except A6 (desktop scaffold) — dropped from this run**, to be picked up later in Alpha or during Beta. Hue starter ships authored + greyed-on-web; desktop-native fetch documented as a future ladder rung.
 2. **A12 spec push: AUTHORIZED** — push v0.1 + v0.2-draft to `snugprotocol/spec` (private) this run; auth content excluded; journal the push (UTC + verification).
 3. **WebLLM model:** the spike benchmarks current small models and decides; rationale recorded in the child journal/ADR.
-4. **Credentials:** owner is leaving an Anthropic or OpenAI key in `internal/.env.local` → live sweeps run REAL byok mode. No OpenWeather/PAT keys → connector starters verify against local stub providers / recorded fixtures through the real wizard+injection+scrub path; real-API verification queued in next-steps.
+4. **Credentials:** owner supplied a live Anthropic-or-OpenAI key locally (gitignored; never committed) → live sweeps run REAL byok mode. No OpenWeather/PAT keys → connector starters verify against local stub providers / recorded fixtures through the real wizard+injection+scrub path; real-API verification queued in next-steps.
 5. **A11 depth: prep-only** — files + real good-first-issues on the private repo; internal/-strip, branch protection, and the item-0 purge staged as an executable runbook, not executed.
 6. **Umbrella approved** — "Approved — run autonomously"; merge-on-green pre-authorized; owner reviews the merged set in the morning.
 

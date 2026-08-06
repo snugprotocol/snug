@@ -1,6 +1,0 @@
-# All changes require maintainer review.
-* @jeetumaker
-# Protocol schemas and auth are High risk-tier — never merge without explicit maintainer approval.
-/packages/protocol/ @jeetumaker
-/packages/auth/ @jeetumaker
-/packages/runner/ @jeetumaker

@@ -35,4 +35,5 @@
 | Spec publication process | `docs/engineering/SPEC_SYNC.md` + `docs/spec-changelog.md` | future `scripts/check-spec-sync` |
 | Code-map test-count regeneration (`pnpm run update-code-map` — rewrites only resolvable numbers in THIS file's Tests column from a green root run; Playwright counts untouched) | `scripts/update-code-map-counts.mjs` ✅ | `scripts/update-code-map-counts.test.mjs` (node:test, runs with the script) |
 | Process, tiers, release rules | `docs/engineering/PROCESS.md` | — |
-| Pre-launch strategy (private, C4) | `internal/` | — |
+| **Community/flip surface** (honest SECURITY.md, process-aware CONTRIBUTING, Covenant 2.1 CoC, `.github/` CODEOWNERS + yml issue forms + config + security stop-template + PR template w/ risk-tier + C1/C2-impact sections; curated good-first-issues mirrored as tracker issues #9–#18) | root `*.md` + `.github/` + `docs/good-first-issues.md` ✅ | — (docs; issue forms schema-validated by GitHub at render) |
+| Pre-launch strategy (private, C4) incl. the staged flip-public runbook | `internal/` (`RUNBOOK-flip-public.md` — untracked, owner-copied) | — |

@@ -1,0 +1,39 @@
+name: Feature / protocol proposal
+description: Propose an SDK or hub feature, or a change to the protocol itself
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't be done today? Concrete use beats abstract capability — "my kid's tracker app needs X" is a stronger case than "the platform should support X".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: A sketch is fine. You don't need to design the whole thing.
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of change is this?
+      description: >
+        Protocol-level changes (envelope messages, schemas in packages/protocol) are
+        the most expensive kind — they're High risk-tier and flow through spec-sync to
+        the spec repo. Expect discussion before any code.
+      options:
+        - SDK / hub / Playground feature
+        - New starter app (see the curation rule in CONTRIBUTING.md — say who needs it)
+        - Protocol change (envelope, schemas)
+        - Docs / process
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including "build it as a micro app on the existing protocol" — the answer surprisingly often.
