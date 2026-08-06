@@ -94,3 +94,9 @@ Scope change to this approved umbrella · destructive or 🔑-gated action not p
 - Done: Gate-2 reads (roadmap v2, auth audit, LAUNCH_OPS, lessons, next-steps, architecture, code-map, .env.local); preflight all green (see above); umbrella drafted.
 - State: awaiting owner's batched Phase-0 answers + plan approval.
 - Next step: record answers, spawn AL-01.
+
+### 2026-08-06 — Claude (Fable 5, orchestrator) — SESSION-BOUNDARY HANDOFF (usage-credit interruption)
+- **RESUME FROM `docs/tasks/active/HANDOFF-alpha-umbrella.md`** — it has the full ledger, git state, and next actions. This entry is the pointer.
+- Progress: 7 children merged/done (AL-01 #5, AL-02 #6, AL-08 #7, AL-13 #8, AL-14 #19, AL-07 #20; A6 dropped). AL-03 (connected-fetch) is CODE-COMPLETE + PUSHED to `origin/feat/TASK-20260806-connected-fetch` @ e5f23f5 (rebased on main, all suites green, adversarial-review blocker fixed) but NOT merged — its final live sweep was interrupted mid-diagnosis of a possible inspector/observability gap for net frames (a LEAD to confirm/refute, not a confirmed finding). Remaining: AL-04, AL-05, AL-09, AL-10, AL-11, AL-12, AL-15.
+- Nothing lives only in chat: all branches pushed; AL-04 pre-draft and this handoff are committed to the repo; issues #9–#18 live; spec pushed. A fresh session loses nothing.
+- IMMEDIATE next action: resume AL-03's live sweep (confirm/refute the net-frame inspector lead), then PR+merge AL-03, then the tail (AL-04 first, with a pre-implementation plan review).
