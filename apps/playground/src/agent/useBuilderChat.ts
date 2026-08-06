@@ -15,7 +15,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
+import type { AuthWizardDirective, RenderDirective } from '@snugprotocol/protocol';
 
+import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
 import { createServerArtifactFetch } from '../state/library.js';
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
 import { resolveTurnMode, useBrain } from '../state/webllm.js';
@@ -40,6 +42,10 @@ export interface ChatMessage {
   streaming?: boolean;
   error?: { code: string; message: string; retryable: boolean };
   artifact?: ArtifactEvent;
+  /** A VALIDATED auth_wizard render directive found in the reply (AL-04 D9). */
+  directive?: AuthWizardDirective;
+  /** Visible note when a claimed directive failed validation and was dropped (D9). */
+  directiveNote?: string;
 }
 
 /**
@@ -97,6 +103,8 @@ export interface UseBuilderChatOptions {
 interface PersistedMeta {
   artifact?: { appId: string; version?: number; displayName: string };
   wireText?: string;
+  /** The VALIDATED render directive — the only directive shape that persists (M1). */
+  directive?: RenderDirective;
 }
 
 let messageSeq = 0;
@@ -246,11 +254,15 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               .filter((m) => m.role !== 'system')
               .map((m) => {
                 const artifact = metaToArtifact(m.meta);
+                // Re-validated strictly on every read (D9): an imported row whose
+                // directive grew fields renders as no card at all.
+                const directive = metaToDirective(m.meta);
                 return {
                   id: ++messageSeq,
                   role: m.role === 'user' ? ('user' as const) : ('agent' as const),
                   displayText: m.content,
                   ...(artifact !== undefined ? { artifact } : {}),
+                  ...(directive !== undefined && directive.kind === 'auth_wizard' ? { directive } : {}),
                 };
               }),
       );
@@ -362,21 +374,37 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         if (result.ok) {
           // A done event with empty/missing text must not wipe the streamed deltas.
           const finalText = result.text !== '' ? result.text : streamAccumRef.current;
+          // D9: validate BEFORE any UI effect. A malformed claimed directive is
+          // dropped with a visible note, never partially rendered and never persisted.
+          const scan = finalText !== '' ? scanForRenderDirective(finalText) : null;
+          const directive: AuthWizardDirective | undefined =
+            scan !== null && 'directive' in scan && scan.directive.kind === 'auth_wizard' ? scan.directive : undefined;
           patchMessage(agentId, (m) => ({
             streaming: false,
             displayText: result.text !== '' ? result.text : m.displayText,
+            ...(directive !== undefined ? { directive } : {}),
+            ...(scan !== null && 'malformed' in scan
+              ? { directiveNote: 'the agent proposed a connection card that failed validation — ignored' }
+              : {}),
           }));
           if (finalText !== '') {
             // F9: the turn that produced v1 is the bootstrap — pin both sides of it.
             if (turn.installedV1 && turn.userDbId !== undefined) db.pinChatMessage(turn.userDbId);
             const meta: PersistedMeta | undefined =
-              turn.artifact !== undefined
+              turn.artifact !== undefined || directive !== undefined
                 ? {
-                    artifact: {
-                      appId: turn.artifact.artifactId,
-                      displayName: turn.artifact.displayName,
-                      ...(turn.artifact.version !== undefined ? { version: turn.artifact.version } : {}),
-                    },
+                    ...(turn.artifact !== undefined
+                      ? {
+                          artifact: {
+                            appId: turn.artifact.artifactId,
+                            displayName: turn.artifact.displayName,
+                            ...(turn.artifact.version !== undefined ? { version: turn.artifact.version } : {}),
+                          },
+                        }
+                      : {}),
+                    // M1: the persisted directive is the VALIDATED shape — evidence-free
+                    // by construction (the schema has no such field).
+                    ...(directive !== undefined ? directiveToMeta(directive) : {}),
                   }
                 : undefined;
             db.appendChatMessage(threadId, 'assistant', finalText, {

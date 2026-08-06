@@ -58,6 +58,12 @@ export function invalidateNetGrants(appId: string): void {
 export interface CreateNetHandlerOptions {
   /** Injectable for tests + the e2e stub; defaults to the browser's fetch. */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  /**
+   * Host-side observer of net-error OUTCOMES (AL-04 AC9): the Run view surfaces a
+   * connect/re-approve CTA for auth-repairable codes. Receives the CODE only —
+   * the wizard mapping is code-keyed, never a message substring (N1).
+   */
+  onNetError?: (appId: string, code: string) => void;
 }
 
 /**
@@ -90,6 +96,7 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
         ...(request.headers !== undefined ? { headers: request.headers } : {}),
         ...(request.body !== undefined ? { body: request.body } : {}),
       });
+      if (!result.ok) options.onNetError?.(netAppId, result.code);
       return result.ok
         ? {
             ok: true,

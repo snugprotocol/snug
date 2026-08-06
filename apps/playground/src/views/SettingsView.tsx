@@ -31,6 +31,8 @@ import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { invalidateNetGrants } from '../state/net.js';
+import { openWizard, wizardStore } from '../state/wizard.js';
+import { useStore } from '../state/store.js';
 import { downloadBlob } from '../run/exportDb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -405,6 +407,9 @@ export function ConnectionsCard(): ReactElement {
   const [rows, setRows] = useState<AuthSpecRow[]>([]);
   const [error, setError] = useState<string | undefined>(undefined);
   const [epoch, setEpoch] = useState(0);
+  // AL-04: approvals happen INSIDE the wizard now — refresh the rows whenever the
+  // wizard session ends so status pills reflect what it changed.
+  const wizardSession = useStore(wizardStore);
 
   useEffect(() => {
     let cancelled = false;
@@ -414,7 +419,7 @@ export function ConnectionsCard(): ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [epoch]);
+  }, [epoch, wizardSession]);
 
   const act = async (appId: string, fn: (db: Awaited<ReturnType<typeof getUserDb>>) => void): Promise<void> => {
     setError(undefined);
@@ -456,10 +461,15 @@ export function ConnectionsCard(): ReactElement {
                   hosts: {row.allowedHosts.length > 0 ? row.allowedHosts.join(', ') : '(none)'}
                 </div>
                 <div className="field-row" style={{ gap: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
+                  {/* AL-04 AC9: the wizard replaces the approval INNARDS — these
+                      buttons open it; the approval transition (and its
+                      invalidateNetGrants call, R3) happens inside the wizard. */}
                   {row.status !== 'approved' ? (
-                    <Button onClick={() => void act(row.appId, (db) => db.approveAuthSpec(row.appId))}>approve</Button>
+                    <Button onClick={() => openWizard({ source: 'settings', appId: row.appId, mode: row.status === 'imported_unapproved' ? 'reapprove' : 'connect' })}>
+                      approve
+                    </Button>
                   ) : (
-                    <Button variant="ghost" onClick={() => void act(row.appId, (db) => db.reapproveAuthSpec(row.appId))}>
+                    <Button variant="ghost" onClick={() => openWizard({ source: 'settings', appId: row.appId, mode: 'reapprove' })}>
                       re-approve
                     </Button>
                   )}
