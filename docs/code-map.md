@@ -31,5 +31,6 @@
 | Spec v0.2 draft staging (Portable User Database Format) | `docs/spec-drafts/spec-v0.2-userdb.md` ✅ | — (push needs explicit ask) |
 | Example apps (single-file, embedded hooks byte-synced to sdk) | `examples/{chess,flying-pig,habit-tracker}` ✅ | `examples` validate suite (18) |
 | Spec publication process | `docs/engineering/SPEC_SYNC.md` + `docs/spec-changelog.md` | future `scripts/check-spec-sync` |
+| Code-map test-count regeneration (`pnpm run update-code-map` — rewrites only resolvable numbers in THIS file's Tests column from a green root run; Playwright counts untouched) | `scripts/update-code-map-counts.mjs` ✅ | `scripts/update-code-map-counts.test.mjs` (node:test, runs with the script) |
 | Process, tiers, release rules | `docs/engineering/PROCESS.md` | — |
 | Pre-launch strategy (private, C4) | `internal/` | — |
