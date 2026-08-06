@@ -87,9 +87,21 @@ Inferrer/wizard/render directive (AL-04) · KB teaching (AL-05) · desktop nativ
 4. D5 minimal panel: right scope, or does it create a second approval surface AL-04 then has to kill (throwaway vs seed)?
 5. Should `net-request` allow a `body` for GET (some APIs abuse it) — or strict-reject?
 
+## Forward constraints (copy into these children's task files at creation)
+
+- **AL-04 (wizard) — the D5 Connections panel is the PERMANENT settings seat; replace its approval INNARDS, not the panel.** `ConnectionsCard` in `apps/playground/src/views/SettingsView.tsx` renders the per-app list (kind/provider/full frozen host list/status) and the Approve/Re-approve/Revoke actions wired to the AL-02 db accessors. AL-04's wizard becomes the approval flow those buttons open — the panel row + status pills survive. **Every approval transition MUST call `invalidateNetGrants(appId)`** (from `state/net.ts`) or a widened host set rides an old session grant (R3). The mutating-call confirm dialog (`run/NetConfirmDialog.tsx` + `netConfirmStore`) is the confirm surface — AL-04 may restyle it but keeps the per-(app,host,method) session-remember contract.
+- **AL-05 (KB teaching) — teach `useConnectedFetch`, which SHIPS NOW as a real API.** Embedded + module forms are byte-locked to `20-html-template.md` section 5 by the KB≡SDK sync test; teaching copy goes in the KB prose layers, never by editing the copy-exactly hook block out of sync. The hook ALWAYS resolves (`{ok:true,status,headers,body}` or `{ok:false,error}`); teach that credentials are injected + scrubbed by the HOST and the app never sees a token; teach that mutating methods prompt the user; teach that only APPROVED hosts are reachable. Read the prompt-engineering reference (standing memory) before authoring.
+- **AL-11 (threat model) — the base64-of-secret scrubber boundary is a NAMED constraint for the threat model.** `scrubAuthValues` (`packages/auth/src/scrub.ts`) matches EXACT substrings only; a provider that re-encodes an injected value (base64/hex/URL-escape) defeats it — the frozen host allowlist is the primary wall, the scrubber is defense-in-depth. `scrub.test.ts` pins this honestly (`A3 boundary … NOT caught`). Also for the model: the SSRF guard is the HONEST browser edition — literal private/loopback/link-local IPs + `localhost`/`.local`/`.internal` are rejected, but a browser cannot pre-resolve DNS, so DNS-rebinding to private IPs is NOT claimed defended (the frozen allowlist is the wall; desktop-native fetch revisits it with real DNS). Both are documented at the code sites; AL-11 must state them as explicit boundaries, not implied coverage.
+
 ## Decisions & surprises
 
-(running)
+- **`normalizeAuthHost` punycode retrofit is in `packages/protocol`, not `packages/auth` (B3).** The AL-02 asymmetry lived in the shared normalizer, so the fix belongs there — one function now does IDNA toASCII via the URL trick, and every consumer (deriveAuthAllowedHosts at store time, the auth ceiling predicates + hostSetEquals at check time, the db freeze union check) inherits it. A host string smuggling more than a hostname (path/port/creds/query) falls back to the fail-closed lowercase form. No auth-package change was needed for the check-time half — it already routes through `normalizeAuthHost`.
+- **The net-request schema rejecting credential headers makes the C1 e2e a BRIDGE-level proof, not an executor-level one.** A forged `Authorization` on a net-request is answered `MALFORMED` by the runner before the executor ever runs — so the real-stub "Authorization absent" assertion is that the request never leaves the bridge. The executor's belt-and-braces strip (reachable only if the schema were bypassed) is proven at the fake fetch in `connected-fetch.test.ts`. Both layers tested; the e2e exercises the outer one.
+- **The SSRF guard blocks the obvious e2e happy path.** A self-signed stub on `127.0.0.1` is a loopback literal the guard correctly refuses — so the net e2e addresses the stub by a public-looking hostname (`stub.snug.test`) that Chromium's `--host-resolver-rules` maps to 127.0.0.1, scoped to a dedicated `net` Playwright project (with `ignoreHTTPSErrors` + `--ignore-certificate-errors` also scoped there, per A1's fixture-only requirement). The stub sends CORS headers because the harness page and the stub are different origins.
+- **`@snugprotocol/db` maps to the sql-free `auth-secrets` module in the net e2e import map.** The executor needs only the `auth:` key-shape constants from db, not sql.js — so the fixture serves `/pkg/db/userdb/auth-secrets.js` for the bare `@snugprotocol/db` specifier, keeping the net harness wasm-free.
+- **OAuth 401-refresh-retry lives in the executor, not the OAuth service.** The service exposes `refresh`/`refreshClientCreds`; the executor does the one-shot retry (fetch → 401 → forceRefresh injection → refetch) so static kinds surface their 401 untouched and only OAuth kinds retry.
+- **A `net` capability boolean was added to `host-ready.capabilities`** (optional, R2-safe) so an app can feature-detect. The runner sets it iff a NetHandler is configured; SnugAppFrame requires BOTH `net` and `netAppId` at the type level (mirrors the db pair).
+- **Mutation-checking uncommitted work with `git checkout` wiped host.ts AND the sdk net files TWICE** (the exact M17 lesson from AL-02). Recovered both times by re-applying from context, then re-ran every affected mutation against COMMITTED code. Rule reinforced for the journal: commit the package, THEN mutate.
 
 ## Session journal (append-only, newest last)
 
@@ -97,3 +109,42 @@ Inferrer/wizard/render directive (AL-04) · KB teaching (AL-05) · desktop nativ
 - Plan v2 instantiated post-review (APPROVE-WITH-CHANGES; B1–B3 + R1–R5 + A1–A3 folded binding). Named AC from the umbrella: audit bug 3 dies by construction — no strictness flag exists anywhere.
 - Also carried: AL-13's task-file move rides this branch (uncommitted on main).
 - Next step: implementation, tests first.
+
+### 2026-08-06 — Claude (Fable 5, implementer) — implementation complete, all amendments met
+- Implemented in the plan's files-to-touch order, TDD per unit (every module's tests shown failing before implementation; scrubber + SSRF tables adapted from the OProject source per D4/D3.5). Commits (task-id-prefixed): protocol net frames → auth executor/scrubber/guard/session-gate/postForm → runner NetHandler seam → sdk useConnectedFetch + KB → playground wiring/panel/dialog/e2e → docs (this commit).
+- **Named AC met — audit bug 3 dead by construction:** no strictness flag/parameter/env read exists in the connected-fetch seat; `browser-safe.test.ts` walks `connected-fetch.ts`/`net-guards.ts`/`scrub.ts`/`session-confirm.ts` for the exact source-system anti-pattern (`STRICT_AUTH_HOST_INJECTION`, `off-list-injection`, injection-mode conditionals, `process.env`) and the factory arity (1 dep object; export surface `['execute']`). Mutation M-knob (plant `skipValidation`) covered by the AL-02 lint shape reused here.
+- Every binding amendment landed with its test: B1 (own size class + boundary cap−1/cap/cap+1 at protocol AND runner) · B2 (`postForm redirect:'manual'` + regression, 3 sites pass `redirect_blocked` through untranslated) · B3 (punycode both sides + stored-unicode + IDN xn-- round-trip) · R1 (scrub whitelisted headers) · R2 (GET/HEAD body reject) · R3 (session-remember keyed (app,host,method) + re-approval invalidation) · R4 (runner value-blind executable lint) · R5 (no appId in schema; host-assigned binding) · A1 (https-only, http-localhost dead; self-signed https e2e stub) · A2 (set-cookie response-drop) · A3 (base64 scrubber boundary named for AL-11).
+- **AC→test mapping:** protocol `net-frames.test.ts` (19) + `punycode-hosts.test.ts` (10); auth `connected-fetch.test.ts` (33, one per D3 gate) + `scrub` (8) + `net-guards` (5) + `session-confirm` (5) + `postform-redirect` (4) + `ceiling-punycode` (4) + `browser-safe` extension (AL-03 named AC ×2); runner `host-net.test.ts` (12) + `net-value-blind.test.ts` (5); sdk contract suite ×2 forms (useConnectedFetch ×3 each) + KB≡SDK byte-compare; playground `netState` (4) + `connectionsPanel` (5) + `confirmDialog` (5) + `e2e/net.spec.ts` (8 on production bytes, self-signed https stub).
+- **25 guard mutations checked RED→restored** (table below).
+- **Surprise (process):** `git checkout` during mutation-checking wiped uncommitted host.ts and the sdk net files TWICE (the M17 trap from AL-02). Re-applied from context both times; re-ran every affected mutation against COMMITTED code. Committing each package BEFORE mutating is now non-negotiable for me.
+- **High-tier self-sign-off (PROCESS):** C1 — no strictness knob in `packages/auth` (AC5 lint + AL-03 named-AC lint); the runner is value-blind (R4 executable lint, mutation-checked); credentials never enter the iframe (C1 e2e: forged Authorization rejected at the bridge; injected key present at the stub yet scrubbed from what the app renders). C2 — the iframe stays `allow-scripts` + `connect-src 'none'`; the ONLY fetch caller is the host-side executor. C3 — protocol changed → spec-changelog INTERNAL-DRAFT entry (net frames out of SOURCES). C5 — no secrets in code/config; no env reads in packages. NO push, NO PR per the run's rules — stopped after the final commit.
+
+### Mutation-check evidence (every guard: mutate → RED → restore → green)
+
+| # | Mutation (reverted fix) | RED test(s) |
+|---|---|---|
+| M1 | drop the net size class from `frameWithinLimits` | protocol B1 boundary ×3 |
+| M2 | add `net-request` to json-schemas SOURCES | protocol export-set-unchanged |
+| M3 | remove GET/HEAD body reject | protocol R2 |
+| M4 | remove credential-header refine | protocol C1 ×2 |
+| M5 | loosen `netRequestSchema` (strict→object) | protocol R5 (extra-field reject) |
+| M6 | drop punycode from `normalizeAuthHost` | protocol punycode ×3 + auth ceiling-punycode (via built dist) |
+| M7 | disable scrubber (return body untouched) | auth scrub ×3 + connected-fetch scrub ×3 |
+| M8 | SSRF guard always allows | auth net-guards + connected-fetch SSRF |
+| M9 | header-strip disabled (keep app headers) | auth connected-fetch gate-7 |
+| M10 | scheme gate allows http (A1) | auth connected-fetch A1 ×2 |
+| M11 | redirect not blocked (followed) | auth connected-fetch redirect |
+| M12 | response size cap disabled | auth connected-fetch B1 boundary |
+| M13 | status gate ignores imported_unapproved | auth connected-fetch imported-barred |
+| M14 | confirm gate bypassed | auth connected-fetch confirm-deny |
+| M15 | session gate stops remembering | auth session-confirm remember ×3 |
+| M16 | session invalidate no-op | auth session-confirm invalidate |
+| M17 | postForm redirect not blocked (B2) | auth postform-redirect ×3 |
+| M18b | net binding hardcoded to a wrong id | runner host-net host-assigned |
+| M19 | oversized net-response silently dropped (net site) | runner host-net terminal NET_SIZE_EXCEEDED |
+| M20 | plant a fetch call in host.ts | runner net-value-blind |
+| M21 | edit embedded useConnectedFetch only | sdk KB≡SDK byte-compare |
+| M22 | bridge net reads a wrong field | sdk contract net round-trip |
+| M23 | approve without invalidateNetGrants | playground connectionsPanel R3 ×3 |
+| M24 | confirm dialog ignores remember checkbox | playground confirmDialog remember |
+| M25 | net state maps NetSpecRow with a fixed status | playground netState imported-barred |

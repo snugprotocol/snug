@@ -9,6 +9,9 @@
         "db": {
           "type": "boolean"
         },
+        "net": {
+          "type": "boolean"
+        },
         "streaming": {
           "type": "boolean"
         }

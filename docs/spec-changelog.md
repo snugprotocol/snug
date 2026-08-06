@@ -27,6 +27,33 @@ timeline-neutral (roadmap v2 rescheduled the credential layer); the v0.0 skeleto
 `43f65e0..ed6e596` at 2026-08-06 08:16:37 UTC; verified by fresh clone (tree
 identical to local; schemas byte-identical to `packages/protocol/schemas/`).
 
+## 2026-08-06 — INTERNAL DRAFT, not staged for any push — TASK-20260806-connected-fetch (AL-03)
+**Excluded from every spec push (owner decision 2026-08-05 spec-gating; publication of the
+net capability is gated at Beta exit, staged prose is AL-12).** Two new INTERNAL-draft
+postMessage frames — `snug:net-request` and `snug:net-response` — the envelope net
+capability (an app's only governed path to the network it cannot touch itself; C2 keeps
+its `connect-src 'none'`). Deliberately NOT added to `json-schemas.ts` SOURCES (the
+publishes-to-spec line is unchanged; `net-frames.test.ts` pins the export set, extending
+the AL-02 guard). `net-request` carries `{url, method, headers?, body?}` with NO appId
+(the runner's net binding is HOST-assigned like `dbNamespace` — R5); it strict-rejects a
+`body` on GET/HEAD (R2) and any credential-shaped header (C1).
+**One PUBLISHED-schema delta (additive, R2-safe):** `host-ready.json` gains an OPTIONAL
+`capabilities.net: boolean` so an app can feature-detect the capability — no `required`
+change, no `additionalProperties`, `io:'input'` keeps v1.0 validators accepting it. This
+is the ONLY `schemas/*.json` change; the net FRAMES stay out of SOURCES. Committed
+`schemas/host-ready.json` regenerated (`schemas-stable.test.ts` currency lock); a spec
+push would carry this one additive field. `net-response` carries
+`{status, headers (whitelist-only), body, truncated?}` or an envelope error. New size
+class `LIMITS.MAX_NET_FRAME_BYTES = 1 MiB + 64 KiB` (`frameWithinLimits` per-type; an
+oversized net-response becomes a terminal `NET_SIZE_EXCEEDED`, never a silent drop — B1).
+New exported constants: `NET_ERROR_CODES`, `NET_METHODS`, `NET_MUTATING_METHODS`,
+`NET_RESPONSE_HEADER_WHITELIST` (+ `x-ratelimit-*` glob; `set-cookie` never crosses).
+`host-ready.capabilities` gains an optional `net` boolean (additive, R2-safe). One
+tightening to a PUBLISHED-adjacent helper: `normalizeAuthHost` now punycodes (IDNA
+toASCII) so declared and URL-derived hosts compare equal (B3, closing the AL-02 IDN
+asymmetry) — this changes the FROZEN host union stored for NEW approvals but no wire
+schema. Wire frames/envelope otherwise UNCHANGED at v1; `schemas/*.json` unchanged.
+
 ## 2026-08-06 — INTERNAL DRAFT, not staged for any push — TASK-20260805-auth-core (AL-02)
 **Excluded from the AL-13 v0.1+v0.2 push by owner decision (2026-08-05 spec-gating):**
 storage schema moves to **v3** — new table `snug_auth_specs` (Dynamic Auth spec metadata:

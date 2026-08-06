@@ -14,7 +14,10 @@
 │      │ sandboxed iframe (allow-scripts, connect-src 'none', CDN allowlist)               │
 │      ▼                                                                                   │
 │  micro app (single-file HTML, authored by LLM via packages/knowledge)                    │
-│      │ useSnugApp / usePersistedState / useAppDB   (packages/sdk)                        │
+│      │ useSnugApp / usePersistedState / useAppDB / useConnectedFetch   (packages/sdk)    │
+│      │ net-request/net-response frames (AL-03, internal draft) ──► runner NetHandler ──► │
+│      │   packages/auth connected-fetch executor (host-only fetch caller; injects creds,  │
+│      │   scrubs responses; app iframe still has connect-src 'none' — C1/C2 intact)       │
 │      ▼                                                                                   │
 │  packages/db USER DB (ADR-0007/0010): ONE sql.js file/user — apps + versions (factory    │
 │  pinned + 5 recent, revert/reset) + chats (bootstrap turn pinned) + per-app wiki docs +  │
@@ -24,13 +27,16 @@
 │      ▼                                                                                   │
 │  packages/db sync (ADR-0009): SyncProvider → hub origin (/userdb CAS) | Dropbox | …      │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
-   packages/protocol = envelope/frames (v1) + userdb-schema.ts (spec v0.2 storage surface;
-     v3 internal draft adds snug_auth_specs) + auth-schema.ts (internal, NOT in schemas/)
+   packages/protocol = envelope/frames (v1) + net-request/net-response (AL-03 internal
+     draft, own size class, NOT in schemas/) + userdb-schema.ts (spec v0.2 storage
+     surface; v3 internal draft adds snug_auth_specs) + auth-schema.ts (internal)
    apps/server (OPTIONAL hub) = /invoke + artifact cache + Google OIDC + /userdb + static
-   packages/auth (AL-02, ADR-0014) = Dynamic Auth pure core, LOCAL-FIRST: browser-safe
-     DI-pure OAuth service + CredentialStore over the user file's snug_secrets `auth:` keys
-     — credentials live in the USER'S file, never a server vault; host ceiling always
-     strict (C1, no knob). Connected-fetch runtime lands in AL-03, wizard/UI in AL-04.
+   packages/auth (AL-02/AL-03, ADR-0014) = Dynamic Auth pure core + connected-fetch
+     runtime, LOCAL-FIRST: browser-safe DI-pure OAuth service + CredentialStore over the
+     user file's snug_secrets `auth:` keys — credentials live in the USER'S file, never a
+     server vault; host ceiling always strict (C1, no knob). The connected-fetch executor
+     is the ONLY host-side fetch caller; injection is always strict (audit bug 3 dead by
+     construction). Wizard/UI lands in AL-04.
 ```
 
 Key invariants: the user DB is the single source of truth in EVERY mode (subscription
@@ -45,7 +51,7 @@ caches); LLM calls originate from the host page only; secrets never reach the hu
 - `knowledge` ← `server`, `playground`
 - `adapters` ← `server`, `playground` (browser-direct byok/local)
 - `runner` ← `playground`
-- `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); no package consumes it yet — `playground` wires it in AL-03/AL-04 (change auth → run `auth` alone today, plus `playground` once wired)
+- `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); `playground` now consumes it (AL-03 wires the connected-fetch executor into the runner's NetHandler seam) — change `auth` → run `auth` + `playground`. `runner` does NOT depend on `auth` (value-blind by lint, R4).
 
 ## External dependencies
 LLM providers: Anthropic + OpenAI via `adapters` — browser-direct in byok mode (CORS opt-in header), any OpenAI-compatible localhost endpoint in local mode (Ollama), hub-side in subscription mode. Experimental: `@mlc-ai/web-llm` (pinned, playground-only, code-split) runs a small model in-page on WebGPU behind the `?webllm=1` flag — same AgentAdapter contract via a brain OVERRIDE of the configured mode, tool-free fenced-HTML build path, demo-brain fallback when WebGPU is absent (ADR-0015; GA at 1.2). sql.js (WASM SQLite), OPFS (browser). Hub server: better-sqlite3 stores, openid-client (Google OIDC), @fastify/{cookie,static,cors}. Dropbox HTTP API (example personal sync origin, PKCE public client). No cloud services required for OSS usage.
