@@ -182,6 +182,48 @@ Order per TDD.md: every suite shown failing before its module; full package suit
 | M29 *(N3)* | `authRequiredPayloadSchema` strict→object | protocol payload unknown-key reject |
 | M30 *(N2)* | `buildAppTurnContext` starts reading message `meta` into context | authChatCanary buildAppTurnContext probe |
 
+### Mutation-check ledger (executed at Gate 5; commit-first rule observed — evidence: RED test name + restore-GREEN)
+
+| # | Executed | Evidence (RED line) | Restore |
+|---|---|---|---|
+| M1 | 2026-08-06 @97f16be | `× …stays OUT of json-schemas SOURCES > buildJsonSchemas() still exports exactly the pre-auth v1 wire set` (1 failed/31 passed) | GREEN 32/32 |
+| M2 | 2026-08-06 @97f16be | `× …persisted shape (M1/M2) > strict-rejects unknown keys (M2)` + `× carries NO evidence[]` (2 failed) — the evidence-reject also re-proves M1's directive half | GREEN 32/32 |
+| M29 | 2026-08-06 @97f16be | `× authRequiredPayloadSchema … > strict-rejects unknown keys (M29…)` (1 failed) | GREEN 32/32 |
+| M21 (protocol half) | 2026-08-06 @97f16be | omit dropped → `× rejects registrationConsoleUrl` + `× rejects registrationInstructions` + `× rejects headerTemplate` + snapshot (4 failed) — inferrer.poison-registration half executed with the auth package | GREEN 32/32 |
+| M3 | 2026-08-06 @8b4f47d | registry lookup forced undefined → `× a registry hit produces a deterministic paramsToAuthSpec proposal and the seam is NEVER invoked` + kindHint-default + poison-registry-claim (3 failed/18) | GREEN 21/21 |
+| M5 *(rewritten)* | 2026-08-06 @8b4f47d | protocol `confidence….catch(0)` + rebuild → all 5 `inferrer.confidence-strict-reject` cases RED (5 failed/16) | protocol restored + rebuilt, GREEN 21/21 |
+| M6 | 2026-08-06 @8b4f47d | planted `fetch("https://docs.example")` call → `× …no fetch call exists on the inference path` (1 failed/20) | GREEN 21/21 |
+| M14 | 2026-08-06 @8b4f47d | status check removed + hosts re-derived → `× throws spec_not_approved on 'unapproved'` + `'imported_unapproved'` + `× returns the ROW's frozen union, never a spec-derived union (M14)` (3 failed/3) | GREEN 6/6 |
+| M21 (auth half) | 2026-08-06 @8b4f47d | protocol omit dropped + rebuild → `× inferrer.poison-registration` + headerTemplate variant (2 failed/19) | protocol restored + rebuilt, GREEN 21/21 |
+| M22 | 2026-08-06 @8b4f47d | bare `import { z } from 'zod'` planted → `× every import specifier in src/ is relative or a pinned workspace package` (offender `auth-spec-inferrer.ts: zod`). NOTE: the child-run isolation gate still resolved zod (pnpm hoisting) — the source-level specifier lint is the load-bearing wall, the gate covers load-order masking | GREEN 11/11 |
+| M27a (registry-values-lose) | 2026-08-06 @8b4f47d | registry rung skipped when docsText present → `× inferrer.poison-registry-claim` (1 failed/20) | GREEN 21/21 |
+| M27d (parse-failure-prefills) | 2026-08-06 @8b4f47d | reply_unparseable branch returns ok:true salvage proposal → `× inferrer.poison-unparseable-reply` (1 failed/20) | GREEN 21/21 |
+| M27b (drop DATA framing) | 2026-08-06 @186e9e7 | rule 4 deleted from prompts/tools/auth-spec-inferrer.md + regen → `× renders the fixed sections with the DATA-framing injection rule` + golden (2 failed/10) | GREEN 12/12 |
+| M27e (registration in an example) | covered structurally | example outputs are validated against `inferrerProposalSchema` (R1 test) + explicit no-registration-keys test — a registration field in any example is a double RED (schema + exclusion) | n/a |
+| M4 *(rewritten)* | 2026-08-06 @e0d6364 | branch selector reads confidence → `× inference provenance ALWAYS forces the field-by-field spec_confirm — even at claimed confidence 1.0` + light-path test (2 failed/12) | GREEN 14/14 |
+| M7 | 2026-08-06 @e0d6364 | expectedFlowId parsed from delivered payload → `× forged flowId: … → flow_mismatch, no exchange` (mismatch became state_replay; 1 failed/3) | GREEN 4/4 |
+| M8 | 2026-08-06 @e0d6364 | approveWizardSpec skips invalidateNetGrants → 3 RED: panel R3-companion + reapprove-drops-grants + api_key approve (AL-03 M23 analogue stays red-capable) | GREEN 21/21 |
+| M9 | 2026-08-06 @e0d6364 | CredentialsStep loads stored values back → `× a stored credential is NEVER loaded back into the field (pre-seeded store)` (1 failed/13) | GREEN 14/14 |
+| M10 | 2026-08-06 @e0d6364 | docsText written into chat meta during runWizardInference → `× docs canary … NEITHER persists anywhere` (byte probe, 1 failed/5) | GREEN 6/6 |
+| M11 | 2026-08-06 @e0d6364 | host list rendered pre-normalization (raw declared) → `× AC7 — a unicode declared host renders as its punycoded xn-- form` (+light-path; 2 failed/12) | GREEN 14/14 |
+| M12 | 2026-08-06 @e0d6364 | malformed claimed directive returned as directive → `× a MALFORMED directive … is reported malformed` + unknown-kind (2 failed/9) | GREEN 11/11 |
+| M13 | 2026-08-06 @e0d6364 | requireApprovedSpecScope dropped from startOAuthFlow + saveWizardClientCreds → `× wizard.mint-unreachable-while-unapproved` + `× generateAuthUrl is unreachable pre-approval` (2 failed/16) | GREEN 18/18 |
+| M15 | 2026-08-06 @e0d6364 | directive hints kept on registry hit → `× wizard.directive-registry-claim-discarded` (1 failed/13) | GREEN 14/14 |
+| M16 | 2026-08-06 @e0d6364 | provenance = directive claim → `× wizard.provenance-host-computed` (1 failed/13) | GREEN 14/14 |
+| M17 | 2026-08-06 @f5c7b1a | approval persists session evidence into a chat row → `× docs canary … NEITHER persists anywhere` (byte probe, 1 failed/5) | GREEN 6/6 |
+| M18 | 2026-08-06 @e0d6364 | onLlmEvent identifier planted in inferrerAdapter.ts → `× canary.docs-never-in-llm-inspector` + adapter source lint (2 failed/11) | GREEN 13/13 |
+| M19 | 2026-08-06 @e0d6364 | tripwire early-return removed → `× a pasted credential shape warns and blocks…` (1 failed/13) | GREEN 14/14 |
+| M20 | 2026-08-06 @e0d6364 | NEW/removed flags dropped (list kept) → `× wizard.reapproval-diff-flags-new-hosts` (1 failed/13). First attempt broke the JSX transform (invalid RED) — redone as a surgical flag removal | GREEN 14/14 |
+| M23 | 2026-08-06 @e0d6364 | listener nulled after start (component-lifetime shape) → `× navigate-away-mid-flow…` (1 failed/13) | GREEN 14/14 |
+| M24 | 2026-08-06 @e0d6364 | light path renders without the host list → `× wizard.light-path-hosts-displayed` (2 failed/12) | GREEN 14/14 |
+| M25 | 2026-08-06 @e0d6364 | NET_HOST_BLOCKED/NET_SSRF_BLOCKED → connect CTA → `× NET_HOST_BLOCKED / NET_SSRF_BLOCKED / NET_CONFIRM_DENIED NEVER open the wizard` (1 failed/13) | GREEN 14/14 |
+| M26 | 2026-08-06 @e0d6364 | mapping keyed on message substrings → `× ALL NET_AUTH_FAILED … map to the connect CTA — code alone` + open test (2 failed/12) | GREEN 14/14 |
+| M27c (smuggled host un-highlighted) | 2026-08-06 @e0d6364 | spec_confirm loses the host display → `× a smuggled host is DISPLAYED in the reviewable list` (2 failed/12) | GREEN 14/14 |
+| M28 | 2026-08-06 @e0d6364 | second open silently replaces → `× a second openWizard while one is parked is REFUSED…` + directive variant (2 failed/12) | GREEN 14/14 |
+| M30 | 2026-08-06 @e0d6364 | buildAppTurnContext appends meta to history content → `× canary.meta-never-in-turn-context` (1 failed/5) | GREEN 6/6 |
+
+All 30 planned rows executed (M1–M30, incl. the M27 quintet split a/b/c/d/e across its five defenses). One test repaired mid-ladder: the first M9 attempt probed `innerHTML` (React sets the value PROPERTY, not the attribute) and could not go red — the load-back probe via `.value` on a pre-seeded store is the red-capable form that stands.
+
 ## Open questions for the plan reviewer
 
 1. ~~D3(d): two-tier confidence UX vs forced spec_confirm~~ **CLOSED by review (M3): forced `spec_confirm` for ALL inference/user_docs provenance; registry (host-computed) keeps the light path.**
