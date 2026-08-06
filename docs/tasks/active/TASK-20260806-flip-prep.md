@@ -66,7 +66,7 @@ Labels ensured via `gh label create --force`: `good first issue` (7057ff), `bug`
 Swept `docs/tasks/**` (active + done, 30 files) for `/Users/…`, `/home/…`, `/tmp/…`, `C:\`, key-location breadcrumbs, personal emails, family identifiers. Scrubbed:
 1. `active/TASK-20260805-alpha-umbrella.md` Phase-0 preflight — absolute repo-root path removed (machine path).
 2. `active/TASK-20260805-alpha-umbrella.md` Phase-0 decision 4 — "leaving an Anthropic or OpenAI key in `internal/.env.local`" → live key supplied locally, location unstated (key-location breadcrumb).
-3. `done/TASK-20260804-hub-polish.md` D3 note — `/tmp/snug-hubdb-backup-20260804` → "a local backup outside the repo" (machine path to a user-data backup).
+3. `done/TASK-20260804-hub-polish.md` D3 note — a dated `/tmp/…` backup path → "a local backup outside the repo" (machine path to a user-data backup; the literal path is deliberately not repeated here).
 
 Kept deliberately: source-system codenames (approved indirection, stay per instructions) · `internal/.env.local` as the *codename/branch* indirection pointer (named in the root AI files themselves — consistent posture until the runbook's stage-1 public rewrite) · `apps/server/.env.local` env-var documentation (app config, not personal) · public handles/byline (`jeetumaker`, Jeetu Maker) · `scratchpad` as a word (no path). Sweep added as runbook stage 1 step 6 (permanent).
 
