@@ -115,9 +115,15 @@ Inferrer/wizard/render directive (AL-04) · KB teaching (AL-05) · desktop nativ
 - **Named AC met — audit bug 3 dead by construction:** no strictness flag/parameter/env read exists in the connected-fetch seat; `browser-safe.test.ts` walks `connected-fetch.ts`/`net-guards.ts`/`scrub.ts`/`session-confirm.ts` for the exact source-system anti-pattern (`STRICT_AUTH_HOST_INJECTION`, `off-list-injection`, injection-mode conditionals, `process.env`) and the factory arity (1 dep object; export surface `['execute']`). Mutation M-knob (plant `skipValidation`) covered by the AL-02 lint shape reused here.
 - Every binding amendment landed with its test: B1 (own size class + boundary cap−1/cap/cap+1 at protocol AND runner) · B2 (`postForm redirect:'manual'` + regression, 3 sites pass `redirect_blocked` through untranslated) · B3 (punycode both sides + stored-unicode + IDN xn-- round-trip) · R1 (scrub whitelisted headers) · R2 (GET/HEAD body reject) · R3 (session-remember keyed (app,host,method) + re-approval invalidation) · R4 (runner value-blind executable lint) · R5 (no appId in schema; host-assigned binding) · A1 (https-only, http-localhost dead; self-signed https e2e stub) · A2 (set-cookie response-drop) · A3 (base64 scrubber boundary named for AL-11).
 - **AC→test mapping:** protocol `net-frames.test.ts` (19) + `punycode-hosts.test.ts` (10); auth `connected-fetch.test.ts` (33, one per D3 gate) + `scrub` (8) + `net-guards` (5) + `session-confirm` (5) + `postform-redirect` (4) + `ceiling-punycode` (4) + `browser-safe` extension (AL-03 named AC ×2); runner `host-net.test.ts` (12) + `net-value-blind.test.ts` (5); sdk contract suite ×2 forms (useConnectedFetch ×3 each) + KB≡SDK byte-compare; playground `netState` (4) + `connectionsPanel` (5) + `confirmDialog` (5) + `e2e/net.spec.ts` (8 on production bytes, self-signed https stub).
-- **25 guard mutations checked RED→restored** (table below).
+- **29 guard mutations checked RED→restored** (table below; M26–M29 added at merge-review for the hand-written shape validator).
 - **Surprise (process):** `git checkout` during mutation-checking wiped uncommitted host.ts and the sdk net files TWICE (the M17 trap from AL-02). Re-applied from context both times; re-ran every affected mutation against COMMITTED code. Committing each package BEFORE mutating is now non-negotiable for me.
 - **High-tier self-sign-off (PROCESS):** C1 — no strictness knob in `packages/auth` (AC5 lint + AL-03 named-AC lint); the runner is value-blind (R4 executable lint, mutation-checked); credentials never enter the iframe (C1 e2e: forged Authorization rejected at the bridge; injected key present at the stub yet scrubbed from what the app renders). C2 — the iframe stays `allow-scripts` + `connect-src 'none'`; the ONLY fetch caller is the host-side executor. C3 — protocol changed → spec-changelog INTERNAL-DRAFT entry (net frames out of SOURCES). C5 — no secrets in code/config; no env reads in packages. NO push, NO PR per the run's rules — stopped after the final commit.
+
+### 2026-08-06 — Claude (Fable 5, implementer) — adversarial merge review: BLOCK MERGE → fixed
+- **Verdict: BLOCK MERGE, one blocker, fully diagnosed by the reviewer on a CLEAN checkout.** `connected-fetch.ts` imported `zod`, which `packages/auth` never declares (deps are only `@snugprotocol/{db,protocol}`, and the AC5 lint PINS that exact set). The import type-checked (workspace type-flattening) and every batch `pnpm test` I ran was green — but ONLY because a sibling suite importing protocol (which does declare zod) warmed Vite's resolver first. **In clean isolation the executor was UNLOADABLE:** `connected-fetch.test.ts` → "no tests", `browser-safe.test.ts` dynamic-import ACs fail, the three playground net suites fail to load. My runs lied; a scrolling batch log makes "no tests" read like a pass.
+- **Why the obvious fix is wrong:** adding `zod` to auth's deps would VIOLATE the AC5 dep-set lint (`browser-safe.test.ts` pins `['@snugprotocol/db','@snugprotocol/protocol']`). Correct fix (reviewer's + mine): REMOVE the zod import and hand-write the shape/GET-HEAD-body/byte-cap checks — pure defense-in-depth, since the strict `netRequestSchema` at the protocol bridge already parsed and rejected malformed frames BEFORE the runner routes to the executor. Fix commit `e207744`.
+- **Re-verified in clean isolation (cold `.vite` cache, single `--filter`, not batch):** auth 152/152 incl. `connected-fetch.test.ts` 33 + `browser-safe.test.ts` 7 (loads standalone, `test count > 0`); the 3 playground net suites 14/14 standalone. Mutation table re-established: M7–M14 + M23–M25 re-run RED in isolation; M26–M29 added for the new hand-written validator (GET/HEAD-body, unknown-field, byte-cap, method-set) — all RED alone.
+- Lesson recorded (batch-run resolver warming masks a suite that cannot load; every runtime import needs a declared dep). NO push, NO PR.
 
 ### Mutation-check evidence (every guard: mutate → RED → restore → green)
 
@@ -148,3 +154,15 @@ Inferrer/wizard/render directive (AL-04) · KB teaching (AL-05) · desktop nativ
 | M23 | approve without invalidateNetGrants | playground connectionsPanel R3 ×3 |
 | M24 | confirm dialog ignores remember checkbox | playground confirmDialog remember |
 | M25 | net state maps NetSpecRow with a fixed status | playground netState imported-barred |
+| M26 | shape validator skips GET/HEAD body reject (R2) | auth connected-fetch R2 |
+| M27 | shape validator accepts unknown fields (R5 belt) | auth connected-fetch R5 extra-field |
+| M28 | request-body byte cap disabled | auth connected-fetch byte-cap |
+| M29 | method-set check removed | auth connected-fetch unknown-method |
+
+**Re-established after the merge-review BLOCKER fix (2026-08-06):** M7–M14 (all in
+`connected-fetch.test.ts`) and M23–M25 (the three playground net suites) were RE-RUN in
+CLEAN ISOLATION with a cold `.vite` cache — the suites now genuinely LOAD (33 tests +
+14 tests, `test count > 0` confirmed, not "no tests"), and each mutation went RED alone.
+M26–M29 are NEW guards on the hand-written shape validator that replaced the phantom-zod
+`inputSchema`. The original batch-run claims for these were unverifiable (the suites
+could not load standalone); they are now established, not asserted.
