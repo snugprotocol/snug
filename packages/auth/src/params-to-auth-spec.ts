@@ -68,13 +68,23 @@ export function paramsToAuthSpec(input: ParamsToAuthSpecInput): ParamsToAuthSpec
   };
 
   const hasInstructions = input.registrationInstructions !== undefined && input.registrationInstructions.length > 0;
+  // Registration copy: explicit user entry wins; else the registry walkthrough is
+  // copied through (AL-04 D5). These are the ONLY two sources — LLM proposals cannot
+  // carry registration fields at all (llmProposalSchema omits them, M5).
   const registration =
     input.registrationConsoleUrl !== undefined || hasInstructions
       ? {
           ...(input.registrationConsoleUrl !== undefined ? { consoleUrl: input.registrationConsoleUrl } : {}),
           ...(hasInstructions ? { instructions: input.registrationInstructions } : {}),
         }
-      : undefined;
+      : wellKnown?.registration !== undefined
+        ? {
+            ...(wellKnown.registration.consoleUrl !== undefined ? { consoleUrl: wellKnown.registration.consoleUrl } : {}),
+            ...(wellKnown.registration.instructions !== undefined && wellKnown.registration.instructions.length > 0
+              ? { instructions: wellKnown.registration.instructions }
+              : {}),
+          }
+        : undefined;
 
   const request =
     input.headerTemplate !== undefined && Object.keys(input.headerTemplate).length > 0

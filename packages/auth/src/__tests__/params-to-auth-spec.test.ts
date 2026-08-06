@@ -190,3 +190,29 @@ describe('output contract', () => {
     expect(paramsToAuthSpec({ kindHint: 'api_key', providerName: '  ' }).spec).toBeNull();
   });
 });
+
+describe('AL-04 D5 — the transformer copies registry registration through (registry/user-entry only, M5)', () => {
+  it('a registry provider with no explicit registration input gets the registry walkthrough', () => {
+    const { spec } = paramsToAuthSpec({ kindHint: 'oauth2_auth_code', providerName: 'Spotify' });
+    expect(spec?.registration?.consoleUrl).toBe('https://developer.spotify.com/dashboard');
+    expect(spec?.registration?.instructions?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('explicit user-entered registration input wins over the registry copy', () => {
+    const { spec } = paramsToAuthSpec({
+      kindHint: 'oauth2_auth_code',
+      providerName: 'Spotify',
+      registrationConsoleUrl: 'https://developer.spotify.com/my-team-dashboard',
+    });
+    expect(spec?.registration?.consoleUrl).toBe('https://developer.spotify.com/my-team-dashboard');
+  });
+
+  it('an unknown provider without registration input builds a spec with no registration block', () => {
+    const { spec } = paramsToAuthSpec({
+      kindHint: 'api_key',
+      providerName: 'Acme Weather',
+      declaredApiHosts: ['api.acme-weather.example'],
+    });
+    expect(spec?.registration).toBeUndefined();
+  });
+});

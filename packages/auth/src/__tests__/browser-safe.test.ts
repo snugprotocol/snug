@@ -3,6 +3,11 @@
 //   - no node: imports, no Buffer, no process.env anywhere in src/
 //   - no strictness/skip-validation/bypass parameter in any exported API
 // This is the lint the plan calls the "browser-safety lint test" + "signature walk".
+// AL-04 (M7) extends it with an import-SPECIFIER lint and a clean-isolation load
+// gate: the AL-03 merge blocker was a phantom third dependency — an undeclared
+// source import masked by batch-resolver warming — and package.json checking alone
+// never catches that shape.
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -43,6 +48,60 @@ describe('AC5 — browser safety (async-first WebCrypto, plan D6)', () => {
       dependencies?: Record<string, string>;
     };
     expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual(['@snugprotocol/db', '@snugprotocol/protocol']);
+  });
+});
+
+describe('AL-04 M7 — import-specifier lint + clean-isolation load gate (mutation M22)', () => {
+  // package.json pinning is necessary but NOT sufficient: an undeclared bare import
+  // in src/ can still resolve when a batch run has warmed the resolver (the AL-03
+  // phantom-dep merge blocker). So every import/export specifier in src/ must be a
+  // relative path or one of the two pinned workspace packages — nothing else. The
+  // inferrer is exactly the module tempted to import `zod`; it must reuse protocol
+  // exports (parseAgentReply, inferrerProposalSchema, authSpecSchema) instead.
+  const ALLOWED_BARE = new Set(['@snugprotocol/db', '@snugprotocol/protocol']);
+  const SPECIFIER = /(?:^|\n)\s*(?:import|export)[^;'"]*from\s*['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+  it('every import specifier in src/ is relative or a pinned workspace package', () => {
+    const offenders: string[] = [];
+    for (const { name, text } of walkSources()) {
+      for (const match of text.matchAll(SPECIFIER)) {
+        const specifier = match[1] ?? match[2];
+        if (specifier === undefined) continue;
+        if (specifier.startsWith('./') || specifier.startsWith('../')) continue;
+        if (ALLOWED_BARE.has(specifier)) continue;
+        offenders.push(`${name}: ${specifier}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('auth-spec-inferrer.test.ts loads and passes standalone — not only in a warmed batch run', () => {
+    // A child vitest run of ONLY the inferrer suite: an import that resolves solely
+    // because a sibling suite warmed the resolver fails here, where it belongs.
+    const packageRoot = join(srcDir, '..');
+    execFileSync('pnpm', ['exec', 'vitest', 'run', 'src/__tests__/auth-spec-inferrer.test.ts'], {
+      cwd: packageRoot,
+      stdio: 'pipe',
+      timeout: 120_000,
+    });
+  }, 150_000);
+});
+
+describe('AL-04 — inferrer + spec-scope walk (D2: no knobs, pinned arity)', () => {
+  it('createAuthSpecInferrer takes exactly the deps object; requireApprovedSpecScope exactly (reader, appId)', async () => {
+    const { createAuthSpecInferrer } = await import('../auth-spec-inferrer.js');
+    const { requireApprovedSpecScope } = await import('../spec-scope.js');
+    expect(createAuthSpecInferrer.length).toBe(1);
+    expect(requireApprovedSpecScope.length).toBe(2);
+  });
+
+  it('the inferrer exposes no strictness knob and reads no environment', () => {
+    const files = walkSources().filter(({ name }) => ['auth-spec-inferrer.ts', 'spec-scope.ts'].includes(name));
+    expect(files.map(({ name }) => name).sort()).toEqual(['auth-spec-inferrer.ts', 'spec-scope.ts']);
+    for (const { name, text } of files) {
+      expect(/\bprocess\.env\b|\bimport\.meta\.env\b/.test(text), `${name} reads environment`).toBe(false);
+      expect(/skipValidation|allowInsecure|bypass|insecureMode/i.test(text), `${name} carries a knob`).toBe(false);
+    }
   });
 });
 

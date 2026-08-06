@@ -35,6 +35,16 @@ export interface WellKnownOauthProvider {
   apiHosts: string[];
   /** Extra authorize-URL query params this provider needs (e.g. Google offline access). */
   authorizeParams?: Record<string, string>;
+  /**
+   * "Get your key / register your app" walkthrough copy the wizard surfaces verbatim
+   * (AL-04 D5). Registry and explicit user entry are the ONLY sources for this block
+   * (M5): LLM-authored proposals structurally cannot carry registration fields, so a
+   * phishing consoleUrl can never render with wizard-grade legitimacy.
+   */
+  registration?: {
+    consoleUrl?: string;
+    instructions?: string[];
+  };
 }
 
 const GOOGLE_ENDPOINTS = {
@@ -55,6 +65,16 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     },
     pkce: true,
     apiHosts: ['api.spotify.com'],
+    // Stub-grade walkthrough (AL-04 plan D5) — AL-09 polishes the wording HERE, in
+    // the registry, never in wizard component copy.
+    registration: {
+      consoleUrl: 'https://developer.spotify.com/dashboard',
+      instructions: [
+        'Open the Spotify developer dashboard and create an app.',
+        'Add this hub\'s OAuth callback URL as a Redirect URI in the app settings.',
+        'Copy the Client ID (and Client Secret if shown) into the fields below.',
+      ],
+    },
   },
   google: {
     displayName: 'Google',
