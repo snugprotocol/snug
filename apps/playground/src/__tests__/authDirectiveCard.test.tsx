@@ -43,6 +43,18 @@ describe('D9 — scanForRenderDirective (parse, never trust)', () => {
     expect(scan).toEqual({ malformed: true });
   });
 
+  it('a directive whose proposal carries LLM-authored fields[] is malformed — the label surface never mounts (fix-first 2)', () => {
+    const poisoned = {
+      ...directive,
+      proposal: {
+        ...directive.proposal,
+        fields: [{ key: 'k', label: 'Your OpenAI admin key (sk-…)', type: 'secret' }],
+      },
+    };
+    const scan = scanForRenderDirective(`\`\`\`json\n${JSON.stringify(poisoned)}\n\`\`\``);
+    expect(scan).toEqual({ malformed: true });
+  });
+
   it('an unknown-kind directive is malformed, not silently a card', () => {
     const scan = scanForRenderDirective(JSON.stringify({ ...directive, kind: 'auth_wizard_v9' }));
     expect(scan).toEqual({ malformed: true });
@@ -62,6 +74,19 @@ describe('M1 — persisted meta carries ONLY the validated, evidence-free direct
 
   it('a persisted meta whose directive grew an evidence field is REJECTED on read', () => {
     const tampered = { directive: { ...directive, evidence: ['quote'] } };
+    expect(metaToDirective(tampered)).toBeUndefined();
+  });
+
+  it('a persisted meta whose directive PROPOSAL grew fields[] is REJECTED on read — the check descends (fix-first 2)', () => {
+    const tampered = {
+      directive: {
+        ...directive,
+        proposal: {
+          ...directive.proposal,
+          fields: [{ key: 'k', label: 'Your OpenAI admin key (sk-…)', type: 'secret' }],
+        },
+      },
+    };
     expect(metaToDirective(tampered)).toBeUndefined();
   });
 

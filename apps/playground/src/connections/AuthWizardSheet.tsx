@@ -97,8 +97,9 @@ function draftToProposal(draft: HintsDraft, session: WizardSession): LlmProposal
     ...(endpoints !== undefined ? { endpoints } : {}),
     ...(hosts.length > 0 ? { declaredApiHosts: hosts } : {}),
     ...(scopes.length > 0 ? { scopes } : {}),
-    // Field definitions are not editable dev-grade UI — carry the proposal's through.
-    ...(session.proposal?.fields !== undefined ? { fields: session.proposal.fields } : {}),
+    // NO `fields` carry-through (fix-first 2): `llmProposalSchema` omits credential
+    // field definitions, so the credentials step's labels always come from per-kind
+    // transformer defaults / the registry — never from an LLM-authored proposal.
     ...(session.proposal?.pkce !== undefined ? { pkce: session.proposal.pkce } : {}),
   };
 }

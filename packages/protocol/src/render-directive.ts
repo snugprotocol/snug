@@ -17,8 +17,12 @@
  * PROPOSAL LINE (M5): every LLM-authored shape uses `llmProposalSchema` =
  * hints MINUS registration copy (`registrationConsoleUrl`/`registrationInstructions`
  * — surfaced verbatim by the wizard, so phishing copy would render with wizard-grade
- * legitimacy) MINUS `headerTemplate` (controls where the secret is injected).
- * Registration + header placement come from the registry or explicit user entry ONLY.
+ * legitimacy) MINUS `headerTemplate` (controls where the secret is injected) MINUS
+ * `fields`/`userLayerFields` (the credentials step renders field labels verbatim, so
+ * an LLM-authored label could dictate WHICH secret the user pastes — credential
+ * misdirection with wizard-grade legitimacy; fix-first 2 of the AL-04 review).
+ * Registration, header placement, and credential field definitions come from the
+ * registry, per-kind transformer defaults, or explicit user entry ONLY.
  *
  * PUBLICATION LINE: out of `json-schemas.ts` SOURCES (same precedent as AL-02/AL-03);
  * shape locked by in-package snapshot tests; prose staged by AL-12.
@@ -50,14 +54,18 @@ export const AUTH_EVIDENCE_MAX_CHARS = 300;
 
 /**
  * The ONLY shape an LLM-authored proposal may take (M5): transformer hints minus
- * registration copy + headerTemplate. Strictness is preserved through `.omit` —
- * a reply/directive carrying an excluded key is a strict-schema rejection
- * (`inferrer.poison-registration`, mutation M21).
+ * registration copy + headerTemplate + credential field definitions (`fields`/
+ * `userLayerFields` — the label surface the credentials step renders verbatim).
+ * Strictness is preserved through `.omit` — a reply/directive carrying an excluded
+ * key is a strict-schema rejection (`inferrer.poison-registration` /
+ * `inferrer.poison-fields`, mutation M21).
  */
 export const llmProposalSchema = authSpecHintsSchema.omit({
   registrationConsoleUrl: true,
   registrationInstructions: true,
   headerTemplate: true,
+  fields: true,
+  userLayerFields: true,
 });
 export type LlmProposal = z.infer<typeof llmProposalSchema>;
 

@@ -10,8 +10,10 @@ Render-directive contract + AUTH_REQUIRED payload, INTERNAL protocol surface out
 AL-12): `authSpecHintsSchema` (packages/protocol/src/auth-schema.ts — the single source of
 truth for transformer-input hints; `packages/auth` re-derives `ParamsToAuthSpecInput` via
 the inferred type, type-only) · `packages/protocol/src/render-directive.ts` —
-`llmProposalSchema` (hints MINUS registration copy + headerTemplate: LLM-authored shapes
-structurally cannot carry phishing registration copy or control secret placement),
+`llmProposalSchema` (hints MINUS registration copy + headerTemplate + credential field
+definitions `fields`/`userLayerFields` [fix-first 2, 2026-08-06]: LLM-authored shapes
+structurally cannot carry phishing registration copy, control secret placement, or author
+the credential-step labels that dictate WHICH secret the user pastes),
 `inferrerProposalSchema` (required confidence in [0,1], strict-rejected when malformed —
 never "reads as 0"; bounded wizard-ephemeral `evidence[]`), `authWizardDirectiveSchema`
 (versioned `v`, strict, the ONLY and the PERSISTED directive shape — no `evidence[]`, no

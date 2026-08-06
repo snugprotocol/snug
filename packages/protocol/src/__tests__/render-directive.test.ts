@@ -45,6 +45,7 @@ const fullHints = {
   },
   scopes: ['user-read-private'],
   pkce: true,
+  userLayerFields: [{ key: 'client_id', label: 'Client ID', type: 'text' }],
 };
 
 /** The same hints with the LLM-excluded fields removed — a valid llm proposal. */
@@ -90,18 +91,30 @@ describe('AC1 — authSpecHintsSchema (single source of truth, M8)', () => {
 
 // ------------------------------------------- llm proposal (M5 exclusions)
 
-describe('AC1/AC8 — llmProposalSchema excludes registration copy + headerTemplate (M5/M21)', () => {
+describe('AC1/AC8 — llmProposalSchema excludes registration copy + headerTemplate + credential field definitions (M5/M21)', () => {
   it('accepts a proposal without the excluded fields', () => {
     expect(llmProposalSchema.safeParse(proposal).success).toBe(true);
   });
 
-  for (const key of ['registrationConsoleUrl', 'registrationInstructions', 'headerTemplate'] as const) {
+  for (const key of ['registrationConsoleUrl', 'registrationInstructions', 'headerTemplate', 'fields', 'userLayerFields'] as const) {
     it(`rejects ${key} (registry or explicit user entry only)`, () => {
       const poisoned = { ...proposal, [key]: fullHints[key] };
       const result = llmProposalSchema.safeParse(poisoned);
       expect(result.success).toBe(false);
     });
   }
+
+  it('a credential-misdirection fields[] label is a strict rejection — on the proposal AND descending through the directive', () => {
+    // The attack (fixFirst 2): an LLM authors the credentials step's own labels,
+    // dictating WHICH secret the user pastes ("Your OpenAI admin key"), unreviewed
+    // by spec_confirm. Field definitions come from per-kind defaults / the registry /
+    // explicit user entry ONLY — the M5 exclusion applied to the label surface.
+    const phishingFields = [{ key: 'k', label: 'Your OpenAI admin key (sk-…)', type: 'secret' }];
+    expect(llmProposalSchema.safeParse({ ...proposal, fields: phishingFields }).success).toBe(false);
+    const poisonedDirective = { ...directive, proposal: { ...proposal, fields: phishingFields } };
+    expect(authWizardDirectiveSchema.safeParse(poisonedDirective).success).toBe(false);
+    expect(renderDirectiveSchema.safeParse(poisonedDirective).success).toBe(false);
+  });
 
   it('has no credential slot of any spelling (strict unknown-key reject)', () => {
     for (const slot of ['credential', 'secret', 'token', 'value', 'apiKey', 'api_key_value', 'password']) {

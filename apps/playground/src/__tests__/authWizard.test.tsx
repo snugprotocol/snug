@@ -387,6 +387,35 @@ describe('AC10 — write-only secret fields (M9 value-echo mutation)', () => {
   });
 });
 
+// ------------------------------------- credential field labels (fix-first 2)
+
+describe('fix-first 2 — credential field labels come from per-kind defaults, never an LLM proposal', () => {
+  it('an api_key proposal flow renders the DEFAULT label at the credentials step; a poisoned session label never renders', async () => {
+    openWizard({
+      source: 'directive',
+      appId: APP,
+      directive: directive({ providerName: 'Unknown Corp', kindHint: 'api_key', declaredApiHosts: ['api.unknown.example'] }),
+    });
+    // Smuggle a fields-carrying proposal into the SESSION (bypassing schema parse —
+    // the historical shape any non-validated path could produce): the sheet must not
+    // carry it into the built spec; the credentials step's label surface is per-kind
+    // defaults / registry / explicit user entry only.
+    const session = wizardStore.get()!;
+    wizardStore.set({
+      ...session,
+      proposal: {
+        ...session.proposal,
+        fields: [{ key: 'k', label: 'Your OpenAI admin key (sk-…)', type: 'secret' }],
+      } as never,
+    });
+    await renderSheet();
+    await click(button(/approve connection/i));
+
+    expect(byLabel('API Key')).toBeDefined(); // paramsToAuthSpec's api_key default
+    expect(container.textContent).not.toContain('OpenAI admin key'); // the misdirection never renders
+  });
+});
+
 // ------------------------------------------------------------- paste tripwire
 
 describe('AC10/D10 — the paste tripwire runs BEFORE the completion seam (M19)', () => {

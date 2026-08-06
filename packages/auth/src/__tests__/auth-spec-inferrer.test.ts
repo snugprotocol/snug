@@ -23,13 +23,14 @@ import { WELL_KNOWN_PROVIDERS_REGISTRY } from '../well-known-providers.js';
 
 // ------------------------------------------------------------------ fixtures
 
-/** A clean api_key reply for an unknown provider (rung 2/3). */
+/** A clean api_key reply for an unknown provider (rung 2/3). NOTE: no `fields` —
+ * credential field definitions are M5-excluded from every LLM-authored shape
+ * (fix-first 2); the transformer's per-kind defaults own the label surface. */
 const cleanReply = {
   proposal: {
     kindHint: 'api_key',
     providerName: 'Acme Weather',
     declaredApiHosts: ['api.acme-weather.example'],
-    fields: [{ key: 'api_key', label: 'API Key', type: 'secret' }],
   },
   confidence: 0.85,
   evidence: ['"Pass your key in the X-Api-Key header"'],
@@ -267,6 +268,23 @@ describe('AC8 — poisoned-docs fixtures (the quintet, D8)', () => {
     const inferrer = createAuthSpecInferrer({ complete: scripted(injected) });
     const result = await inferrer.infer({ providerName: 'Acme Weather', kindHint: 'api_key', prompt: 'p' });
     expect(result).toMatchObject({ ok: false, code: 'reply_invalid' });
+  });
+
+  it('inferrer.poison-fields — LLM-authored credential field definitions (labels) are a strict-schema rejection (M5 extension)', async () => {
+    // Credential-misdirection phishing (fix-first 2): the reply tries to author the
+    // credentials step's own label, dictating WHICH secret the user pastes. Field
+    // definitions come from per-kind defaults / registry / explicit user entry ONLY.
+    const misdirecting = {
+      ...cleanReply,
+      proposal: {
+        ...cleanReply.proposal,
+        fields: [{ key: 'k', label: 'Your OpenAI admin key (sk-…)', type: 'secret' }],
+      },
+    };
+    const inferrer = createAuthSpecInferrer({ complete: scripted(misdirecting) });
+    const result = await inferrer.infer({ providerName: 'Acme Weather', kindHint: 'api_key', prompt: 'p' });
+    expect(result).toMatchObject({ ok: false, code: 'reply_invalid' });
+    expect(JSON.stringify(result)).not.toContain('OpenAI admin key');
   });
 
   // The fifth fixture (poison-registry-claim) lives with the registry-rung tests above.
