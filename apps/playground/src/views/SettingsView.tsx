@@ -219,7 +219,8 @@ function WebllmExperimentCard(): ReactElement | null {
           {brain.kind === 'webllm'
             ? `the ?webllm=1 flag is on: builds and app turns run through ${brain.model} on WebGPU, inside this tab, ` +
               'overriding the choice above. the model downloads on first use (GBs, cached by the browser). ' +
-              'remove the flag from the URL to leave the experiment.'
+              'the experiment stays on for this session even as you navigate — to leave it, reload the page ' +
+              'without ?webllm=1 in the address bar.'
             : brain.kind === 'demo' && brain.reason === 'no-webgpu'
               ? `the ?webllm=1 flag is on, but ${WEBLLM_FALLBACK_BANNER}.`
               : 'the ?webllm=1 flag is on — checking whether this browser can run WebGPU…'}

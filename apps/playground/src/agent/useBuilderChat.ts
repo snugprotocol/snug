@@ -18,7 +18,7 @@ import type { AgentTurnEvent } from '@snugprotocol/adapters';
 
 import { createServerArtifactFetch } from '../state/library.js';
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
-import { useBrain } from '../state/webllm.js';
+import { resolveTurnMode, useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { buildAppTurnContext } from './appContext.js';
 import { createAppTargetSink } from './artifactSink.js';
@@ -206,7 +206,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   // disagree, and branching on the configured mode routed a demo-fallback artifact
   // through the hub fetch (found by webllmBuilderChat.test.tsx; the exact defect
   // class of lessons 2026-08-05 — switch on the call, not the stale discriminator).
-  const serverTurn = brain.kind === 'settings' && mode === 'subscription';
+  const serverTurn = resolveTurnMode(brain, mode) === 'subscription';
 
   const agent: BuilderAgent = useMemo(() => {
     if (brain.kind === 'webllm') return createDirectBuilder({ mode: 'webllm', provider, sink, localUrl });

@@ -19,6 +19,7 @@ import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
+import { useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
@@ -122,6 +123,9 @@ export default function RunView(): ReactElement {
   const navigate = useNavigate();
   const mode = useMode();
   const provider = useProvider();
+  // The run-rail panels' copy depends on where turns EXECUTE — the effective turn
+  // mode with the webllm brain override applied, never the raw mode (review F3).
+  const turnMode = useTurnMode();
   const theme = useTheme();
   useAppMetaMap(); // re-render tiles/header when meta lands
 
@@ -392,9 +396,9 @@ export default function RunView(): ReactElement {
         ) : null}
       </div>
       {railTab === 'inspector' ? (
-        <ThinkPanel llm={llmInspector} frames={inspector.entries} mode={mode} />
+        <ThinkPanel llm={llmInspector} frames={inspector.entries} mode={turnMode} />
       ) : railTab === 'docs' ? (
-        <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} mode={mode} />
+        <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} mode={turnMode} />
       ) : railTab === 'versions' ? (
         <VersionsPanel
           appId={id}

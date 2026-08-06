@@ -98,14 +98,39 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
 }
 
 /**
- * The active transport for the current settings (stores read at creation time).
+ * The active transport for the current settings.
  *
  * `onLlmEvent` is threaded through so the Run view's LLM surface sees the turns an
  * APP makes, not just the ones the builder chat makes — the owner-reported gap where
  * a Chess move populated the frame inspector and nothing else. Subscription mode
  * ignores it: those round trips never leave the hub.
+ *
+ * The brain and settings stores are read PER SEND, not at creation (adversarial
+ * review 2026-08-06, finding 1): RunView memoizes this transport on [mode, provider],
+ * and on a hard load of /run/:id?webllm=1 it is constructed BEFORE the async
+ * `initWebllm()` probe lands — a creation-time `currentBrain()` froze the brain at
+ * 'settings' for the lifetime of the view, so every app turn routed on the configured
+ * mode while the banner claimed in-tab thinking. Same defect class as the
+ * useBuilderChat stale-discriminator bug this task already fixed once: when a
+ * behavior is conditional, evaluate the condition where the CALL happens.
  */
 export function createAppTransport(
+  mode: PlaygroundMode,
+  provider: ByokProvider,
+  onLlmEvent?: (event: AgentTurnEvent) => void,
+): AgentTransport {
+  return {
+    send(wire, options) {
+      return resolveAppTransport(mode, provider, onLlmEvent).send(wire, options);
+    },
+  };
+}
+
+/**
+ * The brain/settings decision, evaluated per send (see createAppTransport).
+ * Exported for the consumer-altitude tests only.
+ */
+export function resolveAppTransport(
   mode: PlaygroundMode,
   provider: ByokProvider,
   onLlmEvent?: (event: AgentTurnEvent) => void,

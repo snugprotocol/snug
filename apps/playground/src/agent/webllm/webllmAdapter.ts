@@ -76,6 +76,11 @@ export function webllmAdapter(options: WebllmAdapterOptions = {}): AgentAdapter 
           retryable: true,
         };
       }
+      // Loading can take MINUTES on first use, and the abort listener is only
+      // registered below — a signal aborted mid-load would otherwise slip through and
+      // start GPU generation with interruptGenerate never firing on that path
+      // (review 2026-08-06, finding 4). Re-check before touching the engine.
+      if (isAborted()) return cancelled('');
 
       // System prompt travels as the leading system message (webllm's OpenAI-shaped
       // API); after the tool refusal above only user/assistant entries remain.

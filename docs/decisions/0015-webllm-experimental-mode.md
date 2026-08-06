@@ -20,16 +20,16 @@ Constraints that shaped it: the adapter contract (`AgentAdapter` through the `ru
 
 ## Measurements (2026-08-06, M-series Mac, Chrome headless via CDP-free Playwright `channel: 'chrome'`, persistent profile)
 
-Method: the EXACT product turn shape — real `buildHostSystemPrompt({appBuilder: true, artifacts: false})` + the fenced-HTML suffix (990–993 prompt tokens on the wire), three app-build prompts (tip calculator / capitals quiz / pomodoro), judged by the real `extractAppHtml` plus a DOM parse of the extracted document. Engine-reported timings; full JSON in the task journal.
+Method: the EXACT product turn shape — real `buildHostSystemPrompt({appBuilder: true, artifacts: false})` + the fenced-HTML suffix (990–997 prompt tokens on the wire), three app-build prompts (tip calculator / capitals quiz / pomodoro), judged by the real `extractAppHtml` plus a DOM-parse gate (document parses AND contains a `<script>` element). Engine-reported timings; the full raw JSONL is preserved verbatim in the task file journal (TASK-20260806-webllm-spike, 2026-08-06 review-fix entry).
 
-| Model | Load | TTFT | Decode | Apps extracted | Notes |
+| Model | Load | TTFT | Decode | Apps passing the gate | Notes |
 |---|---|---|---|---|---|
-| Llama-3.2-1B-q4f16 | 74.7 s cold / **1.7 s warm** (browser cache) | 0.9–2.5 s | 55–65 tok/s | 3/3 but ALL THIN (373–672 B) | splits HTML/CSS/JS into separate fences — the extracted document loses the styles/logic; one run rambled 3 102 tokens |
+| Llama-3.2-1B-q4f16 | 74.7 s cold / **1.7 s warm** (browser cache) | 0.9–2.5 s | 55–65 tok/s | 3/3 extracted but ALL THIN (373–672 B) | splits HTML/CSS/JS into separate fences — the extracted document loses the styles/logic; one run rambled 3 102 tokens |
 | Qwen3-1.7B-q4f16, think OFF | 38.1 s cold | 1.3–2.6 s | 40–42 tok/s | **0/3** | answered every build with hallucinated `responseSchema` JSON — it latched onto the app-envelope layer of the system prompt; also leaked a literal empty `<think>` block into the reply text |
-| Qwen3-1.7B-q4f16, think ON (fairness check) | warm | 1.6 s | ~40 tok/s | 1/1 (thin, 982 B) | CAN build when allowed to think — but spent 1 448 tokens and 61.5 s on one small app; unaffordable in a 4 K context |
-| Llama-3.2-3B-q4f16 | 141 s cold (1.7 GB fetch) | 2.6–3.2 s | 23–26 tok/s | **3/3** (620–2 280 B, all DOM-parse clean) | complete single-fence documents, correct titles; ~30–56 s per build |
+| Qwen3-1.7B-q4f16, think ON (fairness check) | warm | 1.6 s | 24.5 tok/s | **0/1** — one document extracted (982 B) but it FAILS the parse gate (no `<script>` element) | spent 1 448 tokens and 61.5 s producing a script-less shell, with the full chain-of-thought streamed into the reply; broken either way for this surface |
+| Llama-3.2-3B-q4f16 | 141 s cold (1.7 GB fetch) | 2.6–3.2 s | 23–26 tok/s | **3/3** (620–2 280 B, all pass the gate) | complete single-fence documents, correct titles; ~30–56 s per build |
 
-The decisive result is qualitative, not the tok/s column: on the REAL layered system prompt, Qwen3-1.7B without thinking cannot tell an envelope-tagged app request from a human build request (and with thinking it pays for the distinction in tokens the context does not have), while 1B-class models fragment the file. Llama-3.2-3B is the smallest tested model that reliably followed the one-fence contract with substantial output. The warm-load number (1.7 s) is the cold-start story for 1.2: the pain is once per device, not per session.
+The decisive result is qualitative, not the tok/s column: on the REAL layered system prompt, Qwen3-1.7B without thinking cannot tell an envelope-tagged app request from a human build request — and with thinking, its one extracted document still fails the quality gate while eating the 4 K context — while 1B-class models fragment the file. Llama-3.2-3B is the smallest tested model that reliably followed the one-fence contract with substantial output. The warm-load number (1.7 s) is the cold-start story for 1.2: the pain is once per device, not per session.
 
 ## Alternatives considered
 

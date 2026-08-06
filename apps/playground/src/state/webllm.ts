@@ -16,6 +16,7 @@
 import { useMemo } from 'react';
 
 import { WEBLLM_DEFAULT_MODEL } from '../agent/webllm/model.js';
+import { useMode, type PlaygroundMode } from './mode.js';
 import { createStore, useStore, type Store } from './store.js';
 
 export const WEBLLM_FLAG_PARAM = 'webllm';
@@ -30,7 +31,17 @@ export const webgpuStore: Store<WebGpuStatus> = createStore<WebGpuStatus>('unkno
 /** Engine download/compile progress text while a model loads; undefined when idle. */
 export const webllmLoadStatusStore: Store<string | undefined> = createStore<string | undefined>(undefined);
 
-/** `?webllm=1` exactly — an experimental flag should not answer to creative spellings. */
+/**
+ * `?webllm=1` exactly — an experimental flag should not answer to creative spellings.
+ *
+ * STICKY-FOR-SESSION (review 2026-08-06, finding 2 — deliberate): the flag is parsed
+ * once at boot and ARMS the experiment for the whole SPA session. In-app navigation
+ * drops the query string (`/run/:id` after a webllm build carries no flag), so
+ * re-parsing on location change would silently kick a mid-flow user back to their
+ * configured mode the moment they click anywhere — building with webllm and then
+ * running the app on a different brain. Leaving the experiment is a hard reload
+ * without the flag; the settings card says exactly that.
+ */
 export function parseWebllmFlag(search: string): boolean {
   return new URLSearchParams(search).get(WEBLLM_FLAG_PARAM) === '1';
 }
@@ -82,6 +93,28 @@ export function useBrain(): Brain {
 
 export function useWebllmFlag(): boolean {
   return useStore(webllmFlagStore);
+}
+
+/**
+ * What kind of turn actually RUNS right now — the configured mode with the brain
+ * override applied. THE one derivation (review 2026-08-06, finding 3): every surface
+ * whose copy or behavior depends on "where do turns execute" (run-rail empty states,
+ * the builder's server-turn branches) must consume this, never the raw mode, because
+ * the brain makes the raw mode lie. The demo fallback runs the mock adapter through
+ * the byok path, so it reports as 'byok'.
+ */
+export type TurnMode = PlaygroundMode | 'webllm';
+
+export function resolveTurnMode(brain: Brain, mode: PlaygroundMode): TurnMode {
+  if (brain.kind === 'webllm') return 'webllm';
+  if (brain.kind === 'demo') return 'byok';
+  return mode;
+}
+
+export function useTurnMode(): TurnMode {
+  const brain = useBrain();
+  const mode = useMode();
+  return resolveTurnMode(brain, mode);
 }
 
 export interface InitWebllmOptions {

@@ -264,6 +264,29 @@ describe('webllmAdapter — abort (AC8)', () => {
     expect(loader).not.toHaveBeenCalled();
   });
 
+  it('a signal aborted DURING the engine load cancels before generation ever starts (review F4)', async () => {
+    // First use means a minutes-long download; the user's abort lands while the load
+    // promise is pending. Generation must never start on that path — the abort
+    // listener is registered after the load, so only an explicit re-check catches it.
+    const controller = new AbortController();
+    const create = vi.fn();
+    let releaseLoad: (engine: WebllmEngineLike) => void = () => undefined;
+    const loadPromise = new Promise<WebllmEngineLike>((resolve) => {
+      releaseLoad = resolve;
+    });
+    setWebllmEngineLoaderForTests(() => loadPromise);
+    const pending = webllmAdapter().complete({
+      system: 's',
+      messages: [{ role: 'user', content: 'u' }],
+      signal: controller.signal,
+    });
+    controller.abort(); // …while the model is still loading
+    releaseLoad({ chat: { completions: { create } } } as unknown as WebllmEngineLike);
+    const result = await pending;
+    expect(result).toMatchObject({ ok: false, code: 'CANCELLED', retryable: false });
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('a mid-stream abort interrupts generation and preserves the streamed text as partialText', async () => {
     const controller = new AbortController();
     let interrupts = 0;

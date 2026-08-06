@@ -7,14 +7,18 @@
 
 import { memo, useEffect, useState, type ReactElement } from 'react';
 
-import type { PlaygroundMode } from '../state/mode.js';
+import type { TurnMode } from '../state/webllm.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import type { LlmInspectorEntry, LlmInspectorState, LlmInspectorTool } from './llmInspector.js';
 
 export interface LlmInspectorPanelProps {
   state: LlmInspectorState;
-  /** The ACTIVE mode — the empty copy branches on this value, never on a guess (AC15, R4). */
-  mode: PlaygroundMode;
+  /**
+   * The EFFECTIVE turn mode (`useTurnMode()` — configured mode with the webllm brain
+   * override applied), never the raw mode: the brain makes the raw mode lie about
+   * where turns execute (AC15, R4; review 2026-08-06 F3).
+   */
+  mode: TurnMode;
 }
 
 const ms = (value: number): string => (value < 1000 ? `${Math.round(value)}ms` : `${(value / 1000).toFixed(1)}s`);
@@ -166,7 +170,7 @@ const RoundTrip = memo(function RoundTrip({ entry }: { entry: LlmInspectorEntry 
  * wire event, only this switch has to change — the wrong copy cannot silently persist
  * behind a hardcoded assumption.
  */
-function emptyCopy(mode: PlaygroundMode): { title: string; lesson: string } {
+function emptyCopy(mode: TurnMode): { title: string; lesson: string } {
   switch (mode) {
     case 'subscription':
       return {
@@ -185,6 +189,12 @@ function emptyCopy(mode: PlaygroundMode): { title: string; lesson: string } {
         title: 'no round trips yet',
         lesson:
           'your browser calls your local endpoint directly, so each prompt, reply, token count and timing lands here the moment a turn runs. in-memory only.',
+      };
+    case 'webllm':
+      return {
+        title: 'no round trips yet',
+        lesson:
+          'the experimental in-browser model runs on WebGPU inside this tab, so each prompt, reply, token count and timing lands here the moment a turn runs. in-memory only.',
       };
   }
 }

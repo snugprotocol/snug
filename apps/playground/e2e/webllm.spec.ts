@@ -22,6 +22,14 @@ test.describe('AL-07 AC1 — flag off means zero webllm surface', () => {
   test.skip(!hasApp, AWAITS_INTEGRATION);
 
   test('no webllm element anywhere; the mode picker still offers exactly three choices', async ({ page }) => {
+    // Review 2026-08-06 finding 9: flag-off must also mean ZERO engine bytes — the
+    // dynamic import is the code-split seam, so no request may touch the engine
+    // package (dev serves it as a vite module URL, prod as its own chunk).
+    const engineRequests: string[] = [];
+    page.on('request', (request) => {
+      if (/web[-_]llm|mlc/i.test(request.url())) engineRequests.push(request.url());
+    });
+
     await page.goto('/settings');
     const modeGroup = page.getByRole('group', { name: 'where the agent runs' });
     await expect(modeGroup).toBeVisible();
@@ -32,6 +40,8 @@ test.describe('AL-07 AC1 — flag off means zero webllm surface', () => {
     await page.goto('/build');
     await expect(page.getByRole('textbox', { name: 'describe your app' })).toBeVisible();
     await expect(page.locator('[data-testid^="webllm-"]')).toHaveCount(0);
+
+    expect(engineRequests, `flag-off must fetch no engine code, saw: ${engineRequests.join(', ')}`).toEqual([]);
   });
 });
 
@@ -51,6 +61,40 @@ test.describe('AL-07 AC3 — flag on without WebGPU falls back to the demo brain
     await expect(page.getByTestId('webllm-experimental-card')).toContainText(FALLBACK_BANNER);
     // The mode picker is NOT extended by the experiment.
     await expect(page.getByRole('group', { name: 'where the agent runs' }).getByRole('button')).toHaveCount(3);
+  });
+
+  test('run-rail empty copy follows the EFFECTIVE brain, not the configured mode (review F3 at the RunView wiring)', async ({ page }) => {
+    // Subscription configured + flag on (fallback active): turns run on the demo
+    // brain through the byok path, so the think rail must NEVER show the
+    // "nothing to show in subscription mode" copy — that surface would be lying
+    // about the very turns feeding it. This pins RunView passing useTurnMode()
+    // (a raw-mode regression compiles fine, since PlaygroundMode ⊂ TurnMode).
+    await page.goto('/settings?webllm=1');
+    await expect(page.getByTestId('webllm-fallback-banner')).toHaveText(FALLBACK_BANNER);
+    await page.getByRole('button', { name: 'hub subscription' }).click();
+
+    await page.getByRole('link', { name: 'your apps' }).click();
+    await page.getByRole('button', { name: /open chess/i }).click();
+    await expect(page).toHaveURL(/\/run\/starter--chess/);
+    await expect(page.getByText('no round trips yet')).toBeVisible();
+    await expect(page.getByText(/nothing to show in subscription mode/)).toHaveCount(0);
+  });
+
+  test('the flag is sticky for the SPA session: in-app navigation drops the query but keeps the experiment (review F2)', async ({ page }) => {
+    // Deliberate semantics (state/webllm.ts): re-parsing on SPA navigation would kick
+    // a mid-flow user back to their configured brain the moment they click anywhere.
+    await page.goto('/settings?webllm=1');
+    await expect(page.getByTestId('webllm-fallback-banner')).toHaveText(FALLBACK_BANNER);
+
+    await page.getByRole('link', { name: 'build' }).click();
+    await expect(page.getByRole('textbox', { name: 'describe your app' })).toBeVisible();
+    expect(new URL(page.url()).search).not.toContain('webllm'); // the query is gone…
+    await expect(page.getByTestId('webllm-fallback-banner')).toHaveText(FALLBACK_BANNER); // …the experiment is not.
+
+    // A HARD load without the flag leaves the experiment (the documented exit).
+    await page.goto('/build');
+    await expect(page.getByRole('textbox', { name: 'describe your app' })).toBeVisible();
+    await expect(page.locator('[data-testid^="webllm-"]')).toHaveCount(0);
   });
 
   test('the demo brain still completes a build under the flag (fallback keeps building alive)', async ({ page }) => {

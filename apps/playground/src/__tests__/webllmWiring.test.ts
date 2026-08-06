@@ -202,6 +202,27 @@ describe('createAppTransport reads the brain (AC2/AC3 at the factory that decide
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('the brain is read PER SEND, not at creation: a transport built BEFORE the flag/probe land still routes to webllm (review 2026-08-06 F1)', async () => {
+    // Hard-load /run/:id?webllm=1 shape: RunView memoizes the transport immediately;
+    // initWebllm()'s async WebGPU probe resolves AFTER. A creation-time brain read
+    // froze 'settings' forever — every app turn then hit the configured mode while
+    // the banner claimed in-tab thinking.
+    const { engine, requests } = scriptedEngine('{"message":"late brain honored"}');
+    setWebllmEngineLoaderForTests(() => Promise.resolve(engine));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('server must not be reached'));
+    // Stores in their boot state: flag not yet parsed, probe not yet resolved.
+    webllmFlagStore.set(false);
+    webgpuStore.set('unknown');
+    const transport = createAppTransport('subscription', 'mock');
+    // Now the boot init lands (flag parsed, probe resolved) — after construction.
+    webllmFlagStore.set(true);
+    webgpuStore.set('yes');
+    const result = await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
+    expect(result).toMatchObject({ ok: true, text: '{"message":"late brain honored"}' });
+    expect(requests).toHaveLength(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('flag OFF ⇒ settings decide exactly as before, and the engine loader is never touched (AC1)', async () => {
     webllmFlagStore.set(false);
     webgpuStore.set('yes'); // even with WebGPU present
