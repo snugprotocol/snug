@@ -531,10 +531,11 @@ export async function saveWizardClientCreds(clientCreds: Record<string, string>)
   const scope = await requireApprovedSpecScope(specReaderFor(db), session.appId); // B1 wall
   const service = wizardService(db);
   if (service.saveClientCreds === undefined) {
-    await (service as OAuthService).saveClientCreds({ ...scope, clientCreds });
-  } else {
-    await service.saveClientCreds({ ...scope, clientCreds });
+    // nonBlocking 4: the old branch CAST and called the very method that is
+    // missing — a raw TypeError. Absent capability is a typed refusal instead.
+    throw new SnugAuthError('the configured OAuth service does not support client-credential save', 'unsupported_kind');
   }
+  await service.saveClientCreds({ ...scope, clientCreds });
   wizardStepStore.set('done');
 }
 
@@ -614,11 +615,18 @@ const TRIPWIRE_PATTERNS: RegExp[] = [
   /\bAIza[A-Za-z0-9_-]{10,}/, // Google
 ];
 
-/** High-entropy token heuristic: a long base64ish run mixing cases and digits. */
+/**
+ * High-entropy token heuristic: a long base64ish run mixing cases and digits.
+ * URLs are stripped FIRST (nonBlocking 7): the old per-token `/^https?:/` skip was
+ * dead — ':' and '.' are not in the token character class, so a URL never matched
+ * as one token and its long path segments false-positived, training users to click
+ * "send anyway". Stripping applies to this heuristic ONLY: the explicit credential
+ * patterns above still scan the FULL text, so a key pasted inside a URL still trips.
+ */
 function looksHighEntropy(text: string): boolean {
-  for (const match of text.matchAll(/[A-Za-z0-9+/_=-]{32,}/g)) {
+  const withoutUrls = text.replace(/\bhttps?:\/\/[^\s"'<>)\]]+/gi, ' ');
+  for (const match of withoutUrls.matchAll(/[A-Za-z0-9+/_=-]{32,}/g)) {
     const token = match[0];
-    if (/^https?:/i.test(token)) continue;
     if (/[a-z]/.test(token) && /[A-Z]/.test(token) && /[0-9]/.test(token)) return true;
   }
   return false;

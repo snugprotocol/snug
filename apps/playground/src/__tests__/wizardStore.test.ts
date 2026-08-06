@@ -240,6 +240,15 @@ describe('D10/M2 — the paste-box credential tripwire (M19)', () => {
     expect(docsTripwire('Pass your API key in the X-Api-Key header. Requests go to https://api.example.com/v2.')).toBe(false);
     expect(docsTripwire('OAuth 2.0 with PKCE is supported; scopes are space-separated.')).toBe(false);
   });
+
+  it('a docs URL with a long mixed-case path segment does NOT false-positive (nonBlocking 7 — the URL exclusion was dead)', () => {
+    expect(docsTripwire('full reference: https://docs.example.com/Api/V2/AbCdEf0123456789GhIjKl4567MnOp')).toBe(false);
+    expect(docsTripwire('endpoint list at https://api.example.com/reference/GetForecastByCoordinatesV2Async9')).toBe(false);
+  });
+
+  it('a credential SHAPE inside a URL still trips — the real catches stay red-capable (M19)', () => {
+    expect(docsTripwire('https://api.example.com/callback?key=sk-live-abcdef1234567890')).toBe(true);
+  });
 });
 
 describe('M11 — a failed inference leaves the confirm EMPTY (applyInferenceResult)', () => {

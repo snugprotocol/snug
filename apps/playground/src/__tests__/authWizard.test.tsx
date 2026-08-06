@@ -344,6 +344,18 @@ describe('AC12/B1 — approval precedes credentials in every branch (M13)', () =
     expect(saveClientCreds).not.toHaveBeenCalled();
   });
 
+  it('a service missing saveClientCreds is a TYPED unsupported_kind error, never a raw TypeError (nonBlocking 4)', async () => {
+    await seedRow(clientCredsSpec, true);
+    __setWizardHooksForTests({
+      service: { generateAuthUrl: vi.fn(), handleCallback: vi.fn() } as never, // capability absent
+    });
+    openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    await expect(saveWizardClientCreds({ client_id: 'x', client_secret: 'y' })).rejects.toMatchObject({
+      name: 'SnugAuthError',
+      code: 'unsupported_kind',
+    });
+  });
+
   it('client_creds save-mints POST-approval with the frozen row scope, and approve precedes the mint', async () => {
     await seedRow(clientCredsSpec, false);
     const order: string[] = [];
