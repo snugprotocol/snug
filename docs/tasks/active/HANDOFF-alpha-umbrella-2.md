@@ -4,7 +4,7 @@
 
 ## One-paragraph situation
 
-**8 of 14 children merged/done** (AL-01 #5, AL-02 #6, AL-03 #21, AL-07 #20, AL-08 #7, AL-13 #8, AL-14 #19; A6 dropped in Phase 0). **AL-04 (auth-wizard) is implemented, live-swept, and adversarially reviewed — one fix-first pass remains before its merge.** Tail after AL-04: AL-05, AL-09, AL-10, AL-11, AL-12, AL-15 (LAST). Merge-on-green remains pre-authorized (Phase-0). This session ran the full rigor loop on AL-04 and it worked: plan review found 2 blockers pre-implementation; impl review + live sweep found 1 blocker + 3 majors post-implementation, one of them (popup) independently by both gates.
+**7 of 14 children merged/done** (AL-01 #5, AL-02 #6, AL-03 #21, AL-07 #20, AL-08 #7, AL-13 #8, AL-14 #19 — seven children, seven PRs; A6 dropped in Phase 0. NOTE: handoff #1 said "7 done" *before* AL-03 merged — an off-by-one vs its own 6-row ✅ ledger that this session briefly inherited as "8"; the authoritative count is this child list). **AL-04 (auth-wizard) is implemented, live-swept, and adversarially reviewed — one fix-first pass remains before its merge.** Tail after AL-04: AL-05, AL-09, AL-10, AL-11, AL-12, AL-15 (LAST). Merge-on-green remains pre-authorized (Phase-0). This session ran the full rigor loop on AL-04 and it worked: plan review found 2 blockers pre-implementation; impl review + live sweep found 1 blocker + 3 majors post-implementation, one of them (popup) independently by both gates.
 
 ## Git state (all safe on origin — nothing lives only in chat)
 
