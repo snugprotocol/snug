@@ -1,6 +1,6 @@
 # examples — the starter apps
 
-Three curated single-file Snug apps, built exactly the way the app-builder LLM is told to
+Eight curated single-file Snug apps, built exactly the way the app-builder LLM is told to
 build them (`packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md`).
 The playground bundles them as its "starter apps" shelf, loadable with no server and no key —
 they degrade gracefully when the agent is a mock or unreachable.
@@ -8,8 +8,13 @@ they degrade gracefully when the agent is a mock or unreachable.
 | app | what it demos |
 | --- | --- |
 | [`chess/`](chess/) | JSON-only agent conversation with **local validation** — the app is the referee, the agent is a player with a personality |
-| [`flying-pig/`](flying-pig/) | the origin-story arcade game — the agent as a **live game director** (dynamic difficulty + streamed taunts between runs) |
+| [`flying-pig/`](flying-pig/) | the origin-story arcade game — **LLM-free by design** (ADR-0011): pure local reflexes, high score via `usePersistedState` |
 | [`habit-tracker/`](habit-tracker/) | **data ownership** — `useAppDB` writes a real SQLite file; ask a question, the agent answers with SQL that runs on *your* data |
+| [`adventure-quest/`](adventure-quest/) | **both pillars at once** — the agent is the dungeon master, the pack + journal are SQLite tables, off-schema replies fall back to a local guide |
+| [`quiz-me/`](quiz-me/) | **education wow** — the agent writes a five-question quiz on any topic; hard shape validation; built-in bank when keyless; scores in SQL |
+| [`trivia-night/`](trivia-night/) | **multiplayer feeling, zero networking** — pass-and-play on one device, LLM-free, roster in SQL |
+| [`trip-planner/`](trip-planner/) | **the family aspiration** — dream board, packing list, day plan; LLM-free, three SQL tables, export story |
+| [`pocket-ledger/`](pocket-ledger/) | **solo-business rep** — income/expense in integer cents, SQL-summed totals, export-your-books story |
 
 ## The contract every app follows
 
@@ -26,6 +31,14 @@ they degrade gracefully when the agent is a mock or unreachable.
   errors are rendered, malformed replies get a graceful fallback, nothing crashes.
 - No direct browser storage (`localStorage` et al. don't exist in a null-origin iframe) —
   persistence goes through the host-brokered `usePersistedState` / `useAppDB`.
+- **No form elements.** The sandbox is `allow-scripts` only (no `allow-forms`), and the
+  browser blocks a form submission BEFORE the `submit` event fires — an `onSubmit`
+  handler never runs in a real browser even though it works in jsdom. Buttons use
+  `onClick`; inputs accept Enter via `onKeyDown`. Enforced by the validate suite.
+- **LLM posture declared (ADR-0011).** An LLM-free app sets `RESPONSE_SCHEMA = null` and
+  never calls `sendMessage`; an agent-driven app always sends a `responseSchema` and
+  degrades gracefully (visible fallback, never a crash) when the reply is off-schema —
+  which is exactly what the keyless demo brain returns. Enforced by the validate suite.
 - Design: theme-aware via the host `theme` (`data-theme` on `<html>`), both themes styled
   with custom properties, ≥44px touch targets, usable at 375px, no `window.confirm`, no
   hover-only affordances, skeletons over spinners.
@@ -49,4 +62,6 @@ the root, structural checks otherwise), and the 5 MB limit.
 Start from the rendered KB template, keep the hooks block verbatim, put everything
 app-authored after the `// 5. RESPONSE SCHEMA` banner (the validator uses that banner to
 delimit the hook block), add a `README.md`, list the app in `APPS` in
-`validate.test.mjs`, and run the suite.
+`validate.test.mjs` (and in `LLM_FREE_APPS` if it never calls the agent), and run the
+suite. The playground shelf picks the folder up automatically (vite glob) — give it a
+look in `HubView`'s `STARTER_LOOKS` so the tile isn't the generic fallback.

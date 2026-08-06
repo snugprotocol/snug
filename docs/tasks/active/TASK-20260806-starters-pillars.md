@@ -1,6 +1,6 @@
 # TASK-20260806-starters-pillars: Five pillar starter apps (umbrella AL-08)
 
-- **Status**: in-progress
+- **Status**: in-review (implementation + verification complete in the AL-08 worktree; PR/merge owned by the umbrella orchestrator)
 - **Owner**: Jeetu (autonomous run; Claude implements — umbrella Phase-0 approval pre-approves this plan while it stays inside AL-08's scope)
 - **Risk tier**: medium (`examples/` alone is Low, but the shelf/e2e surface is Playground logic → Medium; no protocol/runner/auth touch)
 - **Branch**: `feat/TASK-20260806-starters-pillars`
@@ -69,6 +69,11 @@ Shared literals pinned (lessons 2026-08-03): folder names are the contract — `
 - **Starters ship no App Autopsy conversation today** (see spec) — noted, not built; queued in next-steps as an owner call.
 - Validate-suite convention kept: `APPS` stays an explicit list (per `examples/README.md` "Adding an example") rather than a readdir — the glob and the list CAN drift, but the shelf vitest (AC3) now pins folder-count agreement from the other side.
 - The demo brain's app-mode reply is a fixed `{kind:'answer', message}` JSON — for agent-as-brain starters that is the *off-schema* case by design, so the graceful-fallback path IS the demo path. The visible note doubles as honest UI ("the storyteller is offline — a local guide took over").
+- **SURPRISE (the big one): `<form onSubmit>` is dead inside the C2 sandbox.** `allow-scripts` without `allow-forms` makes Chromium block a form submission at initiation — *before* the `submit` event dispatches — so a React `onSubmit` handler simply never runs in a real browser, while jsdom (which never submits) stays green. The new Playwright spec caught it on trivia-night and trip-planner; auditing for the pattern showed the SHIPPED habit-tracker had it too — its add-habit and ask flows have been dead in real browsers since it shipped. Fixed all three (onClick + Enter keydown), locked with a red-first validate rule (no form elements), promoted to lessons.md, and queued a KB-template line so generated apps can't repeat it.
+- **SURPRISE: a `usePersistedState` write racing initial hydration is silently lost.** Trivia Night's roster add vanished in the e2e: the hook's `kvGet` resolves after the user's first write and overwrites it (and pre-hydration writes are never persisted — `hydratedKey` gating). The app-level fix: the roster became a real `tn_players` table (SQL inserts have no hydration race, and the roster now rides in the export); hall-of-fame stays kv because it writes at podium time. SDK-level fix (expose hydration state from the hook) queued in next-steps — it needs the byte-sync + KB cycle.
+- **Trip-planner initially shipped the same ready-gating gap pocket-ledger avoided**: mutating buttons enabled before the DDL finished → `no such table` on a fast first click. All DB starters now gate mutations on `ready`.
+- **Environment: port 8787 was owned by the main checkout's long-lived `pnpm --filter server dev:local`** (another agent/owner process — off-limits from this worktree). Added `SNUG_SERVER_PORT` as an override honored by BOTH the vite proxy and the e2e config so parallel worktrees can run the Playwright suite; defaults unchanged, no test weakened. This suite ran with `SNUG_SERVER_PORT=18787`.
+- Trivia-night scores are keyed by roster id, not player name — two kids named Sam keep separate scores (caught in self-review, not by a test).
 
 ## Session journal (append-only, newest last)
 
@@ -76,3 +81,9 @@ Shared literals pinned (lessons 2026-08-03): folder names are the contract — `
 - Done: Gate-2 reads (process/TDD/lessons/umbrella/roadmap §2+§5/ADR-0011/code-map; chess + flying-pig + habit-tracker end-to-end; validate suite; starterApps ONE-definition rule; HubView/RunView read-only+Install flow; demo adapter chain; e2e patterns incl. BENIGN console allowlist). Task file written.
 - State: plan approved by umbrella pre-approval; starting tests-first.
 - Next step: red tests (validate APPS + posture, shelf vitest, starters e2e), then author the five apps.
+
+### 2026-08-06 01:25 — Claude (Fable 5) — session (close)
+- Done: red-first tests (validate ENOENT-red on the five, shelf vitest red, starters e2e authored) → five apps assembled with the byte-exact hooks block (extracted from chess programmatically, never retyped) → validate 56 green on first assembly → first e2e run 3/5. The two failures unearthed the form-submit sandbox kill and the kv hydration race (see Decisions & surprises); fixes landed red-first via a new no-form validate rule (18 → 64 total with posture checks), habit-tracker repaired, TN roster moved to SQL, TP ready-gated. Second issue round: my own locator anchored past a leading emoji. Final: validate 64/64 · playground vitest 250 (was 248; `starterShelf` +2) · full root `pnpm build` + `pnpm test` green (vitest 912, was 910) · full Playwright **35/35** (was 30; `starters.spec.ts` +5) on `SNUG_SERVER_PORT=18787`. Docs: examples README (8-row table + no-form + posture contract), stale flying-pig README rewritten to the ADR-0011 exemplar it actually is, code-map rows, next-steps ✅ + 3 queued items, lessons entry.
+- State: all ACs test-backed and green; branch has 5 commits, not pushed (umbrella owns PR/merge). No push, no PR, no publish — per instructions.
+- Next step (for the orchestrator): AI review + merge per umbrella DoD; the umbrella's live agent-browser sweep should walk each new starter once (kid-first eyeball pass is a human/owner call the suite can't make).
+- Open questions: starter App Autopsy pre-seeded thread (queued, owner call) · SDK hydration-state exposure (queued) · KB no-form line (queued, prompt-change discipline).
