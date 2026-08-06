@@ -8,6 +8,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { UserDbCredentialStore } from '@snugprotocol/auth';
+
 import { ConnectionsCard } from '../views/SettingsView.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 import { getUserDb } from '../state/userdb.js';
@@ -140,6 +142,23 @@ describe('ConnectionsCard', () => {
     });
     expect(del).toHaveBeenCalledWith(APP);
     expect(invalidate).toHaveBeenCalledWith(APP);
+  });
+
+  it("AL-04 (AL-03 sweep follow-up): Revoke ALSO wipes the app's credential slice — no zombie value survives to a re-approval", async () => {
+    await seed('approved');
+    const db = await getUserDb();
+    const store = new UserDbCredentialStore(db);
+    await store.setCredential(APP, 'api_key', 'zombie-credential-000');
+    await renderPanel();
+    const revokeButton = [...container.querySelectorAll('button')].find((b) => /revoke/i.test(b.textContent ?? ''));
+    await act(async () => {
+      revokeButton!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // Before this child, deleteAuthSpec left auth:<appId>:* intact — a re-declared +
+    // re-approved spec for the same appId would resume injecting the OLD credential
+    // without re-entry (probe-confirmed by AL-03's live sweep). Fail closed: gone.
+    expect(await store.getCredential(APP, 'api_key')).toBeUndefined();
   });
 
   it('an approved row offers Re-approve, which opens the wizard in reapprove mode (AC9)', async () => {

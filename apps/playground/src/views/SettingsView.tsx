@@ -29,6 +29,7 @@ import {
 } from '../state/sync.js';
 import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
+import { UserDbCredentialStore } from '@snugprotocol/auth';
 import { getUserDb } from '../state/userdb.js';
 import { invalidateNetGrants } from '../state/net.js';
 import { openWizard, wizardStore } from '../state/wizard.js';
@@ -473,7 +474,19 @@ export function ConnectionsCard(): ReactElement {
                       re-approve
                     </Button>
                   )}
-                  <Button variant="danger" onClick={() => void act(row.appId, (db) => db.deleteAuthSpec(row.appId))}>
+                  <Button
+                    variant="danger"
+                    onClick={() =>
+                      void act(row.appId, (db) => {
+                        db.deleteAuthSpec(row.appId);
+                        // AL-04 (AL-03 sweep follow-up): revoke is DISCONNECT — the
+                        // credential slice goes with the spec, or a re-declared spec
+                        // for the same appId would resume injecting the old value
+                        // without re-entry. CredentialStore.clearApp is the seam.
+                        void new UserDbCredentialStore(db).clearApp(row.appId);
+                      })
+                    }
+                  >
                     revoke
                   </Button>
                 </div>

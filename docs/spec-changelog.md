@@ -4,6 +4,23 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-06 — INTERNAL DRAFT, not staged for any push — TASK-20260806-auth-wizard (AL-04)
+Render-directive contract + AUTH_REQUIRED payload, INTERNAL protocol surface out of the
+`schemas/` SOURCES (the AL-02/AL-03 precedent; export-set guard extended; prose staged by
+AL-12): `authSpecHintsSchema` (packages/protocol/src/auth-schema.ts — the single source of
+truth for transformer-input hints; `packages/auth` re-derives `ParamsToAuthSpecInput` via
+the inferred type, type-only) · `packages/protocol/src/render-directive.ts` —
+`llmProposalSchema` (hints MINUS registration copy + headerTemplate: LLM-authored shapes
+structurally cannot carry phishing registration copy or control secret placement),
+`inferrerProposalSchema` (required confidence in [0,1], strict-rejected when malformed —
+never "reads as 0"; bounded wizard-ephemeral `evidence[]`), `authWizardDirectiveSchema`
+(versioned `v`, strict, the ONLY and the PERSISTED directive shape — no `evidence[]`, no
+docs-derived free text; `confidence`/`provenance` display-only: the host re-runs the
+provider ladder at wizard open and computes both), `renderDirectiveSchema` union (one
+member v1, pinned discriminator), `authRequiredPayloadSchema` (display fields for the
+reserved `AUTH_REQUIRED` code; strict; additive — the R5 open-string wire rule
+unchanged). SPEC_SYNC steps 1–3 + 6 taken; steps 4–5 (spec repo) explicitly NOT taken.
+
 ## 2026-08-06 — spec v0.2 DRAFT — TASK-20260806-spec-push — Portable User Database Format published as an explicitly-marked DRAFT — ed6e596
 First publication of the staged v0.2 draft (owner-authorized, alpha-umbrella Phase-0
 decision 2; roadmap A12). Published as a separate `SPEC-v0.2-draft.md` so `SPEC.md`

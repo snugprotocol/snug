@@ -13,6 +13,7 @@ import {
 } from '@snugprotocol/adapters';
 
 import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
+import { demoAuthChatScript, demoAuthVariant } from './demoAuth.js';
 import { DEMO_APP_HTML, DEMO_APP_REPLY, DEMO_APP_TITLE } from './demoApp.js';
 import { ARTIFACT_WRITE_TOOL_NAME } from './tools.js';
 import { webllmAdapter } from './webllm/webllmAdapter.js';
@@ -37,6 +38,10 @@ export interface TurnAdapterConfig {
 
 /** The demo brain's chat script: consult the KB, write the artifact, sign off. */
 function demoChatScript(): MockTurn[] {
+  // AL-04 e2e seam (`?demoauth=<variant>`, the ?webllm=1 URL-flag precedent):
+  // a deterministic auth-directive script; zero footprint when the flag is absent.
+  const authVariant = demoAuthVariant();
+  if (authVariant !== null) return demoAuthChatScript(authVariant);
   return [
     {
       deltas: ['let me check the app template first…'],
