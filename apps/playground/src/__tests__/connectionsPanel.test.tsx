@@ -182,6 +182,22 @@ describe('ConnectionsCard', () => {
     expect(wizard.wizardStore.get()).toMatchObject({ appId: APP, mode: 'reapprove', source: 'settings' });
   });
 
+  it('a FAILING credential wipe surfaces on revoke — never a silent floating promise (nonBlocking 5)', async () => {
+    await seed('approved');
+    const clearApp = vi.spyOn(UserDbCredentialStore.prototype, 'clearApp').mockRejectedValue(new Error('wipe failed'));
+    await renderPanel();
+    const revokeButton = [...container.querySelectorAll('button')].find((b) => /revoke/i.test(b.textContent ?? ''));
+    await act(async () => {
+      revokeButton!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(clearApp).toHaveBeenCalled();
+    // Pre-fix this rejection vanished into `void clearApp(...)` — the spec row was
+    // gone while the credential slice silently survived, re-opening the exact
+    // fail-open scenario revoke exists to close.
+    expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/wipe failed/);
+  });
+
   it('an approved row offers Re-approve, which opens the wizard in reapprove mode (AC9)', async () => {
     await seed('approved');
     await renderPanel();

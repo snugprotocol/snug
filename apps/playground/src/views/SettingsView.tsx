@@ -422,11 +422,13 @@ export function ConnectionsCard(): ReactElement {
     };
   }, [epoch, wizardSession]);
 
-  const act = async (appId: string, fn: (db: Awaited<ReturnType<typeof getUserDb>>) => void): Promise<void> => {
+  const act = async (appId: string, fn: (db: Awaited<ReturnType<typeof getUserDb>>) => void | Promise<void>): Promise<void> => {
     setError(undefined);
     try {
       const db = await getUserDb();
-      fn(db);
+      // AWAITED (nonBlocking 5): a rejection inside the action must surface here —
+      // a floating `void` promise silently swallowed a failed credential wipe.
+      await fn(db);
       invalidateNetGrants(appId); // R3: approve/reapprove/revoke drops remembered grants
       setEpoch((n) => n + 1);
     } catch (err) {
@@ -477,13 +479,16 @@ export function ConnectionsCard(): ReactElement {
                   <Button
                     variant="danger"
                     onClick={() =>
-                      void act(row.appId, (db) => {
-                        db.deleteAuthSpec(row.appId);
+                      void act(row.appId, async (db) => {
                         // AL-04 (AL-03 sweep follow-up): revoke is DISCONNECT — the
                         // credential slice goes with the spec, or a re-declared spec
                         // for the same appId would resume injecting the old value
-                        // without re-entry. CredentialStore.clearApp is the seam.
-                        void new UserDbCredentialStore(db).clearApp(row.appId);
+                        // without re-entry. AWAITED, and wiped BEFORE the spec row is
+                        // deleted (nonBlocking 5): if the wipe fails, the row stays
+                        // and the failure is a visible error — never a deleted spec
+                        // with a silently surviving credential slice.
+                        await new UserDbCredentialStore(db).clearApp(row.appId);
+                        db.deleteAuthSpec(row.appId);
                       })
                     }
                   >
