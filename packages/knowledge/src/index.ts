@@ -24,8 +24,11 @@ export {
 } from './layers.js';
 
 export {
+  buildAuthSpecInferrerPrompt,
   buildHostSystemPrompt,
   buildSkillBuilderPrompt,
+  type AuthSpecInferrerPrompt,
+  type AuthSpecInferrerPromptInput,
   type HostSystemPromptOptions,
   type SkillBuilderContext,
 } from './assemble.js';

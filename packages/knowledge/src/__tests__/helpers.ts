@@ -78,7 +78,7 @@ export function renderedStore(): RenderedStoreEntry[] {
     ['app-builder-summary', 'system/30-app-builder-summary.md'],
     ['app-response-format', 'system/40-app-response-format.md'],
   ];
-  const toolNames: ToolPromptName[] = ['app-builder', 'artifact-write'];
+  const toolNames: ToolPromptName[] = ['app-builder', 'artifact-write', 'auth-spec-inferrer'];
 
   const entries: RenderedStoreEntry[] = [];
   for (const [name, file] of systemLayers) entries.push({ file, text: getSystemLayer(name) });
