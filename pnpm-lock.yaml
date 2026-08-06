@@ -131,7 +131,21 @@ importers:
         specifier: workspace:*
         version: link:../runner
 
-  packages/auth: {}
+  packages/auth:
+    dependencies:
+      '@snugprotocol/db':
+        specifier: workspace:*
+        version: link:../db
+      '@snugprotocol/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/sql.js':
+        specifier: ^1.4.9
+        version: 1.4.11
+      sql.js:
+        specifier: ^1.13.0
+        version: 1.14.1
 
   packages/db:
     dependencies:

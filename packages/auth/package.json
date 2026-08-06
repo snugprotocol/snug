@@ -5,6 +5,14 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "scripts": { "build": "tsc -p tsconfig.json", "test": "vitest run --passWithNoTests" },
-  "license": "MIT"
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "vitest run" },
+  "license": "MIT",
+  "dependencies": {
+    "@snugprotocol/db": "workspace:*",
+    "@snugprotocol/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/sql.js": "^1.4.9",
+    "sql.js": "^1.13.0"
+  }
 }
