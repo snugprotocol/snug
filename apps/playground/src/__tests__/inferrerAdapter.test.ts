@@ -4,11 +4,13 @@
 // buildHostSystemPrompt, and NO inspector event hook (D10 — mutation M18).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AdapterRequest, AgentAdapter } from '@snugprotocol/adapters';
 
+import { modeStore, providerStore } from '../state/mode.js';
 import { runAuthSpecInference } from '../agent/inferrerAdapter.js';
+import { installTestUserDb } from './userdbTestHelper.js';
 
 const DOCS_CANARY = 'CANARY-docs-2f8a71c39b';
 
@@ -91,6 +93,44 @@ describe('D2 — wire placement: system = D8 instructions, user = the docs block
     expect(complete).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.provenance).toBe('registry');
+  });
+});
+
+describe('nonBlocking 2 — a REAL inference never runs on the mock demo brain (AL-05 gate)', () => {
+  afterEach(() => {
+    modeStore.set('byok');
+    providerStore.set('mock');
+  });
+
+  it('keyless SUBSCRIPTION mode: a visible needs-BYOK error, never the demo brain\'s "not parseable" failure', async () => {
+    await installTestUserDb(); // no BYOK key stored anywhere
+    modeStore.set('subscription');
+    providerStore.set('anthropic');
+    const result = await runAuthSpecInference({
+      providerName: 'Acme Weather',
+      kindHint: 'api_key',
+      docsText: 'Acme Weather docs: pass your key in the X-Api-Key header.',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('completion_failed');
+    expect(result.provenance).toBe('user_docs');
+    // The whole point: an HONEST state, not the mock's guaranteed-misleading
+    // 'the model reply was not a parseable JSON object'.
+    expect(result.message).toMatch(/bring-your-own-key|byok/i);
+    expect(result.message).not.toMatch(/not a parseable/i);
+  });
+
+  it('byok mode with the demo-brain provider selected: same guard (the demo brain cannot read docs)', async () => {
+    await installTestUserDb();
+    modeStore.set('byok');
+    providerStore.set('mock');
+    const result = await runAuthSpecInference({ providerName: 'Acme Weather', kindHint: 'api_key' });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('completion_failed');
+    expect(result.provenance).toBe('inference');
+    expect(result.message).toMatch(/bring-your-own-key|byok/i);
   });
 });
 

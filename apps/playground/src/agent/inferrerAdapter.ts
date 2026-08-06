@@ -21,6 +21,7 @@ import {
   type InferAuthSpecResult,
   type InferrerComplete,
 } from '@snugprotocol/auth';
+import type { AuthProvenance } from '@snugprotocol/protocol';
 
 import { getByokKey, localUrlStore, modelStore, modeStore, providerStore } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
@@ -35,28 +36,48 @@ export interface RunAuthSpecInferenceInput {
   adapter?: AgentAdapter;
 }
 
+/**
+ * A live-adapter resolution that can honestly FAIL: a real inference must never
+ * run on the mock demo brain (nonBlocking 2, AL-05 gate) — its scripted chat
+ * replies guarantee a misleading 'not parseable' failure, so a keyless
+ * subscription/byok configuration (or the demo-brain provider) surfaces a
+ * visible needs-BYOK state instead. The `?demoauth` e2e seam is untouched: it
+ * scripts the BUILDER chat turn through the demo brain, never this inference turn.
+ */
+type LiveAdapterResolution = { ok: true; adapter: AgentAdapter } | { ok: false };
+
 /** Resolve the settings-configured adapter, brain override included (per CALL, not creation). */
-async function liveAdapter(): Promise<AgentAdapter> {
+async function liveAdapter(): Promise<LiveAdapterResolution> {
   const brain = currentBrain();
-  if (brain.kind === 'webllm') return createTurnAdapter({ mode: 'webllm', provider: providerStore.get() }, 'chat');
-  if (brain.kind === 'demo') return createTurnAdapter({ mode: 'byok', provider: 'mock' }, 'chat');
+  if (brain.kind === 'webllm') {
+    return { ok: true, adapter: createTurnAdapter({ mode: 'webllm', provider: providerStore.get() }, 'chat') };
+  }
+  if (brain.kind === 'demo') return { ok: false }; // the demo brain cannot read docs
   const mode = modeStore.get();
   const provider = providerStore.get();
-  // Subscription has no browser-side adapter; the inference turn is a direct
-  // browser call, so it runs on the byok/local settings (mock when keyless).
-  const direct: DirectMode = mode === 'subscription' ? 'byok' : mode;
-  const key = direct === 'local' ? undefined : await getByokKey(provider);
   const model = modelStore.get();
-  return createTurnAdapter(
-    {
-      mode: direct,
-      provider,
-      ...(key !== undefined ? { key } : {}),
-      ...(model !== undefined ? { model } : {}),
-      localUrl: localUrlStore.get(),
-    },
-    'chat',
-  );
+  // Subscription has no browser-side adapter; the inference turn is a direct
+  // browser call, so it runs on the byok/local DIRECT settings — never the mock.
+  const direct: DirectMode = mode === 'subscription' ? 'byok' : mode;
+  if (direct === 'local') {
+    return {
+      ok: true,
+      adapter: createTurnAdapter(
+        { mode: 'local', provider, ...(model !== undefined ? { model } : {}), localUrl: localUrlStore.get() },
+        'chat',
+      ),
+    };
+  }
+  if (provider === 'mock') return { ok: false }; // the demo-brain provider — no real model behind it
+  const key = await getByokKey(provider);
+  if (key === undefined) return { ok: false }; // keyless byok/subscription — createTurnAdapter would silently hand back the mock
+  return {
+    ok: true,
+    adapter: createTurnAdapter(
+      { mode: 'byok', provider, key, ...(model !== undefined ? { model } : {}), localUrl: localUrlStore.get() },
+      'chat',
+    ),
+  };
 }
 
 /**
@@ -91,7 +112,22 @@ export async function runAuthSpecInference(input: RunAuthSpecInferenceInput): Pr
     ...(input.kindHint !== undefined ? { kindHint: input.kindHint } : {}),
     ...(input.docsText !== undefined ? { docsText: input.docsText } : {}),
   });
-  const adapter = input.adapter ?? (await liveAdapter());
+  let adapter = input.adapter;
+  if (adapter === undefined) {
+    const live = await liveAdapter();
+    if (!live.ok) {
+      // Visible, honest, and BEFORE any seam call: no mock run, no wire touched.
+      const provenance: AuthProvenance = input.docsText !== undefined ? 'user_docs' : 'inference';
+      return {
+        ok: false,
+        provenance,
+        code: 'completion_failed',
+        message:
+          'inference needs a bring-your-own-key model — the demo brain cannot read provider docs. Add a provider key (or a local model) in Settings, then try again.',
+      };
+    }
+    adapter = live.adapter;
+  }
   const inferrer = createAuthSpecInferrer({ complete: completeWithAdapter(adapter, system) });
   return inferrer.infer({
     providerName: input.providerName,
