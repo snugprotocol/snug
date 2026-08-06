@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pocket Ledger</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f0f7f0; --fg: #1a3320; --muted: #6b8a72;
+      --card: #ffffff; --border: #d8ead9;
+      --accent: #16a34a; --accent-soft: #dcf3e0;
+      --good: #15803d; --good-soft: #dcfce7;
+      --bad: #b91c1c; --bad-soft: #fee2e2;
+      --shadow: 0 10px 30px rgba(20, 90, 40, 0.10);
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1a12; --fg: #ddeee1; --muted: #8aab93;
+      --card: #17271b; --border: #28422e;
+      --accent: #4ade80; --accent-soft: #143a20;
+      --good: #4ade80; --good-soft: #14351f;
+      --bad: #f87171; --bad-soft: #3d1717;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh;
+    }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 16px 14px 40px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(1.5rem, 5vw, 2.1rem); margin: 6px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 14px; font-size: 0.92rem; }
+    .own {
+      display: flex; gap: 10px; align-items: flex-start;
+      background: var(--accent-soft); border: 1px solid var(--border);
+      border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; font-size: 0.9rem;
+    }
+    .own .arrow { font-size: 1.2rem; }
+    .totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+    @media (max-width: 420px) { .totals { grid-template-columns: 1fr; } }
+    .total-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 14px; text-align: center; box-shadow: var(--shadow);
+    }
+    .total-label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+    .total-value { font-size: 1.35rem; font-weight: 900; }
+    .total-value.in { color: var(--good); }
+    .total-value.out { color: var(--bad); }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 120px; gap: 8px; margin-bottom: 10px; }
+    .form-grid input {
+      min-height: 48px; border-radius: 12px; border: 2px solid var(--border);
+      background: var(--bg); color: var(--fg); padding: 0 14px; font-size: 1rem; min-width: 0;
+    }
+    .kind-row { display: flex; gap: 10px; }
+    .btn {
+      min-height: 48px; border-radius: 999px; border: none; cursor: pointer;
+      color: #fff; font-size: 1rem; font-weight: 800; padding: 10px 20px; flex: 1;
+    }
+    .btn.in { background: var(--good); }
+    .btn.out { background: var(--bad); }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .warn { color: var(--bad); font-size: 0.9rem; margin-top: 8px; }
+    .entry { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+    .entry:last-child { border-bottom: none; }
+    .entry .icon { font-size: 1.1rem; }
+    .entry .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .entry .when { color: var(--muted); font-size: 0.78rem; }
+    .entry .amount { font-weight: 800; }
+    .entry .amount.in { color: var(--good); }
+    .entry .amount.out { color: var(--bad); }
+    .remove {
+      min-height: 44px; min-width: 44px; border-radius: 10px; border: 2px solid var(--border);
+      background: none; color: var(--muted); cursor: pointer; font-size: 0.8rem; font-weight: 700;
+    }
+    .remove.arm { border-color: var(--bad); color: var(--bad); }
+    .empty { color: var(--muted); font-size: 0.9rem; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    // This app is LLM-FREE (ADR-0011): a ledger must be BORING — adding entries and
+    // summing them is deterministic arithmetic, and money totals are exactly where a
+    // model's creativity is unwelcome. The wow is ownership: the books are a real
+    // SQLite file that leaves with the user via the export button.
+    const RESPONSE_SCHEMA = null;
+
+    // ============================================================
+    // 6. YOUR APP — Pocket Ledger
+    // ============================================================
+    // All money is INTEGER CENTS in the database — floats never touch a balance.
+    // Comma rules (adversarial review, fix 2): well-formed groups of three are
+    // thousands separators ("1,000" → $1000.00, "1,234.56" → $1234.56); a single
+    // comma with 1-2 trailing digits is a decimal comma ("1,50" → $1.50); anything
+    // ambiguous ("1,2,3", "1,0000") is rejected so the visible warn path fires —
+    // never silently misread as a different amount.
+    const parseCents = (raw) => {
+      if (String(raw).includes('-')) return null; // the in/out buttons carry the sign — reject, don't guess
+      const cleaned = String(raw).replace(/[^0-9.,]/g, '');
+      if (cleaned === '') return null;
+      let normalized = cleaned;
+      if (cleaned.includes(',')) {
+        if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(cleaned)) {
+          normalized = cleaned.replace(/,/g, ''); // thousands separators
+        } else if (/^\d+,\d{1,2}$/.test(cleaned)) {
+          normalized = cleaned.replace(',', '.'); // decimal comma
+        } else {
+          return null; // ambiguous — reject, never guess about money
+        }
+      }
+      if (normalized.split('.').length > 2) return null;
+      const value = Number(normalized);
+      if (!Number.isFinite(value) || value <= 0) return null;
+      const cents = Math.round(value * 100);
+      return cents > 0 && cents <= 100000000 ? cents : null; // sanity cap: one million dollars
+    };
+    const fmt = (cents) => (cents < 0 ? '−' : '') + '$' + (Math.abs(cents) / 100).toFixed(2);
+
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS ledger_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        label TEXT NOT NULL,
+        cents INTEGER NOT NULL,
+        at TEXT NOT NULL
+      )`,
+    ];
+
+    function App() {
+      const { isReady, theme } = useSnugApp({
+        appId: 'pocket-ledger',
+        displayName: 'Pocket Ledger',
+        description: 'Money in, money out, honest totals — a tiny business ledger kept in a real SQLite file you can export anytime.',
+        iconEmoji: '💰',
+        iconColor: '#16a34a',
+      });
+      const db = useAppDB();
+      const [ready, setReady] = useState(false);
+      const [entries, setEntries] = useState([]);
+      const [totalIn, setTotalIn] = useState(0);
+      const [totalOut, setTotalOut] = useState(0);
+      const [label, setLabel] = useState('');
+      const [amount, setAmount] = useState('');
+      const [warn, setWarn] = useState('');
+      const [armed, setArmed] = useState(null);
+      const [dbErr, setDbErr] = useState(null);
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const reload = async () => {
+        const rows = await db.exec('SELECT id, kind, label, cents, at FROM ledger_entries ORDER BY id DESC LIMIT 50', []);
+        setEntries(rows.rows.map(([id, kind, lbl, cents, at]) => ({ id, kind, label: lbl, cents, at })));
+        const sums = await db.exec('SELECT kind, COALESCE(SUM(cents), 0) FROM ledger_entries GROUP BY kind', []);
+        let cameIn = 0, wentOut = 0;
+        for (const [kind, total] of sums.rows) {
+          if (kind === 'income') cameIn = total;
+          if (kind === 'expense') wentOut = total;
+        }
+        setTotalIn(cameIn);
+        setTotalOut(wentOut);
+      };
+
+      useEffect(() => {
+        if (!isReady) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []);
+            if (!cancelled) { await reload(); setReady(true); }
+          } catch (e) {
+            if (!cancelled) setDbErr(String(e && e.message || e));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isReady]);
+
+      const add = async (kind) => {
+        const cleanLabel = label.trim().slice(0, 60);
+        const cents = parseCents(amount);
+        if (cleanLabel === '') { setWarn('give it a name — “lemonade stand”, “paper cups”…'); return; }
+        if (cents === null) { setWarn('give it a number, like 4.50'); return; }
+        setWarn('');
+        setLabel('');
+        setAmount('');
+        try {
+          await db.exec('INSERT INTO ledger_entries (kind, label, cents, at) VALUES (?, ?, ?, ?)',
+            [kind, cleanLabel, cents, new Date().toISOString()]);
+          await reload();
+        } catch (e) { setDbErr(String(e && e.message || e)); }
+      };
+
+      const remove = async (id) => {
+        if (armed !== id) { setArmed(id); return; } // two-tap, never window.confirm
+        setArmed(null);
+        try {
+          await db.exec('DELETE FROM ledger_entries WHERE id = ?', [id]);
+          await reload();
+        } catch (e) { setDbErr(String(e && e.message || e)); }
+      };
+
+      if (!isReady) return <div className="connecting">opening the books…</div>;
+
+      const kept = totalIn - totalOut;
+
+      return (
+        <div className="wrap">
+          <h1>Pocket Ledger</h1>
+          <p className="sub">money in, money out — totals you can trust, in a file you own.</p>
+
+          <div className="own">
+            <span className="arrow" aria-hidden="true">⬆︎</span>
+            <p style={{ margin: 0 }}><b>these books are yours.</b> every entry is a row in a real <b>.sqlite</b>
+            {' '}file — the <b>export .sqlite</b> button in the bar above downloads it for your spreadsheet,
+            your accountant, or your backup drive. no subscription, no lock-in.</p>
+          </div>
+
+          {dbErr && <p className="warn">storage hiccup: {dbErr}</p>}
+
+          <div className="totals">
+            <div className="total-card">
+              <div className="total-label">came in</div>
+              <div className="total-value in" data-testid="total-in">{fmt(totalIn)}</div>
+            </div>
+            <div className="total-card">
+              <div className="total-label">went out</div>
+              <div className="total-value out" data-testid="total-out">{fmt(totalOut)}</div>
+            </div>
+            <div className="total-card">
+              <div className="total-label">you kept</div>
+              <div className={'total-value' + (kept < 0 ? ' out' : '')} data-testid="total-kept">{fmt(kept)}</div>
+            </div>
+          </div>
+
+          <section className="card">
+            <h2>✏️ add an entry</h2>
+            <div className="form-grid">
+              <input type="text" value={label} placeholder="lemonade stand, paper cups…"
+                aria-label="what was it" maxLength={60}
+                onChange={(e) => setLabel(e.target.value)} />
+              <input type="text" inputMode="decimal" value={amount} placeholder="0.00"
+                aria-label="how much" maxLength={12}
+                onChange={(e) => setAmount(e.target.value)} />
+            </div>
+            <div className="kind-row">
+              <button className="btn in" onClick={() => add('income')} disabled={!ready}>➕ money in</button>
+              <button className="btn out" onClick={() => add('expense')} disabled={!ready}>➖ money out</button>
+            </div>
+            {warn !== '' ? <p className="warn">{warn}</p> : null}
+          </section>
+
+          <section className="card">
+            <h2>📒 the book</h2>
+            {!ready ? <p className="empty">opening your file…</p>
+              : entries.length === 0 ? <p className="empty">no entries yet — your first sale goes on top.</p>
+              : entries.map((entry) => (
+                  <div className="entry" key={entry.id}>
+                    <span className="icon" aria-hidden="true">{entry.kind === 'income' ? '➕' : '➖'}</span>
+                    <span className="label">
+                      {entry.label}
+                      <span className="when"> · {entry.at.slice(0, 10)}</span>
+                    </span>
+                    <span className={'amount ' + (entry.kind === 'income' ? 'in' : 'out')}>
+                      {entry.kind === 'income' ? '+' : '−'}{fmt(entry.cents).replace('−', '')}
+                    </span>
+                    <button className={'remove' + (armed === entry.id ? ' arm' : '')}
+                      onClick={() => remove(entry.id)}
+                      aria-label={armed === entry.id ? 'tap again to remove ' + entry.label : 'remove ' + entry.label}>
+                      {armed === entry.id ? 'sure?' : '✕'}
+                    </button>
+                  </div>
+                ))}
+          </section>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trivia Night</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #fdf4e7; --fg: #3c2a12; --muted: #94805f;
+      --card: #fffdf8; --border: #efdec2;
+      --accent: #d97706; --accent-soft: #fdeacc;
+      --good: #15803d; --good-soft: #dcfce7;
+      --bad: #b91c1c; --bad-soft: #fee2e2;
+      --shadow: 0 10px 30px rgba(120, 70, 10, 0.12);
+    }
+    :root[data-theme="dark"] {
+      --bg: #1c1509; --fg: #f3e9d6; --muted: #b3a184;
+      --card: #2a2010; --border: #453615;
+      --accent: #f59e0b; --accent-soft: #3d2c10;
+      --good: #4ade80; --good-soft: #14351f;
+      --bad: #f87171; --bad-soft: #3d1717;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh;
+    }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 16px 14px 40px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(1.5rem, 5vw, 2.1rem); margin: 6px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 16px; font-size: 0.92rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+    .addrow { display: flex; gap: 8px; }
+    .addrow input {
+      flex: 1; min-height: 48px; border-radius: 12px; border: 2px solid var(--border);
+      background: var(--bg); color: var(--fg); padding: 0 14px; font-size: 1rem;
+    }
+    .btn {
+      min-height: 48px; border-radius: 999px; border: none; cursor: pointer;
+      background: var(--accent); color: #fff; font-size: 1rem; font-weight: 800; padding: 10px 22px;
+    }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .btn.ghost { background: none; border: 2px solid var(--border); color: var(--fg); }
+    .btn.arm { border-color: var(--bad); color: var(--bad); }
+    .btn.big { font-size: 1.15rem; padding: 14px 30px; }
+    .players { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .player-chip {
+      display: inline-flex; align-items: center; gap: 6px; min-height: 44px;
+      border: 2px solid var(--border); border-radius: 999px; padding: 6px 14px;
+      background: var(--accent-soft); font-weight: 800; cursor: pointer; font-size: 0.98rem;
+      color: var(--fg);
+    }
+    .player-chip.arm { border-color: var(--bad); color: var(--bad); }
+    .pass { text-align: center; padding: 26px 10px; }
+    .pass .big { font-size: 3.6rem; }
+    .pass h3 { font-size: 1.4rem; margin: 10px 0 4px; }
+    .scoreline { color: var(--muted); font-size: 0.9rem; margin-bottom: 16px; }
+    .cat { display: inline-block; background: var(--accent-soft); border-radius: 999px; padding: 4px 14px; font-weight: 800; font-size: 0.85rem; margin-bottom: 10px; }
+    .question { font-size: 1.15rem; font-weight: 800; line-height: 1.45; margin: 0 0 14px; }
+    .answers { display: grid; gap: 10px; }
+    .answer {
+      min-height: 52px; border-radius: 14px; border: 2px solid var(--border);
+      background: var(--card); color: var(--fg); font-size: 1rem; font-weight: 700;
+      cursor: pointer; padding: 12px 14px; text-align: left;
+    }
+    .answer:hover:not(:disabled) { border-color: var(--accent); }
+    .answer:disabled { cursor: default; }
+    .answer.right { background: var(--good-soft); border-color: var(--good); }
+    .answer.wrong { background: var(--bad-soft); border-color: var(--bad); }
+    .feedback { margin-top: 12px; font-weight: 800; }
+    .center { text-align: center; }
+    .podium { text-align: center; }
+    .podium .crown { font-size: 3.4rem; }
+    .podium-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 6px; border-bottom: 1px dashed var(--border); font-size: 1.05rem; }
+    .podium-row:last-child { border-bottom: none; }
+    .podium-row .who { font-weight: 800; }
+    .fame { color: var(--muted); font-size: 0.88rem; margin-top: 10px; }
+    .empty { color: var(--muted); font-size: 0.9rem; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    // This app is LLM-FREE (ADR-0011): pass-and-play trivia is a deterministic
+    // rulebook — questions come from the built-in deck, scoring is arithmetic, and
+    // the "multiplayer" is the device moving between hands. A model call would add
+    // latency and a key requirement to a game whose whole point is instant party
+    // energy on one phone, with zero networking.
+    const RESPONSE_SCHEMA = null;
+
+    // ============================================================
+    // 6. YOUR APP — Trivia Night
+    // ============================================================
+    const PLAYER_EMOJI = ['🦊', '🐼', '🦄', '🐸'];
+    const ROUNDS = 2; // questions per player per game
+    const MAX_PLAYERS = 4;
+
+    const DECK = [
+      { cat: '🐾 animals', question: 'What is the fastest land animal?', choices: ['Ostrich', 'Cheetah', 'Horse', 'Greyhound'], answerIndex: 1 },
+      { cat: '🐾 animals', question: 'Which one is NOT a mammal?', choices: ['Dolphin', 'Bat', 'Penguin', 'Elephant'], answerIndex: 2 },
+      { cat: '🐾 animals', question: 'How many legs does a spider have?', choices: ['Six', 'Eight', 'Ten', 'Twelve'], answerIndex: 1 },
+      { cat: '🚀 space', question: 'Which planet has the famous rings?', choices: ['Mars', 'Venus', 'Saturn', 'Mercury'], answerIndex: 2 },
+      { cat: '🚀 space', question: 'What do you call a scientist who studies stars?', choices: ['Astronomer', 'Geologist', 'Biologist', 'Chemist'], answerIndex: 0 },
+      { cat: '🚀 space', question: 'The first person on the Moon was…', choices: ['Yuri Gagarin', 'Neil Armstrong', 'Buzz Lightyear', 'Sally Ride'], answerIndex: 1 },
+      { cat: '🍕 food', question: 'Which fruit wears its seeds on the outside?', choices: ['Banana', 'Strawberry', 'Orange', 'Mango'], answerIndex: 1 },
+      { cat: '🍕 food', question: 'What is sushi usually wrapped in?', choices: ['Lettuce', 'Paper', 'Seaweed', 'Pancake'], answerIndex: 2 },
+      { cat: '🍕 food', question: 'Honey is made by…', choices: ['Wasps', 'Ants', 'Butterflies', 'Bees'], answerIndex: 3 },
+      { cat: '⚽ sports', question: 'How many players are on a football (soccer) team on the pitch?', choices: ['9', '10', '11', '12'], answerIndex: 2 },
+      { cat: '⚽ sports', question: 'In which sport do you serve, volley and smash?', choices: ['Tennis', 'Golf', 'Rowing', 'Rugby'], answerIndex: 0 },
+      { cat: '⚽ sports', question: 'An Olympic gold medal is mostly made of…', choices: ['Gold', 'Silver', 'Bronze', 'Chocolate'], answerIndex: 1 },
+      { cat: '🤪 silly', question: 'Which of these can you NOT hold in your left hand?', choices: ['A pencil', 'An apple', 'Your left elbow', 'A spoon'], answerIndex: 2 },
+      { cat: '🤪 silly', question: 'What has hands but cannot clap?', choices: ['A clock', 'A crab', 'A robot', 'A statue'], answerIndex: 0 },
+      { cat: '🤪 silly', question: 'What gets wetter the more it dries?', choices: ['A sponge', 'A towel', 'An umbrella', 'A duck'], answerIndex: 1 },
+      { cat: '🌍 world', question: 'Which country is famous for the Eiffel Tower?', choices: ['Italy', 'Spain', 'France', 'Greece'], answerIndex: 2 },
+      { cat: '🌍 world', question: 'What is the biggest hot desert?', choices: ['Gobi', 'Sahara', 'Mojave', 'Atacama'], answerIndex: 1 },
+      { cat: '🌍 world', question: 'The Great Wall is in…', choices: ['India', 'Japan', 'China', 'Egypt'], answerIndex: 2 },
+    ];
+
+    function shuffled(list) {
+      const out = list.slice();
+      for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const t = out[i]; out[i] = out[j]; out[j] = t;
+      }
+      return out;
+    }
+
+    const rankedOf = (match) => match.order
+      .map((p) => ({ ...p, score: match.scores[p.id] }))
+      .sort((a, b) => b.score - a.score);
+
+    // The roster is a real table, not key-value state: a kv write that races the
+    // initial hydration gets overwritten when the stored value arrives, so a player
+    // added in the first moments after load could silently vanish. SQL inserts have
+    // no such race — and the roster rides along in the exported .sqlite for free.
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS tn_players (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL
+      )`,
+    ];
+
+    function App() {
+      const { isReady, theme } = useSnugApp({
+        appId: 'trivia-night',
+        displayName: 'Trivia Night',
+        description: 'Pass-and-play trivia for 2-4 players on one device — zero networking, zero setup, instant game night.',
+        iconEmoji: '🎉',
+        iconColor: '#d97706',
+      });
+      const db = useAppDB();
+      // Roster: SQL (see DDL note). Hall of fame: kv is safe here because it is only
+      // written at podium time, long after hydration has settled.
+      const [players, setPlayers] = useState([]); // [{id, name, emoji}] from tn_players
+      const [ready, setReady] = useState(false);
+      const [fame, setFame] = usePersistedState('tn-fame', null); // {name, score, when}
+      const [name, setName] = useState('');
+      const [armedRemove, setArmedRemove] = useState(null);
+      const [match, setMatch] = useState(null);
+      const [dbErr, setDbErr] = useState(null);
+      // match: { order:[{name,emoji}], scores:{name:n}, deck:[q], turn:0, phase:'pass'|'ask'|'feedback', picked:null }
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const reload = async () => {
+        const rows = await db.exec('SELECT id, name, emoji FROM tn_players ORDER BY id', []);
+        setPlayers(rows.rows.map(([id, playerName, emoji]) => ({ id, name: playerName, emoji })));
+      };
+
+      useEffect(() => {
+        if (!isReady) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []);
+            if (!cancelled) { await reload(); setReady(true); }
+          } catch (e) {
+            if (!cancelled) setDbErr(String(e && e.message || e));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isReady]);
+
+      // Hall of fame update is a side effect of the game ENDING, never of rendering.
+      const gameOver = match !== null && match.turn >= match.deck.length;
+      useEffect(() => {
+        if (!gameOver) return;
+        const top = rankedOf(match)[0];
+        setFame((prev) => (prev === null || top.score > prev.score)
+          ? { name: top.name, score: top.score, when: new Date().toISOString().slice(0, 10) }
+          : prev);
+      }, [gameOver]);
+
+      // No form element: the sandbox (allow-scripts only) blocks form submission before
+      // the submit event fires, so onSubmit never runs in a real browser. Button
+      // onClick + Enter on the input are the working pattern.
+      const addPlayer = async () => {
+        const clean = name.trim().slice(0, 20);
+        if (clean === '' || players.length >= MAX_PLAYERS || !ready) return;
+        setName('');
+        try {
+          await db.exec('INSERT INTO tn_players (name, emoji) VALUES (?, ?)',
+            [clean, PLAYER_EMOJI[players.length % PLAYER_EMOJI.length]]);
+          await reload();
+        } catch (err) { setDbErr(String(err && err.message || err)); }
+      };
+
+      const removePlayer = async (player) => {
+        if (armedRemove !== player.id) { setArmedRemove(player.id); return; } // two-tap, never window.confirm
+        setArmedRemove(null);
+        try {
+          await db.exec('DELETE FROM tn_players WHERE id = ?', [player.id]);
+          await reload();
+        } catch (err) { setDbErr(String(err && err.message || err)); }
+      };
+
+      const startGame = () => {
+        // Scores key on the roster id, not the name — two kids named Sam keep separate scores.
+        const scores = {};
+        for (const p of players) scores[p.id] = 0;
+        setMatch({
+          order: players.slice(),
+          scores,
+          deck: shuffled(DECK).slice(0, players.length * ROUNDS),
+          turn: 0,
+          phase: 'pass',
+          picked: null,
+        });
+      };
+
+      if (!isReady) return <div className="connecting">setting up game night…</div>;
+
+      // ── Podium ──
+      if (gameOver) {
+        const ranked = rankedOf(match);
+        const top = ranked[0];
+        const isTie = ranked.length > 1 && ranked[1].score === top.score;
+        return (
+          <div className="wrap">
+            <h1>Trivia Night</h1>
+            <p className="sub">and the winner is…</p>
+            <div className="card podium">
+              <div className="crown">👑</div>
+              <h3>{isTie ? 'it’s a tie!' : top.emoji + ' ' + top.name + ' wins!'}</h3>
+              {ranked.map((p) => (
+                <div className="podium-row" key={p.id}>
+                  <span className="who">{p.emoji} {p.name}</span>
+                  <span>{p.score} point{p.score === 1 ? '' : 's'}</span>
+                </div>
+              ))}
+              <div className="center" style={{ marginTop: 16, display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                <button className="btn" onClick={startGame}>🔄 play again</button>
+                <button className="btn ghost" onClick={() => setMatch(null)}>👥 change players</button>
+              </div>
+              {fame !== null ? <p className="fame">🏆 hall of fame: {fame.name} — {fame.score} points ({fame.when})</p> : null}
+            </div>
+          </div>
+        );
+      }
+
+      // ── Mid-game ──
+      if (match !== null) {
+        const player = match.order[match.turn % match.order.length];
+        const q = match.deck[match.turn];
+
+        if (match.phase === 'pass') return (
+          <div className="wrap">
+            <h1>Trivia Night</h1>
+            <p className="sub">question {match.turn + 1} of {match.deck.length}</p>
+            <div className="card pass">
+              <div className="big">{player.emoji}</div>
+              <h3>pass the device to {player.name}!</h3>
+              <p className="scoreline">no peeking, everyone else 🙈</p>
+              <button className="btn big" onClick={() => setMatch({ ...match, phase: 'ask', picked: null })}>
+                I’m {player.name} — ready!
+              </button>
+            </div>
+          </div>
+        );
+
+        const answered = match.picked !== null;
+        const right = answered && match.picked === q.answerIndex;
+        const isLastTurn = match.turn + 1 >= match.deck.length;
+        return (
+          <div className="wrap">
+            <h1>Trivia Night</h1>
+            <p className="sub">{player.emoji} {player.name} · question {match.turn + 1} of {match.deck.length} · {match.scores[player.id]} point{match.scores[player.id] === 1 ? '' : 's'}</p>
+            <div className="card">
+              <span className="cat">{q.cat}</span>
+              <p className="question" data-testid="tn-question">{q.question}</p>
+              <div className="answers">
+                {q.choices.map((choice, i) => (
+                  <button key={i}
+                    className={'answer' + (answered ? (i === q.answerIndex ? ' right' : i === match.picked ? ' wrong' : '') : '')}
+                    data-testid="tn-answer" disabled={answered}
+                    onClick={() => {
+                      if (answered) return;
+                      const scores = { ...match.scores };
+                      if (i === q.answerIndex) scores[player.id] += 1;
+                      setMatch({ ...match, picked: i, scores, phase: 'feedback' });
+                    }}>
+                    {choice}
+                  </button>
+                ))}
+              </div>
+              {answered ? (
+                <div>
+                  <div className="feedback" data-testid="tn-feedback">
+                    {right ? '✓ +1 for ' + player.name + '!' : '✗ oops — it was “' + q.choices[q.answerIndex] + '”'}
+                  </div>
+                  <div className="center" style={{ marginTop: 14 }}>
+                    <button className="btn" onClick={() => setMatch({ ...match, turn: match.turn + 1, phase: 'pass', picked: null })}>
+                      {isLastTurn ? 'see the podium 🏆' : 'pass it on →'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      }
+
+      // ── Lobby ──
+      return (
+        <div className="wrap">
+          <h1>Trivia Night</h1>
+          <p className="sub">2-4 players, one device, zero setup — pass it around and play.</p>
+          <div className="card">
+            <h2>👥 who’s playing?</h2>
+            {dbErr && <p className="empty">storage hiccup: {dbErr}</p>}
+            <div className="addrow">
+              <input type="text" value={name} placeholder="type a name…" maxLength={20}
+                aria-label="player name" onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addPlayer(); }} />
+              <button className="btn" type="button" onClick={addPlayer}
+                disabled={!ready || name.trim() === '' || players.length >= MAX_PLAYERS}>
+                add player
+              </button>
+            </div>
+            {players.length === 0
+              ? <p className="empty" style={{ marginTop: 10 }}>{ready ? 'add at least two players to start.' : 'setting up game night…'}</p>
+              : (
+                <div className="players">
+                  {players.map((p) => (
+                    <button key={p.id} className={'player-chip' + (armedRemove === p.id ? ' arm' : '')}
+                      onClick={() => removePlayer(p)}
+                      aria-label={armedRemove === p.id ? 'tap again to remove ' + p.name : 'remove ' + p.name}>
+                      {p.emoji} {p.name}{armedRemove === p.id ? ' — sure?' : ''}
+                    </button>
+                  ))}
+                </div>
+              )}
+            <div className="center" style={{ marginTop: 16 }}>
+              <button className="btn big" onClick={startGame} disabled={players.length < 2}>
+                🎉 start the game
+              </button>
+            </div>
+            <p className="empty" style={{ marginTop: 10, textAlign: 'center' }}>
+              each player answers {ROUNDS} questions — most points takes the crown 👑
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

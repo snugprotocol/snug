@@ -20,8 +20,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export const FIXTURE_PORT = 43117;
-/** MUST stay 8787: the app's vite.config.ts dev proxy targets 127.0.0.1:8787. */
-export const SERVER_PORT = 8787;
+/**
+ * Default 8787: the app's vite.config.ts dev proxy targets 127.0.0.1:8787. Both sides
+ * honor SNUG_SERVER_PORT (the playwright config forwards it to the vite webServer), so
+ * a parallel worktree can run this suite while another checkout's dev server holds the
+ * default port — the proxy target and the reference server always move together.
+ */
+export const SERVER_PORT = Number(process.env.SNUG_SERVER_PORT ?? '') || 8787;
 export const APP_PORT = 43119;
 
 export const FIXTURE_URL = `http://127.0.0.1:${FIXTURE_PORT}`;

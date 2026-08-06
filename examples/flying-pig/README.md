@@ -1,25 +1,24 @@
-# flying pig
+# flying pig feed!
 
-The origin-story arcade game: tap or press space to flap a pixel pig through wooden fence
-towers. The agent is the flight coach.
+The origin-story arcade game, ported to the contract as the **LLM-free exemplar**
+(ADR-0011): aim a slingshot, throw food at flying pigs, chase combos. No model call
+anywhere in the loop.
 
 ## What it demos
 
-- **The agent as game director**: after every run the app sends
-  `sendMessage('run_over', {score, best, runsPlayed, lastDifficulty})` with a
-  `responseSchema` of `{difficulty: {speed, gap}, message}`. The coach retunes the next
-  run's obstacle speed and gap from your score, and heckles (or encourages) you in
-  character.
-- **Streaming**: the coach's line arrives via `opts.onStream`, so the taunt types itself
-  into the speech bubble while the model is still talking.
-- **Defensive by design**: difficulty replies are clamped (`speed` 0.6–2.5, `gap`
-  130–240 px) and missing fields keep the previous values; if the reply errors or is raw
-  text, the game nudges difficulty locally and keeps playing — the coach chip always shows
-  the *actual* live settings.
-- **Art with no images**: the pig (two wing frames), clouds, and terrain are pure CSS —
-  `box-shadow` pixel sprites and gradients — because the sandbox allows no remote images.
-- **Persistence**: best score, run count, and the coach's last tuning survive reloads via
-  `usePersistedState`.
+- **LLM-free by declaration**: `RESPONSE_SCHEMA = null` and the authored code never
+  calls `sendMessage` — enforced by the validate suite's posture check. Reflexes, spawn
+  timers, physics and scoring are all local; a round trip would only add latency to a
+  game whose appeal is instant response. The agent's role ended when it authored the app.
+- **Even an LLM-free app honors the handshake**: first paint is gated on `hostReady`,
+  because the persisted high score hydrates through the bridge — the handshake is the
+  contract, the agent call is not.
+- **Dynamic difficulty, locally**: pig speed scales with the player's measured accuracy —
+  the "game director" is a formula, not a model.
+- **Persistence**: the high score survives reloads via `usePersistedState` (a read-only
+  boot pattern — nothing writes until the first game ends).
+- **Art with no images**: pigs, food, clouds and terrain are emoji + CSS gradients —
+  the sandbox allows no remote images.
 
 ## Files
 

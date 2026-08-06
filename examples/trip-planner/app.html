@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Family Trip Planner</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #eefaf6; --fg: #113a31; --muted: #5f8a7e;
+      --card: #ffffff; --border: #d3ece2;
+      --accent: #0d9488; --accent-soft: #d9f2ec;
+      --good: #15803d; --bad: #b91c1c;
+      --shadow: 0 10px 30px rgba(10, 90, 70, 0.10);
+    }
+    :root[data-theme="dark"] {
+      --bg: #0d1c17; --fg: #dff2ec; --muted: #86ab9f;
+      --card: #142a23; --border: #24443a;
+      --accent: #2dd4bf; --accent-soft: #123a32;
+      --good: #4ade80; --bad: #f87171;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh;
+    }
+    .wrap { max-width: 680px; margin: 0 auto; padding: 16px 14px 40px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(1.5rem, 5vw, 2.1rem); margin: 6px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 14px; font-size: 0.92rem; }
+    .own {
+      display: flex; gap: 10px; align-items: flex-start;
+      background: var(--accent-soft); border: 1px solid var(--border);
+      border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; font-size: 0.9rem;
+    }
+    .own .arrow { font-size: 1.2rem; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+    .tab {
+      min-height: 48px; border-radius: 999px; border: 2px solid var(--border);
+      background: var(--card); color: var(--fg); font-size: 0.98rem; font-weight: 800;
+      cursor: pointer; padding: 8px 18px;
+    }
+    .tab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+    .addrow { display: flex; gap: 8px; }
+    .addrow input {
+      flex: 1; min-width: 0; min-height: 48px; border-radius: 12px; border: 2px solid var(--border);
+      background: var(--bg); color: var(--fg); padding: 0 14px; font-size: 1rem;
+    }
+    .btn {
+      min-height: 48px; border-radius: 999px; border: none; cursor: pointer;
+      background: var(--accent); color: #fff; font-size: 0.98rem; font-weight: 800; padding: 10px 20px;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .btn.ghost { background: none; border: 2px solid var(--border); color: var(--fg); }
+    .btn.arm { border-color: var(--bad); color: var(--bad); }
+    .place-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+    .place {
+      border: 1px solid var(--border); border-radius: 14px; padding: 12px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .place .emoji { font-size: 1.8rem; }
+    .place .name { font-weight: 800; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .remove {
+      min-height: 44px; min-width: 44px; border-radius: 10px; border: 2px solid var(--border);
+      background: none; color: var(--muted); cursor: pointer; font-size: 0.8rem; font-weight: 700;
+    }
+    .remove.arm { border-color: var(--bad); color: var(--bad); }
+    .pack-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--border); }
+    .pack-row:last-child { border-bottom: none; }
+    .check {
+      min-height: 44px; min-width: 44px; border-radius: 12px; border: 2px solid var(--border);
+      background: var(--card); cursor: pointer; font-size: 1.1rem; color: var(--fg);
+    }
+    .check[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .pack-name { flex: 1; font-size: 1rem; }
+    .pack-name.done { text-decoration: line-through; color: var(--muted); }
+    .meter-bg { height: 12px; border-radius: 999px; background: var(--accent-soft); overflow: hidden; margin-top: 12px; }
+    .meter { height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.3s; }
+    .meter-label { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+    .day-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .day-chip {
+      min-height: 44px; min-width: 44px; border-radius: 12px; border: 2px solid var(--border);
+      background: var(--card); color: var(--fg); font-weight: 800; cursor: pointer;
+    }
+    .day-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .plan-day { margin-top: 12px; }
+    .plan-day h3 { font-size: 0.95rem; margin: 0 0 6px; }
+    .plan-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 0.95rem; }
+    .plan-row .txt { flex: 1; }
+    .empty { color: var(--muted); font-size: 0.9rem; }
+    .warn { color: var(--bad); font-size: 0.9rem; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    // This app is LLM-FREE (ADR-0011): a trip plan is the family's OWN data —
+    // places, packing, day plans — and every operation on it (add, check, remove)
+    // is deterministic. There is nothing here for a model to decide; the whole
+    // point is that the plan lives in a SQLite file the family keeps.
+    const RESPONSE_SCHEMA = null;
+
+    // ============================================================
+    // 6. YOUR APP — Family Trip Planner (single-user v1)
+    // ============================================================
+    const PLACE_EMOJI = ['🏔️', '🏖️', '🏰', '🌋', '🗽', '🎡', '🛶', '🐠'];
+    const DAYS = [1, 2, 3, 4, 5, 6, 7];
+
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS trip_places (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS trip_packing (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item TEXT NOT NULL,
+        packed INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS trip_days (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        day INTEGER NOT NULL,
+        plan TEXT NOT NULL
+      )`,
+    ];
+
+    function App() {
+      const { isReady, theme } = useSnugApp({
+        appId: 'trip-planner',
+        displayName: 'Family Trip Planner',
+        description: 'Dream places, packing list and a day-by-day plan — the whole trip lives in a SQLite file your family owns.',
+        iconEmoji: '🧳',
+        iconColor: '#0d9488',
+      });
+      const db = useAppDB();
+      const [tab, setTab] = useState('dream'); // dream | packing | plan
+      const [ready, setReady] = useState(false);
+      const [places, setPlaces] = useState([]);
+      const [packing, setPacking] = useState([]);
+      const [plans, setPlans] = useState([]);
+      const [placeName, setPlaceName] = useState('');
+      const [packItem, setPackItem] = useState('');
+      const [planText, setPlanText] = useState('');
+      const [day, setDay] = useState(1);
+      const [armed, setArmed] = useState(null); // 'place-3' | 'pack-5' | 'plan-2'
+      const [dbErr, setDbErr] = useState(null);
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const reload = async () => {
+        const p = await db.exec('SELECT id, name, emoji FROM trip_places ORDER BY id', []);
+        setPlaces(p.rows.map(([id, name, emoji]) => ({ id, name, emoji })));
+        const k = await db.exec('SELECT id, item, packed FROM trip_packing ORDER BY id', []);
+        setPacking(k.rows.map(([id, item, packed]) => ({ id, item, packed: packed === 1 })));
+        const d = await db.exec('SELECT id, day, plan FROM trip_days ORDER BY day, id', []);
+        setPlans(d.rows.map(([id, dayNo, plan]) => ({ id, day: dayNo, plan })));
+      };
+
+      useEffect(() => {
+        if (!isReady) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []);
+            if (!cancelled) { await reload(); setReady(true); }
+          } catch (e) {
+            if (!cancelled) setDbErr(String(e && e.message || e));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isReady]);
+
+      const guard = async (fn) => {
+        try { await fn(); await reload(); } catch (e) { setDbErr(String(e && e.message || e)); }
+      };
+
+      // No form element anywhere: the sandbox blocks form submission before the submit
+      // event fires (onSubmit never runs in a real browser) — buttons use onClick and
+      // the inputs accept Enter via onKeyDown.
+      const addPlace = () => {
+        const clean = placeName.trim().slice(0, 60);
+        if (clean === '') return;
+        const emoji = PLACE_EMOJI[places.length % PLACE_EMOJI.length];
+        setPlaceName('');
+        guard(() => db.exec('INSERT INTO trip_places (name, emoji) VALUES (?, ?)', [clean, emoji]));
+      };
+
+      const addPack = () => {
+        const clean = packItem.trim().slice(0, 60);
+        if (clean === '') return;
+        setPackItem('');
+        guard(() => db.exec('INSERT INTO trip_packing (item, packed) VALUES (?, 0)', [clean]));
+      };
+
+      const addPlan = () => {
+        const clean = planText.trim().slice(0, 120);
+        if (clean === '') return;
+        setPlanText('');
+        guard(() => db.exec('INSERT INTO trip_days (day, plan) VALUES (?, ?)', [day, clean]));
+      };
+
+      const togglePacked = (row) => {
+        guard(() => db.exec('UPDATE trip_packing SET packed = ? WHERE id = ?', [row.packed ? 0 : 1, row.id]));
+      };
+
+      // Literal SQL only (validate-suite lint): statements assembled from strings are
+      // the habit that graduates into injection — each removable kind owns its literal.
+      const DELETE_SQL = {
+        place: 'DELETE FROM trip_places WHERE id = ?',
+        pack: 'DELETE FROM trip_packing WHERE id = ?',
+        plan: 'DELETE FROM trip_days WHERE id = ?',
+      };
+      const removeRow = (kind, id) => {
+        const key = kind + '-' + id;
+        if (armed !== key) { setArmed(key); return; } // two-tap, never window.confirm
+        setArmed(null);
+        guard(() => db.exec(DELETE_SQL[kind], [id]));
+      };
+
+      if (!isReady) return <div className="connecting">unfolding the map…</div>;
+
+      const packedCount = packing.filter((p) => p.packed).length;
+
+      return (
+        <div className="wrap">
+          <h1>Family Trip Planner</h1>
+          <p className="sub">dream it, pack it, plan it — one file your family owns.</p>
+
+          <div className="own">
+            <span className="arrow" aria-hidden="true">⬆︎</span>
+            <p style={{ margin: 0 }}><b>this trip is yours.</b> every place, sock and plan below lives in a real
+            {' '}<b>.sqlite</b> file — the <b>export .sqlite</b> button in the bar above downloads the whole
+            trip to keep or share. no account, no lock-in.</p>
+          </div>
+
+          {dbErr && <p className="warn">storage hiccup: {dbErr}</p>}
+
+          <div className="tabs" role="group" aria-label="planner sections">
+            <button className={'tab' + (tab === 'dream' ? ' on' : '')} onClick={() => setTab('dream')}>🌍 dream board</button>
+            <button className={'tab' + (tab === 'packing' ? ' on' : '')} onClick={() => setTab('packing')}>🎒 packing</button>
+            <button className={'tab' + (tab === 'plan' ? ' on' : '')} onClick={() => setTab('plan')}>🗓️ day plan</button>
+          </div>
+
+          {tab === 'dream' ? (
+            <section className="card">
+              <h2>🌍 where could we go?</h2>
+              <div className="addrow">
+                <input type="text" value={placeName} placeholder="Norway, grandma’s house, the moon…"
+                  aria-label="add a dream place" maxLength={60}
+                  onChange={(e) => setPlaceName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addPlace(); }} />
+                <button className="btn" type="button" onClick={addPlace} disabled={!ready || placeName.trim() === ''}>add place</button>
+              </div>
+              <div style={{ marginTop: 12 }}>
+                {!ready ? <p className="empty">opening your file…</p>
+                  : places.length === 0 ? <p className="empty">no dreams yet — name a place and it’s on the board.</p>
+                  : (
+                    <div className="place-grid">
+                      {places.map((p) => (
+                        <div className="place" key={p.id}>
+                          <span className="emoji" aria-hidden="true">{p.emoji}</span>
+                          <span className="name">{p.name}</span>
+                          <button className={'remove' + (armed === 'place-' + p.id ? ' arm' : '')}
+                            onClick={() => removeRow('place', p.id)}
+                            aria-label={armed === 'place-' + p.id ? 'tap again to remove ' + p.name : 'remove ' + p.name}>
+                            {armed === 'place-' + p.id ? 'sure?' : '✕'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            </section>
+          ) : tab === 'packing' ? (
+            <section className="card">
+              <h2>🎒 what do we pack?</h2>
+              <div className="addrow">
+                <input type="text" value={packItem} placeholder="sunscreen, swimsuit, teddy…"
+                  aria-label="add something to pack" maxLength={60}
+                  onChange={(e) => setPackItem(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addPack(); }} />
+                <button className="btn" type="button" onClick={addPack} disabled={!ready || packItem.trim() === ''}>add item</button>
+              </div>
+              <div style={{ marginTop: 12 }}>
+                {packing.length === 0 ? <p className="empty">the bag is empty — add the first thing.</p>
+                  : packing.map((row) => (
+                      <div className="pack-row" key={row.id}>
+                        <button className="check" aria-pressed={row.packed} aria-label={'pack ' + row.item}
+                          onClick={() => togglePacked(row)}>
+                          {row.packed ? '✓' : ''}
+                        </button>
+                        <span className={'pack-name' + (row.packed ? ' done' : '')}>{row.item}</span>
+                        <button className={'remove' + (armed === 'pack-' + row.id ? ' arm' : '')}
+                          onClick={() => removeRow('pack', row.id)}
+                          aria-label={armed === 'pack-' + row.id ? 'tap again to remove ' + row.item : 'remove ' + row.item}>
+                          {armed === 'pack-' + row.id ? 'sure?' : '✕'}
+                        </button>
+                      </div>
+                    ))}
+              </div>
+              {packing.length > 0 ? (
+                <div>
+                  <div className="meter-bg"><div className="meter" style={{ width: Math.round(packedCount / packing.length * 100) + '%' }} /></div>
+                  <p className="meter-label">{packedCount} of {packing.length} packed{packedCount === packing.length ? ' — ready to go! 🚀' : ''}</p>
+                </div>
+              ) : null}
+            </section>
+          ) : (
+            <section className="card">
+              <h2>🗓️ what happens each day?</h2>
+              <div className="day-chips" role="group" aria-label="pick a day">
+                {DAYS.map((d) => (
+                  <button key={d} className={'day-chip' + (day === d ? ' on' : '')} onClick={() => setDay(d)}
+                    aria-label={'day ' + d}>{d}</button>
+                ))}
+              </div>
+              <div className="addrow">
+                <input type="text" value={planText} placeholder={'day ' + day + ': breakfast pancakes, then…'}
+                  aria-label="what’s the plan" maxLength={120}
+                  onChange={(e) => setPlanText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addPlan(); }} />
+                <button className="btn" type="button" onClick={addPlan} disabled={!ready || planText.trim() === ''}>add plan</button>
+              </div>
+              {DAYS.map((d) => {
+                const dayPlans = plans.filter((p) => p.day === d);
+                if (dayPlans.length === 0) return null;
+                return (
+                  <div className="plan-day" key={d}>
+                    <h3>day {d}</h3>
+                    {dayPlans.map((p) => (
+                      <div className="plan-row" key={p.id}>
+                        <span aria-hidden="true">•</span>
+                        <span className="txt">{p.plan}</span>
+                        <button className={'remove' + (armed === 'plan-' + p.id ? ' arm' : '')}
+                          onClick={() => removeRow('plan', p.id)}
+                          aria-label={armed === 'plan-' + p.id ? 'tap again to remove this plan' : 'remove this plan'}>
+                          {armed === 'plan-' + p.id ? 'sure?' : '✕'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+              {plans.length === 0 ? <p className="empty" style={{ marginTop: 10 }}>nothing planned yet — day 1 is waiting.</p> : null}
+            </section>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

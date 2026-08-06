@@ -10,7 +10,7 @@ import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
-import type { SnugDbDriver } from '@snugprotocol/db';
+import { createDbDriver, createMemoryBackend, type SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type RunnerHost } from '@snugprotocol/runner';
 
@@ -207,16 +207,34 @@ export default function RunView(): ReactElement {
   const transport = useMemo(() => createAppTransport(mode, provider, onLlmEvent), [mode, provider, onLlmEvent]);
   // The db driver is the SHARED user DB's materialized face (ADR-0010) — never closed
   // here; it lives as long as the page. App data lands as native app_* tables.
+  //
+  // EXCEPT for a read-only starter browse (adversarial review of AL-08, finding 1):
+  // an UNINSTALLED starter gets an EPHEMERAL in-memory driver instead. Browsing must
+  // leave ZERO trace in the user's file — before this, playing an uninstalled starter
+  // materialized orphaned `app_x<hex("starter--…")>__*` tables into the user DB (the
+  // kv-orphan leak AL-01's live sweep logged), which then rode along in every export
+  // with no matching `snug_apps` row. The memory backend dies with the view; Install
+  // makes a real copy whose OWN uuid namespace starts fresh in the user file (the
+  // pre-install play data intentionally vanishes — trying is not owning).
   const [db, setDb] = useState<SnugDbDriver | null>(null);
   useEffect(() => {
     let cancelled = false;
+    if (isStarterId(id)) {
+      const ephemeral = createDbDriver({ backend: createMemoryBackend(), locateWasm });
+      setDb(ephemeral);
+      return () => {
+        cancelled = true;
+        setDb(null);
+        void ephemeral.close();
+      };
+    }
     void getUserDb().then((userDb) => {
       if (!cancelled) setDb(userDb.driver);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [id]);
 
   // AC18: a direct /run/starter--* visit (bookmark, back button, deep link) opens the
   // user's OWN copy when they already installed it — the same install_source identity

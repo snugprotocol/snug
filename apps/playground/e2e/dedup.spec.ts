@@ -17,7 +17,11 @@ test.describe('AC8 — marketplace install dedup', () => {
     // copy is a deliberate two-step act (owner request, 2026-08-04).
     await page.getByRole('button', { name: /open chess/i }).click();
     await page.getByTestId('starter-install').click();
-    await expect(page).toHaveURL(/\/run\//, { timeout: 20_000 });
+    // Wait for the INSTALLED url shape (uuid), not just /run/ — the read-only starter
+    // route already matches /\/run\//, so the unanchored wait captured firstUrl BEFORE
+    // the install navigation landed and the later toHaveURL(firstUrl) raced it (flaky
+    // 2-of-3 full runs; found by the AL-08 adversarial review).
+    await expect(page).toHaveURL(/\/run\/[0-9a-f-]{36}/, { timeout: 20_000 });
     const firstUrl = page.url();
 
     // SPA navigation back (ephemeral-context OPFS does not survive hard reloads —
