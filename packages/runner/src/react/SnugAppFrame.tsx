@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactElement, type Ref } from 'react';
 import { injectCsp } from '../csp.js';
 import { createRunnerHost, type RunnerHost, type RunnerHostBaseOptions, type RunnerHostOptions } from '../host.js';
-import type { DbDriver } from '../transport.js';
+import type { DbDriver, NetHandler } from '../transport.js';
 
 export type SnugAppFrameProps = Omit<RunnerHostBaseOptions, 'iframe'> &
-  ({ db: DbDriver; dbNamespace: string } | { db?: undefined; dbNamespace?: undefined }) & {
+  ({ db: DbDriver; dbNamespace: string } | { db?: undefined; dbNamespace?: undefined }) &
+  ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined }) & {
     /** The untrusted app HTML. RUNNER_CSP is injected before it ever reaches the iframe. */
     html: string;
     className?: string;
@@ -31,8 +32,8 @@ function applyRef(ref: Ref<RunnerHost | null> | undefined, value: RunnerHost | n
  *
  * Semantics (deliberate, documented):
  * - The host is keyed on the mounted iframe element and created once per mount.
- *   Identity options (transport, budgetKey, budgetStore, db, dbNamespace, locale) are
- *   captured at mount — pass a React `key` to remount when they must change.
+ *   Identity options (transport, budgetKey, budgetStore, db, dbNamespace, net, netAppId,
+ *   locale) are captured at mount — pass a React `key` to remount when they must change.
  * - `html` changes flow through the RESET path, not host recreation: the same host
  *   persists, the srcdoc reassignment is counted as an expected load, and in-flight
  *   work is superseded with SUPERSEDED terminal frames on the reload — never dropped
@@ -85,6 +86,7 @@ export function SnugAppFrame(props: SnugAppFrameProps): ReactElement {
       onBudgetExhausted: () => propsRef.current.onBudgetExhausted?.(),
       onNavigatedAway: () => propsRef.current.onNavigatedAway?.(),
       ...(initial.db !== undefined ? { db: initial.db, dbNamespace: initial.dbNamespace } : {}),
+      ...(initial.net !== undefined ? { net: initial.net, netAppId: initial.netAppId } : {}),
     } as RunnerHostOptions);
     hostRef.current = host;
     applyRef(propsRef.current.controlsRef, host);

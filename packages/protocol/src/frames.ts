@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ERROR_CODES, FRAME_TYPES, LIMITS, PROTOCOL_VERSION } from './constants.js';
+import { ERROR_CODES, FRAME_TYPES, LIMITS, NET_METHODS, PROTOCOL_VERSION, STRIP_HEADERS } from './constants.js';
 
 const version = z.literal(PROTOCOL_VERSION);
 const id = z.string().min(1).max(LIMITS.ID_CHARS);
@@ -23,6 +23,8 @@ export const hostReadySchema = z.object({
     streaming: z.boolean(),
     db: z.boolean(),
     auth: z.boolean(),
+    /** The envelope net capability (AL-03). Optional so pre-AL-03 host-ready frames still parse (R2). */
+    net: z.boolean().optional(),
   }),
   theme: z.enum(['light', 'dark']),
   locale: z.string().max(32).optional(),
@@ -109,6 +111,65 @@ export const dbResponseSchema = z.union([
   z.object({ ...dbResponseBase, ok: z.literal(false), error: responseErrorSchema }),
 ]);
 
+const NET_CREDENTIAL_HEADER_SET = new Set<string>(STRIP_HEADERS);
+
+/**
+ * INTERNAL draft — AL-03's envelope net capability (plan D1; out of json-schemas
+ * SOURCES until the Beta gate, locked by in-package tests instead).
+ *
+ * Strict by design (C1/R5): NO appId field exists — the runner's net binding is
+ * HOST-assigned exactly like `dbNamespace`, so an app cannot name another app's auth
+ * spec; a headers object carrying a credential header (STRIP_HEADERS) is rejected at
+ * the bridge (the executor additionally strips, belt and braces); and a `body` on
+ * GET/HEAD is strict-rejected (amendment R2).
+ */
+export const netRequestSchema = z
+  .strictObject({
+    v: version,
+    type: z.literal(FRAME_TYPES.netRequest),
+    requestId: id,
+    instanceId: id,
+    url: z.string().min(1).max(4096),
+    method: z.enum(NET_METHODS),
+    headers: z.record(z.string().min(1).max(128), z.string().max(4096)).optional(),
+    /** Byte cap (MAX_NET_REQUEST_BODY_BYTES) is executor-enforced; chars ≤ bytes, so this is a cheap early bound. */
+    body: z.string().max(LIMITS.MAX_NET_REQUEST_BODY_BYTES).optional(),
+  })
+  .superRefine((frame, ctx) => {
+    if ((frame.method === 'GET' || frame.method === 'HEAD') && frame.body !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['body'], message: `body is not allowed on ${frame.method} (R2 amendment)` });
+    }
+    for (const name of Object.keys(frame.headers ?? {})) {
+      if (NET_CREDENTIAL_HEADER_SET.has(name.toLowerCase())) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['headers', name],
+          message: `credential header '${name}' may never cross the bridge (C1) — the host injects credentials itself`,
+        });
+      }
+    }
+  });
+
+const netResponseBase = { v: version, type: z.literal(FRAME_TYPES.netResponse), requestId: id } as const;
+
+/**
+ * INTERNAL draft (see netRequestSchema). Success carries the HTTP status verbatim plus
+ * WHITELIST-only headers (already value-scrubbed by the executor) and the scrubbed
+ * body; `truncated` marks a response the executor had to cut at the size cap. Envelope
+ * failures use the shared error shape (errors as data, R5).
+ */
+export const netResponseSchema = z.union([
+  z.strictObject({
+    ...netResponseBase,
+    ok: z.literal(true),
+    status: z.number().int().min(100).max(599),
+    headers: z.record(z.string(), z.string()),
+    body: z.string(),
+    truncated: z.boolean().optional(),
+  }),
+  z.strictObject({ ...netResponseBase, ok: z.literal(false), error: responseErrorSchema }),
+]);
+
 export const hostEventSchema = z.object({
   v: version,
   type: z.literal(FRAME_TYPES.hostEvent),
@@ -132,6 +193,8 @@ export type AppResponseFrame = z.infer<typeof appResponseSchema>;
 export type ResponseError = z.infer<typeof responseErrorSchema>;
 export type DbRequestFrame = z.infer<typeof dbRequestSchema>;
 export type DbResponseFrame = z.infer<typeof dbResponseSchema>;
+export type NetRequestFrame = z.infer<typeof netRequestSchema>;
+export type NetResponseFrame = z.infer<typeof netResponseSchema>;
 export type HostEventFrame = z.infer<typeof hostEventSchema>;
 export type AppEventFrame = z.infer<typeof appEventSchema>;
 
@@ -143,6 +206,8 @@ export type Frame =
   | AppResponseFrame
   | DbRequestFrame
   | DbResponseFrame
+  | NetRequestFrame
+  | NetResponseFrame
   | HostEventFrame
   | AppEventFrame;
 
@@ -154,6 +219,8 @@ const FRAME_SCHEMAS: Record<string, z.ZodType<Frame>> = {
   [FRAME_TYPES.appResponse]: appResponseSchema,
   [FRAME_TYPES.dbRequest]: dbRequestSchema,
   [FRAME_TYPES.dbResponse]: dbResponseSchema,
+  [FRAME_TYPES.netRequest]: netRequestSchema,
+  [FRAME_TYPES.netResponse]: netResponseSchema,
   [FRAME_TYPES.hostEvent]: hostEventSchema,
   [FRAME_TYPES.appEvent]: appEventSchema,
 };
@@ -222,13 +289,18 @@ export function parseFrame(input: unknown): FrameParseResult {
 /**
  * R6 helper: hosts/SDKs check outbound frames before posting (structured clone has no
  * built-in cap). db-request/db-response use their own 8 MiB size class so artifact
- * import/export can round-trip; every other frame keeps the 256 KiB cap.
+ * import/export can round-trip; net-request/net-response use the net class (B1: 1 MiB
+ * response cap + envelope margin — a cap-sized body passes, so an over-cap response can
+ * only ever become a terminal error frame, never a silent drop); every other frame
+ * keeps the 256 KiB cap.
  */
 export function frameWithinLimits(frame: Frame): boolean {
   const limit =
     frame.type === FRAME_TYPES.dbRequest || frame.type === FRAME_TYPES.dbResponse
       ? LIMITS.MAX_DB_FRAME_BYTES
-      : LIMITS.MAX_FRAME_BYTES;
+      : frame.type === FRAME_TYPES.netRequest || frame.type === FRAME_TYPES.netResponse
+        ? LIMITS.MAX_NET_FRAME_BYTES
+        : LIMITS.MAX_FRAME_BYTES;
   try {
     return new TextEncoder().encode(JSON.stringify(frame)).byteLength <= limit;
   } catch {

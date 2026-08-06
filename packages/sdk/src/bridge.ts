@@ -9,7 +9,7 @@ import {
   parseFrame,
   type ResponseError,
 } from '@snugprotocol/protocol';
-import type { HostCapabilities, SendMessageResult, SnugTheme } from './types.js';
+import type { ConnectedFetchResult, HostCapabilities, SendMessageResult, SnugTheme } from './types.js';
 
 /** Result of one host-brokered db op, resolved from TOP-LEVEL db-response frame fields. */
 export type DbBridgeResult =
@@ -30,11 +30,13 @@ interface BridgeState {
   pending: Map<string, PendingEntry>;
   /** requestId → db resolve. */
   dbPending: Map<string, (result: DbBridgeResult) => void>;
+  /** requestId → net resolve (AL-03). */
+  netPending: Map<string, (result: ConnectedFetchResult) => void>;
   /** Re-render triggers for mounted hooks. */
   listeners: Set<() => void>;
 }
 
-const initialState = (): Omit<BridgeState, 'pending' | 'dbPending' | 'listeners'> => ({
+const initialState = (): Omit<BridgeState, 'pending' | 'dbPending' | 'netPending' | 'listeners'> => ({
   instanceId: null,
   theme: 'light',
   capabilities: {},
@@ -45,6 +47,7 @@ export const bridge: BridgeState = {
   ...initialState(),
   pending: new Map(),
   dbPending: new Map(),
+  netPending: new Map(),
   listeners: new Set(),
 };
 
@@ -85,6 +88,24 @@ function onMessage(event: MessageEvent): void {
       resolve(
         frame.ok
           ? { ok: true, rows: frame.rows, columns: frame.columns, value: frame.value, bytesBase64: frame.bytesBase64 }
+          : { ok: false, error: frame.error },
+      );
+      return;
+    }
+    case FRAME_TYPES.netResponse: {
+      const resolve = bridge.netPending.get(frame.requestId);
+      if (!resolve) return;
+      bridge.netPending.delete(frame.requestId);
+      // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+      resolve(
+        frame.ok
+          ? {
+              ok: true,
+              status: frame.status,
+              headers: frame.headers,
+              body: frame.body,
+              ...(frame.truncated !== undefined ? { truncated: frame.truncated } : {}),
+            }
           : { ok: false, error: frame.error },
       );
       return;
@@ -134,6 +155,22 @@ export function dbRequest(op: string, args: Record<string, unknown>): Promise<Db
   });
 }
 
+/** Post a net-request and resolve on its terminal net-response (AL-03). Always resolves. */
+export function netRequest(fields: Record<string, unknown>): Promise<ConnectedFetchResult> {
+  ensureListener();
+  if (!bridge.ready) {
+    return Promise.resolve({
+      ok: false,
+      error: { code: ERROR_CODES.HOST_ERROR, message: 'not connected to host yet', retryable: true },
+    });
+  }
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    bridge.netPending.set(requestId, resolve);
+    postToHost({ type: FRAME_TYPES.netRequest, requestId, ...fields });
+  });
+}
+
 /** The pre-ready guard result: appMessage frames need the host-assigned instanceId. */
 export function notConnectedResult(): SendMessageResult {
   return {
@@ -150,5 +187,6 @@ export function __resetSnugBridgeForTests(): void {
   Object.assign(bridge, initialState());
   bridge.pending.clear();
   bridge.dbPending.clear();
+  bridge.netPending.clear();
   bridge.listeners.clear();
 }

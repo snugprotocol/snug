@@ -254,9 +254,29 @@ export function isAuthSpecUnknownKeysOnlyFailure(error: z.ZodError): boolean {
 
 // ------------------------------------------------------------- host functions
 
-/** Canonical host form: lowercase (hostnames are case-insensitive). */
+/**
+ * Canonical host form: lowercase + IDNA toASCII (punycode) via the URL trick — AL-03
+ * amendment B3. URL-derived hosts (`new URL().hostname`) come out punycoded, so
+ * declared hosts MUST normalize the same way or a unicode declared host can never
+ * match a real request host (the AL-02 merge-review asymmetry). Applied at STORE time
+ * (deriveAuthAllowedHosts → new approvals freeze xn-- forms) AND at CHECK time on both
+ * sides of every membership comparison, so pre-existing stored unicode entries still
+ * match. Inputs smuggling more than a hostname (path/port/credentials/query/fragment)
+ * fall back to the trimmed lowercase form, which can never equal a URL-derived
+ * hostname — membership fails closed, as before the retrofit.
+ */
 export function normalizeAuthHost(host: string): string {
-  return host.trim().toLowerCase();
+  const lower = host.trim().toLowerCase();
+  if (lower.length === 0 || lower.includes('/')) return lower;
+  try {
+    const url = new URL(`http://${lower}`);
+    if (url.pathname === '/' && url.search === '' && url.hash === '' && url.port === '' && url.username === '' && url.password === '' && url.hostname.length > 0) {
+      return url.hostname;
+    }
+  } catch {
+    /* not a bare hostname — fall through to the fail-closed form */
+  }
+  return lower;
 }
 
 const hostOfUrl = (url: string): string | undefined => {

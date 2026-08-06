@@ -44,16 +44,22 @@ describe('announce → host-ready handshake', () => {
     });
   });
 
-  it('advertises db capability if and only if a driver is configured; auth is always false', async () => {
+  it('advertises db capability if and only if a driver is configured; auth is always false; net iff a handler is configured', async () => {
     const withDb = await mount({
       options: { db: { handle: async () => ({ ok: true as const }) }, dbNamespace: 'ns' },
     });
     await withDb.connect();
-    expect(withDb.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: true, auth: false });
+    expect(withDb.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: true, auth: false, net: false });
 
     const withoutDb = await mount();
     await withoutDb.connect();
-    expect(withoutDb.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false });
+    expect(withoutDb.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false, net: false });
+
+    const withNet = await mount({
+      options: { net: { handle: async () => ({ ok: true as const, status: 200, headers: {}, body: '' }) }, netAppId: 'app' },
+    });
+    await withNet.connect();
+    expect(withNet.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false, net: true });
   });
 
   it('ready-ack is idempotent: a duplicate announce in the same load supersedes and re-acks', async () => {

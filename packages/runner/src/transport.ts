@@ -1,4 +1,4 @@
-import type { DbRequestFrame } from '@snugprotocol/protocol';
+import type { DbRequestFrame, NetRequestFrame } from '@snugprotocol/protocol';
 
 /**
  * Outcome of one transport attempt — errors as data, never thrown across the boundary.
@@ -62,4 +62,26 @@ export type DbDriverResult =
  */
 export interface DbDriver {
   handle(namespace: string, request: DbRequestFrame): Promise<DbDriverResult>;
+}
+
+/**
+ * Result of one net operation — errors as data, mirroring DbDriverResult. Success maps
+ * 1:1 onto the top-level fields of a `snug:net-response` (AL-03).
+ */
+export type NetHandlerResult =
+  | { ok: true; status: number; headers: Record<string, string>; body: string; truncated?: boolean }
+  | { ok: false; code: string; message: string; retryable: boolean };
+
+/**
+ * Host-brokered network handler (AL-03; implemented in apps/playground by the
+ * @snugprotocol/auth connected-fetch executor). `netAppId` is the HOST-assigned
+ * `netAppId` option — never the app-claimed appId — so the net binding is decided by
+ * the embedder exactly like `dbNamespace`, and an app cannot name another app's auth
+ * spec. C1 (token boundary): this interface exposes NO credential surface to the
+ * runner; the runner routes the validated net-request frame and posts the response the
+ * handler returns, and never sees a credential value (the R4 value-blind lint proves
+ * the runner imports no fetch-calling module).
+ */
+export interface NetHandler {
+  handle(netAppId: string, request: NetRequestFrame): Promise<NetHandlerResult>;
 }

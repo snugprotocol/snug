@@ -69,3 +69,42 @@ describe('AC5 — no strictness knob anywhere (C1 / finding 4)', () => {
     }
   });
 });
+
+describe('AL-03 named AC — audit bug 3 dies by construction (no strictness flag exists anywhere)', () => {
+  // The source-system anti-pattern was an env-read flag (STRICT_AUTH_HOST_INJECTION)
+  // defaulting OFF, evaluated per call. The connected-fetch seat must carry NOTHING of
+  // that shape: no env read, no per-call mode, no injection toggle of any spelling.
+  it('the connected-fetch executor source carries no injection-mode conditional', () => {
+    const files = walkSources().filter(({ name }) => ['connected-fetch.ts', 'net-guards.ts', 'scrub.ts', 'session-confirm.ts'].includes(name));
+    expect(files.map(({ name }) => name).sort()).toEqual(['connected-fetch.ts', 'net-guards.ts', 'scrub.ts', 'session-confirm.ts']);
+    const knob = /STRICT_AUTH_HOST_INJECTION|off[-_]?list[-_]?injection|injectionMode|hostCheckMode|enforceHosts?\b|process\.env/i;
+    for (const { name, text } of files) {
+      const match = knob.exec(text);
+      expect(match, `${name} reintroduces the audit-bug-3 shape: ${match?.[0]}`).toBeNull();
+    }
+  });
+
+  it('createConnectedFetch deps accept exactly the pinned DI seams — no extra boolean/mode parameter', async () => {
+    const { createConnectedFetch } = await import('../connected-fetch.js');
+    // Runtime probe: an executor built from ONLY the pinned deps works; there is no
+    // required extra parameter, and the factory arity is exactly 1 (the deps object).
+    expect(createConnectedFetch.length).toBe(1);
+    const executor = createConnectedFetch({
+      credentialStore: {
+        getCredential: async () => undefined,
+        setCredential: async () => undefined,
+        deleteCredential: async () => undefined,
+        listCredentialFields: async () => [],
+        getConnectionState: async () => undefined,
+        setConnectionState: async () => undefined,
+        clearConnectionState: async () => undefined,
+        clearApp: async () => undefined,
+        getOrCreateStateHmacKey: async () => 'k',
+      },
+      specReader: { getAuthSpec: () => undefined },
+      fetchImpl: async () => new Response(''),
+      confirmGate: { confirm: async () => false },
+    });
+    expect(Object.keys(executor)).toEqual(['execute']);
+  });
+});

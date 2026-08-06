@@ -65,6 +65,7 @@ const APP_ORIGIN_TYPES = new Set<string>([
   FRAME_TYPES.appMessage,
   FRAME_TYPES.appCancel,
   FRAME_TYPES.dbRequest,
+  FRAME_TYPES.netRequest,
   FRAME_TYPES.appEvent,
 ]);
 
@@ -74,6 +75,8 @@ export interface HostStub {
   frames(type: string): AppFrame[];
   /** Db-request frames of one op. */
   dbRequests(op: string): AppFrame[];
+  /** Net-request frames observed on the window (AL-03). */
+  netRequests(): AppFrame[];
   /** Dispatches a raw frame to the app side (inside act). */
   post(frame: Record<string, unknown>): void;
   /** Posts a valid host-ready frame (instanceId 'ins-1' unless overridden). */
@@ -83,6 +86,8 @@ export interface HostStub {
   failRequest(requestId: string, error: Partial<ResponseError>): void;
   dbSucceed(requestId: string, fields?: Record<string, unknown>): void;
   dbFail(requestId: string, error: Partial<ResponseError>): void;
+  netSucceed(requestId: string, fields?: Record<string, unknown>): void;
+  netFail(requestId: string, error: Partial<ResponseError>): void;
   dispose(): void;
 }
 
@@ -105,6 +110,7 @@ export function hostStub(): HostStub {
     fromApp,
     frames: (type) => fromApp.filter((f) => f.type === type),
     dbRequests: (op) => fromApp.filter((f) => f.type === FRAME_TYPES.dbRequest && f.op === op),
+    netRequests: () => fromApp.filter((f) => f.type === FRAME_TYPES.netRequest),
     post(frame) {
       act(() => {
         window.dispatchEvent(new MessageEvent('message', { data: frame }));
@@ -135,6 +141,21 @@ export function hostStub(): HostStub {
     },
     dbFail(requestId, over) {
       stub.post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.dbResponse, requestId, ok: false, error: error(over) });
+    },
+    netSucceed(requestId, fields = {}) {
+      stub.post({
+        v: PROTOCOL_VERSION,
+        type: FRAME_TYPES.netResponse,
+        requestId,
+        ok: true,
+        status: 200,
+        headers: {},
+        body: '',
+        ...fields,
+      });
+    },
+    netFail(requestId, over) {
+      stub.post({ v: PROTOCOL_VERSION, type: FRAME_TYPES.netResponse, requestId, ok: false, error: error(over) });
     },
     dispose() {
       window.removeEventListener('message', listener);

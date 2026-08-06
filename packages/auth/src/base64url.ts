@@ -31,6 +31,13 @@ export function base64UrlToUtf8(encoded: string): string {
   return new TextDecoder().decode(base64UrlToBytes(encoded));
 }
 
+/** STANDARD (non-url) base64 of a utf8 string — what Basic auth and signing schemes expect. */
+export function utf8ToBase64(text: string): string {
+  const url = utf8ToBase64Url(text);
+  const base64 = url.replace(/-/g, '+').replace(/_/g, '/');
+  return base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+}
+
 /** `byteLength` random bytes from WebCrypto, base64url-encoded. */
 export function randomBase64Url(byteLength: number): string {
   const bytes = new Uint8Array(byteLength);

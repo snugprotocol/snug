@@ -30,9 +30,11 @@ import {
 import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
+import { invalidateNetGrants } from '../state/net.js';
 import { downloadBlob } from '../run/exportDb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
+import type { AuthSpecRow } from '@snugprotocol/db';
 
 
 export function SettingsView(): ReactElement {
@@ -181,6 +183,7 @@ export function SettingsView(): ReactElement {
 
       <AccountCard />
       <DataCard />
+      <ConnectionsCard />
 
       <Card>
         <div className="field">
@@ -389,4 +392,97 @@ function DataCard(): ReactElement {
       </div>
     </Card>
   );
+}
+
+/**
+ * Connections (AL-03 D5): the minimal, PERMANENT settings seat for the envelope net
+ * capability. Lists each app's auth spec — kind, provider, the FULL frozen host list,
+ * and status — with Approve / Re-approve / Revoke wired to the AL-02 db accessors. Every
+ * approval transition invalidates that app's remembered session grants (R3). AL-04's
+ * wizard replaces the approval INNARDS; this panel survives. Dev-grade visuals.
+ */
+export function ConnectionsCard(): ReactElement {
+  const [rows, setRows] = useState<AuthSpecRow[]>([]);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [epoch, setEpoch] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getUserDb().then((db) => {
+      if (!cancelled) setRows(db.listAuthSpecs());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [epoch]);
+
+  const act = async (appId: string, fn: (db: Awaited<ReturnType<typeof getUserDb>>) => void): Promise<void> => {
+    setError(undefined);
+    try {
+      const db = await getUserDb();
+      fn(db);
+      invalidateNetGrants(appId); // R3: approve/reapprove/revoke drops remembered grants
+      setEpoch((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <Card>
+      <div className="field">
+        <label>connections</label>
+        <span className="hint">
+          apps you build can reach the network only through connections you approve here. the host attaches your saved
+          credentials, blocks private ranges, asks before any change, and scrubs responses — the app never sees a token.
+        </span>
+        {error !== undefined ? (
+          <div className="error-note" role="alert">
+            {error}
+          </div>
+        ) : null}
+        {rows.length === 0 ? (
+          <span className="hint">no connections yet — an app declares one when it needs an API.</span>
+        ) : (
+          <ul className="connections-list" style={{ listStyle: 'none', padding: 0, margin: 'var(--space-2) 0 0' }}>
+            {rows.map((row) => (
+              <li key={row.appId} className="connection-row" style={{ padding: 'var(--space-2) 0', borderTop: '1px solid var(--hairline, #8882)' }}>
+                <div className="connection-head" style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <strong>{row.spec.provider.name}</strong>
+                  <code>{row.spec.kind}</code>
+                  <span className={`connection-status status-${row.status}`}>{statusLabel(row.status)}</span>
+                </div>
+                <div className="connection-hosts hint">
+                  hosts: {row.allowedHosts.length > 0 ? row.allowedHosts.join(', ') : '(none)'}
+                </div>
+                <div className="field-row" style={{ gap: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
+                  {row.status !== 'approved' ? (
+                    <Button onClick={() => void act(row.appId, (db) => db.approveAuthSpec(row.appId))}>approve</Button>
+                  ) : (
+                    <Button variant="ghost" onClick={() => void act(row.appId, (db) => db.reapproveAuthSpec(row.appId))}>
+                      re-approve
+                    </Button>
+                  )}
+                  <Button variant="danger" onClick={() => void act(row.appId, (db) => db.deleteAuthSpec(row.appId))}>
+                    revoke
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function statusLabel(status: AuthSpecRow['status']): string {
+  switch (status) {
+    case 'approved':
+      return 'approved';
+    case 'imported_unapproved':
+      return 'imported — needs re-approval';
+    default:
+      return 'not approved';
+  }
 }

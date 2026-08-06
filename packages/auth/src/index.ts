@@ -1,10 +1,11 @@
-// @snugprotocol/auth — the Dynamic Auth pure core (AL-02, TASK-20260805-auth-core).
+// @snugprotocol/auth — the Dynamic Auth pure core (AL-02, TASK-20260805-auth-core)
+// plus the connected-fetch runtime (AL-03, TASK-20260806-connected-fetch).
 // Local-first custody per ADR-0014: every credential value lives in the user's own
 // file (`snug_secrets` `auth:` keys via @snugprotocol/db); spec metadata lives in
 // `snug_auth_specs` (@snugprotocol/protocol schema, frozen-host union enforced in
 // @snugprotocol/db). Hard constraint C1: host-bound injection is always strict —
 // nothing in this package exposes a strictness knob, flag, or env read (browser-safe,
-// WebCrypto only). Connected-fetch runtime is AL-03; wizard/UI is AL-04.
+// WebCrypto only). Wizard/UI is AL-04.
 
 export {
   base64UrlToBytes,
@@ -12,8 +13,32 @@ export {
   bytesToBase64Url,
   bytesToHex,
   randomBase64Url,
+  utf8ToBase64,
   utf8ToBase64Url,
 } from './base64url.js';
+
+export {
+  createConnectedFetch,
+  type ConnectedFetch,
+  type ConnectedFetchDeps,
+  type ConnectedFetchResult,
+  type NetConfirmGate,
+  type NetRequestInput,
+  type NetSpecReader,
+  type NetSpecRow,
+} from './connected-fetch.js';
+
+export { isForbiddenNetHost } from './net-guards.js';
+
+export { scrubAuthValues } from './scrub.js';
+
+export {
+  createSessionConfirmGate,
+  type NetConfirmDecision,
+  type NetConfirmPrompt,
+  type NetConfirmRequest,
+  type SessionConfirmGate,
+} from './session-confirm.js';
 
 export {
   UserDbCredentialStore,

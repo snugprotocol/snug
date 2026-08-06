@@ -1504,3 +1504,52 @@ img.identity-avatar {
 .file-btn {
   cursor: pointer;
 }
+
+/* AL-03 — the mutating-call confirm dialog (dev-grade; functional and clean). */
+.net-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  padding: var(--space-4);
+}
+.net-confirm-card {
+  background: var(--surface);
+  border: 1px solid var(--ember-deep);
+  border-radius: 12px;
+  padding: var(--space-4);
+  max-width: 440px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+.net-confirm-title {
+  margin: 0 0 var(--space-2);
+  font-size: 1.05rem;
+}
+.net-confirm-body {
+  margin: 0 0 var(--space-3);
+  line-height: 1.45;
+}
+.net-confirm-remember {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-3);
+  font-size: 0.9rem;
+}
+.net-confirm-actions {
+  justify-content: flex-end;
+}
+/* Connections panel status pills. */
+.connection-status {
+  font-size: 0.78rem;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline, #8884);
+}
+.status-approved {
+  color: var(--ember-bright);
+  border-color: var(--ember-deep);
+}

@@ -10,7 +10,7 @@ import { registerContractSuite, type ContractHookApi } from './contract-suite.js
 const code = readFileSync(path.resolve(process.cwd(), 'embedded/snug-hooks.js'), 'utf8');
 
 function evalEmbedded(): ContractHookApi {
-  const factory = new Function('React', `${code}\nreturn { useSnugApp, usePersistedState, useAppDB };`);
+  const factory = new Function('React', `${code}\nreturn { useSnugApp, usePersistedState, useAppDB, useConnectedFetch };`);
   return factory(React) as ContractHookApi;
 }
 

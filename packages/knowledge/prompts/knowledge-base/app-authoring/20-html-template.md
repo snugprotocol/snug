@@ -66,6 +66,7 @@ The template below has two zones:
       ready: false,
       pending: new Map(),    // requestId -> { resolve, onStream }
       dbPending: new Map(),  // requestId -> resolve
+      netPending: new Map(), // requestId -> resolve
       listeners: new Set(),  // re-render triggers for hooks
 
       post(frame) {
@@ -111,6 +112,17 @@ The template below has two zones:
         return;
       }
 
+      if (data.type === '{{frameType:netResponse}}') {
+        const resolve = SnugBridge.netPending.get(data.requestId);
+        if (!resolve) return;
+        SnugBridge.netPending.delete(data.requestId);
+        // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+        resolve(data.ok
+          ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+          : { ok: false, error: data.error });
+        return;
+      }
+
       if (data.type === '{{frameType:hostEvent}}') {
         if (data.event === 'theme-change' && data.data && data.data.theme) {
           SnugBridge.theme = data.data.theme;
@@ -125,6 +137,15 @@ The template below has two zones:
         const requestId = crypto.randomUUID();
         SnugBridge.dbPending.set(requestId, resolve);
         SnugBridge.post({ type: '{{frameType:dbRequest}}', requestId, op, ...args });
+      });
+    }
+
+    function snugNetRequest(fields) {
+      if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+      return new Promise((resolve) => {
+        const requestId = crypto.randomUUID();
+        SnugBridge.netPending.set(requestId, resolve);
+        SnugBridge.post({ type: '{{frameType:netRequest}}', requestId, ...fields });
       });
     }
 
@@ -262,7 +283,27 @@ The template below has two zones:
     }
 
     // ============================================================
-    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+    // The sandboxed app has NO network of its own. This reaches your app's APPROVED hosts
+    // THROUGH the host, which injects your saved credentials, blocks private ranges, caps
+    // sizes, asks you before any write, and scrubs the response. You never see a token.
+    // ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+    // ============================================================
+    function useConnectedFetch() {
+      return useMemo(() => ({
+        fetch(url, opts) {
+          return snugNetRequest({
+            url,
+            method: (opts && opts.method) || 'GET',
+            headers: opts && opts.headers,
+            body: opts && opts.body,
+          });
+        },
+      }), []);
+    }
+
+    // ============================================================
+    // 6. RESPONSE SCHEMA — describe the JSON the agent must return
     // ============================================================
     const RESPONSE_SCHEMA = {
       kind: "string: 'move' | 'game_over' | 'error'",
@@ -273,7 +314,7 @@ The template below has two zones:
     };
 
     // ============================================================
-    // 6. YOUR APP
+    // 7. YOUR APP
     // ============================================================
     function App() {
       const { isReady, theme, isWaiting, sendMessage } = useSnugApp({

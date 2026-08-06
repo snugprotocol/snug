@@ -64,3 +64,32 @@ export interface AppDb {
   exportDb(): Promise<string>;
   importDb(bytesBase64: string): Promise<void>;
 }
+
+/** Options for a host-brokered net request (AL-03). No credential fields — the HOST injects them. */
+export interface ConnectedFetchOptions {
+  /** Defaults to GET. Mutating methods prompt the user for confirmation on the host side. */
+  method?: string;
+  /** Ordinary request headers. Credential headers (Authorization, Cookie, X-Api-Key, …) are stripped by the host. */
+  headers?: Record<string, string>;
+  /** Request body (POST/PUT/PATCH/DELETE only). */
+  body?: string;
+}
+
+/**
+ * The ALWAYS-resolved result of a connected fetch (never rejects): a scrubbed,
+ * whitelist-headered success, or an envelope error (errors are data — render them). The
+ * app never sees a credential value; the host injected and scrubbed them.
+ */
+export type ConnectedFetchResult =
+  | { ok: true; status: number; headers: Record<string, string>; body: string; truncated?: boolean }
+  | { ok: false; error: ResponseError };
+
+/**
+ * Host-brokered network surface (useConnectedFetch, AL-03). The sandboxed app has zero
+ * network of its own (C2); this reaches the app's APPROVED hosts through the host, which
+ * validates the ceiling, injects credentials, blocks private ranges, caps sizes, gates
+ * mutating calls behind user confirmation, and scrubs the response. ALWAYS resolves.
+ */
+export interface ConnectedFetch {
+  fetch(url: string, opts?: ConnectedFetchOptions): Promise<ConnectedFetchResult>;
+}
