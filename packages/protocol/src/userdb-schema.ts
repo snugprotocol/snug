@@ -26,7 +26,10 @@
  */
 
 /** Version written to `PRAGMA user_version`; bump with a migration + spec changelog entry. */
-export const USERDB_SCHEMA_VERSION = 2 as const;
+// v3 (AL-02, internal draft — excluded from the AL-13 spec push): adds `snug_auth_specs`
+// (Dynamic Auth spec metadata; see auth-schema.ts). Credential VALUES live in
+// `snug_secrets` under `auth:` keys (ADR-0014) — never in this table.
+export const USERDB_SCHEMA_VERSION = 3 as const;
 
 /** Size/retention limits for the user DB (spec-normative, rule R6 family). */
 export const USERDB_LIMITS = {
@@ -58,6 +61,7 @@ export const USERDB_TABLES = {
   chatThreads: 'snug_chat_threads',
   chatMessages: 'snug_chat_messages',
   sync: 'snug_sync',
+  authSpecs: 'snug_auth_specs',
 } as const;
 
 export type UserDbTable = (typeof USERDB_TABLES)[keyof typeof USERDB_TABLES];
@@ -203,6 +207,21 @@ export const USERDB_DDL: readonly string[] = [
     meta TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.sync} (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+  // v3 (AL-02, plan D5/N3): approval-stable Dynamic Auth spec metadata ONLY. Dynamic
+  // connection state lives at secret key `auth:<appId>:_connection` and pending flow
+  // state in memory / `auth:_flow:<flowId>` — a token refresh must not dirty this
+  // synced table (content-hash gate) nor change default-export bytes. `allowed_hosts`
+  // is the FROZEN host union (JSON array, sorted/unique/lowercase), computed at
+  // approval and enforced at the accessor write boundary (HostFreezeViolation).
+  `CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.authSpecs} (
+    app_id TEXT PRIMARY KEY,
+    spec_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    allowed_hosts TEXT NOT NULL,
+    approved_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
 ];
 
 /** Normative index DDL, separate from tables so the one-CREATE-per-table invariant holds. */

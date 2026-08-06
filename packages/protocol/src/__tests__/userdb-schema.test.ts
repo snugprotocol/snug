@@ -24,8 +24,8 @@ import {
 } from '../userdb-schema.js';
 
 describe('userdb schema constants (spec surface)', () => {
-  it('declares schema version 2', () => {
-    expect(USERDB_SCHEMA_VERSION).toBe(2);
+  it('declares schema version 3 (AL-02: snug_auth_specs — internal draft, excluded from the AL-13 spec push)', () => {
+    expect(USERDB_SCHEMA_VERSION).toBe(3);
   });
 
   it('caps the whole user DB at 64 MiB and retains at least 5 versions per app', () => {
@@ -54,6 +54,7 @@ describe('userdb schema constants (spec surface)', () => {
         'snug_chat_threads',
         'snug_chat_messages',
         'snug_sync',
+        'snug_auth_specs',
       ].sort(),
     );
     for (const table of Object.values(USERDB_TABLES)) {
@@ -81,6 +82,21 @@ describe('userdb schema constants (spec surface)', () => {
     expect(dedup).toBeDefined();
     expect(dedup!.replace(/\s+/g, ' ')).toContain('UNIQUE INDEX');
     expect(dedup!.replace(/\s+/g, ' ')).toContain('WHERE install_source IS NOT NULL');
+  });
+
+  it('v3 table snug_auth_specs holds ONLY approval-stable spec metadata (plan D5/N3 — no token, no connection, no flow columns)', () => {
+    const specs = USERDB_DDL.find((d) => d.includes('snug_auth_specs '))!.replace(/\s+/g, ' ');
+    expect(specs).toContain('app_id TEXT PRIMARY KEY');
+    expect(specs).toContain('spec_json TEXT NOT NULL');
+    expect(specs).toContain('status TEXT NOT NULL');
+    expect(specs).toContain('allowed_hosts TEXT NOT NULL');
+    expect(specs).toContain('approved_at TEXT');
+    // Dynamic state NEVER lives here: connection state → auth:<appId>:_connection secret,
+    // flow state → in-memory / auth:_flow:<flowId> secret (a refresh must not dirty the
+    // synced table nor change default-export bytes).
+    for (const forbidden of ['token', 'refresh', 'expires', 'verifier', 'flow', 'session', 'last_error']) {
+      expect(specs.toLowerCase()).not.toContain(forbidden);
+    }
   });
 
   it('v2 columns are present in the DDL (install_source, pinned, meta)', () => {
