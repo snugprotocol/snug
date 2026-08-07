@@ -107,6 +107,18 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
       "### A CSP console error for a \`.map\` file is EXPECTED, not a bug",
     ],
   },
+  {
+    "file": "knowledge-base/app-authoring/90-auth-and-connected-apis.md",
+    "headingTree": [
+      "## Connected APIs: calling an external API with auth and credentials",
+      "### Design the app against useConnectedFetch (it must work before it is connected)",
+      "### Declare the connection: emit the auth_wizard render directive (auth declaration)",
+      "### Example: a weather app with an API key provider",
+      "### Example: no directive — an app with no external API",
+      "### Keyless public APIs (a provider with no credential)",
+      "### What the user sees (net requests in the frames timeline)",
+    ],
+  },
 ]
 `;
 
