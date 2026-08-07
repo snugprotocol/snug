@@ -71,6 +71,20 @@ export {
 
 export { paramsToAuthSpec, type ParamsToAuthSpecInput, type ParamsToAuthSpecResult } from './params-to-auth-spec.js';
 
+export {
+  AUTH_INFERENCE_CONFIDENCE_NOTE_THRESHOLD,
+  createAuthSpecInferrer,
+  needsUnsureConfidenceNote,
+  type AuthSpecInferrer,
+  type AuthSpecInferrerDeps,
+  type AuthSpecInferrerErrorCode,
+  type InferAuthSpecInput,
+  type InferAuthSpecResult,
+  type InferrerComplete,
+} from './auth-spec-inferrer.js';
+
+export { requireApprovedSpecScope } from './spec-scope.js';
+
 export { isHostAllowed, isUrlWithinHosts, undeclaredHosts } from './app-host-freeze.js';
 
 export {
@@ -96,4 +110,5 @@ export {
   type RedirectUriProvider,
   type SignedStatePayload,
   type SnugAuthErrorCode,
+  type SpecScope,
 } from './oauth-service.js';

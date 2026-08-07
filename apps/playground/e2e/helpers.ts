@@ -23,6 +23,9 @@ export const FIXTURE_PORT = 43117;
 /** The self-signed HTTPS provider stub for the AL-03 net e2e (net-stub.mjs). */
 export const NET_STUB_PORT = 43120;
 export const NET_STUB_URL = `https://127.0.0.1:${NET_STUB_PORT}`;
+/** The local fake IdP for the AL-04 PKCE popup e2e (fake-idp.mjs). */
+export const FAKE_IDP_PORT = 43121;
+export const FAKE_IDP_URL = `http://127.0.0.1:${FAKE_IDP_PORT}`;
 /**
  * Default 8787: the app's vite.config.ts dev proxy targets 127.0.0.1:8787. Both sides
  * honor SNUG_SERVER_PORT (the playwright config forwards it to the vite webServer), so

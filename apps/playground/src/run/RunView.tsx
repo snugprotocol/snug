@@ -14,9 +14,11 @@ import { createDbDriver, createMemoryBackend, type SnugDbDriver } from '@snugpro
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } from '@snugprotocol/runner';
 
+import type { AuthWizardDirective } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { createNetHandlerFor } from '../state/net.js';
+import { netErrorCta, openWizard, openWizardForNetError } from '../state/wizard.js';
 import { NetConfirmDialog } from './NetConfirmDialog.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
@@ -216,7 +218,22 @@ export default function RunView(): ReactElement {
   // ceiling + credentials from the page user DB per use — the runner never sees a token.
   // Starters get no net: an uninstalled starter has no auth spec, and its ephemeral DB
   // would carry none anyway. Installed apps bind net to their own id (host-assigned).
-  const netHandler = useMemo(() => (isStarterId(id) ? undefined : createNetHandlerFor()), [id]);
+  // AL-04 AC9: auth-repairable net errors surface a host-side connect/re-approve
+  // CTA. The mapping is code-keyed (netErrorCta) — blocked/denied codes surface
+  // NOTHING here (offering a connect CTA on an off-ceiling attempt would coach
+  // ceiling-widening in direct response to the attack, M12).
+  const [netAuthError, setNetAuthError] = useState<{ appId: string; code: string } | null>(null);
+  const netHandler = useMemo(
+    () =>
+      isStarterId(id)
+        ? undefined
+        : createNetHandlerFor({
+            onNetError: (appId, code) => {
+              if (netErrorCta(code) !== null) setNetAuthError({ appId, code });
+            },
+          }),
+    [id],
+  );
   const netProps: { net: NetHandler; netAppId: string } | Record<string, never> =
     netHandler !== undefined ? { net: netHandler, netAppId: id } : {};
   // The db driver is the SHARED user DB's materialized face (ADR-0010) — never closed
@@ -465,6 +482,7 @@ export default function RunView(): ReactElement {
             busy={chat.busy}
             onSend={chat.send}
             onStop={chat.stop}
+            onDirectiveConnect={(directive) => openWizard({ source: 'directive', appId: id, directive })}
           />
         </>
       )}
@@ -474,6 +492,23 @@ export default function RunView(): ReactElement {
   return (
     <div className="run-layout" style={stageStyle}>
       <NetConfirmDialog />
+      {netAuthError !== null ? (
+        <div className="error-note" role="alert" data-testid="net-auth-cta">
+          this app tried to use the network but its connection is not ready ({netAuthError.code}).
+          <div className="field-row">
+            <Button
+              onClick={() => {
+                if (openWizardForNetError(netAuthError.appId, netAuthError.code)) setNetAuthError(null);
+              }}
+            >
+              {netErrorCta(netAuthError.code) === 'reapprove' ? 're-approve this connection' : 'connect this app'}
+            </Button>
+            <Button variant="ghost" onClick={() => setNetAuthError(null)}>
+              dismiss
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <div className="run-stage">
         <header className="run-header">
           {meta !== undefined ? (
@@ -653,10 +688,12 @@ interface RailChatProps {
   busy: boolean;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** AL-04 D9: directive-card mount — the run view always has an appId to attach. */
+  onDirectiveConnect?: (directive: AuthWizardDirective) => void;
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
-function RailChat({ messages, steps, activity, busy, onSend, onStop }: RailChatProps): ReactElement {
+function RailChat({ messages, steps, activity, busy, onSend, onStop, onDirectiveConnect }: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
   const submit = (): void => {
     if (draft.trim() === '') return;
@@ -676,7 +713,7 @@ function RailChat({ messages, steps, activity, busy, onSend, onStop }: RailChatP
       {messages.length === 0 ? (
         <EmptyState glyph="✎" title="keep talking" lesson="ask for tweaks — the agent can rebuild the app from here." />
       ) : (
-        <ChatLog messages={messages} steps={steps} activity={activity} busy={busy} phase="edit" />
+        <ChatLog messages={messages} steps={steps} activity={activity} busy={busy} phase="edit" onDirectiveConnect={onDirectiveConnect} />
       )}
       <div className="composer" style={{ position: 'static', padding: 0, background: 'none' }}>
         <textarea

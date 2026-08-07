@@ -55,7 +55,9 @@ export type SnugAuthErrorCode =
   | 'unsupported_kind'
   | 'host_not_allowed'
   | 'redirect_blocked'
-  | 'missing_credential';
+  | 'missing_credential'
+  /** AL-04 B1: a SpecScope was requested for a row that is not `approved` (spec-scope.ts). */
+  | 'spec_not_approved';
 
 export class SnugAuthError extends Error {
   constructor(
@@ -285,7 +287,12 @@ export interface OAuthStartResult {
   flowId: string;
 }
 
-interface SpecScope {
+/**
+ * Exported (AL-04 B1, verifier footnote): the wizard builds every SpecScope through
+ * `requireApprovedSpecScope` (spec-scope.ts) — the helper is the executable form of
+ * the `allowedHosts` doc comment below, which nothing previously enforced.
+ */
+export interface SpecScope {
   appId: string;
   spec: AuthSpec;
   /** The FROZEN host ceiling from the `snug_auth_specs` row. Required — no bypass. */

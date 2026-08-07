@@ -29,8 +29,11 @@ import {
 } from '../state/sync.js';
 import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
+import { UserDbCredentialStore } from '@snugprotocol/auth';
 import { getUserDb } from '../state/userdb.js';
 import { invalidateNetGrants } from '../state/net.js';
+import { openWizard, wizardStore } from '../state/wizard.js';
+import { useStore } from '../state/store.js';
 import { downloadBlob } from '../run/exportDb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -405,6 +408,9 @@ export function ConnectionsCard(): ReactElement {
   const [rows, setRows] = useState<AuthSpecRow[]>([]);
   const [error, setError] = useState<string | undefined>(undefined);
   const [epoch, setEpoch] = useState(0);
+  // AL-04: approvals happen INSIDE the wizard now — refresh the rows whenever the
+  // wizard session ends so status pills reflect what it changed.
+  const wizardSession = useStore(wizardStore);
 
   useEffect(() => {
     let cancelled = false;
@@ -414,13 +420,15 @@ export function ConnectionsCard(): ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [epoch]);
+  }, [epoch, wizardSession]);
 
-  const act = async (appId: string, fn: (db: Awaited<ReturnType<typeof getUserDb>>) => void): Promise<void> => {
+  const act = async (appId: string, fn: (db: Awaited<ReturnType<typeof getUserDb>>) => void | Promise<void>): Promise<void> => {
     setError(undefined);
     try {
       const db = await getUserDb();
-      fn(db);
+      // AWAITED (nonBlocking 5): a rejection inside the action must surface here —
+      // a floating `void` promise silently swallowed a failed credential wipe.
+      await fn(db);
       invalidateNetGrants(appId); // R3: approve/reapprove/revoke drops remembered grants
       setEpoch((n) => n + 1);
     } catch (err) {
@@ -456,14 +464,34 @@ export function ConnectionsCard(): ReactElement {
                   hosts: {row.allowedHosts.length > 0 ? row.allowedHosts.join(', ') : '(none)'}
                 </div>
                 <div className="field-row" style={{ gap: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
+                  {/* AL-04 AC9: the wizard replaces the approval INNARDS — these
+                      buttons open it; the approval transition (and its
+                      invalidateNetGrants call, R3) happens inside the wizard. */}
                   {row.status !== 'approved' ? (
-                    <Button onClick={() => void act(row.appId, (db) => db.approveAuthSpec(row.appId))}>approve</Button>
+                    <Button onClick={() => openWizard({ source: 'settings', appId: row.appId, mode: row.status === 'imported_unapproved' ? 'reapprove' : 'connect' })}>
+                      approve
+                    </Button>
                   ) : (
-                    <Button variant="ghost" onClick={() => void act(row.appId, (db) => db.reapproveAuthSpec(row.appId))}>
+                    <Button variant="ghost" onClick={() => openWizard({ source: 'settings', appId: row.appId, mode: 'reapprove' })}>
                       re-approve
                     </Button>
                   )}
-                  <Button variant="danger" onClick={() => void act(row.appId, (db) => db.deleteAuthSpec(row.appId))}>
+                  <Button
+                    variant="danger"
+                    onClick={() =>
+                      void act(row.appId, async (db) => {
+                        // AL-04 (AL-03 sweep follow-up): revoke is DISCONNECT — the
+                        // credential slice goes with the spec, or a re-declared spec
+                        // for the same appId would resume injecting the old value
+                        // without re-entry. AWAITED, and wiped BEFORE the spec row is
+                        // deleted (nonBlocking 5): if the wipe fails, the row stays
+                        // and the failure is a visible error — never a deleted spec
+                        // with a silently surviving credential slice.
+                        await new UserDbCredentialStore(db).clearApp(row.appId);
+                        db.deleteAuthSpec(row.appId);
+                      })
+                    }
+                  >
                     revoke
                   </Button>
                 </div>

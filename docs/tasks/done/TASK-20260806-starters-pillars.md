@@ -1,6 +1,6 @@
 # TASK-20260806-starters-pillars: Five pillar starter apps (umbrella AL-08)
 
-- **Status**: done-pending-merge (review fixes applied; rebased onto main post-AL-02 merge a2b360c; all suites green; PR/merge owned by the umbrella orchestrator)
+- **Status**: done — merged to main via PR #7 (2026-08-06)
 - **Owner**: Jeetu (autonomous run; Claude implements — umbrella Phase-0 approval pre-approves this plan while it stays inside AL-08's scope)
 - **Risk tier**: medium (`examples/` alone is Low, but the shelf/e2e surface is Playground logic → Medium; no protocol/runner/auth touch)
 - **Branch**: `feat/TASK-20260806-starters-pillars`

@@ -212,7 +212,7 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<{ b
 // --------------------------------------------------------------------- factory
 
 export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
-  void (deps.clock ?? Date.now); // reserved seat (plan D2) — grant bookkeeping lands with AL-04
+  void (deps.clock ?? Date.now); // reserved seat — grant bookkeeping moved to AL-10 (AL-04 N6: nothing in the wizard reads time)
   // Internal OAuth service seat: token get/refresh only. Flow starts belong to the
   // approval surface (AL-04); this provider throwing keeps that boundary typed.
   const oauth = new OAuthService({

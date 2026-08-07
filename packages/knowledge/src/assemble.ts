@@ -7,6 +7,7 @@ import {
   getSkillCreatorFile,
   getSkillMode,
   getSystemLayer,
+  getToolPrompt,
 } from './layers.js';
 
 const SEPARATOR = '\n\n---\n\n';
@@ -63,4 +64,62 @@ export function buildSkillBuilderPrompt(mode: string, ctx?: SkillBuilderContext)
     parts.push(block.join('\n'));
   }
   return parts.join(SEPARATOR);
+}
+
+// ---------------------------------------------------------------------------
+// Auth-spec-inferrer prompt (AL-04 plan D8) — the dedicated inference turn.
+// ---------------------------------------------------------------------------
+
+export interface AuthSpecInferrerPromptInput {
+  /** Provider display name — echoed into the user slot, never into the system slot. */
+  providerName: string;
+  /** Optional auth-kind hint from the user/caller. */
+  kindHint?: string;
+  /** UNTRUSTED pasted provider docs. Rides ONLY inside the delimited data block. */
+  docsText?: string;
+}
+
+export interface AuthSpecInferrerPrompt {
+  /** Trusted instruction sections (task, rules, few-shot, output contract) — AdapterRequest.system (D2). */
+  system: string;
+  /** The runtime data block: provider identity + delimited <provider_docs> — the single user message (D2). */
+  user: string;
+}
+
+/**
+ * Neutralize a delimiter breakout inside pasted docs: a literal `</provider_docs>`
+ * (or opening variant) in the untrusted text must not terminate the data block the
+ * system prompt's DATA-framing rule points at. Prompt-side hardening only — the
+ * real walls are the host-side schema/registry/review (D8: injection resistance is
+ * layered, prompt-last).
+ */
+function defangProviderDocs(text: string): string {
+  return text.replace(/<(\/?provider_docs)/gi, '‹$1');
+}
+
+/**
+ * Build the two wire slots of the inference turn (D2 placement pin): the SYSTEM slot
+ * is the statically rendered tools/auth-spec-inferrer.md — runtime values never enter
+ * it — and the USER slot carries the provider identity plus the delimited untrusted
+ * docs block. The caller (playground adapter layer) sends them as
+ * `AdapterRequest.system` and the single user message respectively; packages/auth
+ * receives only the finished strings (its dep surface cannot include this package).
+ */
+export function buildAuthSpecInferrerPrompt(input: AuthSpecInferrerPromptInput): AuthSpecInferrerPrompt {
+  const system = getToolPrompt('auth-spec-inferrer');
+  const docs =
+    input.docsText !== undefined && input.docsText.trim().length > 0
+      ? defangProviderDocs(input.docsText)
+      : '(no documentation was pasted — answer from your own knowledge of this provider, or refuse honestly as in Example 3)';
+  const user = [
+    `Provider name: ${input.providerName}`,
+    `Kind hint: ${input.kindHint ?? '(none given — infer the kind)'}`,
+    '',
+    '<provider_docs>',
+    docs,
+    '</provider_docs>',
+    '',
+    'Reply with the JSON object only.',
+  ].join('\n');
+  return { system, user };
 }

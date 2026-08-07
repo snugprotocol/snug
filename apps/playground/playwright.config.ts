@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
-import { APP_PORT, APP_URL, FIXTURE_PORT, FIXTURE_URL, NET_STUB_PORT, NET_STUB_URL, SERVER_PORT, SERVER_URL, appIsPresent } from './e2e/helpers';
+import { APP_PORT, APP_URL, FAKE_IDP_PORT, FIXTURE_PORT, FIXTURE_URL, NET_STUB_PORT, NET_STUB_URL, SERVER_PORT, SERVER_URL, appIsPresent } from './e2e/helpers';
 
 const hasApp = appIsPresent();
 // Propagated to workers so specs can skip (not fail) before workstream A lands.
@@ -43,6 +43,15 @@ const webServer = [
     ignoreHTTPSErrors: true,
     reuseExistingServer: false,
     timeout: 120_000,
+  },
+  {
+    // AL-04 auth-wizard e2e: the local fake IdP for the PKCE popup flow (plain http
+    // on the loopback; CORS-open token endpoint).
+    command: 'node e2e/fixtures/fake-idp.mjs',
+    url: `http://127.0.0.1:${FAKE_IDP_PORT}/healthz`,
+    env: { SNUG_E2E_FAKE_IDP_PORT: String(FAKE_IDP_PORT) },
+    reuseExistingServer: false,
+    timeout: 30_000,
   },
   {
     command: 'pnpm --filter server build && node ../server/dist/server.js',
@@ -87,7 +96,7 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/, /net\.spec\.ts/],
+      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/, /net\.spec\.ts/, /auth-wizard\.spec\.ts/],
     },
     {
       // AL-03 net e2e: its OWN project so the self-signed-cert allowance and the
@@ -105,6 +114,21 @@ export default defineConfig({
             // ignored at the browser level too — scoped to THIS project's browser.
             '--ignore-certificate-errors',
           ],
+        },
+      },
+    },
+    {
+      // AL-04 auth-wizard e2e: its OWN project (the net-project precedent) — the
+      // connected fetch at the end of the api_key flow hits the self-signed stub
+      // through the real app shell, so the cert allowance + resolver rule stay
+      // scoped here and never touch the plain app contexts.
+      name: 'auth-wizard',
+      testMatch: /auth-wizard\.spec\.ts/,
+      use: {
+        ...devices['Desktop Chrome'],
+        ignoreHTTPSErrors: true,
+        launchOptions: {
+          args: [`--host-resolver-rules=MAP stub.snug.test 127.0.0.1`, '--ignore-certificate-errors'],
         },
       },
     },

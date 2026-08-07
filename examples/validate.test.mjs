@@ -100,7 +100,15 @@ for (const app of APPS) {
     assert.doesNotMatch(html, /<link\b/i, 'no <link> elements');
     assert.doesNotMatch(html, /@import\b/, 'no CSS @import');
     assert.doesNotMatch(html, /url\(\s*['"]?https?:/i, 'no remote url() in CSS');
-    assert.doesNotMatch(html, /\b(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/, 'no network APIs (connect-src is blocked)');
+    // The no-network-APIs rule applies to the APP-AUTHORED region: the canonical hook
+    // block is byte-locked to sdk/embedded by the sync test below, and since AL-03 it
+    // legitimately DEFINES a `fetch(url, opts)` method on the useConnectedFetch handle
+    // — that method posts a snug:net-request frame; connect-src stays blocked, so it
+    // is the governed seam, not a network API call. Anything an APP writes is still
+    // fully checked (AL-04 repair of the AL-03 rule conflict this suite carried,
+    // masked until now by turbo's own-files cache key).
+    const appAuthored = html.replace(hookBlock(html, app), '');
+    assert.doesNotMatch(appAuthored, /\b(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/, 'no network APIs (connect-src is blocked)');
   });
 
   test(`${app}: embedded hooks block is byte-identical to sdk/embedded/snug-hooks.js (normalized)`, () => {

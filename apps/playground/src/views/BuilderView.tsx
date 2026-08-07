@@ -9,6 +9,7 @@ import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { LlmInspectorPanel } from '../run/LlmInspectorPanel.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
 import { useMode } from '../state/mode.js';
+import { openWizard } from '../state/wizard.js';
 import { Button } from '../ui/Button.js';
 import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -133,6 +134,13 @@ export function BuilderView(): ReactElement {
             activity={chat.activity}
             busy={chat.busy}
             phase={chat.attachedAppId !== undefined ? 'edit' : 'build'}
+            // AL-04 D9: the directive card's mount — only once an app exists to
+            // attach the connection to (the wizard needs an appId to scope rows).
+            onDirectiveConnect={
+              chat.attachedAppId !== undefined
+                ? (directive) => openWizard({ source: 'directive', appId: chat.attachedAppId!, directive })
+                : undefined
+            }
           />
         </>
       )}

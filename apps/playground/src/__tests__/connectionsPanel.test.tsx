@@ -8,10 +8,13 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { UserDbCredentialStore } from '@snugprotocol/auth';
+
 import { ConnectionsCard } from '../views/SettingsView.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 import { getUserDb } from '../state/userdb.js';
 import * as net from '../state/net.js';
+import * as wizard from '../state/wizard.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -36,10 +39,17 @@ async function seed(status: 'unapproved' | 'approved' | 'imported_unapproved' = 
   db.putAuthSpec(APP, spec);
   if (status === 'approved') db.approveAuthSpec(APP);
   if (status === 'imported_unapproved') {
-    // simulate an imported row: put + demote via the accessor's status
+    // The REAL AL-02 import machinery, no stub: approve, export the db bytes, drop
+    // the local row (so no byte-identical locally-approved twin exists), then
+    // import — reconciliation demotes the incoming row to `imported_unapproved`
+    // with approved_at cleared (userdb.ts reconcileImportedAuthSpecs).
     db.approveAuthSpec(APP);
-    // there is no public demote; the panel only needs a non-approved row to show Approve,
-    // so leave it approved for that path and use the dedicated imported case elsewhere.
+    const bytes = await db.exportUserDb();
+    db.deleteAuthSpec(APP);
+    await db.importUserDb(bytes);
+    if (db.getAuthSpec(APP)?.status !== 'imported_unapproved') {
+      throw new Error('seed failed: import machinery did not demote the row to imported_unapproved');
+    }
   }
 }
 
@@ -58,6 +68,7 @@ async function renderPanel(): Promise<void> {
 
 beforeEach(async () => {
   await installTestUserDb();
+  wizard.__resetWizardStateForTests();
 });
 afterEach(() => {
   act(() => root?.unmount());
@@ -82,11 +93,10 @@ describe('ConnectionsCard', () => {
     expect((container.textContent ?? '').toLowerCase()).toContain('no connections');
   });
 
-  it('Approve calls approveAuthSpec and invalidates remembered net grants (R3)', async () => {
+  it('AL-04 AC9: Approve OPENS THE WIZARD (connect) — the transition happens inside it', async () => {
     await seed('unapproved');
     const db = await getUserDb();
     const approve = vi.spyOn(db, 'approveAuthSpec');
-    const invalidate = vi.spyOn(net, 'invalidateNetGrants');
     await renderPanel();
     const approveButton = [...container.querySelectorAll('button')].find((b) => /approve/i.test(b.textContent ?? ''));
     expect(approveButton).toBeDefined();
@@ -94,8 +104,35 @@ describe('ConnectionsCard', () => {
       approveButton!.click();
       await new Promise((r) => setTimeout(r, 0));
     });
+    // The panel button no longer approves directly — the wizard owns the innards
+    // (and its approval action is what calls invalidateNetGrants, tested in
+    // authWizard.test.tsx — AL-03's R3/M23 guard stays red-capable there).
+    expect(approve).not.toHaveBeenCalled();
+    expect(wizard.wizardStore.get()).toMatchObject({ appId: APP, mode: 'connect', source: 'settings' });
+  });
+
+  it('AL-04 AC12/B1 companion: approveWizardSpec on the seeded row still drops grants (the R3 wall, in its new seat)', async () => {
+    await seed('unapproved');
+    const db = await getUserDb();
+    const approve = vi.spyOn(db, 'approveAuthSpec');
+    const invalidate = vi.spyOn(net, 'invalidateNetGrants');
+    wizard.openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    const result = await wizard.approveWizardSpec();
+    expect(result.ok).toBe(true);
     expect(approve).toHaveBeenCalledWith(APP);
     expect(invalidate).toHaveBeenCalledWith(APP);
+  });
+
+  it('AL-04 D5: editing an APPROVED row routes through reapproveAuthSpec — the HostFreezeViolation split never fires as a surprise', async () => {
+    await seed('approved');
+    const db = await getUserDb();
+    const reapprove = vi.spyOn(db, 'reapproveAuthSpec');
+    wizard.openWizard({ source: 'settings', appId: APP, mode: 'connect' });
+    // A changed union on an approved row: putAuthSpec would throw HostFreezeViolation;
+    // the wizard's approve action must take the reapprove path instead.
+    const result = await wizard.approveWizardSpec({ ...spec, declaredApiHosts: ['api.example.com', 'api.widened.example'] });
+    expect(result.ok).toBe(true);
+    expect(reapprove).toHaveBeenCalledTimes(1);
   });
 
   it('Revoke deletes the spec and invalidates remembered net grants', async () => {
@@ -114,11 +151,55 @@ describe('ConnectionsCard', () => {
     expect(invalidate).toHaveBeenCalledWith(APP);
   });
 
-  it('an approved row offers Re-approve, which re-freezes and invalidates grants', async () => {
+  it("AL-04 (AL-03 sweep follow-up): Revoke ALSO wipes the app's credential slice — no zombie value survives to a re-approval", async () => {
     await seed('approved');
     const db = await getUserDb();
-    const reapprove = vi.spyOn(db, 'reapproveAuthSpec');
-    const invalidate = vi.spyOn(net, 'invalidateNetGrants');
+    const store = new UserDbCredentialStore(db);
+    await store.setCredential(APP, 'api_key', 'zombie-credential-000');
+    await renderPanel();
+    const revokeButton = [...container.querySelectorAll('button')].find((b) => /revoke/i.test(b.textContent ?? ''));
+    await act(async () => {
+      revokeButton!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // Before this child, deleteAuthSpec left auth:<appId>:* intact — a re-declared +
+    // re-approved spec for the same appId would resume injecting the OLD credential
+    // without re-entry (probe-confirmed by AL-03's live sweep). Fail closed: gone.
+    expect(await store.getCredential(APP, 'api_key')).toBeUndefined();
+  });
+
+  it('a REAL imported_unapproved row (AL-02 import machinery) opens the wizard in REAPPROVE mode (AC9 ternary)', async () => {
+    await seed('imported_unapproved');
+    await renderPanel();
+    expect(container.textContent ?? '').toContain('imported — needs re-approval');
+    const approveButton = [...container.querySelectorAll('button')].find((b) => /approve/i.test(b.textContent ?? ''));
+    expect(approveButton).toBeDefined();
+    await act(async () => {
+      approveButton!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // The SettingsView mode ternary: imported_unapproved → 'reapprove' (union diff shown).
+    expect(wizard.wizardStore.get()).toMatchObject({ appId: APP, mode: 'reapprove', source: 'settings' });
+  });
+
+  it('a FAILING credential wipe surfaces on revoke — never a silent floating promise (nonBlocking 5)', async () => {
+    await seed('approved');
+    const clearApp = vi.spyOn(UserDbCredentialStore.prototype, 'clearApp').mockRejectedValue(new Error('wipe failed'));
+    await renderPanel();
+    const revokeButton = [...container.querySelectorAll('button')].find((b) => /revoke/i.test(b.textContent ?? ''));
+    await act(async () => {
+      revokeButton!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(clearApp).toHaveBeenCalled();
+    // Pre-fix this rejection vanished into `void clearApp(...)` — the spec row was
+    // gone while the credential slice silently survived, re-opening the exact
+    // fail-open scenario revoke exists to close.
+    expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/wipe failed/);
+  });
+
+  it('an approved row offers Re-approve, which opens the wizard in reapprove mode (AC9)', async () => {
+    await seed('approved');
     await renderPanel();
     const reapproveButton = [...container.querySelectorAll('button')].find((b) => /re-approve/i.test(b.textContent ?? ''));
     expect(reapproveButton).toBeDefined();
@@ -126,7 +207,6 @@ describe('ConnectionsCard', () => {
       reapproveButton!.click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(reapprove).toHaveBeenCalledWith(APP);
-    expect(invalidate).toHaveBeenCalledWith(APP);
+    expect(wizard.wizardStore.get()).toMatchObject({ appId: APP, mode: 'reapprove', source: 'settings' });
   });
 });

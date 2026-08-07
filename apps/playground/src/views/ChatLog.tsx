@@ -1,7 +1,10 @@
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
+import type { AuthWizardDirective } from '@snugprotocol/protocol';
+
 import type { BuildStepView, ChatMessage } from '../agent/useBuilderChat.js';
+import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { StatusLine, type StatusPhase } from './StatusLine.js';
 
@@ -31,6 +34,12 @@ export interface ChatLogProps {
   phase?: StatusPhase;
   /** Compact mode for the run-view chat rail (smaller artifact cards). */
   compact?: boolean;
+  /**
+   * Mount for a VALIDATED `auth_wizard` directive card (AL-04 D9): the caller wires
+   * this to `openWizard({source:'directive', …})` with the attached appId. Absent ⇒
+   * the card renders with a disabled CTA (no app to attach the connection to yet).
+   */
+  onDirectiveConnect?: (directive: AuthWizardDirective) => void;
 }
 
 /** The streamed conversation: user bubbles, streaming agent text with a soft caret,
@@ -42,6 +51,7 @@ export function ChatLog({
   busy = false,
   phase = 'build',
   compact = false,
+  onDirectiveConnect,
 }: ChatLogProps): ReactElement {
   return (
     <div className="chat-log" aria-live="polite">
@@ -57,7 +67,21 @@ export function ChatLog({
                 {message.error.retryable ? ' — try again.' : ''}
               </div>
             ) : null}
+            {message.directiveNote !== undefined ? <div className="hint">{message.directiveNote}</div> : null}
           </div>
+          {message.directive !== undefined ? (
+            <Card className="artifact-card" data-testid="auth-directive-card">
+              <span aria-hidden="true" style={{ fontSize: '1.5rem' }}>
+                🔐
+              </span>
+              <span className="artifact-name">connect {message.directive.proposal.providerName}</span>
+              {onDirectiveConnect !== undefined ? (
+                <Button onClick={() => onDirectiveConnect(message.directive!)}>connect</Button>
+              ) : (
+                <span className="hint">run the app once to attach this connection</span>
+              )}
+            </Card>
+          ) : null}
           {message.artifact !== undefined ? (
             <Card className="artifact-card" data-testid="artifact-card">
               <span aria-hidden="true" style={{ fontSize: '1.5rem' }}>

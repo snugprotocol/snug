@@ -67,3 +67,23 @@ describe('registry entries', () => {
     expect(lookupWellKnownProvider('GitHub')?.authorizeParams).toBeUndefined();
   });
 });
+
+describe('AL-04 D5 — registry registration walkthrough copy (M5: registry/user-entry are the ONLY sources)', () => {
+  it('Spotify carries at least stub-grade registration instructions (AL-09 dependency)', () => {
+    const registration = lookupWellKnownProvider('Spotify')?.registration;
+    expect(registration?.consoleUrl).toBe('https://developer.spotify.com/dashboard');
+    expect(registration?.instructions?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('every registration block present in the registry is schema-shaped (consoleUrl URL, non-empty steps)', () => {
+    for (const [key, entry] of Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)) {
+      if (entry.registration === undefined) continue;
+      if (entry.registration.consoleUrl !== undefined) {
+        expect(() => new URL(entry.registration!.consoleUrl!), key).not.toThrow();
+      }
+      for (const step of entry.registration.instructions ?? []) {
+        expect(step.length, key).toBeGreaterThan(0);
+      }
+    }
+  });
+});

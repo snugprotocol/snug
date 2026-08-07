@@ -6,6 +6,9 @@
 
 import {
   APP_OBJECT_NAME_RULE,
+  AUTH_EVIDENCE_MAX_CHARS,
+  AUTH_EVIDENCE_MAX_ITEMS,
+  AUTH_KINDS,
   CDN_ALLOWLIST,
   FRAME_TYPES,
   LIMITS,
@@ -41,6 +44,11 @@ const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   maxFrameKiB: `${LIMITS.MAX_FRAME_BYTES / 1024} KiB`,
   maxParseFailures: String(LIMITS.MAX_PARSE_FAILURES),
   rawExcerptChars: String(LIMITS.RAW_EXCERPT_CHARS),
+  // AL-04 D8: the auth-spec-inferrer prompt injects the persisted kind literals and
+  // the evidence bounds from protocol — never retyped in prompt text (ADR-0004).
+  authKinds: AUTH_KINDS.join(', '),
+  authEvidenceMaxItems: String(AUTH_EVIDENCE_MAX_ITEMS),
+  authEvidenceMaxChars: String(AUTH_EVIDENCE_MAX_CHARS),
 };
 
 const FRAME_TYPE_PREFIX = 'frameType:';

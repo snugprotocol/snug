@@ -209,6 +209,83 @@ export const apiKeySchema = z.strictObject({
 });
 export type ApiKeySpec = z.infer<typeof apiKeySchema>;
 
+// ------------------------------------------------------------------- hints
+
+/**
+ * Evidence-style bounds on the hint strings (AL-04 fix-first pass, nonBlocking 8):
+ * the hints schema is the proposal surface of the CHAT-PERSISTED `auth_wizard`
+ * directive (render-directive.ts), so its free-string slots are bounded the same
+ * way `evidence[]` was — an LLM-authored directive must not smuggle megabytes into
+ * `snug_chat_messages.meta`.
+ */
+export const AUTH_PROVIDER_NAME_MAX_CHARS = 120;
+
+/** RFC 1035: a full hostname is at most 253 characters. */
+export const AUTH_HINT_HOST_MAX_CHARS = 253;
+
+export const AUTH_HINT_SCOPE_MAX_CHARS = 200;
+
+export const AUTH_HINT_HOSTS_MAX_ITEMS = 32;
+
+export const AUTH_HINT_SCOPES_MAX_ITEMS = 64;
+
+const boundedScopesSchema = z
+  .array(z.string().max(AUTH_HINT_SCOPE_MAX_CHARS))
+  .max(AUTH_HINT_SCOPES_MAX_ITEMS);
+
+const hintEndpointsSchema = z
+  .strictObject({
+    authorizeUrl: z.url().optional(),
+    tokenUrl: z.url().optional(),
+    refreshUrl: z.url().optional(),
+    revokeUrl: z.url().optional(),
+  })
+  .optional();
+
+/**
+ * The transformer-input HINTS shape (AL-04 plan D1/M8) — the single source of truth
+ * for what `paramsToAuthSpec` consumes. `packages/auth` re-derives
+ * `ParamsToAuthSpecInput` from THIS schema's inferred type (one definition, two
+ * packages served; hand-maintained drift is a compile error). It obeys this module's
+ * "persisted discriminators — never retype them" doctrine: field meanings match the
+ * shipped transformer exactly, resolved toward SHIPPED runtime behavior (risk R7) —
+ * e.g. `kindHint` stays an open string because the transformer owns the unknown-kind
+ * failure, and URL slots strict-validate because every downstream consumer does.
+ *
+ * Hints are NOT a spec: the deterministic, fail-closed `paramsToAuthSpec` remains the
+ * only spec builder. LLM-authored shapes derive from this via `llmProposalSchema`
+ * (render-directive.ts), which OMITS registration copy + headerTemplate (M5).
+ */
+export const authSpecHintsSchema = z.strictObject({
+  /** Auth kind. Open string — the transformer owns the unknown-kind failure. */
+  kindHint: z.string().optional(),
+  /** Provider display name. Required; also the well-known-registry lookup key. */
+  providerName: z.string().max(AUTH_PROVIDER_NAME_MAX_CHARS),
+  docsUrl: z.url().optional(),
+  homepageUrl: z.url().optional(),
+  /** Where the user goes to mint credentials — `registration.consoleUrl`. */
+  registrationConsoleUrl: z.url().optional(),
+  /** Plain-English numbered steps surfaced verbatim by the wizard. */
+  registrationInstructions: z.array(z.string()).optional(),
+  /** Field definitions the user must paste in; per-kind defaults apply when omitted. */
+  fields: z.array(authFieldSchema).optional(),
+  /** Non-standard header placement for static kinds (values may use `{{field_key}}`). */
+  headerTemplate: z.record(z.string(), z.string()).optional(),
+  /** The API hosts the spec asks to call. Per-kind rules live in the transformer. */
+  declaredApiHosts: z.array(z.string().max(AUTH_HINT_HOST_MAX_CHARS)).max(AUTH_HINT_HOSTS_MAX_ITEMS).optional(),
+  /** OAuth endpoints. Registry defaults apply for well-known providers. */
+  endpoints: hintEndpointsSchema,
+  scopes: boundedScopesSchema.optional(),
+  pkce: z.boolean().optional(),
+  /** @draft two-layer synthesis — runtime resolution deferred (TWO_LAYER_RESOLUTION_DEFERRED). */
+  authMode: z.enum(['per_user', 'global', 'two_layer']).optional(),
+  userLayerEndpoints: hintEndpointsSchema,
+  userLayerScopes: boundedScopesSchema.optional(),
+  userLayerPkce: z.boolean().optional(),
+  userLayerFields: z.array(authFieldSchema).optional(),
+});
+export type AuthSpecHints = z.infer<typeof authSpecHintsSchema>;
+
 // ------------------------------------------------------------------ the union
 
 export const authSpecSchema = z.discriminatedUnion('kind', [
