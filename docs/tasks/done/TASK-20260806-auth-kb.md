@@ -1,6 +1,6 @@
 # TASK-20260806-auth-kb: AL-05 — teach the builder LLM auth declaration + connected-API design (roadmap A5)
 
-- **Status**: in-progress (child of TASK-20260805-alpha-umbrella; Phase-0 approval pre-approves child plans) — **plan v2** (v1 reviewed by fresh-context 2-lens workflow `wf_e9a101a8-a46`: REVISE, 1 blocker + 4 majors + 6 minors, 0 refuted; ALL folded below)
+- **Status**: done (merged via PR #23 → main @ `2b84c6d`, 2026-08-06) — **plan v2** (v1 reviewed by fresh-context 2-lens workflow `wf_e9a101a8-a46`: REVISE, 1 blocker + 4 majors + 6 minors, 0 refuted; ALL folded below)
 - **Owner**: Jeetu (autonomous overnight run; Claude orchestrates)
 - **Risk tier**: **Medium** (LLM-prompt/KB work + UI copy; no schema wire changes; TDD mandatory)
 - **Branch**: `feat/TASK-20260806-auth-kb` (cut off `main` @ `caaeb97`, post-AL-04)

@@ -5,12 +5,13 @@ blast-radius: whether builder-authored apps reach external APIs through the host
 source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb; Anthropic prompt-engineering best practices read 2026-08-06)
 -->
 
-## Connected APIs: calling an external API with auth and credentials
+## Connected APIs: calling an external API with auth, login, and credentials
 
 Snug apps can use real external APIs — weather, music, repos, market data — even ones
-that need an API key or an OAuth login. A sandboxed app has NO network of its own: every
-external call travels through the host, and the host holds the user's credentials and
-injects them into requests outside the app. Building a connected app has exactly two
+behind authentication: an API key, a bearer token, or a "sign in with Google"-style
+OAuth login. A sandboxed app has NO network of its own: every external HTTP call
+travels through the host, and the host holds the user's credentials and access tokens
+and injects them into requests outside the app. Building a connected app has exactly two
 parts, both yours:
 
 1. **In the app code** — call external APIs only through the `useConnectedFetch` hook
@@ -22,8 +23,12 @@ parts, both yours:
 Credentials live with the host, always. The user's API keys and tokens are stored by the
 host and injected only after the user approves the connection. App code, app storage, and
 your directive carry zero secrets: never write a key into the HTML, never add a key-entry
-input to an app, never ask for a secret in chat. The host strips credential-shaped
-headers from app requests, so a hardcoded key could not work even if you wrote one.
+input to an app, never ask for a secret in chat. There is no key for you to write — the
+user's credential is the host's to hold and inject, and it is never handed to you or to
+the app. So a key in app code is two failures at once: the app is broken for the user
+whose real credential it ignores, and whatever value you typed is now sitting in source
+the user can publish. Write the call, declare the provider, and let the host supply the
+credential.
 
 ### Design the app against useConnectedFetch (it must work before it is connected)
 
@@ -36,15 +41,19 @@ settles is a broken app. When you need external data, pick the provider while yo
 the code — the hostnames you call in the app are the same hostnames you declare in the
 `{{authWizardDirectiveKind}}` directive below.
 
-### Declare the connection: emit the {{authWizardDirectiveKind}} render directive (auth declaration)
+### Declare the connection: emit the {{authWizardDirectiveKind}} render directive (authentication declaration)
 
-Emit the directive when, and only when, the app you just wrote or modified NEWLY needs a
-provider connection:
+This directive is how the user gets to log in or hand over a key: it is the only way an
+app ever becomes connected. Emit it when, and only when, the app you just wrote or
+modified NEWLY needs a provider connection:
 
 - The app calls `useConnectedFetch` → close that same reply with exactly one directive.
 - The app makes no external calls → no directive.
 - You edited an already-declared app without adding a provider → no directive again.
 - A later edit adds a NEW provider → one directive for the new provider.
+- The app would need TWO OR MORE providers → still one directive, for one provider
+  only, and say so in the reply (see below). Never bundle two providers into one
+  declaration.
 
 After the app write, end your reply with one fenced json code block holding only the
 directive object:
@@ -56,7 +65,10 @@ directive object:
     "Spotify". For well-known providers the host resolves everything else from its
     pinned registry — give the name only, never authorization or endpoint URLs (the
     registry's URLs are verified; yours cannot be).
-  - `kindHint` (when the docs make it obvious): one of {{authKinds}}.
+  - `kindHint` (when the docs make it obvious): one of {{authKinds}} — that is,
+    whether the provider authenticates with an API key, a bearer token the user
+    pastes, or an OAuth login where the user signs in at the provider. Omit it when
+    the provider's docs leave the authentication style unclear; the host resolves it.
   - `declaredApiHosts` (when the app calls external hosts — usually yes): exactly the
     bare hostnames your app's code passes to `useConnectedFetch`, no more. You know
     them — you wrote the calls.
@@ -66,6 +78,16 @@ keys it does not recognize is dropped whole. The directive is a doorbell, not an
 the connect card, the host independently resolves the provider, and the user reviews and
 approves every host before anything is saved. Your app keeps working in its
 not-yet-connected state until then.
+
+### An app that would need two or more providers (one connection per app)
+
+An app holds ONE connected provider in this version, so a second directive in the same
+reply never reaches the user. Pick the provider the app's primary live feature needs and
+declare that one; `declaredApiHosts` then carries only the declared provider's
+hostnames, never the other's — an undeclared host is blocked with no way to connect it.
+Then tell the user plainly: the app supports one connected provider at this version, so
+the second feature ships with manual entry or sample data. Build that second feature
+that way in the same write, so the app is whole. Do not quietly drop it.
 
 ### Example: a weather app with an API key provider
 

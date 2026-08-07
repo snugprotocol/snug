@@ -6,9 +6,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AdapterRequest, AgentAdapter } from '@snugprotocol/adapters';
+import { LOCAL_DEFAULT_BASE_URL, type AdapterRequest, type AgentAdapter } from '@snugprotocol/adapters';
 
-import { modeStore, providerStore, setByokKey } from '../state/mode.js';
+import { localUrlStore, modeStore, providerStore, setByokKey } from '../state/mode.js';
 import { inferenceWireCopy, runAuthSpecInference } from '../agent/inferrerAdapter.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
@@ -157,6 +157,7 @@ describe('AL-05 AC7 — inferenceWireCopy: the paste-box names the wire the infe
   afterEach(() => {
     modeStore.set('byok');
     providerStore.set('mock');
+    localUrlStore.set(LOCAL_DEFAULT_BASE_URL);
   });
 
   it('SUBSCRIPTION mode with a stored key: says the pasted text goes browser-direct to the provider — not "your configured model"', async () => {
@@ -189,12 +190,36 @@ describe('AL-05 AC7 — inferenceWireCopy: the paste-box names the wire the infe
     expect(copy).not.toMatch(/directly from this browser/i);
   });
 
-  it('local mode: names the local server wire', async () => {
+  it('local mode: names the configured endpoint, never the provider (M65)', async () => {
     await installTestUserDb();
     modeStore.set('local');
     providerStore.set('anthropic');
     const copy = await inferenceWireCopy();
-    expect(copy).toMatch(/local anthropic server/i);
+    expect(copy).toContain(LOCAL_DEFAULT_BASE_URL);
+    // local mode ignores provider/key entirely (agent/adapter.ts) — the copy must
+    // not attribute the wire to a provider the local adapter never reads.
+    expect(copy).not.toMatch(/anthropic/i);
+  });
+
+  it('local mode with the DEFAULT provider: never invents a "mock server" (M65)', async () => {
+    // The default reachable state: providerStore is 'mock' and the provider select
+    // only renders in byok mode, so a user who switches to local without ever
+    // visiting byok settings must not be told about a mock server that does not exist.
+    await installTestUserDb();
+    modeStore.set('local');
+    providerStore.set('mock');
+    const copy = await inferenceWireCopy();
+    expect(copy).not.toMatch(/mock/i);
+    expect(copy).toContain(LOCAL_DEFAULT_BASE_URL);
+  });
+
+  it('local mode with a custom endpoint: the copy follows localUrlStore, not the default', async () => {
+    await installTestUserDb();
+    modeStore.set('local');
+    providerStore.set('mock');
+    localUrlStore.set('http://127.0.0.1:1234/v1');
+    const copy = await inferenceWireCopy();
+    expect(copy).toContain('http://127.0.0.1:1234/v1');
   });
 
   it('the sheet RENDERS the wire copy in the docs label — import-presence alone is not enough (source pin, M61)', () => {

@@ -110,9 +110,10 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
   {
     "file": "knowledge-base/app-authoring/90-auth-and-connected-apis.md",
     "headingTree": [
-      "## Connected APIs: calling an external API with auth and credentials",
+      "## Connected APIs: calling an external API with auth, login, and credentials",
       "### Design the app against useConnectedFetch (it must work before it is connected)",
-      "### Declare the connection: emit the auth_wizard render directive (auth declaration)",
+      "### Declare the connection: emit the auth_wizard render directive (authentication declaration)",
+      "### An app that would need two or more providers (one connection per app)",
       "### Example: a weather app with an API key provider",
       "### Example: no directive — an app with no external API",
       "### Keyless public APIs (a provider with no credential)",
