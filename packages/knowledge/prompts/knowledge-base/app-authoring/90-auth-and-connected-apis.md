@@ -8,7 +8,7 @@ source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb; Anthropic prompt-en
 ## Connected APIs: calling an external API with auth and credentials
 
 Snug apps can use real external APIs — weather, music, repos, market data — even ones
-that need an API key or a login. A sandboxed app has NO network of its own: every
+that need an API key or an OAuth login. A sandboxed app has NO network of its own: every
 external call travels through the host, and the host holds the user's credentials and
 injects them into requests outside the app. Building a connected app has exactly two
 parts, both yours:
@@ -61,8 +61,8 @@ directive object:
     bare hostnames your app's code passes to `useConnectedFetch`, no more. You know
     them — you wrote the calls.
 
-Emit only `v`, `kind`, `proposal`: the host validates strictly, and a directive carrying
-anything else is dropped whole. The directive is a doorbell, not an authority — it opens
+Emit only `v`, `kind`, `proposal`: the host validates strictly — a directive carrying
+keys it does not recognize is dropped whole. The directive is a doorbell, not an authority — it opens
 the connect card, the host independently resolves the provider, and the user reviews and
 approves every host before anything is saved. Your app keeps working in its
 not-yet-connected state until then.
@@ -97,8 +97,9 @@ manual-entry or sample-data mode so it is still useful.
 ### What the user sees (net requests in the frames timeline)
 
 The connect card renders above your reply; approving it opens the host's connection
-wizard. After approval, the app's calls go through — and every net request and response
-appears in the host's frames timeline as structure only (method, host, status), never
-bodies and never credentials. Mutating calls (POST/PUT/PATCH/DELETE) additionally ask
-the user to confirm each time. Design copy accordingly: the user can always see THAT the
-app is calling out, and is always asked before it writes.
+wizard. After approval the app's calls go through the host, and net traffic surfaces in
+the host's frame timeline as structure only — request and response bodies and
+credentials never appear there. Mutating calls (POST/PUT/PATCH/DELETE) ask the user to
+confirm before the write goes out (the user may remember that grant for the session).
+Design copy accordingly: the host, not the app, is where the user controls and audits
+network access.

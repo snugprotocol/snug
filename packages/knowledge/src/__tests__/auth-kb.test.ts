@@ -97,6 +97,9 @@ describe('AC10b — retrieval delivery: build-time auth queries reach the emissi
     'api key',
     'auth',
     'useConnectedFetch',
+    // Review C-minor: the tokenizer keeps 'oauth2_*' whole, so a bare 'oauth' query
+    // scores ONLY if the prose contains the standalone word — pinned here.
+    'oauth',
   ];
 
   for (const query of queries) {
@@ -115,4 +118,15 @@ describe('AC10b — retrieval delivery: build-time auth queries reach the emissi
       ).toBeDefined();
     });
   }
+});
+
+describe('AL-05 review C1 — the net-visibility teaching never overclaims the shipped inspector (M60)', () => {
+  // The shipped frames timeline renders net frames with NO per-frame method/host/
+  // status detail, and the mutating-call confirm supports a session-remember grant.
+  // The teaching must claim no more than the host delivers (review finding C1).
+  it('does not teach (method, host, status) detail or an always-visible / asks-every-time claim', () => {
+    const text = authKbText();
+    expect(text).not.toMatch(/method, host, status/);
+    expect(text).not.toMatch(/always see|always asked|confirm each time|asked every time/i);
+  });
 });

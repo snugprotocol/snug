@@ -30,7 +30,10 @@ prompts/
 │       └── 90-auth-and-connected-apis.md  ← connected APIs: useConnectedFetch design + the auth_wizard directive contract (AL-05; headings are retrieval-tested)
 ├── tools/                           ← tool + parameter descriptions
 │   ├── app-builder.md
-│   └── artifact-write.md
+│   ├── app-doc-write.md
+│   ├── artifact-write.md
+│   ├── auth-spec-inferrer.md        ← D8 inference prompt (few-shot outputs contract-tested)
+│   └── schema-apply.md
 ├── skills/                          ← skill-builder prompts (workstream B)
 │   ├── skill-creator/               ← VENDORED Anthropic skill-creator — verbatim, commit-pinned,
 │   │                                   Apache-2.0 (LICENSE.txt + NOTICE.md); NO header comments here

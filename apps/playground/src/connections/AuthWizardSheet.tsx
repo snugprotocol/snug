@@ -323,9 +323,12 @@ function SpecConfirmFields({
   const [wireCopy, setWireCopy] = useState('');
   useEffect(() => {
     let alive = true;
-    void inferenceWireCopy().then((copy) => {
-      if (alive) setWireCopy(copy);
-    });
+    void inferenceWireCopy()
+      .then((copy) => {
+        if (alive) setWireCopy(copy);
+      })
+      // On failure the label simply makes no wire claim — never a wrong one.
+      .catch(() => {});
     return () => {
       alive = false;
     };

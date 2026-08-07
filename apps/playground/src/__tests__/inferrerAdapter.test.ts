@@ -197,12 +197,16 @@ describe('AL-05 AC7 — inferenceWireCopy: the paste-box names the wire the infe
     expect(copy).toMatch(/local anthropic server/i);
   });
 
-  it('the sheet composes the docs label from inferenceWireCopy — the stale "configured model" claim is gone (source pin)', () => {
+  it('the sheet RENDERS the wire copy in the docs label — import-presence alone is not enough (source pin, M61)', () => {
     const source = readFileSync(
       join(__dirname, '..', 'connections', 'AuthWizardSheet.tsx'),
       'utf8',
     );
     expect(source).toContain('inferenceWireCopy');
+    // Review C2: the ${wireCopy} interpolation must sit INSIDE the docs label
+    // expression — an orphaned import/useEffect with a reverted static label kept
+    // the weaker containment assertions green.
+    expect(source).toMatch(/provider docs \(optional[\s\S]{0,120}?\$\{wireCopy\}/);
     expect(source).not.toContain('your configured model');
   });
 });
