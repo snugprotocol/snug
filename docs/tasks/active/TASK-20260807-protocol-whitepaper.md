@@ -1,6 +1,6 @@
 # TASK-20260807-protocol-whitepaper: The Snug Protocol whitepaper (PDF)
 
-- **Status**: planned
+- **Status**: in-review
 - **Owner**: Jeetu Maker
 - **Risk tier**: low (docs-only; authors NO schema, code, or normative text — it *describes* the frozen v0.1 surface and the published v0.2 draft)
 - **Branch**: `feat/TASK-20260807-protocol-whitepaper`
@@ -97,3 +97,41 @@ None. No `packages/*` file is read at build time or modified. The checker reads 
 - State: plan complete, awaiting approval. No implementation code written.
 - Next step: on approval — create branch off `main`, write `scripts/check-whitepaper.mjs` red first, then figures, then prose.
 - Open questions: none blocking. The spec-repo push remains explicitly deferred.
+
+### 2026-08-07 — Jeetu Maker (with Claude) — session
+- Done: **all eight acceptance criteria met; 70/70 conformance checks green.** Built the
+  22-page A4 PDF (`docs/whitepaper/dist/`, 939 KB) with 7 original inline-SVG figures,
+  authored via HTML + CSS Paged Media through headless Chrome — no TeX, no npm dependency,
+  no network at build time. Checker written red first (Gate 3), then figures, CSS, prose,
+  build script. Staged into the spec clone on branch `docs/whitepaper-v0.1` (commit
+  `ae6ec8b`), **not pushed**.
+- **Defects found and fixed, each now guarded by a check that was proven to fail without
+  the fix:**
+  1. Every section number was off by one — an unnumbered `h2` suppressed `::before` but
+     still incremented the counter, so "Contents" consumed §1. Invisible in source; only
+     the rendered PDF showed it. AC8 now asserts the CSS rule.
+  2. Five of seven figures were never cited in prose. The reference check had counted the
+     caption as a citation, so it passed; it now strips captions before counting.
+  3. A build killed mid-run left a PDF with no `/Author` metadata — caught by AC2, which
+     is why the metadata check reads the `/Info` dictionary rather than the cover page.
+  4. R5 overclaim: the paper listed `MALFORMED` among R5's known error codes, but SPEC.md
+     defines it in R1 and omits it from R5. AC4 had only checked that each code *appears*
+     somewhere; it now compares the paper's R5 list against the spec's as sets.
+  5. (Fresh-context review) §6.2 stated the reserved-prefix rule absolutely, dropping the
+     spec's single normative exemption, `snug_kv` — and §4.1 lists the `kvGet`/`kvSet`
+     operations that table backs, so the paper contradicted itself.
+  6. (Review) §5.4 discussed v0.2 storage material under a Normative·v0.1 badge without
+     the Draft badge the paper's own Conventions callout promises.
+  7. (Review) §5.2 asserted always-strict credential injection as a C1 requirement and
+     §5.3 asserted a fixed CDN allowlist as part of C2. **Neither appears in either
+     published spec file** — both were internal implementation doctrine. Now stated as
+     recommendation and host policy respectively, explicitly not v0.1 requirements.
+- A fresh-context review also fact-checked Appendix A against all 10 schemas' `required`
+  arrays, the frame table's directions, every R6 constant, all eleven §-references and
+  seven figure citations, and the unpublished-surface exclusion: **all clean.**
+- State: content complete and verified; branch `feat/TASK-20260807-protocol-whitepaper`
+  (4 commits) not yet merged. Spec clone holds an unpushed staging commit.
+- Next step: owner review of the PDF. Then PR + merge here; the spec-repo push is a
+  separate explicit decision needing a `spec-changelog.md` entry.
+- Open questions: whether to push to `snugprotocol/spec` now or hold until the paper has
+  had wider review — owner's call, deliberately not taken here.
