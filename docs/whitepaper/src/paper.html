@@ -546,9 +546,14 @@ reach the model, and never reach a publisher.</strong></p>
 
 <p>Concretely, hosts MUST strip <code>authorization</code>, <code>cookie</code>,
 <code>set-cookie</code>, <code>x-api-key</code>, and <code>proxy-authorization</code> from any
-application-originated request at the envelope boundary. Where a host injects a credential on
-an application's behalf, injection is host-bound and <strong>always strict — never a
-configurable flag</strong>.</p>
+application-originated request at the envelope boundary. That header strip is the whole of
+C1's normative wire surface at v0.1.</p>
+
+<p>Beyond it, the reference implementation adopts a rule we recommend to any host and expect
+a later revision to make normative: where a host injects a credential on an application's
+behalf, injection is host-bound and <strong>always strict — never a configurable
+flag</strong>. It is stated here as implementation doctrine, not as a v0.1 requirement,
+because the authenticated-connections surface it governs is itself unpublished (§9).</p>
 
 <p>The emphasis is earned. An audit of the two production systems this protocol generalises
 from found a strictness control that defaulted to off, which is to say a documented feature
@@ -560,8 +565,10 @@ protocol therefore does not offer the choice.</p>
 <h3>C2 — sandbox integrity</h3>
 
 <p>The second hard constraint: <strong>application frames run with
-<code>sandbox="allow-scripts"</code> only, with <code>connect-src</code> blocked and a fixed
-CDN allowlist.</strong> These are never weakened, including for demonstrations.</p>
+<code>sandbox="allow-scripts"</code> only, with <code>connect-src</code> blocked.</strong>
+These are never weakened, including for demonstrations. Hosts that permit any script source
+at all SHOULD confine it to a fixed allowlist, as the reference implementation does; the
+allowlist itself is a host policy rather than a v0.1 requirement.</p>
 
 <p>Three properties follow. First, the frame is assigned a <strong>null origin</strong>:
 <code>allow-same-origin</code> is absent, so the application cannot reach host storage, host
@@ -585,7 +592,8 @@ isolation enforceable rather than advisory.</p>
 <p>We state these plainly, because a threat model that lists only solved problems is
 marketing.</p>
 
-<p><strong>Secrets are persistent at rest.</strong> In the draft storage layer, credentials
+<p><strong>Secrets are persistent at rest.</strong> <span class="badge draft">Draft</span>
+In the draft storage layer of §6, credentials
 live in the <code>snug_secrets</code> table inside the user's own file. They are stripped from
 host-bound synchronisation and from default exports, and the file is vacuumed so that freed
 pages retain nothing recoverable. They are nonetheless present in the local file. This is a
@@ -684,9 +692,11 @@ cannot overlap.</p>
 <p>The naming rules are normative. Reserved prefixes — <code>snug_</code>,
 <code>sqlite_</code>, and <code>app_</code>, case-insensitively — are refused, blocking an
 application from forging another application's at-rest name. Object names must match
-<code>^[A-Za-z][A-Za-z0-9_]{0,40}$</code>. A conforming host <strong>refuses to persist</strong>
-any runtime whose object names violate the rule, failing closed with prior state retained;
-an unvalidated name is never interpolated into SQL.</p>
+<code>^[A-Za-z][A-Za-z0-9_]{0,40}$</code>. The single exemption is the driver-internal
+<code>snug_kv</code> table, held at rest as <code>app_&lt;token&gt;__snug_kv</code>, which
+backs the key-value storage operations of §4.1. A conforming host <strong>refuses to
+persist</strong> any runtime whose object names violate the rule, failing closed with prior
+state retained; an unvalidated name is never interpolated into SQL.</p>
 
 <p>These schemas are designed by the model from the application's own requirements. A
 portfolio tracker receives tables for equities, trades, and dividends, because that is what a
