@@ -1,6 +1,6 @@
 # TASK-20260807-protocol-whitepaper: The Snug Protocol whitepaper (PDF)
 
-- **Status**: in-review
+- **Status**: done
 - **Owner**: Jeetu Maker
 - **Risk tier**: low (docs-only; authors NO schema, code, or normative text — it *describes* the frozen v0.1 surface and the published v0.2 draft)
 - **Branch**: `feat/TASK-20260807-protocol-whitepaper`
