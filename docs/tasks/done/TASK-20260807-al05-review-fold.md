@@ -1,6 +1,6 @@
 # TASK-20260807-al05-review-fold: fold the post-merge AL-05 adversarial-review findings
 
-- **Status**: in-progress
+- **Status**: done (merged 2026-08-07 via PR #24 → `main` @ `4b6efb3`; post-merge root suite green 19/19, uncached)
 - **Owner**: Jeetu (Claude orchestrates; owner instruction 2026-08-07: "fix all findings — major & minor using dynamic workflows")
 - **Risk tier**: **Medium** (KB/prompt teaching text + one disclosure-copy line; no schema or wire change; TDD mandatory)
 - **Branch**: `feat/TASK-20260807-al05-review-fold` (cut off `feat/TASK-20260806-starters-auth-spectrum` @ `5a8819a`, which carries unmerged AL-05 housekeeping + HANDOFF #4 off `main` @ `2b84c6d`)
