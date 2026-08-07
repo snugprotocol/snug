@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 318" role="img" aria-label="Materialisation: at-rest namespaced tables become a per-app runtime database with natural names">
+  <defs>
+    <marker id="f6-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6472"/>
+    </marker>
+  </defs>
+
+  <!-- at rest -->
+  <rect x="16" y="46" width="238" height="196" rx="8" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.4"/>
+  <text x="135" y="70" text-anchor="middle" class="f-title">At rest</text>
+  <text x="135" y="86" text-anchor="middle" class="f-tiny">inside the shared user file</text>
+
+  <rect x="34" y="98" width="202" height="26" rx="4" fill="#fff" stroke="#c9ced6"/>
+  <text x="135" y="115" text-anchor="middle" class="f-mono-sm">app_7f3c…__equities</text>
+  <rect x="34" y="128" width="202" height="26" rx="4" fill="#fff" stroke="#c9ced6"/>
+  <text x="135" y="145" text-anchor="middle" class="f-mono-sm">app_7f3c…__trades</text>
+  <rect x="34" y="158" width="202" height="26" rx="4" fill="#fff" stroke="#c9ced6"/>
+  <text x="135" y="175" text-anchor="middle" class="f-mono-sm">app_2b91…__habits</text>
+  <text x="135" y="204" text-anchor="middle" class="f-tiny">every app's tables coexist</text>
+  <text x="135" y="220" text-anchor="middle" class="f-tiny">under injective namespace tokens</text>
+
+  <!-- registry -->
+  <rect x="282" y="82" width="156" height="124" rx="8" fill="#f5f7fa" stroke="#5b6472" stroke-width="1.3"/>
+  <text x="360" y="104" text-anchor="middle" class="f-label">Schema registry</text>
+  <text x="360" y="122" text-anchor="middle" class="f-mono-sm">snug_app_schemas</text>
+  <text x="360" y="142" text-anchor="middle" class="f-tiny">runtime sqlite_master DDL</text>
+  <text x="360" y="156" text-anchor="middle" class="f-tiny">stored VERBATIM, in</text>
+  <text x="360" y="170" text-anchor="middle" class="f-tiny">creation order</text>
+  <text x="360" y="192" text-anchor="middle" class="f-tiny">no DDL body is ever rewritten</text>
+
+  <!-- runtime -->
+  <rect x="466" y="46" width="238" height="196" rx="8" fill="#fff" stroke="#5b6472" stroke-width="1.4"/>
+  <text x="585" y="70" text-anchor="middle" class="f-title">At run</text>
+  <text x="585" y="86" text-anchor="middle" class="f-tiny">App A's own in-memory database</text>
+
+  <rect x="484" y="98" width="202" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+  <text x="585" y="115" text-anchor="middle" class="f-mono-sm">equities</text>
+  <rect x="484" y="128" width="202" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+  <text x="585" y="145" text-anchor="middle" class="f-mono-sm">trades</text>
+  <rect x="484" y="158" width="202" height="26" rx="4" fill="#fbfbfc" stroke="#c9ced6" stroke-dasharray="3 2"/>
+  <text x="585" y="175" text-anchor="middle" class="f-tiny">App B's tables are not present</text>
+  <text x="585" y="204" text-anchor="middle" class="f-tiny">natural names · the app writes ordinary SQL</text>
+  <text x="585" y="220" text-anchor="middle" class="f-tiny">isolation is PHYSICAL at runtime</text>
+
+  <!-- flows -->
+  <path d="M254 132 L278 132" fill="none" stroke="#5b6472" stroke-width="1.4" marker-end="url(#f6-a)"/>
+  <path d="M442 132 L462 132" fill="none" stroke="#5b6472" stroke-width="1.4" marker-end="url(#f6-a)"/>
+  <text x="360" y="222" text-anchor="middle" class="f-edge">materialise →</text>
+
+  <path d="M466 258 C 360 284, 260 284, 178 258" fill="none" stroke="#a8712a" stroke-width="1.4" marker-end="url(#f6-a)"/>
+  <text x="360" y="284" text-anchor="middle" class="f-edge-alt">← write-back: create under the natural name, then ALTER TABLE … RENAME (a pure name swap)</text>
+
+  <text x="16" y="308" class="f-note">A name-gate violation rolls the whole write-back back: prior state is retained and the error surfaces. Per-app export = materialise, then export a standalone .sqlite.</text>
+</svg>

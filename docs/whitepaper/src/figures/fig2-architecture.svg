@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 468" role="img" aria-label="System architecture: host page, runner, sandboxed app iframe, transport seam, user database and sync origins">
+  <defs>
+    <marker id="f2-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6472"/>
+    </marker>
+    <marker id="f2-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#a8712a"/>
+    </marker>
+  </defs>
+
+  <!-- outer: host page -->
+  <rect x="12" y="30" width="524" height="424" rx="10" fill="#fbfbfc" stroke="#5b6472" stroke-width="1.6"/>
+  <text x="28" y="52" class="f-title">Host page (static files — no backend required)</text>
+
+  <!-- chat UI -->
+  <rect x="32" y="68" width="150" height="52" rx="7" fill="#fff" stroke="#5b6472" stroke-width="1.2"/>
+  <text x="107" y="90" text-anchor="middle" class="f-label">Chat UI</text>
+  <text x="107" y="106" text-anchor="middle" class="f-tiny">build + app-attached</text>
+
+  <!-- transport seam -->
+  <rect x="212" y="68" width="180" height="52" rx="7" fill="#fff" stroke="#5b6472" stroke-width="1.2"/>
+  <text x="302" y="90" text-anchor="middle" class="f-label">AgentTransport seam</text>
+  <text x="302" y="106" text-anchor="middle" class="f-tiny">byok · local · subscription</text>
+
+  <!-- LLM provider, outside the host page -->
+  <rect x="566" y="68" width="140" height="52" rx="7" fill="#f5f7fa" stroke="#5b6472" stroke-width="1.4"/>
+  <text x="636" y="90" text-anchor="middle" class="f-label">LLM provider</text>
+  <text x="636" y="106" text-anchor="middle" class="f-tiny">or localhost model</text>
+  <path d="M392 94 L562 94" fill="none" stroke="#5b6472" stroke-width="1.4" marker-end="url(#f2-arrow)"/>
+  <text x="477" y="86" text-anchor="middle" class="f-edge">host-page origin only</text>
+
+  <!-- runner -->
+  <rect x="32" y="140" width="360" height="46" rx="7" fill="#fff" stroke="#5b6472" stroke-width="1.2"/>
+  <text x="212" y="160" text-anchor="middle" class="f-label">Runner — postMessage bridge</text>
+  <text x="212" y="176" text-anchor="middle" class="f-tiny">validates every frame at the envelope boundary; strips credential headers</text>
+  <path d="M107 120 L107 138" fill="none" stroke="#5b6472" stroke-width="1.2" marker-end="url(#f2-arrow)"/>
+  <path d="M302 138 L302 122" fill="none" stroke="#5b6472" stroke-width="1.2" marker-end="url(#f2-arrow)"/>
+
+  <!-- sandboxed iframe -->
+  <rect x="32" y="206" width="360" height="92" rx="7" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="212" y="228" text-anchor="middle" class="f-title">Sandboxed iframe</text>
+  <text x="212" y="245" text-anchor="middle" class="f-mono-sm">sandbox="allow-scripts" · connect-src 'none'</text>
+  <rect x="60" y="256" width="304" height="32" rx="5" fill="#fff" stroke="#a8712a" stroke-width="1.1"/>
+  <text x="212" y="270" text-anchor="middle" class="f-label">Micro app — single-file HTML</text>
+  <text x="212" y="282" text-anchor="middle" class="f-tiny">useSnugApp · usePersistedState · useAppDB</text>
+  <path d="M180 204 L180 188" fill="none" stroke="#a8712a" stroke-width="1.4" marker-end="url(#f2-arrow-amber)"/>
+  <path d="M244 188 L244 204" fill="none" stroke="#a8712a" stroke-width="1.4" marker-end="url(#f2-arrow-amber)"/>
+  <text x="212" y="200" text-anchor="middle" class="f-edge-alt">frames (v: 1)</text>
+
+  <!-- user db -->
+  <rect x="32" y="318" width="360" height="76" rx="7" fill="#fff" stroke="#5b6472" stroke-width="1.4"/>
+  <text x="212" y="340" text-anchor="middle" class="f-title">User database — one SQLite file</text>
+  <text x="212" y="357" text-anchor="middle" class="f-tiny">apps · versions · per-app native tables · chats · wiki · settings · secrets</text>
+  <text x="212" y="376" text-anchor="middle" class="f-tiny">OPFS runtime copy (crash-safe A/B slots) · export / import</text>
+  <path d="M212 296 L212 316" fill="none" stroke="#5b6472" stroke-width="1.2" marker-end="url(#f2-arrow)"/>
+  <text x="286" y="311" text-anchor="middle" class="f-edge">db frames — host-brokered</text>
+
+  <!-- sync -->
+  <rect x="32" y="410" width="360" height="30" rx="5" fill="#f5f7fa" stroke="#5b6472" stroke-width="1.1"/>
+  <text x="212" y="430" text-anchor="middle" class="f-label">SyncProvider — hub origin · personal origin · none</text>
+  <path d="M212 394 L212 408" fill="none" stroke="#5b6472" stroke-width="1.2" marker-end="url(#f2-arrow)"/>
+
+  <!-- optional hub -->
+  <rect x="566" y="318" width="140" height="122" rx="7" fill="#f5f7fa" stroke="#5b6472" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="636" y="340" text-anchor="middle" class="f-label">Hub (optional)</text>
+  <text x="636" y="360" text-anchor="middle" class="f-tiny">/userdb CAS sync</text>
+  <text x="636" y="376" text-anchor="middle" class="f-tiny">/invoke (subscription)</text>
+  <text x="636" y="392" text-anchor="middle" class="f-tiny">artifact cache</text>
+  <text x="636" y="414" text-anchor="middle" class="f-tiny">transient caches only —</text>
+  <text x="636" y="428" text-anchor="middle" class="f-tiny">never authoritative</text>
+  <path d="M392 425 L562 400" fill="none" stroke="#5b6472" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#f2-arrow)"/>
+
+  <text x="12" y="20" class="f-note">Credentials never cross into the iframe, the model payload, or a publisher (C1); the sandbox profile is fixed (C2).</text>
+</svg>

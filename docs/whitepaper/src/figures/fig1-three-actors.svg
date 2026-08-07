@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" role="img" aria-label="The three actors: LLM provider, hub provider, and the end user who owns one portable file">
+  <defs>
+    <marker id="f1-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6472"/>
+    </marker>
+    <marker id="f1-arrow-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#a8712a"/>
+    </marker>
+  </defs>
+
+  <!-- end user, centre -->
+  <rect x="258" y="118" width="204" height="112" rx="10" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.6"/>
+  <text x="360" y="145" text-anchor="middle" class="f-title">End user</text>
+  <text x="360" y="165" text-anchor="middle" class="f-sub">owns apps, data, and chats</text>
+  <rect x="292" y="178" width="136" height="36" rx="5" fill="#fff" stroke="#a8712a" stroke-width="1.2"/>
+  <text x="360" y="196" text-anchor="middle" class="f-mono">user.sqlite</text>
+  <text x="360" y="208" text-anchor="middle" class="f-tiny">ONE portable file</text>
+
+  <!-- LLM provider -->
+  <rect x="24" y="40" width="188" height="86" rx="10" fill="#f5f7fa" stroke="#5b6472" stroke-width="1.4"/>
+  <text x="118" y="66" text-anchor="middle" class="f-title">LLM provider</text>
+  <text x="118" y="86" text-anchor="middle" class="f-sub">serves model calls</text>
+  <text x="118" y="104" text-anchor="middle" class="f-tiny">BYOK · local endpoint ·</text>
+  <text x="118" y="116" text-anchor="middle" class="f-tiny">hub subscription path</text>
+
+  <!-- hub provider -->
+  <rect x="508" y="40" width="188" height="86" rx="10" fill="#f5f7fa" stroke="#5b6472" stroke-width="1.4"/>
+  <text x="602" y="66" text-anchor="middle" class="f-title">Hub provider</text>
+  <text x="602" y="86" text-anchor="middle" class="f-sub">provisions apps per user</text>
+  <text x="602" y="104" text-anchor="middle" class="f-tiny">multi-tenant service</text>
+  <text x="602" y="116" text-anchor="middle" class="f-tiny">static files suffice</text>
+
+  <!-- edges -->
+  <path d="M212 96 C 250 108, 252 126, 268 136" fill="none" stroke="#5b6472" stroke-width="1.4" marker-end="url(#f1-arrow)"/>
+  <text x="196" y="140" text-anchor="middle" class="f-edge">model calls</text>
+
+  <path d="M508 96 C 470 108, 468 126, 452 136" fill="none" stroke="#5b6472" stroke-width="1.4" marker-end="url(#f1-arrow)"/>
+  <text x="530" y="140" text-anchor="middle" class="f-edge">hosting, sync</text>
+
+  <!-- portability arrows out of the file -->
+  <path d="M292 240 C 250 262, 200 262, 168 250" fill="none" stroke="#a8712a" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f1-arrow-open)"/>
+  <path d="M428 240 C 470 262, 520 262, 552 250" fill="none" stroke="#a8712a" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f1-arrow-open)"/>
+  <text x="140" y="268" text-anchor="middle" class="f-edge-alt">any provider</text>
+  <text x="584" y="268" text-anchor="middle" class="f-edge-alt">any hub</text>
+  <path d="M360 234 L360 268" fill="none" stroke="#a8712a" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f1-arrow-open)"/>
+  <text x="360" y="284" text-anchor="middle" class="f-edge-alt">fully offline</text>
+
+  <!-- the invariant -->
+  <rect x="150" y="298" width="420" height="24" rx="4" fill="#fbfbfc" stroke="#c9ced6" stroke-width="1"/>
+  <text x="360" y="314" text-anchor="middle" class="f-note">A hub is a convenience, never a requirement: apps must run with no hub backend.</text>
+</svg>
