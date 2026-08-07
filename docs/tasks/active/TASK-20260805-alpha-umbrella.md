@@ -88,6 +88,10 @@ Scope change to this approved umbrella · destructive or 🔑-gated action not p
 
 - IProject extraction baseline corrected: the currently checked-out auth working tree (named in `internal/.env.local`), not `main` (verified 2026-08-05; audit paths absent on IProject `main`).
 
+### Owner scope amendment (2026-08-06, mid-run — supersedes the tail order for THIS run)
+
+After AL-05 merges: run **AL-09 (starters-auth-spectrum) ONLY**, then **STOP and hold AL-10, AL-11, AL-12, AL-15** until the owner gives an explicit green light — the owner wants to run manual tests first. The morning report happens at that stop point (AL-15's /close-session sweep still happens when the tail resumes).
+
 ## Session journal (append-only, newest last)
 
 ### 2026-08-05 23:xx — Claude (Fable 5) — Phase 0
