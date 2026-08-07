@@ -100,14 +100,18 @@ describe('AC10b — retrieval delivery: build-time auth queries reach the emissi
   ];
 
   for (const query of queries) {
-    it(`"${query}" returns the 90-file's emission teaching in the top 5`, () => {
-      const hits = searchKnowledge(query);
+    it(`"${query}" returns the 90-file's emission teaching in the top 3`, () => {
+      // slice() matters: the zero-score fallback returns EVERY document, so an
+      // unsliced find() would pass even when retrieval has effectively failed.
+      // As authored the emission hit ranks FIRST for every query here; top-3
+      // leaves margin for unrelated KB growth while still failing on demotion.
+      const hits = searchKnowledge(query).slice(0, 3);
       const emissionHit = hits.find(
         (hit) => hit.file === KB_AUTH_FILE && hit.text.includes(AUTH_WIZARD_DIRECTIVE_KIND),
       );
       expect(
         emissionHit,
-        `top-5 for "${query}": ${hits.map((h) => `${h.file}#${h.heading}`).join(' | ')}`,
+        `top-3 for "${query}": ${hits.map((h) => `${h.file}#${h.heading}`).join(' | ')}`,
       ).toBeDefined();
     });
   }
