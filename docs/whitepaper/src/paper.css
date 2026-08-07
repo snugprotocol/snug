@@ -1,0 +1,479 @@
+/* paper.css — print stylesheet for the Snug Protocol whitepaper.
+ *
+ * Target: A4, rendered by headless Chrome's print pipeline (see build.mjs).
+ * Chrome supports the subset of CSS Paged Media that matters here: @page size and
+ * margins, and named margin boxes for running heads and folios. It does NOT support
+ * `target-counter()`, so the table of contents carries hand-authored page hints rather
+ * than generated cross-reference numbers.
+ *
+ * Typography is system-stack only — no webfont fetch at build time, which keeps the
+ * build hermetic (AC1) and reproducible on any machine.
+ */
+
+/* ------------------------------------------------------------------ page geometry */
+
+@page {
+  size: A4;
+  margin: 22mm 20mm 20mm 20mm;
+
+  @top-left {
+    content: "The Snug Protocol";
+    font: 400 7.6pt/1 "Charter", "Iowan Old Style", Georgia, serif;
+    color: #8a919b;
+    letter-spacing: 0.04em;
+  }
+  @top-right {
+    content: "v0.1 · v0.2 draft";
+    font: 400 7.6pt/1 "Charter", "Iowan Old Style", Georgia, serif;
+    color: #8a919b;
+    letter-spacing: 0.04em;
+  }
+  @bottom-center {
+    content: counter(page);
+    font: 400 8.4pt/1 "Charter", "Iowan Old Style", Georgia, serif;
+    color: #5b6472;
+  }
+}
+
+/* The cover carries no furniture. */
+@page :first {
+  margin: 0;
+  @top-left { content: ""; }
+  @top-right { content: ""; }
+  @bottom-center { content: ""; }
+}
+
+/* ------------------------------------------------------------------ base */
+
+:root {
+  --ink: #16191d;
+  --ink-soft: #3d444e;
+  --muted: #5b6472;
+  --faint: #8a919b;
+  --rule: #c9ced6;
+  --rule-soft: #e2e6ea;
+  --amber: #a8712a;
+  --amber-bg: #fdf7ee;
+  --slate-bg: #f5f7fa;
+  --danger: #b04a4a;
+  --ok: #3f7d58;
+
+  --serif: "Charter", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --sans: "Inter", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  font-family: var(--serif);
+  font-size: 10.2pt;
+  line-height: 1.52;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  counter-reset: section figure table;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+}
+
+/* ------------------------------------------------------------------ cover */
+
+.cover {
+  page-break-after: always;
+  break-after: page;
+  height: 297mm;
+  padding: 34mm 24mm 20mm;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.cover::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 7mm;
+  background: linear-gradient(90deg, var(--amber) 0%, #c99050 45%, #5b6472 100%);
+}
+
+.cover-mark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 30mm;
+}
+.cover-mark svg { width: 26px; height: 26px; color: var(--amber); }
+.cover-mark span {
+  font-family: var(--sans);
+  font-size: 11pt;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.cover h1 {
+  font-size: 30pt;
+  line-height: 1.16;
+  font-weight: 600;
+  letter-spacing: -0.014em;
+  margin: 0 0 10mm;
+  max-width: 148mm;
+}
+
+.cover .subtitle {
+  font-size: 12.4pt;
+  line-height: 1.48;
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 0 0 auto;
+  max-width: 140mm;
+}
+
+.cover-meta {
+  border-top: 1.4px solid var(--rule);
+  padding-top: 7mm;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8mm;
+}
+.cover-meta .k {
+  font-family: var(--sans);
+  font-size: 7.4pt;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 2.4mm;
+}
+.cover-meta .v { font-size: 10pt; color: var(--ink); }
+.cover-meta .v.author { font-size: 11.4pt; font-weight: 600; }
+
+.cover-abstract {
+  margin-top: 9mm;
+  padding: 6mm 7mm;
+  background: var(--amber-bg);
+  border-left: 2.4px solid var(--amber);
+  font-size: 9.4pt;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+.cover-abstract strong { color: var(--ink); font-weight: 600; }
+
+/* ------------------------------------------------------------------ headings */
+
+h2, h3, h4 {
+  font-family: var(--sans);
+  color: var(--ink);
+  letter-spacing: -0.008em;
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+h2 {
+  font-size: 14.2pt;
+  font-weight: 650;
+  margin: 9mm 0 3.4mm;
+  padding-bottom: 1.8mm;
+  border-bottom: 1.2px solid var(--rule);
+  counter-increment: section;
+  counter-reset: subsection;
+}
+h2::before {
+  content: counter(section) "  ";
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Unnumbered headings (Contents, references, appendix) must ALSO stop incrementing the
+ * counter — suppressing only ::before still advances it, which silently shifted every
+ * section number by one (Contents consumed "1", so Introduction printed as "2"). */
+h2.nonum {
+  counter-increment: none;
+}
+h2.nonum::before { content: none; }
+
+h3 {
+  font-size: 11.2pt;
+  font-weight: 620;
+  margin: 6mm 0 2.2mm;
+  counter-increment: subsection;
+}
+h3::before {
+  content: counter(section) "." counter(subsection) "  ";
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+}
+h3.nonum::before { content: none; }
+
+h4 {
+  font-size: 10pt;
+  font-weight: 620;
+  margin: 4.6mm 0 1.6mm;
+  color: var(--ink-soft);
+}
+
+/* First section starts on a fresh page after the TOC. */
+.section-start { break-before: page; page-break-before: always; }
+
+/* ------------------------------------------------------------------ text */
+
+p { margin: 0 0 3.1mm; text-align: justify; }
+p.lead { font-size: 11pt; color: var(--ink-soft); }
+p + p { text-indent: 0; }
+
+strong { font-weight: 640; }
+em { font-style: italic; }
+
+a { color: var(--ink); text-decoration: none; border-bottom: 0.6px solid var(--rule); }
+
+code, .mono {
+  font-family: var(--mono);
+  font-size: 0.865em;
+  background: var(--slate-bg);
+  padding: 0.5px 3px;
+  border-radius: 2.5px;
+  border: 0.6px solid var(--rule-soft);
+  white-space: nowrap;
+}
+
+pre {
+  font-family: var(--mono);
+  font-size: 8.2pt;
+  line-height: 1.5;
+  background: var(--slate-bg);
+  border: 0.8px solid var(--rule-soft);
+  border-left: 2.4px solid var(--muted);
+  border-radius: 3px;
+  padding: 3.4mm 4mm;
+  margin: 3.4mm 0 4mm;
+  overflow: visible;
+  white-space: pre-wrap;
+  word-break: break-word;
+  break-inside: avoid;
+}
+pre code { background: none; border: none; padding: 0; font-size: inherit; white-space: pre-wrap; }
+pre .c { color: var(--muted); font-style: italic; }
+pre .k { color: var(--amber); }
+
+ul, ol { margin: 0 0 3.4mm; padding-left: 5.6mm; }
+li { margin-bottom: 1.5mm; }
+li::marker { color: var(--amber); }
+
+dl.rules { margin: 0 0 4mm; }
+dl.rules dt {
+  font-family: var(--sans);
+  font-size: 9.4pt;
+  font-weight: 640;
+  color: var(--ink);
+  margin-top: 3.4mm;
+}
+dl.rules dt .rid {
+  display: inline-block;
+  min-width: 8mm;
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+}
+dl.rules dd { margin: 0.9mm 0 0 8mm; text-align: justify; }
+
+/* ------------------------------------------------------------------ tables */
+
+/* Tables may split across pages; a header row repeats on the continuation (see thead
+ * below). Forcing `break-inside: avoid` on a tall table strands most of a page when it
+ * cannot fit — the threat and frame tables are long enough that atomicity costs more
+ * than it buys. Individual rows still stay intact. */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8.6pt;
+  margin: 3.4mm 0 2mm;
+}
+thead { display: table-header-group; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+
+/* Short tables read better whole — opt in rather than defaulting every table to atomic. */
+table.keep-together { break-inside: avoid; page-break-inside: avoid; }
+caption {
+  caption-side: bottom;
+  text-align: left;
+  font-size: 8.2pt;
+  color: var(--muted);
+  padding-top: 2mm;
+  counter-increment: table;
+}
+caption::before {
+  content: "Table " counter(table) ". ";
+  font-family: var(--sans);
+  font-weight: 640;
+  color: var(--ink-soft);
+}
+th {
+  font-family: var(--sans);
+  font-size: 7.6pt;
+  font-weight: 640;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+  padding: 2mm 2.4mm;
+  border-bottom: 1.2px solid var(--rule);
+  vertical-align: bottom;
+}
+td {
+  padding: 1.9mm 2.4mm;
+  border-bottom: 0.6px solid var(--rule-soft);
+  vertical-align: top;
+}
+tbody tr:last-child td { border-bottom: 1.2px solid var(--rule); }
+td.mono-cell { font-family: var(--mono); font-size: 8pt; white-space: nowrap; }
+td .dir {
+  font-family: var(--sans);
+  font-size: 7.4pt;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ figures */
+
+figure {
+  margin: 5mm 0 5.5mm;
+  break-inside: avoid;
+  page-break-inside: avoid;
+  text-align: center;
+}
+figure svg { width: 100%; height: auto; max-width: 100%; }
+
+/* Figure numbers are written into the caption text, not generated by this counter.
+ * Rationale: generated content is invisible to scripts/check-whitepaper.mjs, so it could
+ * neither verify the numbering nor confirm that a "Figure N" reference in the prose points
+ * at a figure that exists. The counter is still incremented so the numbering can be
+ * audited against the text if the two ever diverge. The bold lead-in below styles the
+ * literal "Figure N." that opens each caption. */
+figcaption {
+  counter-increment: figure;
+  font-size: 8.2pt;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: left;
+  margin-top: 2.6mm;
+  padding-top: 2mm;
+  border-top: 0.6px solid var(--rule-soft);
+}
+figcaption b, figcaption .fignum {
+  font-family: var(--sans);
+  font-weight: 640;
+  color: var(--ink-soft);
+}
+
+/* Figure label typography — shared by every inline SVG. */
+svg .f-title { font: 640 9.4px var(--sans); fill: #16191d; }
+svg .f-label { font: 620 8.8px var(--sans); fill: #16191d; }
+svg .f-sub { font: 400 8.4px var(--sans); fill: #3d444e; }
+svg .f-tiny { font: 400 7.4px var(--sans); fill: #5b6472; }
+svg .f-note { font: 400 7.6px var(--sans); fill: #5b6472; font-style: italic; }
+svg .f-edge { font: 600 7.4px var(--sans); fill: #5b6472; }
+svg .f-edge-alt { font: 600 7.4px var(--sans); fill: #a8712a; }
+svg .f-mono { font: 600 10px var(--mono); fill: #16191d; }
+svg .f-mono-sm { font: 400 7.8px var(--mono); fill: #16191d; }
+
+/* ------------------------------------------------------------------ callouts */
+
+.callout {
+  background: var(--slate-bg);
+  border: 0.8px solid var(--rule-soft);
+  border-left: 2.4px solid var(--muted);
+  border-radius: 3px;
+  padding: 3.4mm 4mm;
+  margin: 4mm 0;
+  font-size: 9.2pt;
+  break-inside: avoid;
+}
+.callout .callout-title {
+  font-family: var(--sans);
+  font-size: 7.6pt;
+  font-weight: 640;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 1.8mm;
+}
+.callout p:last-child { margin-bottom: 0; }
+
+.callout.draft { background: var(--amber-bg); border-left-color: var(--amber); }
+.callout.draft .callout-title { color: var(--amber); }
+.callout.security { background: #fdf2f2; border-left-color: var(--danger); }
+.callout.security .callout-title { color: var(--danger); }
+
+.badge {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 7pt;
+  font-weight: 640;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.7mm 2mm;
+  border-radius: 2.5px;
+  vertical-align: 0.9mm;
+  margin-left: 2.4mm;
+}
+.badge.draft { background: var(--amber); color: #fff; }
+.badge.normative { background: var(--slate-bg); color: var(--muted); border: 0.6px solid var(--rule); }
+
+/* ------------------------------------------------------------------ contents */
+
+.toc { break-after: page; page-break-after: always; }
+.toc h2 { margin-top: 0; }
+.toc ol { list-style: none; padding: 0; margin: 0; font-family: var(--sans); font-size: 9.4pt; }
+.toc > ol > li {
+  display: flex;
+  align-items: baseline;
+  gap: 2.4mm;
+  padding: 1.7mm 0;
+  border-bottom: 0.6px solid var(--rule-soft);
+}
+.toc .num { color: var(--amber); font-weight: 640; min-width: 7mm; font-variant-numeric: tabular-nums; }
+.toc .ttl { flex: 1; color: var(--ink); }
+.toc .sub {
+  display: block;
+  font-size: 8.2pt;
+  color: var(--faint);
+  margin-top: 0.7mm;
+  font-family: var(--serif);
+  font-style: italic;
+}
+.toc .pg { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 8.6pt; }
+
+/* ------------------------------------------------------------------ references */
+
+.refs { font-size: 8.8pt; }
+.refs ol { padding-left: 6.4mm; }
+.refs li { margin-bottom: 2.2mm; line-height: 1.45; }
+.refs .src { color: var(--muted); }
+
+.colophon {
+  margin-top: 8mm;
+  padding-top: 4mm;
+  border-top: 1.2px solid var(--rule);
+  font-size: 8.4pt;
+  color: var(--muted);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5mm;
+}
+.colophon .k {
+  font-family: var(--sans);
+  font-size: 7.2pt;
+  font-weight: 640;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 1.4mm;
+}
+
+/* Keep short blocks from stranding a heading or a lone line at a page break. */
+p, li { orphans: 2; widows: 2; }

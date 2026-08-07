@@ -1,5 +1,9 @@
 node_modules/
 dist/
+# ...except the whitepaper PDF: it IS the deliverable, and the spec repo is published
+# from this committed artifact (docs/whitepaper/README.md).
+!docs/whitepaper/dist/
+!docs/whitepaper/dist/*.pdf
 .turbo/
 .next/
 *.log

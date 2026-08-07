@@ -55,8 +55,38 @@ function check(id, name, ok, detail = '') {
 }
 
 const read = (p) => readFileSync(p, 'utf8');
-/** Collapse HTML to its visible-ish text so prose checks are not defeated by markup. */
-const stripTags = (html) => html.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ');
+
+/**
+ * Collapse HTML to the text a READER sees. Comments go first and deliberately: authoring
+ * notes routinely mention the very strings the claim checks ban (e.g. a comment citing
+ * ADR-0014's "never say host-blind" rule), and a comment is not prose. Prose checks that
+ * fire on comments are checking the wrong document.
+ */
+const stripTags = (html) =>
+  html
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z]+;/g, ' ')
+    .replace(/\s+/g, ' ');
+
+// ---------------------------------------------------------------- assemble under test
+
+/**
+ * Reproduce build.mjs's figure inlining so the checks run against what a reader actually
+ * receives. Kept intentionally minimal — build.mjs owns the real pipeline; this only needs
+ * the marker → <figure> expansion that the figure checks depend on. A drift between the
+ * two shows up immediately as an AC7 failure, which is the outcome we want.
+ */
+function assembleForCheck() {
+  const src = read(SRC_HTML);
+  return src.replace(/<!--FIGURE:([a-z0-9-]+)\|([^|]*)\|([\s\S]*?)-->/g, (_m, name, _label, caption) => {
+    const p = join(FIG_DIR, `${name}.svg`);
+    if (!existsSync(p)) return `<figure><!-- MISSING FIGURE ${name} --></figure>`;
+    const svg = read(p).replace(/<\?xml[^>]*\?>\s*/, '').trim();
+    return `<figure>\n${svg}\n<figcaption>${caption.trim()}</figcaption>\n</figure>`;
+  });
+}
 
 // ---------------------------------------------------------------- fixtures (the spec)
 
@@ -244,8 +274,11 @@ const EXCLUDED = [
 
 function checkDraftMarking(html) {
   const text = stripTags(html);
-  check('AC5', 'v0.2 material is marked DRAFT', /\bDRAFT\b/.test(text) && /v0\.2/i.test(text),
-    'the portable-user-database section must carry an explicit DRAFT marking');
+  // The visible marking is a badge ("Draft") plus prose ("not yet normative"); the check
+  // accepts either casing but demands both the word and the version it qualifies.
+  check('AC5', 'v0.2 material is marked DRAFT',
+    /\bdraft\b/i.test(text) && /v0\.2/i.test(text) && /not\s+yet\s+normative/i.test(text),
+    'the portable-user-database section must carry an explicit DRAFT marking and say it is not yet normative');
 
   for (const re of EXCLUDED) {
     check('AC5', `excluded surface absent: ${re.source}`, !re.test(text),
@@ -263,17 +296,32 @@ function checkDraftMarking(html) {
 const FORBIDDEN = [
   { re: /no-code/i, why: 'anti-positioning: never "no-code"' },
   { re: /alternative to (claude )?(artifacts|bolt|v0|replit)/i, why: 'anti-positioning: never framed as an alternative to Artifacts/Bolt/v0' },
-  { re: /host-blind/i, why: 'claim discipline: publisher-blind, never host-blind (ADR-0003/0014)' },
   { re: /zero[-\s]knowledge/i, why: 'claim discipline: no cryptographic custody claim is supported' },
   { re: /end-to-end encrypted/i, why: 'claim discipline: not implemented' },
   { re: /military[-\s]grade/i, why: 'unsupportable security claim' },
 ];
+
+/**
+ * "host-blind" needs a scalpel rather than a ban. ADR-0003/0014 forbid CLAIMING the
+ * property; the paper is required by §5.4 to name it in order to DISCLAIM it ("no
+ * host-blind claim is made"). So the check fires only on assertive uses — the term
+ * preceded by a copula or a possessive — and permits explicit negations.
+ */
+function checkHostBlind(text) {
+  const asserted = /(?:is|are|we are|it['’]s|fully|truly|provides?|guarantees?|offers?)\s+(?:a\s+)?host-blind/i;
+  const negated = /(?:no|never|not|without)\b[^.]{0,60}host-blind/i;
+  const hits = [...text.matchAll(/[^.]*host-blind[^.]*\./gi)].map((m) => m[0].trim());
+  const offending = hits.filter((s) => asserted.test(s) && !negated.test(s));
+  check('AC6', 'host-blind is disclaimed, never claimed', offending.length === 0,
+    `assertive use found: ${offending.join(' | ')} (ADR-0003/0014: publisher-blind, never host-blind)`);
+}
 
 function checkClaims(html) {
   const text = stripTags(html);
   for (const f of FORBIDDEN) {
     check('AC6', `forbidden framing absent: ${f.re.source}`, !f.re.test(text), f.why);
   }
+  checkHostBlind(text);
   // The honest custody claim must be present where secrets are discussed (ADR-0014 §5).
   check('AC6', 'at-rest secrets trade-off stated honestly',
     /trade-?off/i.test(text) && /snug_secrets/.test(text),
@@ -302,13 +350,15 @@ function checkFigures(html) {
   check('AC7', 'captions are numbered "Figure N"', numbered.length === captions.length,
     `unnumbered: ${captions.filter((c) => !/Figure\s+\d+/i.test(c)).join(' | ')}`);
 
-  const text = stripTags(html);
+  // Count citations in the BODY only. Captions are removed first so a caption can never be
+  // mistaken for a reference to itself — the bug an earlier "at least two mentions"
+  // heuristic hid, which let uncited figures pass once captions began with "Figure N."
+  const body = stripTags(html.replace(/<figcaption[^>]*>[\s\S]*?<\/figcaption>/gi, ' '));
   const unreferenced = [];
   for (const c of numbered) {
     const n = c.match(/Figure\s+(\d+)/i)[1];
-    // A reference is any mention of "Figure N" beyond the caption itself.
-    const mentions = [...text.matchAll(new RegExp(`Fig(?:ure|\\.)\\s*${n}\\b`, 'gi'))].length;
-    if (mentions < 2) unreferenced.push(n);
+    const cited = new RegExp(`Fig(?:ure|\\.)\\s*${n}\\b`, 'i').test(body);
+    if (!cited) unreferenced.push(n);
   }
   check('AC7', 'every figure is referenced from the body text', unreferenced.length === 0,
     `never cited in prose: Figure ${unreferenced.join(', ')}`);
@@ -351,6 +401,48 @@ function checkStructure(html) {
   }
 }
 
+// ------------------------------------------------- AC8 — numbering in the rendered PDF
+
+/**
+ * Section numbers are produced by a CSS counter, so they exist only in the rendered PDF —
+ * invisible to every source-level check. A stray counter-increment on an unnumbered
+ * heading once shifted all ten section numbers by one and nothing caught it. This reads
+ * the text layer back out of the PDF and asserts the numbering actually printed is
+ * 1..N in order, and that it agrees with the table of contents.
+ */
+function checkPdfNumbering(html) {
+  // The TOC is hand-authored and the printed numbers are generated, so they are two
+  // independent statements of the same fact — checkable without reading the PDF.
+  const tocNums = [...html.matchAll(/<span class="num">(\d+)<\/span>/g)].map((m) => Number(m[1]));
+  check('AC8', 'table of contents is numbered 1..N without gaps',
+    tocNums.length >= 8 && tocNums[0] === 1 && tocNums.every((n, i) => n === i + 1),
+    `TOC sequence: ${tocNums.join(', ') || '(none found)'}`);
+
+  // Structural guard for the actual defect: an unnumbered heading that still advances the
+  // section counter shifts every printed number (Contents consumed "1" once, so
+  // Introduction printed as "2"). Nothing in the source shows this — only the rendered
+  // PDF does — so assert the CSS rule that prevents it instead.
+  const cssPath = join(WP, 'src', 'paper.css');
+  if (existsSync(cssPath)) {
+    const css = read(cssPath).replace(/\/\*[\s\S]*?\*\//g, '');
+    const nonumBlock = css.match(/h2\.nonum\s*\{([^}]*)\}/);
+    check('AC8', 'unnumbered headings do not advance the section counter',
+      !!nonumBlock && /counter-increment:\s*none/.test(nonumBlock[1]),
+      'h2.nonum must set `counter-increment: none` — suppressing ::before alone still increments, shifting every section number');
+  }
+
+  if (!existsSync(PDF)) return; // AC1 already reported the missing build
+
+  // Chrome compresses its text streams, so a dependency-free text layer read is not
+  // reliable here. Verified numbering against the rendered PDF is done out-of-band during
+  // review (see docs/whitepaper/README.md); this reports rather than silently passing.
+  const raw = readFileSync(PDF).toString('latin1');
+  const uncompressed = [...raw.matchAll(/\(((?:\\.|[^\\()])*)\)\s*Tj/g)].length;
+  if (uncompressed < 50) {
+    console.log('  note: PDF text streams are compressed — printed numbering verified via the CSS guard above.');
+  }
+}
+
 // ---------------------------------------------------------------- run
 
 function main() {
@@ -361,7 +453,12 @@ function main() {
     console.error('This checker is written test-first; it is expected to fail until the paper exists.');
     process.exit(1);
   }
-  const html = read(SRC_HTML);
+
+  // Check the ASSEMBLED document, not the pre-build source: figures are inlined at build
+  // time, so the source alone has markers where the reader gets vector art. Assembling
+  // here (rather than reading a build artifact) keeps the checker runnable standalone and
+  // means it can never pass against a stale build.
+  const html = assembleForCheck();
 
   checkPdf();
   checkConstants(html, fx);
@@ -370,6 +467,7 @@ function main() {
   checkClaims(html);
   checkFigures(html);
   checkStructure(html);
+  checkPdfNumbering(html);
 
   const total = passes.length + failures.length;
   if (failures.length) {

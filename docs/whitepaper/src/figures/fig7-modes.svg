@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 286" role="img" aria-label="The three execution modes: BYOK, local, and subscription, all originating model calls from the host page">
+  <defs>
+    <marker id="f7-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6472"/>
+    </marker>
+  </defs>
+
+  <!-- byok -->
+  <rect x="16" y="34" width="220" height="150" rx="9" fill="#fff" stroke="#5b6472" stroke-width="1.4"/>
+  <text x="126" y="58" text-anchor="middle" class="f-title">byok</text>
+  <text x="126" y="76" text-anchor="middle" class="f-tiny">browser-direct to a frontier API</text>
+  <rect x="36" y="90" width="180" height="30" rx="5" fill="#f5f7fa" stroke="#c9ced6"/>
+  <text x="126" y="109" text-anchor="middle" class="f-mono-sm">host page → provider</text>
+  <text x="126" y="140" text-anchor="middle" class="f-tiny">key read from snug_secrets</text>
+  <text x="126" y="158" text-anchor="middle" class="f-tiny">no hub involved at all</text>
+  <text x="126" y="174" text-anchor="middle" class="f-edge">user pays the provider</text>
+
+  <!-- local -->
+  <rect x="250" y="34" width="220" height="150" rx="9" fill="#fff" stroke="#5b6472" stroke-width="1.4"/>
+  <text x="360" y="58" text-anchor="middle" class="f-title">local</text>
+  <text x="360" y="76" text-anchor="middle" class="f-tiny">OpenAI-compatible endpoint</text>
+  <rect x="270" y="90" width="180" height="30" rx="5" fill="#f5f7fa" stroke="#c9ced6"/>
+  <text x="360" y="109" text-anchor="middle" class="f-mono-sm">host page → localhost</text>
+  <text x="360" y="140" text-anchor="middle" class="f-tiny">no key, no cloud, no network</text>
+  <text x="360" y="158" text-anchor="middle" class="f-tiny">runs entirely on the user's machine</text>
+  <text x="360" y="174" text-anchor="middle" class="f-edge">zero marginal cost</text>
+
+  <!-- subscription -->
+  <rect x="484" y="34" width="220" height="150" rx="9" fill="#fff" stroke="#5b6472" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="594" y="58" text-anchor="middle" class="f-title">subscription</text>
+  <text x="594" y="76" text-anchor="middle" class="f-tiny">hub-mediated, opt-in</text>
+  <rect x="504" y="90" width="180" height="30" rx="5" fill="#f5f7fa" stroke="#c9ced6"/>
+  <text x="594" y="109" text-anchor="middle" class="f-mono-sm">host page → hub /invoke</text>
+  <text x="594" y="140" text-anchor="middle" class="f-tiny">artifacts still land client-authoritatively</text>
+  <text x="594" y="158" text-anchor="middle" class="f-tiny">hub stores are transient caches</text>
+  <text x="594" y="174" text-anchor="middle" class="f-edge">hub carries the provider cost</text>
+
+  <!-- shared invariant -->
+  <rect x="16" y="204" width="688" height="62" rx="8" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.5"/>
+  <text x="360" y="226" text-anchor="middle" class="f-title">Invariant across all three modes</text>
+  <text x="360" y="244" text-anchor="middle" class="f-tiny">Model calls originate from the HOST PAGE only. The app iframe keeps sandbox="allow-scripts" with connect-src 'none'.</text>
+  <text x="360" y="259" text-anchor="middle" class="f-tiny">Credentials never enter the iframe. The user database remains the single source of truth.</text>
+
+  <path d="M126 186 L126 202" fill="none" stroke="#a8712a" stroke-width="1.2" marker-end="url(#f7-a)"/>
+  <path d="M360 186 L360 202" fill="none" stroke="#a8712a" stroke-width="1.2" marker-end="url(#f7-a)"/>
+  <path d="M594 186 L594 202" fill="none" stroke="#a8712a" stroke-width="1.2" marker-end="url(#f7-a)"/>
+
+  <text x="16" y="24" class="f-note">Switching modes is a settings change, not a migration — the same file, the same apps, a different brain.</text>
+</svg>
