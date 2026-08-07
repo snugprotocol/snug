@@ -31,7 +31,9 @@ App Type" for deciding, per app, whether a turn needs the model at all.
 
 An app cannot: call `fetch`/`XMLHttpRequest` (network is blocked by CSP), use browser
 storage (the sandbox has a null origin — storage exists only via the host bridge), open
-windows, or reach any credential. Everything flows through `postMessage` frames.
+windows, or reach any credential. Everything flows through `postMessage` frames. External
+APIs are still reachable — the HOST makes the call on the app's behalf through
+`useConnectedFetch`; see "Connected APIs".
 
 ## The Runtime Loop
 
@@ -52,8 +54,9 @@ simply runs. Steps 3-5 describe one agent round trip, and happen only when the a
 
 ## The SDK Hooks (the whole app-side API)
 
-Three hooks — included as copy-exactly code in the HTML template (see "The Mandatory HTML
-Template") — are the ONLY way an app talks to the host:
+These hooks — included as copy-exactly code in the HTML template (see "The Mandatory HTML
+Template") — are the ONLY way an app talks to the host. The first three are always
+present; the fourth appears only in apps that call an external API:
 
 - `useSnugApp({appId, displayName, description, iconEmoji, iconColor})` →
   `{isReady, theme, isWaiting, lastResponse, sendMessage}`. `sendMessage(action, payload,
@@ -62,6 +65,9 @@ Template") — are the ONLY way an app talks to the host:
   persistence with automatic hydrate-and-merge.
 - `useAppDB()` → `{exec(sql, params?), exportDb(), importDb(bytesBase64)}` — a per-app SQL
   database brokered by the host.
+- `useConnectedFetch()` → `{fetch(url, opts?)}` — host-mediated calls to the app's
+  approved external hosts; always resolves `{ok: true, status, headers, body}` or
+  `{ok: false, error}`. See "Connected APIs".
 
 ## Hard Rules
 
@@ -83,3 +89,4 @@ Template") — are the ONLY way an app talks to the host:
 - "Design Quality" — theming, layout, animation, touch targets, empty states
 - "Defensive Coding" — what NOT to do; crash-proofing rules
 - "CDN Compatibility" — UMD vs ESM and the pinned known-good library table
+- "Connected APIs" — `useConnectedFetch`, declaring auth, credentials the host holds

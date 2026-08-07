@@ -16,7 +16,8 @@ shipped crash.
 ## What NOT to Do
 
 - Do NOT call `fetch()` or `XMLHttpRequest` — the CSP blocks all network from the iframe.
-  Everything goes through the bridge.
+  Everything goes through the bridge; for external APIs that means `useConnectedFetch`,
+  which asks the HOST to make the call — see "Connected APIs".
 - Do NOT touch `localStorage`, `sessionStorage`, cookies, or IndexedDB — the null-origin
   sandbox has no working browser storage. Use `usePersistedState` / `useAppDB` only.
 - Do NOT hand-roll `postMessage` plumbing, rename the hooks, or "improve" the bridge

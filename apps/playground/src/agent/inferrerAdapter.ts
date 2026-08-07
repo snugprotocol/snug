@@ -53,7 +53,10 @@ type LiveAdapterResolution = { ok: true; adapter: AgentAdapter } | { ok: false }
  */
 type WireDecision =
   | { kind: 'webllm' }
-  | { kind: 'local'; provider: ByokProvider }
+  // No `provider`: local mode ignores provider/key entirely (adapter.ts) — the
+  // endpoint IS the wire, so carrying a provider here would only license copy that
+  // names something the local adapter never reads.
+  | { kind: 'local'; localUrl: string }
   | { kind: 'byok'; provider: ByokProvider; viaSubscription: boolean }
   | { kind: 'unavailable' };
 
@@ -66,7 +69,7 @@ async function decideWire(): Promise<WireDecision> {
   // Subscription has no browser-side adapter; the inference turn is a direct
   // browser call, so it runs on the byok/local DIRECT settings — never the mock.
   const direct: DirectMode = mode === 'subscription' ? 'byok' : mode;
-  if (direct === 'local') return { kind: 'local', provider };
+  if (direct === 'local') return { kind: 'local', localUrl: localUrlStore.get() };
   if (provider === 'mock') return { kind: 'unavailable' }; // the demo-brain provider — no real model behind it
   const key = await getByokKey(provider);
   if (key === undefined) return { kind: 'unavailable' }; // keyless byok/subscription — createTurnAdapter would silently hand back the mock
@@ -85,7 +88,7 @@ export async function inferenceWireCopy(): Promise<string> {
     case 'webllm':
       return 'pasted text stays in this browser (local WebLLM model)';
     case 'local':
-      return `pasted text goes to your local ${wire.provider} server`;
+      return `pasted text goes to your local model at ${wire.localUrl}`;
     case 'byok':
       return wire.viaSubscription
         ? `even in subscription mode, pasted text goes directly from this browser to ${wire.provider} using your saved key`
@@ -107,7 +110,9 @@ async function liveAdapter(): Promise<LiveAdapterResolution> {
     return {
       ok: true,
       adapter: createTurnAdapter(
-        { mode: 'local', provider: wire.provider, ...(model !== undefined ? { model } : {}), localUrl: localUrlStore.get() },
+        // `provider` is a required slot on TurnAdapterConfig that local mode ignores;
+        // the endpoint from the wire decision is what actually gets called.
+        { mode: 'local', provider: providerStore.get(), ...(model !== undefined ? { model } : {}), localUrl: wire.localUrl },
         'chat',
       ),
     };
