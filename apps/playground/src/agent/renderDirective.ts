@@ -6,7 +6,7 @@
 // carries no evidence[] and no docs-derived free text), and it is re-validated on
 // every read: an imported/synced file cannot smuggle a widened shape back in.
 
-import { renderDirectiveSchema, type RenderDirective } from '@snugprotocol/protocol';
+import { AUTH_WIZARD_DIRECTIVE_KIND, renderDirectiveSchema, type RenderDirective } from '@snugprotocol/protocol';
 
 export type DirectiveScan = { directive: RenderDirective } | { malformed: true } | null;
 
@@ -28,7 +28,7 @@ export function scanForRenderDirective(text: string): DirectiveScan {
     if (typeof parsed !== 'object' || parsed === null) continue;
     const validated = renderDirectiveSchema.safeParse(parsed);
     if (validated.success) return { directive: validated.data };
-    if (typeof (parsed as Record<string, unknown>)['kind'] === 'string' && String((parsed as Record<string, unknown>)['kind']).startsWith('auth_wizard')) {
+    if (typeof (parsed as Record<string, unknown>)['kind'] === 'string' && String((parsed as Record<string, unknown>)['kind']).startsWith(AUTH_WIZARD_DIRECTIVE_KIND)) {
       sawMalformedClaim = true;
     }
   }

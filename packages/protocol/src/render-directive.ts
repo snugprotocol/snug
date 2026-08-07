@@ -86,6 +86,14 @@ export type InferrerProposal = z.infer<typeof inferrerProposalSchema>;
 // -------------------------------------------------------------- the directive
 
 /**
+ * The directive-kind discriminator — a PERSISTED literal (chat meta rows carry it),
+ * pinned by test like AUTH_KINDS. Single home (AL-05, M48): the schema, the prompt
+ * store's `{{authWizardDirectiveKind}}` placeholder, the playground scanner's
+ * malformed-claim check, and the demo seam all read this export.
+ */
+export const AUTH_WIZARD_DIRECTIVE_KIND = 'auth_wizard' as const;
+
+/**
  * The `auth_wizard` render directive — versioned with the frame discipline (`v`),
  * strict, and identical to the persisted chat-meta shape (M1). `confidence` and
  * `provenance` are OPTIONAL display-only echoes: the host recomputes both at wizard
@@ -93,7 +101,7 @@ export type InferrerProposal = z.infer<typeof inferrerProposalSchema>;
  */
 export const authWizardDirectiveSchema = z.strictObject({
   v: z.literal(PROTOCOL_VERSION),
-  kind: z.literal('auth_wizard'),
+  kind: z.literal(AUTH_WIZARD_DIRECTIVE_KIND),
   proposal: llmProposalSchema,
   /** Display-only. The host recomputes confidence at wizard open (B2). */
   confidence: z.number().min(0).max(1).optional(),

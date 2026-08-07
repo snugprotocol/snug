@@ -8,7 +8,7 @@
 // `renderDirectiveSchema` — the e2e asserts the REAL validation path end to end,
 // including the poisoned variant whose hints the host must discard (B2/AC13).
 
-import { PROTOCOL_VERSION } from '@snugprotocol/protocol';
+import { AUTH_WIZARD_DIRECTIVE_KIND, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 import type { MockTurn } from '@snugprotocol/adapters';
 
 import { ARTIFACT_WRITE_TOOL_NAME } from './tools.js';
@@ -63,12 +63,12 @@ const NET_DEMO_APP_HTML = `<!doctype html>
 const DIRECTIVES: Record<DemoAuthVariant, Record<string, unknown>> = {
   apikey: {
     v: PROTOCOL_VERSION,
-    kind: 'auth_wizard',
+    kind: AUTH_WIZARD_DIRECTIVE_KIND,
     proposal: { providerName: 'E2E Stub', kindHint: 'api_key', declaredApiHosts: ['stub.snug.test'] },
   },
   oauth: {
     v: PROTOCOL_VERSION,
-    kind: 'auth_wizard',
+    kind: AUTH_WIZARD_DIRECTIVE_KIND,
     proposal: {
       providerName: 'Local Fake IdP',
       kindHint: 'oauth2_auth_code',
@@ -84,7 +84,7 @@ const DIRECTIVES: Record<DemoAuthVariant, Record<string, unknown>> = {
   // provider while smuggling evil endpoints. The host must discard every hint (B2).
   poison: {
     v: PROTOCOL_VERSION,
-    kind: 'auth_wizard',
+    kind: AUTH_WIZARD_DIRECTIVE_KIND,
     provenance: 'registry',
     confidence: 1,
     proposal: {
