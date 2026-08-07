@@ -318,7 +318,11 @@ export async function approveWizardSpec(spec?: unknown): Promise<WizardApproveRe
   try {
     const existing = db.getAuthSpec(session.appId);
     if (spec !== undefined) {
-      if (existing?.status === AUTH_SPEC_STATUS.approved || session.mode === 'reapprove') {
+      if (
+        existing?.status === AUTH_SPEC_STATUS.approved ||
+        existing?.status === AUTH_SPEC_STATUS.importedUnapproved ||
+        session.mode === 'reapprove'
+      ) {
         db.reapproveAuthSpec(session.appId, spec);
       } else {
         db.putAuthSpec(session.appId, spec);

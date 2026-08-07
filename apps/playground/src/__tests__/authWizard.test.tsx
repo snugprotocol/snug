@@ -305,6 +305,34 @@ describe('AC7/M4 — wizard.reapproval-diff-flags-new-hosts (M20)', () => {
     expect(button(/re-approve connection/i)).toBeDefined();
   });
 
+  it('a DIRECTIVE over an imported_unapproved row ALSO presents the re-approval diff (fix-first 1 residual)', async () => {
+    // An imported (synced) row carries a previously-frozen union the user approved
+    // on another device; a directive session over it must get the same NEW/removed
+    // flags and re-approve framing as the approved-row case — the row-status keying
+    // includes imported_unapproved, matching the settings mount's reapprove routing.
+    await seedRow({ ...apiKeySpec, declaredApiHosts: ['api.old.example'] }, true);
+    const db = await getUserDb();
+    // The REAL AL-02 import machinery, no stub: export the approved bytes, drop the
+    // local row, import — reconciliation demotes the row to imported_unapproved.
+    const bytes = await db.exportUserDb();
+    db.deleteAuthSpec(APP);
+    await db.importUserDb(bytes);
+    expect(db.getAuthSpec(APP)?.status).toBe('imported_unapproved');
+    openWizard({
+      source: 'directive',
+      appId: APP,
+      directive: directive({ providerName: 'Unknown Corp', kindHint: 'api_key', declaredApiHosts: ['api.new.example'] }),
+    });
+    await renderSheet();
+
+    const hosts = container.querySelector('[data-testid="wizard-hosts"]')?.textContent ?? '';
+    expect(hosts).toContain('api.new.example');
+    expect(hosts).toMatch(/NEW — not previously approved/);
+    expect(hosts).toContain('api.old.example');
+    expect(hosts).toMatch(/removed by this re-approval/);
+    expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('re-approve connection');
+  });
+
   it('re-approve routes through reapproveAuthSpec with the edited spec and drops remembered grants (AC9)', async () => {
     await seedRow(apiKeySpec, true);
     const db = await getUserDb();

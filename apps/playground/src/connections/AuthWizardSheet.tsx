@@ -134,11 +134,14 @@ export function AuthWizardSheet(): ReactElement | null {
 
   // AC7 (fix-first 1): the re-approval presentation is keyed off the ROW, never
   // just the session mode — a directive/error-CTA session over an already-approved
-  // row re-freezes the ceiling via reapproveAuthSpec (approveWizardSpec routes on
-  // row status), so the sheet must SAY re-approval on exactly that condition. Gated
-  // on the review step so a fresh connect flow doesn't relabel itself after its own
-  // approval advances the step (the row is approved by then).
-  const reapproving = session.mode === 'reapprove' || (step === 'review' && row?.status === AUTH_SPEC_STATUS.approved);
+  // OR imported_unapproved row re-freezes a previously-frozen ceiling (approveWizardSpec
+  // routes on the same row condition), so the sheet must SAY re-approval on exactly
+  // that condition. Gated on the review step so a fresh connect flow doesn't relabel
+  // itself after its own approval advances the step (the row is approved by then).
+  const reapproving =
+    session.mode === 'reapprove' ||
+    (step === 'review' &&
+      (row?.status === AUTH_SPEC_STATUS.approved || row?.status === AUTH_SPEC_STATUS.importedUnapproved));
 
   return (
     <Sheet title={reapproving ? 're-approve connection' : 'connect this app'} open onClose={onClose}>
@@ -219,8 +222,12 @@ function ReviewStep({
   const hosts = pendingSpec !== undefined ? deriveAuthAllowedHosts(pendingSpec) : [];
   // AC7 (fix-first 1): the union diff is keyed off the ROW status — the same
   // condition approveWizardSpec routes to reapproveAuthSpec on — so a directive
-  // session (mode 'connect') over an approved row still renders NEW/removed flags.
-  const reapproving = session.mode === 'reapprove' || row?.status === AUTH_SPEC_STATUS.approved;
+  // session (mode 'connect') over an approved OR imported_unapproved row (whose
+  // allowedHosts carry a previously-frozen union) still renders NEW/removed flags.
+  const reapproving =
+    session.mode === 'reapprove' ||
+    row?.status === AUTH_SPEC_STATUS.approved ||
+    row?.status === AUTH_SPEC_STATUS.importedUnapproved;
   const frozen = reapproving ? (row?.allowedHosts ?? []).map(normalizeAuthHost) : undefined;
   const removed = frozen !== undefined ? frozen.filter((h) => !hosts.includes(h)) : [];
 
