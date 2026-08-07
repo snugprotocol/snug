@@ -1,8 +1,10 @@
 // demoAuth.ts — deterministic demo-brain variants for the AL-04 auth-wizard e2e,
 // gated behind the `?demoauth=<variant>` URL flag (the `?webllm=1` precedent: a
-// URL-flag seam, zero footprint when absent). FLAGGED TO THE REVIEWER (plan D9
-// note): this is a scripted TEST SEAM in the demo brain, not builder-prompt
-// teaching — AL-05 owns teaching the real builder to emit directives.
+// URL-flag seam, zero footprint when absent). FORMALIZED at AL-05 (AC8): this is
+// a TEST SEAM kept on purpose — the wizard e2e needs a deterministic brain. The
+// REAL builder teaching lives in the ADR-0004 store
+// (knowledge-base/app-authoring/90-auth-and-connected-apis.md), and the taught
+// emission format is sync-tested against the real scanner in authKbEmission.test.ts.
 //
 // Every directive here is built from protocol constants and must pass
 // `renderDirectiveSchema` — the e2e asserts the REAL validation path end to end,

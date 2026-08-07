@@ -26,7 +26,8 @@ prompts/
 │       ├── 50-app-catalog.md        ← app types + worked chess example
 │       ├── 60-design-quality.md
 │       ├── 70-defensive-coding.md
-│       └── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)
+│       ├── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)
+│       └── 90-auth-and-connected-apis.md  ← connected APIs: useConnectedFetch design + the auth_wizard directive contract (AL-05; headings are retrieval-tested)
 ├── tools/                           ← tool + parameter descriptions
 │   ├── app-builder.md
 │   └── artifact-write.md
