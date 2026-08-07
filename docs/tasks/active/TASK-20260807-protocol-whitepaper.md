@@ -135,3 +135,25 @@ None. No `packages/*` file is read at build time or modified. The checker reads 
   separate explicit decision needing a `spec-changelog.md` entry.
 - Open questions: whether to push to `snugprotocol/spec` now or hold until the paper has
   had wider review — owner's call, deliberately not taken here.
+
+### 2026-08-07 — Jeetu Maker (with Claude) — close-session (Gate 6)
+- Done: owner approved the paper and asked to close, PR, and merge. Gate-6 sweep completed
+  in-branch: **lessons** — two entries appended (presence-vs-conformance checks; CSS
+  generated content being invisible to both source greps and PDF text extraction).
+  **Docs drift** — the whitepaper was undiscoverable from the wiki, so
+  `docs/INDEX.md` (Living state) and `docs/code-map.md` (next to the spec-publication row)
+  now point at `docs/whitepaper/`. **next-steps** — shipped entry plus a dated entry for
+  the deferred spec push, recording the unpushed spec-clone branch and commit SHA.
+- **No ADR**: no architectural decision was made. The toolchain choice (HTML + CSS Paged
+  Media via headless Chrome, chosen because no TeX engine exists on this machine) is
+  recorded in the task file's Decisions section and `docs/whitepaper/README.md`; it binds
+  one docs artifact, not the system.
+- **No spec-changelog entry, deliberately**: `packages/protocol` was untouched. This is a
+  derivative publication of an already-published spec, not a protocol change, so
+  SPEC_SYNC's change flow is not triggered. The changelog entry belongs to the *push*,
+  which remains deferred and needs an explicit ask.
+- State: 8 commits on `feat/TASK-20260807-protocol-whitepaper`; 70/70 checks green;
+  22-page PDF at `docs/whitepaper/dist/`, `/Author` = Jeetu Maker. Spec clone holds the
+  unpushed staging commit `ae6ec8b` on `docs/whitepaper-v0.1`.
+- Next step: PR → merge to `main` → move this file to `done/`.
+- Open questions: the spec-repo push timing (recorded in next-steps, needs an explicit ask).

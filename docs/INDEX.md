@@ -48,6 +48,7 @@ Optimize for **clarity and maintainability** over cleverness.
 |------|-----------|-----------|
 | [next-steps.md](next-steps.md) | Dated, ordered backlog | Picking up work / checking what's next |
 | [spec-changelog.md](spec-changelog.md) | Every change pushed to `snugprotocol/spec`, with task id | Any protocol change; preparing a spec release |
+| [whitepaper/](whitepaper/README.md) | The protocol whitepaper (PDF) — source, build, and the spec-conformance checker | Explaining *why* the protocol is shaped this way; any edit to the paper |
 | [decisions/](decisions/README.md) | Append-only ADRs | Understanding *why* |
 | [lessons.md](lessons.md) | Append-only rules learned the hard way | **Always at Gate 2**; append at Gate 6 |
 | [glossary.md](glossary.md) | Domain terms (envelope, bridge, micro app…) | Meeting an unfamiliar term |
