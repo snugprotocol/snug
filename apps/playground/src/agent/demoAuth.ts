@@ -1,14 +1,16 @@
 // demoAuth.ts — deterministic demo-brain variants for the AL-04 auth-wizard e2e,
 // gated behind the `?demoauth=<variant>` URL flag (the `?webllm=1` precedent: a
-// URL-flag seam, zero footprint when absent). FLAGGED TO THE REVIEWER (plan D9
-// note): this is a scripted TEST SEAM in the demo brain, not builder-prompt
-// teaching — AL-05 owns teaching the real builder to emit directives.
+// URL-flag seam, zero footprint when absent). FORMALIZED at AL-05 (AC8): this is
+// a TEST SEAM kept on purpose — the wizard e2e needs a deterministic brain. The
+// REAL builder teaching lives in the ADR-0004 store
+// (knowledge-base/app-authoring/90-auth-and-connected-apis.md), and the taught
+// emission format is sync-tested against the real scanner in authKbEmission.test.ts.
 //
 // Every directive here is built from protocol constants and must pass
 // `renderDirectiveSchema` — the e2e asserts the REAL validation path end to end,
 // including the poisoned variant whose hints the host must discard (B2/AC13).
 
-import { PROTOCOL_VERSION } from '@snugprotocol/protocol';
+import { AUTH_WIZARD_DIRECTIVE_KIND, PROTOCOL_VERSION } from '@snugprotocol/protocol';
 import type { MockTurn } from '@snugprotocol/adapters';
 
 import { ARTIFACT_WRITE_TOOL_NAME } from './tools.js';
@@ -63,12 +65,12 @@ const NET_DEMO_APP_HTML = `<!doctype html>
 const DIRECTIVES: Record<DemoAuthVariant, Record<string, unknown>> = {
   apikey: {
     v: PROTOCOL_VERSION,
-    kind: 'auth_wizard',
+    kind: AUTH_WIZARD_DIRECTIVE_KIND,
     proposal: { providerName: 'E2E Stub', kindHint: 'api_key', declaredApiHosts: ['stub.snug.test'] },
   },
   oauth: {
     v: PROTOCOL_VERSION,
-    kind: 'auth_wizard',
+    kind: AUTH_WIZARD_DIRECTIVE_KIND,
     proposal: {
       providerName: 'Local Fake IdP',
       kindHint: 'oauth2_auth_code',
@@ -84,7 +86,7 @@ const DIRECTIVES: Record<DemoAuthVariant, Record<string, unknown>> = {
   // provider while smuggling evil endpoints. The host must discard every hint (B2).
   poison: {
     v: PROTOCOL_VERSION,
-    kind: 'auth_wizard',
+    kind: AUTH_WIZARD_DIRECTIVE_KIND,
     provenance: 'registry',
     confidence: 1,
     proposal: {

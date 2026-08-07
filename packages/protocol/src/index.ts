@@ -135,6 +135,7 @@ export {
   AUTH_EVIDENCE_MAX_CHARS,
   AUTH_EVIDENCE_MAX_ITEMS,
   AUTH_PROVENANCES,
+  AUTH_WIZARD_DIRECTIVE_KIND,
   authRequiredPayloadSchema,
   authWizardDirectiveSchema,
   inferrerProposalSchema,

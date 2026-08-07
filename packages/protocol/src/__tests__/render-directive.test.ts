@@ -27,6 +27,7 @@ import {
   AUTH_EVIDENCE_MAX_CHARS,
   AUTH_EVIDENCE_MAX_ITEMS,
   AUTH_PROVENANCES,
+  AUTH_WIZARD_DIRECTIVE_KIND,
   authRequiredPayloadSchema,
   authWizardDirectiveSchema,
   inferrerProposalSchema,
@@ -302,5 +303,15 @@ describe('AC1 — render directive stays OUT of json-schemas SOURCES (extends th
       },
     };
     expect(shape).toMatchSnapshot();
+  });
+});
+
+describe('AL-05 — AUTH_WIZARD_DIRECTIVE_KIND single-homed (M48)', () => {
+  it('pins the wire literal — this is a PERSISTED discriminator and must never drift', () => {
+    expect(AUTH_WIZARD_DIRECTIVE_KIND).toBe('auth_wizard');
+  });
+
+  it('is the literal the directive schema discriminates on (schema follows the constant)', () => {
+    expect(authWizardDirectiveSchema.shape.kind.value).toBe(AUTH_WIZARD_DIRECTIVE_KIND);
   });
 });

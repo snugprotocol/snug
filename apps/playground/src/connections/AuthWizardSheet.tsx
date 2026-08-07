@@ -33,6 +33,7 @@ import {
 } from '@snugprotocol/auth';
 import type { AuthSpecRow } from '@snugprotocol/db';
 
+import { inferenceWireCopy } from '../agent/inferrerAdapter.js';
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';
 import {
@@ -316,6 +317,22 @@ function SpecConfirmFields({
   const [tripped, setTripped] = useState(false);
   const [busy, setBusy] = useState(false);
   const [inferError, setInferError] = useState<string | undefined>(undefined);
+  // AL-05 AC7: the paste-box names the wire the inference turn will ACTUALLY use
+  // (keyed subscription = browser-direct byok), resolved from the same decision
+  // ladder as the adapter itself — honest copy, no drift.
+  const [wireCopy, setWireCopy] = useState('');
+  useEffect(() => {
+    let alive = true;
+    void inferenceWireCopy()
+      .then((copy) => {
+        if (alive) setWireCopy(copy);
+      })
+      // On failure the label simply makes no wire claim — never a wrong one.
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   const abortRef = useRef<AbortController | null>(null);
 
   const infer = async (): Promise<void> => {
@@ -389,7 +406,7 @@ function SpecConfirmFields({
       ) : null}
 
       <div className="field">
-        <label htmlFor="wizard-docs">provider docs (optional — pasted text goes to your configured model)</label>
+        <label htmlFor="wizard-docs">provider docs (optional{wireCopy !== '' ? ` — ${wireCopy}` : ''})</label>
         <textarea
           id="wizard-docs"
           aria-label="paste provider docs"

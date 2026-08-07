@@ -9,6 +9,7 @@ import {
   AUTH_EVIDENCE_MAX_CHARS,
   AUTH_EVIDENCE_MAX_ITEMS,
   AUTH_KINDS,
+  AUTH_WIZARD_DIRECTIVE_KIND,
   CDN_ALLOWLIST,
   FRAME_TYPES,
   LIMITS,
@@ -49,6 +50,8 @@ const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   authKinds: AUTH_KINDS.join(', '),
   authEvidenceMaxItems: String(AUTH_EVIDENCE_MAX_ITEMS),
   authEvidenceMaxChars: String(AUTH_EVIDENCE_MAX_CHARS),
+  // AL-05 M48: the directive-kind discriminator, injected — never retyped in KB text.
+  authWizardDirectiveKind: AUTH_WIZARD_DIRECTIVE_KIND,
 };
 
 const FRAME_TYPE_PREFIX = 'frameType:';

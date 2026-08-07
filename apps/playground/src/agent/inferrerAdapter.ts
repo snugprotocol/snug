@@ -23,7 +23,7 @@ import {
 } from '@snugprotocol/auth';
 import type { AuthProvenance } from '@snugprotocol/protocol';
 
-import { getByokKey, localUrlStore, modelStore, modeStore, providerStore } from '../state/mode.js';
+import { getByokKey, localUrlStore, modelStore, modeStore, providerStore, type ByokProvider } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 
@@ -46,35 +46,78 @@ export interface RunAuthSpecInferenceInput {
  */
 type LiveAdapterResolution = { ok: true; adapter: AgentAdapter } | { ok: false };
 
-/** Resolve the settings-configured adapter, brain override included (per CALL, not creation). */
-async function liveAdapter(): Promise<LiveAdapterResolution> {
+/**
+ * The wire the inference turn will actually use — ONE decision ladder shared by
+ * the adapter construction below and the paste-box disclosure copy (AL-05 AC7),
+ * so the copy structurally cannot drift from the wire. Never carries a key.
+ */
+type WireDecision =
+  | { kind: 'webllm' }
+  | { kind: 'local'; provider: ByokProvider }
+  | { kind: 'byok'; provider: ByokProvider; viaSubscription: boolean }
+  | { kind: 'unavailable' };
+
+async function decideWire(): Promise<WireDecision> {
   const brain = currentBrain();
-  if (brain.kind === 'webllm') {
-    return { ok: true, adapter: createTurnAdapter({ mode: 'webllm', provider: providerStore.get() }, 'chat') };
-  }
-  if (brain.kind === 'demo') return { ok: false }; // the demo brain cannot read docs
+  if (brain.kind === 'webllm') return { kind: 'webllm' };
+  if (brain.kind === 'demo') return { kind: 'unavailable' }; // the demo brain cannot read docs
   const mode = modeStore.get();
   const provider = providerStore.get();
-  const model = modelStore.get();
   // Subscription has no browser-side adapter; the inference turn is a direct
   // browser call, so it runs on the byok/local DIRECT settings — never the mock.
   const direct: DirectMode = mode === 'subscription' ? 'byok' : mode;
-  if (direct === 'local') {
+  if (direct === 'local') return { kind: 'local', provider };
+  if (provider === 'mock') return { kind: 'unavailable' }; // the demo-brain provider — no real model behind it
+  const key = await getByokKey(provider);
+  if (key === undefined) return { kind: 'unavailable' }; // keyless byok/subscription — createTurnAdapter would silently hand back the mock
+  return { kind: 'byok', provider, viaSubscription: mode === 'subscription' };
+}
+
+/**
+ * Honest paste-box disclosure (AL-05 AC7): the docs label names the wire the
+ * inference turn will actually use. The keyed-subscription case is the point —
+ * a subscription user with a stored BYOK key gets a browser-direct call to that
+ * provider for THIS turn, and the copy says so instead of "your configured model".
+ */
+export async function inferenceWireCopy(): Promise<string> {
+  const wire = await decideWire();
+  switch (wire.kind) {
+    case 'webllm':
+      return 'pasted text stays in this browser (local WebLLM model)';
+    case 'local':
+      return `pasted text goes to your local ${wire.provider} server`;
+    case 'byok':
+      return wire.viaSubscription
+        ? `even in subscription mode, pasted text goes directly from this browser to ${wire.provider} using your saved key`
+        : `pasted text goes directly from this browser to ${wire.provider} using your saved key`;
+    case 'unavailable':
+      return 'docs inference needs a real model — add an API key in settings';
+  }
+}
+
+/** Resolve the settings-configured adapter, brain override included (per CALL, not creation). */
+async function liveAdapter(): Promise<LiveAdapterResolution> {
+  const wire = await decideWire();
+  if (wire.kind === 'unavailable') return { ok: false };
+  if (wire.kind === 'webllm') {
+    return { ok: true, adapter: createTurnAdapter({ mode: 'webllm', provider: providerStore.get() }, 'chat') };
+  }
+  const model = modelStore.get();
+  if (wire.kind === 'local') {
     return {
       ok: true,
       adapter: createTurnAdapter(
-        { mode: 'local', provider, ...(model !== undefined ? { model } : {}), localUrl: localUrlStore.get() },
+        { mode: 'local', provider: wire.provider, ...(model !== undefined ? { model } : {}), localUrl: localUrlStore.get() },
         'chat',
       ),
     };
   }
-  if (provider === 'mock') return { ok: false }; // the demo-brain provider — no real model behind it
-  const key = await getByokKey(provider);
-  if (key === undefined) return { ok: false }; // keyless byok/subscription — createTurnAdapter would silently hand back the mock
+  const key = await getByokKey(wire.provider);
+  if (key === undefined) return { ok: false }; // key cleared between decision and use — same honest failure
   return {
     ok: true,
     adapter: createTurnAdapter(
-      { mode: 'byok', provider, key, ...(model !== undefined ? { model } : {}), localUrl: localUrlStore.get() },
+      { mode: 'byok', provider: wire.provider, key, ...(model !== undefined ? { model } : {}), localUrl: localUrlStore.get() },
       'chat',
     ),
   };

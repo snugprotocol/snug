@@ -1,6 +1,6 @@
 # TASK-20260806-auth-wizard: Dynamic Auth part 3 — inferrer, wizard, render directive (umbrella child AL-04)
 
-- **Status**: in-progress — Gate 3 (implementation, tests-first). Plan v2 verified: fidelity check PASS 2026-08-06 (all 21 review findings FAITHFUL, 27 identifier citations OK against merged main @ 4a763ea, no v1 weakening). AL-03 merged via PR #21.
+- **Status**: **done — merged via PR #22 → main @ `caaeb97` (2026-08-06)**. Full rigor loop: plan v2 (review-folded, fidelity-verified) → TDD implementation (M1–M47 mutation ledger) → live sweep 12/12 (real BYOK) → adversarial review FIX_FIRST → all 13 items fixed test-first → delta re-review CLEAN (15/15 VERIFIED_FIXED, 3 MINORs closed on-branch) → merge. Post-merge root suite on main green (19/19).
 - **Owner**: Jeetu (autonomous run; Claude implements)
 - **Risk tier**: **high** (protocol render directive + auth UX collecting secrets + LLM inferrer on the transport seam + C1)
 - **Branch**: `feat/TASK-20260806-auth-wizard` (off fresh `main` post-AL-03-merge — NOT off the AL-03 branch)

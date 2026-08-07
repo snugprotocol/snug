@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
-import type { AuthWizardDirective, RenderDirective } from '@snugprotocol/protocol';
+import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirective } from '@snugprotocol/protocol';
 
 import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
 import { createServerArtifactFetch } from '../state/library.js';
@@ -262,7 +262,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   role: m.role === 'user' ? ('user' as const) : ('agent' as const),
                   displayText: m.content,
                   ...(artifact !== undefined ? { artifact } : {}),
-                  ...(directive !== undefined && directive.kind === 'auth_wizard' ? { directive } : {}),
+                  ...(directive !== undefined && directive.kind === AUTH_WIZARD_DIRECTIVE_KIND ? { directive } : {}),
                 };
               }),
       );
@@ -378,7 +378,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           // dropped with a visible note, never partially rendered and never persisted.
           const scan = finalText !== '' ? scanForRenderDirective(finalText) : null;
           const directive: AuthWizardDirective | undefined =
-            scan !== null && 'directive' in scan && scan.directive.kind === 'auth_wizard' ? scan.directive : undefined;
+            scan !== null && 'directive' in scan && scan.directive.kind === AUTH_WIZARD_DIRECTIVE_KIND ? scan.directive : undefined;
           patchMessage(agentId, (m) => ({
             streaming: false,
             displayText: result.text !== '' ? result.text : m.displayText,

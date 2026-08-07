@@ -8,8 +8,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AdapterRequest, AgentAdapter } from '@snugprotocol/adapters';
 
-import { modeStore, providerStore } from '../state/mode.js';
-import { runAuthSpecInference } from '../agent/inferrerAdapter.js';
+import { modeStore, providerStore, setByokKey } from '../state/mode.js';
+import { inferenceWireCopy, runAuthSpecInference } from '../agent/inferrerAdapter.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const DOCS_CANARY = 'CANARY-docs-2f8a71c39b';
@@ -150,5 +150,63 @@ describe('D10/M6 — source lint: the inference path carries no transport, loop,
         expect(text.includes(forbidden), `${rel.join('/')} must not reference ${forbidden}`).toBe(false);
       }
     }
+  });
+});
+
+describe('AL-05 AC7 — inferenceWireCopy: the paste-box names the wire the inference turn actually uses (M55)', () => {
+  afterEach(() => {
+    modeStore.set('byok');
+    providerStore.set('mock');
+  });
+
+  it('SUBSCRIPTION mode with a stored key: says the pasted text goes browser-direct to the provider — not "your configured model"', async () => {
+    await installTestUserDb();
+    await setByokKey('anthropic', 'sk-test-disclosure');
+    modeStore.set('subscription');
+    providerStore.set('anthropic');
+    const copy = await inferenceWireCopy();
+    expect(copy).toMatch(/subscription/i);
+    expect(copy).toMatch(/directly from this browser to anthropic/i);
+    expect(copy).not.toMatch(/configured model/i);
+  });
+
+  it('byok mode with a stored key: names the provider and the browser-direct wire', async () => {
+    await installTestUserDb();
+    await setByokKey('openai', 'sk-test-disclosure');
+    modeStore.set('byok');
+    providerStore.set('openai');
+    const copy = await inferenceWireCopy();
+    expect(copy).toMatch(/directly from this browser to openai/i);
+    expect(copy).not.toMatch(/subscription/i);
+  });
+
+  it('keyless subscription: says inference is unavailable without a key — no wire claim at all', async () => {
+    await installTestUserDb(); // no key stored
+    modeStore.set('subscription');
+    providerStore.set('anthropic');
+    const copy = await inferenceWireCopy();
+    expect(copy).toMatch(/needs a real model|add an api key/i);
+    expect(copy).not.toMatch(/directly from this browser/i);
+  });
+
+  it('local mode: names the local server wire', async () => {
+    await installTestUserDb();
+    modeStore.set('local');
+    providerStore.set('anthropic');
+    const copy = await inferenceWireCopy();
+    expect(copy).toMatch(/local anthropic server/i);
+  });
+
+  it('the sheet RENDERS the wire copy in the docs label — import-presence alone is not enough (source pin, M61)', () => {
+    const source = readFileSync(
+      join(__dirname, '..', 'connections', 'AuthWizardSheet.tsx'),
+      'utf8',
+    );
+    expect(source).toContain('inferenceWireCopy');
+    // Review C2: the ${wireCopy} interpolation must sit INSIDE the docs label
+    // expression — an orphaned import/useEffect with a reverted static label kept
+    // the weaker containment assertions green.
+    expect(source).toMatch(/provider docs \(optional[\s\S]{0,120}?\$\{wireCopy\}/);
+    expect(source).not.toContain('your configured model');
   });
 });

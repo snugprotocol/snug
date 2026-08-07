@@ -88,6 +88,10 @@ Scope change to this approved umbrella · destructive or 🔑-gated action not p
 
 - IProject extraction baseline corrected: the currently checked-out auth working tree (named in `internal/.env.local`), not `main` (verified 2026-08-05; audit paths absent on IProject `main`).
 
+### Owner scope amendment (2026-08-06, mid-run — supersedes the tail order for THIS run)
+
+After AL-05 merges: run **AL-09 (starters-auth-spectrum) ONLY**, then **STOP and hold AL-10, AL-11, AL-12, AL-15** until the owner gives an explicit green light — the owner wants to run manual tests first. The morning report happens at that stop point (AL-15's /close-session sweep still happens when the tail resumes).
+
 ## Session journal (append-only, newest last)
 
 ### 2026-08-05 23:xx — Claude (Fable 5) — Phase 0
@@ -113,3 +117,7 @@ Scope change to this approved umbrella · destructive or 🔑-gated action not p
 - Nothing lives only in chat: branch pushed @ handoff commit; verdict JSON committed; housekeeping done (merged children's task files all in done/).
 - IMMEDIATE next: fix-first pass → delta re-review → merge AL-04 → tail (AL-05 blocked on subscription-guard fix item).
 - CORRECTION (2026-08-06, same session): the running "N of 14 done" counts were off by one, inherited from handoff #1 ("7 done" vs its own 6-row ✅ ledger). Authoritative: **7 merged/done after AL-03** = AL-01 #5, AL-02 #6, AL-03 #21, AL-07 #20, AL-08 #7, AL-13 #8, AL-14 #19. AL-04 in flight (fix-first), 6 pending (AL-05, 09, 10, 11, 12, 15).
+
+### 2026-08-06 — Claude (Fable 5, orchestrator) — resumed from HANDOFF #2; AL-04 MERGED (PR #22); SESSION-BOUNDARY HANDOFF #3
+- Resumed per /pickup (baseline verified: diff fully journal-explained, root 19/19 at 1f86bbd). Fix agent applied ALL of the review's work order test-first — 4 fixFirst (incl. the AC7 directive-mount BLOCKER) + all 9 nonBlocking rows — with mutation rows M31–M46 RED-evidenced, +22 tests, one bonus real bug (window.open undefined). Delta re-review (fresh-context workflow, 2 lenses + refute-first verify, 2/2 coverage; first launch lost to a usage-limit reset — the 0-lens hard-fail guard caught it, resumed cleanly): ALL 15 items VERIFIED_FIXED with independently executed repros; 3 MINORs survived and were closed on-branch (imported_unapproved directive-mount diff + M47; two journal-honesty corrections; AL-10 tripwire row). Merge gate green (playground 400, root 19/19, typecheck clean, Playwright 53+1 skip) → **AL-04 merged via PR #22 → main @ caaeb97; post-merge root suite green**. Branch deleted. **8 of 14 children done** (AL-01 #5, AL-02 #6, AL-03 #21, AL-04 #22, AL-07 #20, AL-08 #7, AL-13 #8, AL-14 #19).
+- **RESUME FROM `docs/tasks/active/HANDOFF-alpha-umbrella-3.md`** (60% context rule) — housekeeping + handoff ride the fresh `feat/TASK-20260806-auth-kb` branch. AL-05's subscription-guard blocker is CLEARED (fixed at 0f5c5ad). Tail: AL-05 → AL-09 → AL-10 → AL-11 → AL-12 → AL-15 (LAST).

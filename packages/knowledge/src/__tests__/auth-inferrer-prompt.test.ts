@@ -78,8 +78,8 @@ describe('D8 — user slot: the delimited untrusted data block (D2)', () => {
 });
 
 describe('D8/M5/R1 — few-shot OUTPUT fixtures conform to the REAL output contract', () => {
-  it('there are exactly three examples: clean api_key, oauth2_auth_code, honest refusal', () => {
-    expect(exampleOutputs()).toHaveLength(3);
+  it('there are exactly four examples: clean api_key, oauth2_auth_code, multi-host production-only, honest refusal', () => {
+    expect(exampleOutputs()).toHaveLength(4);
   });
 
   it('every example output parses via parseAgentReply and validates against inferrerProposalSchema (R1)', () => {
@@ -108,6 +108,28 @@ describe('D8/M5/R1 — few-shot OUTPUT fixtures conform to the REAL output contr
     expect(refusal!.proposal['endpoints']).toBeUndefined();
     expect(refusal!.proposal['declaredApiHosts']).toBeUndefined();
     expect(refusal!.evidence).toEqual([]);
+  });
+});
+
+describe('AL-05 AC6 — primary-host bias: several documented hosts, production declared, the rest reviewer-visible', () => {
+  it('the rules bias declaredApiHosts to the host the docs present as production/live (M54)', () => {
+    expect(rendered.system).toMatch(/presents as the production/i);
+  });
+
+  it('rule 7 keeps quotes for documented hosts deliberately left out — the reviewer-visibility valve (M59)', () => {
+    expect(rendered.system).toMatch(/deliberately left out/i);
+  });
+
+  it('the multi-host example declares EXACTLY the production host; left-out hosts stay quoted in evidence (M54)', () => {
+    const multiHost = exampleOutputs()
+      .map((block) => JSON.parse(block) as { proposal: { declaredApiHosts?: string[] }; evidence: string[] })
+      .find((output) => output.evidence.some((quote) => quote.includes('sandbox')));
+    expect(multiHost, 'no multi-host example found (evidence naming a sandbox host)').toBeDefined();
+    expect(multiHost!.proposal.declaredApiHosts).toHaveLength(1);
+    expect(multiHost!.proposal.declaredApiHosts![0]).toMatch(/^api\./);
+    // The compensating control: every documented-but-undeclared host is still quoted.
+    expect(multiHost!.evidence.some((quote) => quote.includes('sandbox.'))).toBe(true);
+    expect(multiHost!.evidence.some((quote) => quote.includes('telemetry.'))).toBe(true);
   });
 });
 

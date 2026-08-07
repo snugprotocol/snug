@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUTH_WIZARD_DIRECTIVE_KIND,
   CDN_ALLOWLIST,
   FRAME_TYPES,
   LIMITS,
@@ -83,5 +84,13 @@ describe('renderPrompt', () => {
   it('leaves text without placeholders untouched', () => {
     const text = 'plain prose with { single } braces and code `${x}`';
     expect(renderPrompt(text)).toBe(text);
+  });
+});
+
+describe('AL-05 — auth_wizard directive kind placeholder (M48)', () => {
+  it('injects the directive kind from protocol — never retyped in prompt text', () => {
+    expect(renderPrompt('kind: {{authWizardDirectiveKind}}')).toBe(
+      `kind: ${AUTH_WIZARD_DIRECTIVE_KIND}`,
+    );
   });
 });
