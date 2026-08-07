@@ -256,6 +256,20 @@ function checkFrames(html, fx) {
   const missingCodes = [...new Set(codes)].filter((c) => !text.includes(c));
   check('AC4', 'all R5 error codes documented', missingCodes.length === 0,
     `missing from paper: ${missingCodes.join(', ')}`);
+
+  // Presence is not enough: the paper must reproduce R5's known-codes list EXACTLY. The
+  // paper once added MALFORMED to it — a code the spec defines in R1 as a wire answer,
+  // not a known code — and a presence-only check passed happily. Compare the sets.
+  const r5Spec = fx.spec.match(/R5 Error codes[\s\S]*?(?=\n-\s+\*\*R6|\n##)/);
+  const r5Paper = text.match(/The known codes are([\s\S]*?)(?:Receivers treat|MALFORMED is defined)/);
+  if (r5Spec && r5Paper) {
+    const setOf = (s) => new Set((s.match(/\b[A-Z][A-Z_]{3,}\b/g) ?? []).filter((c) => c !== 'MAX_USERDB_BYTES'));
+    const specSet = setOf(r5Spec[0]);
+    const paperSet = setOf(r5Paper[1]);
+    const extra = [...paperSet].filter((c) => !specSet.has(c));
+    check('AC4', "paper's R5 list contains no code the spec omits", extra.length === 0,
+      `paper lists as a known code but SPEC.md R5 does not: ${extra.join(', ')}`);
+  }
 }
 
 // ---------------------------------------------------------------- AC5 — draft marking

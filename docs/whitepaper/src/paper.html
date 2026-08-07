@@ -401,10 +401,12 @@ implemented approximately.</p>
   <dd><code>error.code</code> is an open string. The known codes are
   <code>PARSE_FAILED</code>, <code>THREAD_CONFLICT</code>, <code>NETWORK_ERROR</code>,
   <code>RESET_FAILED</code>, <code>CANCELLED</code>, <code>SUPERSEDED</code>,
-  <code>UNSUPPORTED_VERSION</code>, <code>MALFORMED</code>, <code>CONSENT_REQUIRED</code>
+  <code>UNSUPPORTED_VERSION</code>, <code>CONSENT_REQUIRED</code>
   (reserved), <code>AUTH_REQUIRED</code> (reserved for a future authenticated-connections
-  revision), and <code>HOST_ERROR</code>. Receivers treat unknown codes according to the
-  <code>retryable</code> flag and render them as <code>HOST_ERROR</code>.</dd>
+  revision), and <code>HOST_ERROR</code>. <code>MALFORMED</code> is defined by R1 as a
+  wire answer to an unparseable frame and is not part of this list. Receivers treat unknown
+  codes according to the <code>retryable</code> flag and render them as
+  <code>HOST_ERROR</code>.</dd>
 
   <dt><span class="rid">R6</span> Limits</dt>
   <dd>Frames are capped at 256 KiB, except <code>db-request</code> and
