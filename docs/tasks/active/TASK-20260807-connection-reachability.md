@@ -1,9 +1,9 @@
 # TASK-20260807-connection-reachability: a chat-less app can never become a connected app
 
-- **Status**: active — **Gate 1 (spec) only. NOT started, NOT scheduled.** Parked pending the owner's green light (it sits with the held AL-10/AL-11 tail).
-- **Owner**: unassigned (raised by Claude, orchestrator, 2026-08-07 while running AL-09)
+- **Status**: active — **Gate 2 in progress** (owner green light 2026-08-08; posture + direction C ratified — see journal)
+- **Owner**: Claude (orchestrator), taken over 2026-08-08 on owner instruction via /pickup
+- **Branch**: `feat/TASK-20260807-connection-reachability`
 - **Risk tier**: **High** — protocol surface (announce or equivalent), the auth/wizard trust ladder, and the host-side spec-write path. Any design here decides who may propose a connection.
-- **Branch**: none yet
 - **Packages likely touched**: `packages/protocol`, `packages/sdk` (BOTH faces — embedded + typed), `packages/auth`, `packages/db`, `apps/playground`, `examples/`, `packages/knowledge`
 - **Spec impact**: likely YES (additive) — and it must respect the publication line: `app-announce.json` IS in the published `SOURCES` (`packages/protocol/src/json-schemas.ts:16`) while the whole auth surface is deliberately OUT until Beta exit (`auth-schema.ts:10–19`). That tension is a design input, not an afterthought.
 - **Related**: raised by **AL-09** (`TASK-20260807-starters-auth-spectrum` — see its §Security review verdict and §Owner decision needed; the owner chose option **C**, park AL-09 and promote this gap) · AL-04 (wizard, directive contract, B2 ladder) · AL-05 fold (queued the sibling "second provider stranded with no CTA" case to AL-10/AL-11) · ADR-0014 (custody)
@@ -53,9 +53,81 @@ Sketched only so the next session does not restart from zero. Each needs its own
 
 ## Out of scope
 
-The AL-05 fold's separately-queued "second provider stranded with no CTA" case (AL-10/AL-11) · the keyless (`none`) credential kind (AL-12/post-alpha) · the URL-borne credential channel (AL-10/AL-11) · AL-09's starters themselves.
+The AL-05 fold's separately-queued "second provider stranded with no CTA" case (AL-10/AL-11) · the keyless (`none`) credential kind (AL-12/post-alpha) · the URL-borne credential channel (AL-10/AL-11) · AL-09's starters themselves · an imported-HTML-app declaration channel (**no HTML-import flow exists in the product at all** — "import" is whole-`.sqlite` import only, verified 2026-08-08; when an app-import flow is built, its review sheet adopts this task's declaration pattern and inherits the full constraint list, esp. confusables #5 and bounds #3).
+
+## Plan v1 (Gate 2, 2026-08-08) — direction C: install-time declaration, resolved not persisted
+
+### Design in one paragraph
+
+A **connected starter carries a declaration file in its example folder** (`examples/<folder>/connection.json`), validated against the SAME bounded schema as LLM proposals (`llmProposalSchema` — reused directly, not copied; it already omits the poison surfaces: registration copy, `headerTemplate`, credential `fields`). The declaration is **never persisted anywhere** — it is resolved on demand from the app's existing `install_source` (`starter:<folder>`, unique-indexed, already the single source of install identity) back to the in-repo manifest. The wizard gains a third open-request variant `{ source: 'declaration', appId, declaration }` whose session carries a NEW host-computed provenance **`app_declared`** that forces the SAME field-by-field `spec_confirm` strong review as `inference` (`AuthWizardSheet.tsx:187` gains one disjunct) with its own honest copy ("declared by this app — not verified"). `putAuthSpec` remains wizard-only on explicit user approval; no row, no seed, no schema change, no migration, no announce-frame change, no SDK change, no published-artifact regen. Constraints #3/#6/#7/#8/#9/#10/#11 are eliminated structurally (nothing is persisted, no runtime channel exists, no published schema is touched); #1/#2/#4/#5 are designed against explicitly (below).
+
+### The trust ladder after this task (posture, ratified 2026-08-08)
+
+| Proposer | Channel | Review |
+|---|---|---|
+| user | Settings row / empty-wizard CTA | manual entry (unchanged) |
+| builder LLM (reviewed) | directive → `resolveWizardIntent` | registry rung light / inference strong (unchanged) |
+| **install act** (NEW) | starter manifest → `resolveDeclaredIntent` | **always strong (`app_declared` ⇒ `spec_confirm`)** |
+| app at runtime | — | **does not exist, by owner decision** |
+
+### Constraint-by-constraint disposition (the 12 from §Prior art)
+
+1. **Registry-hit host discard doesn't exist for static kinds** → `resolveDeclaredIntent` NEVER consults the registry and NEVER emits `registry` provenance — the declared kind and declared hosts go to the transformer as-is; `paramsToAuthSpec`'s per-kind rules (static ⇒ `requireDeclaredHosts`, oauth2 ⇒ registry endpoint/host fallback) apply unchanged. No "registry protects us" claim is made for any kind.
+2. **Registry rung vs. declared static kind unsatisfiable** → dissolved: there is no registry rung for declarations. `my-repos` (github + `bearer_token` + `api.github.com`) flows as declared; the only registry effect is the transformer's display-name borrow, acceptable for REPO-CURATED manifests (see #5).
+3. **Bounds not inherited for free** → the manifest validates against `llmProposalSchema` itself (strict, bounded: `providerName.max(120)`, hosts `max(253)/max(32)`). No new schema, no new bounds to derive, poison keys strict-rejected.
+4. **Trust-ladder parity** → `app_declared` joins `inference`/`user_docs` in the FORCED `spec_confirm` branch. Mutation test: removing the disjunct goes red.
+5. **Confusables** → residual risk accepted THIS task because every manifest is first-party, in-repo, PR-reviewed content (validate suite gates it); the moment any untrusted channel (app import) adopts this pattern, a charset guard becomes a BLOCKER — recorded in next-steps with this constraint cited.
+6. **`putAuthSpec` fails open on unapproved rows** → not triggered: this task never calls `putAuthSpec` outside the wizard and never creates rows. The underlying db asymmetry stays queued (AL-10, already in next-steps 2026-08-07).
+7. **Revoke terminality** → structurally preserved: revoke still deletes the row and nothing re-creates it without a fresh, user-initiated, strongly-reviewed wizard approval. Settings/CTA re-OFFERING the declaration after revoke is disclosure, not reversal (nothing app-timed exists). Negative test pins: declaration present + revoke ⇒ `listAuthSpecs()` stays empty until a user approves again.
+8. **Whole-frame MALFORMED** → no frame is touched.
+9. **Publication line** → nothing published is regenerated; `AUTH_PROVENANCES` lives in `render-directive.ts` (Beta-gated internal surface, snapshot-pinned); spec-changelog gets an internal-draft entry per SPEC_SYNC.
+10. **Two SDK faces** → neither face changes.
+11. *(AL-09 v3's AC7 stub contradiction)* → this task's e2e proves REACHABILITY (install → prefilled strong review → approve → frozen row → revoke), not live injection; the fixture declares `api.example.com` and no network call is made (Gate-3 errors fire before any fetch). Live injection stays proven by AL-03/AL-04 suites and AL-09's AC7 when it resumes.
+12. *(D7 correction)* → carried: the CTA fires on `NET_NOT_APPROVED` (Gate 3); this task makes the wizard behind it PREFILLED instead of empty.
+
+### Mechanism (files to touch, with anchors)
+
+1. **`packages/protocol/src/render-directive.ts`** — add `'app_declared'` to `AUTH_PROVENANCES` (`:43`); doc comment gains the install-act rung. Snapshot/pin tests updated in-package. **SPEC_SYNC applies (internal draft); spec-changelog entry.**
+2. **`apps/playground/src/starter/starterApps.ts`** — add `import.meta.glob('../../../../examples/*/connection.json')`; new `starterDeclarationFor(installSource: string): LlmProposal | null` — parses `install_source`, looks up the manifest, validates with `llmProposalSchema` (strict; invalid ⇒ `null` + console warn, NEVER a throw — a bad manifest must not break install/run: parse-and-drop, the anti-#8 posture).
+3. **`apps/playground/src/state/wizard.ts`** — third union variant `{ source: 'declaration'; appId: string; declaration: LlmProposal }` (`:219–221`); `resolveDeclaredIntent(appId, declaration): WizardSession` → `{ appId, source: 'declaration', mode: 'connect', provenance: 'app_declared', proposal: declaration, evidence: [] }` (NO registry consult — contrast `resolveWizardIntent:231–255`); `openWizardForNetError` (`:667–671`): when mode is `'connect'` and the app has a declaration and NO existing row, open the declaration variant instead of the empty `error_cta` session (`reapprove` path unchanged).
+4. **`apps/playground/src/connections/AuthWizardSheet.tsx`** — `:187` gains `|| session.provenance === 'app_declared'`; review-step copy branch: "this connection was declared by the app when you installed it — it is a claim, not a verified fact; review every field."
+5. **`apps/playground/src/views/SettingsView.tsx`** — `ConnectionsCard` additionally lists installed apps having a declaration but no `snug_auth_specs` row as "declared — not connected" with a connect button → declaration variant; empty-state hint (`:452–453`) updated to stop saying declarations don't exist.
+6. **`apps/playground/src/run/RunView.tsx`** — install affordance (`:560–570`) gains a one-line disclosure when the starter declares a connection: "connects to {provider} ({hosts}) — you approve before anything is sent"; no blocking sheet (consent lives in the wizard, where it is strong).
+7. **`examples/connection-demo/`** — a minimal, honest, shippable example app that declares `{providerName: 'Example API', kindHint: 'api_key', declaredApiHosts: ['api.example.com']}` — the walking-skeleton proof vehicle and the shelf's first visibly-connected starter pattern. `examples/validate.test.mjs` gains the manifest rule: every `connection.json` validates against `llmProposalSchema` (via the built protocol package), and folders WITHOUT one are exempt.
+8. **Docs**: architecture/code-map counts; next-steps rows (confusable-guard blocker-on-import #5; AL-09 note that the five starters add manifests on resume); spec-changelog.
+
+### Test plan (TDD, red-first; mutation row per guard)
+
+- **T1** (validate) `connection.json` schema rule: valid manifest passes; poison key (`headerTemplate`) manifest REJECTED; oversized `providerName` REJECTED. *(constraint #3)*
+- **T2** (unit, starterApps) `starterDeclarationFor`: resolves for `starter:connection-demo`; `null` for non-starter sources, unknown folders, and INVALID manifests (parse-and-drop, no throw). *(anti-#8)*
+- **T3** (unit, wizard) `resolveDeclaredIntent`: provenance is ALWAYS `app_declared` — including for a registry-hit name (`github` + `bearer_token` keeps the declared kind; never `registry` provenance, never an oauth2 kindHint swap). Mutation: reintroduce the `resolveWizardIntent` registry branch ⇒ red. *(constraints #1/#2)*
+- **T4** (unit, wizard) `openWizardForNetError` prefill: `NET_NOT_APPROVED` + declaration + no row ⇒ declaration session; with an existing row ⇒ unchanged `error_cta`; `NET_IMPORTED_UNAPPROVED` ⇒ unchanged `reapprove`. *(#12)*
+- **T5** (component, AuthWizardSheet) `app_declared` ⇒ `spec_confirm` forced + the declared-by-app copy visible. Mutation: drop the disjunct ⇒ red. *(constraint #4)*
+- **T6** (component, SettingsView) declared-but-unconnected row renders + opens the declaration session; after approval it becomes a normal row; empty-state copy updated.
+- **T7** (negative, db-level) declaration present + revoke ⇒ `listAuthSpecs()` empty, credentials cleared, and NOTHING recreates a row without a wizard approval. *(constraint #7)*
+- **T8** (e2e, Playwright, default chromium project) the walking skeleton: shelf → open `connection-demo` → install (disclosure visible) → trigger connect (Settings path) → PREFILLED strong review → approve → Settings shows approved row with frozen `api.example.com` → revoke → declared-not-connected again. No network leaves the page.
+- **T9** (negative, C1) the declaration path never renders/accepts credential values before the wizard's credentials step; manifest cannot define `fields` (poison omit) — covered by T1 + existing wizard suites; asserted explicitly.
+
+### Sequencing
+
+Walking skeleton FIRST (protocol constant → resolver → wizard variant → sheet branch → T8 skeleton red→green), then breadth (Settings surface, disclosure, negative tests). If the skeleton stalls on a structural surprise, STOP and re-plan before breadth — the AL-09 lesson.
+
+### Shared literals pinned (fan-out rule)
+
+Manifest filename **`connection.json`** · wizard source **`'declaration'`** · provenance **`'app_declared'`** · example folder **`connection-demo`** · testids **`starter-install-disclosure`**, **`connection-declared-row`**, existing `starter-install` / `net-auth-cta` unchanged · declared fixture host **`api.example.com`**.
+
+### Packages touched (TDD.md table)
+
+`packages/protocol` (constant + tests; High) · `apps/playground` (wizard/sheet/settings/run/starter; High by escalation) · `examples` (fixture + validate rule; Low). **NOT touched:** `packages/auth`, `packages/db`, `packages/sdk`, `packages/runner`, `apps/server`, `packages/knowledge` (KB doctrine note deferred to AL-09 resume — recorded in next-steps).
 
 ## Session journal (append-only, newest last)
+
+### 2026-08-08 — Claude (orchestrator) — /pickup; owner green light; posture ratified; Gate 2 opened
+
+- Resumed the alpha umbrella per `/pickup` from HANDOFF #5. Baseline verified green on `main` @ `85ecd3b` (19/19 root suites; playground 409). Owner chose **"Design connection-reachability"** from the held options; branch cut off main.
+- **All 12 constraint anchors re-verified at source by the orchestrator** before any design work — every citation in §Prior art holds on current main (docs-only merges since verification).
+- **OWNER DECISION (2026-08-08): the cross-cutting posture question is settled — an app may NEVER propose a connection at runtime.** Proposals come only from: the user (Settings), the reviewed builder LLM (directive), or the **install act's declaration** — consented at install and given the SAME strong field-by-field `spec_confirm` review as inference. **Direction C (install-time declaration) is ratified**; A rejected (runtime channel, failed-review lineage), B rejected as primary (user must know the provider; registry structurally OAuth-only), D rejected (trust laundering — app content would wear `inference` provenance and fake chat history).
+- Session ops per owner: dynamic workflows for reviews; mechanical subagents on Opus, high-risk/deep-thinking work on Fable.
 
 ### 2026-08-07 — Claude (orchestrator) — raised while running AL-09; owner chose to park AL-09 and promote this
 
