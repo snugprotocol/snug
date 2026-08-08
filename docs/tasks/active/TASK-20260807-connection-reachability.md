@@ -55,7 +55,28 @@ Sketched only so the next session does not restart from zero. Each needs its own
 
 The AL-05 fold's separately-queued "second provider stranded with no CTA" case (AL-10/AL-11) · the keyless (`none`) credential kind (AL-12/post-alpha) · the URL-borne credential channel (AL-10/AL-11) · AL-09's starters themselves · an imported-HTML-app declaration channel (**no HTML-import flow exists in the product at all** — "import" is whole-`.sqlite` import only, verified 2026-08-08; when an app-import flow is built, its review sheet adopts this task's declaration pattern and inherits the full constraint list, esp. confusables #5 and bounds #3).
 
+## Security review of plan v1 — REVISE (2026-08-08, 3 lenses, 20 agents, refute-first)
+
+3-lens fresh-context review of the DESIGN before any code (`wf_46da5ab7-695`; trust-boundary / fail-closed / blast-radius). **17 findings; 15 CONFIRMED (8 MAJOR, 7 MINOR — one MAJOR downgraded on verification), 2 REFUTED, 0 unverified.** **No BLOCKER: the ratified posture survives** — the reviewers independently confirmed 20 soundness properties including bounds/poison inheritance via `.omit`, the no-registry resolver, wizard-only writes, revoke terminality, the publication line, and that no frame/SDK/published artifact is touched. Every load-bearing claim below was **re-derived at source by the orchestrator**, not taken on the reviewers' word. Plan v2 folds all 15.
+
+**The eight MAJORs (each sinks part of v1 as written):**
+
+1. **`install_source` is not evidence of an install act.** It is a plain TEXT column (`userdb-schema.ts:161`) and `importUserDb` swaps the DB wholesale, reconciling ONLY `snug_auth_specs` (`userdb.ts:432–484`, `:1749`) — `apps` rows land verbatim from attacker bytes. A crafted `.sqlite` with `install_source:'starter:my-repos'` + arbitrary HTML would inherit the first-party manifest's identity, and the wizard would attest an install act that never happened — laundering a credential grab through the host's own trusted voice, where a seeded row would at least have shown "imported — needs re-approval".
+2. **`app_declared` is not session-sticky.** `applyInferenceResult` overwrites the LIVE session's provenance (`wizard.ts:555–577`) and the inferrer's rung 1 returns `'registry'` for any registry-name hit *before any model call* (`auth-spec-inferrer.ts:106–125`). The `spec_confirm` branch itself renders an "infer from docs" button (`AuthWizardSheet.tsx:442`) — **one click flips a declaration session to the LIGHT approve-as-is path and the "not verified" warning vanishes.** T3/T5 as written pin only resolve-time and render-time, so they stay green while the invariant dies at runtime.
+3. *(same defect, fail-closed lens)* For a declared **static** kind + registry name (`github`+`bearer_token`), the same click also strands the session: the registry rung's proposal is `{providerName, kindHint}` only, so `declaredApiHosts` are erased and `paramsToAuthSpec` fails (`params-to-auth-spec.ts:101–104`).
+4. **The glob cannot deliver parse-and-drop as specified.** Without options `import.meta.glob` returns lazy promise loaders (so a *sync* resolver cannot exist); with `eager:true` a malformed `connection.json` becomes a build/module-graph error in a module `RunView.tsx:29` imports — **taking down the entire playground**, the exact whole-surface failure constraint #8 exists to prevent.
+5. **`openWizardForNetError` needs async DB state.** Both new inputs are async (row check via `getUserDb`; `install_source` lives in the apps table and the caller passes only `appId`), but the function is sync and its call site consumes the boolean (`RunView.tsx:499–503`) — a naive `async` conversion makes the Promise always truthy, **dismissing the CTA even when the wizard refuses to open** (parked-session refusal, `wizard.ts:259–262`).
+6. **T8 proves the Settings path, not the headline gap.** Disposition #11 pins "no network call is made", so `NET_NOT_APPROVED` can never fire in the e2e and the CTA→prefilled-wizard integration — the very seam finding 5 breaks — is covered by no test above unit level.
+7. **`connection-demo` cannot be both validated and connected.** The validate suite's no-network rule regex matches `net.fetch(` in app-authored code (`\b` sits between `.` and `fetch`), so the demo either goes red in `APPS`, or ships unvalidated.
+8. **Widening `AUTH_PROVENANCES` leaks into the persisted, LLM-claimable directive schema** (`render-directive.ts:109`): a builder directive could then claim `provenance:'app_declared'` (today strict-rejected), and chat meta carrying the new literal reads as *no directive at all* on an older host.
+
+**The seven MINORs:** (9/11) disposition #7's parenthetical "nothing app-timed exists" is **false** — the CTA is fired by the app's own net attempt, so post-revoke an app can re-summon a one-click prefilled re-connect sheet on its own cadence (the terminality invariant itself holds; the rationale was wrong). (10) the validate rule has **no build path to `llmProposalSchema`** — `examples/` has no protocol dependency and no build step, so the gate can silently not run. (12) "consented at install" is **unbound**: the manifest resolves from the *current bundle* at every wizard open while the app HTML froze at install, so a later deploy re-proposes different hosts under the same install identity. (13) shelf blast radius incomplete: `starterShelf.test.tsx:86` pins exactly 8 starters, `STARTER_LOOKS` has no row (silent ⬡ fallback), and **AL-09's parked branch pins 13 ids** — a 9-starter main makes those literals stale at resume. (14) disposition #2 was factually wrong: registry effects on a declared proposal are three, not one (display name, registration walkthrough, and for oauth2 the manifest's endpoints/hosts WIN — the inverse of the directive channel's discard). (15) the shipped KB still teaches the directive "is the only way an app ever becomes connected" — falsified by this release, and AL-09's own bar makes that a defect at resume.
+
+**Two REFUTED — recorded so they are not re-litigated:** (a) "the validate suite can't catch registry-name/foreign-host manifests" — misreads disposition #5, whose load-bearing control is human PR curation; the suite is only ever claimed to enforce bounds + poison keys. (b) "HubView installs with zero disclosure" — `installStarter` (`HubView.tsx:119–139`) is **dead code**; per AC18 the tile only browses, and the sole install path is RunView's button, exactly where v1 puts the disclosure.
+
 ## Plan v1 (Gate 2, 2026-08-08) — direction C: install-time declaration, resolved not persisted
+
+> **SUPERSEDED by plan v2 below (2026-08-08).** Kept for the audit trail: the review's findings are only legible against the design they attacked. Where v1 and v2 conflict, **v2 wins**.
 
 ### Design in one paragraph
 
@@ -119,6 +140,71 @@ Manifest filename **`connection.json`** · wizard source **`'declaration'`** · 
 ### Packages touched (TDD.md table)
 
 `packages/protocol` (constant + tests; High) · `apps/playground` (wizard/sheet/settings/run/starter; High by escalation) · `examples` (fixture + validate rule; Low). **NOT touched:** `packages/auth`, `packages/db`, `packages/sdk`, `packages/runner`, `apps/server`, `packages/knowledge` (KB doctrine note deferred to AL-09 resume — recorded in next-steps).
+
+---
+
+## Plan v2 (2026-08-08) — the review folded; THIS is the plan of record
+
+Five structural changes answer the eight MAJORs; the rest are pinned as named guards. **The ratified posture is unchanged** (no runtime app channel; install-act declarations always get the strong review) — v2 changes the *mechanism*, not the posture.
+
+### V2-1 — Provenance is DERIVED, not stored on the session (kills MAJORs 2+3, MINOR 14 residue)
+
+The v1 error was treating provenance as session state that any later step could overwrite. In v2 the declaration is a **separate, immutable session field** — `declaration: LlmProposal` — set only at open by `resolveDeclaredIntent` and **never written by `applyInferenceResult`** (which keeps overwriting `provenance`/`proposal` exactly as today, untouched). The sheet's strong-review gate becomes:
+
+```ts
+const specConfirm = session.declaration !== undefined
+  || session.provenance === 'inference' || session.provenance === 'user_docs';
+```
+
+so **no mid-session action can reach the light path** — inference on a declaration session still renders the strong review, now showing both "declared by this app" and whatever the inferrer returned. `app_declared` is thus **not** a new `AUTH_PROVENANCES` member (this also kills MAJOR 8 outright: the persisted directive enum is untouched, no forward-compat break, no LLM-claimable literal, and mechanism step 1 disappears — **`packages/protocol` is no longer touched at all, so SPEC_SYNC and the spec-changelog no longer apply**). Provenance on a declaration session starts `undefined` and is display-derived.
+**Guards:** T3 (open-time), **T3b — mid-session mutation: run inference on a declaration session, assert `specConfirm` stays true and the declared-by-app copy stays visible** (mutation: drop the `session.declaration` disjunct ⇒ red), **T3c — static-kind strand: `github`+`bearer_token` declaration + infer-from-docs ⇒ declared hosts still present in the reviewed draft.**
+
+### V2-2 — Trust the FROZEN app HTML, not `install_source` (kills MAJOR 1, MINOR 12)
+
+`install_source` is attacker-writable via whole-DB import, so it can never be the sole key to a first-party declaration. v2 requires **both**:
+
+1. the app's `install_source` resolves to a bundled manifest, **and**
+2. the **installed HTML byte-matches the bundled starter HTML** for that folder (`loadStarterHtml(folder)`), compared against the app's **pinned factory version 1** (`snug_app_versions`, written at install — `userdb.ts:1110`), never the mutable current version.
+
+An imported row with attacker HTML fails (2); an app the user has since edited fails (2) and correctly falls back to today's empty-wizard behavior. This also binds MINOR 12: a later deploy that changes a starter's HTML *or* manifest stops matching, so the declaration silently withdraws rather than re-proposing new hosts under an old consent. **Copy is corrected to what is actually proven** — "this app ships with a declared connection to {provider}", never "you approved this at install".
+**Guards:** **T2b — byte-mismatch (one changed byte in the stored HTML) ⇒ `null`**; **T2c — imported-app simulation: an `apps` row with a starter `install_source` but foreign HTML ⇒ `null`, and Settings does NOT list it as declared** (mutation: drop the HTML check ⇒ red). **T2d — the comparison reads version 1, not `current_version`.**
+
+### V2-3 — Async resolver, async open, explicit call-site rework (kills MAJORs 4+5)
+
+- `import.meta.glob('../../../../examples/*/connection.json', { query: '?raw', import: 'default' })` — **raw strings, lazy loaders**, matching the existing `app.html` pattern. Raw import means Vite never JSON-parses at transform time, so **a malformed manifest can never break the build**; `starterDeclarationFor` becomes **async**, does its own `JSON.parse` in a try/catch, then `llmProposalSchema.safeParse` — invalid ⇒ `null` + one `console.warn`. True parse-and-drop.
+- `openWizardForNetError` becomes **`async`** and its call site is reworked in the same commit: `void openWizardForNetError(...).then((opened) => { if (opened) setNetAuthError(null) })` — the CTA is dismissed **only** on a real open, so a parked-session refusal keeps the banner. The declaration lookup needs the app record; `RunView` already has `appId` and gains one `db.getApp(appId)` read inside the async path.
+**Guards:** **T2e — malformed JSON manifest ⇒ resolver returns `null` AND the shelf/run view still render** (the anti-#8 whole-surface proof); **T4b — parked-session refusal: `openWizardForNetError` resolves `false` and the CTA stays mounted** (mutation: return the raw promise ⇒ red).
+
+### V2-4 — The e2e proves the CTA gap, not a detour (kills MAJOR 6, MAJOR 7)
+
+`connection-demo` **does** attempt a connected call — that is the point — so:
+- it goes in `examples/validate.test.mjs` `APPS` and the **no-network rule is satisfied honestly**: the app calls `net.fetch(...)` **inside the hooks block region** (the governed seam the AL-04 repair already exempts), with the app-authored region free of network APIs. If authoring cannot keep the call inside the exempt region, the rule is **not** weakened — the demo instead uses the existing `useConnectedFetch` handle pattern verbatim, and if that still trips the rule the finding is escalated to the owner rather than patched around.
+- **T8 is re-pointed at the real gap**: install → app's own call → `NET_NOT_APPROVED` → **CTA banner** → click → **PREFILLED strong review** → approve → frozen row → revoke → declared-not-connected. The Settings path becomes **T8b** (second, cheaper assertion), not the headline. This exercises the sync/async seam of V2-3 end-to-end.
+
+### V2-5 — Post-revoke re-offer is rate-limited by honesty, not silence (folds MINORs 9/11)
+
+The terminality invariant holds (verified sound), but v1's rationale was wrong: the CTA *is* app-timed. v2 does **not** add a tombstone (that stays queued for AL-10 as already recorded) and does not let the app's cadence drive a prefilled sheet either. Instead: **the prefilled declaration upgrade applies only when the app has never had a row in this session's lifetime**; once the user revokes, subsequent CTAs for that app open the **plain** (unprefilled) wizard until the user initiates from Settings. Cheap, needs no schema, and makes the app's retry loop strictly less useful than the user's own click.
+**Guard:** **T7b — revoke, then re-fire `NET_NOT_APPROVED` ⇒ the wizard opens WITHOUT the declaration prefilled** (mutation: drop the check ⇒ red).
+
+### V2-6 — The named small folds
+
+- **MINOR 10** — `examples/package.json` gains a workspace dependency on `@snugprotocol/protocol` and the manifest rule imports it directly; **the rule must fail loudly if the import fails** (no graceful-degrade try/catch — a curation gate that can silently skip is not a gate). Pinned by a self-check test.
+- **MINOR 13** — the shelf fold is explicit: bump `starterShelf.test.tsx`'s count pin to 9, add a `STARTER_LOOKS` row for `connection-demo` **and extend the look-coverage loop to cover it** (so the ⬡ fallback cannot ship silently), update `code-map` counts. **AL-09 collision recorded in ITS task file too**: on resume its `APPS` 8→13 and 13-id pins become 9→14 and 14 ids.
+- **MINOR 14** — disposition #2 corrected in place: registry effects on a declared proposal are **three** (display name, registration walkthrough, and for `oauth2_auth_code` the manifest's endpoints/hosts WIN over the registry's — the inverse of the directive channel's discard). Acceptable only because manifests are first-party; **stated as the precise reason an untrusted declaration channel needs a charset guard + registry-borrow ban before it can exist.**
+- **MINOR 15** — the one-sentence KB amendment lands **in this task, not AL-09**: the doctrine's "the directive is the only way an app ever becomes connected" gains the install-act rung. `packages/knowledge` is therefore back in the touched set (its generator + suite run).
+- **MINOR 5 (from the original 12)** — next-steps row: a charset/confusable guard on `providerName` is a **BLOCKER prerequisite** for any future untrusted declaration channel (app import), citing this review.
+
+### Revised packages touched
+
+`apps/playground` (High by escalation) · `packages/knowledge` (KB sentence + generator) · `examples` (fixture, validate rule, workspace dep). **NO LONGER TOUCHED: `packages/protocol`** (V2-1 removes the enum change) — so **no spec-sync, no spec-changelog, no published-artifact regen**. Still untouched: `packages/auth`, `packages/db`, `packages/sdk`, `packages/runner`, `apps/server`.
+
+### Revised sequencing
+
+Walking skeleton first, now proving the **CTA** path: resolver (async, raw-glob, HTML byte-match) → wizard `declaration` field + async open + call-site rework → sheet gate → **T8 red→green**. Then breadth: Settings surface, disclosure copy, revoke rule, KB sentence, shelf/validate folds. **If the skeleton stalls on a structural surprise, STOP and re-plan** — the AL-09 lesson, which has now paid twice.
+
+### Shared literals (v2 — supersedes v1's list where they differ)
+
+Manifest filename **`connection.json`** (raw-imported) · wizard session field **`declaration`** · example folder **`connection-demo`** · declared fixture host **`api.example.com`** · testids **`starter-install-disclosure`**, **`connection-declared-row`**, existing `starter-install` / `net-auth-cta` unchanged. **DROPPED from v1: the `'app_declared'` provenance literal and the `'declaration'` wizard `source` value** — v2 keeps `source:'error_cta'|'settings'` and carries the declaration in its own field, so no persisted discriminator changes.
 
 ## Session journal (append-only, newest last)
 
