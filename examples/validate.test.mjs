@@ -51,6 +51,46 @@ const QUALIFIED_NETWORK_API = /\b(window|globalThis|self)\s*\.\s*(fetch|XMLHttpR
 const CDN_ALLOWLIST = ['https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://unpkg.com'];
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 
+/**
+ * A connected app's own `connection.json` (TASK-20260807-connection-reachability):
+ * the install-act declaration. Returns `null` when the folder ships no manifest —
+ * which is most apps, and which grants NO exception of any kind.
+ *
+ * Read as raw text and JSON.parsed here (never `import`ed) so a malformed manifest is
+ * this suite's failure to report, not a module-load crash.
+ */
+function readDeclaredHosts(app) {
+  let raw;
+  try {
+    raw = readFileSync(path.join(HERE, app, 'connection.json'), 'utf8');
+  } catch {
+    return null; // no manifest — no exception
+  }
+  const parsed = JSON.parse(raw); // a malformed manifest MUST fail the suite loudly
+  const hosts = parsed.declaredApiHosts;
+  assert.ok(Array.isArray(hosts) && hosts.length > 0, `${app}: connection.json declares a non-empty declaredApiHosts`);
+  return hosts;
+}
+
+/**
+ * The allowlist decision for ONE url in ONE app. A declared API host is permitted as a
+ * URL LITERAL in authored code — that is the whole point of a connected app — but the
+ * caller still refuses it as a `<script src>`/`href`, so a declared host can never
+ * become executable code or a subresource load. Host match is exact (never a prefix:
+ * `api.example.com.evil.test` must not pass on `api.example.com`).
+ */
+function urlAllowed(url, declaredHosts) {
+  if (CDN_ALLOWLIST.some((cdn) => url.startsWith(cdn + '/'))) return true;
+  if (declaredHosts === null) return false;
+  let host;
+  try {
+    ({ host } = new URL(url));
+  } catch {
+    return false;
+  }
+  return declaredHosts.includes(host);
+}
+
 // jsdom lives in the repo-root devDependencies; the suite degrades gracefully without it.
 let JSDOM = null;
 try {
@@ -89,14 +129,17 @@ for (const app of APPS) {
 
   test(`${app}: single-file HTML with no external refs beyond allowlisted CDN scripts`, () => {
     assert.match(html, /^<!DOCTYPE html>/i, 'starts with <!DOCTYPE html>');
-    // Every absolute URL in the file must sit on the CDN allowlist…
+    // Every absolute URL in the file must sit on the CDN allowlist — or, for a
+    // connected app, be a host that app's own connection.json declares (the URL it is
+    // entitled to call through the governed seam). Undeclared hosts still fail.
+    const declaredHosts = readDeclaredHosts(app);
     for (const [url] of html.matchAll(/https?:\/\/[^\s"'<>)]+/g)) {
-      assert.ok(
-        CDN_ALLOWLIST.some((cdn) => url.startsWith(cdn + '/')),
-        `URL ${url} is on the CDN allowlist`,
-      );
+      assert.ok(urlAllowed(url, declaredHosts), `URL ${url} is on the CDN allowlist or declared by this app`);
     }
-    // …and may only appear as a <script src>. No stylesheets, imports, images, or fetches.
+    // …and may only appear as a <script src>. No stylesheets, imports, images, or
+    // fetches. NOTE the deliberate asymmetry: a DECLARED host is permitted as a URL
+    // literal above, but never here — a declared API host must not become executable
+    // code or any subresource load, so this check stays CDN-only.
     for (const m of html.matchAll(/(src|href)\s*=\s*["']([^"']*)["']/g)) {
       const [, attr, value] = m;
       assert.equal(attr, 'src', `${value}: no href-based external references`);
@@ -264,5 +307,27 @@ test('the no-network-APIs rule forbids direct calls and allows only the governed
   ];
   for (const [src, mustBeForbidden] of cases) {
     assert.equal(forbidden(src), mustBeForbidden, `${JSON.stringify(src)} forbidden=${mustBeForbidden}`);
+  }
+});
+
+// The declared-host allowlist exception, tested directly (TASK-20260807, owner decision
+// (i)). Negative cases first and in the majority: this rule EXISTS to keep the check
+// total, so the only thing worth proving is what it still refuses.
+test('the CDN allowlist admits a declared API host only for the app that declares it', () => {
+  const declared = ['api.example.com'];
+  const cases = [
+    // [url, declaredHosts, allowed?]
+    ['https://cdn.jsdelivr.net/npm/react@18/x.js', null, true], // CDN, no manifest needed
+    ['https://api.example.com/v1/data', declared, true], // the whole point
+    ['https://api.example.com/v1/data', null, false], // NO manifest ⇒ no exception
+    ['https://api.evil.test/v1/data', declared, false], // undeclared host
+    ['https://api.example.com.evil.test/x', declared, false], // suffix attack — exact host only
+    ['https://evil.test/?x=api.example.com', declared, false], // declared host in the QUERY, not the host
+    ['https://sub.api.example.com/x', declared, false], // subdomain is a different host
+    ['http://api.example.com/v1', declared, true], // scheme is not this rule's job (CSP/connect-src is)
+    ['not a url at all', declared, false],
+  ];
+  for (const [url, hosts, allowed] of cases) {
+    assert.equal(urlAllowed(url, hosts), allowed, `${url} (declared: ${JSON.stringify(hosts)}) allowed=${allowed}`);
   }
 });
