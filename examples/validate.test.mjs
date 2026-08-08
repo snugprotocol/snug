@@ -40,6 +40,14 @@ const APPS = [
  * Everything not in this set is agent-driven.
  */
 const LLM_FREE_APPS = new Set(['flying-pig', 'trivia-night', 'trip-planner', 'pocket-ledger']);
+/**
+ * The no-network-APIs rule, as a PAIR of patterns with one home (so the per-app rule
+ * below and the rule-behavior test at the bottom of this file can never diverge).
+ * See the long comment at the call site for why both are load-bearing.
+ */
+const DIRECT_NETWORK_API = /(?<![.\w])(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/;
+const QUALIFIED_NETWORK_API = /\b(window|globalThis|self)\s*\.\s*(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/;
+
 const CDN_ALLOWLIST = ['https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://unpkg.com'];
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 
@@ -108,7 +116,19 @@ for (const app of APPS) {
     // fully checked (AL-04 repair of the AL-03 rule conflict this suite carried,
     // masked until now by turbo's own-files cache key).
     const appAuthored = html.replace(hookBlock(html, app), '');
-    assert.doesNotMatch(appAuthored, /\b(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/, 'no network APIs (connect-src is blocked)');
+    // AL-03-rule repair #2 (cherry-picked from TASK-20260807-starters-auth-spectrum so
+    // the two tasks cannot fork on a security literal — 2026-08-03 shared-literal
+    // lesson): `useConnectedFetch()` hands the app an object whose `.fetch(url)` METHOD
+    // is the governed net seam, so a METHOD call (`api.fetch(`) is legal app code while
+    // a BARE network call stays forbidden. `\bfetch` treated the dot as a boundary and
+    // flagged the seam itself.
+    //
+    // THE TWO ASSERTIONS ARE A PAIR — neither ships without the other. The bare-call
+    // regex below uses `(?<![.\w])`, which by design no longer matches `window.fetch(`;
+    // the old single regex caught that case incidentally via `\b`. Assertion 2 is what
+    // keeps window-qualified calls forbidden. Deleting it opens a real hole.
+    assert.doesNotMatch(appAuthored, DIRECT_NETWORK_API, 'no direct network APIs (connect-src is blocked)');
+    assert.doesNotMatch(appAuthored, QUALIFIED_NETWORK_API, 'no window-qualified network APIs either');
   });
 
   test(`${app}: embedded hooks block is byte-identical to sdk/embedded/snug-hooks.js (normalized)`, () => {
@@ -209,5 +229,40 @@ test('pocket-ledger: parseCents handles decimal commas, thousands separators, an
   ];
   for (const [input, expected] of cases) {
     assert.equal(parseCents(input), expected, `parseCents(${JSON.stringify(input)})`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The no-network-APIs rule, tested directly (TASK-20260807-connection-reachability,
+// owner decision (i)). The per-app assertions above prove the SHIPPED apps are clean;
+// this proves the RULE ITSELF discriminates correctly — a green suite of compliant
+// apps cannot tell a working guard from a broken one.
+//
+// Both patterns are asserted together exactly as the call site uses them, so the
+// documented invariant ("neither ships without the other") is enforced, not just
+// commented: deleting QUALIFIED_NETWORK_API turns the three qualified rows red.
+test('the no-network-APIs rule forbids direct calls and allows only the governed seam', () => {
+  const forbidden = (src) => DIRECT_NETWORK_API.test(src) || QUALIFIED_NETWORK_API.test(src);
+  const cases = [
+    // [source, must be forbidden?]
+    ['const r = await fetch(url);', true],
+    ['const r = await window.fetch(url);', true], // the case DIRECT_ alone would miss
+    ['globalThis.fetch(url);', true],
+    ['self . fetch (url);', true], // whitespace must not defeat it
+    ['new XMLHttpRequest();', true],
+    ['new WebSocket(wsUrl);', true],
+    ['new EventSource(streamUrl);', true],
+    // The AL-03 governed seam: `useConnectedFetch()` returns a handle whose `.fetch`
+    // METHOD posts a snug:net-request frame. connect-src stays blocked; the host is
+    // the only caller that reaches the network. This is the line the old rule broke.
+    ['const r = await api.fetch(url);', false],
+    ['const r = await net.fetch(url, { method: "POST" });', false],
+    ['const data = await this.fetch(path);', false],
+    // Identifiers that merely CONTAIN a forbidden name are not calls to it.
+    ['const doFetch = () => refetch(url);', false],
+    ['prefetchAssets();', false],
+  ];
+  for (const [src, mustBeForbidden] of cases) {
+    assert.equal(forbidden(src), mustBeForbidden, `${JSON.stringify(src)} forbidden=${mustBeForbidden}`);
   }
 });
