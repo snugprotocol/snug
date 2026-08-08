@@ -136,6 +136,13 @@ After AL-05 merges: run **AL-09 (starters-auth-spectrum) ONLY**, then **STOP and
 - Gates: root 19/19 · knowledge 112 (was 96) · playground 409 (was 407) · protocol 188 · Playwright 53 + 1 skip · typecheck + lint clean · generator verified byte-identical.
 - **Scope amendment still binding and untouched by this fold: AL-09 next, then STOP** for the owner's manual tests. This fold was authorized separately ("fix all findings — major & minor using dynamic workflows") and does not start AL-09.
 
+### 2026-08-08 — Claude (orchestrator) — connection-reachability green-lit; Gate 2 done, Gate 3 in progress; SESSION-BOUNDARY HANDOFF #6
+
+- **RESUME FROM `docs/tasks/active/HANDOFF-alpha-umbrella-6.md`** (60% context rule) — full ledger, git state, the two binding owner decisions, and a four-step next action. This entry is the pointer.
+- Owner green-lit **connection-reachability** (the child AL-09 gave birth to) and ratified its posture: **an app may never propose a connection at runtime**; proposals come only from the user, the reviewed builder directive, or the install act — direction **C**. Gate 2 ran the full rigor loop: plan v1 → **3-lens fresh-context design review (REVISE: 15 confirmed, 8 MAJOR + 7 MINOR, 2 refuted, NO BLOCKER — the posture survived)** → plan v2 folding all 15 → **independent fidelity verification, which caught one of my own folds resting on a false claim** → owner fork → **owner chose (i), extend the validate rule narrowly**, now landed test-first and mutation-evidenced (`bc97848`, `b6d27a2`).
+- **Umbrella tally unchanged at 9/14 merged.** AL-09 still PARKED and untouched at `7b45f90`; AL-10/11/12/15 still HELD. No feature production code exists for connection-reachability yet — the walking skeleton is the next action.
+- Gates at handoff: **root `pnpm test` 19/19 green**, examples 75 (was 73).
+
 ### 2026-08-07 — Claude (orchestrator) — AL-09 STARTED, then PARKED by owner decision C; a new High-tier child is born
 
 - Ran AL-09 (`TASK-20260807-starters-auth-spectrum`) through Gate 2 with the full rigor loop. Plan v1 → **fresh-context plan review** (2 lenses: 1 BLOCKER + 3 MAJOR + 2 MINOR, all real) → v2. The blocker: a read-only starter can never reach the auth wizard. Investigating the fix exposed something larger — **no chat-less app can EVER become a connected app**: the only non-test `putAuthSpec` is inside the wizard (`wizard.ts:328`), and every wizard entry needs a directive, an existing row, or an empty manual review. Three separately-correct designs (AL-08 chat-less starters, AL-04 directive-only proposals, the wizard's row-or-proposal model) composing into a dead end, invisible until a starter needed a credential.

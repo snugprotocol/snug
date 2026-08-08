@@ -1,6 +1,6 @@
 # TASK-20260807-connection-reachability: a chat-less app can never become a connected app
 
-- **Status**: active — **Gate 2 in progress** (owner green light 2026-08-08; posture + direction C ratified — see journal)
+- **Status**: active — **Gate 2 COMPLETE (plan v2 is the plan of record); Gate 3 IN PROGRESS.** Resume from `docs/tasks/active/HANDOFF-alpha-umbrella-6.md`
 - **Owner**: Claude (orchestrator), taken over 2026-08-08 on owner instruction via /pickup
 - **Branch**: `feat/TASK-20260807-connection-reachability`
 - **Risk tier**: **High** — protocol surface (announce or equivalent), the auth/wizard trust ladder, and the host-side spec-write path. Any design here decides who may propose a connection.
