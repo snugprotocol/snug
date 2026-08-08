@@ -1,4 +1,12 @@
-# HANDOFF #4 — Alpha umbrella (TASK-20260805-alpha-umbrella) — resume point
+# HANDOFF #4 — Alpha umbrella — ⚠️ SPENT / SUPERSEDED (2026-08-07)
+
+> **DO NOT FOLLOW THIS FILE.** Superseded by **`HANDOFF-alpha-umbrella-5.md`** — read that instead.
+>
+> Its "IMMEDIATE NEXT ACTION — run AL-09" is **complete**: AL-09 ran, uncovered a structural gap, and was **PARKED by owner decision** (its branch is `feat/TASK-20260807-starters-auth-spectrum`, not the `20260806` one named below, which merged into main long ago). Its git-state and 9/14 tally are stale. Kept only as the historical record of the AL-05 → AL-09 boundary.
+
+---
+
+# HANDOFF #4 (historical) — Alpha umbrella (TASK-20260805-alpha-umbrella) — resume point
 
 **Written:** 2026-08-06, at a planned context-window boundary (60% rule — owner instruction: save state + fresh session, never compress mid-session). **Purpose:** a fresh session picks up with zero loss. Read this, then `docs/tasks/active/TASK-20260805-alpha-umbrella.md` (umbrella plan of record — including the OWNER SCOPE AMENDMENT), then act on "IMMEDIATE NEXT ACTION". Supersedes `docs/tasks/done/HANDOFF-alpha-umbrella-3.md` (spent).
 
