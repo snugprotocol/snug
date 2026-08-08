@@ -175,11 +175,21 @@ An imported row with attacker HTML fails (2); an app the user has since edited f
 - `openWizardForNetError` becomes **`async`** and its call site is reworked in the same commit: `void openWizardForNetError(...).then((opened) => { if (opened) setNetAuthError(null) })` — the CTA is dismissed **only** on a real open, so a parked-session refusal keeps the banner. The declaration lookup needs the app record; `RunView` already has `appId` and gains one `db.getApp(appId)` read inside the async path.
 **Guards:** **T2e — malformed JSON manifest ⇒ resolver returns `null` AND the shelf/run view still render** (the anti-#8 whole-surface proof); **T4b — parked-session refusal: `openWizardForNetError` resolves `false` and the CTA stays mounted** (mutation: return the raw promise ⇒ red).
 
-### V2-4 — The e2e proves the CTA gap, not a detour (kills MAJOR 6, MAJOR 7)
+### V2-4 (REWRITTEN 2026-08-08 after the fidelity check falsified v2's first attempt) — the e2e proves the CTA gap (kills MAJOR 6, MAJOR 7)
 
-`connection-demo` **does** attempt a connected call — that is the point — so:
-- it goes in `examples/validate.test.mjs` `APPS` and the **no-network rule is satisfied honestly**: the app calls `net.fetch(...)` **inside the hooks block region** (the governed seam the AL-04 repair already exempts), with the app-authored region free of network APIs. If authoring cannot keep the call inside the exempt region, the rule is **not** weakened — the demo instead uses the existing `useConnectedFetch` handle pattern verbatim, and if that still trips the rule the finding is escalated to the owner rather than patched around.
+**What was wrong:** v2 first claimed the demo could put its call "inside the hooks block region". False at source — `hookBlock` cuts everything ABOVE the section-5 banner (`validate.test.mjs:67–74`), so app code is by definition outside it, and the block is byte-locked to `packages/sdk/embedded/snug-hooks.js` (`:114–116`). No shipped example calls `net.fetch` at all. **Owner chose (i): extend the rule narrowly** (see §RESOLVED above).
+
+- **The no-network rule is repaired, not weakened** — cherry-picked from AL-09's branch: a **method** call on the governed handle (`api.fetch(`) is legal app code; **bare** and **`window.`/`globalThis.`/`self.`-qualified** calls are both forbidden, the latter being coverage the old single-regex rule lacked. `connection-demo` goes in `APPS` and is fully validated like every other app.
+- **The CDN-allowlist rule gains a manifest-scoped exception** — a URL is permitted if its host appears in that same app's `connection.json` `declaredApiHosts`; every other absolute URL still fails, and an app with no manifest gets no exception.
 - **T8 is re-pointed at the real gap**: install → app's own call → `NET_NOT_APPROVED` → **CTA banner** → click → **PREFILLED strong review** → approve → frozen row → revoke → declared-not-connected. The Settings path becomes **T8b** (second, cheaper assertion), not the headline. This exercises the sync/async seam of V2-3 end-to-end.
+**Guards (negative-first, before the allowance is written):** **T1b — bare `fetch(` in authored code still fails; `window.fetch(` still fails** (new coverage; mutation: revert to the old single regex ⇒ the `window.` case goes green, proving the repair); **T1c — a URL on a host the app did NOT declare still fails the allowlist; an app with no manifest gets no exception**; **T1d — `connection-demo` passes the full suite unmodified** (no exemption, no skip).
+
+### V2-7 — The three corrections the fidelity check surfaced (folded 2026-08-08)
+
+- **C4 / MAJOR 3 needs a mechanism, not just an assertion.** `AuthWizardSheet.tsx:189–193` re-seeds the draft from `session.proposal` on every session change, so an "infer from docs" click on a declaration session wipes the declared hosts from the form the user reviews (`specConfirm` correctly stays strong — MAJOR 2 is genuinely fixed — but the draft the transformer sees is host-less and it will refuse). **Fix: `draftFromProposal` prefers `session.declaration`'s hosts when the inferrer's proposal supplies none.** T3c asserts the outcome; this line produces it.
+- **C2 / V2-5 is friction, not a boundary — say so.** Nothing persists "has had a row this session" (revoke leaves zero DB residue by design), so the rule **dies on page reload** and an app that induces a refresh gets the prefilled sheet back. V2-5 stands as a **speed bump with honest wording**; the real fix is the revoke tombstone already queued to AL-10. The plan claims no security property for it.
+- **C1 / V2-2's byte-match must fail LOUDLY, not silently.** A later deploy editing a starter's HTML — including a forced hooks-block resync when `snug-hooks.js` changes — makes an installed app stop matching, and the user then hits the **empty wizard this task exists to eliminate**, with no diagnostic. **Fix: compare a NORMALIZED form** (the suite's own `normalize()` precedent, `validate.test.mjs:55–60`), **log the mismatch reason, and surface a Settings state** ("this app's code no longer matches its starter") instead of withdrawing in silence. **Guard: T2f — normalized-equal HTML (line endings/trailing whitespace differ) still resolves; a semantic edit does not, and the mismatch is reported.**
+- **Factual corrections carried into implementation:** `loadStarterHtml` takes a **starter id**, not a folder (`starterApps.ts:47–50`); `starterShelf.test.tsx:86` pins no literal `8` (it derives from `ORIGINAL_FOLDERS`/`PILLAR_FOLDERS` — the work is adding `connection-demo` to an array and extending the look-coverage loop); `wizardStore.test.ts:210/225` assert a **sync** boolean from `openWizardForNetError` and move in the same commit as V2-3; the `examples`→protocol workspace dep needs a named turbo build-ordering guarantee or fresh clones go red; the KB edit is **larger than one sentence** (the same file's emission rules assume a directive-closing reply a chat-less starter cannot produce, and the generated snapshot + KB suite move with it).
 
 ### V2-5 — Post-revoke re-offer is rate-limited by honesty, not silence (folds MINORs 9/11)
 
@@ -231,6 +241,24 @@ An independent fresh-context verifier checked whether v2 actually disposes of al
 - **(iv) Defer the demo entirely** — land the mechanism against the five AL-09 starters when AL-09 resumes (they will declare real providers anyway), and prove the CTA path there. Costs this task its own walking skeleton.
 
 **Orchestrator recommendation: (i), scoped narrowly and reviewed** — it is the only option that both proves the gap closed and keeps every app under validation, and it converges with AL-09's needs rather than deferring the same decision twice. **(ii) is the safe fallback** if the owner would rather not touch a security rule in this task.
+
+### RESOLVED — owner chose (i), 2026-08-08
+
+**The widening is not new work: it already exists, mutation-evidenced, on AL-09's parked branch** (`feat/TASK-20260807-starters-auth-spectrum`, "AL-03-rule repair #2", 13 regex cases). Verified by diff against main. The repair replaces one regex with two, and **nothing is weakened** — the forbidden set grows:
+
+```js
+// a METHOD call on the governed handle (api.fetch() ) is legal app code…
+assert.doesNotMatch(appAuthored, /(?<![.\w])(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/, 'no direct network APIs');
+// …while bare AND window-qualified calls are both forbidden — the second assertion
+// is NEW coverage the old single-regex rule did not have.
+assert.doesNotMatch(appAuthored, /\b(window|globalThis|self)\s*\.\s*(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/, 'no window-qualified network APIs either');
+```
+
+The old rule flagged the governed seam itself (`\b` treats `.` as a boundary) while **missing `window.fetch(` entirely** — so this is a repair that closes a hole, not a relaxation. AL-09's branch additionally carries two rules this task wants anyway: an app-authored-credential rule (Authorization header, credential-named string literals, query-string credentials) and a connected-posture rule (`useConnectedFetch` present iff the app is declared connected).
+
+**Decision on how it lands (D-C1):** this task **cherry-picks the rule repair from AL-09's branch** rather than re-authoring it, so the two tasks cannot fork on a security literal (the 2026-08-03 shared-literal lesson). AL-09's branch keeps its copy; on its rebase the change is already in main and drops out cleanly.
+
+**The CDN-allowlist half still needs a decision (it is NOT in AL-09's precedent).** `validate.test.mjs:83–89` requires every absolute URL to sit on `CDN_ALLOWLIST`, so `https://api.example.com/...` as a literal in the demo trips it. Scoped resolution: **a declared host is allowlisted for the app that declares it** — the rule reads the app's own `connection.json` and permits URLs whose host appears in `declaredApiHosts`, everything else unchanged. This keeps the check total (no app is exempted) and ties the exception to the same first-party, PR-reviewed manifest the whole design rests on. **Negative tests come first**: a URL on a host the app did NOT declare still fails; an app with no manifest gets no exception.
 
 ### Shared literals (v2 — supersedes v1's list where they differ)
 
