@@ -36,13 +36,45 @@
      user file's snug_secrets `auth:` keys — credentials live in the USER'S file, never a
      server vault; host ceiling always strict (C1, no knob). The connected-fetch executor
      is the ONLY host-side fetch caller; injection is always strict (audit bug 3 dead by
-     construction). Wizard/UI lands in AL-04.
+     construction). Wizard/UI shipped in AL-04 (`apps/playground/src/connections/`).
 ```
 
 Key invariants: the user DB is the single source of truth in EVERY mode (subscription
 artifacts are fetched client-side and written into it — hub stores are transient
 caches); LLM calls originate from the host page only; secrets never reach the hub
 (stripped from sync pushes and default exports, VACUUMed).
+
+## Who may propose a connection (the trust ladder — ADR-0016)
+
+A connection is a credential grant, so the question "who is allowed to *ask* for one?"
+is a protocol-level posture, not a UI detail. **An app may never propose a connection
+at runtime** — there is no frame, no SDK call, and no announce field that can do it.
+Exactly three proposers exist, and the review each one gets is fixed:
+
+| Proposer | Channel | Review |
+|---|---|---|
+| the user | Settings / net-error CTA | manual entry |
+| the builder LLM (already reviewed) | chat directive → `resolveWizardIntent` | registry rung light · inference strong |
+| the **install act** | starter's `examples/<folder>/connection.json` | **always strong** (field-by-field) |
+
+The install-act rung (TASK-20260807-connection-reachability) exists because a chat-less
+app — a starter, anything installed rather than built — otherwise had no reachable path
+to a connection at all. Its declaration is **never persisted**: it is resolved on demand
+and only when TWO independent facts hold — `install_source` maps to a bundled manifest,
+AND the installed HTML matches the bundled starter's for **both** the pinned factory
+version and the version that actually runs. Requiring the running version is the security
+property: the iframe executes `current_version` and credential brokering keys on `appId`,
+so vouching for bytes that never run would let an imported DB pair pristine code with an
+attacker's. Any mismatch is reported in Settings, never silently withdrawn.
+
+The declaration rides in its own immutable wizard-session field, so it forces the strong
+review unconditionally — no mid-session action (notably "infer from docs") can downgrade
+it to the light path. **Every write still goes through an explicit user approval in the
+wizard; the only non-test `putAuthSpec` call site lives there.** Manifests are trusted
+only because they are first-party, in-repo, PR-reviewed content gated by the `examples`
+validate suite. **Before any UNTRUSTED declaration channel can exist** (an app-import
+flow above all), a `providerName` charset/confusable guard and a registry-borrow ban are
+hard prerequisites — see `docs/next-steps.md`.
 
 ## Dependency graph (who depends on whom → whose tests also run)
 
