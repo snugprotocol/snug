@@ -287,6 +287,26 @@ describe('the PRE-INSTALL lookup — what the run view discloses before anything
     expect(await starterDeclarationForStarterId('9f3a1c22-0000-4000-8000-000000000000')).toBeNull();
   });
 
+  it('the prefix guard really guards — an id whose SLICE would hit a real folder must not resolve', async () => {
+    // Found by mutation M22, and it took two attempts to write a test that can actually
+    // fail for the reason it names.
+    //
+    // Attempt 1 passed a bare folder name — useless, because without the guard
+    // `'connection-demo'.slice(9)` is `'on-demo'`, which matches nothing, so the function
+    // returns null either way. The guard was never exercised and the test proved nothing.
+    //
+    // The discriminating input has to be one where the UNGUARDED `slice()` lands exactly
+    // on a real folder. `STARTER_PREFIX` is 9 chars, so a 9-char prefix followed by the
+    // folder name does it: with the guard this is refused outright; without it, the slice
+    // yields `connection-demo` and the function would answer for an id it has no
+    // authority over. That is the whole point of the guard — an installed app's id must
+    // go through the two-fact resolver, never this weaker lookup.
+    const spoofed = `..:.:.:.:${DEMO_FOLDER}`;
+    expect(spoofed.slice(9), 'the fixture must actually reach a real folder when unguarded').toBe(DEMO_FOLDER);
+
+    expect(await starterDeclarationForStarterId(spoofed), 'only prefixed starter ids may resolve').toBeNull();
+  });
+
   it('drops a malformed manifest exactly like the installed path', async () => {
     __setDeclarationManifestsForTests({ [DEMO_FOLDER]: { manifest: '{ nope', html: BUNDLED_HTML } });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -172,11 +172,32 @@ describe('a NON-declaring starter shows nothing (the control)', () => {
   it('renders no disclosure for an installed app route', async () => {
     // The disclosure belongs to the INSTALL ACT. Once the app is owned, the connection
     // surfaces are Settings and the CTA — repeating it here would be noise on every load.
+    //
+    // MUTATION NOTE (M22/M23): this passes through THREE independent refusals — the
+    // effect's `isStarterId` check, the render guard, and `starterDeclarationForStarterId`
+    // refusing a non-prefixed id. Removing any ONE of them leaves this green, so it does
+    // not by itself pin the render guard; the test below supplies the discriminating
+    // case. The redundancy is deliberate defence-in-depth, not an accident, and it is
+    // recorded here so a future reader does not "simplify" all three away at once.
     const copy = db.installApp({ displayName: 'demo', html: BUNDLED_HTML, installSource: `starter:${DEMO_FOLDER}` });
     await renderRun(copy.appId);
     await settle();
     await settle();
 
+    expect(disclosure()).toBeNull();
+  });
+
+  it('the render guard is load-bearing when a declaration is somehow present off-route', async () => {
+    // The discriminating case for the render guard specifically: force the state the
+    // guard exists to refuse. If the guard is removed, an installed app's route would
+    // render an install disclosure next to an Install button that is not even there.
+    const copy = db.installApp({ displayName: 'demo', html: BUNDLED_HTML, installSource: `starter:${DEMO_FOLDER}` });
+    const el = await renderRun(copy.appId);
+    await settle();
+
+    // An installed route never offers Install — so a disclosure here would be orphaned
+    // copy about an act the user cannot perform.
+    expect(el.querySelector('[data-testid="starter-install"]'), 'an owned app offers no Install').toBeNull();
     expect(disclosure()).toBeNull();
   });
 });
