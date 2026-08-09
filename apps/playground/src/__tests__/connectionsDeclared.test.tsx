@@ -15,12 +15,13 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { NET_ERROR_CODES } from '@snugprotocol/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
 
 import { ConnectionsCard } from '../views/SettingsView.js';
-import { __resetWizardStateForTests, wizardStore } from '../state/wizard.js';
+import { __resetWizardStateForTests, openWizardForNetError, wizardStore } from '../state/wizard.js';
 import {
   __setDeclarationManifestsForTests,
   __resetDeclarationManifestsForTests,
@@ -145,6 +146,38 @@ describe('an installed declaring app is reachable from Settings', () => {
     await renderCard();
 
     expect(declaredRow(), 'a connected app is not a declared-only app').toBeNull();
+  });
+});
+
+describe('the revoke ACTION records the note (§V2-5 wiring)', () => {
+  it('revoking from Settings makes the app’s next CTA unprefilled', async () => {
+    // Found by mutation M29: the whole post-revoke rule was tested against
+    // `noteAuthSpecRevoked` called directly, so deleting the CALL SITE in the revoke
+    // button left everything green — the rule worked and nothing ever triggered it.
+    // This drives the real button and then asks the real CTA path what it sees.
+    const appId = installDemo();
+    db.putAuthSpec(appId, {
+      kind: 'api_key',
+      provider: { name: 'Example API' },
+      fields: [{ key: 'api_key', label: 'API Key', type: 'secret' }],
+      declaredApiHosts: [DECLARED_HOST],
+    });
+    await renderCard();
+
+    const revoke = [...container.querySelectorAll('button')].find((b) => /revoke/i.test(b.textContent ?? ''));
+    expect(revoke, 'the connected row must offer revoke').toBeDefined();
+    await act(async () => {
+      revoke!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await settle();
+
+    expect(db.listAuthSpecs(), 'the revoke really happened').toHaveLength(0);
+    await openWizardForNetError(appId, NET_ERROR_CODES.NET_NOT_APPROVED);
+    expect(
+      wizardStore.get()?.declaration,
+      'after a real revoke, the app’s own retry must not be prefilled',
+    ).toBeUndefined();
   });
 });
 
