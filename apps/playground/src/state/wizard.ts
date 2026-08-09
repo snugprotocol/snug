@@ -277,6 +277,27 @@ export function resolveWizardIntent(appId: string, directive: AuthWizardDirectiv
   };
 }
 
+/**
+ * Apps the user has revoked during THIS page's lifetime (§V2-5).
+ *
+ * ⚠️ FRICTION, NOT A SECURITY BOUNDARY — and the distinction must not erode. Revoke
+ * leaves ZERO DB residue by design (`deleteAuthSpec` is a bare DELETE), so this can only
+ * live in page memory: it dies on reload, and an app that induces a refresh gets the
+ * prefilled sheet back. What it buys is narrow and real — the app's retry loop becomes
+ * strictly less useful than the user's own click — and nothing more. The actual fix is
+ * the revoke TOMBSTONE, queued to AL-10. `wizardPostRevoke.test.ts` pins this limit with
+ * a test that fails if anyone starts treating this as a control.
+ */
+const revokedThisSession = new Set<string>();
+
+/**
+ * Record that the user revoked `appId`'s connection. Called from the revoke action
+ * itself, so the note cannot drift from the act it describes.
+ */
+export function noteAuthSpecRevoked(appId: string): void {
+  revokedThisSession.add(appId);
+}
+
 /** Open the wizard (both mounts). Returns false — with a visible note — when one is parked (R2/M28). */
 export function openWizard(request: WizardOpenRequest): boolean {
   if (wizardStore.get() !== null) {
@@ -723,6 +744,12 @@ export async function openWizardForNetError(appId: string, code: string): Promis
     declaration = undefined;
   }
 
+  // V2-5: once the user has revoked this app, its OWN retry loop stops getting the
+  // prefilled review. The wizard still opens — the friction is on the convenience, never
+  // on the access — and the user's deliberate Settings click is unaffected, because that
+  // path passes the declaration explicitly.
+  if (revokedThisSession.has(appId)) declaration = undefined;
+
   return openWizard({ source: 'error_cta', appId, mode, ...(declaration !== undefined ? { declaration } : {}) });
 }
 
@@ -732,6 +759,11 @@ export async function openWizardForNetError(appId: string, code: string): Promis
 
 export function __resetWizardStateForTests(): void {
   teardownFlow();
+  // Cleared here because this seam stands in for a PAGE RELOAD, which is exactly what
+  // §V2-5's note does not survive. Leaving it populated would make the friction look
+  // durable in tests while it is not in production — the one misreading this whole
+  // design must avoid.
+  revokedThisSession.clear();
   hooks = {};
   serviceSingleton = null;
   flowStateStore = new InMemoryFlowStateStore();

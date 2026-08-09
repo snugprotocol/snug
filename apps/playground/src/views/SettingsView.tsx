@@ -32,7 +32,7 @@ import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm
 import { UserDbCredentialStore } from '@snugprotocol/auth';
 import { getUserDb } from '../state/userdb.js';
 import { invalidateNetGrants } from '../state/net.js';
-import { openWizard, wizardStore } from '../state/wizard.js';
+import { noteAuthSpecRevoked, openWizard, wizardStore } from '../state/wizard.js';
 import { resolveDeclaredIntent } from '../starter/starterDeclaration.js';
 import type { LlmProposal } from '@snugprotocol/protocol';
 import { useStore } from '../state/store.js';
@@ -590,6 +590,10 @@ export function ConnectionsCard(): ReactElement {
                         // with a silently surviving credential slice.
                         await new UserDbCredentialStore(db).clearApp(row.appId);
                         db.deleteAuthSpec(row.appId);
+                        // §V2-5: from here, this app's OWN retry loop gets the plain
+                        // wizard rather than the prefilled review. Recorded at the revoke
+                        // itself so the note cannot drift from the act.
+                        noteAuthSpecRevoked(row.appId);
                       })
                     }
                   >
