@@ -28,6 +28,7 @@ import {
   __setDeclarationManifestsForTests,
   __resetDeclarationManifestsForTests,
 } from '../starter/starterDeclaration.js';
+import { loadStarterHtml, STARTER_PREFIX } from '../starter/starterApps.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 /** Pinned shared literals (task file §Shared literals v2). */
@@ -121,15 +122,44 @@ describe('T2c — an imported app cannot borrow a starter’s declaration', () =
 });
 
 describe('T2d — the comparison reads the PINNED factory version, never current_version', () => {
-  it('a user edit on TOP of an untouched factory v1 keeps the declaration', async () => {
-    // Deliberate, and the reason the pinned version is the right key: the user editing
-    // their copy does not retract the fact that they installed a declaring starter. The
-    // factory bytes are still what the install act brought in, so the declaration stands
-    // — and the user still reviews every field before anything is approved.
+  it('a later version that does NOT match withdraws the declaration (BOTH versions must match)', async () => {
+    // REVERSED by the Gate-4 implementation review (security lens, MAJOR, confirmed by an
+    // independent refuter and reproduced by me at source). My original reasoning — "a user
+    // edit does not retract the install act, so pinned v1 is the right key" — was WRONG,
+    // and this test previously blessed the exact attack shape.
+    //
+    // The hole: `RunView` executes `current_version` (`library.ts` → `getAppHtml(id)` with
+    // no version), while the resolver validated ONLY v1. A whole-DB import can therefore
+    // supply v1 = the repo's real bytes (public, free to copy) + `install_source` =
+    // 'starter:connection-demo' + current_version = 2 = attacker code. Both facts held,
+    // the declaration attached, and the sheet said "this app ships with a declared
+    // connection" about code that shipped nothing. The credential brokering is keyed on
+    // appId, so the ATTACKER's version is what any approval would have benefited.
+    //
+    // The claim Fact 2 exists to make is "the bytes came from this repo" — which is only
+    // an inference about the RUNNING app if the compared bytes are the ones that run.
     const appId = installDemo();
     db.saveAppVersion(appId, '<html>my own edits</html>', 'user edit');
 
-    expect(await starterDeclarationFor(db, appId), 'the pinned factory version is untouched').not.toBeNull();
+    expect(
+      await starterDeclarationFor(db, appId),
+      'the resolver must vouch for the code that RUNS, not archival bytes',
+    ).toBeNull();
+  });
+
+  it('reports the mismatch when the running version diverges, rather than withdrawing silently', async () => {
+    const appId = installDemo();
+    db.saveAppVersion(appId, '<html>my own edits</html>', 'user edit');
+
+    const outcome = await resolveDeclaredIntent(db, appId);
+    expect(outcome.declaration).toBeUndefined();
+    expect(outcome.mismatch, 'the user must be told why the guided setup vanished').toBe('html_mismatch');
+  });
+
+  it('an app still on its factory version (no later edits) declares normally', async () => {
+    // The control — without it the fix above could be "always return null".
+    const appId = installDemo();
+    expect(await starterDeclarationFor(db, appId)).not.toBeNull();
   });
 
   it('reads version 1 explicitly — a doctored current version cannot mint a declaration', async () => {
@@ -142,11 +172,16 @@ describe('T2d — the comparison reads the PINNED factory version, never current
     expect(await starterDeclarationFor(db, appId), 'only the pinned factory version counts').toBeNull();
   });
 
-  it('asks the DB for version 1 by number', async () => {
+  it('reads BOTH the pinned factory version and the running version', async () => {
+    // Both reads are load-bearing and each closes a different hole (see the resolver's
+    // comment): v1 alone lets an importer hide attacker code in current_version; current
+    // alone lets an importer fake an install act that never happened.
     const appId = installDemo();
     const spy = vi.spyOn(db, 'getAppHtml');
     await starterDeclarationFor(db, appId);
-    expect(spy).toHaveBeenCalledWith(appId, 1);
+
+    expect(spy, 'the pinned factory version').toHaveBeenCalledWith(appId, 1);
+    expect(spy, 'the version that actually runs').toHaveBeenCalledWith(appId);
   });
 });
 
@@ -313,5 +348,49 @@ describe('the PRE-INSTALL lookup — what the run view discloses before anything
 
     expect(await starterDeclarationForStarterId(`starter--${DEMO_FOLDER}`)).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the REAL production glob — no fixtures injected (Gate-4 review, MAJOR)', () => {
+  // Found by the Gate-4 implementation review's test lens, confirmed by an independent
+  // refuter and reproduced here: EVERY other suite in this file injects
+  // `__setDeclarationManifestsForTests`, and `bundled()` short-circuits on that seam
+  // BEFORE it ever touches `import.meta.glob`. So the production wiring — the two glob
+  // patterns and `folderOf`'s regex — was executed by no committed test at all.
+  //
+  // The verifier mutated the manifest glob to a misspelled pattern and all 477 playground
+  // tests stayed GREEN. Concretely that ships a build where `connection-demo` resolves to
+  // nothing for every user: no install disclosure, an empty wizard behind the CTA, no
+  // Settings row — the exact gap this whole task exists to close, silently reopened.
+  //
+  // These tests deliberately run WITHOUT the fixture seam, against the real bundled files.
+  beforeEach(() => {
+    __resetDeclarationManifestsForTests();
+  });
+
+  it('resolves the real examples/connection-demo manifest through the real glob', async () => {
+    const factory = await loadStarterHtml(`${STARTER_PREFIX}connection-demo`);
+    expect(factory, 'the app.html glob must find the demo').toBeDefined();
+
+    const appId = db.installApp({
+      displayName: 'connection demo',
+      html: factory!,
+      installSource: DEMO_SOURCE,
+    }).appId;
+
+    const result = await starterDeclarationFor(db, appId);
+    expect(result, 'the production glob + folderOf + parse chain must actually work').not.toBeNull();
+    expect(result?.declaration.declaredApiHosts).toEqual([DECLARED_HOST]);
+  });
+
+  it('resolves the real manifest through the PRE-INSTALL lookup too', async () => {
+    const declaration = await starterDeclarationForStarterId(`${STARTER_PREFIX}connection-demo`);
+    expect(declaration?.declaredApiHosts).toEqual([DECLARED_HOST]);
+  });
+
+  it('a real starter that ships NO manifest resolves to null through the real glob', async () => {
+    // Pins `folderOf` discrimination: with a broken folder regex every folder would look
+    // like the same folder, and chess would wrongly inherit the demo's manifest.
+    expect(await starterDeclarationForStarterId(`${STARTER_PREFIX}chess`)).toBeNull();
   });
 });
