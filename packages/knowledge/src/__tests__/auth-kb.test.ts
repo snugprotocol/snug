@@ -251,3 +251,47 @@ describe('AL-05 review M64 — the older corpus does not contradict the connecte
     });
   }
 });
+
+// TASK-20260807-connection-reachability MINOR 15: the doctrine's "the directive is the
+// ONLY way an app ever becomes connected" was falsified by this release. The install act
+// is a third rung — an app can ship a `connection.json` that the user's install carries
+// into the same strong review.
+//
+// This is deliberately MORE than a one-sentence fix. The surrounding emission rules are
+// written for a builder LLM closing a reply with a directive, which a chat-less starter
+// cannot produce; leaving the false absolute in place would teach the builder that a
+// starter shipping a manifest is impossible, and leaving the rules unqualified would
+// invite it to emit a directive for an app it did not write.
+describe('the connected-app doctrine names every rung, not just the directive', () => {
+  it('no longer claims the directive is the ONLY way an app becomes connected', () => {
+    // The exact falsified absolute. Kept as a literal so the test fails if the sentence
+    // is ever restored verbatim.
+    expect(authKbText()).not.toContain('it is the only way an\napp ever becomes connected');
+    expect(authKbText().replace(/\s+/g, ' ')).not.toContain('the only way an app ever becomes connected');
+  });
+
+  it('teaches the directive as the way an app YOU BUILD becomes connected', () => {
+    // The claim is still true when scoped to the builder's own channel, which is the
+    // only channel this file's reader has. Scoping it keeps the teaching directive
+    // (emit one, exactly once) without asserting a falsehood about the whole product.
+    const text = authKbText().replace(/\s+/g, ' ');
+    expect(text).toMatch(/the only way an app you (build|write)[^.]*becomes connected/i);
+  });
+
+  it('names the install act as the other rung, without inviting the builder to use it', () => {
+    const text = authKbText().replace(/\s+/g, ' ').toLowerCase();
+    expect(text, 'the builder must know the rung exists').toContain('install');
+    // …and must NOT be told to author manifests: `connection.json` is a first-party,
+    // in-repo, PR-reviewed artifact. A builder emitting one would be exactly the
+    // runtime app-proposes-a-connection channel the ratified posture forbids.
+    expect(text, 'the builder must never be taught to author a manifest').not.toContain('connection.json');
+  });
+
+  it('still requires the directive for an app the builder itself writes', () => {
+    // Guards the qualification against over-correction: if the emission rule softened
+    // to "optional", a connected app the builder writes would ship unreachable — the
+    // very bug this whole task exists to fix, reintroduced through the KB.
+    const text = authKbText().replace(/\s+/g, ' ');
+    expect(text).toMatch(/calls `useConnectedFetch`[^.]*exactly one directive/i);
+  });
+});
