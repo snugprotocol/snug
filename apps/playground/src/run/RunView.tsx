@@ -498,7 +498,14 @@ export default function RunView(): ReactElement {
           <div className="field-row">
             <Button
               onClick={() => {
-                if (openWizardForNetError(netAuthError.appId, netAuthError.code)) setNetAuthError(null);
+                // `openWizardForNetError` is async (it resolves the install-act
+                // declaration from the user DB). Dismiss the banner ONLY on a real
+                // open: a Promise is always truthy, so `if (open(...))` here would
+                // clear the CTA even when the wizard refused — e.g. because another
+                // wizard is already parked — and strand the user with no way back.
+                void openWizardForNetError(netAuthError.appId, netAuthError.code).then((opened) => {
+                  if (opened) setNetAuthError(null);
+                });
               }}
             >
               {netErrorCta(netAuthError.code) === 'reapprove' ? 're-approve this connection' : 'connect this app'}

@@ -46,6 +46,7 @@ import type { UserDb } from '@snugprotocol/db';
 
 import { createStore } from './store.js';
 import { getUserDb } from './userdb.js';
+import { starterDeclarationFor } from '../starter/starterDeclaration.js';
 import { invalidateNetGrants } from './net.js';
 
 // ---------------------------------------------------------------------------
@@ -76,6 +77,18 @@ export interface WizardSession {
   reason?: string;
   /** Display-only echoes of what the DIRECTIVE claimed (never read by gates, M16). */
   directiveDisplay?: { confidence?: number; provenance?: AuthProvenance };
+  /**
+   * The INSTALL-ACT declaration (TASK-20260807-connection-reachability §V2-1): the
+   * `connection.json` an app shipped in-repo, resolved at open time and never after.
+   *
+   * A SEPARATE, IMMUTABLE field on purpose. The obvious design — reuse `provenance` —
+   * fails: the spec_confirm branch ships an "infer from docs" button whose
+   * `applyInferenceResult` overwrites `provenance`/`proposal` on the LIVE session, so
+   * one click would have laundered a declaration into the light approve-as-is path.
+   * Nothing writes this field after `openWizard`, so `specConfirm` can trust it for the
+   * whole session's life. Provenance stays DERIVED and display-only here.
+   */
+  declaration?: LlmProposal;
 }
 
 export type WizardStep = 'review' | 'credentials' | 'done';
@@ -217,7 +230,17 @@ function teardownFlow(): void {
 // ---------------------------------------------------------------------------
 
 export type WizardOpenRequest =
-  | { source: 'settings' | 'error_cta'; appId: string; mode: WizardMode }
+  | {
+      source: 'settings' | 'error_cta';
+      appId: string;
+      mode: WizardMode;
+      /**
+       * The install-act declaration, already resolved by the CALLER (§V2-1/V2-3).
+       * Resolving it needs a DB read, so it is passed in rather than fetched here —
+       * `openWizard` stays synchronous and every existing caller is unaffected.
+       */
+      declaration?: LlmProposal;
+    }
   | { source: 'directive'; appId: string; directive: AuthWizardDirective };
 
 /**
@@ -267,7 +290,17 @@ export function openWizard(request: WizardOpenRequest): boolean {
   const session: WizardSession =
     request.source === 'directive'
       ? resolveWizardIntent(request.appId, request.directive)
-      : { appId: request.appId, source: request.source, mode: request.mode, evidence: [] };
+      : {
+          appId: request.appId,
+          source: request.source,
+          mode: request.mode,
+          evidence: [],
+          // Spread so an absent declaration leaves the key OFF the session entirely —
+          // `declaration !== undefined` is the sheet's strong-review gate, and an
+          // explicit `undefined` would read identically but survive object spreads
+          // differently. Keep the shape honest.
+          ...(request.declaration !== undefined ? { declaration: request.declaration } : {}),
+        };
   wizardStore.set(session);
   return true;
 }
@@ -664,10 +697,33 @@ export function netErrorCta(code: string): WizardMode | null {
 }
 
 /** Open the wizard for a net error — consults ONLY the code via `netErrorCta`. */
-export function openWizardForNetError(appId: string, code: string): boolean {
+/**
+ * The net-error CTA mount. ASYNC as of TASK-20260807-connection-reachability §V2-3,
+ * because resolving the install-act declaration reads the user DB.
+ *
+ * THE RESOLVED VALUE IS THE CONTRACT, and the reason this function is worth a comment:
+ * a Promise is always truthy, so a call site that does `if (openWizardForNetError(...))`
+ * after the async conversion dismisses the CTA banner even when the wizard REFUSED to
+ * open — leaving the user with no way back to the connection. Callers must await, then
+ * branch on the boolean. `RunView.tsx` does exactly that, and T4b pins it here.
+ *
+ * The mode check stays FIRST: a code with no CTA must refuse without touching the DB.
+ */
+export async function openWizardForNetError(appId: string, code: string): Promise<boolean> {
   const mode = netErrorCta(code);
   if (mode === null) return false;
-  return openWizard({ source: 'error_cta', appId, mode });
+
+  // A failure to resolve the declaration must never block the wizard — the user still
+  // gets today's plain review, which is strictly better than no wizard at all.
+  let declaration: LlmProposal | undefined;
+  try {
+    const db = await getUserDb();
+    declaration = (await starterDeclarationFor(db, appId))?.declaration;
+  } catch {
+    declaration = undefined;
+  }
+
+  return openWizard({ source: 'error_cta', appId, mode, ...(declaration !== undefined ? { declaration } : {}) });
 }
 
 // ---------------------------------------------------------------------------

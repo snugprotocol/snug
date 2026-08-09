@@ -206,12 +206,17 @@ describe('D7/N1 — code-keyed error→CTA mapping (M25/M26)', () => {
     expect(netErrorCta(NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED)).toBe('reapprove');
   });
 
-  it('the mapping consults ONLY the code — openWizardForNetError opens for an auth code with any message (M26)', () => {
-    expect(openWizardForNetError(APP, NET_ERROR_CODES.NET_AUTH_FAILED)).toBe(true);
+  // `openWizardForNetError` is ASYNC as of TASK-20260807-connection-reachability §V2-3:
+  // it resolves the install-act declaration (a DB read) before opening. The RESOLVED
+  // VALUE keeps the same true/false contract these assertions always pinned — that is
+  // precisely what the call site depends on, since awaiting is what makes a naive
+  // conversion dismiss the CTA on a refusal.
+  it('the mapping consults ONLY the code — openWizardForNetError opens for an auth code with any message (M26)', async () => {
+    expect(await openWizardForNetError(APP, NET_ERROR_CODES.NET_AUTH_FAILED)).toBe(true);
     expect(wizardStore.get()?.mode).toBe('connect');
   });
 
-  it('NET_HOST_BLOCKED / NET_SSRF_BLOCKED / NET_CONFIRM_DENIED NEVER open the wizard (M12/M25)', () => {
+  it('NET_HOST_BLOCKED / NET_SSRF_BLOCKED / NET_CONFIRM_DENIED NEVER open the wizard (M12/M25)', async () => {
     for (const code of [
       NET_ERROR_CODES.NET_HOST_BLOCKED,
       NET_ERROR_CODES.NET_SSRF_BLOCKED,
@@ -222,7 +227,8 @@ describe('D7/N1 — code-keyed error→CTA mapping (M25/M26)', () => {
       NET_ERROR_CODES.NET_FETCH_FAILED,
     ]) {
       expect(netErrorCta(code), code).toBeNull();
-      expect(openWizardForNetError(APP, code), code).toBe(false);
+      // Awaited, and still strictly `false` — never a truthy Promise (V2-3).
+      expect(await openWizardForNetError(APP, code), code).toBe(false);
       expect(wizardStore.get(), code).toBeNull();
     }
   });
