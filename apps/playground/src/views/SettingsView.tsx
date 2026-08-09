@@ -33,6 +33,8 @@ import { UserDbCredentialStore } from '@snugprotocol/auth';
 import { getUserDb } from '../state/userdb.js';
 import { invalidateNetGrants } from '../state/net.js';
 import { openWizard, wizardStore } from '../state/wizard.js';
+import { resolveDeclaredIntent } from '../starter/starterDeclaration.js';
+import type { LlmProposal } from '@snugprotocol/protocol';
 import { useStore } from '../state/store.js';
 import { downloadBlob } from '../run/exportDb.js';
 import { Button } from '../ui/Button.js';
@@ -404,8 +406,21 @@ function DataCard(): ReactElement {
  * approval transition invalidates that app's remembered session grants (R3). AL-04's
  * wizard replaces the approval INNARDS; this panel survives. Dev-grade visuals.
  */
+/**
+ * An installed app that DECLARES a connection but has no auth row yet
+ * (TASK-20260807-connection-reachability §V2-6), or whose declaration has withdrawn
+ * because its code no longer matches the starter it came from.
+ */
+interface DeclaredEntry {
+  appId: string;
+  displayName: string;
+  declaration?: LlmProposal;
+  mismatch?: 'html_mismatch';
+}
+
 export function ConnectionsCard(): ReactElement {
   const [rows, setRows] = useState<AuthSpecRow[]>([]);
+  const [declared, setDeclared] = useState<DeclaredEntry[]>([]);
   const [error, setError] = useState<string | undefined>(undefined);
   const [epoch, setEpoch] = useState(0);
   // AL-04: approvals happen INSIDE the wizard now — refresh the rows whenever the
@@ -417,6 +432,39 @@ export function ConnectionsCard(): ReactElement {
     void getUserDb().then((db) => {
       if (!cancelled) setRows(db.listAuthSpecs());
     });
+    return () => {
+      cancelled = true;
+    };
+  }, [epoch, wizardSession]);
+
+  /**
+   * The install-act half of the panel. Without it a chat-less app is INVISIBLE here:
+   * this card renders `listAuthSpecs()`, which stays empty until something writes a row,
+   * and for a starter nothing ever could — so the panel said "no connections yet" while
+   * an installed app sat unable to reach the network, with no route to fix it.
+   *
+   * An app that already HAS a row is deliberately excluded: the list above owns it, and
+   * two controls for one connection is worse than none.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const db = await getUserDb();
+      const withRows = new Set(db.listAuthSpecs().map((row) => row.appId));
+      const found: DeclaredEntry[] = [];
+      for (const app of db.listApps()) {
+        if (withRows.has(app.appId)) continue;
+        const intent = await resolveDeclaredIntent(db, app.appId);
+        if (intent.declaration === undefined && intent.mismatch === undefined) continue;
+        found.push({
+          appId: app.appId,
+          displayName: app.displayName,
+          ...(intent.declaration !== undefined ? { declaration: intent.declaration } : {}),
+          ...(intent.mismatch !== undefined ? { mismatch: intent.mismatch } : {}),
+        });
+      }
+      if (!cancelled) setDeclared(found);
+    })();
     return () => {
       cancelled = true;
     };
@@ -449,9 +497,62 @@ export function ConnectionsCard(): ReactElement {
             {error}
           </div>
         ) : null}
-        {rows.length === 0 ? (
+        {rows.length === 0 && declared.length === 0 ? (
           <span className="hint">no connections yet — an app declares one when it needs an API.</span>
-        ) : (
+        ) : null}
+
+        {/*
+          Declared — NOT connected (§V2-6). These apps shipped a `connection.json` that
+          the install act carried in; nothing is approved and no credential exists. The
+          control opens the SAME strong review the CTA opens, just user-initiated.
+        */}
+        {declared.length > 0 ? (
+          <ul className="connections-list" style={{ listStyle: 'none', padding: 0, margin: 'var(--space-2) 0 0' }}>
+            {declared.map((entry) => (
+              <li
+                key={entry.appId}
+                className="connection-row"
+                data-testid="connection-declared-row"
+                style={{ padding: 'var(--space-2) 0', borderTop: '1px solid var(--hairline, #8882)' }}
+              >
+                <div className="connection-head" style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <strong>{entry.declaration?.providerName ?? entry.displayName}</strong>
+                  <span className="connection-status">declared — not connected</span>
+                </div>
+                {entry.mismatch !== undefined ? (
+                  // NEVER a silent withdrawal (fidelity check C1): withdrawing quietly
+                  // drops the user into the empty wizard this whole task exists to kill.
+                  <div className="hint">
+                    “{entry.displayName}” no longer matches the starter it was installed from, so its declared
+                    connection was withdrawn. reinstall it from the shelf to restore the guided setup.
+                  </div>
+                ) : (
+                  <>
+                    <div className="connection-hosts hint">
+                      wants to reach: {entry.declaration?.declaredApiHosts?.join(', ') ?? '(unstated)'}
+                    </div>
+                    <div className="field-row" style={{ gap: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
+                      <Button
+                        onClick={() =>
+                          openWizard({
+                            source: 'settings',
+                            appId: entry.appId,
+                            mode: 'connect',
+                            ...(entry.declaration !== undefined ? { declaration: entry.declaration } : {}),
+                          })
+                        }
+                      >
+                        review and connect
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {rows.length === 0 ? null : (
           <ul className="connections-list" style={{ listStyle: 'none', padding: 0, margin: 'var(--space-2) 0 0' }}>
             {rows.map((row) => (
               <li key={row.appId} className="connection-row" style={{ padding: 'var(--space-2) 0', borderTop: '1px solid var(--hairline, #8882)' }}>
