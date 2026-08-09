@@ -170,3 +170,26 @@ export async function starterDeclarationFor(
 export function declaringStarterId(folder: string): string {
   return `${STARTER_PREFIX}${folder}`;
 }
+
+/**
+ * The PRE-INSTALL lookup: what a READ-ONLY starter declares, before the user owns
+ * anything (§V2-6, the install disclosure).
+ *
+ * DELIBERATELY WEAKER THAN THE TWO-FACT RESOLVER, because it answers a weaker question.
+ * There is no app row and no stored HTML on the starter route, so there is nothing to
+ * compare — this reads the BUNDLED manifest directly and makes a claim strictly about
+ * bundled bytes: "this starter ships a declared connection". It grants no trust and
+ * prefills no review; it exists so the install act is INFORMED rather than surprising.
+ *
+ * The id guard matters: an installed app's uuid must never resolve here, or the HTML
+ * check could be sidestepped by asking this question instead of the real one.
+ */
+export async function starterDeclarationForStarterId(starterId: string): Promise<LlmProposal | null> {
+  if (!starterId.startsWith(STARTER_PREFIX)) return null;
+
+  const folder = starterId.slice(STARTER_PREFIX.length);
+  const found = await bundled(folder);
+  if (found === null) return null;
+
+  return parseManifest(found.manifest, folder);
+}

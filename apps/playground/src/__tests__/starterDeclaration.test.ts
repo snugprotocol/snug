@@ -24,6 +24,7 @@ import type { UserDb } from '@snugprotocol/db';
 import {
   resolveDeclaredIntent,
   starterDeclarationFor,
+  starterDeclarationForStarterId,
   __setDeclarationManifestsForTests,
   __resetDeclarationManifestsForTests,
 } from '../starter/starterDeclaration.js';
@@ -261,5 +262,36 @@ describe('the resolver never consults the well-known registry (posture)', () => 
     expect(result?.declaration.providerName).toBe('github');
     expect(result?.declaration.declaredApiHosts, 'declared hosts survive verbatim').toEqual([DECLARED_HOST]);
     expect(result?.declaration.endpoints, 'no registry endpoints may be spliced in').toBeUndefined();
+  });
+});
+
+describe('the PRE-INSTALL lookup — what the run view discloses before anything is owned', () => {
+  it('reports the declaration for a starter the user has not installed', async () => {
+    // The install disclosure (§V2-6) runs on the READ-ONLY starter route, where there is
+    // no app row and no stored HTML — so it cannot use the two-fact resolver. This is a
+    // deliberately weaker lookup for a deliberately weaker claim: "this starter ships a
+    // declared connection", made about BUNDLED bytes the user has not yet copied.
+    const declaration = await starterDeclarationForStarterId(`starter--${DEMO_FOLDER}`);
+
+    expect(declaration?.providerName).toBe('Example API');
+    expect(declaration?.declaredApiHosts).toEqual([DECLARED_HOST]);
+  });
+
+  it('returns null for a starter that ships no manifest', async () => {
+    expect(await starterDeclarationForStarterId('starter--chess')).toBeNull();
+  });
+
+  it('returns null for an id that is not a starter id at all', async () => {
+    // An installed app's uuid must never resolve here — that path has to go through the
+    // two-fact resolver, or the HTML check could be bypassed by asking the wrong question.
+    expect(await starterDeclarationForStarterId('9f3a1c22-0000-4000-8000-000000000000')).toBeNull();
+  });
+
+  it('drops a malformed manifest exactly like the installed path', async () => {
+    __setDeclarationManifestsForTests({ [DEMO_FOLDER]: { manifest: '{ nope', html: BUNDLED_HTML } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(await starterDeclarationForStarterId(`starter--${DEMO_FOLDER}`)).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });
