@@ -1,8 +1,9 @@
 // Validates the curated example apps against the Snug app-authoring contract.
 //
-// Run from the repo root (plain node, no build step):
+// Run through the workspace (the suite imports @snugprotocol/protocol, so that package
+// must be built — turbo's test → build → ^build chain handles it):
 //
-//   node --test examples/validate.test.mjs
+//   pnpm --filter examples test
 //
 // Checks, per app:
 //   1. single-file HTML — no external references beyond the allowlisted CDN <script> tags
@@ -402,6 +403,28 @@ test('every examples/ folder shipping an app.html is in APPS — the list cannot
     onDisk,
     'APPS and the examples/ folders on disk have drifted — a shelf app is unvalidated, or APPS names a folder that no longer exists',
   );
+});
+
+/**
+ * `examples/README.md` tells contributors every example ships a `README.md`, and until
+ * now nothing enforced it — the ninth folder landed without one, in the same commit that
+ * edited the file stating the rule (found by the Gate-4 implementation review). An
+ * unenforced convention drifts on first use, which is exactly what happened.
+ */
+test('every example folder ships a README.md (the documented contributor rule, now enforced)', () => {
+  for (const app of APPS) {
+    const readme = path.join(HERE, app, 'README.md');
+    assert.ok(
+      (() => {
+        try {
+          return statSync(readme).isFile();
+        } catch {
+          return false;
+        }
+      })(),
+      `${app}: examples/README.md requires every example to ship its own README.md`,
+    );
+  }
 });
 
 /**

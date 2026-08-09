@@ -46,12 +46,20 @@ they degrade gracefully when the agent is a mock or unreachable.
 
 ## Validating
 
-From the repo root (plain node ≥20, no build step — `examples/` is intentionally not a
-workspace package):
-
 ```sh
-node --test examples/validate.test.mjs
+pnpm --filter examples test
 ```
+
+Run it through the workspace, not directly. The suite imports `llmProposalSchema` from
+`@snugprotocol/protocol` so the manifest rule enforces the *real* contract rather than a
+restated copy that could drift — which means it needs that package **built**. Turbo's
+`test → build → ^build` chain does that for you (verified: with `packages/protocol/dist`
+deleted, `pnpm --filter examples test` rebuilds protocol first).
+
+Running `node --test examples/validate.test.mjs` directly still works once protocol has
+been built; on a fresh clone it fails loudly with `ERR_MODULE_NOT_FOUND`, which is
+deliberate — a curation gate that quietly skipped its own checks would report success for
+work it never did.
 
 Asserts, per app: single-file with allowlisted-CDN-scripts-only, hooks block identical to
 `packages/sdk/embedded/snug-hooks.js` (same normalization as the sdk kb-sync test),
