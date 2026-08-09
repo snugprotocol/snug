@@ -18,6 +18,22 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+/**
+ * The manifest contract, imported from the SOURCE OF TRUTH rather than restated
+ * (TASK-20260807-connection-reachability MINOR 10). `connection.json` is validated at
+ * runtime by `llmProposalSchema` in the playground; restating that shape here would let
+ * the curation gate and the runtime drift, and the drift would show up as a manifest
+ * that passes review and then silently resolves to nothing.
+ *
+ * NO try/catch, deliberately. A gate that degrades to "skip the check" when its own
+ * dependency is missing is not a gate — it reports success for work it never did. If
+ * this import fails the suite must fail loudly, and the workspace dep on
+ * `@snugprotocol/protocol` plus turbo's `test → build → ^build` chain is what makes it
+ * resolve (verified: with `packages/protocol/dist` deleted, `turbo run test
+ * --filter=examples` rebuilds protocol BEFORE this file runs).
+ */
+import { llmProposalSchema } from '@snugprotocol/protocol';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
 const EMBEDDED_HOOKS = path.join(REPO_ROOT, 'packages', 'sdk', 'embedded', 'snug-hooks.js');
@@ -82,6 +98,14 @@ function readDeclaredHosts(app) {
     return null; // no manifest — no exception
   }
   const parsed = JSON.parse(raw); // a malformed manifest MUST fail the suite loudly
+
+  // The SAME strict schema the runtime resolver applies. A manifest carrying a key the
+  // proposal contract excludes (registration copy, credential field definitions) is a
+  // strict-schema rejection at runtime — catching it here means it never reaches a
+  // review, rather than being silently dropped once shipped.
+  const result = llmProposalSchema.safeParse(parsed);
+  assert.ok(result.success, `${app}: connection.json must satisfy llmProposalSchema — ${result.error?.message ?? ''}`);
+
   const hosts = parsed.declaredApiHosts;
   assert.ok(Array.isArray(hosts) && hosts.length > 0, `${app}: connection.json declares a non-empty declaredApiHosts`);
   return hosts;
@@ -378,4 +402,32 @@ test('every examples/ folder shipping an app.html is in APPS — the list cannot
     onDisk,
     'APPS and the examples/ folders on disk have drifted — a shelf app is unvalidated, or APPS names a folder that no longer exists',
   );
+});
+
+/**
+ * MINOR 10's self-check: the imported contract must really BE the contract.
+ *
+ * The failure this guards is subtle. If `llmProposalSchema` were ever swapped for a
+ * permissive stand-in — or if a future editor wrapped the import in a try/catch and fell
+ * back to `{ safeParse: () => ({ success: true }) }` to "make CI green on a fresh clone"
+ * — every manifest check above would still pass, and this suite would report success for
+ * validation it no longer performs. So assert the schema REFUSES something: a proposal
+ * carrying an excluded key (registration copy) is a strict rejection, and a schema that
+ * accepts it is not the real one.
+ */
+test('the imported llmProposalSchema is the REAL strict contract, not a permissive stand-in', () => {
+  assert.equal(typeof llmProposalSchema?.safeParse, 'function', 'the protocol import must resolve');
+
+  const valid = llmProposalSchema.safeParse({ providerName: 'Example API', declaredApiHosts: ['api.example.com'] });
+  assert.ok(valid.success, 'a well-formed proposal must pass');
+
+  // `llmProposalSchema` omits registration copy (M5/M21) — strictness is the point.
+  const poisoned = llmProposalSchema.safeParse({
+    providerName: 'Example API',
+    registrationInstructions: ['go here and paste your key'],
+  });
+  assert.equal(poisoned.success, false, 'an excluded key must be a strict rejection');
+
+  const missingName = llmProposalSchema.safeParse({ declaredApiHosts: ['api.example.com'] });
+  assert.equal(missingName.success, false, 'providerName is required');
 });

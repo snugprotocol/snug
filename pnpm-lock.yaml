@@ -125,7 +125,11 @@ importers:
         specifier: ^26.0.0
         version: 26.1.2
 
-  examples: {}
+  examples:
+    devDependencies:
+      '@snugprotocol/protocol':
+        specifier: workspace:*
+        version: link:../packages/protocol
 
   packages/adapters:
     dependencies:
