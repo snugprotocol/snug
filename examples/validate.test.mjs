@@ -13,7 +13,7 @@
 //   5. parses as HTML (jsdom when available at the repo root; structural checks otherwise)
 //   6. under the 5 MB artifact limit
 import assert from 'node:assert/strict';
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,11 @@ const APPS = [
   'trivia-night',
   'trip-planner',
   'pocket-ledger',
+  // The connected demo (TASK-20260807-connection-reachability): the FIRST shipped
+  // example that actually CALLS the governed seam. It is validated exactly like every
+  // other app — no exemption, no skip — which is what made the rule repair above
+  // necessary in the first place.
+  'connection-demo',
 ];
 
 /**
@@ -39,7 +44,17 @@ const APPS = [
  * authored code; an agent-driven app calls `sendMessage` WITH a `responseSchema`.
  * Everything not in this set is agent-driven.
  */
-const LLM_FREE_APPS = new Set(['flying-pig', 'trivia-night', 'trip-planner', 'pocket-ledger']);
+const LLM_FREE_APPS = new Set([
+  'flying-pig',
+  'trivia-night',
+  'trip-planner',
+  'pocket-ledger',
+  // `connection-demo` is LLM-free ON PURPOSE: it exists to show an app reaching a real
+  // API through the governed seam, and a model in the loop would blur exactly that —
+  // you could not tell whether the body on screen came off the wire or out of a
+  // sentence generator.
+  'connection-demo',
+]);
 /**
  * The no-network-APIs rule, as a PAIR of patterns with one home (so the per-app rule
  * below and the rule-behavior test at the bottom of this file can never diverge).
@@ -330,4 +345,37 @@ test('the CDN allowlist admits a declared API host only for the app that declare
   for (const [url, hosts, allowed] of cases) {
     assert.equal(urlAllowed(url, hosts), allowed, `${url} (declared: ${JSON.stringify(hosts)}) allowed=${allowed}`);
   }
+});
+
+/**
+ * THE CURATION GATE ITSELF (TASK-20260807-connection-reachability).
+ *
+ * `APPS` is a hand-maintained list, and every per-app check above iterates it — so a new
+ * folder that nobody adds to the list ships to the shelf COMPLETELY UNVALIDATED while
+ * this suite stays green and merely reports a smaller number. That is the worst possible
+ * failure mode for a curation gate: silence that reads as approval. (Found by mutating
+ * `connection-demo` out of `APPS`: the suite went 84 → 75 and stayed green.)
+ *
+ * The playground's shelf is glob-driven (`import.meta.glob('examples/*./app.html')`), so
+ * the filesystem — not this list — decides what users actually get. This test makes the
+ * filesystem the authority here too.
+ */
+test('every examples/ folder shipping an app.html is in APPS — the list cannot silently under-report', () => {
+  const onDisk = readdirSync(HERE, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => {
+      try {
+        return statSync(path.join(HERE, name, 'app.html')).isFile();
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+
+  assert.deepEqual(
+    [...APPS].sort(),
+    onDisk,
+    'APPS and the examples/ folders on disk have drifted — a shelf app is unvalidated, or APPS names a folder that no longer exists',
+  );
 });
