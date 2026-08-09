@@ -6,5 +6,8 @@
   "scripts": {
     "test": "node --test validate.test.mjs"
   },
+  "devDependencies": {
+    "@snugprotocol/protocol": "workspace:*"
+  },
   "license": "MIT"
 }

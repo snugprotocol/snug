@@ -46,6 +46,7 @@ import type { UserDb } from '@snugprotocol/db';
 
 import { createStore } from './store.js';
 import { getUserDb } from './userdb.js';
+import { starterDeclarationFor } from '../starter/starterDeclaration.js';
 import { invalidateNetGrants } from './net.js';
 
 // ---------------------------------------------------------------------------
@@ -76,6 +77,18 @@ export interface WizardSession {
   reason?: string;
   /** Display-only echoes of what the DIRECTIVE claimed (never read by gates, M16). */
   directiveDisplay?: { confidence?: number; provenance?: AuthProvenance };
+  /**
+   * The INSTALL-ACT declaration (TASK-20260807-connection-reachability §V2-1): the
+   * `connection.json` an app shipped in-repo, resolved at open time and never after.
+   *
+   * A SEPARATE, IMMUTABLE field on purpose. The obvious design — reuse `provenance` —
+   * fails: the spec_confirm branch ships an "infer from docs" button whose
+   * `applyInferenceResult` overwrites `provenance`/`proposal` on the LIVE session, so
+   * one click would have laundered a declaration into the light approve-as-is path.
+   * Nothing writes this field after `openWizard`, so `specConfirm` can trust it for the
+   * whole session's life. Provenance stays DERIVED and display-only here.
+   */
+  declaration?: LlmProposal;
 }
 
 export type WizardStep = 'review' | 'credentials' | 'done';
@@ -217,7 +230,17 @@ function teardownFlow(): void {
 // ---------------------------------------------------------------------------
 
 export type WizardOpenRequest =
-  | { source: 'settings' | 'error_cta'; appId: string; mode: WizardMode }
+  | {
+      source: 'settings' | 'error_cta';
+      appId: string;
+      mode: WizardMode;
+      /**
+       * The install-act declaration, already resolved by the CALLER (§V2-1/V2-3).
+       * Resolving it needs a DB read, so it is passed in rather than fetched here —
+       * `openWizard` stays synchronous and every existing caller is unaffected.
+       */
+      declaration?: LlmProposal;
+    }
   | { source: 'directive'; appId: string; directive: AuthWizardDirective };
 
 /**
@@ -254,6 +277,27 @@ export function resolveWizardIntent(appId: string, directive: AuthWizardDirectiv
   };
 }
 
+/**
+ * Apps the user has revoked during THIS page's lifetime (§V2-5).
+ *
+ * ⚠️ FRICTION, NOT A SECURITY BOUNDARY — and the distinction must not erode. Revoke
+ * leaves ZERO DB residue by design (`deleteAuthSpec` is a bare DELETE), so this can only
+ * live in page memory: it dies on reload, and an app that induces a refresh gets the
+ * prefilled sheet back. What it buys is narrow and real — the app's retry loop becomes
+ * strictly less useful than the user's own click — and nothing more. The actual fix is
+ * the revoke TOMBSTONE, queued to AL-10. `wizardPostRevoke.test.ts` pins this limit with
+ * a test that fails if anyone starts treating this as a control.
+ */
+const revokedThisSession = new Set<string>();
+
+/**
+ * Record that the user revoked `appId`'s connection. Called from the revoke action
+ * itself, so the note cannot drift from the act it describes.
+ */
+export function noteAuthSpecRevoked(appId: string): void {
+  revokedThisSession.add(appId);
+}
+
 /** Open the wizard (both mounts). Returns false — with a visible note — when one is parked (R2/M28). */
 export function openWizard(request: WizardOpenRequest): boolean {
   if (wizardStore.get() !== null) {
@@ -267,7 +311,17 @@ export function openWizard(request: WizardOpenRequest): boolean {
   const session: WizardSession =
     request.source === 'directive'
       ? resolveWizardIntent(request.appId, request.directive)
-      : { appId: request.appId, source: request.source, mode: request.mode, evidence: [] };
+      : {
+          appId: request.appId,
+          source: request.source,
+          mode: request.mode,
+          evidence: [],
+          // Spread so an absent declaration leaves the key OFF the session entirely —
+          // `declaration !== undefined` is the sheet's strong-review gate, and an
+          // explicit `undefined` would read identically but survive object spreads
+          // differently. Keep the shape honest.
+          ...(request.declaration !== undefined ? { declaration: request.declaration } : {}),
+        };
   wizardStore.set(session);
   return true;
 }
@@ -664,10 +718,39 @@ export function netErrorCta(code: string): WizardMode | null {
 }
 
 /** Open the wizard for a net error — consults ONLY the code via `netErrorCta`. */
-export function openWizardForNetError(appId: string, code: string): boolean {
+/**
+ * The net-error CTA mount. ASYNC as of TASK-20260807-connection-reachability §V2-3,
+ * because resolving the install-act declaration reads the user DB.
+ *
+ * THE RESOLVED VALUE IS THE CONTRACT, and the reason this function is worth a comment:
+ * a Promise is always truthy, so a call site that does `if (openWizardForNetError(...))`
+ * after the async conversion dismisses the CTA banner even when the wizard REFUSED to
+ * open — leaving the user with no way back to the connection. Callers must await, then
+ * branch on the boolean. `RunView.tsx` does exactly that, and T4b pins it here.
+ *
+ * The mode check stays FIRST: a code with no CTA must refuse without touching the DB.
+ */
+export async function openWizardForNetError(appId: string, code: string): Promise<boolean> {
   const mode = netErrorCta(code);
   if (mode === null) return false;
-  return openWizard({ source: 'error_cta', appId, mode });
+
+  // A failure to resolve the declaration must never block the wizard — the user still
+  // gets today's plain review, which is strictly better than no wizard at all.
+  let declaration: LlmProposal | undefined;
+  try {
+    const db = await getUserDb();
+    declaration = (await starterDeclarationFor(db, appId))?.declaration;
+  } catch {
+    declaration = undefined;
+  }
+
+  // V2-5: once the user has revoked this app, its OWN retry loop stops getting the
+  // prefilled review. The wizard still opens — the friction is on the convenience, never
+  // on the access — and the user's deliberate Settings click is unaffected, because that
+  // path passes the declaration explicitly.
+  if (revokedThisSession.has(appId)) declaration = undefined;
+
+  return openWizard({ source: 'error_cta', appId, mode, ...(declaration !== undefined ? { declaration } : {}) });
 }
 
 // ---------------------------------------------------------------------------
@@ -676,6 +759,11 @@ export function openWizardForNetError(appId: string, code: string): boolean {
 
 export function __resetWizardStateForTests(): void {
   teardownFlow();
+  // Cleared here because this seam stands in for a PAGE RELOAD, which is exactly what
+  // §V2-5's note does not survive. Leaving it populated would make the friction look
+  // durable in tests while it is not in production — the one misreading this whole
+  // design must avoid.
+  revokedThisSession.clear();
   hooks = {};
   serviceSingleton = null;
   flowStateStore = new InMemoryFlowStateStore();

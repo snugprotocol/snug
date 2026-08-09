@@ -70,15 +70,29 @@ const parseCsv = (text: string): string[] =>
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
+/**
+ * Seeds the editable draft. The proposal wins where it has an answer; the install-act
+ * declaration fills the gaps (TASK-20260807-connection-reachability §V2-7/C4).
+ *
+ * The host fallback is the load-bearing part. This runs on EVERY session change, so an
+ * "infer from docs" click on a declaration session re-seeds from the inferrer's proposal
+ * — and an inferrer that returns no hosts would otherwise WIPE the declared ones from
+ * the very form the user reviews. `specConfirm` stays strong either way, so the failure
+ * was silent: a host-less draft the transformer simply refuses. A fallback, never an
+ * override: an inferrer that DID find hosts is what the transformer will build from, so
+ * that is what the user must see.
+ */
 function draftFromProposal(session: WizardSession): HintsDraft {
   const proposal = session.proposal;
+  const declaration = session.declaration;
+  const hosts = proposal?.declaredApiHosts ?? declaration?.declaredApiHosts;
   return {
-    providerName: proposal?.providerName ?? '',
-    kindHint: proposal?.kindHint ?? 'api_key',
-    authorizeUrl: proposal?.endpoints?.authorizeUrl ?? '',
-    tokenUrl: proposal?.endpoints?.tokenUrl ?? '',
-    hostsCsv: csv(proposal?.declaredApiHosts),
-    scopesCsv: csv(proposal?.scopes),
+    providerName: proposal?.providerName ?? declaration?.providerName ?? '',
+    kindHint: proposal?.kindHint ?? declaration?.kindHint ?? 'api_key',
+    authorizeUrl: proposal?.endpoints?.authorizeUrl ?? declaration?.endpoints?.authorizeUrl ?? '',
+    tokenUrl: proposal?.endpoints?.tokenUrl ?? declaration?.endpoints?.tokenUrl ?? '',
+    hostsCsv: csv(hosts),
+    scopesCsv: csv(proposal?.scopes ?? declaration?.scopes),
   };
 }
 
@@ -184,7 +198,17 @@ function ReviewStep({
   row: AuthSpecRow | undefined;
   onApproved: () => void;
 }): ReactElement {
-  const specConfirm = session.provenance === 'inference' || session.provenance === 'user_docs';
+  /**
+   * The strong, field-by-field review. `session.declaration` is an INDEPENDENT disjunct,
+   * not a provenance value, and that independence is the whole point
+   * (TASK-20260807-connection-reachability §V2-1, design-review MAJOR 2): the branch
+   * below ships an "infer from docs" button whose `applyInferenceResult` overwrites the
+   * live session's `provenance`. Gating on provenance alone would let ONE CLICK move a
+   * declared connection onto the light approve-as-is path. Nothing writes `declaration`
+   * after `openWizard`, so this stays true for the session's whole life.
+   */
+  const specConfirm =
+    session.declaration !== undefined || session.provenance === 'inference' || session.provenance === 'user_docs';
   const [draft, setDraft] = useState<HintsDraft>(() => draftFromProposal(session));
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -193,7 +217,13 @@ function ReviewStep({
     setDraft(draftFromProposal(session));
   }, [session]);
 
-  const proposalDriven = session.proposal !== undefined;
+  /**
+   * A declaration makes the session proposal-driven too: there is a reviewable shape to
+   * build a spec from, so the transformer runs and `pendingSpec` exists. Without this the
+   * strong review would render with nothing behind it — the host list empty and Approve
+   * with no spec to approve.
+   */
+  const proposalDriven = session.proposal !== undefined || session.declaration !== undefined;
   const built = useMemo(
     () => (proposalDriven ? paramsToAuthSpec(draftToProposal(draft, session)) : undefined),
     [proposalDriven, draft, session],
@@ -249,6 +279,19 @@ function ReviewStep({
         <strong>{pendingSpec?.provider.name ?? session.proposal?.providerName ?? row?.spec.provider.name ?? '…'}</strong>{' '}
         <code>{pendingSpec?.kind ?? session.proposal?.kindHint ?? row?.spec.kind ?? ''}</code>
       </div>
+
+      {/*
+        The install-act disclosure (§V2-2, corrected copy). It claims EXACTLY what the
+        resolver proved — this app came from this repo carrying a manifest — and nothing
+        about consent. "you approved this at install" would be a lie: the install act is
+        why this review is prefilled, not a substitute for it.
+      */}
+      {session.declaration !== undefined ? (
+        <div className="hint" data-testid="connection-declared-note">
+          this app ships with a declared connection to{' '}
+          <strong>{session.declaration.providerName}</strong> — review every field below before approving.
+        </div>
+      ) : null}
 
       {specConfirm ? (
         <SpecConfirmFields session={session} draft={draft} setDraft={setDraft} reason={built?.spec === null ? built.reason : session.reason} />

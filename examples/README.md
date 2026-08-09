@@ -1,6 +1,6 @@
 # examples — the starter apps
 
-Eight curated single-file Snug apps, built exactly the way the app-builder LLM is told to
+Nine curated single-file Snug apps, built exactly the way the app-builder LLM is told to
 build them (`packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md`).
 The playground bundles them as its "starter apps" shelf, loadable with no server and no key —
 they degrade gracefully when the agent is a mock or unreachable.
@@ -15,6 +15,7 @@ they degrade gracefully when the agent is a mock or unreachable.
 | [`trivia-night/`](trivia-night/) | **multiplayer feeling, zero networking** — pass-and-play on one device, LLM-free, roster in SQL |
 | [`trip-planner/`](trip-planner/) | **the family aspiration** — dream board, packing list, day plan; LLM-free, three SQL tables, export story |
 | [`pocket-ledger/`](pocket-ledger/) | **solo-business rep** — income/expense in integer cents, SQL-summed totals, export-your-books story |
+| [`connection-demo/`](connection-demo/) | **the connected path** — the only example that calls a real API through the governed seam; ships a `connection.json` the install act carries into the approval review, and shows the un-connected state honestly |
 
 ## The contract every app follows
 
@@ -45,12 +46,20 @@ they degrade gracefully when the agent is a mock or unreachable.
 
 ## Validating
 
-From the repo root (plain node ≥20, no build step — `examples/` is intentionally not a
-workspace package):
-
 ```sh
-node --test examples/validate.test.mjs
+pnpm --filter examples test
 ```
+
+Run it through the workspace, not directly. The suite imports `llmProposalSchema` from
+`@snugprotocol/protocol` so the manifest rule enforces the *real* contract rather than a
+restated copy that could drift — which means it needs that package **built**. Turbo's
+`test → build → ^build` chain does that for you (verified: with `packages/protocol/dist`
+deleted, `pnpm --filter examples test` rebuilds protocol first).
+
+Running `node --test examples/validate.test.mjs` directly still works once protocol has
+been built; on a fresh clone it fails loudly with `ERR_MODULE_NOT_FOUND`, which is
+deliberate — a curation gate that quietly skipped its own checks would report success for
+work it never did.
 
 Asserts, per app: single-file with allowlisted-CDN-scripts-only, hooks block identical to
 `packages/sdk/embedded/snug-hooks.js` (same normalization as the sdk kb-sync test),

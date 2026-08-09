@@ -22,6 +22,8 @@ const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blu
   'trivia-night': { emoji: '🎉', color: '#d97706', blurb: 'pass one device around — game night with zero setup' },
   'trip-planner': { emoji: '🧳', color: '#0d9488', blurb: 'dream places, packing and day plans in a file you keep' },
   'pocket-ledger': { emoji: '💰', color: '#16a34a', blurb: 'money in, money out — honest totals you can export' },
+  // The connected demo (TASK-20260807-connection-reachability).
+  'connection-demo': { emoji: '🔌', color: '#0ea5e9', blurb: 'watch an app reach a real API — and see who approves it' },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };

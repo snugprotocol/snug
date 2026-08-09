@@ -43,9 +43,10 @@ Conventions: **Difficulty** easy / moderate / stretch · **Proves it** = the sui
 
 ## 6. Example validator should discover apps, not hardcode them
 
-**Context.** `examples/validate.test.mjs` pins `const APPS = […8 names…]` near the top. A contributed example in a new directory would silently skip validation — exactly wrong for a repo that treats every starter as a contract (CONTRIBUTING.md). Keep the ADR-0011 posture declaration explicit: `LLM_FREE_APPS` stays a hand-maintained set (posture is a *declaration*, not something to infer), and a discovered app absent from it is validated as agent-driven.
+**Context.** `examples/validate.test.mjs` pins `const APPS = […9 names…]` near the top. A contributed example in a new directory would silently skip validation — exactly wrong for a repo that treats every starter as a contract (CONTRIBUTING.md). Keep the ADR-0011 posture declaration explicit: `LLM_FREE_APPS` stays a hand-maintained set (posture is a *declaration*, not something to infer), and a discovered app absent from it is validated as agent-driven.
+**Partly done (2026-08-08, TASK-20260807-connection-reachability).** The *silent* half is closed: a self-check now asserts `APPS` equals the set of `examples/` folders shipping an `app.html`, so drift fails loudly instead of shipping an unvalidated app. What remains is the ergonomic half — deriving the list rather than asserting it, so a contributor does not have to edit two places.
 **Files.** `examples/validate.test.mjs` (+ a line in `examples/README.md`).
-**Acceptance.** Validator derives the app list from `examples/` subdirectories containing an `app.html`; a test asserts the discovered set matches the filesystem; the current eight apps pass unchanged; a scratch directory without `app.html` is ignored.
+**Acceptance.** Validator derives the app list from `examples/` subdirectories containing an `app.html`; the current nine apps pass unchanged; a scratch directory without `app.html` is ignored.
 **Difficulty.** easy · **Proves it.** `pnpm --filter examples test`
 
 ## 7. Surface *why* an inspector entry's payloads are missing

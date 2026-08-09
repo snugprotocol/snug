@@ -1,0 +1,6 @@
+{
+  "kindHint": "api_key",
+  "providerName": "Example API",
+  "docsUrl": "https://docs.example.com/api",
+  "declaredApiHosts": ["api.example.com"]
+}

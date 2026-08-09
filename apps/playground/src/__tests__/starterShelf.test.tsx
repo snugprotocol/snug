@@ -26,6 +26,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 /** Folder names are the pinned contract literals (task file, "shared literals"). */
 const PILLAR_FOLDERS = ['adventure-quest', 'quiz-me', 'trivia-night', 'trip-planner', 'pocket-ledger'];
 const ORIGINAL_FOLDERS = ['chess', 'flying-pig', 'habit-tracker'];
+/** The connected demo (TASK-20260807-connection-reachability) — the ninth folder. */
+const CONNECTED_FOLDERS = ['connection-demo'];
+/** Every folder that must reach the shelf with its own look — the coverage loop's input. */
+const LOOK_COVERED = [...PILLAR_FOLDERS, ...CONNECTED_FOLDERS];
 
 let container: HTMLDivElement | undefined;
 let root: Root | undefined;
@@ -75,21 +79,25 @@ afterEach(() => {
 });
 
 describe('the five pillar starters register through the ONE definition (AC3)', () => {
-  it('listStarterApps() carries all eight starters straight from the examples/ glob', () => {
+  it('listStarterApps() carries all nine starters straight from the examples/ glob', () => {
     const ids = listStarterApps().map((starter) => starter.id);
-    for (const folder of [...ORIGINAL_FOLDERS, ...PILLAR_FOLDERS]) {
+    for (const folder of [...ORIGINAL_FOLDERS, ...PILLAR_FOLDERS, ...CONNECTED_FOLDERS]) {
       expect(ids, `examples/${folder}/app.html must be bundled on the shelf`).toContain(`${STARTER_PREFIX}${folder}`);
     }
     // The COUNT is pinned too (review fix 5a): the validate suite's APPS list and the
     // vite glob can drift silently — a ninth folder that skips validation, or a listed
     // app whose folder vanished, both surface here as a length mismatch.
-    expect(ids).toHaveLength(ORIGINAL_FOLDERS.length + PILLAR_FOLDERS.length);
+    expect(ids).toHaveLength(ORIGINAL_FOLDERS.length + PILLAR_FOLDERS.length + CONNECTED_FOLDERS.length);
   });
 
-  it('every pillar starter tile has its own look, not the ⬡ fallback', async () => {
+  // The loop covers PILLAR + CONNECTED folders (TASK-20260807-connection-reachability
+  // §V2-6/MINOR 13). Extending it is the point: `STARTER_LOOKS` falls back via `??`, so a
+  // new folder with no row renders a ⬡ tile with the generic blurb and NOTHING fails —
+  // a silent UX regression. A folder is only "covered" if it is in this list.
+  it('every pillar and connected starter tile has its own look, not the ⬡ fallback', async () => {
     const el = await renderHub();
     const emojis: string[] = [];
-    for (const folder of PILLAR_FOLDERS) {
+    for (const folder of LOOK_COVERED) {
       const name = folder.replace(/-/g, ' ');
       const tile = [...el.querySelectorAll<HTMLElement>('[data-testid="starter-tile"]')].find(
         (candidate) => candidate.getAttribute('data-starter-name') === name,
@@ -102,7 +110,7 @@ describe('the five pillar starters register through the ONE definition (AC3)', (
       expect(blurb, `${name} needs its own blurb`).not.toContain('curated example — runs without a server');
       emojis.push(emoji);
     }
-    // Kids find tiles by icon — five identical icons would defeat the shelf.
-    expect(new Set(emojis).size, 'each pillar starter gets a distinct emoji').toBe(PILLAR_FOLDERS.length);
+    // Kids find tiles by icon — identical icons would defeat the shelf.
+    expect(new Set(emojis).size, 'each covered starter gets a distinct emoji').toBe(LOOK_COVERED.length);
   });
 });

@@ -1,8 +1,9 @@
 // Validates the curated example apps against the Snug app-authoring contract.
 //
-// Run from the repo root (plain node, no build step):
+// Run through the workspace (the suite imports @snugprotocol/protocol, so that package
+// must be built — turbo's test → build → ^build chain handles it):
 //
-//   node --test examples/validate.test.mjs
+//   pnpm --filter examples test
 //
 // Checks, per app:
 //   1. single-file HTML — no external references beyond the allowlisted CDN <script> tags
@@ -13,10 +14,26 @@
 //   5. parses as HTML (jsdom when available at the repo root; structural checks otherwise)
 //   6. under the 5 MB artifact limit
 import assert from 'node:assert/strict';
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+/**
+ * The manifest contract, imported from the SOURCE OF TRUTH rather than restated
+ * (TASK-20260807-connection-reachability MINOR 10). `connection.json` is validated at
+ * runtime by `llmProposalSchema` in the playground; restating that shape here would let
+ * the curation gate and the runtime drift, and the drift would show up as a manifest
+ * that passes review and then silently resolves to nothing.
+ *
+ * NO try/catch, deliberately. A gate that degrades to "skip the check" when its own
+ * dependency is missing is not a gate — it reports success for work it never did. If
+ * this import fails the suite must fail loudly, and the workspace dep on
+ * `@snugprotocol/protocol` plus turbo's `test → build → ^build` chain is what makes it
+ * resolve (verified: with `packages/protocol/dist` deleted, `turbo run test
+ * --filter=examples` rebuilds protocol BEFORE this file runs).
+ */
+import { llmProposalSchema } from '@snugprotocol/protocol';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -31,6 +48,11 @@ const APPS = [
   'trivia-night',
   'trip-planner',
   'pocket-ledger',
+  // The connected demo (TASK-20260807-connection-reachability): the FIRST shipped
+  // example that actually CALLS the governed seam. It is validated exactly like every
+  // other app — no exemption, no skip — which is what made the rule repair above
+  // necessary in the first place.
+  'connection-demo',
 ];
 
 /**
@@ -39,9 +61,75 @@ const APPS = [
  * authored code; an agent-driven app calls `sendMessage` WITH a `responseSchema`.
  * Everything not in this set is agent-driven.
  */
-const LLM_FREE_APPS = new Set(['flying-pig', 'trivia-night', 'trip-planner', 'pocket-ledger']);
+const LLM_FREE_APPS = new Set([
+  'flying-pig',
+  'trivia-night',
+  'trip-planner',
+  'pocket-ledger',
+  // `connection-demo` is LLM-free ON PURPOSE: it exists to show an app reaching a real
+  // API through the governed seam, and a model in the loop would blur exactly that —
+  // you could not tell whether the body on screen came off the wire or out of a
+  // sentence generator.
+  'connection-demo',
+]);
+/**
+ * The no-network-APIs rule, as a PAIR of patterns with one home (so the per-app rule
+ * below and the rule-behavior test at the bottom of this file can never diverge).
+ * See the long comment at the call site for why both are load-bearing.
+ */
+const DIRECT_NETWORK_API = /(?<![.\w])(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/;
+const QUALIFIED_NETWORK_API = /\b(window|globalThis|self)\s*\.\s*(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/;
+
 const CDN_ALLOWLIST = ['https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://unpkg.com'];
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
+
+/**
+ * A connected app's own `connection.json` (TASK-20260807-connection-reachability):
+ * the install-act declaration. Returns `null` when the folder ships no manifest —
+ * which is most apps, and which grants NO exception of any kind.
+ *
+ * Read as raw text and JSON.parsed here (never `import`ed) so a malformed manifest is
+ * this suite's failure to report, not a module-load crash.
+ */
+function readDeclaredHosts(app) {
+  let raw;
+  try {
+    raw = readFileSync(path.join(HERE, app, 'connection.json'), 'utf8');
+  } catch {
+    return null; // no manifest — no exception
+  }
+  const parsed = JSON.parse(raw); // a malformed manifest MUST fail the suite loudly
+
+  // The SAME strict schema the runtime resolver applies. A manifest carrying a key the
+  // proposal contract excludes (registration copy, credential field definitions) is a
+  // strict-schema rejection at runtime — catching it here means it never reaches a
+  // review, rather than being silently dropped once shipped.
+  const result = llmProposalSchema.safeParse(parsed);
+  assert.ok(result.success, `${app}: connection.json must satisfy llmProposalSchema — ${result.error?.message ?? ''}`);
+
+  const hosts = parsed.declaredApiHosts;
+  assert.ok(Array.isArray(hosts) && hosts.length > 0, `${app}: connection.json declares a non-empty declaredApiHosts`);
+  return hosts;
+}
+
+/**
+ * The allowlist decision for ONE url in ONE app. A declared API host is permitted as a
+ * URL LITERAL in authored code — that is the whole point of a connected app — but the
+ * caller still refuses it as a `<script src>`/`href`, so a declared host can never
+ * become executable code or a subresource load. Host match is exact (never a prefix:
+ * `api.example.com.evil.test` must not pass on `api.example.com`).
+ */
+function urlAllowed(url, declaredHosts) {
+  if (CDN_ALLOWLIST.some((cdn) => url.startsWith(cdn + '/'))) return true;
+  if (declaredHosts === null) return false;
+  let host;
+  try {
+    ({ host } = new URL(url));
+  } catch {
+    return false;
+  }
+  return declaredHosts.includes(host);
+}
 
 // jsdom lives in the repo-root devDependencies; the suite degrades gracefully without it.
 let JSDOM = null;
@@ -81,14 +169,17 @@ for (const app of APPS) {
 
   test(`${app}: single-file HTML with no external refs beyond allowlisted CDN scripts`, () => {
     assert.match(html, /^<!DOCTYPE html>/i, 'starts with <!DOCTYPE html>');
-    // Every absolute URL in the file must sit on the CDN allowlist…
+    // Every absolute URL in the file must sit on the CDN allowlist — or, for a
+    // connected app, be a host that app's own connection.json declares (the URL it is
+    // entitled to call through the governed seam). Undeclared hosts still fail.
+    const declaredHosts = readDeclaredHosts(app);
     for (const [url] of html.matchAll(/https?:\/\/[^\s"'<>)]+/g)) {
-      assert.ok(
-        CDN_ALLOWLIST.some((cdn) => url.startsWith(cdn + '/')),
-        `URL ${url} is on the CDN allowlist`,
-      );
+      assert.ok(urlAllowed(url, declaredHosts), `URL ${url} is on the CDN allowlist or declared by this app`);
     }
-    // …and may only appear as a <script src>. No stylesheets, imports, images, or fetches.
+    // …and may only appear as a <script src>. No stylesheets, imports, images, or
+    // fetches. NOTE the deliberate asymmetry: a DECLARED host is permitted as a URL
+    // literal above, but never here — a declared API host must not become executable
+    // code or any subresource load, so this check stays CDN-only.
     for (const m of html.matchAll(/(src|href)\s*=\s*["']([^"']*)["']/g)) {
       const [, attr, value] = m;
       assert.equal(attr, 'src', `${value}: no href-based external references`);
@@ -108,7 +199,19 @@ for (const app of APPS) {
     // fully checked (AL-04 repair of the AL-03 rule conflict this suite carried,
     // masked until now by turbo's own-files cache key).
     const appAuthored = html.replace(hookBlock(html, app), '');
-    assert.doesNotMatch(appAuthored, /\b(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/, 'no network APIs (connect-src is blocked)');
+    // AL-03-rule repair #2 (cherry-picked from TASK-20260807-starters-auth-spectrum so
+    // the two tasks cannot fork on a security literal — 2026-08-03 shared-literal
+    // lesson): `useConnectedFetch()` hands the app an object whose `.fetch(url)` METHOD
+    // is the governed net seam, so a METHOD call (`api.fetch(`) is legal app code while
+    // a BARE network call stays forbidden. `\bfetch` treated the dot as a boundary and
+    // flagged the seam itself.
+    //
+    // THE TWO ASSERTIONS ARE A PAIR — neither ships without the other. The bare-call
+    // regex below uses `(?<![.\w])`, which by design no longer matches `window.fetch(`;
+    // the old single regex caught that case incidentally via `\b`. Assertion 2 is what
+    // keeps window-qualified calls forbidden. Deleting it opens a real hole.
+    assert.doesNotMatch(appAuthored, DIRECT_NETWORK_API, 'no direct network APIs (connect-src is blocked)');
+    assert.doesNotMatch(appAuthored, QUALIFIED_NETWORK_API, 'no window-qualified network APIs either');
   });
 
   test(`${app}: embedded hooks block is byte-identical to sdk/embedded/snug-hooks.js (normalized)`, () => {
@@ -210,4 +313,144 @@ test('pocket-ledger: parseCents handles decimal commas, thousands separators, an
   for (const [input, expected] of cases) {
     assert.equal(parseCents(input), expected, `parseCents(${JSON.stringify(input)})`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// The no-network-APIs rule, tested directly (TASK-20260807-connection-reachability,
+// owner decision (i)). The per-app assertions above prove the SHIPPED apps are clean;
+// this proves the RULE ITSELF discriminates correctly — a green suite of compliant
+// apps cannot tell a working guard from a broken one.
+//
+// Both patterns are asserted together exactly as the call site uses them, so the
+// documented invariant ("neither ships without the other") is enforced, not just
+// commented: deleting QUALIFIED_NETWORK_API turns the three qualified rows red.
+test('the no-network-APIs rule forbids direct calls and allows only the governed seam', () => {
+  const forbidden = (src) => DIRECT_NETWORK_API.test(src) || QUALIFIED_NETWORK_API.test(src);
+  const cases = [
+    // [source, must be forbidden?]
+    ['const r = await fetch(url);', true],
+    ['const r = await window.fetch(url);', true], // the case DIRECT_ alone would miss
+    ['globalThis.fetch(url);', true],
+    ['self . fetch (url);', true], // whitespace must not defeat it
+    ['new XMLHttpRequest();', true],
+    ['new WebSocket(wsUrl);', true],
+    ['new EventSource(streamUrl);', true],
+    // The AL-03 governed seam: `useConnectedFetch()` returns a handle whose `.fetch`
+    // METHOD posts a snug:net-request frame. connect-src stays blocked; the host is
+    // the only caller that reaches the network. This is the line the old rule broke.
+    ['const r = await api.fetch(url);', false],
+    ['const r = await net.fetch(url, { method: "POST" });', false],
+    ['const data = await this.fetch(path);', false],
+    // Identifiers that merely CONTAIN a forbidden name are not calls to it.
+    ['const doFetch = () => refetch(url);', false],
+    ['prefetchAssets();', false],
+  ];
+  for (const [src, mustBeForbidden] of cases) {
+    assert.equal(forbidden(src), mustBeForbidden, `${JSON.stringify(src)} forbidden=${mustBeForbidden}`);
+  }
+});
+
+// The declared-host allowlist exception, tested directly (TASK-20260807, owner decision
+// (i)). Negative cases first and in the majority: this rule EXISTS to keep the check
+// total, so the only thing worth proving is what it still refuses.
+test('the CDN allowlist admits a declared API host only for the app that declares it', () => {
+  const declared = ['api.example.com'];
+  const cases = [
+    // [url, declaredHosts, allowed?]
+    ['https://cdn.jsdelivr.net/npm/react@18/x.js', null, true], // CDN, no manifest needed
+    ['https://api.example.com/v1/data', declared, true], // the whole point
+    ['https://api.example.com/v1/data', null, false], // NO manifest ⇒ no exception
+    ['https://api.evil.test/v1/data', declared, false], // undeclared host
+    ['https://api.example.com.evil.test/x', declared, false], // suffix attack — exact host only
+    ['https://evil.test/?x=api.example.com', declared, false], // declared host in the QUERY, not the host
+    ['https://sub.api.example.com/x', declared, false], // subdomain is a different host
+    ['http://api.example.com/v1', declared, true], // scheme is not this rule's job (CSP/connect-src is)
+    ['not a url at all', declared, false],
+  ];
+  for (const [url, hosts, allowed] of cases) {
+    assert.equal(urlAllowed(url, hosts), allowed, `${url} (declared: ${JSON.stringify(hosts)}) allowed=${allowed}`);
+  }
+});
+
+/**
+ * THE CURATION GATE ITSELF (TASK-20260807-connection-reachability).
+ *
+ * `APPS` is a hand-maintained list, and every per-app check above iterates it — so a new
+ * folder that nobody adds to the list ships to the shelf COMPLETELY UNVALIDATED while
+ * this suite stays green and merely reports a smaller number. That is the worst possible
+ * failure mode for a curation gate: silence that reads as approval. (Found by mutating
+ * `connection-demo` out of `APPS`: the suite went 84 → 75 and stayed green.)
+ *
+ * The playground's shelf is glob-driven (`import.meta.glob('examples/*./app.html')`), so
+ * the filesystem — not this list — decides what users actually get. This test makes the
+ * filesystem the authority here too.
+ */
+test('every examples/ folder shipping an app.html is in APPS — the list cannot silently under-report', () => {
+  const onDisk = readdirSync(HERE, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => {
+      try {
+        return statSync(path.join(HERE, name, 'app.html')).isFile();
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+
+  assert.deepEqual(
+    [...APPS].sort(),
+    onDisk,
+    'APPS and the examples/ folders on disk have drifted — a shelf app is unvalidated, or APPS names a folder that no longer exists',
+  );
+});
+
+/**
+ * `examples/README.md` tells contributors every example ships a `README.md`, and until
+ * now nothing enforced it — the ninth folder landed without one, in the same commit that
+ * edited the file stating the rule (found by the Gate-4 implementation review). An
+ * unenforced convention drifts on first use, which is exactly what happened.
+ */
+test('every example folder ships a README.md (the documented contributor rule, now enforced)', () => {
+  for (const app of APPS) {
+    const readme = path.join(HERE, app, 'README.md');
+    assert.ok(
+      (() => {
+        try {
+          return statSync(readme).isFile();
+        } catch {
+          return false;
+        }
+      })(),
+      `${app}: examples/README.md requires every example to ship its own README.md`,
+    );
+  }
+});
+
+/**
+ * MINOR 10's self-check: the imported contract must really BE the contract.
+ *
+ * The failure this guards is subtle. If `llmProposalSchema` were ever swapped for a
+ * permissive stand-in — or if a future editor wrapped the import in a try/catch and fell
+ * back to `{ safeParse: () => ({ success: true }) }` to "make CI green on a fresh clone"
+ * — every manifest check above would still pass, and this suite would report success for
+ * validation it no longer performs. So assert the schema REFUSES something: a proposal
+ * carrying an excluded key (registration copy) is a strict rejection, and a schema that
+ * accepts it is not the real one.
+ */
+test('the imported llmProposalSchema is the REAL strict contract, not a permissive stand-in', () => {
+  assert.equal(typeof llmProposalSchema?.safeParse, 'function', 'the protocol import must resolve');
+
+  const valid = llmProposalSchema.safeParse({ providerName: 'Example API', declaredApiHosts: ['api.example.com'] });
+  assert.ok(valid.success, 'a well-formed proposal must pass');
+
+  // `llmProposalSchema` omits registration copy (M5/M21) — strictness is the point.
+  const poisoned = llmProposalSchema.safeParse({
+    providerName: 'Example API',
+    registrationInstructions: ['go here and paste your key'],
+  });
+  assert.equal(poisoned.success, false, 'an excluded key must be a strict rejection');
+
+  const missingName = llmProposalSchema.safeParse({ declaredApiHosts: ['api.example.com'] });
+  assert.equal(missingName.success, false, 'providerName is required');
 });

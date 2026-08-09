@@ -14,7 +14,7 @@ import { createDbDriver, createMemoryBackend, type SnugDbDriver } from '@snugpro
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } from '@snugprotocol/runner';
 
-import type { AuthWizardDirective } from '@snugprotocol/protocol';
+import type { AuthWizardDirective, LlmProposal } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { createNetHandlerFor } from '../state/net.js';
@@ -27,6 +27,7 @@ import { useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
+import { starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -280,6 +281,27 @@ export default function RunView(): ReactElement {
    */
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | undefined>(undefined);
+  /**
+   * What THIS starter declares, read from its bundled manifest (§V2-6). The install act
+   * is the rung of the trust ladder the user performs themselves, and a rung taken
+   * without knowing what it carries is a surprise rather than consent. Resolved only on
+   * the read-only starter route — once the app is owned, Settings and the CTA are the
+   * connection surfaces and repeating this would be noise on every load.
+   */
+  const [starterDeclaration, setStarterDeclaration] = useState<LlmProposal | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    if (!isStarterId(id)) {
+      setStarterDeclaration(undefined);
+      return;
+    }
+    void starterDeclarationForStarterId(id).then((found) => {
+      if (!cancelled) setStarterDeclaration(found ?? undefined);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
   const installLatch = useRef(false);
   const installThisStarter = useCallback(async (): Promise<void> => {
     if (installLatch.current || !isStarterId(id)) return;
@@ -498,7 +520,14 @@ export default function RunView(): ReactElement {
           <div className="field-row">
             <Button
               onClick={() => {
-                if (openWizardForNetError(netAuthError.appId, netAuthError.code)) setNetAuthError(null);
+                // `openWizardForNetError` is async (it resolves the install-act
+                // declaration from the user DB). Dismiss the banner ONLY on a real
+                // open: a Promise is always truthy, so `if (open(...))` here would
+                // clear the CTA even when the wizard refused — e.g. because another
+                // wizard is already parked — and strand the user with no way back.
+                void openWizardForNetError(netAuthError.appId, netAuthError.code).then((opened) => {
+                  if (opened) setNetAuthError(null);
+                });
               }}
             >
               {netErrorCta(netAuthError.code) === 'reapprove' ? 're-approve this connection' : 'connect this app'}
@@ -583,6 +612,25 @@ export default function RunView(): ReactElement {
             ) : null}
           </div>
         </header>
+        {/*
+          The install disclosure (§V2-6). Deliberately states ONLY what installing does
+          and does not do: it copies the app, and it connects NOTHING. The declaration
+          becomes a prefilled review the user still walks field by field — so the copy
+          promises a review and must never read as "installing connects this app".
+        */}
+        {isStarterId(id) && starterDeclaration !== undefined ? (
+          <div
+            className="hint"
+            data-testid="starter-install-disclosure"
+            style={{ margin: 'var(--space-3) var(--space-4) 0' }}
+          >
+            🔌 this starter ships a declared connection to <strong>{starterDeclaration.providerName}</strong>
+            {starterDeclaration.declaredApiHosts !== undefined && starterDeclaration.declaredApiHosts.length > 0
+              ? ` (${starterDeclaration.declaredApiHosts.join(', ')})`
+              : ''}
+            . installing only copies the app — nothing is connected until you review and approve it yourself.
+          </div>
+        ) : null}
         {exportError !== undefined ? (
           <div className="error-note" style={{ margin: 'var(--space-3) var(--space-4) 0' }} role="alert">
             export failed — {exportError}

@@ -44,8 +44,8 @@ the code — the hostnames you call in the app are the same hostnames you declar
 ### Declare the connection: emit the {{authWizardDirectiveKind}} render directive (authentication declaration)
 
 This directive is how the user gets to log in or hand over a key: it is the only way an
-app ever becomes connected. Emit it when, and only when, the app you just wrote or
-modified NEWLY needs a provider connection:
+app you build ever becomes connected. Emit it when, and only when, the app you just wrote
+or modified NEWLY needs a provider connection:
 
 - The app calls `useConnectedFetch` → close that same reply with exactly one directive.
 - The app makes no external calls → no directive.
@@ -78,6 +78,15 @@ keys it does not recognize is dropped whole. The directive is a doorbell, not an
 the connect card, the host independently resolves the provider, and the user reviews and
 approves every host before anything is saved. Your app keeps working in its
 not-yet-connected state until then.
+
+The directive is your channel, and the only one you have. The host has one other: an app
+the user installs from the built-in shelf can arrive already declaring what it needs, so
+the user's install brings that declaration to the same connect card. You never produce
+that kind of app and there is nothing for you to emit for it — it is described here only
+so you do not conclude that an app without a build conversation could never be connected,
+and so you never emit a directive for an app you did not just write. Whichever channel a
+declaration arrives through, it is a request the user reviews field by field: nothing
+about it shortens the approval, and no app can ever ask for a connection on its own.
 
 ### An app that would need two or more providers (one connection per app)
 
