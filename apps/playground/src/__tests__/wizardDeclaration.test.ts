@@ -137,6 +137,18 @@ describe('T4b — the async conversion must not turn a refusal into a truthy Pro
     expect(wizardStore.get()?.source, 'the first session survives untouched').toBe('settings');
   });
 
+  it('a code with no CTA refuses WITHOUT reading the user DB', async () => {
+    // Found by mutation M8: moving the mode check after the resolver left every other
+    // assertion green. The ordering is a real property — the CTA fires on app-timed net
+    // errors, and codes like NET_HOST_BLOCKED can arrive in a loop, so a refusal must be
+    // a pure function of the code and never an app-triggered read of the user's library.
+    const appId = installDemo();
+    const spy = vi.spyOn(db, 'getApp');
+
+    expect(await openWizardForNetError(appId, NET_ERROR_CODES.NET_HOST_BLOCKED)).toBe(false);
+    expect(spy, 'a no-CTA code must short-circuit before any DB access').not.toHaveBeenCalled();
+  });
+
   it('the refusal is a resolved false, not a rejection', async () => {
     // Belt and braces on the call-site contract: `.then(opened => ...)` must run. A
     // thrown/rejected refusal would skip the handler and leave the CTA in limbo.
