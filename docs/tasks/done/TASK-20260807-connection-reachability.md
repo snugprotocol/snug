@@ -1,6 +1,6 @@
 # TASK-20260807-connection-reachability: a chat-less app can never become a connected app
 
-- **Status**: active — **Gates 1–4 COMPLETE** (plan v2 was the plan of record; feature work done, e2e-proven, implementation-reviewed and folded; the MAJOR-1 UX residue closed by owner decision 2026-08-08). **Gate 5 (merge) IN PROGRESS.**
+- **Status**: ✅ **DONE — MERGED 2026-08-08 via PR #30, `main` @ `ab2b8f3`.** All six gates complete (plan v2 was the plan of record; five DESIGN reviews + one IMPLEMENTATION review, all findings folded and mutation-evidenced; the MAJOR-1 UX residue closed by owner decision and queued to AL-10). Post-merge `main` verified green uncached: root 19/19 · playground 482 · examples 87 · knowledge 116 · Playwright 56 + 1 skip.
 - **Owner**: Claude (orchestrator), taken over 2026-08-08 on owner instruction via /pickup
 - **Branch**: `feat/TASK-20260807-connection-reachability`
 - **Risk tier**: **High** — protocol surface (announce or equivalent), the auth/wizard trust ladder, and the host-side spec-write path. Any design here decides who may propose a connection.
