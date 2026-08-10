@@ -107,6 +107,20 @@ export {
   type InferrerComplete,
 } from './auth-spec-inferrer.js';
 
+/**
+ * Dynamic Auth v2 (P2): the FULL-requirement inferrer. Additive — the v3 inferrer above
+ * keeps shipping until P4 retires it (fold B1).
+ */
+export {
+  createConnectionRequirementInferrer,
+  type ConnectionRequirementInferrer,
+  type ConnectionRequirementInferrerDeps,
+  type ConnectionRequirementInferrerErrorCode,
+  type InferConnectionRequirementInput,
+  type InferConnectionRequirementResult,
+  type RequirementInferrerComplete,
+} from './connection-requirement-inferrer.js';
+
 export { requireApprovedSpecScope } from './spec-scope.js';
 
 export { isHostAllowed, isUrlWithinHosts, undeclaredHosts } from './app-host-freeze.js';

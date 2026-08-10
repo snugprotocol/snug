@@ -1,8 +1,8 @@
 <!--
 layer: knowledge-base
 destination: served section-by-section through {{appBuilderToolName}} retrieval; the summary layer's trigger clause sends every external-API build here BEFORE code is written (AL-05 AC5/AC10)
-blast-radius: whether builder-authored apps reach external APIs through the host at all, and whether the builder ever tries to place a credential in app code (C1). Headings are retrieval-load-bearing (AL-05 AC10): a retrieval test pins that build-time auth queries return the emission teaching in searchKnowledge's top results — renaming or de-keywording headings can silently unserve this file.
-source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb; Anthropic prompt-engineering best practices read 2026-08-06)
+blast-radius: whether builder-authored apps reach external APIs through the host at all, whether the builder ever tries to place a credential in app code (C1), and whether a declared connection is COMPLETE — a requirement missing a field the provider needs produces an app that cannot authenticate and a user who cannot fix it. Headings are retrieval-load-bearing (AL-05 AC10, ADR-0004): a retrieval test pins that build-time auth queries return the emission teaching in searchKnowledge's top results — renaming or de-keywording headings can silently unserve this file.
+source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb); rewritten for Dynamic Auth v2 (TASK-20260810-p2-pipeline, parent §5 R1/R3 — the full-requirement channel, the skip-rules, the completeness bar). Anthropic prompt-engineering best practices re-read 2026-08-10.
 -->
 
 ## Connected APIs: calling an external API with auth, login, and credentials
@@ -16,9 +16,9 @@ parts, both yours:
 
 1. **In the app code** — call external APIs only through the `useConnectedFetch` hook
    (copy it exactly from §5 of the template).
-2. **In your chat reply** — declare the connection the app needs by emitting ONE
-   `{{authWizardDirectiveKind}}` render directive (contract below), which makes the host
-   show the user a connect card.
+2. **In your chat reply** — declare what the connection NEEDS by emitting ONE
+   `{{connectionRequirementDirectiveKind}}` render directive (contract below), which makes
+   the host show the user a connect card.
 
 Credentials live with the host, always. The user's API keys and tokens are stored by the
 host and injected only after the user approves the connection. App code, app storage, and
@@ -27,8 +27,8 @@ input to an app, never ask for a secret in chat. There is no key for you to writ
 user's credential is the host's to hold and inject, and it is never handed to you or to
 the app. So a key in app code is two failures at once: the app is broken for the user
 whose real credential it ignores, and whatever value you typed is now sitting in source
-the user can publish. Write the call, declare the provider, and let the host supply the
-credential.
+the user can publish. Write the call, declare what the provider requires, and let the host
+collect and supply the credential.
 
 ### Design the app against useConnectedFetch (it must work before it is connected)
 
@@ -39,18 +39,40 @@ resolves `{ ok: false }`. Design for that from the first render: show a friendly
 naturally on the next user action once connected. A blank screen or a spinner that never
 settles is a broken app. When you need external data, pick the provider while you write
 the code — the hostnames you call in the app are the same hostnames you declare in the
-`{{authWizardDirectiveKind}}` directive below.
+`{{connectionRequirementDirectiveKind}}` directive below.
 
-### Declare the connection: emit the {{authWizardDirectiveKind}} render directive (authentication declaration)
+### Research the provider's authentication before you declare it
+
+Declare what the provider ACTUALLY requires, in this order of authority:
+
+1. **The host's pinned registry.** For a well-known provider, name it and the host
+   substitutes its own verified hosts, endpoints and sign-up copy over anything you
+   declare. Your job there is the name, correctly spelled.
+2. **What you know about the provider.** Most API-key providers are documented well
+   enough that you know the header names and the values they carry. Use that knowledge.
+3. **Documentation the user pastes.** If the user gives you the provider's auth docs,
+   read them and declare from the text in front of you.
+
+If none of those answers the question, say so plainly in your reply and declare only what
+you are sure of. An honestly incomplete declaration the user can correct is better than a
+confident wrong one: a wrong hostname freezes a ceiling that refuses every real request,
+and the user sees it as an authentication bug with no way to diagnose it. There is no
+live-fetch rung — the host never fetches a documentation URL for you (fetching arbitrary
+URLs would be an unfrozen network surface beside the frozen host allowlist), and
+desktop-native fetch is a FUTURE rung that does not exist yet.
+
+### Declare the connection: emit the {{connectionRequirementDirectiveKind}} directive as you build
 
 This directive is how the user gets to log in or hand over a key: it is the only way an
-app you build ever becomes connected. Emit it when, and only when, the app you just wrote
-or modified NEWLY needs a provider connection:
+app you build ever becomes connected. Emit it as part of the build — the declaration is
+stored with the app version, so the connect card is there BEFORE the app is first run, not
+discovered later when a call fails. Nothing infers this for you at run time.
+
+Emit it when, and only when, the app you just wrote or modified NEWLY needs a provider
+connection:
 
 - The app calls `useConnectedFetch` → close that same reply with exactly one directive.
 - The app makes no external calls → no directive.
-- You edited an already-declared app without adding a provider → no directive again.
-- A later edit adds a NEW provider → one directive for the new provider.
 - The app would need TWO OR MORE providers → still one directive, for one provider
   only, and say so in the reply (see below). Never bundle two providers into one
   declaration.
@@ -59,34 +81,149 @@ After the app write, end your reply with one fenced json code block holding only
 directive object:
 
 - `v` — the protocol version, always {{protocolVersion}}.
-- `kind` — always `{{authWizardDirectiveKind}}`.
-- `proposal` — at most three members:
-  - `providerName` (always): the provider's common name, e.g. "OpenWeather" or
-    "Spotify". For well-known providers the host resolves everything else from its
-    pinned registry — give the name only, never authorization or endpoint URLs (the
-    registry's URLs are verified; yours cannot be).
-  - `kindHint` (when the docs make it obvious): one of {{authKinds}} — that is,
-    whether the provider authenticates with an API key, a bearer token the user
-    pastes, or an OAuth login where the user signs in at the provider. Omit it when
-    the provider's docs leave the authentication style unclear; the host resolves it.
-  - `declaredApiHosts` (when the app calls external hosts — usually yes): exactly the
-    bare hostnames your app's code passes to `useConnectedFetch`, no more. You know
-    them — you wrote the calls.
+- `kind` — always `{{connectionRequirementDirectiveKind}}`.
+- `requirement` — what the app needs:
+  - `slot` (always): a short lowercase id for this connection within the app, e.g.
+    `coinbase`. Letters, digits and dashes.
+  - `provider` (always): `{ "name": "..." }`, the provider's common name, plus optional
+    `homepageUrl` and `docsUrl`. Spell the name correctly — the host matches it against
+    its pinned registry.
+  - `kind` (always): one of {{connectionKinds}} — how the provider authenticates.
+  - `declaredApiHosts` (always): exactly the bare hostnames your app's code passes to
+    `useConnectedFetch`, no more. You know them — you wrote the calls. These become the
+    ceiling the user approves; a host you leave out is blocked, and a host you add
+    needlessly is one the user is asked to trust.
+  - the credential fields, the registration walkthrough, and the header placement —
+    described in the next three sections, because getting them complete is the whole job.
 
-Emit only `v`, `kind`, `proposal`: the host validates strictly — a directive carrying
-keys it does not recognize is dropped whole. The directive is a doorbell, not an authority — it opens
-the connect card, the host independently resolves the provider, and the user reviews and
-approves every host before anything is saved. Your app keeps working in its
-not-yet-connected state until then.
+The host validates strictly: a directive carrying keys it does not recognize is dropped
+whole. The directive is a REQUEST, not an authority — the host independently re-resolves
+well-known providers, and the user reviews every field and every host before anything is
+saved or any credential is collected. Your app keeps working in its not-yet-connected
+state until then.
 
 The directive is your channel, and the only one you have. The host has one other: an app
 the user installs from the built-in shelf can arrive already declaring what it needs, so
 the user's install brings that declaration to the same connect card. You never produce
 that kind of app and there is nothing for you to emit for it — it is described here only
 so you do not conclude that an app without a build conversation could never be connected,
-and so you never emit a directive for an app you did not just write. Whichever channel a
-declaration arrives through, it is a request the user reviews field by field: nothing
-about it shortens the approval, and no app can ever ask for a connection on its own.
+and so you never emit a directive for an app you did not just write.
+
+### Declare EVERY credential the provider requires (the completeness bar)
+
+Declare every field that provider requires to authenticate — not the first one, not the
+most famous one. **A key without its secret is a defect.** A partial declaration produces
+an app that cannot authenticate and a user with no way to supply the missing value: the
+connect card asks for what you declared, the host injects what it collected, and the
+provider rejects the request.
+
+So count the values the provider's own sign-in flow hands out. Coinbase Exchange issues
+three — a key, a secret, and a passphrase — and all three must be declared. A provider
+issuing one key gets one field.
+
+Each entry in `requirement.fields` describes ONE value the user will paste:
+
+- `key` — lowercase identifier, e.g. `api_key`. This is the name you reference in the
+  header placement below.
+- `label` — what the user sees above the input, e.g. "API Secret".
+- `type` — `text` for a visible value, `secret` for one that must be masked. Anything
+  the provider calls a secret, a passphrase or a private key is `secret`.
+- `description` (optional) — one line of help, e.g. where the value appears in the
+  provider's console.
+- `required` — true unless the provider genuinely treats it as optional.
+
+You are describing the SHAPE of the credential, never its value. You have no credential
+to supply and must never invent an example one: these are empty inputs the user fills.
+
+### Tell the user where to get the credential (registration walkthrough)
+
+The user has to go and create the credential before they can paste it, so
+`requirement.registration` carries the walkthrough:
+
+- `consoleUrl` — the page where the credential is created.
+- `instructions` — short ordered steps, in the order they must be done.
+
+Order carries meaning here: if the provider shows a value exactly once, the step that says
+so must come BEFORE the step that closes the dialog. Write the steps you would give a
+person sitting at the provider's site for the first time.
+
+### Tell the host where the credential goes (header placement)
+
+For key-and-secret providers, `requirement.request.headerTemplate` maps header names to
+values the HOST renders — outside the app, after approval, with the real credential. You
+write the SHAPE with `{{{fieldKey}}}` references; the host substitutes the values.
+
+You may reference:
+
+- any `key` you declared in `fields`;
+- `request.timestamp`, `request.method`, `request.url`, `request.pathAndQuery`,
+  `request.body` — facts about the outgoing request;
+- four helpers: `timestamp`, `base64`, `hmac_sha256`, `hmac_sha256_b64`.
+
+A reference to anything else is rejected, and the directive with it — the host will not
+guess what you meant, because a typo'd field name in a signature silently signs the wrong
+bytes and produces a plausible-looking signature the provider rejects.
+
+Never place a literal credential in a template. Every value is a reference.
+
+### Editing a connected app: when to re-emit, and when to skip
+
+Re-emit the directive ONLY when your edit changes what the connection NEEDS. This matters
+because re-emitting is not free: if the user has already approved the connection, a
+changed requirement stages a re-approval request, and asking someone to re-approve a
+connection they did not change is noise that trains them to click through the review that
+protects them.
+
+Re-emit when:
+
+- the app newly calls `useConnectedFetch` and had no connection before;
+- a later edit adds a NEW provider (one directive, for the new provider);
+- the app now calls a hostname that is not in the declared `declaredApiHosts`;
+- you learn the declaration was incomplete or wrong — a missing field, a wrong header.
+
+Skip — emit NOTHING — when:
+
+- the edit was UI-only: layout, styling, copy, a new view over the same data;
+- the edit changed app logic but did not change the auth surface;
+- a valid requirement already exists and your edit asked nothing new of it.
+
+Re-emitting an unchanged requirement is a no-op, not a safety net: the host compares it to
+what is stored and writes nothing. But you cannot rely on that to excuse a careless
+re-emit, because a requirement you changed WHILE re-emitting — a reordered walkthrough, a
+dropped field — reads as a real edit and asks the user to approve again. When in doubt
+about whether your edit touched the auth surface, it did not; skip.
+
+### Example: a three-value signed API (Coinbase Exchange)
+
+The user asks for a portfolio tracker. The app calls
+`https://api.exchange.coinbase.com/...` through `useConnectedFetch`, renders a
+"connect Coinbase Exchange to see your balances" state while unconnected, and the reply
+ends with the declaration below. Coinbase Exchange issues three values and signs every
+request, so all three are declared and the signature is expressed as a template:
+
+```json
+{"v": {{protocolVersion}}, "kind": "{{connectionRequirementDirectiveKind}}", "requirement": {"slot": "coinbase", "provider": {"name": "Coinbase Exchange", "docsUrl": "https://docs.cdp.coinbase.com/exchange"}, "kind": "api_key", "fields": [{"key": "api_key", "label": "API Key", "type": "text", "required": true}, {"key": "api_secret", "label": "API Secret", "type": "secret", "description": "Shown once at creation. Copy it before closing the dialog.", "required": true}, {"key": "passphrase", "label": "Passphrase", "type": "secret", "description": "The passphrase you chose while creating the key.", "required": true}], "registration": {"consoleUrl": "https://exchange.coinbase.com/profile/api", "instructions": ["Sign in at exchange.coinbase.com and open Profile then API.", "Choose New API Key and give it View permission only.", "Choose a passphrase and write it down — it is not shown again.", "Copy the API key and the secret before closing the dialog."]}, "request": {"headerTemplate": {"CB-ACCESS-KEY": "{{{api_key}}}", "CB-ACCESS-PASSPHRASE": "{{{passphrase}}}", "CB-ACCESS-TIMESTAMP": "{{request.timestamp}}", "CB-ACCESS-SIGN": "{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}"}}, "declaredApiHosts": ["api.exchange.coinbase.com"]}}
+```
+
+Three values, three inputs on the connect card, and a signature the host computes with a
+secret you never see. Declaring only `api_key` here would produce an app that cannot sign
+a single request.
+
+### Example: a single-key API (OpenWeather)
+
+The user asks for a weather dashboard. OpenWeather issues one key and takes it as a query
+parameter the host adds, so one field and no header template:
+
+```json
+{"v": {{protocolVersion}}, "kind": "{{connectionRequirementDirectiveKind}}", "requirement": {"slot": "openweather", "provider": {"name": "OpenWeather"}, "kind": "api_key", "fields": [{"key": "api_key", "label": "API Key", "type": "secret", "required": true}], "registration": {"consoleUrl": "https://home.openweathermap.org/api_keys", "instructions": ["Create a free OpenWeather account.", "Open API keys and copy the default key."]}, "declaredApiHosts": ["api.openweathermap.org"]}}
+```
+
+### Example: no directive — an app with no external API
+
+A to-do list, a board game against the agent, a habit tracker: these use persistence and
+the agent bridge but make no external calls, so there is no `useConnectedFetch` and no
+directive. The runtime agent bridge (`sendMessage`) is host-internal — never emit a
+directive for it.
 
 ### An app that would need two or more providers (one connection per app)
 
@@ -98,39 +235,21 @@ Then tell the user plainly: the app supports one connected provider at this vers
 the second feature ships with manual entry or sample data. Build that second feature
 that way in the same write, so the app is whole. Do not quietly drop it.
 
-### Example: a weather app with an API key provider
-
-The user asks for a weather dashboard using OpenWeather. The app's code calls
-`https://api.openweathermap.org/...` through `useConnectedFetch`, renders a
-"connect OpenWeather to see live weather" state while unconnected, and the reply ends
-with:
-
-```json
-{"v": {{protocolVersion}}, "kind": "{{authWizardDirectiveKind}}", "proposal": {"providerName": "OpenWeather", "kindHint": "api_key", "declaredApiHosts": ["api.openweathermap.org"]}}
-```
-
-### Example: no directive — an app with no external API
-
-A to-do list, a board game against the agent, a habit tracker: these use persistence and
-the agent bridge but make no external calls, so there is no `useConnectedFetch` and no
-directive. The runtime agent bridge (`sendMessage`) is host-internal — never emit a
-directive for it.
-
 ### Keyless public APIs (a provider with no credential)
 
-Every external host still requires a user-approved connection, and connections in this
-version carry a credential (one of {{authKinds}}). When the user's request can be served
-by a provider that issues API keys — including free-tier keys — prefer that provider and
-declare it normally. If the user insists on a provider with truly no credential to hold,
-say plainly that connected data for it is not supported yet, and ship the app with a
-manual-entry or sample-data mode so it is still useful.
+A provider that needs no credential is declared with `kind` `none`: it carries
+`declaredApiHosts` and no credential fields, because keyless means "no credentials", never
+"no host gate". The user still approves the hosts before the app can reach them. When a
+request could be served either by a keyless provider or by one issuing free-tier keys,
+prefer whichever the user asked for and say which you chose.
 
 ### What the user sees (net requests in the frames timeline)
 
 The connect card renders above your reply; approving it opens the host's connection
-wizard. After approval the app's calls go through the host, and net traffic surfaces in
-the host's frame timeline as structure only — request and response bodies and
-credentials never appear there. Mutating calls (POST/PUT/PATCH/DELETE) ask the user to
-confirm before the write goes out (the user may remember that grant for the session).
-Design copy accordingly: the host, not the app, is where the user controls and audits
-network access.
+wizard, which shows the user every field, every host and every registration step you
+declared, verbatim, before a single credential is collected. After approval the app's
+calls go through the host, and net traffic surfaces in the host's frame timeline as
+structure only — request and response bodies and credentials never appear there. Mutating
+calls (POST/PUT/PATCH/DELETE) ask the user to confirm before the write goes out (the user
+may remember that grant for the session). Design copy accordingly: the host, not the app,
+is where the user controls and audits network access.

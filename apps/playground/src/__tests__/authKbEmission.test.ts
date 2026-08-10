@@ -6,15 +6,22 @@
 //   M52: break the scanner's fence candidate path → the taught format stops being
 //        found → RED. (Evidenced against the scanner, not the fixture.)
 //   M57: give the never-case reply a directive → the null assertion → RED.
+//
+// P2 (TASK-20260810-p2-pipeline): the KB now teaches the `connection_requirement`
+// directive, so this test follows it. The GUARANTEE is unchanged and still cross-package
+// with no copies — the KB's own rendered example is fed to the real scanner — and it is
+// now strictly stronger, because the successor schema validates the full requirement
+// (fields, header template, registration copy) rather than a three-key hint. The v3
+// `auth_wizard` path itself is untouched and still scans; its retirement is P4's item.
 import { describe, expect, it } from 'vitest';
 import { getKnowledgeBase } from '@snugprotocol/knowledge';
-import { AUTH_WIZARD_DIRECTIVE_KIND } from '@snugprotocol/protocol';
+import { CONNECTION_REQUIREMENT_DIRECTIVE_KIND } from '@snugprotocol/protocol';
 
 import { scanForRenderDirective } from '../agent/renderDirective.js';
 
 const KB_AUTH_FILE = 'knowledge-base/app-authoring/90-auth-and-connected-apis.md';
 
-/** The KB's canonical rendered directive example (the api_key weather example). */
+/** The KB's canonical rendered directive example (P2: the three-value Coinbase example). */
 function kbExampleBlock(): string {
   const doc = getKnowledgeBase().find((d) => d.file === KB_AUTH_FILE);
   expect(doc, `${KB_AUTH_FILE} missing from the knowledge base`).toBeDefined();
@@ -46,8 +53,17 @@ describe('AC4b — the KB-taught emission format round-trips the real scanner', 
     expect(scan).not.toBeNull();
     expect(scan).not.toHaveProperty('malformed');
     if (scan !== null && 'directive' in scan) {
-      expect(scan.directive.kind).toBe(AUTH_WIZARD_DIRECTIVE_KIND);
-      expect(scan.directive.proposal.providerName).toBe('OpenWeather');
+      expect(scan.directive.kind).toBe(CONNECTION_REQUIREMENT_DIRECTIVE_KIND);
+      if (scan.directive.kind === CONNECTION_REQUIREMENT_DIRECTIVE_KIND) {
+        expect(scan.directive.requirement.provider.name).toBe('Coinbase Exchange');
+        // The re-admitted seats survive the KB→scanner round trip. This is the half the
+        // v3 assertion could not make: a three-key hint had nothing to check.
+        expect(scan.directive.requirement.fields?.map((f) => f.key)).toEqual([
+          'api_key',
+          'api_secret',
+          'passphrase',
+        ]);
+      }
     }
   });
 

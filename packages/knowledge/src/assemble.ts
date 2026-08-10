@@ -106,7 +106,29 @@ function defangProviderDocs(text: string): string {
  * receives only the finished strings (its dep surface cannot include this package).
  */
 export function buildAuthSpecInferrerPrompt(input: AuthSpecInferrerPromptInput): AuthSpecInferrerPrompt {
-  const system = getToolPrompt('auth-spec-inferrer');
+  return buildInferrerPromptFor('auth-spec-inferrer', input);
+}
+
+/**
+ * Dynamic Auth v2 (TASK-20260810-p2-pipeline, R2): the same two-slot placement, aimed at
+ * the FULL-requirement prompt. The v3 builder above keeps shipping under the B1 cutover
+ * rule; its removal is P4's named exit item.
+ *
+ * The SLOT SPLIT IS THE POINT and is unchanged: trusted instructions in `system`,
+ * untrusted pasted docs inside a delimited block in `user`. There is no credential seat
+ * in either — inference runs at BUILD time, before any credential exists (C1).
+ */
+export function buildConnectionRequirementInferrerPrompt(
+  input: AuthSpecInferrerPromptInput,
+): AuthSpecInferrerPrompt {
+  return buildInferrerPromptFor('connection-requirement-inferrer', input);
+}
+
+function buildInferrerPromptFor(
+  tool: 'auth-spec-inferrer' | 'connection-requirement-inferrer',
+  input: AuthSpecInferrerPromptInput,
+): AuthSpecInferrerPrompt {
+  const system = getToolPrompt(tool);
   const docs =
     input.docsText !== undefined && input.docsText.trim().length > 0
       ? defangProviderDocs(input.docsText)

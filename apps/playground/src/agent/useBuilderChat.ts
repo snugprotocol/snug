@@ -24,6 +24,7 @@ import { resolveTurnMode, useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { buildAppTurnContext } from './appContext.js';
 import { createAppTargetSink } from './artifactSink.js';
+import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import {
   createDirectBuilder,
   createServerBuilder,
@@ -379,13 +380,45 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           const scan = finalText !== '' ? scanForRenderDirective(finalText) : null;
           const directive: AuthWizardDirective | undefined =
             scan !== null && 'directive' in scan && scan.directive.kind === AUTH_WIZARD_DIRECTIVE_KIND ? scan.directive : undefined;
+          /**
+           * P2 (+ fold): the build turn's `connection_requirement` declaration lands HERE,
+           * post-turn — the earliest moment the directive exists, and still strictly before
+           * the app is first RUN, which is the guarantee that matters. It cannot happen at
+           * the version write: `artifact_write` is a mid-turn tool call and the KB has the
+           * model close its reply with the directive, so there is no reply text to scan yet.
+           *
+           * A refusal never unwinds the saved app — the HTML is the user's work — but it is
+           * never swallowed either: it becomes a visible note, because a connected app with
+           * no connect card is indistinguishable from a broken one.
+           */
+          let connectionNote: string | undefined;
+          if (turn.artifact !== undefined && finalText !== '') {
+            const appHtml = db.getAppHtml(turn.artifact.artifactId);
+            if (appHtml !== undefined) {
+              const outcome = await finalizeConnectionDeclaration(db, {
+                appId: turn.artifact.artifactId,
+                html: appHtml,
+                reply: finalText,
+                channel: 'inference',
+              });
+              if (outcome !== undefined && !outcome.ok) {
+                connectionNote =
+                  outcome.reason === 'connected_html_without_requirement'
+                    ? 'this app calls out to a provider but the agent declared no connection, so there is no connect card yet — ask it to declare the connection'
+                    : 'the agent proposed a connection that failed validation — the app was saved without it';
+              }
+            }
+          }
+
           patchMessage(agentId, (m) => ({
             streaming: false,
             displayText: result.text !== '' ? result.text : m.displayText,
             ...(directive !== undefined ? { directive } : {}),
             ...(scan !== null && 'malformed' in scan
               ? { directiveNote: 'the agent proposed a connection card that failed validation — ignored' }
-              : {}),
+              : connectionNote !== undefined
+                ? { directiveNote: connectionNote }
+                : {}),
           }));
           if (finalText !== '') {
             // F9: the turn that produced v1 is the bootstrap — pin both sides of it.

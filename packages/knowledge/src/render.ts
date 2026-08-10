@@ -11,6 +11,8 @@ import {
   AUTH_KINDS,
   AUTH_WIZARD_DIRECTIVE_KIND,
   CDN_ALLOWLIST,
+  CONNECTION_KINDS,
+  CONNECTION_REQUIREMENT_DIRECTIVE_KIND,
   FRAME_TYPES,
   LIMITS,
   PROTOCOL_VERSION,
@@ -52,6 +54,10 @@ const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   authEvidenceMaxChars: String(AUTH_EVIDENCE_MAX_CHARS),
   // AL-05 M48: the directive-kind discriminator, injected — never retyped in KB text.
   authWizardDirectiveKind: AUTH_WIZARD_DIRECTIVE_KIND,
+  // Dynamic Auth v2 (P2): the successor directive kind and the six-kind discriminator
+  // set, injected for the same reason — these are PERSISTED literals with one home.
+  connectionRequirementDirectiveKind: CONNECTION_REQUIREMENT_DIRECTIVE_KIND,
+  connectionKinds: CONNECTION_KINDS.join(', '),
 };
 
 const FRAME_TYPE_PREFIX = 'frameType:';
