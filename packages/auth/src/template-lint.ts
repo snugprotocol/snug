@@ -59,12 +59,27 @@ export type AuthTemplateHelper = (typeof AUTH_TEMPLATE_HELPERS)[number];
  * Note `request.pathAndQuery` can legitimately render EMPTY (`deriveDefaultPath` returns
  * '' for an unparseable URL). That is a render-time value question, not a lint question:
  * an empty render is a valid outcome for an accepted token.
+ *
+ * `request.timestamp` is the odd one and is here on purpose. It is a RENDER fact — minted
+ * by the render pass from the memoized `RenderState`, not read off the request — and it
+ * exists because the Coinbase-Exchange prehash needs the timestamp in ARGUMENT position:
+ * `{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery,
+ * request.body)}}`. A helper CALL is not an accepted argument form in this grammar, so
+ * `timestamp()` could not go there and the Exchange template ADR-0017 §Consequences calls
+ * buildable was in fact INEXPRESSIBLE (verified by execution: both the four-part and the
+ * two-part shapes linted `ok: false`).
+ *
+ * A pinned token was chosen over allowing nested zero-arg helper calls because it keeps
+ * the grammar FLAT. Nesting would make argument resolution recursive and asynchronous, and
+ * every bound on it ("zero-arg only", "one level") would be a rule enforced by code rather
+ * than by the shape of the language. A token is enforced by the token list itself.
  */
 export const AUTH_TEMPLATE_REQUEST_TOKENS = [
   'request.method',
   'request.url',
   'request.pathAndQuery',
   'request.body',
+  'request.timestamp',
 ] as const;
 
 export type AuthTemplateRequestToken = (typeof AUTH_TEMPLATE_REQUEST_TOKENS)[number];
@@ -199,9 +214,16 @@ function lintExpression(expression: string, fieldKeys: ReadonlySet<string>): str
       return `helper '${name}' takes ${expected} argument(s) but got ${args.length}`;
     }
     for (const arg of args) {
-      // A QUOTED argument is a literal by authorial intent — that is the one place the
-      // engine's fallback is correct, so the lint permits it. An UNQUOTED argument must
-      // name something real; otherwise it lands on the silent fallback.
+      // A QUOTED argument is a literal by authorial intent, so the lint permits it
+      // unexamined — and the ENGINE now honors that same reading, returning quoted
+      // arguments verbatim without consulting `ctx.fields`.
+      //
+      // That second half used to be false and it was a live credential leak (review
+      // blocker B1): the engine stripped the quotes, lost the quoted-ness, and resolved
+      // `{{base64('api_key')}}` to the CREDENTIAL — a template this lint had accepted
+      // precisely BECAUSE it looked like an inert literal. Skipping a quoted argument is
+      // only sound while the engine agrees it is inert; `template-parity.test.ts` is what
+      // keeps that agreement from silently rotting.
       if (arg.quoted) continue;
       if (fieldKeys.has(arg.text)) continue;
       if (isPinnedRequestToken(arg.text)) continue;

@@ -27,13 +27,18 @@ export {
 export { namespaceToFileName } from './namespace.js';
 
 export {
+  ConnectionNotAdmitted,
   ConnectionRevokedError,
   ConnectionSlotCapExceeded,
+  ConnectionSlotMismatch,
   ConnectionWriteRuleViolation,
+  defaultAdmissionGate,
   HostFreezeViolation,
   openUserDb,
   USERDB_ERROR_CODES,
   UserDbError,
+  type ConnectionAdmissionGate,
+  type ConnectionAdmissionResult,
   type AppDocRecord,
   type AppMigrationRecord,
   type AppPersistErrorEvent,

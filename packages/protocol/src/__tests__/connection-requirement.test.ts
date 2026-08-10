@@ -89,11 +89,23 @@ const coinbaseRequirement = {
     ],
   },
   request: {
+    // `request.timestamp`, NOT `timestamp()`. This fixture is the canonical
+    // Coinbase-Exchange requirement, so it must be a template that can actually RENDER —
+    // the schema bounds only the envelope, so a template with an unrenderable body parses
+    // happily and teaches the wrong shape to every reader of this file.
+    //
+    // It previously read `timestamp()` in the signature's argument list, which the auth
+    // template lint REJECTS (verified by execution): the grammar is flat, so a helper CALL
+    // is not an accepted ARGUMENT form. `request.timestamp` is the pinned render token
+    // added for exactly this seat, and it is served from the same memoized slot as
+    // `{{timestamp()}}` so the signed and sent timestamps cannot disagree. See ADR-0017
+    // §`request.timestamp` and packages/auth `template-parity.test.ts`, which renders this
+    // template and recomputes the HMAC from the timestamp it actually sent.
     headerTemplate: {
       'CB-ACCESS-KEY': '{{api_key}}',
       'CB-ACCESS-SIGN':
-        '{{hmac_sha256_b64(api_secret, timestamp(), request.method, request.pathAndQuery, request.body)}}',
-      'CB-ACCESS-TIMESTAMP': '{{timestamp()}}',
+        '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}',
+      'CB-ACCESS-TIMESTAMP': '{{request.timestamp}}',
       'CB-ACCESS-PASSPHRASE': '{{passphrase}}',
     },
   },
@@ -158,7 +170,7 @@ describe('AC1 — the Coinbase-shaped requirement parses in FULL (the defect thi
   it('carries the signing template VERBATIM — the strong review renders these bytes, so they must survive parse unchanged', () => {
     const req = connectionRequirementSchema.parse(coinbaseRequirement);
     expect(req.request?.headerTemplate?.['CB-ACCESS-SIGN']).toBe(
-      '{{hmac_sha256_b64(api_secret, timestamp(), request.method, request.pathAndQuery, request.body)}}',
+      '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}',
     );
   });
 

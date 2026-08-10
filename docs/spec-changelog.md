@@ -86,14 +86,78 @@ enforced surface with the pinned one (fold S-M2) — the engine's HELPERS map is
 six to four (`unix_ms`/`hmac_sha512`/`sha256` deleted: shipped with no requirement behind
 them, and every unused helper is signing surface), the pinned enum is `timestamp |
 hmac_sha256 | hmac_sha256_b64 | base64`, request tokens are exactly `readRequestField`'s
-switch (`request.method|url|pathAndQuery|body`), and the lint makes the engine's
+switch (`request.method|url|pathAndQuery|body|timestamp`), and the lint makes the engine's
 unknown-token→literal fallback UNREACHABLE from an accepted template. `hmac_sha256_b64` is
 the ONE added encoding-capable variant (ADR-0017 §Coinbase): `base64(HMAC-SHA256(base64decode(secret),
 concat(parts)))` FUSED into one fixed-shape helper rather than exposing a general
 `base64decode()` — Coinbase-Exchange's scheme was inexpressible in three independent ways
-at once (hex-only HMAC, utf8-in base64, no grammar nesting). `timestamp()` is memoized per
-render pass (two evaluations can straddle a second boundary → intermittently-invalid
-signatures). Registry-borrow ban now fires on provider-name match **OR** `declaredApiHosts ∩`
+at once (hex-only HMAC, utf8-in base64, no grammar nesting).
+
+**Two Gate-2 review blockers, both PROVEN BY EXECUTION against the built package and fixed
+in this phase, are folded into the above** (ADR-0017 §`request.timestamp` and §Quoted
+helper arguments): (1) **quoted-argument parity was a credential-exfiltration hole** —
+the lint skips quoted arguments as literals-by-authorial-intent, but the engine's
+`parseHelperArgs` stripped quotes WITHOUT recording quoted-ness and `resolveArgToken`
+resolved the bare text as a FIELD, so `{{base64('api_key')}}` linted `ok: true` and
+rendered `base64('SUPERSECRET')`. Fixed in the ENGINE (quoted arguments return VERBATIM,
+consulting neither `ctx.fields` nor the request tokens), because widening the lint would
+have left the engine still able to resolve a quoted token to a secret. The spec draft now
+states this as a normative host obligation, not an implementation detail.
+(2) **the pinned Coinbase-Exchange template was INEXPRESSIBLE**, so the fourth helper's
+justification was unrealized and the timestamp memoization protected nothing reachable: a
+helper CALL is not an accepted ARGUMENT form in either the lint or the engine, so
+`timestamp()` could be sent but never SIGNED. Fixed by adding the fifth pinned request
+token `request.timestamp` — a RENDER fact minted by the pass and served from the SAME
+memoized slot as `{{timestamp()}}`, so the two spellings cannot disagree. Nested helper
+calls in argument position remain REJECTED by both lint and engine (the grammar stays
+flat); that rejection is tested, not assumed. The acceptance property is that an HMAC
+recomputed independently from the value SENT in `CB-ACCESS-TIMESTAMP` equals the value
+sent in `CB-ACCESS-SIGN`. The timestamp is memoized per render pass (two evaluations can
+straddle a second boundary → intermittently-invalid signatures).
+
+**Four post-implementation review findings, all reproduced by probe before fixing and all
+mutation-evidenced** (no wire change; admission and storage behavior only):
+(1) the registry-borrow ban left ATTACKER-AUTHORED CREDENTIAL-PROMPT COPY intact —
+substituting hosts and pinning `provider.name` while passing `fields`,
+`request.headerTemplate` and `testRequest` through verbatim made the borrow strictly more
+dangerous, because substitution ADDS legitimacy ("Paste your Spotify password" rendered
+beside registry-grade hosts). Those three seats have no registry counterpart to substitute
+with, so a borrow hit from a non-registry channel that occupies any of them is now REFUSED
+outright; the substituted requirement is still returned on the rejection so a "we refused
+this" review row can never surface `evil.example` or an attacker's rename.
+(2) the AC5 userLayer channel guard had **NO PRODUCTION CALLER** — the property held on
+the function while `putDeclaredConnection` persisted requirements without consulting it,
+so an `inference`-provenance `userLayer` reached storage and its endpoint hosts were
+unioned into the frozen ceiling at approval. Enforcement now sits ON the persist path:
+`putDeclaredConnection` and `stagePendingRequirement` call an admission gate before any
+write, admission runs BEFORE validation so the SUBSTITUTED requirement is what gets
+hashed, host-derived and persisted, and the row's own `provenance` is the channel (staging
+inherits it from the stored row), so the channel judged and the channel recorded cannot
+drift. **Dependency direction, checked and reported:** `@snugprotocol/auth` already depends
+on `@snugprotocol/db`, so calling admission from packages/db would close an import cycle —
+the gate is therefore INJECTED (`OpenUserDbOptions.admissionGate`) and assembled at the
+composition root (`apps/playground/src/state/userdb.ts`, which depends on both). The seam
+is not an on/off switch: packages/db ships `defaultAdmissionGate`, which enforces the
+registry-FREE half (the AC5 userLayer channel rule needs only provenance) and is installed
+whenever a caller injects nothing, so the persist path fails closed on the motivating seat
+even unwired.
+(3) `approveConnection` neither cleared nor refused a STAGED PENDING requirement, so the
+derived "needs re-approval" pill read TRUE on a row the user had just approved and a later
+`reapproveConnection` promoted a never-re-reviewed requirement. It now DISCARDS the staged
+edit (it re-affirms the current requirement and derives its ceiling from
+`requirement_json`, never from the pending column). Discarding rather than throwing is
+deliberate: an app can stage an edit at any time, so throwing would let an attacker deny
+the user their own approval. `reapproveConnection` remains the only promotion path.
+(4) `putDeclaredConnection` never checked `slot === requirement.slot`, producing rows whose
+PK and reviewed content disagreed — the canonical hash and review screen read the
+requirement JSON while the PK, the `auth:<appId>:<slot>:*` credential prefix and the
+revoke/wipe path key off the COLUMN. Now a named `CONNECTION_SLOT_MISMATCH` at
+`putDeclaredConnection`, `stagePendingRequirement` AND `reapproveConnection` (a promoted
+pending row can carry a foreign slot that no current accessor validated). Refused rather
+than normalized to the column: silently rewriting the requirement would change the exact
+bytes the caller is about to hash and show.
+
+Registry-borrow ban now fires on provider-name match **OR** `declaredApiHosts ∩`
 registry `apiHosts`, for ALL kinds (fold S-M3), substituting pinned values rather than
 merging. `WellKnownOauthProvider.endpoints` becomes OPTIONAL (fold T-M1) so static-kind
 providers are representable by `apiHosts`/`registration` alone — TYPE change only, data

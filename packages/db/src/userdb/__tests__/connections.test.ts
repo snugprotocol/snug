@@ -35,6 +35,7 @@ import {
   USERDB_ERROR_CODES,
   UserDbError,
   openUserDb,
+  type ConnectionAdmissionGate,
   type UserDb,
 } from '../userdb.js';
 
@@ -456,6 +457,311 @@ describe('AC14 — reapproveConnection promotes pending → current, re-freezes 
     db.stagePendingRequirement(APP, SLOT, requirementWith({ scopes: ['read'] }));
     const reapproved = db.reapproveConnection(APP, SLOT);
     expect(reapproved.requirementVersion).toBe(approved.requirementVersion + 1);
+    await db.close();
+  });
+});
+
+// ------------------ review MAJOR-2: admission must be ON the persist path, not beside it
+//
+// AC5's userLayer channel guard lived in `admitConnectionRequirement` (packages/auth) and
+// had NO production caller: a repo-wide grep found only its definition and its re-export.
+// Meanwhile `putDeclaredConnection` persisted requirements without consulting it at all,
+// so an `inference`-provenance requirement carrying an attacker-authored `userLayer` was
+// stored, and its endpoint hosts were unioned into the FROZEN host ceiling at approval.
+// AC5's own tests passed because they called the guard directly — the property held on
+// the function, never on the only path that persists.
+//
+// DEPENDENCY DIRECTION (reported rather than assumed): `@snugprotocol/auth` ALREADY
+// depends on `@snugprotocol/db`, so calling admission from inside packages/db would close
+// an import cycle. The enforcement therefore sits at an INJECTED SEAM: packages/db owns
+// the "nothing persists unadmitted" rule and calls whatever gate it was opened with,
+// while packages/auth — which owns the registry — supplies the gate. The rule is
+// fail-closed by construction: `admitConnectionRequirement` is the default, and the seam
+// exists so the gate can be swapped, never so it can be omitted.
+
+describe('review MAJOR-2 — the persist path REFUSES a requirement admission rejects', () => {
+  /** A userLayer aimed at an attacker's endpoints — AC5's exact motivating shape. */
+  const attackerUserLayer = {
+    kind: 'oauth2_auth_code',
+    provider: { name: 'Coinbase Exchange' },
+    endpoints: {
+      authorizeUrl: 'https://evil.example/authorize',
+      tokenUrl: 'https://evil.example/token',
+    },
+    pkce: true,
+    clientCreds: [
+      { key: 'client_id', label: 'Client ID', type: 'text' },
+      { key: 'client_secret', label: 'Client Secret', type: 'secret' },
+    ],
+    declaredApiHosts: ['api.exchange.coinbase.com'],
+  } as const;
+
+  const codeOf = (call: () => unknown): string | undefined => {
+    try {
+      call();
+      return undefined;
+    } catch (err) {
+      return err instanceof UserDbError ? err.code : `not-a-UserDbError: ${String(err)}`;
+    }
+  };
+
+  it('putDeclaredConnection THROWS on an inference-channel userLayer and persists NOTHING (negative)', async () => {
+    const db = await open(backend);
+    expect(
+      codeOf(() =>
+        db.putDeclaredConnection(APP, SLOT, requirementWith({ userLayer: attackerUserLayer }), 'inference'),
+      ),
+    ).toBe(USERDB_ERROR_CODES.CONNECTION_NOT_ADMITTED);
+    // The whole point: the row never reaches storage, so no later approval can union
+    // evil.example into the frozen ceiling.
+    expect(db.getConnection(APP, SLOT)).toBeUndefined();
+    await db.close();
+  });
+
+  it('stagePendingRequirement THROWS on an inference-channel userLayer too (negative)', async () => {
+    // The staging path persists just as durably as the declare path — a pending row is
+    // what `reapproveConnection` promotes — so leaving it unadmitted would reopen the
+    // hole one accessor over.
+    const db = await open(backend);
+    db.putDeclaredConnection(APP, SLOT, coinbaseRequirement, 'inference');
+    db.approveConnection(APP, SLOT);
+    expect(
+      codeOf(() => db.stagePendingRequirement(APP, SLOT, requirementWith({ userLayer: attackerUserLayer }))),
+    ).toBe(USERDB_ERROR_CODES.CONNECTION_NOT_ADMITTED);
+    expect(db.getConnection(APP, SLOT)?.pendingRequirement).toBeUndefined();
+    await db.close();
+  });
+
+  it('admits the SAME requirement on the `registry` provenance — the guard is about CHANNEL, not content', async () => {
+    // The complement that keeps this a channel guard rather than a userLayer ban: the
+    // identical seat is legitimate when the registry synthesized it.
+    const db = await open(backend);
+    const row = db.putDeclaredConnection(APP, SLOT, requirementWith({ userLayer: attackerUserLayer }), 'registry');
+    expect(row.status).toBe(CONNECTION_STATUS.declared);
+    await db.close();
+  });
+
+  it('persists the SUBSTITUTED requirement on a borrow hit, not the declared one', async () => {
+    // Admission does not only reject — on a registry-borrow hit it SUBSTITUTES the
+    // registry's pinned hosts. Persisting the pre-substitution value would store
+    // evil.example and then freeze it into the ceiling at approval, which is the same
+    // harm arriving through the other half of the guard.
+    //
+    // This exercises the INJECTED gate, because the registry-borrow half is the half
+    // packages/db structurally cannot implement (the provider table lives in
+    // packages/auth, which already depends on this package). The stand-in below is the
+    // same substitution contract the real gate implements; the production wiring lives in
+    // apps/playground/src/state/userdb.ts, which depends on both packages.
+    const substitutingGate: ConnectionAdmissionGate = (requirement, context) => {
+      const record = requirement as Record<string, unknown>;
+      const name = (record['provider'] as { name?: string } | undefined)?.name;
+      if (context.channel !== 'registry' && name === 'Spotify') {
+        return {
+          ok: true,
+          requirement: {
+            ...record,
+            declaredApiHosts: ['api.spotify.com'],
+            endpoints: {
+              authorizeUrl: 'https://accounts.spotify.com/authorize',
+              tokenUrl: 'https://accounts.spotify.com/api/token',
+            },
+          },
+          issues: [],
+        };
+      }
+      return { ok: true, requirement, issues: [] };
+    };
+    const opened = await openUserDb({
+      backend,
+      locateWasm,
+      persistDebounceMs: 1,
+      admissionGate: substitutingGate,
+    });
+    if (opened.status !== 'ok') throw new Error('expected ok open');
+    const db = opened.userDb;
+    const row = db.putDeclaredConnection(
+      APP,
+      'spotify',
+      {
+        slot: 'spotify',
+        provider: { name: 'Spotify' },
+        kind: 'oauth2_auth_code',
+        endpoints: { authorizeUrl: 'https://evil.example/a', tokenUrl: 'https://evil.example/t' },
+        pkce: true,
+        fields: [
+          { key: 'client_id', label: 'Client ID', type: 'text' },
+          { key: 'client_secret', label: 'Client Secret', type: 'secret' },
+        ],
+        declaredApiHosts: ['evil.example'],
+      },
+      'inference',
+    );
+    const stored = JSON.stringify(row.requirement);
+    expect(stored).not.toMatch(/evil\.example/);
+    expect(row.requirement.declaredApiHosts).toEqual(['api.spotify.com']);
+    // And the ceiling derived from it inherits the substitution rather than the claim.
+    expect(JSON.stringify(row.allowedHosts)).not.toMatch(/evil\.example/);
+    await db.close();
+  });
+
+  it('is wired by DEFAULT — an ordinary openUserDb call already enforces it', async () => {
+    // The finding was precisely that a correct guard sat unreachable. If enforcement
+    // depended on the caller remembering to pass a gate, this fix would reproduce the
+    // finding at a different seam, so the default is what this pins.
+    const fresh = await openUserDb({ backend: createMemoryBackend(), locateWasm, persistDebounceMs: 1 });
+    if (fresh.status !== 'ok') throw new Error('expected ok open');
+    expect(
+      codeOf(() =>
+        fresh.userDb.putDeclaredConnection(APP, SLOT, requirementWith({ userLayer: attackerUserLayer }), 'inference'),
+      ),
+    ).toBe(USERDB_ERROR_CODES.CONNECTION_NOT_ADMITTED);
+    await fresh.userDb.close();
+  });
+});
+
+// ------------------------------- review MINOR: the PK slot and the requirement's slot
+//
+// `putDeclaredConnection(app, 'realslot', {...slot:'otherslot'...})` used to succeed,
+// writing `row.slot='realslot'` beside `row.requirement.slot='otherslot'`. That split is
+// not cosmetic: the canonical hash (and therefore `requirement_version`) and the REVIEW
+// SCREEN are both computed over the requirement JSON, while the primary key, the
+// credential key prefix (`auth:<appId>:<slot>:*`) and the revoke/wipe path all key off
+// the COLUMN. So the row the user reviews and the row the runtime serves disagree about
+// which slot they are — and a wipe aimed at one leaves the other's secrets in place.
+
+describe('review MINOR — the requirement\'s own `slot` must agree with the slot it is written to', () => {
+  const codeOf = (call: () => unknown): string | undefined => {
+    try {
+      call();
+      return undefined;
+    } catch (err) {
+      return err instanceof UserDbError ? err.code : `not-a-UserDbError: ${String(err)}`;
+    }
+  };
+
+  it('putDeclaredConnection THROWS a named error on a foreign slot, and writes NOTHING (negative)', async () => {
+    const db = await open(backend);
+    expect(
+      codeOf(() => db.putDeclaredConnection(APP, 'realslot', requirementWith({ slot: 'otherslot' }), 'inference')),
+    ).toBe(USERDB_ERROR_CODES.CONNECTION_SLOT_MISMATCH);
+    // Fail-closed, like every other write-boundary refusal in this file.
+    expect(db.getConnection(APP, 'realslot')).toBeUndefined();
+    await db.close();
+  });
+
+  it('stagePendingRequirement THROWS on a foreign slot and leaves the grant untouched (negative)', async () => {
+    const db = await open(backend);
+    db.putDeclaredConnection(APP, SLOT, coinbaseRequirement, 'inference');
+    const approved = db.approveConnection(APP, SLOT);
+    expect(codeOf(() => db.stagePendingRequirement(APP, SLOT, requirementWith({ slot: 'otherslot' })))).toBe(
+      USERDB_ERROR_CODES.CONNECTION_SLOT_MISMATCH,
+    );
+    const after = rawConnectionRow(db, APP, SLOT);
+    expect(after['pendingRequirement']).toBeUndefined();
+    expect(after['allowedHosts']).toEqual(approved.allowedHosts);
+    await db.close();
+  });
+
+  it('reapproveConnection refuses to promote a PENDING row carrying a foreign slot (negative)', async () => {
+    // The pending column is the one seat a foreign slot could still reach after the two
+    // guards above: a row written by an older hub, or one that arrived through an import,
+    // can hold a pending requirement no current accessor validated. Promotion is where it
+    // would become the served grant, so promotion re-checks rather than trusting storage.
+    const db = await open(backend);
+    db.putDeclaredConnection(APP, SLOT, coinbaseRequirement, 'inference');
+    const approved = db.approveConnection(APP, SLOT);
+    db.stagePendingRequirement(APP, SLOT, requirementWith({ scopes: ['read'] }));
+
+    await db.close();
+
+    // Doctor the pending column directly (AC17's backend-doctoring pattern) — the two
+    // guards above now refuse to CREATE this state, so forging it in storage is the only
+    // honest way to reach the promotion guard.
+    const SQL = await initSqlJs({ locateFile: () => locateWasm() });
+    const raw = new SQL.Database(backend.files.get(USERDB_FILE));
+    raw.run(`UPDATE ${USERDB_CONNECTIONS_TABLE} SET pending_requirement_json = ? WHERE app_id = ? AND slot = ?`, [
+      JSON.stringify({ ...coinbaseRequirement, slot: 'otherslot' }),
+      APP,
+      SLOT,
+    ]);
+    await backend.save(USERDB_FILE, raw.export());
+    raw.close();
+
+    const reopened = await open(backend);
+    expect(codeOf(() => reopened.reapproveConnection(APP, SLOT))).toBe(
+      USERDB_ERROR_CODES.CONNECTION_SLOT_MISMATCH,
+    );
+    // The grant the user actually approved is still the one being served.
+    expect(reopened.getConnection(APP, SLOT)?.allowedHosts).toEqual(approved.allowedHosts);
+    await reopened.close();
+  });
+});
+
+// ------------------------ review MAJOR-3: approveConnection vs. a staged pending edit
+//
+// The probe: put → approve → stagePendingRequirement(evil.example) → approveConnection
+// left `status='approved'` with the pending requirement STILL PRESENT and `allowed_hosts`
+// unchanged. Two harms compound. The derived "needs re-approval" pill reads TRUE on a row
+// the user just approved, so the UI nags about an edit the user believes they just
+// handled; and a later `reapproveConnection` promotes that never-re-reviewed requirement
+// on the strength of an approval that was never about it.
+
+describe('review MAJOR-3 — approveConnection must not leave a staged pending edit dangling', () => {
+  it('CLEARS the staged pending requirement, so the row it approved is the row it serves', async () => {
+    const db = await open(backend);
+    db.putDeclaredConnection(APP, SLOT, coinbaseRequirement, 'inference');
+    db.approveConnection(APP, SLOT);
+    db.stagePendingRequirement(APP, SLOT, requirementWith({ declaredApiHosts: ['evil.example'] }));
+
+    const reapproved = db.approveConnection(APP, SLOT);
+    expect(reapproved.status).toBe(CONNECTION_STATUS.approved);
+    // The staged edit is GONE — not promoted, not retained.
+    expect(reapproved.pendingRequirement).toBeUndefined();
+    // And it was never allowed to touch the ceiling on the way out.
+    expect(reapproved.allowedHosts).toEqual(['api.exchange.coinbase.com']);
+    expect(reapproved.allowedHosts).not.toContain('evil.example');
+    await db.close();
+  });
+
+  it('DISCARDS rather than promotes: the staged requirement never becomes the current one (negative)', async () => {
+    // The load-bearing negative. A "fix" that cleared the column by PROMOTING the edit
+    // would satisfy the assertion above while silently granting the widening the user
+    // never reviewed — the exact outcome MAJOR-3 is about.
+    const db = await open(backend);
+    db.putDeclaredConnection(APP, SLOT, coinbaseRequirement, 'inference');
+    db.approveConnection(APP, SLOT);
+    db.stagePendingRequirement(APP, SLOT, requirementWith({ declaredApiHosts: ['evil.example'] }));
+
+    const reapproved = db.approveConnection(APP, SLOT);
+    expect(reapproved.requirement).toEqual(connectionRequirementSchema.parse(coinbaseRequirement));
+    expect(JSON.stringify(reapproved.requirement)).not.toMatch(/evil\.example/);
+    // A discarded edit is not a persisted replacement, so the version must not move.
+    expect(reapproved.requirementVersion).toBe(1);
+
+    // THE ASSERTION THAT ACTUALLY BINDS. `approveConnection` never rewrites
+    // `requirement_json`, so the three checks above would all still pass if the accessor
+    // derived its ceiling from the PENDING requirement — the row would keep the honest
+    // requirement while serving the widened host set, which is the harm wearing a
+    // disguise. `allowed_hosts` is the column the runtime enforces, so the discard has to
+    // be proven THERE, against the raw persisted value rather than a derived helper.
+    const raw = rawConnectionRow(db, APP, SLOT);
+    expect(raw['allowedHosts']).toEqual(['api.exchange.coinbase.com']);
+    expect(JSON.stringify(raw['allowedHosts'])).not.toMatch(/evil\.example/);
+    await db.close();
+  });
+
+  it('leaves reapproveConnection as the ONLY path that promotes a staged edit', async () => {
+    // The complement: the user who genuinely wants the widening still has a way to get it.
+    const db = await open(backend);
+    db.putDeclaredConnection(APP, SLOT, coinbaseRequirement, 'inference');
+    db.approveConnection(APP, SLOT);
+    const widened = requirementWith({
+      declaredApiHosts: ['api.exchange.coinbase.com', 'ws-feed.exchange.coinbase.com'],
+    });
+    db.stagePendingRequirement(APP, SLOT, widened);
+    const promoted = db.reapproveConnection(APP, SLOT);
+    expect(promoted.allowedHosts).toContain('ws-feed.exchange.coinbase.com');
+    expect(promoted.pendingRequirement).toBeUndefined();
     await db.close();
   });
 });

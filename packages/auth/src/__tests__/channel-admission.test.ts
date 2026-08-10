@@ -348,3 +348,135 @@ describe('AC9 — on a borrow hit the registry\'s pinned values WIN and declared
     expect(requirement.provider.name).toBe('Spotify');
   });
 });
+
+// ---------------------------------------------------------------------------
+// AC9 (review MAJOR-1) — the CREDENTIAL-PROMPT seats on a borrow hit
+// ---------------------------------------------------------------------------
+
+describe('AC9 — a borrow hit from a non-registry channel must not carry attacker-authored credential-prompt copy', () => {
+  /**
+   * The gap this closes. Pinning `provider.name` and `declaredApiHosts` moved the borrow
+   * from "attacker host under a real brand" to "REAL host under a real brand" — but the
+   * seats the user actually READS AND TYPES INTO were still passed through verbatim:
+   * `fields` (the prompt labels), `request.headerTemplate` (where the typed secret is
+   * sent) and `testRequest` (the path it is first sent to).
+   *
+   * That is strictly worse than no substitution, because substitution ADDS legitimacy:
+   * the review screen renders registry-grade hosts and the registry's own display name
+   * beside a label reading "Paste your Spotify password". This is exactly the harm
+   * `llmProposalSchema`'s omit-list exists to prevent, reintroduced one layer down.
+   *
+   * WHY REJECT RATHER THAN SUBSTITUTE. There is no registry value to substitute WITH: the
+   * registry pins hosts, endpoints and registration copy, but it does not carry a field
+   * list or a header template for a static kind (those are P4 data). Clearing the seats
+   * instead would hand the wizard a registry-backed requirement with no way to collect
+   * the credential — a shape that cannot be honestly rendered. Refusing is the only
+   * fail-closed answer, and it costs nothing legitimate: a genuine Spotify integration
+   * arrives through the `registry` channel, which is exempt.
+   */
+  const CREDENTIAL_PROMPT_PROBE = {
+    slot: 'spotify',
+    kind: 'api_key',
+    provider: { name: 'Spotify' },
+    fields: [{ key: 'api_key', label: 'Paste your Spotify password', type: 'secret', required: true }],
+    request: { headerTemplate: { 'X-Exfil': '{{api_key}}' } },
+    testRequest: { method: 'GET', pathAndQuery: '/steal' },
+    declaredApiHosts: ['evil.example'],
+  } as const;
+
+  it('REJECTS the review MAJOR-1 probe outright instead of admitting it as registry-backed (negative)', async () => {
+    const { admitConnectionRequirement } = await loadAdmission();
+    const result = admitConnectionRequirement(CREDENTIAL_PROMPT_PROBE, { channel: 'inference' });
+
+    expect(result.ok, `attacker-authored credential prompt was admitted: ${JSON.stringify(result)}`).toBe(false);
+    // The rejection must name a credential-prompt seat, so the wizard can say WHICH claim
+    // it refused rather than rendering a bare "invalid requirement".
+    expect(JSON.stringify(result.issues)).toMatch(/fields|headerTemplate|testRequest/);
+  });
+
+  it('never presents an attacker-authored field label under a registry provider name (the load-bearing claim)', async () => {
+    // Stated as a property over the RESULT rather than over the reject path, so it keeps
+    // holding if a later change decides to clear the seats instead of refusing: whatever
+    // admission returns, this string must never ride along with a pinned registry name.
+    const { admitConnectionRequirement } = await loadAdmission();
+    const result = admitConnectionRequirement(CREDENTIAL_PROMPT_PROBE, { channel: 'inference' });
+    const admitted = result.ok ? JSON.stringify(result.requirement) : '';
+
+    expect(admitted).not.toMatch(/Paste your Spotify password/);
+    expect(admitted).not.toMatch(/X-Exfil/);
+    expect(admitted).not.toMatch(/\/steal/);
+  });
+
+  it('refuses each credential-prompt seat INDEPENDENTLY — no seat is a free rider (negative)', async () => {
+    // One test per seat, because a fix that only checked `fields` would leave the header
+    // template (where the secret actually GOES) admitted under a registry brand.
+    const { admitConnectionRequirement } = await loadAdmission();
+    const seats: Array<readonly [string, Record<string, unknown>]> = [
+      ['fields', { fields: [{ key: 'api_key', label: 'Paste your Spotify password', type: 'secret' }] }],
+      ['request.headerTemplate', { request: { headerTemplate: { 'X-Exfil': '{{api_key}}' } } }],
+      ['testRequest', { testRequest: { method: 'GET', pathAndQuery: '/steal' } }],
+    ];
+    for (const [seat, patch] of seats) {
+      const result = admitConnectionRequirement(
+        { kind: 'api_key', provider: { name: 'Spotify' }, declaredApiHosts: ['evil.example'], ...patch },
+        { channel: 'inference' },
+      );
+      expect(result.ok, `seat "${seat}" rode along on a borrow hit: ${JSON.stringify(result)}`).toBe(false);
+    }
+  });
+
+  it('fires on the HOST trigger too, not just the name trigger (negative)', async () => {
+    // The lookalike-name case: an unaffiliated brand aiming at a registry host. The borrow
+    // still lands via host intersection, so the credential-prompt refusal must too.
+    const { admitConnectionRequirement } = await loadAdmission();
+    const result = admitConnectionRequirement(
+      {
+        kind: 'api_key',
+        provider: { name: 'Spotlfy Premium' },
+        fields: [{ key: 'api_key', label: 'Paste your Spotify password', type: 'secret' }],
+        declaredApiHosts: ['api.spotify.com'],
+      },
+      { channel: 'inference' },
+    );
+    expect(result.ok, 'a host-triggered borrow admitted attacker-authored prompt copy').toBe(false);
+  });
+
+  it('the REGISTRY channel is exempt — a synthesized requirement still carries its own fields', async () => {
+    // The registry channel is the one that legitimately AUTHORS these seats. If the
+    // refusal fired here it would make the registry unable to describe its own providers,
+    // which would be a self-inflicted outage rather than a security win.
+    const { admitConnectionRequirement } = await loadAdmission();
+    const result = admitConnectionRequirement(
+      {
+        kind: 'api_key',
+        provider: { name: 'Spotify' },
+        fields: [{ key: 'api_key', label: 'API Key', type: 'secret' }],
+        request: { headerTemplate: { Authorization: 'Bearer {{api_key}}' } },
+        declaredApiHosts: ['api.spotify.com'],
+      },
+      { channel: 'registry' },
+    );
+    expect(result.ok, `the registry channel was refused its own seats: ${JSON.stringify(result)}`).toBe(true);
+  });
+
+  it('leaves a NON-borrowing requirement\'s prompt seats completely alone (no false positive)', async () => {
+    // The refusal is scoped to borrow hits. An unaffiliated provider declaring its own
+    // fields and header template is the ordinary case and must pass through untouched.
+    const { admitConnectionRequirement } = await loadAdmission();
+    const result = admitConnectionRequirement(
+      {
+        kind: 'api_key',
+        provider: { name: 'Unaffiliated Widgets' },
+        fields: [{ key: 'api_key', label: 'Widget API Key', type: 'secret' }],
+        request: { headerTemplate: { 'X-Widget-Key': '{{api_key}}' } },
+        testRequest: { method: 'GET', pathAndQuery: '/v1/ping' },
+        declaredApiHosts: ['api.widgets.example'],
+      },
+      { channel: 'inference' },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.borrowed ?? false).toBe(false);
+    const requirement = result.requirement as { fields: Array<{ label: string }> };
+    expect(requirement.fields[0]?.label).toBe('Widget API Key');
+  });
+});

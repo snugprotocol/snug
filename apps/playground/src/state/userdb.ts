@@ -3,9 +3,32 @@
 // the UI surfaces 'corrupt' and recovery is an explicit user action (recoverFresh, or
 // restore-from-origin once sync ships). Tests inject a memory-backed instance.
 
-import { openUserDb, type OpenUserDbResult, type UserDb } from '@snugprotocol/db';
+import {
+  openUserDb,
+  type ConnectionAdmissionGate,
+  type OpenUserDbResult,
+  type UserDb,
+} from '@snugprotocol/db';
+import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol/auth';
 import { locateWasm } from '../run/wasm.js';
 import { createStore, useStore } from './store.js';
+
+/**
+ * THE COMPOSITION ROOT for connection admission (review MAJOR-2).
+ *
+ * `packages/db` owns the rule that nothing persists unadmitted, but it cannot reach the
+ * well-known-provider registry: `@snugprotocol/auth` already depends on
+ * `@snugprotocol/db`, so a direct call would close an import cycle. This app depends on
+ * BOTH, which makes it the one place the full gate can be assembled — packages/db's
+ * built-in default enforces the registry-free half (AC5's userLayer channel rule) until
+ * this wiring runs, so the seam is a strengthening, never an on/off switch.
+ *
+ * The `channel` reaching admission is the row's PERSISTED provenance, handed over by the
+ * accessor itself, so the channel a requirement is judged on and the channel recorded
+ * beside it are the same value by construction.
+ */
+const admissionGate: ConnectionAdmissionGate = (requirement, context) =>
+  admitConnectionRequirement(requirement, { channel: context.channel as AdmissionChannel });
 
 export type UserDbStatus =
   | { state: 'opening' }
@@ -32,7 +55,7 @@ export function bootUserDb(): Promise<UserDb> {
   const ready = ensureReadyPromise();
   if (opened) return ready;
   opened = true;
-  void openUserDb({ locateWasm }).then((result) => {
+  void openUserDb({ locateWasm, admissionGate }).then((result) => {
     if (result.status === 'ok') {
       userDbStatusStore.set({ state: 'ready' });
       resolveReady?.(result.userDb);

@@ -36,6 +36,16 @@
  * one because the review screen renders `provider.name`, and a surviving declared name
  * would let attacker copy sit next to registry-grade hosts.
  *
+ * WHAT SUBSTITUTION CANNOT REACH, and why that is a REFUSAL (review MAJOR-1). The seats
+ * that drive the credential prompt — `fields` (what the user is asked to type),
+ * `request.headerTemplate` (where the typed secret is sent) and `testRequest` — have no
+ * registry counterpart to substitute in: the registry pins hosts, endpoints and
+ * registration copy, not a per-kind field list. Passing them through was strictly worse
+ * than not substituting at all, because substitution ADDS legitimacy: a label reading
+ * "Paste your Spotify password" rendered beside registry-grade hosts and the registry's
+ * own display name. So a borrow hit from a non-registry channel that occupies any of
+ * those seats is REFUSED outright rather than admitted with a partial correction.
+ *
  * WHAT THIS IS NOT. Admission is not authorization. A clean pass here means "these claims
  * may be SHOWN to the user", never "this app may have a credential". The frozen host
  * ceiling (`snug_connections.allowed_hosts`, computed at approval) remains the runtime
@@ -157,6 +167,39 @@ function findBorrowedEntry(
 }
 
 /**
+ * The seats that DRIVE A CREDENTIAL PROMPT: what the user is asked to type, where the
+ * typed value is sent, and the first request it is sent on.
+ *
+ * These are separated from the substitutable seats because the registry has nothing to
+ * substitute them WITH. It pins hosts, endpoints and registration copy; it does not carry
+ * a field list or a header template for a static kind (that data is P4). So on a borrow
+ * hit from an authoring channel these seats cannot be corrected — only refused.
+ */
+const CREDENTIAL_PROMPT_SEATS = ['fields', 'request', 'testRequest'] as const;
+
+/**
+ * Which credential-prompt seats does this requirement actually carry?
+ *
+ * `request` counts only when it carries a `headerTemplate` — an empty `request` object
+ * says nothing about where a secret goes, and refusing on it would reject shapes that
+ * declare no prompt at all.
+ */
+function occupiedPromptSeats(requirement: Record<string, unknown>): string[] {
+  const occupied: string[] = [];
+  for (const seat of CREDENTIAL_PROMPT_SEATS) {
+    const value = requirement[seat];
+    if (value === undefined || value === null) continue;
+    if (seat === 'request') {
+      if (asRecord(value)?.['headerTemplate'] !== undefined) occupied.push('request.headerTemplate');
+      continue;
+    }
+    if (seat === 'fields' && Array.isArray(value) && value.length === 0) continue;
+    occupied.push(seat);
+  }
+  return occupied;
+}
+
+/**
  * Apply the registry's pinned values over the declared ones.
  *
  * Substitution is REPLACEMENT, never a merge: merging would let a declaration keep
@@ -232,6 +275,43 @@ export function admitConnectionRequirement<T>(requirement: T, options: Admission
   const borrowed = findBorrowedEntry(record);
   if (borrowed === undefined) {
     return { ok: true, requirement, issues: [] };
+  }
+
+  // Guard 2b — the CREDENTIAL-PROMPT seats on a borrow hit (review MAJOR-1).
+  //
+  // Substituting hosts and pinning `provider.name` made the borrow MORE dangerous for
+  // these seats, not less: before, an attacker's field label sat beside an attacker's
+  // host and read as the sketchy thing it was; after substitution it reads as
+  // registry-grade Spotify asking the user to "Paste your Spotify password", with the
+  // typed value routed by an attacker-authored `headerTemplate`. Legitimacy is exactly
+  // what substitution confers, so any seat it CANNOT correct must be refused instead.
+  //
+  // The `registry` channel is exempt for the same reason it is exempt in Guard 1: it is
+  // the seat's legitimate AUTHOR, not a borrower of someone else's brand.
+  if (options.channel !== 'registry') {
+    const occupied = occupiedPromptSeats(record);
+    if (occupied.length > 0) {
+      return {
+        ok: false,
+        borrowed: true,
+        borrowedFrom: borrowed.key,
+        // The SUBSTITUTED requirement is still what we hand back, even though `ok` is
+        // false. Two reasons, both load-bearing. First, the substitution properties are
+        // unconditional: a caller that logs or renders a rejected requirement (a "we
+        // refused this" review row) must never see `evil.example` or an attacker's
+        // rename, and returning the raw record would reintroduce exactly that. Second,
+        // `ok:false` is defined as FATAL for the requirement (see the contract note on
+        // `admitConnectionRequirement`), so no caller may use this value as an admitted
+        // one — the prompt seats it still carries are refused, not blessed.
+        requirement: applyRegistryValues(record, borrowed.entry) as T,
+        issues: occupied.map((path) => ({
+          path,
+          // Names the seat AND the borrow, because the two together are the harm — the
+          // wizard needs to say which claim it refused, not just "invalid requirement".
+          message: `'${path}' is credential-prompt copy that the '${options.channel}' channel may not author while borrowing registry provider '${borrowed.key}'; the registry has no pinned value to substitute, so the requirement is refused`,
+        })),
+      };
+    }
   }
 
   return {

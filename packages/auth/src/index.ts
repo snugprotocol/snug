@@ -64,9 +64,9 @@ export {
 } from './well-known-providers.js';
 
 export {
+  AUTH_ENGINE_HELPER_NAMES,
   AuthTemplateError,
   renderAuthHeaderTemplate,
-  renderAuthTemplateString,
   type AuthTemplateContext,
   type AuthTemplateRequest,
 } from './template-engine.js';

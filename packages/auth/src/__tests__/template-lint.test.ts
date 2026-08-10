@@ -25,8 +25,19 @@ const srcDir = join(__dirname, '..');
  */
 const PINNED_HELPERS = ['timestamp', 'hmac_sha256', 'hmac_sha256_b64', 'base64'] as const;
 
-/** The pinned request tokens — this IS `readRequestField`'s switch (:197-208), not an inference. */
-const PINNED_REQUEST_TOKENS = ['request.method', 'request.url', 'request.pathAndQuery', 'request.body'] as const;
+/**
+ * The pinned request tokens — this IS `readRequestField`'s switch, not an inference.
+ * `request.timestamp` is the render-minted one (review blocker B2): it is what makes the
+ * timestamp writable in ARGUMENT position, which is what the Coinbase-Exchange prehash
+ * needs and what no helper-call form could supply.
+ */
+const PINNED_REQUEST_TOKENS = [
+  'request.method',
+  'request.url',
+  'request.pathAndQuery',
+  'request.body',
+  'request.timestamp',
+] as const;
 
 /** Declared field keys for the Coinbase-shaped fixture the lint is exercised against. */
 const DECLARED_FIELDS = ['api_key', 'api_secret', 'passphrase'] as const;
@@ -56,13 +67,28 @@ function walkSources(): Array<{ name: string; text: string }> {
 // ---------------------------------------------------------------------------
 
 describe('AC7 — HELPERS map equals the pinned enum exactly (fold S-M2a)', () => {
-  // This suite tests the SHIPPED engine, so it fails today for the right reason:
-  // unix_ms, hmac_sha512 and sha256 are still in the map. Asserting the map's key set
-  // (not just "the extras are gone") is what keeps the trim honest in both directions —
-  // a future helper added without an enum amendment fails here too.
-  it('exposes exactly the four pinned helpers — no more, no fewer', async () => {
+  // Asserting the map's key set (not just "the extras are gone") is what keeps the trim
+  // honest in both directions — a future helper added without an enum amendment fails here.
+  it('the pinned enum lists exactly the four agreed names', async () => {
+    // Test-side literal vs the exported enum. This half only pins the ENUM's contents; on
+    // its own it says nothing about the engine — see the next test for that.
     const { AUTH_TEMPLATE_HELPERS } = await loadLint();
     expect([...AUTH_TEMPLATE_HELPERS].sort()).toEqual([...PINNED_HELPERS].sort());
+  });
+
+  it("the ENGINE's helper map set-equals the pinned enum", async () => {
+    // The real AC7, and previously a TAUTOLOGY: this suite compared the local
+    // `PINNED_HELPERS` array to `AUTH_TEMPLATE_HELPERS` and stopped there. Both are
+    // lint/test-side constants, so the assertion was the enum equalling itself — the
+    // engine's `HELPERS` map was never read, and a helper added to the engine alone would
+    // have passed. `AUTH_ENGINE_HELPER_NAMES` is the engine's actual `Object.keys(HELPERS)`,
+    // so this compares the two SIDES the invariant is about.
+    const { AUTH_TEMPLATE_HELPERS } = await loadLint();
+    const { AUTH_ENGINE_HELPER_NAMES } = await import('../template-engine.js');
+    expect(
+      [...AUTH_ENGINE_HELPER_NAMES].sort(),
+      'the engine implements a different helper set than the lint enforces',
+    ).toEqual([...AUTH_TEMPLATE_HELPERS].sort());
   });
 
   it('unix_ms, hmac_sha512 and sha256 are GONE from the engine', async () => {
@@ -278,16 +304,48 @@ describe('AC8 — no render path bypasses the lint (unit + source proof)', () =>
     ).rejects.toThrow();
   });
 
-  it('source proof: every call site of renderAuthHeaderTemplate/renderAuthTemplateString sits behind the lint', () => {
-    // The grep half (precedent: browser-safe.test.ts). A runtime test can only cover the
-    // paths it thinks to call; this one fails when a NEW unlinted call site is added.
+  it('the UNLINTED render primitive is not reachable from outside the package', () => {
+    // THE STRUCTURAL HALF, and the one that actually carries AC8 outside this package.
+    //
+    // `renderAuthTemplateString` is the primitive with NO lint gate — the gate sits on the
+    // header-object seat (`renderAuthHeaderTemplate`), which is the seat every production
+    // caller uses. So the honest way to stop an external caller from rendering unlinted is
+    // not to grep for one, it is to make the unlinted function unimportable: it is no
+    // longer re-exported from `index.ts`. External packages can reach ONLY the gated seat.
+    //
+    // What this proves: no module outside `packages/auth` can call the unlinted primitive
+    // at all, because the package does not expose it.
+    // What it does NOT prove: anything about modules INSIDE this package, which can still
+    // import it by relative path — that case is carried by the sweep below.
+    const index = readFileSync(join(srcDir, 'index.ts'), 'utf8');
+    expect(
+      /renderAuthHeaderTemplate/.test(index),
+      'the gated render seat should stay exported — narrowing must not remove the supported API',
+    ).toBe(true);
+    expect(
+      /renderAuthTemplateString/.test(index),
+      'index.ts re-exports the UNLINTED render primitive — an external caller can bypass the gate',
+    ).toBe(false);
+  });
+
+  it('source proof: no in-package module calls a render function without importing the lint', () => {
+    // The grep half (precedent: browser-safe.test.ts), retained for in-package callers now
+    // that the export surface covers external ones. A runtime test can only cover the paths
+    // it thinks to call; this one fails when a NEW unlinted call site is added.
+    //
+    // STATED PLAINLY, because this was previously over-claimed as a bypass proof:
+    // this test proves CO-OCCURRENCE — that a rendering module also imports the lint module
+    // — and nothing more. It does NOT prove ORDERING (that the lint runs BEFORE the render),
+    // it does not prove the imported symbol is actually CALLED, and it does not prove the
+    // lint was called with the right field keys. Those three are carried by the runtime
+    // tests above and by `connected-fetch.test.ts`, not here. Its real value is as a
+    // tripwire: a new module that renders without even importing the lint is caught the day
+    // it is added, which grep can honestly do and a fixed set of runtime tests cannot.
     const offenders: string[] = [];
     for (const { name, text } of walkSources()) {
       if (name === 'template-engine.ts' || name === 'template-lint.ts') continue; // definition + lint itself
+      if (name === 'index.ts') continue; // pure re-export barrel; covered by the export test above
       if (!/renderAuthHeaderTemplate|renderAuthTemplateString/.test(text)) continue;
-      // A module that renders must also import the lint. This is coarse by design: it
-      // cannot prove ORDERING, so it is paired with the runtime tests above rather than
-      // trusted alone.
       if (!/from '\.\/template-lint\.js'/.test(text)) {
         offenders.push(`${name} renders a template without importing the lint`);
       }

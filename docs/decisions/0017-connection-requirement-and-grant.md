@@ -234,10 +234,66 @@ splits on commas — a multi-part prehash cannot arrive as one argument. This ad
 primitive; it is concatenation of already-permitted tokens.
 
 **One consequence is a real defect if ignored, so it is pinned here:** the timestamp
-signed MUST be the same value sent in `CB-ACCESS-TIMESTAMP`. Two separate `{{timestamp()}}`
+signed MUST be the same value sent in `CB-ACCESS-TIMESTAMP`. Two separate timestamp
 evaluations can straddle a second boundary and produce an intermittently-invalid
-signature — a ~1-in-N auth failure, not a theoretical one. `timestamp()` is therefore
+signature — a ~1-in-N auth failure, not a theoretical one. The timestamp is therefore
 evaluated **once per render pass** and memoized in the render context.
+
+#### `request.timestamp`: a fifth pinned request token, added so the above is reachable
+
+The four-helper enum above is **necessary but not sufficient** for Exchange, and the
+first implementation shipped it insufficient. Verified by execution against the built
+package: the pinned template
+
+```
+{{hmac_sha256_b64(api_secret, timestamp(), request.method, request.pathAndQuery, request.body)}}
+```
+
+**failed the lint** (`ok: false`). A helper CALL is not an accepted ARGUMENT form — the
+grammar is flat, `parseHelperArgs` has no recursive descent, and the lint accepts an
+argument only if it is a quoted literal, a declared field key, or a pinned request token.
+So the timestamp could be *sent* (`{{timestamp()}}` in bare position) but never *signed*,
+and the Coinbase-Exchange template this section justifies the fourth helper for was
+**inexpressible in the shipped code**. The `timestamp()` memoization was, for the same
+reason, protecting nothing reachable: no template could evaluate it twice.
+
+**Decision: add `request.timestamp` to the pinned request-token set** (now five:
+`request.method` · `request.url` · `request.pathAndQuery` · `request.body` ·
+`request.timestamp`). It is a **render fact**, not a request fact — minted by the render
+pass from the memoized state rather than read off the request — so it resolves even when
+no request context is supplied, and `{{timestamp()}}` and `{{request.timestamp}}` are
+served from the **same memoized slot** and cannot disagree.
+
+The rejected alternative was allowing a **nested zero-arg helper call in argument
+position**, bounded to one level. It keeps `timestamp()` as the only spelling, but it
+makes argument resolution recursive and asynchronous, and every bound on it ("zero-arg
+only", "one level, no recursion") becomes a rule enforced by code that a later edit can
+relax. A pinned token is enforced by the token list itself, and the grammar stays flat.
+Nesting remains **rejected by both the lint and the engine**, and that rejection is tested
+rather than assumed.
+
+The acceptance property is not "the two timestamp headers match" — two frozen clocks
+satisfy that. It is that the HMAC **independently recomputed from the value sent in
+`CB-ACCESS-TIMESTAMP`** equals the value sent in `CB-ACCESS-SIGN`. That is what
+`template-parity.test.ts` asserts, and defeating the memoization turns it red.
+
+#### Quoted helper arguments are literals in the ENGINE, not only in the lint
+
+The lint skips a quoted argument unexamined, on the reading that quotes mark a literal by
+authorial intent. The engine did not honor that reading: `parseHelperArgs` stripped the
+quotes and **discarded the fact they were there**, so `resolveArgToken` looked the bare
+text up in `ctx.fields` and resolved it as a credential. Verified by execution:
+`{{base64('api_key')}}` **linted `ok: true`** and **rendered `base64('SUPERSECRET')`** —
+the live credential, from a template that passes a human review precisely *because* the
+quotes make it look inert.
+
+This was a **C1 breach reachable from an approved template**, and it is fixed in the
+**engine**: quoted arguments are returned verbatim without consulting `ctx.fields` or the
+request tokens. The fix belongs there rather than in a widened lint because widening the
+lint would only narrow *which* templates reach the capability, leaving the engine still
+able to resolve a quoted token to a secret. With the engine honoring quoting, the lint's
+own parity claim — "a template cannot lint one way and render another" — is true of the
+shipped code.
 
 **Cost accounted honestly:** the enum is FOUR, not the three the plan pinned. The trim is
 unaffected — `unix_ms`, `hmac_sha512` and `sha256` are deleted from the engine's HELPERS
@@ -245,8 +301,9 @@ map, so the net count drops six → four. Every unused helper is signing surface
 template can reach, and those three shipped with no requirement behind them.
 
 The variant is not privileged: it is linted like every other helper (name in enum; every
-argument a declared field key, a pinned request token, or a quoted literal) and rendered
-verbatim in the strong review code box like every other template.
+UNQUOTED argument a declared field key or a pinned request token; quoted arguments are
+literals and render as their own text) and rendered verbatim in the strong review code box
+like every other template.
 
 ## Alternatives considered
 
@@ -280,7 +337,19 @@ verbatim in the strong review code box like every other template.
 - **A Coinbase-shaped app becomes buildable**: three fields, a signed CB-ACCESS-* header
   template, a developer-console walkthrough, and a host ceiling — persisted as a
   `declared` row before the app is ever run. That is the defect this rewrite was filed
-  for, and it is the acceptance bar for P2.
+  for, and it is the acceptance bar for P2. The exact four-header template is now
+  **executed** in `template-parity.test.ts`, not asserted in prose — the first
+  implementation of this ADR claimed buildability while the template failed the lint.
+- **The v4 four-helper lint also applies to the still-shipping v3 `authSpec` render
+  path.** `connected-fetch.ts`'s static-kind branch lints every `headerTemplate` before
+  rendering, and it does not branch on schema version, so a v3 spec whose template uses
+  `unix_ms`, `hmac_sha512` or `sha256` now fails closed with `NET_AUTH_FAILED` rather
+  than rendering. This is disclosed rather than scoped away for two reasons: the engine's
+  HELPERS map no longer contains those three at all, so a v3 template using them would
+  fail at render regardless — scoping the lint to v4 rows would change only *which*
+  error is raised, trading a review-time rejection for a signing-time throw — and the
+  surface is pre-launch, so no such row exists in a user's database. A repo-wide search
+  finds the three names only in the trim's own comments and tests.
 - **Editing a declaring app no longer withdraws its guided setup.** ADR-0016's recorded
   UX cost is repaid: the requirement is the user's own persisted row, so an edit flows
   through the re-infer rules instead of vanishing. ADR-0016 §Consequences' warning against
@@ -315,10 +384,14 @@ three:
    review. This is the direct cost of admitting LLM-authored templates, and it is why the
    review renders them uncollapsed.
 2. **Helper encoding defeats the value-match scrubber by design.** `{{base64(api_secret)}}`
-   in an odd header is not caught by `scrub.ts`, which documents re-encoded values as out
-   of scope (`scrub.ts:16–19`). `hmac_sha256_b64` adds one row to this: the decoded key
-   never leaves the render, but the base64 digest output is outside the scrubber's reach
-   by the same documented boundary. The host ceiling remains the wall.
+   — the UNQUOTED form, which genuinely references the credential — in an odd header is
+   not caught by `scrub.ts`, which documents re-encoded values as out of scope
+   (`scrub.ts:16–19`). `hmac_sha256_b64` adds one row to this: the decoded key never
+   leaves the render, but the base64 digest output is outside the scrubber's reach by the
+   same documented boundary. The host ceiling remains the wall. Note the *quoted* form
+   `{{base64('api_secret')}}` is no longer an instance of this risk at all — it renders
+   the literal string, per §Quoted helper arguments above — and a reviewer may now rely on
+   quotes meaning what they appear to mean.
 3. **ASCII lookalike provider names are accepted.** Per §Confusable guard above — carried
    by the host-intersection ban and the review's provenance copy, not by the charset rule.
 

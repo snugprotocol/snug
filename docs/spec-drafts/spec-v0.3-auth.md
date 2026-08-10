@@ -298,9 +298,15 @@ A template value may reference **only**:
 
 - a **declared field key** from this requirement's own `fields`;
 - a **pinned request token**: `request.method` · `request.url` · `request.pathAndQuery` ·
-  `request.body`;
+  `request.body` · `request.timestamp`;
 - a **pinned helper**: `timestamp` · `hmac_sha256` · `hmac_sha256_b64` · `base64`;
 - a quoted literal.
+
+The grammar is **flat**: a helper call is a placeholder form, never an argument form. A
+conforming host MUST reject a nested call such as
+`{{hmac_sha256_b64(api_secret, timestamp(), request.body)}}` and MUST NOT evaluate it.
+`request.timestamp` exists so the timestamp is nonetheless writable in argument position —
+see §4.4.1.
 
 The lint's load-bearing job is making the render engine's *unknown-token-as-literal*
 fallback unreachable. In argument position that fallback is silent and wrong:
@@ -308,6 +314,15 @@ fallback unreachable. In argument position that fallback is silent and wrong:
 eight-byte string `"api_secrt"` instead of the credential and produces a plausible 64-hex
 signature the provider rejects. A conforming host rejects that at review time, not at
 signing time.
+
+**A quoted argument is a literal in the ENGINE, not only in the lint.** Because the lint
+accepts a quoted argument without examining it, a conforming host MUST render a quoted
+argument **verbatim** — it MUST NOT resolve the quoted text against the credential fields
+or the request tokens. `{{base64('api_key')}}` MUST render `base64("api_key")`, the
+literal token text, even when `api_key` is a declared field holding a live credential.
+A host that strips the quotes and then resolves the bare text emits the **credential**
+from a template that passed review precisely because the quotes made it look inert. This
+is a credential-disclosure requirement, not a formatting one.
 
 `hmac_sha256_b64(secret, ...messageParts)` computes
 `base64(HMAC-SHA256(base64decode(secret), concat(messageParts)))` — the three transforms
@@ -317,10 +332,32 @@ returns hex unconditionally, the base64 helper is utf8-in so it cannot re-encode
 digest bytes, and the grammar has no nesting. The message tail is variadic because real
 prehash strings are multi-part concatenations and the argument grammar splits on commas.
 
-**`timestamp()` MUST be evaluated once per render pass and memoized.** Two independent
+#### 4.4.1 `request.timestamp` and the one-timestamp rule
+
+**The timestamp MUST be evaluated once per render pass and memoized.** Two independent
 evaluations can straddle a second boundary, so a signed timestamp and a sent timestamp
 would disagree intermittently — an occasional, hard-to-diagnose auth failure rather than a
 clean one.
+
+`request.timestamp` is the token that makes the memoization *reachable*. Every signing
+scheme of this shape sends the timestamp in one header and signs it inside another, so the
+timestamp must be writable in **argument** position — and the helper form `timestamp()`
+cannot go there, because the grammar admits no nested calls. Without this token the
+canonical Coinbase-Exchange template is not expressible at all.
+
+`request.timestamp` is a **render fact**, not a request fact: a conforming host mints it
+during the render pass rather than reading it from the request, so it resolves even when
+no request context is supplied, and it MUST be served from the **same** memoized value as
+`{{timestamp()}}`. The two spellings MUST NOT be able to disagree within one pass.
+
+The conformance property is not that two rendered timestamp headers are equal — two frozen
+clocks satisfy that. It is that an HMAC **recomputed independently from the timestamp value
+the host actually sent** equals the signature the host sent:
+
+```
+CB-ACCESS-TIMESTAMP: {{request.timestamp}}
+CB-ACCESS-SIGN:      {{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}
+```
 
 ### 4.5 `userLayer` is registry-synthesized only
 

@@ -56,17 +56,33 @@ async function hmacBytes(secret: Uint8Array, message: string): Promise<Uint8Arra
  * Per-render state. Currently one entry, and it is a correctness fix rather than a cache:
  *
  * TIMESTAMP MEMOIZATION. Every signing scheme that sends a timestamp header ALSO signs
- * that timestamp, so a template reads `{{timestamp()}}` twice — once for
- * `CB-ACCESS-TIMESTAMP`, once inside `{{hmac_sha256_b64(api_secret, timestamp(), ...)}}`.
+ * that timestamp, so a template reads the timestamp twice — once for
+ * `CB-ACCESS-TIMESTAMP`, once inside `{{hmac_sha256_b64(api_secret, request.timestamp, ...)}}`.
  * Evaluating `Date.now()` independently at each site straddles a second boundary
  * whenever the two calls land either side of one, so the header and the signed prehash
  * disagree and the provider rejects the request. That presents as an INTERMITTENT ~1-in-N
- * auth failure — the worst possible shape to debug — so `timestamp()` is evaluated once
+ * auth failure — the worst possible shape to debug — so the timestamp is evaluated once
  * per render pass and reused across every placeholder in the whole header object.
+ *
+ * Until B2 this memoization protected NOTHING REACHABLE. The only way to read a timestamp
+ * was `{{timestamp()}}`, which is a helper CALL — and a helper call was never an accepted
+ * ARGUMENT form in either the lint or the engine, so the signed-and-sent pair the
+ * memoization exists for could not be written down. `request.timestamp` (a pinned token,
+ * legal in argument position by the grammar that already existed) is what makes it
+ * reachable. Both forms read this one slot, so they cannot disagree.
  */
 interface RenderState {
   timestamp?: string;
 }
+
+/**
+ * The one seat that mints the render pass's timestamp. Both `{{timestamp()}}` and
+ * `{{request.timestamp}}` route through it, which is what makes "the signed timestamp
+ * byte-equals the sent timestamp" true by CONSTRUCTION rather than by two call sites
+ * agreeing to read the same field.
+ */
+const renderTimestamp = (state: RenderState): string =>
+  (state.timestamp ??= Math.floor(Date.now() / 1000).toString());
 
 type HelperFn = (args: string[], ctx: AuthTemplateContext, state: RenderState) => Promise<string> | string;
 
@@ -78,7 +94,7 @@ type HelperFn = (args: string[], ctx: AuthTemplateContext, state: RenderState) =
  * signing surface.
  */
 const HELPERS: Record<string, HelperFn> = {
-  timestamp: (_args, _ctx, state) => (state.timestamp ??= Math.floor(Date.now() / 1000).toString()),
+  timestamp: (_args, _ctx, state) => renderTimestamp(state),
   base64: (args) => utf8ToBase64(args[0] ?? ''),
   hmac_sha256: async (args) => {
     const [secret, message] = args;
@@ -121,6 +137,19 @@ const HELPERS: Record<string, HelperFn> = {
     return bytesToBase64(await hmacBytes(key, messageParts.join('')));
   },
 };
+
+/**
+ * The engine's ACTUAL helper names, exported so AC7 can assert the real map against the
+ * lint's `AUTH_TEMPLATE_HELPERS` enum.
+ *
+ * Before this export AC7 was a TAUTOLOGY: the test compared a locally-declared
+ * `PINNED_HELPERS` array to `AUTH_TEMPLATE_HELPERS`, and both are lint/test-side constants
+ * — the engine's `HELPERS` map was never read, so a helper added to the engine without an
+ * enum amendment passed. The enum could only ever equal itself. `HELPERS` stays private
+ * (the functions are not public surface); only the NAME SET is exposed, which is exactly
+ * what the invariant is about.
+ */
+export const AUTH_ENGINE_HELPER_NAMES: readonly string[] = Object.freeze(Object.keys(HELPERS));
 
 const PLACEHOLDER_RE = /\{\{\s*([^}]+?)\s*\}\}/g;
 const HELPER_RE = /^([a-zA-Z_][a-zA-Z0-9_]*)\((.*)\)$/;
@@ -193,12 +222,12 @@ async function resolveExpression(expr: string, ctx: AuthTemplateContext, state: 
     if (helper === undefined) {
       throw new AuthTemplateError(`Unknown template helper: ${name}`);
     }
-    const args = parseHelperArgs(helperMatch[2]!, ctx);
+    const args = parseHelperArgs(helperMatch[2]!, ctx, state);
     return helper(args, ctx, state);
   }
 
   if (expr.startsWith('request.')) {
-    return readRequestField(expr.slice('request.'.length), ctx);
+    return readRequestField(expr.slice('request.'.length), ctx, state);
   }
   if (Object.prototype.hasOwnProperty.call(ctx.fields, expr)) {
     return ctx.fields[expr]!;
@@ -206,15 +235,43 @@ async function resolveExpression(expr: string, ctx: AuthTemplateContext, state: 
   throw new AuthTemplateError(`Unknown template field: ${expr}`);
 }
 
-function parseHelperArgs(argList: string, ctx: AuthTemplateContext): string[] {
+/**
+ * Split a helper's argument list and resolve each argument.
+ *
+ * QUOTED-NESS IS CARRIED, not discarded (B2 review blocker B1). This scanner used to strip
+ * quotes and then hand the bare text to `resolveArgToken`, which looked it up in
+ * `ctx.fields` — so `{{base64('api_key')}}` resolved the CREDENTIAL while the lint, which
+ * skips quoted arguments as literals-by-authorial-intent, had waved the template through
+ * unexamined. Proven by execution: that template linted `ok` and rendered
+ * base64('SUPERSECRET'). A reviewer reading quotes concludes no credential is referenced,
+ * which made an approved template into a C1 exfiltration path.
+ *
+ * The fix lands HERE rather than in the lint deliberately. Widening the lint to also
+ * type-check quoted arguments would leave the engine still able to resolve a quoted token
+ * to a credential — it would only narrow which templates reach that behavior. Making the
+ * ENGINE honor quoting removes the capability, so the lint's parity comment
+ * (`template-lint.ts` `splitHelperArgs`) is true of the shipped code instead of aspirational.
+ *
+ * Kept byte-for-byte parallel to the lint's `splitHelperArgs` — same escape handling, same
+ * quote toggles, same comma splitting, and now the same notion of quoted-ness. Any change
+ * to one MUST be mirrored in the other; `template-parity.test.ts` is what fails if they drift.
+ */
+function parseHelperArgs(argList: string, ctx: AuthTemplateContext, state: RenderState): string[] {
   const trimmed = argList.trim();
   if (trimmed.length === 0) return [];
 
   const args: string[] = [];
   let current = '';
+  let quoted = false;
   let inSingleQuote = false;
   let inDoubleQuote = false;
   let escape = false;
+
+  const push = (): void => {
+    args.push(resolveArgToken(current.trim(), quoted, ctx, state));
+    current = '';
+    quoted = false;
+  };
 
   for (const ch of trimmed) {
     if (escape) {
@@ -228,36 +285,51 @@ function parseHelperArgs(argList: string, ctx: AuthTemplateContext): string[] {
     }
     if (ch === "'" && !inDoubleQuote) {
       inSingleQuote = !inSingleQuote;
+      quoted = true;
       continue;
     }
     if (ch === '"' && !inSingleQuote) {
       inDoubleQuote = !inDoubleQuote;
+      quoted = true;
       continue;
     }
     if (ch === ',' && !inSingleQuote && !inDoubleQuote) {
-      args.push(resolveArgToken(current.trim(), ctx));
-      current = '';
+      push();
       continue;
     }
     current += ch;
   }
-  args.push(resolveArgToken(current.trim(), ctx));
+  push();
   return args;
 }
 
-function resolveArgToken(token: string, ctx: AuthTemplateContext): string {
+function resolveArgToken(token: string, quoted: boolean, ctx: AuthTemplateContext, state: RenderState): string {
+  // A QUOTED argument is a literal by authorial intent, and it is returned VERBATIM without
+  // consulting `ctx.fields` or the request tokens. This is the branch that closes B1: it
+  // must come before every lookup, because the whole defect was a quoted token reaching one.
+  if (quoted) return token;
   if (token.length === 0) return '';
   if (token.startsWith('request.')) {
-    return readRequestField(token.slice('request.'.length), ctx);
+    return readRequestField(token.slice('request.'.length), ctx, state);
   }
   if (Object.prototype.hasOwnProperty.call(ctx.fields, token)) {
     return ctx.fields[token]!;
   }
-  // Anything else is a literal — covers numeric or quote-stripped values.
+  // Anything else is a literal — covers numeric values and unrecognized bare tokens. The
+  // lint makes this branch unreachable from an accepted template (see template-lint.ts);
+  // it survives so the engine stays total, and NOT as a supported authoring shape.
   return token;
 }
 
-function readRequestField(path: string, ctx: AuthTemplateContext): string {
+function readRequestField(path: string, ctx: AuthTemplateContext, state: RenderState): string {
+  // `request.timestamp` is a RENDER fact, not a request fact: it is minted by this pass
+  // rather than read off `ctx.request`, so it resolves before the no-request check and is
+  // available even when no request context was supplied. It is served from the SAME
+  // memoized slot as `{{timestamp()}}`, which is the whole point — the timestamp a
+  // signature is computed over and the timestamp sent in the header are one value by
+  // construction, not two reads that usually agree. See `RenderState`.
+  if (path === 'timestamp') return renderTimestamp(state);
+
   const req = ctx.request;
   if (req === undefined) {
     throw new AuthTemplateError(`Template referenced request.${path} but no request context was provided`);

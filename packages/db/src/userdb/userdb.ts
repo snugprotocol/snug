@@ -81,6 +81,10 @@ export const USERDB_ERROR_CODES = {
   CONNECTION_REVOKED: 'USERDB_CONNECTION_REVOKED',
   /** The app already holds `AUTH_MAX_SLOTS_PER_APP` declared slots (AC11, fold S-M1). */
   CONNECTION_SLOT_CAP: 'USERDB_CONNECTION_SLOT_CAP',
+  /** A requirement's own `slot` disagrees with the slot it is being written to (review MINOR). */
+  CONNECTION_SLOT_MISMATCH: 'USERDB_CONNECTION_SLOT_MISMATCH',
+  /** Channel admission refused the requirement at the persist boundary (review MAJOR-2). */
+  CONNECTION_NOT_ADMITTED: 'USERDB_CONNECTION_NOT_ADMITTED',
 } as const;
 
 export type UserDbErrorCode = (typeof USERDB_ERROR_CODES)[keyof typeof USERDB_ERROR_CODES];
@@ -185,6 +189,131 @@ export class ConnectionSlotCapExceeded extends UserDbError {
     this.name = 'ConnectionSlotCapExceeded';
   }
 }
+
+/**
+ * Thrown when a requirement's OWN `slot` disagrees with the slot it is being written to
+ * (review MINOR).
+ *
+ * Not a cosmetic mismatch. The two identities are read by different halves of the system:
+ * the COLUMN is the primary key, the credential-key prefix (`auth:<appId>:<slot>:*`) and
+ * what revoke/wipe targets; the REQUIREMENT JSON is what the canonical hash covers, what
+ * `requirement_version` tracks, and what the review screen renders. Allowing them to
+ * diverge means the user reviews and approves a requirement labelled `otherslot` while
+ * the runtime serves — and later wipes — `realslot`.
+ *
+ * Refused at every accessor that can introduce the split rather than normalized to the
+ * column: silently rewriting the requirement would change bytes the caller is about to
+ * hash and show, which is how a "helpful" coercion becomes a review-integrity bug.
+ */
+export class ConnectionSlotMismatch extends UserDbError {
+  constructor(
+    readonly appId: string,
+    readonly slot: string,
+    readonly requirementSlot: unknown,
+  ) {
+    super(
+      USERDB_ERROR_CODES.CONNECTION_SLOT_MISMATCH,
+      `connection "${appId}/${slot}" carries a requirement for slot ${JSON.stringify(requirementSlot)}; the requirement's own slot must match the slot it is written to`,
+    );
+    this.name = 'ConnectionSlotMismatch';
+  }
+}
+
+/**
+ * Thrown when channel ADMISSION refuses a requirement at the persist boundary
+ * (review MAJOR-2).
+ *
+ * Distinct from `INVALID_CONNECTION_REQUIREMENT`, which means "this is not a well-formed
+ * requirement". This one means "this is well-formed, and this CHANNEL may not make this
+ * claim" — a provenance judgement, not a shape judgement. The wizard renders them
+ * differently: a shape error is a build bug to report, while a refused admission is a
+ * trust decision to show the user.
+ */
+export class ConnectionNotAdmitted extends UserDbError {
+  constructor(
+    readonly appId: string,
+    readonly slot: string,
+    readonly provenance: string,
+    readonly issues: readonly { path: string; message: string }[],
+  ) {
+    super(
+      USERDB_ERROR_CODES.CONNECTION_NOT_ADMITTED,
+      `connection "${appId}/${slot}" was refused admission on the '${provenance}' channel: ${
+        issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ') || 'no reason given'
+      }`,
+    );
+    this.name = 'ConnectionNotAdmitted';
+  }
+}
+
+/**
+ * The ADMISSION SEAM (review MAJOR-2).
+ *
+ * WHY A SEAM RATHER THAN A DIRECT CALL. `@snugprotocol/auth` already depends on
+ * `@snugprotocol/db`, and the admission logic needs the well-known-provider REGISTRY,
+ * which lives in `packages/auth`. Importing it here would close an import cycle. So the
+ * dependency is inverted instead: packages/db owns the RULE ("nothing persists
+ * unadmitted") and calls whatever gate it holds, while packages/auth — which owns the
+ * registry — supplies the gate at construction.
+ *
+ * The seam is deliberately NOT an "enable admission" flag. There is no configuration that
+ * turns the rule off; the only choice is WHICH gate implements it, and the default
+ * (`defaultAdmissionGate`) is installed when a caller says nothing. That distinction is
+ * the whole point of the finding: the previous guard was correct and simply never
+ * reached, so a fix whose enforcement depended on the caller remembering to opt in would
+ * reproduce it one seam over.
+ *
+ * Structurally identical to `AdmissionResult` in packages/auth, restated here so the two
+ * packages agree by SHAPE without either importing the other.
+ */
+export interface ConnectionAdmissionResult {
+  ok: boolean;
+  /** The requirement AFTER registry substitution — what must be persisted on a borrow hit. */
+  requirement: unknown;
+  issues: readonly { path: string; message: string }[];
+}
+
+export type ConnectionAdmissionGate = (
+  requirement: unknown,
+  context: { channel: string; appId: string; slot: string },
+) => ConnectionAdmissionResult;
+
+/**
+ * The gate installed when a caller injects none — and the reason this fix does not
+ * reproduce the finding it closes.
+ *
+ * It enforces the half of admission that needs NO registry: the AC5 userLayer channel
+ * rule. `userLayer` is a registry-SYNTHESIZED seat, so the judgement is made entirely on
+ * provenance — "did this come from the registry channel?" — and needs nothing from the
+ * provider table. That half is therefore implemented here, where the persist path can
+ * always reach it, rather than left to injection that a caller might forget.
+ *
+ * The registry-BORROW half (name/host substitution) genuinely cannot live here: it reads
+ * the well-known-provider table in packages/auth, which packages/db must not import. A
+ * second copy of that table here would be a divergent security rule, which is worse than
+ * one honest hand-off. So the composition root injects the full gate
+ * (`admitConnectionRequirement`), and this default holds the floor until it does —
+ * failing CLOSED on the seat that motivated AC5, never silently admitting everything.
+ */
+export const defaultAdmissionGate: ConnectionAdmissionGate = (requirement, context) => {
+  const record =
+    typeof requirement === 'object' && requirement !== null && !Array.isArray(requirement)
+      ? (requirement as Record<string, unknown>)
+      : undefined;
+  if (record !== undefined && record['userLayer'] !== undefined && context.channel !== 'registry') {
+    return {
+      ok: false,
+      requirement,
+      issues: [
+        {
+          path: 'userLayer',
+          message: `userLayer is registry-synthesized only — the '${context.channel}' channel may not declare one`,
+        },
+      ],
+    };
+  }
+  return { ok: true, requirement, issues: [] };
+};
 
 /** A write-back failure the service recovered from by keeping the previous rest state. */
 export interface AppPersistErrorEvent {
@@ -504,6 +633,13 @@ export interface OpenUserDbOptions {
   file?: string;
   /** Surfaced when a write-back fails closed (name gate, cap) — previous rest state retained. */
   onAppPersistError?: (event: AppPersistErrorEvent) => void;
+  /**
+   * Channel-admission gate consulted before ANY requirement is persisted (review MAJOR-2).
+   * Defaults to `defaultAdmissionGate`; the composition root injects the full
+   * registry-aware gate from packages/auth. There is no way to switch admission OFF —
+   * see the `ConnectionAdmissionGate` note for why that is the seam's whole point.
+   */
+  admissionGate?: ConnectionAdmissionGate;
 }
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
@@ -953,6 +1089,7 @@ function construct(
   const debounceMs = options.persistDebounceMs ?? DEFAULT_PERSIST_DEBOUNCE_MS;
   const maxBytes = options.maxBytes ?? USERDB_LIMITS.MAX_USERDB_BYTES;
   const retained = options.versionsRetained ?? USERDB_LIMITS.VERSIONS_RETAINED;
+  const admissionGate = options.admissionGate ?? defaultAdmissionGate;
   let closed = false;
   let dirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1148,6 +1285,48 @@ function construct(
       );
     }
     return parsed.data;
+  }
+
+  /**
+   * Parse strictly AND require the requirement's own `slot` to match the slot it is being
+   * written to (review MINOR).
+   *
+   * The two checks are fused into one helper so no accessor can accidentally do the first
+   * without the second — the split identity is only reachable by forgetting this call,
+   * and three accessors need it (`putDeclaredConnection`, `stagePendingRequirement`, and
+   * `reapproveConnection`, which promotes a pending row storage may have forged).
+   */
+  function parseConnectionRequirementForSlot(requirement: unknown, appId: string, slot: string): ConnectionRequirement {
+    const validated = parseConnectionRequirementStrict(requirement);
+    if (validated.slot !== slot) {
+      throw new ConnectionSlotMismatch(appId, slot, validated.slot);
+    }
+    return validated;
+  }
+
+  /**
+   * Run channel ADMISSION, then validate (review MAJOR-2).
+   *
+   * ORDER IS LOAD-BEARING and runs admission FIRST: on a registry-borrow hit the gate
+   * SUBSTITUTES the registry's pinned hosts for the declared ones, and it is the
+   * substituted value that must be validated, hashed, host-derived and persisted.
+   * Validating first and admitting after would store the attacker's `evil.example`
+   * unless every caller remembered to re-derive — exactly the "guard beside the path
+   * rather than on it" shape this fix exists to remove.
+   *
+   * The slot check runs on the POST-substitution requirement for the same reason.
+   */
+  function admitAndParse(
+    requirement: unknown,
+    appId: string,
+    slot: string,
+    channel: string,
+  ): ConnectionRequirement {
+    const admitted = admissionGate(requirement, { channel, appId, slot });
+    if (!admitted.ok) {
+      throw new ConnectionNotAdmitted(appId, slot, channel, admitted.issues);
+    }
+    return parseConnectionRequirementForSlot(admitted.requirement, appId, slot);
   }
 
   const CONNECTION_COLUMNS =
@@ -2020,7 +2199,10 @@ function construct(
       // the same schema pass rather than trusted from the TypeScript signature: a
       // JavaScript caller (or a JSON round trip) can hand over `'llm_guess'` and the
       // compiler will never see it.
-      const validated = parseConnectionRequirementStrict(requirement);
+      // Provenance IS the admission channel — the argument the caller already supplies —
+      // so admission needs no new parameter and cannot drift from what gets persisted in
+      // the `provenance` column.
+      const validated = admitAndParse(requirement, appId, slot, provenance);
       if (!CONNECTION_PROVENANCES.includes(provenance)) {
         throw new UserDbError(
           USERDB_ERROR_CODES.INVALID_CONNECTION_REQUIREMENT,
@@ -2099,8 +2281,13 @@ function construct(
 
     stagePendingRequirement(appId, slot, requirement) {
       assertOpen();
-      const validated = parseConnectionRequirementStrict(requirement);
+      // The row is read BEFORE admission here (unlike the declare path) because the
+      // channel is not an argument on this accessor — a staged edit inherits the row's
+      // stored `provenance`, which is the channel that authored the connection. Reading
+      // it first is what makes admission possible at all; nothing is written until every
+      // guard below has passed.
       const existing = requireConnectionRow(appId, slot);
+      const validated = admitAndParse(requirement, appId, slot, existing.provenance);
       if (existing.status === CONNECTION_STATUS.revoked) {
         throw new ConnectionRevokedError(appId, slot, existing.revokedAt);
       }
@@ -2137,10 +2324,26 @@ function construct(
       // newer hub, or one that arrived through an import, stays unapprovable until a hub
       // that understands it runs. Same fail-closed posture as `approveAuthSpec`.
       const validated = parseConnectionRequirementStrict(existing.requirement);
+      // A staged pending edit is DISCARDED here, not preserved and not promoted (review
+      // MAJOR-3). `approveConnection` re-affirms the CURRENT requirement — it derives its
+      // ceiling from `existing.requirement` and never reads the pending column — so a
+      // staged edit that survived this call would be an edit the user did not act on,
+      // sitting in the seat the next `reapproveConnection` promotes. Two concrete harms
+      // followed: the derived "needs re-approval" pill read TRUE on a row the user had
+      // just approved, and a later promotion carried a requirement that borrowed the
+      // legitimacy of an approval which was never about it.
+      //
+      // CLEARING rather than THROWING, deliberately. Throwing would make the approve
+      // button fail on a row whose pending edit the user may never have seen (an app can
+      // stage one at any time), turning an attacker-triggerable state into a denial of
+      // the user's own approval. Discarding is also the honest reading of the act: the
+      // user approved what the screen showed them, which is the current requirement.
+      // Widening remains reachable only through `reapproveConnection`, which shows the
+      // staged edit and re-derives the ceiling from it.
       const timestamp = now();
       run(
         `UPDATE ${USERDB_CONNECTIONS_TABLE}
-         SET status = ?, allowed_hosts = ?, approved_at = ?, updated_at = ?
+         SET status = ?, allowed_hosts = ?, pending_requirement_json = NULL, approved_at = ?, updated_at = ?
          WHERE app_id = ? AND slot = ?`,
         [
           CONNECTION_STATUS.approved,
@@ -2167,7 +2370,17 @@ function construct(
       // Promote pending when there is one; re-approving without a staged edit is a
       // legitimate act too (the user re-confirming an unchanged grant), and it must not
       // bump the version — `nextRequirementVersion` handles both by comparison.
-      const promoted = parseConnectionRequirementStrict(existing.pendingRequirement ?? existing.requirement);
+      //
+      // The slot is re-checked HERE, not just at the staging accessors, because promotion
+      // is the moment a pending requirement becomes the SERVED grant, and the pending
+      // column is reachable without passing `stagePendingRequirement`: a row written by an
+      // older hub, or one that arrived through an import, can hold a foreign slot no
+      // current accessor validated (review MINOR).
+      const promoted = parseConnectionRequirementForSlot(
+        existing.pendingRequirement ?? existing.requirement,
+        appId,
+        slot,
+      );
       const requirementJson = JSON.stringify(promoted);
       const unionJson = JSON.stringify(deriveConnectionAllowedHosts(promoted));
       guardAddedBytes(requirementJson.length + unionJson.length, `re-approval of "${appId}/${slot}"`);
