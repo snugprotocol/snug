@@ -9,6 +9,7 @@ import {
   AUTH_STATE_HMAC_SECRET_KEY,
   authAppSecretPrefix,
   authConnectionSecretKey,
+  authConnectionStateSecretKey,
   authCredentialSecretKey,
 } from '@snugprotocol/db';
 import { randomBase64Url } from './base64url.js';
@@ -48,9 +49,16 @@ export interface CredentialStore {
   /** Credential field names present for the app (excludes the `_connection` state row). */
   listCredentialFields(appId: string): Promise<string[]>;
 
-  getConnectionState(appId: string): Promise<AuthConnectionState | undefined>;
-  setConnectionState(appId: string, state: AuthConnectionState): Promise<void>;
-  clearConnectionState(appId: string): Promise<void>;
+  /**
+   * The optional `slot` is the Dynamic Auth v2 (P1) addition: absent it reads v3's
+   * `auth:<appId>:_connection`; present it reads v4's `auth:<appId>:<slot>:_connection`.
+   * OPTIONAL rather than required because the v3 callers (`snug_auth_specs`) keep shipping
+   * until P3 — making it required would break every one of them for a phase they are not
+   * part of (cutover rule, fold B1).
+   */
+  getConnectionState(appId: string, slot?: string): Promise<AuthConnectionState | undefined>;
+  setConnectionState(appId: string, state: AuthConnectionState, slot?: string): Promise<void>;
+  clearConnectionState(appId: string, slot?: string): Promise<void>;
 
   /** Wipe the whole `auth:<appId>:*` slice — disconnect's final act. */
   clearApp(appId: string): Promise<void>;
@@ -89,8 +97,13 @@ export class UserDbCredentialStore implements CredentialStore {
     return Promise.resolve(fields);
   }
 
-  getConnectionState(appId: string): Promise<AuthConnectionState | undefined> {
-    const raw = this.db.getSecret(authConnectionSecretKey(appId));
+  /** v3 `auth:<appId>:_connection`, or v4 `auth:<appId>:<slot>:_connection` when slotted. */
+  private connectionKey(appId: string, slot?: string): string {
+    return slot === undefined ? authConnectionSecretKey(appId) : authConnectionStateSecretKey(appId, slot);
+  }
+
+  getConnectionState(appId: string, slot?: string): Promise<AuthConnectionState | undefined> {
+    const raw = this.db.getSecret(this.connectionKey(appId, slot));
     if (raw === undefined) return Promise.resolve(undefined);
     try {
       return Promise.resolve(JSON.parse(raw) as AuthConnectionState);
@@ -99,13 +112,13 @@ export class UserDbCredentialStore implements CredentialStore {
     }
   }
 
-  setConnectionState(appId: string, state: AuthConnectionState): Promise<void> {
-    this.db.setSecret(authConnectionSecretKey(appId), JSON.stringify(state));
+  setConnectionState(appId: string, state: AuthConnectionState, slot?: string): Promise<void> {
+    this.db.setSecret(this.connectionKey(appId, slot), JSON.stringify(state));
     return Promise.resolve();
   }
 
-  clearConnectionState(appId: string): Promise<void> {
-    this.db.deleteSecret(authConnectionSecretKey(appId));
+  clearConnectionState(appId: string, slot?: string): Promise<void> {
+    this.db.deleteSecret(this.connectionKey(appId, slot));
     return Promise.resolve();
   }
 

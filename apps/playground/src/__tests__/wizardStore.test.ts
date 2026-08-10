@@ -217,6 +217,24 @@ describe('D7/N1 — code-keyed error→CTA mapping (M25/M26)', () => {
   });
 
   it('NET_HOST_BLOCKED / NET_SSRF_BLOCKED / NET_CONFIRM_DENIED NEVER open the wizard (M12/M25)', async () => {
+    // GUARD FIRST, and this is load-bearing rather than decorative. Every entry below is
+    // read off `NET_ERROR_CODES`, so a code that does not exist yet arrives as
+    // `undefined` — and `netErrorCta(undefined)` falls through to `null`, making the loop
+    // PASS while proving nothing about the code it claims to cover. Asserting the codes
+    // are defined turns that silent vacuum into a failure.
+    for (const [name, code] of Object.entries({
+      NET_HOST_BLOCKED: NET_ERROR_CODES.NET_HOST_BLOCKED,
+      NET_SSRF_BLOCKED: NET_ERROR_CODES.NET_SSRF_BLOCKED,
+      NET_CONFIRM_DENIED: NET_ERROR_CODES.NET_CONFIRM_DENIED,
+      NET_SCHEME_BLOCKED: NET_ERROR_CODES.NET_SCHEME_BLOCKED,
+      NET_REDIRECT_BLOCKED: NET_ERROR_CODES.NET_REDIRECT_BLOCKED,
+      NET_SIZE_EXCEEDED: NET_ERROR_CODES.NET_SIZE_EXCEEDED,
+      NET_FETCH_FAILED: NET_ERROR_CODES.NET_FETCH_FAILED,
+      NET_AMBIGUOUS_CONNECTION: NET_ERROR_CODES.NET_AMBIGUOUS_CONNECTION,
+    })) {
+      expect(code, `${name} must be a defined protocol code`).toBe(name);
+    }
+
     for (const code of [
       NET_ERROR_CODES.NET_HOST_BLOCKED,
       NET_ERROR_CODES.NET_SSRF_BLOCKED,
@@ -225,6 +243,12 @@ describe('D7/N1 — code-keyed error→CTA mapping (M25/M26)', () => {
       NET_ERROR_CODES.NET_REDIRECT_BLOCKED,
       NET_ERROR_CODES.NET_SIZE_EXCEEDED,
       NET_ERROR_CODES.NET_FETCH_FAILED,
+      // TASK-20260810-p1-runtime: the ambiguity refusal joins the OFF-CEILING null set.
+      // Two approved grants both claim the target host, so there is nothing for the user
+      // to connect — opening the connect wizard would invite them to "fix" it by adding a
+      // THIRD credential, and re-approving either one resolves nothing. It is a build
+      // defect, surfaced in Settings, never a CTA.
+      NET_ERROR_CODES.NET_AMBIGUOUS_CONNECTION,
     ]) {
       expect(netErrorCta(code), code).toBeNull();
       // Awaited, and still strictly `false` — never a truthy Promise (V2-3).

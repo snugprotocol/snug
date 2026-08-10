@@ -120,6 +120,18 @@ export const NET_ERROR_CODES = {
   NET_INVALID_REQUEST: 'NET_INVALID_REQUEST',
   NET_NOT_APPROVED: 'NET_NOT_APPROVED',
   NET_IMPORTED_UNAPPROVED: 'NET_IMPORTED_UNAPPROVED',
+  /**
+   * Dynamic Auth v2 (P1): TWO approved grants in one app claim the SAME target host, so
+   * host-based slot routing has no unique answer. v3 could not produce this code —
+   * `snug_auth_specs.app_id` was the whole primary key, so "which connection?" had exactly
+   * one answer — and v4's `(app_id, slot)` key makes the question genuinely ambiguous.
+   *
+   * A REFUSAL, never a tiebreak. Picking "the first row" would send provider A's secret to
+   * a host provider B also claims, which is credential theft performed by the host itself.
+   * Doctrine caps apps at one connection (Q4), so this state is a bug or an attack rather
+   * than a routine case, and it is decided BEFORE any credential is read.
+   */
+  NET_AMBIGUOUS_CONNECTION: 'NET_AMBIGUOUS_CONNECTION',
   NET_SCHEME_BLOCKED: 'NET_SCHEME_BLOCKED',
   NET_HOST_BLOCKED: 'NET_HOST_BLOCKED',
   NET_SSRF_BLOCKED: 'NET_SSRF_BLOCKED',
