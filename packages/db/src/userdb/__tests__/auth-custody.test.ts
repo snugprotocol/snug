@@ -147,7 +147,16 @@ describe('AC3/N3 — dynamic state never dirties the synced spec surface', () =>
     };
     expect(dumpSpecs(after)).toBe(dumpSpecs(before));
     // And no dynamic-state bytes leak into the synced default export at all.
-    expect(bytesContain(after, '_connection')).toBe(false);
+    //
+    // NEEDLE SHARPENED, not weakened (TASK-20260810-p0-contracts): this probed the bare
+    // substring `'_connection'`, which userdb schema v4 made AMBIGUOUS — the new
+    // `snug_connections` table name contains it, so `sqlite_master` alone tripped the
+    // probe and the test went red on a table name rather than on leaked state. The claim
+    // is unchanged and the assertion is now STRICTER: it looks for the exact secret key
+    // `auth:<appId>:_connection` that the write above created, so it can only pass by the
+    // state genuinely being stripped, and can no longer be satisfied-or-broken by any
+    // table whose name happens to share the suffix.
+    expect(bytesContain(after, authConnectionSecretKey(APP))).toBe(false);
     expect(bytesContain(after, `${SENTINEL}-rotated`)).toBe(false);
     await db.close();
   });

@@ -56,7 +56,7 @@ describe('AC2 — registry bypass: famous providers never touch the seam (M3)', 
     expect(result.provenance).toBe('registry');
     expect(result.spec?.kind).toBe('oauth2_auth_code');
     if (result.spec?.kind !== 'oauth2_auth_code') return;
-    expect(result.spec.endpoints.tokenUrl).toBe(WELL_KNOWN_PROVIDERS_REGISTRY['spotify']!.endpoints.tokenUrl);
+    expect(result.spec.endpoints.tokenUrl).toBe(WELL_KNOWN_PROVIDERS_REGISTRY['spotify']!.endpoints?.tokenUrl);
     expect(result.confidence).toBeUndefined();
     expect(result.evidence).toEqual([]);
   });

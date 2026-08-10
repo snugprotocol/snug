@@ -8,8 +8,10 @@
 // WebCrypto only). Wizard/UI is AL-04.
 
 export {
+  base64ToBytes,
   base64UrlToBytes,
   base64UrlToUtf8,
+  bytesToBase64,
   bytesToBase64Url,
   bytesToHex,
   randomBase64Url,
@@ -68,6 +70,28 @@ export {
   type AuthTemplateContext,
   type AuthTemplateRequest,
 } from './template-engine.js';
+
+export {
+  AUTH_TEMPLATE_HELPERS,
+  AUTH_TEMPLATE_REQUEST_TOKENS,
+  AuthTemplateLintError,
+  assertLintedTemplate,
+  lintAuthHeaderTemplate,
+  type AuthTemplateHelper,
+  type AuthTemplateLintIssue,
+  type AuthTemplateLintOptions,
+  type AuthTemplateLintResult,
+  type AuthTemplateRequestToken,
+} from './template-lint.js';
+
+export {
+  ADMISSION_CHANNELS,
+  admitConnectionRequirement,
+  type AdmissionChannel,
+  type AdmissionIssue,
+  type AdmissionOptions,
+  type AdmissionResult,
+} from './requirement-admission.js';
 
 export { paramsToAuthSpec, type ParamsToAuthSpecInput, type ParamsToAuthSpecResult } from './params-to-auth-spec.js';
 

@@ -21,7 +21,22 @@
 export interface WellKnownOauthProvider {
   /** Display name used in the spec — falls back to the input when absent. */
   displayName?: string;
-  endpoints: {
+  /**
+   * OAuth endpoints — OPTIONAL as of the Dynamic Auth v2 rewrite (fold T-M1).
+   *
+   * They were required when the registry served exactly one consumer: the OAuth branch of
+   * `paramsToAuthSpec`. The registry-borrow ban now consults this same registry for ALL
+   * kinds (`requirement-admission.ts`), so a static-kind provider — an exchange with an
+   * HMAC-signed API key and no OAuth flow at all — must be representable by its
+   * `apiHosts` and `registration` alone. Requiring empty endpoint URLs to satisfy the
+   * type would have meant inventing URLs that do not exist, which is worse than absent:
+   * `deriveConnectionAllowedHosts` unions endpoint hosts into the FROZEN ceiling, so a
+   * placeholder URL would silently widen it.
+   *
+   * TYPE CHANGE ONLY in P0 — the static-kind DATA entries are P4. Consumers that need
+   * endpoints must narrow explicitly; the OAuth transformer already does.
+   */
+  endpoints?: {
     authorizeUrl: string;
     tokenUrl: string;
     refreshUrl?: string;

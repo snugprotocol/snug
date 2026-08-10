@@ -18,9 +18,13 @@ import initSqlJs from 'sql.js';
 import type { Database, SqlJsStatic } from 'sql.js';
 import {
   APP_KV_TABLE,
+  AUTH_MAX_SLOTS_PER_APP,
   AUTH_SPEC_STATUS,
+  CONNECTION_PROVENANCES,
+  CONNECTION_STATUS,
   FRAME_TYPES,
   PROTOCOL_VERSION,
+  USERDB_CONNECTIONS_TABLE,
   USERDB_DDL,
   USERDB_FILE,
   USERDB_INDEX_DDL,
@@ -31,7 +35,10 @@ import {
   appDataToken,
   appRestTableName,
   authSpecSchema,
+  canonicalRequirementHash,
+  connectionRequirementSchema,
   deriveAuthAllowedHosts,
+  deriveConnectionAllowedHosts,
   hostSetEquals,
   isAuthSpecUnknownKeysOnlyFailure,
   isValidAppObjectName,
@@ -39,9 +46,12 @@ import {
   type AppSchemaObject,
   type AuthSpec,
   type AuthSpecStatus,
+  type ConnectionProvenance,
+  type ConnectionRequirement,
+  type ConnectionStatus,
   type DbRequestFrame,
 } from '@snugprotocol/protocol';
-import { authAppSecretPrefix } from './auth-secrets.js';
+import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
 import { KV_TABLE_DDL, createDbDriver, type DbPersistence, type SnugDbDriver } from '../driver.js';
 import { namespaceToFileName } from '../namespace.js';
 import { detectPersistenceBackend, type PersistenceBackend } from '../persistence.js';
@@ -63,6 +73,14 @@ export const USERDB_ERROR_CODES = {
   INVALID_AUTH_SPEC: 'USERDB_INVALID_AUTH_SPEC',
   /** An ordinary auth-spec update tried to change the frozen derived host union (plan D5). */
   HOST_FREEZE: 'USERDB_HOST_FREEZE',
+  /** A connection requirement failed strict validation at the write boundary (AC10). */
+  INVALID_CONNECTION_REQUIREMENT: 'USERDB_INVALID_CONNECTION_REQUIREMENT',
+  /** An accessor was called against a connection row whose status forbids that write (AC10/AC12). */
+  CONNECTION_WRITE_RULE: 'USERDB_CONNECTION_WRITE_RULE',
+  /** A write was aimed at a REVOKED row; reconnect is an explicit wizard act (AC10). */
+  CONNECTION_REVOKED: 'USERDB_CONNECTION_REVOKED',
+  /** The app already holds `AUTH_MAX_SLOTS_PER_APP` declared slots (AC11, fold S-M1). */
+  CONNECTION_SLOT_CAP: 'USERDB_CONNECTION_SLOT_CAP',
 } as const;
 
 export type UserDbErrorCode = (typeof USERDB_ERROR_CODES)[keyof typeof USERDB_ERROR_CODES];
@@ -93,6 +111,78 @@ export class HostFreezeViolation extends UserDbError {
       `auth spec update would change the frozen host union [${frozenHosts.join(', ')}] → [${attemptedHosts.join(', ')}]; use reapproveAuthSpec`,
     );
     this.name = 'HostFreezeViolation';
+  }
+}
+
+/**
+ * Thrown when a connection accessor is aimed at a row whose STATUS forbids that write —
+ * `putDeclaredConnection` against an `approved` row (a changed requirement must stage
+ * through `stagePendingRequirement`, parent §3), or `stagePendingRequirement` against a
+ * row that is not `approved` (a `declared` row is simply replaced).
+ *
+ * Named separately from `ConnectionRevokedError` because the two carry different
+ * REMEDIES, and the wizard renders them differently: this one means "use the other
+ * accessor", while a tombstone means "ask the user to reconnect, and show them the date".
+ * A single generic error would force the UI to string-match the message to tell them
+ * apart.
+ */
+export class ConnectionWriteRuleViolation extends UserDbError {
+  constructor(
+    readonly appId: string,
+    readonly slot: string,
+    readonly status: ConnectionStatus,
+    remedy: string,
+  ) {
+    super(
+      USERDB_ERROR_CODES.CONNECTION_WRITE_RULE,
+      `connection "${appId}/${slot}" is ${status}; ${remedy}`,
+    );
+    this.name = 'ConnectionWriteRuleViolation';
+  }
+}
+
+/**
+ * Thrown when any write is aimed at a REVOKED row. Revocation is deliberately terminal
+ * for the automatic channels: the row survives as a TOMBSTONE so the wizard can tell the
+ * user "you revoked this on <date>" instead of silently re-offering a clean-looking
+ * connection, and only an explicit reconnect act may move it forward.
+ */
+export class ConnectionRevokedError extends UserDbError {
+  constructor(
+    readonly appId: string,
+    readonly slot: string,
+    readonly revokedAt: string | undefined,
+  ) {
+    super(
+      USERDB_ERROR_CODES.CONNECTION_REVOKED,
+      `connection "${appId}/${slot}" was revoked${revokedAt !== undefined ? ` on ${revokedAt}` : ''}; reconnecting is an explicit user act, not an automatic re-declaration`,
+    );
+    this.name = 'ConnectionRevokedError';
+  }
+}
+
+/**
+ * Thrown when an app already holds `AUTH_MAX_SLOTS_PER_APP` rows and a NEW slot is
+ * declared (fold S-M1). `guardAddedBytes` bounds bytes per write, not row count, so
+ * without this a hostile or broken build emits unbounded declared rows.
+ *
+ * Two boundary rules are load-bearing and are pinned by tests rather than left to
+ * reading: REPLACING an existing slot never counts (otherwise the legitimate R3
+ * re-inference path breaks exactly at the cap), and REVOKED tombstones DO count (they
+ * are precisely what a flooding attacker leaves behind, and the revoke path keeps the
+ * row by design).
+ */
+export class ConnectionSlotCapExceeded extends UserDbError {
+  constructor(
+    readonly appId: string,
+    readonly slot: string,
+    readonly cap: number,
+  ) {
+    super(
+      USERDB_ERROR_CODES.CONNECTION_SLOT_CAP,
+      `app "${appId}" already declares ${cap} connection slots (AUTH_MAX_SLOTS_PER_APP); refusing to add "${slot}"`,
+    );
+    this.name = 'ConnectionSlotCapExceeded';
   }
 }
 
@@ -175,10 +265,49 @@ export interface AuthSpecRow {
   updatedAt: string;
 }
 
-/** What `importUserDb` surfaces about the auth-spec reconciliation pass (plan D5/N1). */
+/**
+ * One `snug_connections` row (Dynamic Auth v2) — the REQUIREMENT/GRANT split in one
+ * record. Credential VALUES never appear here; they live in `snug_secrets` under
+ * `auth:<appId>:<slot>:<fieldKey>` (ADR-0014, byte-for-byte unchanged).
+ */
+export interface ConnectionRow {
+  appId: string;
+  slot: string;
+  /** What the app NEEDS. Validated strictly at every write boundary. */
+  requirement: ConnectionRequirement;
+  /**
+   * An edit's CHANGED requirement, staged while the grant keeps serving `requirement`
+   * and its old frozen hosts (fold B2). Present + `status === 'approved'` is the
+   * DERIVED "needs re-approval" state — never a fourth status.
+   */
+  pendingRequirement?: ConnectionRequirement;
+  /** Bumped on every persisted replacement whose canonical hash differs (fold T-mn3). */
+  requirementVersion: number;
+  provenance: ConnectionProvenance;
+  /** Display-only inference confidence; never read by a gating decision. */
+  confidence?: number;
+  status: ConnectionStatus;
+  /**
+   * The FROZEN host ceiling for `approved` rows — the union derived AT approval and
+   * displayed in full to the user first. For `declared`/`revoked` rows it is the union
+   * derived from the current requirement (a preview; injection is barred by `status`).
+   */
+  allowedHosts: string[];
+  /** True for a row that arrived through `importUserDb` and was re-reviewed (fold T-M5). */
+  imported: boolean;
+  approvedAt?: string;
+  /** Tombstone stamp. The row SURVIVES revocation so the wizard can show this date. */
+  revokedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What `importUserDb` surfaces about the auth reconciliation passes (plan D5/N1). */
 export interface UserDbImportReport {
   /** Structurally unusable `snug_auth_specs` rows that were dropped, with reasons. */
   droppedAuthSpecs: Array<{ appId: string; reason: string }>;
+  /** Structurally unusable `snug_connections` rows that were dropped, with reasons. */
+  droppedConnections: Array<{ appId: string; slot: string; reason: string }>;
 }
 
 export interface AppMigrationRecord {
@@ -259,6 +388,53 @@ export interface UserDb {
   getAuthSpec(appId: string): AuthSpecRow | undefined;
   listAuthSpecs(): AuthSpecRow[];
   deleteAuthSpec(appId: string): void;
+
+  // ------------------------------------------------- connections (Dynamic Auth v2)
+  //
+  // The ONLY writers of `snug_connections`. Each is the sole legal author of one
+  // transition, so "which accessor may I call?" is answerable from `status` alone —
+  // that is what makes the write rules enforceable rather than conventional.
+
+  /**
+   * Insert, or replace an existing **`declared`** row — the legitimate R3 re-inference
+   * path. THROWS `ConnectionWriteRuleViolation` on an `approved` row (a changed
+   * requirement stages through `stagePendingRequirement`) and `ConnectionRevokedError`
+   * on a tombstone. Enforces `AUTH_MAX_SLOTS_PER_APP` for NEW slots only.
+   */
+  putDeclaredConnection(
+    appId: string,
+    slot: string,
+    requirement: unknown,
+    provenance: ConnectionProvenance,
+    opts?: { confidence?: number },
+  ): ConnectionRow;
+  /**
+   * Stage an edit's changed requirement against an APPROVED row (fold B2): writes
+   * `pending_requirement_json` and NOTHING else, so the grant keeps serving the exact
+   * requirement and frozen hosts the user approved. THROWS on any other status.
+   */
+  stagePendingRequirement(appId: string, slot: string, requirement: unknown): ConnectionRow;
+  /**
+   * Wizard-only: freeze the derived host union into `allowed_hosts`, stamp `approved_at`,
+   * status → `approved`. `allowedHosts` on the returned row is the COMPLETE list the
+   * caller must have displayed to the user. Re-validates the stored requirement.
+   */
+  approveConnection(appId: string, slot: string): ConnectionRow;
+  /**
+   * The ONLY widening path: promote `pending_requirement_json` → `requirement_json`,
+   * re-freeze the union, clear pending, stamp a NEW `approved_at`. Bumps
+   * `requirement_version` when the promoted requirement differs canonically.
+   */
+  reapproveConnection(appId: string, slot: string): ConnectionRow;
+  /**
+   * status → `revoked`, `revoked_at` stamped, **row KEPT** as a tombstone, and the
+   * credential slice `auth:<appId>:<slot>:*` wiped (slot-scoped — a sibling slot's
+   * credentials survive).
+   */
+  revokeConnection(appId: string, slot: string): ConnectionRow;
+  getConnection(appId: string, slot: string): ConnectionRow | undefined;
+  /** Every row for one app, or every row in the DB when `appId` is omitted. Slot-ordered. */
+  listConnections(appId?: string): ConnectionRow[];
 
   putAppDoc(appId: string, slug: string, doc: { title?: string; content: string }): void;
   getAppDoc(appId: string, slug: string): AppDocRecord | undefined;
@@ -390,7 +566,106 @@ const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
     for (const ddl of USERDB_DDL) db.run(ddl);
     for (const ddl of USERDB_INDEX_DDL) db.run(ddl);
   },
+  // v3 → v4 (TASK-20260810, Dynamic Auth v2): additive only — `snug_connections` lands
+  // via the same idempotent replay. A bare replay is CORRECT here for the same reason it
+  // was at v3 and for no other: v4 adds a whole NEW table, and `CREATE TABLE IF NOT
+  // EXISTS` cannot alter an existing one. The day a migration needs to change an existing
+  // table's shape, this pattern silently does nothing while `migrate()` stamps the new
+  // version anyway (`:498`) — which is exactly the "the persisted version lied" failure
+  // the self-heal guard below exists to catch. Adding columns needs `addColumnIfMissing`,
+  // as v1 → v2 did.
+  //
+  // NOT MIGRATED, deliberately: `snug_auth_specs` rows are left exactly where they are.
+  // P0 is ADDITIVE (fold B1) — v3 keeps shipping alongside v4 until P3 rewires its last
+  // consumer, so translating specs into connections here would give one connection two
+  // live writers. What v4 DOES clean up on this path is the ORPHANED credential slice:
+  // see `wipeLegacyAuthSlice`, which runs on open rather than in the migration because
+  // the Q9 self-heal can also produce a first-v4 open (fold T-M4).
+  (db) => {
+    for (const ddl of USERDB_DDL) db.run(ddl);
+    for (const ddl of USERDB_INDEX_DDL) db.run(ddl);
+  },
 ];
+
+/**
+ * The DDL-REPLAY SELF-HEALING GUARD (Q9, absorbed from next-steps `23266fc`).
+ *
+ * `migrate()` stamps `PRAGMA user_version` UNCONDITIONALLY, so the stamp is a claim
+ * about which migrations RAN, never evidence that the tables they were supposed to
+ * create actually exist. A file can therefore read as v4 with `snug_connections`
+ * missing — from an interrupted write, a partially-restored backup, or a migration that
+ * threw after the stamp — and the forward-only loop will run NOTHING, leaving the first
+ * accessor call to fail with a raw SQLite "no such table" that looks like a code bug.
+ *
+ * So the expected table set is verified against `sqlite_master` and, on ANY miss, the
+ * idempotent DDL is replayed before the stamp is trusted. This is a targeted CREATE, not
+ * a re-seed: `CREATE TABLE IF NOT EXISTS` cannot touch a table that is present, so rows
+ * in every surviving table are left exactly as they are.
+ *
+ * Returns TRUE when it healed, because a heal MUTATES the file and the caller must mark
+ * the handle dirty — the same lesson as `migrate()`'s return value (review finding 1: a
+ * mutation that never reaches disk leaves the file lying again on the next open).
+ */
+function healMissingTables(db: Database): boolean {
+  const present = new Set(
+    selectRows(db, `SELECT name FROM sqlite_master WHERE type = 'table'`).map((row) => String(row[0])),
+  );
+  const missing = Object.values(USERDB_TABLES).filter((table) => !present.has(table));
+  if (missing.length === 0) return false;
+  for (const ddl of USERDB_DDL) db.run(ddl);
+  for (const ddl of USERDB_INDEX_DDL) db.run(ddl);
+  return true;
+}
+
+/**
+ * The LEGACY-SLICE WIPE (fold T-M4) — run EXACTLY ONCE, on the open that advances a file
+ * from v3 to v4, and never again.
+ *
+ * WHAT IT REMOVES. v3's `authCredentialSecretKey` builds `auth:<appId>:<field>` with NO
+ * slot, so under v4's slot-keyed shape those rows hold REAL credential values that
+ * nothing in v4 lists, reads, or wipes — the AL-03 lingering-values failure exactly.
+ * They are orphaned, not merely stale, and orphaned credentials in a file that SYNCS are
+ * the worst kind.
+ *
+ * WHY ONCE, AND NOT ON EVERY OPEN. This is the trap in an otherwise obvious cleanup.
+ * `packages/auth/src/credential-store.ts` is a LIVE writer of exactly these keys and
+ * keeps shipping through P0 under the additive cutover rule (fold B1) — it is not dead
+ * code yet, it is the v3 path still serving connected apps. A wipe on every open would
+ * therefore delete credentials that the still-shipping v3 path wrote moments earlier,
+ * turning a one-time cleanup into a recurring self-inflicted disconnection. Gating on
+ * "the migration actually advanced this file to v4" makes the wipe a true migration step
+ * that a v3-era file passes through once; when P3 retires the v3 writers there will be
+ * nothing left for it to find, and it can go.
+ *
+ * SCOPED BY SEGMENT COUNT (`isLegacyAppSecretKey`), never by prefix: a `LIKE
+ * 'auth:<appId>:%'` delete would also take every live v4 `auth:<appId>:<slot>:*` key and
+ * disconnect every connected app on the next hub start. Non-auth namespaces (`byok:*`)
+ * and the app-agnostic auth keys (`auth:_state_hmac`, `auth:_flow:*`) are outside the
+ * rule by construction.
+ *
+ * Returns the number of rows removed so the caller can mark dirty only when it mattered
+ * — a clean file must not be re-persisted on every open.
+ */
+function wipeLegacyAuthSlice(db: Database): number {
+  const keys = selectRows(db, `SELECT key FROM ${USERDB_TABLES.secrets}`)
+    .map((row) => String(row[0]))
+    .filter(isLegacyAppSecretKey);
+  if (keys.length === 0) return 0;
+  for (const key of keys) {
+    db.run(`DELETE FROM ${USERDB_TABLES.secrets} WHERE key = ?`, [key]);
+  }
+  // Reclaim the pages, per the `deleteApp`/`exportUserDb` precedent: a DELETE only frees
+  // the pages, so without this the orphaned credential bytes survive in the file and
+  // travel in a secrets-bearing export — the wipe would remove the KEYS while leaving the
+  // VALUES exactly where an attacker would look for them. Best-effort for the same reason
+  // as every other reclaim here; the rows are unreachable from every query path either way.
+  try {
+    db.run('VACUUM');
+  } catch {
+    /* space reclaim is an optimization, not part of the wipe's contract */
+  }
+  return keys.length;
+}
 
 // ------------------------------------------------------- auth-spec reconciliation
 
@@ -432,7 +707,7 @@ interface LocalApprovedAuthSpec {
 function reconcileImportedAuthSpecs(
   next: Database,
   localApproved: ReadonlyMap<string, LocalApprovedAuthSpec>,
-): UserDbImportReport {
+): UserDbImportReport['droppedAuthSpecs'] {
   const dropped: UserDbImportReport['droppedAuthSpecs'] = [];
   const rows = selectRows(next, `SELECT app_id, spec_json, allowed_hosts FROM ${USERDB_TABLES.authSpecs}`);
   for (const row of rows) {
@@ -480,23 +755,139 @@ function reconcileImportedAuthSpecs(
     dropped.push({ appId, reason: validated.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).slice(0, 3).join('; ') });
     next.run(`DELETE FROM ${USERDB_TABLES.authSpecs} WHERE app_id = ?`, [appId]);
   }
-  return { droppedAuthSpecs: dropped };
+  return dropped;
+}
+
+/** The identity a locally-approved connection is compared against during import. */
+interface LocalApprovedConnection {
+  requirementJson: string;
+  allowedHosts: string;
+  approvedAt: string | null;
+  requirementVersion: number;
+}
+
+const connectionKey = (appId: string, slot: string): string => `${appId} ${slot}`;
+
+/**
+ * The DELTA-AWARE import reconciliation for `snug_connections` (fold T-M5), the v4
+ * sibling of `reconcileImportedAuthSpecs` and run on the candidate BEFORE it goes live.
+ * Per imported row:
+ *
+ * - BYTE-IDENTICAL `(requirement_json, allowed_hosts)` to a locally-APPROVED row →
+ *   status/`approved_at` RESTORED. Identical rows carry zero attack surface, and blanket
+ *   demotion would nuke every approval on each routine two-device pull and train exactly
+ *   the approval fatigue that makes users click through the review that protects them.
+ * - Anything else that validates → demoted to `declared`, `approved_at` cleared,
+ *   `imported = 1`, and `allowed_hosts` REWRITTEN from the requirement. A doctored,
+ *   widened host column is therefore never honored — the union is recomputed, never
+ *   trusted, which is the property that makes the byte-identity test above safe to have.
+ * - A REVOKED row stays revoked with its tombstone intact. It can never be promoted by
+ *   an import: the whole point of keeping the row is that the user's revocation outlives
+ *   a file swap.
+ * - Structurally unusable → dropped and surfaced in the import report.
+ *
+ * `pending_requirement_json` is CLEARED on every demoted row (skew-window safety, fold
+ * S-m2): the executor binds to the approved requirement, and a staged edit that survived
+ * an import into a row the user has not re-approved would be a requirement nobody
+ * reviewed sitting in the seat the next `reapproveConnection` promotes.
+ *
+ * HOST-UNION OUTPUT STABILITY IS LOAD-BEARING here, not cosmetic. Branch 1 compares the
+ * STORED `allowed_hosts` JSON against the local row's, so if `deriveConnectionAllowedHosts`
+ * ever emitted different bytes for an unchanged requirement (a different sort, different
+ * normalization, different spacing) every approved row would miss branch 1 and mass-demote
+ * on the first sync pull — which reads to the user as "the update logged me out of
+ * everything". Both sides of that comparison are produced by the same function, and the
+ * approval path stores exactly what it derives.
+ */
+function reconcileImportedConnections(
+  next: Database,
+  localApproved: ReadonlyMap<string, LocalApprovedConnection>,
+): UserDbImportReport['droppedConnections'] {
+  const dropped: UserDbImportReport['droppedConnections'] = [];
+  const rows = selectRows(
+    next,
+    `SELECT app_id, slot, requirement_json, allowed_hosts, status FROM ${USERDB_CONNECTIONS_TABLE}`,
+  );
+  for (const row of rows) {
+    const appId = String(row[0]);
+    const slot = String(row[1]);
+    const requirementJson = String(row[2]);
+    const allowedHostsJson = String(row[3]);
+    const status = String(row[4]);
+    const drop = (reason: string): void => {
+      dropped.push({ appId, slot, reason });
+      next.run(`DELETE FROM ${USERDB_CONNECTIONS_TABLE} WHERE app_id = ? AND slot = ?`, [appId, slot]);
+    };
+
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(requirementJson);
+    } catch {
+      drop('requirement_json is not valid JSON');
+      continue;
+    }
+
+    const validated = connectionRequirementSchema.safeParse(parsedJson);
+    if (!validated.success) {
+      // No unknown-keys-only escape hatch here, unlike v3's R2 preserve rule: the
+      // requirement schema is strict at every level BY DESIGN (a future seat must not
+      // ride in unreviewed on a channel that predates it), so "preserve the bytes,
+      // demote the trust" would mean storing a row no v4 accessor can re-validate or
+      // approve. Dropping it and reporting the reason is the honest outcome.
+      drop(validated.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).slice(0, 3).join('; '));
+      continue;
+    }
+
+    if (status === CONNECTION_STATUS.revoked) {
+      // A tombstone survives the import unchanged. Deliberately BEFORE the byte-identity
+      // branch: a revoked row is never a candidate for restoring an approval.
+      continue;
+    }
+
+    const local = localApproved.get(connectionKey(appId, slot));
+    if (local !== undefined && local.requirementJson === requirementJson && local.allowedHosts === allowedHostsJson) {
+      next.run(
+        `UPDATE ${USERDB_CONNECTIONS_TABLE}
+         SET status = ?, approved_at = ?, requirement_version = ?, pending_requirement_json = NULL
+         WHERE app_id = ? AND slot = ?`,
+        [CONNECTION_STATUS.approved, local.approvedAt, local.requirementVersion, appId, slot],
+      );
+      continue;
+    }
+
+    next.run(
+      `UPDATE ${USERDB_CONNECTIONS_TABLE}
+       SET status = ?, approved_at = NULL, allowed_hosts = ?, imported = 1, pending_requirement_json = NULL
+       WHERE app_id = ? AND slot = ?`,
+      [
+        CONNECTION_STATUS.declared,
+        JSON.stringify(deriveConnectionAllowedHosts(validated.data)),
+        appId,
+        slot,
+      ],
+    );
+  }
+  return dropped;
 }
 
 /**
- * Forward-migrate to the current schema version. Returns TRUE when the database was
- * actually advanced — a migration is itself a MUTATION of the file, so the caller
- * must mark the handle dirty (review finding 1: opening an existing v2 file and
- * closing without any other write used to lose the migration on disk — the persisted
- * version lied until an unrelated write happened to flush it).
+ * Forward-migrate to the current schema version.
+ *
+ * Reports the version it FOUND, not just whether it advanced, because two callers need
+ * to know which boundaries were crossed rather than merely that something happened:
+ * `advanced` still drives the mark-dirty rule (review finding 1: opening an existing v2
+ * file and closing without any other write used to lose the migration on disk — the
+ * persisted version lied until an unrelated write happened to flush it), while the
+ * legacy-slice wipe fires only when `found < 4`, so a file already at v4 never has its
+ * live credentials re-examined (see `wipeLegacyAuthSlice`).
  */
-function migrate(db: Database): boolean {
+function migrate(db: Database): { found: number; advanced: boolean } {
   const found = readUserVersion(db);
   for (let v = found; v < USERDB_SCHEMA_VERSION; v++) {
     MIGRATIONS[v]?.(db);
   }
   db.run(`PRAGMA user_version = ${USERDB_SCHEMA_VERSION}`);
-  return found < USERDB_SCHEMA_VERSION;
+  return { found, advanced: found < USERDB_SCHEMA_VERSION };
 }
 
 interface LifecycleTarget {
@@ -567,12 +958,23 @@ function construct(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let saving: Promise<void> = Promise.resolve();
 
-  const migrated = migrate(db);
+  const migration = migrate(db);
+  // Q9 self-heal, AFTER the migration and BEFORE anything trusts the schema: the
+  // `user_version` stamp is unconditional, so a file can read as current with tables
+  // missing. Verifying against sqlite_master is the only thing that makes the stamp
+  // meaningful (see `healMissingTables`).
+  const healed = healMissingTables(db);
+  // The legacy-slice wipe is a MIGRATION STEP, gated on this open having actually
+  // crossed v3 → v4 (fold T-M4). It deliberately does NOT run for a file already at v4:
+  // the v3 credential writers are still shipping under the additive cutover rule, so a
+  // wipe on every open would delete live credentials they had just written.
+  const wiped = migration.found < USERDB_SCHEMA_VERSION ? wipeLegacyAuthSlice(db) : 0;
   seedMeta();
-  // A migration mutated the file: make it durable even if this session never writes
-  // again (markDirty is hoisted; fresh files are marked dirty by seedMeta's write
-  // anyway, and a current-version file stays clean — no spurious no-op saves).
-  if (migrated) markDirty();
+  // A migration, a heal, or a wipe each MUTATED the file: make it durable even if this
+  // session never writes again (markDirty is hoisted; fresh files are marked dirty by
+  // seedMeta's write anyway, and an untouched current-version file stays clean — no
+  // spurious no-op saves).
+  if (migration.advanced || healed || wiped > 0) markDirty();
 
   // ------------------------------------------------------------- write-back pipeline
 
@@ -724,6 +1126,119 @@ function construct(
       createdAt: String(row[5]),
       updatedAt: String(row[6]),
     };
+  }
+
+  // ------------------------------------------ connection helpers (Dynamic Auth v2)
+
+  /**
+   * Strict ingest at the write boundary, fail closed — the v4 sibling of
+   * `parseAuthSpecStrict`. Every accessor parses BEFORE touching a row, so a rejected
+   * requirement leaves the database byte-identical: there is no partial write to undo.
+   */
+  function parseConnectionRequirementStrict(requirement: unknown): ConnectionRequirement {
+    const parsed = connectionRequirementSchema.safeParse(requirement);
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .slice(0, 3)
+        .map((i) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ');
+      throw new UserDbError(
+        USERDB_ERROR_CODES.INVALID_CONNECTION_REQUIREMENT,
+        `connection requirement failed validation: ${issues}`,
+      );
+    }
+    return parsed.data;
+  }
+
+  const CONNECTION_COLUMNS =
+    'app_id, slot, requirement_json, requirement_version, provenance, confidence, status, pending_requirement_json, imported, allowed_hosts, approved_at, revoked_at, created_at, updated_at';
+
+  const toConnectionRow = (row: unknown[]): ConnectionRow => ({
+    appId: String(row[0]),
+    slot: String(row[1]),
+    // JSON.parse, not zod: every write validates, so re-parsing here would spend a
+    // schema pass per read to re-prove a boundary invariant — and would make a row
+    // written by a NEWER hub unreadable rather than merely unapprovable.
+    requirement: JSON.parse(String(row[2])) as ConnectionRequirement,
+    requirementVersion: Number(row[3]),
+    provenance: String(row[4]) as ConnectionProvenance,
+    ...(row[5] !== null && row[5] !== undefined ? { confidence: Number(row[5]) } : {}),
+    status: String(row[6]) as ConnectionStatus,
+    ...(row[7] !== null && row[7] !== undefined
+      ? { pendingRequirement: JSON.parse(String(row[7])) as ConnectionRequirement }
+      : {}),
+    imported: row[8] === 1,
+    allowedHosts: JSON.parse(String(row[9])) as string[],
+    ...(row[10] !== null && row[10] !== undefined ? { approvedAt: String(row[10]) } : {}),
+    ...(row[11] !== null && row[11] !== undefined ? { revokedAt: String(row[11]) } : {}),
+    createdAt: String(row[12]),
+    updatedAt: String(row[13]),
+  });
+
+  function readConnectionRow(appId: string, slot: string): ConnectionRow | undefined {
+    const row = select(
+      `SELECT ${CONNECTION_COLUMNS} FROM ${USERDB_CONNECTIONS_TABLE} WHERE app_id = ? AND slot = ?`,
+      [appId, slot],
+    )[0];
+    return row === undefined ? undefined : toConnectionRow(row);
+  }
+
+  /** Read a row or throw NOT_FOUND — the shared preamble of every non-creating accessor. */
+  function requireConnectionRow(appId: string, slot: string): ConnectionRow {
+    const existing = readConnectionRow(appId, slot);
+    if (existing === undefined) {
+      throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `no connection "${appId}/${slot}"`);
+    }
+    return existing;
+  }
+
+  /**
+   * Delete the credential slice for ONE slot (`auth:<appId>:<slot>:*`).
+   *
+   * Slot-scoped, and the scoping is the point: an app-wide `auth:<appId>:%` delete would
+   * take a SIBLING slot's live credentials, so revoking Dropbox in a three-cloud app
+   * would silently disconnect OneDrive too (R6's whole motivating shape).
+   *
+   * LIKE metacharacters in the prefix are escaped exactly as `deleteApp` does — the same
+   * known limit applies (an appId or slot containing a literal colon could over-match),
+   * and it is unreachable here for a second reason beyond randomUUID app ids:
+   * `CONNECTION_SLOT_RULE` admits no colon.
+   */
+  function wipeConnectionSecrets(appId: string, slot: string): void {
+    const prefix = authConnectionSlotPrefix(appId, slot).replace(/([!%_])/g, '!$1');
+    run(`DELETE FROM ${USERDB_TABLES.secrets} WHERE key LIKE ? ESCAPE '!'`, [`${prefix}%`]);
+    // RECLAIM THE PAGES, exactly as `deleteApp` does and for exactly the same reason:
+    // a DELETE only marks the row's pages FREE, so the credential bytes stay in the file
+    // and travel in `exportUserDb({ includeSecrets: true })` — a revoked API secret
+    // readable in a synced image is the AL-03 lingering-values failure with extra steps.
+    // Mutation-evidenced: the byte-probe in the AC13 test fails without this line while
+    // every API-level assertion still passes, which is precisely how this class of bug
+    // ships unnoticed.
+    //
+    // Best-effort for the same reason as `deleteApp`: VACUUM allocates a second copy of
+    // the database, so it is the statement most likely to fail under memory pressure. A
+    // failed reclaim must not fail an already-committed revocation — the row is gone from
+    // every query path regardless, and the freed pages get reused later.
+    try {
+      db.run('VACUUM');
+    } catch {
+      /* space reclaim is an optimization, not part of the revoke's contract */
+    }
+  }
+
+  /**
+   * `requirement_version` for a persisted replacement (fold T-mn3): the SAME number when
+   * the canonical hash matches, one higher when it differs.
+   *
+   * Canonical rather than literal comparison because the channels that produce
+   * requirements do not emit stable key order — an LLM re-emits the same requirement
+   * with keys shuffled every turn, and a `JSON.stringify` comparison would bump the
+   * version on every rebuild. That is not merely noisy: P2's edit pipeline uses an
+   * unchanged version as its "nothing to re-review" signal, so phantom bumps would
+   * manufacture re-approval prompts for edits that changed nothing.
+   */
+  function nextRequirementVersion(previous: ConnectionRequirement, next: ConnectionRequirement, current: number): number {
+    return canonicalRequirementHash(previous) === canonicalRequirementHash(next) ? current : current + 1;
   }
 
   // ------------------------------------- driver face: materializer PersistenceBackend
@@ -1215,6 +1730,11 @@ function construct(
           USERDB_TABLES.appMigrations,
           USERDB_TABLES.appSchemas,
           USERDB_TABLES.authSpecs,
+          // v4: the app's connection rows go with it. Tombstones included — a `revoked`
+          // row exists to tell the user about an app they still have; once the app is
+          // gone there is nobody left to tell, and leaving it would resurrect a stale
+          // tombstone against a reused id and count against the slot cap forever.
+          USERDB_TABLES.connections,
         ]) {
           db.run(`DELETE FROM ${table} WHERE app_id = ?`, [appId]);
         }
@@ -1492,6 +2012,222 @@ function construct(
       run(`DELETE FROM ${USERDB_TABLES.authSpecs} WHERE app_id = ?`, [appId]);
     },
 
+    // --------------------------------------------------- connections (Dynamic Auth v2)
+
+    putDeclaredConnection(appId, slot, requirement, provenance, opts = {}) {
+      assertOpen();
+      // Parse FIRST, before any row is read or written. Provenance is validated through
+      // the same schema pass rather than trusted from the TypeScript signature: a
+      // JavaScript caller (or a JSON round trip) can hand over `'llm_guess'` and the
+      // compiler will never see it.
+      const validated = parseConnectionRequirementStrict(requirement);
+      if (!CONNECTION_PROVENANCES.includes(provenance)) {
+        throw new UserDbError(
+          USERDB_ERROR_CODES.INVALID_CONNECTION_REQUIREMENT,
+          `unknown connection provenance ${JSON.stringify(provenance)}`,
+        );
+      }
+      const requirementJson = JSON.stringify(validated);
+      const unionJson = JSON.stringify(deriveConnectionAllowedHosts(validated));
+      guardAddedBytes(requirementJson.length + unionJson.length, `connection "${appId}/${slot}"`);
+
+      const existing = readConnectionRow(appId, slot);
+      const timestamp = now();
+      if (existing === undefined) {
+        // The row-count cap applies to NEW slots only (fold S-M1). Counting on the
+        // replace path too would refuse the legitimate R3 re-inference of an existing
+        // slot at exactly the cap — a build that is doing nothing wrong.
+        const held = Number(
+          select(`SELECT COUNT(*) FROM ${USERDB_CONNECTIONS_TABLE} WHERE app_id = ?`, [appId])[0]?.[0] ?? 0,
+        );
+        // Revoked tombstones are counted deliberately: they are exactly what a flooding
+        // build leaves behind, and the revoke path keeps the row by design, so excluding
+        // them would hand back an unbounded budget for the price of a revoke.
+        if (held >= AUTH_MAX_SLOTS_PER_APP) {
+          throw new ConnectionSlotCapExceeded(appId, slot, AUTH_MAX_SLOTS_PER_APP);
+        }
+        run(
+          `INSERT INTO ${USERDB_CONNECTIONS_TABLE} (${CONNECTION_COLUMNS})
+           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, NULL, NULL, ?, ?)`,
+          [
+            appId,
+            slot,
+            requirementJson,
+            1,
+            provenance,
+            opts.confidence ?? null,
+            CONNECTION_STATUS.declared,
+            unionJson,
+            timestamp,
+            timestamp,
+          ],
+        );
+        return readConnectionRow(appId, slot)!;
+      }
+
+      // Status gates, checked in tombstone-first order so a revoked row reports the
+      // remedy the user actually needs rather than "use stagePendingRequirement".
+      if (existing.status === CONNECTION_STATUS.revoked) {
+        throw new ConnectionRevokedError(appId, slot, existing.revokedAt);
+      }
+      if (existing.status === CONNECTION_STATUS.approved) {
+        throw new ConnectionWriteRuleViolation(
+          appId,
+          slot,
+          existing.status,
+          'a changed requirement must be staged with stagePendingRequirement and re-approved by the user',
+        );
+      }
+      run(
+        `UPDATE ${USERDB_CONNECTIONS_TABLE}
+         SET requirement_json = ?, requirement_version = ?, provenance = ?, confidence = ?,
+             allowed_hosts = ?, updated_at = ?
+         WHERE app_id = ? AND slot = ?`,
+        [
+          requirementJson,
+          nextRequirementVersion(existing.requirement, validated, existing.requirementVersion),
+          provenance,
+          opts.confidence ?? null,
+          unionJson,
+          timestamp,
+          appId,
+          slot,
+        ],
+      );
+      return readConnectionRow(appId, slot)!;
+    },
+
+    stagePendingRequirement(appId, slot, requirement) {
+      assertOpen();
+      const validated = parseConnectionRequirementStrict(requirement);
+      const existing = requireConnectionRow(appId, slot);
+      if (existing.status === CONNECTION_STATUS.revoked) {
+        throw new ConnectionRevokedError(appId, slot, existing.revokedAt);
+      }
+      if (existing.status !== CONNECTION_STATUS.approved) {
+        throw new ConnectionWriteRuleViolation(
+          appId,
+          slot,
+          existing.status,
+          'only an approved row has a grant worth protecting; replace a declared row with putDeclaredConnection',
+        );
+      }
+      const pendingJson = JSON.stringify(validated);
+      guardAddedBytes(pendingJson.length, `pending requirement for "${appId}/${slot}"`);
+      // ONLY the pending column moves. `allowed_hosts`, `requirement_json`, `status`,
+      // `approved_at` and `requirement_version` are all left alone ON PURPOSE (fold B2):
+      // the grant must keep serving EXACTLY what the user approved while the edit waits,
+      // so an edit that widens the host set cannot widen the live ceiling by staging.
+      // The version does not move either — a staged requirement is not yet persisted
+      // INTO the grant; `reapproveConnection` bumps it at promotion.
+      run(
+        `UPDATE ${USERDB_CONNECTIONS_TABLE} SET pending_requirement_json = ?, updated_at = ? WHERE app_id = ? AND slot = ?`,
+        [pendingJson, now(), appId, slot],
+      );
+      return readConnectionRow(appId, slot)!;
+    },
+
+    approveConnection(appId, slot) {
+      assertOpen();
+      const existing = requireConnectionRow(appId, slot);
+      if (existing.status === CONNECTION_STATUS.revoked) {
+        throw new ConnectionRevokedError(appId, slot, existing.revokedAt);
+      }
+      // Re-validate the STORED requirement at the trust boundary: a row written by a
+      // newer hub, or one that arrived through an import, stays unapprovable until a hub
+      // that understands it runs. Same fail-closed posture as `approveAuthSpec`.
+      const validated = parseConnectionRequirementStrict(existing.requirement);
+      const timestamp = now();
+      run(
+        `UPDATE ${USERDB_CONNECTIONS_TABLE}
+         SET status = ?, allowed_hosts = ?, approved_at = ?, updated_at = ?
+         WHERE app_id = ? AND slot = ?`,
+        [
+          CONNECTION_STATUS.approved,
+          // Derived here and stored verbatim. The import reconciliation compares these
+          // exact bytes against a fresh derivation, so "what approval stored" and "what
+          // derivation produces" must be the same function's output — never a
+          // re-serialization of the column.
+          JSON.stringify(deriveConnectionAllowedHosts(validated)),
+          timestamp,
+          timestamp,
+          appId,
+          slot,
+        ],
+      );
+      return readConnectionRow(appId, slot)!;
+    },
+
+    reapproveConnection(appId, slot) {
+      assertOpen();
+      const existing = requireConnectionRow(appId, slot);
+      if (existing.status === CONNECTION_STATUS.revoked) {
+        throw new ConnectionRevokedError(appId, slot, existing.revokedAt);
+      }
+      // Promote pending when there is one; re-approving without a staged edit is a
+      // legitimate act too (the user re-confirming an unchanged grant), and it must not
+      // bump the version — `nextRequirementVersion` handles both by comparison.
+      const promoted = parseConnectionRequirementStrict(existing.pendingRequirement ?? existing.requirement);
+      const requirementJson = JSON.stringify(promoted);
+      const unionJson = JSON.stringify(deriveConnectionAllowedHosts(promoted));
+      guardAddedBytes(requirementJson.length + unionJson.length, `re-approval of "${appId}/${slot}"`);
+      const timestamp = now();
+      run(
+        `UPDATE ${USERDB_CONNECTIONS_TABLE}
+         SET requirement_json = ?, requirement_version = ?, status = ?, allowed_hosts = ?,
+             pending_requirement_json = NULL, approved_at = ?, updated_at = ?
+         WHERE app_id = ? AND slot = ?`,
+        [
+          requirementJson,
+          nextRequirementVersion(existing.requirement, promoted, existing.requirementVersion),
+          CONNECTION_STATUS.approved,
+          unionJson,
+          timestamp,
+          timestamp,
+          appId,
+          slot,
+        ],
+      );
+      return readConnectionRow(appId, slot)!;
+    },
+
+    revokeConnection(appId, slot) {
+      assertOpen();
+      const existing = requireConnectionRow(appId, slot);
+      const timestamp = now();
+      // The ROW SURVIVES. Revocation is not a delete: the tombstone is what lets the
+      // wizard say "you revoked this on <date>" instead of silently re-offering a
+      // clean-looking connection, and it is what makes `putDeclaredConnection` able to
+      // refuse an automatic re-declaration. `requirement_json` stays readable for the
+      // same reason — the wizard renders what was revoked.
+      run(
+        `UPDATE ${USERDB_CONNECTIONS_TABLE}
+         SET status = ?, revoked_at = ?, approved_at = NULL, pending_requirement_json = NULL, updated_at = ?
+         WHERE app_id = ? AND slot = ?`,
+        [CONNECTION_STATUS.revoked, existing.revokedAt ?? timestamp, timestamp, appId, slot],
+      );
+      // The VALUES go, and only this slot's. Metadata is a tombstone; credentials are
+      // not — a revoked connection that kept working is the failure this closes.
+      wipeConnectionSecrets(appId, slot);
+      return readConnectionRow(appId, slot)!;
+    },
+
+    getConnection(appId, slot) {
+      assertOpen();
+      return readConnectionRow(appId, slot);
+    },
+
+    listConnections(appId) {
+      assertOpen();
+      const rows =
+        appId === undefined
+          ? select(`SELECT ${CONNECTION_COLUMNS} FROM ${USERDB_CONNECTIONS_TABLE} ORDER BY app_id, slot`)
+          : select(`SELECT ${CONNECTION_COLUMNS} FROM ${USERDB_CONNECTIONS_TABLE} WHERE app_id = ? ORDER BY slot`, [
+              appId,
+            ]);
+      return rows.map(toConnectionRow);
+    },
+
     // ------------------------------------------------------------------------ docs
 
     putAppDoc(appId, slug, doc) {
@@ -1730,11 +2466,18 @@ function construct(
           `user DB is schema v${foundVersion}; this hub supports up to v${USERDB_SCHEMA_VERSION}`,
         );
       }
-      migrate(next);
-      // Auth-spec reconciliation (plan D5/N1): snapshot the locally-APPROVED rows from
-      // the still-open handle, then run the delta-aware pass on the candidate BEFORE it
-      // becomes live. Every import path (pull-merge, applyRemote, recovery restore, UI
-      // import) flows through here.
+      const importMigration = migrate(next);
+      // The candidate gets the SAME schema guarantees as an opened file: the version
+      // stamp it arrived with is another hub's claim, so heal against sqlite_master
+      // before reading its tables, and run the v3→v4 legacy wipe on a v3-era import for
+      // the same reason it runs on a v3-era open (fold T-M4) — an imported file's
+      // orphaned credential slice is no less orphaned for having arrived over sync.
+      healMissingTables(next);
+      if (importMigration.found < USERDB_SCHEMA_VERSION) wipeLegacyAuthSlice(next);
+      // Auth reconciliation (plan D5/N1 + fold T-M5): snapshot the locally-APPROVED rows
+      // from the still-open handle, then run the delta-aware passes on the candidate
+      // BEFORE it becomes live. Every import path (pull-merge, applyRemote, recovery
+      // restore, UI import) flows through here.
       const localApproved = new Map<string, LocalApprovedAuthSpec>();
       for (const row of select(
         `SELECT app_id, spec_json, allowed_hosts, approved_at FROM ${USERDB_TABLES.authSpecs} WHERE status = ?`,
@@ -1746,7 +2489,23 @@ function construct(
           approvedAt: row[3] === null || row[3] === undefined ? null : String(row[3]),
         });
       }
-      const report = reconcileImportedAuthSpecs(next, localApproved);
+      const localApprovedConnections = new Map<string, LocalApprovedConnection>();
+      for (const row of select(
+        `SELECT app_id, slot, requirement_json, allowed_hosts, approved_at, requirement_version
+         FROM ${USERDB_CONNECTIONS_TABLE} WHERE status = ?`,
+        [CONNECTION_STATUS.approved],
+      )) {
+        localApprovedConnections.set(connectionKey(String(row[0]), String(row[1])), {
+          requirementJson: String(row[2]),
+          allowedHosts: String(row[3]),
+          approvedAt: row[4] === null || row[4] === undefined ? null : String(row[4]),
+          requirementVersion: Number(row[5]),
+        });
+      }
+      const report: UserDbImportReport = {
+        droppedAuthSpecs: reconcileImportedAuthSpecs(next, localApproved),
+        droppedConnections: reconcileImportedConnections(next, localApprovedConnections),
+      };
       // Close the inner driver FIRST: its cached app databases came from the old handle.
       // Its close-flush writes into the old handle, which is discarded right after.
       await inner.close();

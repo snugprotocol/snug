@@ -27,6 +27,9 @@ export {
 export { namespaceToFileName } from './namespace.js';
 
 export {
+  ConnectionRevokedError,
+  ConnectionSlotCapExceeded,
+  ConnectionWriteRuleViolation,
   HostFreezeViolation,
   openUserDb,
   USERDB_ERROR_CODES,
@@ -39,6 +42,7 @@ export {
   type AuthSpecRow,
   type ChatMessage,
   type ChatThread,
+  type ConnectionRow,
   type InstallAppInput,
   type OpenUserDbOptions,
   type OpenUserDbResult,
@@ -52,10 +56,14 @@ export {
   AUTH_FLOW_SECRET_PREFIX,
   AUTH_STATE_HMAC_SECRET_KEY,
   authAppSecretPrefix,
+  authConnectionCredentialSecretKey,
   authConnectionSecretKey,
+  authConnectionSlotPrefix,
+  authConnectionStateSecretKey,
   authCredentialSecretKey,
   authFlowSecretKey,
   isAuthSecretKey,
+  isLegacyAppSecretKey,
 } from './userdb/auth-secrets.js';
 
 export {

@@ -26,10 +26,21 @@
  *
  * PUBLICATION LINE: out of `json-schemas.ts` SOURCES (same precedent as AL-02/AL-03);
  * shape locked by in-package snapshot tests; prose staged by AL-12.
+ *
+ * DYNAMIC AUTH v2 (TASK-20260810 P0): the `connection_requirement` directive lands
+ * ALONGSIDE `auth_wizard` (cutover rule, fold B1) and carries the full, bounded
+ * `connectionRequirement` instead of the omit-list proposal. The orphaned
+ * `authRequiredPayloadSchema` was DELETED in the same phase — it had zero non-test
+ * consumers, and the display fields an app-side connect CTA needs now come from the
+ * persisted `snug_connections` row, which is the requirement's only durable home.
  */
 
 import { z } from 'zod';
-import { AUTH_KINDS, authSpecHintsSchema } from './auth-schema.js';
+import { authSpecHintsSchema } from './auth-schema.js';
+import {
+  CONNECTION_PROVENANCES,
+  connectionRequirementSchema,
+} from './connection-requirement.js';
 import { PROTOCOL_VERSION } from './constants.js';
 
 // ------------------------------------------------------------------ constants
@@ -110,20 +121,50 @@ export const authWizardDirectiveSchema = z.strictObject({
 });
 export type AuthWizardDirective = z.infer<typeof authWizardDirectiveSchema>;
 
-/** The directive union (one member v1) — future directives extend this discriminator. */
-export const renderDirectiveSchema = z.discriminatedUnion('kind', [authWizardDirectiveSchema]);
-export type RenderDirective = z.infer<typeof renderDirectiveSchema>;
-
-// ------------------------------------------------------- AUTH_REQUIRED payload
+// ------------------------------------------------ connection_requirement (v2)
 
 /**
- * Payload for the reserved `ERROR_CODES.AUTH_REQUIRED` (constants.ts): the display
- * fields an app-side "connect" CTA needs. Additive — the wire error-code rule (open
- * strings, R5) is unchanged. Strict-rejects unknown keys (mutation M29).
+ * The Dynamic Auth v2 directive-kind discriminator — a PERSISTED literal, single-homed
+ * exactly like `AUTH_WIZARD_DIRECTIVE_KIND` (the prompt store, the playground scanner,
+ * and the build-validation seam all read this export rather than retyping it).
  */
-export const authRequiredPayloadSchema = z.strictObject({
-  providerName: z.string().min(1),
-  kind: z.enum(AUTH_KINDS),
-  declaredApiHosts: z.array(z.string().min(1)).optional(),
+export const CONNECTION_REQUIREMENT_DIRECTIVE_KIND = 'connection_requirement' as const;
+
+/**
+ * The `connection_requirement` directive: the BUILD-time channel that carries a FULL
+ * `connectionRequirement` (TASK-20260810 parent §5, R1). It is the successor to
+ * `auth_wizard`, and the reason the two coexist here is the P0 cutover rule (fold B1) —
+ * `auth_wizard`/`llmProposalSchema` keep shipping until their last runtime consumer
+ * (`apps/playground/src/starter/starterDeclaration.ts:31`) is rewired in P4.
+ *
+ * WHAT CHANGED AND WHY IT IS SAFE. `auth_wizard` carried `llmProposalSchema`, which
+ * OMITS registration copy, `headerTemplate`, and `fields` — the AL-04 answer to
+ * credential misdirection, and also the reason a Coinbase-shaped requirement collapsed
+ * to one generic field. This directive re-admits those seats and pays for them
+ * elsewhere: bounds at parse (connection-requirement.ts), the template lint and
+ * registry-borrow ban (packages/auth), and a strong field-by-field review that renders
+ * every re-admitted byte verbatim before a credential is collected. The M5 principle
+ * survives in a stronger form — an LLM-authored seat is not trusted, it is DISPLAYED.
+ *
+ * `provenance` here is the AUTHORING CHANNEL claim and, like `auth_wizard`'s, is
+ * DISPLAY-ONLY: the host computes provenance from the channel it actually received the
+ * directive on, and no gating code reads this copy. `confidence` is likewise display-only
+ * (it drives the review's lower-confidence band, never an approval decision).
+ */
+export const connectionRequirementDirectiveSchema = z.strictObject({
+  v: z.literal(PROTOCOL_VERSION),
+  kind: z.literal(CONNECTION_REQUIREMENT_DIRECTIVE_KIND),
+  requirement: connectionRequirementSchema,
+  /** Display-only. The host recomputes confidence from the ladder rung it resolved. */
+  confidence: z.number().min(0).max(1).optional(),
+  /** Display-only. The host computes provenance from the RECEIVING channel, not this claim. */
+  provenance: z.enum(CONNECTION_PROVENANCES).optional(),
 });
-export type AuthRequiredPayload = z.infer<typeof authRequiredPayloadSchema>;
+export type ConnectionRequirementDirective = z.infer<typeof connectionRequirementDirectiveSchema>;
+
+/** The directive union — extended additively; the discriminator is the persisted literal. */
+export const renderDirectiveSchema = z.discriminatedUnion('kind', [
+  authWizardDirectiveSchema,
+  connectionRequirementDirectiveSchema,
+]);
+export type RenderDirective = z.infer<typeof renderDirectiveSchema>;

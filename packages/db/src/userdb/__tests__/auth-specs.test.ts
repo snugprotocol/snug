@@ -6,7 +6,13 @@
 // unusable rows are dropped + surfaced; doctored widened hosts are never honored).
 import initSqlJs from 'sql.js';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { AUTH_SPEC_STATUS, USERDB_FILE, deriveAuthAllowedHosts, authSpecSchema } from '@snugprotocol/protocol';
+import {
+  AUTH_SPEC_STATUS,
+  USERDB_FILE,
+  USERDB_SCHEMA_VERSION,
+  deriveAuthAllowedHosts,
+  authSpecSchema,
+} from '@snugprotocol/protocol';
 import { locateWasm } from '../../__tests__/helpers.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
 import { createSyncLoop } from '../../sync/loop.js';
@@ -201,7 +207,11 @@ describe('AC3 — v2→v3 migration', () => {
 
     const persisted = new SQL.Database(backend.files.get(USERDB_FILE));
     try {
-      expect(persisted.exec('PRAGMA user_version')[0]?.values).toEqual([[3]]);
+      // The claim is "a no-op session PERSISTS the migration", not "the current version
+      // is 3". TASK-20260810-p0-contracts bumps the schema to v4, so the literal is
+      // re-bound to the constant it always meant — the assertion still fails if a no-op
+      // session loses the migration, which is the whole point of review finding 1.
+      expect(persisted.exec('PRAGMA user_version')[0]?.values).toEqual([[USERDB_SCHEMA_VERSION]]);
       expect(
         persisted.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'snug_auth_specs'")[0]?.values,
       ).toEqual([['snug_auth_specs']]);

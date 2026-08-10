@@ -44,6 +44,7 @@ import { isForbiddenNetHost } from './net-guards.js';
 import { OAuthService, SnugAuthError, type FetchLike } from './oauth-service.js';
 import { scrubAuthValues } from './scrub.js';
 import { AuthTemplateError, renderAuthHeaderTemplate } from './template-engine.js';
+import { AuthTemplateLintError, assertLintedTemplate } from './template-lint.js';
 import type { NetConfirmRequest } from './session-confirm.js';
 
 // ------------------------------------------------------------------------ types
@@ -256,6 +257,14 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
     }
     const template = spec.request?.headerTemplate;
     if (template !== undefined) {
+      // Lint against the spec's DECLARED field keys, not the keys actually loaded above.
+      // The two differ whenever an optional field has no stored value: `fields` would be
+      // missing that key, so the engine's own gate (which lints `Object.keys(ctx.fields)`)
+      // would reject a template that is legitimately correct for this spec. Linting the
+      // declaration here is both stricter in the case that matters — a key naming nothing
+      // in the spec is rejected even if a same-named value happened to be loaded — and
+      // kinder in the case that does not.
+      assertLintedTemplate(template, { fieldKeys: spec.fields.map((field) => field.key) });
       return renderAuthHeaderTemplate(template, {
         fields,
         request: { method: request.method, url: request.url, ...(request.body !== undefined ? { body: request.body } : {}) },
@@ -347,7 +356,14 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         try {
           injected = await resolveInjectedHeaders(appId, row, { method, url: url.href, ...(body !== undefined ? { body } : {}) }, forceRefresh);
         } catch (err) {
-          if (err instanceof SnugAuthError || err instanceof AuthTemplateError) {
+          // A lint failure joins the same bucket: it is an auth-configuration fault, not
+          // an executor crash, and the app must learn nothing from it beyond "auth
+          // failed". The message names only template structure — never a value (C5).
+          if (
+            err instanceof SnugAuthError ||
+            err instanceof AuthTemplateError ||
+            err instanceof AuthTemplateLintError
+          ) {
             return failure(NET_ERROR_CODES.NET_AUTH_FAILED, err.message);
           }
           throw err;

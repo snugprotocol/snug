@@ -37,11 +37,6 @@ exports[`AC1 — render directive stays OUT of json-schemas SOURCES (extends the
     "evidence",
     "proposal",
   ],
-  "payloadKeys": [
-    "declaredApiHosts",
-    "kind",
-    "providerName",
-  ],
   "proposalKeys": [
     "authMode",
     "declaredApiHosts",
@@ -60,6 +55,13 @@ exports[`AC1 — render directive stays OUT of json-schemas SOURCES (extends the
     "registry",
     "inference",
     "user_docs",
+  ],
+  "requirementDirectiveKeys": [
+    "confidence",
+    "kind",
+    "provenance",
+    "requirement",
+    "v",
   ],
   "samples": {
     "directive": true,

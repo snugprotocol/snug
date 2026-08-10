@@ -24,8 +24,12 @@ import {
 } from '../userdb-schema.js';
 
 describe('userdb schema constants (spec surface)', () => {
-  it('declares schema version 3 (AL-02: snug_auth_specs — internal draft, excluded from the AL-13 spec push)', () => {
-    expect(USERDB_SCHEMA_VERSION).toBe(3);
+  // TASK-20260810-p0-contracts AC20: v4 adds `snug_connections` (Dynamic Auth v2, requirement/
+  // grant split). Version 3's assertion is REPLACED, not duplicated — `PRAGMA user_version` is a
+  // single scalar and `migrate()` stamps it unconditionally (userdb.ts:498), so a test asserting
+  // two versions at once would be asserting an impossible file.
+  it('declares schema version 4 (Dynamic Auth v2: snug_connections — internal draft, still excluded from the spec push)', () => {
+    expect(USERDB_SCHEMA_VERSION).toBe(4);
   });
 
   it('caps the whole user DB at 64 MiB and retains at least 5 versions per app', () => {
@@ -54,7 +58,12 @@ describe('userdb schema constants (spec surface)', () => {
         'snug_chat_threads',
         'snug_chat_messages',
         'snug_sync',
+        // v3's table stays listed: P0 is ADDITIVE (fold B1). `snug_auth_specs` has live
+        // consumers across packages/db, packages/auth, and the playground, and its deletion is
+        // a NAMED EXIT ITEM of P3 — removing it here would make "every phase ends green" false.
         'snug_auth_specs',
+        // v4 (Dynamic Auth v2): slot-keyed connections, PRIMARY KEY (app_id, slot) — R6.
+        'snug_connections',
       ].sort(),
     );
     for (const table of Object.values(USERDB_TABLES)) {
@@ -96,6 +105,46 @@ describe('userdb schema constants (spec surface)', () => {
     // synced table nor change default-export bytes).
     for (const forbidden of ['token', 'refresh', 'expires', 'verifier', 'flow', 'session', 'last_error']) {
       expect(specs.toLowerCase()).not.toContain(forbidden);
+    }
+  });
+
+  it('v4 table snug_connections is slot-keyed and carries the requirement/grant split (parent plan §3)', () => {
+    const conns = USERDB_DDL.find((d) => d.includes('snug_connections '))!.replace(/\s+/g, ' ');
+    // R6: one row per (app, slot) — the v3 shape made one-connection-per-app STRUCTURAL by
+    // putting app_id alone on the PK. Lifting that is the whole point of the composite key.
+    expect(conns).toContain('PRIMARY KEY (app_id, slot)');
+    expect(conns).toContain('app_id TEXT NOT NULL');
+    expect(conns).toContain('slot TEXT NOT NULL');
+    // The requirement half — what the app NEEDS. Written at authoring moments only.
+    expect(conns).toContain('requirement_json TEXT NOT NULL');
+    expect(conns).toContain('requirement_version INTEGER NOT NULL');
+    expect(conns).toContain('provenance TEXT NOT NULL');
+    expect(conns).toContain('confidence REAL');
+    // The grant half — what the user ALLOWED. Written only on explicit approval.
+    expect(conns).toContain('status TEXT NOT NULL');
+    expect(conns).toContain('allowed_hosts TEXT NOT NULL');
+    expect(conns).toContain('approved_at TEXT');
+    // Fold B2: an edit's changed requirement for an APPROVED row STAGES here; the grant keeps
+    // serving requirement_json + its old frozen hosts until re-approval. "needs re-approval" is
+    // DERIVED (status='approved' AND pending_requirement_json IS NOT NULL), never a 4th status.
+    expect(conns).toContain('pending_requirement_json TEXT');
+    // Fold T-M5: `imported` is a COLUMN — the strictObject requirement schema has no seat for
+    // an envelope flag, so a JSON-embedded flag would be a strict-parse rejection.
+    expect(conns).toContain('imported INTEGER NOT NULL DEFAULT 0');
+    // TOMBSTONE: the row survives revoke, which is what closes the revoke-reversal finding.
+    expect(conns).toContain('revoked_at TEXT');
+    expect(conns).toContain('created_at TEXT NOT NULL');
+    expect(conns).toContain('updated_at TEXT NOT NULL');
+  });
+
+  it('v4 table snug_connections holds NO credential or dynamic-connection state (ADR-0014 custody, unchanged)', () => {
+    const conns = USERDB_DDL.find((d) => d.includes('snug_connections '))!.replace(/\s+/g, ' ');
+    // Same posture as the v3 table, restated because the table is new: credential VALUES live
+    // at `auth:<appId>:<slot>:<fieldKey>` and connection state at `auth:<appId>:<slot>:_connection`
+    // in snug_secrets. A token refresh must not dirty this synced table (content-hash gate) nor
+    // change default-export bytes.
+    for (const forbidden of ['token', 'secret', 'refresh', 'expires', 'verifier', 'flow', 'session', 'password']) {
+      expect(conns.toLowerCase(), forbidden).not.toContain(forbidden);
     }
   });
 

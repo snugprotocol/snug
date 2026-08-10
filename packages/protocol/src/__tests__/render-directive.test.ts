@@ -6,18 +6,26 @@
 //     LLM-authored proposal structurally cannot carry phishing registration copy or
 //     control where the secret is injected);
 //   - `inferrerProposalSchema` strict confidence in [0,1] + bounded evidence (M11);
-//   - `authWizardDirectiveSchema` — the ONLY directive shape, which IS the persisted
-//     shape: no credential slot, no evidence[], no docs-derived free text (M1);
-//   - `authRequiredPayloadSchema` strict (M29);
+//   - `authWizardDirectiveSchema` — the persisted directive shape: no credential slot,
+//     no evidence[], no docs-derived free text (M1);
 //   - none of it enters json-schemas SOURCES (the publishes-to-spec line, mutation M1
 //     of the AL-04 table — extends the AL-02/AL-03 guard).
+//
+// TASK-20260810-p0-contracts (Dynamic Auth v2, P0) changes TWO things here, both
+// deliberate rather than incidental churn:
+//   - `authRequiredPayloadSchema` is DELETED (task §Scope D18). It was an orphan with
+//     ZERO non-test consumers, so its only cost was test churn; the display fields an
+//     app-side connect CTA needs now come from the persisted `snug_connections` row.
+//     Its three tests and its snapshot key go with it.
+//   - the directive union gains `connection_requirement` ADDITIVELY (fold B1). Every
+//     `auth_wizard` assertion below stays EXACTLY as it was — that is the cutover rule
+//     asserted, not merely promised: v3's channel must keep shipping green through P0.
 import { describe, expect, it } from 'vitest';
 import {
   AUTH_HINT_HOSTS_MAX_ITEMS,
   AUTH_HINT_HOST_MAX_CHARS,
   AUTH_HINT_SCOPES_MAX_ITEMS,
   AUTH_HINT_SCOPE_MAX_CHARS,
-  AUTH_KINDS,
   AUTH_PROVIDER_NAME_MAX_CHARS,
   authSpecHintsSchema,
 } from '../auth-schema.js';
@@ -28,8 +36,9 @@ import {
   AUTH_EVIDENCE_MAX_ITEMS,
   AUTH_PROVENANCES,
   AUTH_WIZARD_DIRECTIVE_KIND,
-  authRequiredPayloadSchema,
+  CONNECTION_REQUIREMENT_DIRECTIVE_KIND,
   authWizardDirectiveSchema,
+  connectionRequirementDirectiveSchema,
   inferrerProposalSchema,
   llmProposalSchema,
   renderDirectiveSchema,
@@ -249,22 +258,80 @@ describe('AC1 — renderDirectiveSchema union (one member v1, pinned discriminat
   });
 });
 
-// -------------------------------------------- AUTH_REQUIRED payload (M29)
+// ------------------------------ connection_requirement directive (P0, additive)
 
-describe('AC1 — authRequiredPayloadSchema (reserved code gets its payload, M29)', () => {
-  const payload = { providerName: 'Spotify', kind: 'oauth2_auth_code', declaredApiHosts: ['api.spotify.com'] };
+describe('TASK-20260810 P0 — the connection_requirement directive lands ALONGSIDE auth_wizard (fold B1)', () => {
+  /** A minimal but complete requirement — the full-shape bounds live in connection-requirement.test.ts. */
+  const requirement = {
+    slot: 'spotify',
+    provider: { name: 'Spotify' },
+    kind: 'oauth2_auth_code',
+    endpoints: {
+      authorizeUrl: 'https://accounts.spotify.com/authorize',
+      tokenUrl: 'https://accounts.spotify.com/api/token',
+    },
+    declaredApiHosts: ['api.spotify.com'],
+  };
+  const requirementDirective = { v: PROTOCOL_VERSION, kind: 'connection_requirement', requirement };
 
-  it('parses the display-field payload', () => {
-    expect(authRequiredPayloadSchema.safeParse(payload).success).toBe(true);
+  it('pins the wire literal — a PERSISTED discriminator, single-homed like AUTH_WIZARD_DIRECTIVE_KIND', () => {
+    expect(CONNECTION_REQUIREMENT_DIRECTIVE_KIND).toBe('connection_requirement');
+    expect(connectionRequirementDirectiveSchema.shape.kind.value).toBe(CONNECTION_REQUIREMENT_DIRECTIVE_KIND);
   });
 
-  it('kind must be an AUTH_KINDS literal', () => {
-    expect(AUTH_KINDS).toContain(payload.kind);
-    expect(authRequiredPayloadSchema.safeParse({ ...payload, kind: 'oauth3' }).success).toBe(false);
+  it('parses through the union, and the auth_wizard member STILL parses (the cutover rule, asserted)', () => {
+    const parsedNew = renderDirectiveSchema.safeParse(requirementDirective);
+    expect(parsedNew.success, JSON.stringify(parsedNew.error?.issues ?? [], null, 2)).toBe(true);
+    if (parsedNew.success) expect(parsedNew.data.kind).toBe('connection_requirement');
+    // v3's channel is untouched by P0 — `starterDeclaration.ts` still runtime-imports it.
+    expect(renderDirectiveSchema.safeParse(directive).success).toBe(true);
   });
 
-  it('strict-rejects unknown keys (M29 — the payload schema, not just the directive)', () => {
-    expect(authRequiredPayloadSchema.safeParse({ ...payload, credential: 'x' }).success).toBe(false);
+  it('carries the FULL requirement — the seats llmProposalSchema omits are exactly what this directive exists to deliver', () => {
+    // The omit-list (registration copy, headerTemplate, fields) IS the Coinbase defect.
+    // Here they ride in a bounded, lint-checked, review-rendered shape instead.
+    const rich = {
+      ...requirementDirective,
+      requirement: {
+        slot: 'coinbase',
+        provider: { name: 'Coinbase Exchange' },
+        kind: 'api_key',
+        fields: [
+          { key: 'api_key', label: 'API Key', type: 'secret' },
+          { key: 'api_secret', label: 'API Secret', type: 'secret' },
+          { key: 'passphrase', label: 'Passphrase', type: 'secret' },
+        ],
+        registration: { instructions: ['Open Settings, then API.'] },
+        request: { headerTemplate: { 'CB-ACCESS-KEY': '{{api_key}}' } },
+        declaredApiHosts: ['api.exchange.coinbase.com'],
+      },
+    };
+    const parsed = connectionRequirementDirectiveSchema.safeParse(rich);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [], null, 2)).toBe(true);
+    if (parsed.success) expect(parsed.data.requirement.fields).toHaveLength(3);
+  });
+
+  it('strict-rejects unknown keys, an out-of-range confidence, and an unknown provenance literal', () => {
+    expect(connectionRequirementDirectiveSchema.safeParse({ ...requirementDirective, extra: 1 }).success).toBe(false);
+    expect(connectionRequirementDirectiveSchema.safeParse({ ...requirementDirective, confidence: 1.5 }).success).toBe(false);
+    // `provenance` is the five-channel CONNECTION set, not the three-rung AUTH_PROVENANCES.
+    expect(connectionRequirementDirectiveSchema.safeParse({ ...requirementDirective, provenance: 'starter' }).success).toBe(true);
+    expect(connectionRequirementDirectiveSchema.safeParse({ ...requirementDirective, provenance: 'trusted' }).success).toBe(false);
+  });
+
+  it('carries NO credential slot of any spelling — the directive is chat-PERSISTED (M1 posture, restated for v2)', () => {
+    for (const slot of ['credential', 'secret', 'token', 'value', 'apiKey', 'password']) {
+      expect(
+        connectionRequirementDirectiveSchema.safeParse({ ...requirementDirective, [slot]: 'sk-live-abc123' }).success,
+        `directive accepted a '${slot}' slot`,
+      ).toBe(false);
+    }
+  });
+
+  it('a malformed requirement fails the DIRECTIVE, not just the inner schema (validation is not deferrable)', () => {
+    const bad = { ...requirementDirective, requirement: { ...requirement, slot: 'Not A Slot' } };
+    expect(connectionRequirementDirectiveSchema.safeParse(bad).success).toBe(false);
+    expect(renderDirectiveSchema.safeParse(bad).success).toBe(false);
   });
 });
 
@@ -289,11 +356,15 @@ describe('AC1 — render directive stays OUT of json-schemas SOURCES (extends th
   });
 
   it('locks the internal contract with an in-package snapshot instead', () => {
+    // P0 updates this snapshot DELIBERATELY: `payloadKeys` is gone with the deleted
+    // orphan, and `requirementDirectiveKeys` is added for the v2 channel. The
+    // `directiveKeys`/`proposalKeys` entries are untouched — a diff there would mean the
+    // additive cutover silently narrowed v3.
     const shape = {
       directiveKeys: Object.keys(authWizardDirectiveSchema.shape).sort(),
+      requirementDirectiveKeys: Object.keys(connectionRequirementDirectiveSchema.shape).sort(),
       proposalKeys: Object.keys(llmProposalSchema.shape).sort(),
       inferrerKeys: Object.keys(inferrerProposalSchema.shape).sort(),
-      payloadKeys: Object.keys(authRequiredPayloadSchema.shape).sort(),
       hintsKeys: Object.keys(authSpecHintsSchema.shape).sort(),
       provenances: [...AUTH_PROVENANCES],
       evidenceBounds: { items: AUTH_EVIDENCE_MAX_ITEMS, chars: AUTH_EVIDENCE_MAX_CHARS },
