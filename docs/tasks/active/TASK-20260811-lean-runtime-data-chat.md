@@ -1,6 +1,6 @@
 # TASK-20260811-lean-runtime-data-chat: Lean runtime turns (authored contracts) + intent-routed app data chat
 
-- **Status**: **in progress** — Gates 1–2 complete + two fresh-context plan reviews folded (2026-08-11); **plan APPROVED by owner 2026-08-11 (all of §5 (a)–(e) as planned)**; P0 implementation started
+- **Status**: **COMPLETE — P0–P4 implemented, whole-surface reviewed, awaiting owner review + PR** (2026-08-11). Plan approved by owner (all of §5 (a)–(e) as planned); every AC has tests; 19/19 turbo tasks green uncached at **2156 tests + 185 examples** (from 1881 at pickup).
 - **Owner**: Jeetu (commissioned 2026-08-11); planning session by Claude; implementation session by Claude (took Owner 2026-08-11 on plan approval)
 - **Risk tier**: **High** (auto-escalated: `packages/protocol` schemas + `userdb-schema.ts`, prompt-store changes under ADR-0004, a new LLM→SQL surface adjacent to C1)
 - **Branch**: `feat/TASK-20260811-lean-runtime-data-chat` (off `main` at `4b9c49c` — the Dynamic Auth v2 chain is MERGED as of PR #33/#34, so this builds on the v4 world directly)
@@ -704,3 +704,49 @@ materialized DB; every file:line citation in §0 checked accurate.
   the docs close** (code-map rows, architecture status, ADRs proposed→accepted, lessons,
   next-steps, product-vision differentiators).
 - Open questions: none new.
+
+### 2026-08-11 — Claude (implementation session, P4 + close) — session
+
+- Done: **P4 complete; the task is implemented end to end.**
+  - **`artifact_edit`** (D10): unique-match-or-fail, atomic, uniqueness re-checked after
+    each earlier edit in the batch, through the SAME sink as `artifact_write` (so an
+    edited version pins, reloads and carries the contract forward like any other). An
+    invariant test asserts it produces exactly the file a whole-file write would have.
+  - **Whole-surface review** (8 agents: 4 end-to-end traces + 4 adversarial verifiers).
+    It found **two BLOCKERs that 2100+ passing tests had missed**, both fixed:
+    1. **Wrong affected-row counts.** `scratchRun` treated sql.js `getRowsModified()` as
+       cumulative and took a delta; it is `sqlite3_changes()` (per statement), so any
+       second write reported a wrong, often NEGATIVE count — rendered on the approval
+       card. The drift guard could not catch it: it re-ran the same broken arithmetic on
+       both sides and agreed with itself. A `RETURNING` clause separately suppressed the
+       count entirely, so a destructive `DELETE … RETURNING id` previewed as "0 rows" and
+       could never trip drift. **Why it survived:** the one multi-statement test paired a
+       write with a SELECT, and a SELECT leaves `sqlite3_changes()` untouched.
+    2. **Contract could forge a system-block boundary.** `renderRuntimeContract` stripped
+       only the EXACT separator; `\n\n\n---\n\n\n` passed through and its own newlines
+       supplied the blank lines the separator needs, making attacker text a PEER of
+       `10-host-identity` (verified: 5 blocks where 4 expected; reproduced from every
+       free-text seat AND a settings VALUE). Now neutralizes any horizontal-rule LINE.
+    Also fixed from the same round: query results ride a defanged `<query_result>` block
+    instead of raw concatenation; one approval card per turn (a second proposal used to
+    silently replace the first); approve is single-flight; **subscription mode now SENDS
+    the contract** (`createHttpTransport` gained a per-send `getContract` seat — the
+    server half had been unreachable from the shipped client).
+  - **Threat-model delta** written with the residual risks stated rather than implied
+    away, including the ones this task chose NOT to close.
+  - **Docs close**: code-map rows (call-site count corrected to a VERIFIED four — the data
+    lane reuses the builder's call site via the tools override, so it is not a fifth), the
+    architecture status paragraph, ADR-0018/0019 proposed → accepted, product-vision
+    differentiators 1 and 2 extended with the two USPs, lessons, next-steps.
+  - **The plan's deferred question answered:** sync pulls DO share the `importUserDb`
+    seam (`pullMerge`, the recovery restore and the manual import all funnel through it),
+    so imported-contract reconciliation covers sync. Pinned by a behavioral test rather
+    than a grep, so a future bespoke sync-import fails loudly.
+- **State: 19/19 turbo tasks green, uncached — 2156 tests + 185 examples** (protocol 250,
+  knowledge 164, runner 108, db 284, server 123, adapters 103, sdk 41, auth 357,
+  playground 726, examples 185). Baseline at pickup was 1881.
+- Next step: **owner review + PR.** Nothing is blocked. Queued follow-ups are in
+  `docs/next-steps.md` (subscription server twins; the `^`-anchored C1 scanner limit;
+  driver-reported row counts; row-identity drift detection; persisting a staged proposal
+  across reload; an optional pre-write confirm on classifier-routed `app_change`).
+- Open questions: none.
