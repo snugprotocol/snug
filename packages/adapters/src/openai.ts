@@ -61,7 +61,12 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
   return {
-    async complete({ system, messages, tools, signal, onDelta }): Promise<AdapterResult> {
+    async complete({ system, messages, tools, signal, onDelta, maxOutputTokens }): Promise<AdapterResult> {
+      // The per-turn cap NARROWS the construction ceiling and can never widen it (D4).
+      // This is also what keeps local mode's 8K rule intact: `localAdapter` builds this
+      // adapter with LOCAL_DEFAULT_MAX_TOKENS, so a contract asking for more is clamped.
+      const turnMaxTokens =
+        maxOutputTokens === undefined ? maxTokens : Math.min(maxOutputTokens, maxTokens);
       let response: Response;
       try {
         response = await fetchImpl(`${baseUrl}/chat/completions`, {
@@ -73,7 +78,7 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
           body: JSON.stringify({
             model,
             stream: true,
-            max_completion_tokens: maxTokens,
+            max_completion_tokens: turnMaxTokens,
             messages: toOpenAiMessages(system, messages),
             ...(tools !== undefined && tools.length > 0
               ? {

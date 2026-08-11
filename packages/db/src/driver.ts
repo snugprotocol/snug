@@ -103,7 +103,8 @@ function hasSqliteMagic(bytes: Uint8Array): boolean {
 }
 
 /** True when the SQL tail is only whitespace, semicolons, and comments — i.e. no second statement. */
-function isSqlTailEmpty(tail: string): boolean {
+/** Exported alongside `forbiddenStatementReason` so `scratchRun` shares the multi-statement rule. */
+export function isSqlTailEmpty(tail: string): boolean {
   return (
     tail
       .replace(/\/\*[\s\S]*?\*\//g, ' ')
@@ -113,20 +114,33 @@ function isSqlTailEmpty(tail: string): boolean {
 }
 
 /** BLOB cells become plain number arrays so results stay JSON/structured-clone friendly. */
-const normalizeCell = (cell: unknown): unknown => (cell instanceof Uint8Array ? Array.from(cell) : cell);
+export const normalizeCell = (cell: unknown): unknown => (cell instanceof Uint8Array ? Array.from(cell) : cell);
 
 /**
  * Statement classes closed on purpose (Gate-5): ATTACH (reach outside the namespace
  * file), PRAGMA writable_schema (silent schema corruption), load_extension() (native
  * code). Checked on the comment-stripped statement text; other PRAGMAs stay allowed.
+ *
+ * EXPORTED as of TASK-20260811 (D7): `scratchRun` runs LLM-authored SQL through the SAME
+ * guards. One definition, not two — a second copy is a second thing to forget to update.
+ *
+ * The `writable_schema` match tolerates SQLite's alternate spellings (fold F-Sm3b,
+ * pre-existing and verified bypassable): the identifier may be quoted (`"writable_schema"`,
+ * `'writable_schema'`, `[writable_schema]`, backticks) and/or schema-qualified
+ * (`main.writable_schema`), all of which SQLite honors and the original anchored pattern
+ * missed. Matching the bare token anywhere after `PRAGMA` is the conservative reading: the
+ * cost of a false positive is one refused pragma naming a reserved word, and the cost of a
+ * false negative is silent schema corruption.
  */
-function forbiddenStatementReason(sql: string): string | undefined {
+export function forbiddenStatementReason(sql: string): string | undefined {
   const cleaned = sql
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/--[^\n]*/g, ' ')
     .trim();
   if (/^ATTACH\b/i.test(cleaned)) return 'ATTACH is not allowed';
-  if (/^PRAGMA\s+writable_schema\b/i.test(cleaned)) return 'PRAGMA writable_schema is not allowed';
+  if (/^PRAGMA\b/i.test(cleaned) && /\bwritable_schema\b/i.test(cleaned)) {
+    return 'PRAGMA writable_schema is not allowed';
+  }
   if (/\bload_extension\s*\(/i.test(cleaned)) return 'load_extension() is not allowed';
   return undefined;
 }

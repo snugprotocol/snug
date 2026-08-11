@@ -33,7 +33,15 @@
 // slot-keyed requirement/grant split (see connection-requirement.ts). ADDITIVE by the
 // cutover rule (fold B1): `snug_auth_specs` keeps shipping until its last consumers are
 // rewired in P3, so BOTH tables exist at v4 and neither migration replays over the other.
-export const USERDB_SCHEMA_VERSION = 5 as const;
+// v6 (TASK-20260811, ADR-0018 — internal draft): adds `snug_app_versions.runtime_contract_json`,
+// the compact per-app runtime contract a lean app turn assembles FROM. Stored on the VERSION
+// row so it is version-linked by construction: revert restores the contract that shipped with
+// the reverted HTML, and the factory pin keeps the factory contract. Nullable — a contract-less
+// app is the normal legacy/LLM-optional case, not an error. This is the first migration to add a
+// column to an EXISTING table since v2, so it needs `addColumnIfMissing`, NOT a bare DDL replay
+// (`CREATE TABLE IF NOT EXISTS` cannot alter an existing table — see the v4 comment in
+// packages/db's MIGRATIONS for why a bare replay would silently lie about the version).
+export const USERDB_SCHEMA_VERSION = 6 as const;
 
 /** Size/retention limits for the user DB (spec-normative, rule R6 family). */
 export const USERDB_LIMITS = {
@@ -184,6 +192,7 @@ export const USERDB_DDL: readonly string[] = [
     note TEXT,
     created_at TEXT NOT NULL,
     pinned INTEGER NOT NULL DEFAULT 0,
+    runtime_contract_json TEXT,
     PRIMARY KEY (app_id, version)
   )`,
   `CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.appSchemas} (

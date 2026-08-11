@@ -1,7 +1,7 @@
 # TASK-20260811-lean-runtime-data-chat: Lean runtime turns (authored contracts) + intent-routed app data chat
 
-- **Status**: planned — Gates 1–2 complete + two fresh-context plan reviews folded (2026-08-11); **awaiting owner plan approval; implementation starts in a fresh session (`/pickup`)**
-- **Owner**: Jeetu (commissioned 2026-08-11); planning session by Claude
+- **Status**: **in progress** — Gates 1–2 complete + two fresh-context plan reviews folded (2026-08-11); **plan APPROVED by owner 2026-08-11 (all of §5 (a)–(e) as planned)**; P0 implementation started
+- **Owner**: Jeetu (commissioned 2026-08-11); planning session by Claude; implementation session by Claude (took Owner 2026-08-11 on plan approval)
 - **Risk tier**: **High** (auto-escalated: `packages/protocol` schemas + `userdb-schema.ts`, prompt-store changes under ADR-0004, a new LLM→SQL surface adjacent to C1)
 - **Branch**: `feat/TASK-20260811-lean-runtime-data-chat` (off `main` at `4b9c49c` — the Dynamic Auth v2 chain is MERGED as of PR #33/#34, so this builds on the v4 world directly)
 - **Packages touched**: `protocol`, `db`, `knowledge`, `playground` (agent/appContext, transport, tools, run views); `sdk` (possibly — hook guidance only); `adapters` (possibly — response-format plumbing); dependents per graph: change `protocol` → run everything
@@ -498,3 +498,61 @@ materialized DB; every file:line citation in §0 checked accurate.
 - Next step: **owner reviews this plan (esp. §5 open decisions a–e) → on approval, a fresh
   session runs `/pickup TASK-20260811-lean-runtime-data-chat` and starts P0 tests-first.**
 - Open questions: §5 (a)–(e).
+
+### 2026-08-11 — Claude (implementation session, P0) — session
+
+- **Owner approval received** for the whole plan including §5 (a)–(e) exactly as planned;
+  Owner line updated, status planned → in progress.
+- Done: **P0 complete, all five items, tests-first throughout** (every suite shown red for
+  the right reason before its implementation):
+  - **P0.1** `packages/protocol/src/runtime-contract.ts` — internal-draft
+    `runtimeContractSchema` (strict, per-seat bounds + a whole-artifact 2.5 KB cap),
+    `parseRuntimeContract` (tolerant read → `undefined`, never throws, so a bad row
+    degrades to lean generic layers per AC-F1-4), `canonicalRuntimeContract` (key-sorted
+    bytes for the import guard). 15 tests incl. the publication-line guard.
+  - **P0.2** `chat-intent.ts` — `chatIntentSchema` + `parseChatIntent` (fail-closed:
+    every unusable reply → `undefined`, no default lane, explicitly tested that garbage
+    never resolves to `app_change`), lane predicates. 12 tests.
+  - **P0.3** userdb **v5 → v6**: `snug_app_versions.runtime_contract_json` (nullable,
+    additive). Migration uses `addColumnIfMissing` — the first column-add since v2, and
+    exactly the case the v4 MIGRATIONS comment warned a bare DDL replay would silently
+    botch. Accessors `getRuntimeContract`/`putRuntimeContract` (validate-on-write,
+    tolerate-on-read) + the three lifecycle rules: copy-forward in `saveAppVersion`
+    (F-B1), revert/reset copy from the **target** version via a new explicit
+    `contractSourceVersion` arg (F-B1 — both delegate to `saveAppVersion`, so a naive
+    copy-forward would have served the pre-revert contract), and
+    `reconcileImportedRuntimeContracts` dropping foreign contracts unless canonically
+    byte-identical to a locally known row (F-SB1/AC-F1-7, `droppedRuntimeContracts` added
+    to `UserDbImportReport`). 20 tests incl. a stale-v5 fixture through the migration.
+  - **P0.4** `db.scratchRun` — throwaway sql.js instance over the app's exported
+    materialized bytes; read-only BY CONSTRUCTION (no flag). Byte-compare proofs that
+    UPDATE/INSERT/DROP leave the real DB untouched; namespace jail asserted as PHYSICAL
+    ABSENCE (other apps' + hub tables error as missing); result bounds `MAX_QUERY_ROWS`
+    200 / `MAX_QUERY_RESULT_BYTES` 32 KiB with honest `totalRows`. Guards shared with the
+    real executor by EXPORTING `forbiddenStatementReason`/`isSqlTailEmpty`/`normalizeCell`
+    from driver.ts rather than copying them. **F-Sm3b closed**: the `writable_schema`
+    match now catches quoted and schema-qualified spellings. 24 tests.
+  - **P0.5** per-turn `maxOutputTokens` on `AdapterRequest` (same altitude as `cache`);
+    both adapters CLAMP (narrow-only) so local mode's 8K rule survives a contract asking
+    for more; absent ⇒ today's default byte-for-byte (AC-F1-4). 9 tests.
+- **Two corrections worth recording** (both mine, both caught by the existing guards):
+  (a) the `snug_kv` presence test initially asserted the table exists unconditionally — it
+  is created LAZILY on first kv use (`driver.ts` `ensureKvTable`), so the test now seeds a
+  kv write first; the ADR-0010 exemption claim is unchanged and still asserted. (b) I first
+  reached for a `SQL_ERROR` userdb code that does not exist — added
+  `SCRATCH_UNAVAILABLE` instead, which is the honest distinction (the sandbox never
+  existed vs. a SQL error inside it, the latter being per-statement DATA). Caught by
+  `db:build`'s tsc, NOT by `db:test` — **db's test script does not typecheck**, so a
+  package-level green is not a type-clean claim; run the root turbo build/test.
+- State: **all 19 turbo tasks green, uncached (`--force`): 1963 tests** (protocol 250,
+  knowledge 120, runner 108, db 280, server 110, adapters 101, sdk 41, auth 357,
+  playground 596). Baseline at pickup was 1881, so +82. No test deleted or weakened; the
+  one snapshot update is the single additive DDL line, reviewed before accepting.
+- Next step: **P1 — lean runtime turns**: `system/45-app-runtime.md` + the `appRuntime`
+  assembly branch and golden snapshots, then the two call-site swaps (`transport.ts:57`,
+  `invoke.ts:103`) with the shared `renderRuntimeContract` in `packages/knowledge`, the
+  per-send contract read (F-M1: turn → revert → turn), and `/invoke`'s strict `contract`
+  field (F-M3, 400 on over-bound + credential-scan coverage).
+- Open questions: none new. Note for P1: `renderRuntimeContract` must land in
+  `packages/knowledge` as ONE renderer used by both call sites (F-M3's two-artifact-fork
+  risk).

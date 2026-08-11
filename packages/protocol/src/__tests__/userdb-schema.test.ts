@@ -30,8 +30,27 @@ describe('userdb schema constants (spec surface)', () => {
   // two versions at once would be asserting an impossible file.
   // TASK-20260810-p3-wizard: v5 DROPS `snug_auth_specs`. Again REPLACED rather than
   // duplicated, for the same reason — one scalar, one true answer.
-  it('declares schema version 5 (Dynamic Auth v2 cutover: snug_auth_specs dropped)', () => {
-    expect(USERDB_SCHEMA_VERSION).toBe(5);
+  // TASK-20260811 P0.3: v6 adds `snug_app_versions.runtime_contract_json` (ADR-0018) —
+  // ADDITIVE, an `addColumnIfMissing` on an EXISTING table (unlike v3/v4's new-table
+  // replays, which is why this migration cannot be a bare DDL replay).
+  it('declares schema version 6 (runtime contracts on app versions)', () => {
+    expect(USERDB_SCHEMA_VERSION).toBe(6);
+  });
+
+  it('stores the runtime contract ON THE VERSION ROW — version-linked by construction (ADR-0018)', () => {
+    // The contract lives on `snug_app_versions`, not on `snug_apps` and not in a docs
+    // slug: revert must restore the contract that shipped with the reverted HTML, and a
+    // free-text doc is neither version-linked nor bounded.
+    const versionsDdl = USERDB_DDL.find((ddl) => ddl.includes(`CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.appVersions}`));
+    expect(versionsDdl).toBeDefined();
+    expect(versionsDdl).toContain('runtime_contract_json TEXT');
+    // Nullable: an app without a contract is the NORMAL legacy/LLM-optional case, never an
+    // error state (AC-F1-4).
+    expect(versionsDdl).not.toMatch(/runtime_contract_json TEXT NOT NULL/);
+  });
+
+  it('adds NO new table at v6 — USERDB_TABLES is untouched, so the self-heal guard is unaffected', () => {
+    expect(Object.values(USERDB_TABLES)).not.toContain('snug_runtime_contracts');
   });
 
   it('caps the whole user DB at 64 MiB and retains at least 5 versions per app', () => {
