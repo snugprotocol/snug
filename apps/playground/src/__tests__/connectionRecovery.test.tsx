@@ -197,7 +197,10 @@ describe('P3-AC10 — the v4 requirement inferrer runs on the SHIPPED post-turn 
     expect(rows).toHaveLength(1);
     // Declared by the model's own directive: the slot and provenance come from the
     // DECLARATION channel, not from the registry rung a recovery would have taken.
-    expect(rows[0]!.slot).toBe('openweather');
+    // `tidegauge` since P4: the bearer variant moved off OpenWeather when that provider
+    // gained a registry entry (see the long note on the variant). The property under test
+    // is unchanged — the slot came from the DECLARATION, not from a recovery guess.
+    expect(rows[0]!.slot).toBe('tidegauge');
     expect(rows[0]!.provenance).not.toBe('registry');
   });
 });

@@ -141,13 +141,11 @@ export {
   authWizardDirectiveSchema,
   connectionRequirementDirectiveSchema,
   inferrerProposalSchema,
-  llmProposalSchema,
   renderDirectiveSchema,
   type AuthProvenance,
   type AuthWizardDirective,
   type ConnectionRequirementDirective,
   type InferrerProposal,
-  type LlmProposal,
   type RenderDirective,
 } from './render-directive.js';
 

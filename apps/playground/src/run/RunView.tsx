@@ -14,7 +14,7 @@ import { createDbDriver, createMemoryBackend, type SnugDbDriver } from '@snugpro
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } from '@snugprotocol/runner';
 
-import { NET_ERROR_CODES, type LlmProposal } from '@snugprotocol/protocol';
+import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { createNetHandlerFor } from '../state/net.js';
@@ -32,7 +32,7 @@ import { useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
-import { starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
+import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -293,7 +293,7 @@ export default function RunView(): ReactElement {
    * the read-only starter route — once the app is owned, Settings and the CTA are the
    * connection surfaces and repeating this would be noise on every load.
    */
-  const [starterDeclaration, setStarterDeclaration] = useState<LlmProposal | undefined>(undefined);
+  const [starterDeclaration, setStarterDeclaration] = useState<ConnectionRequirement | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
     if (!isStarterId(id)) {
@@ -318,6 +318,13 @@ export default function RunView(): ReactElement {
       if (html === undefined) throw new Error('starter not bundled');
       const name = listStarterApps().find((s) => s.id === id)?.name ?? 'starter';
       const entry = await userLibrary().save(html, name, starterInstallSource(id));
+      // THE COPY (P4-AC3). The app row now exists, so the two-fact vouch can run and the
+      // manifest can land as a `declared` row owned by the user. Deliberately AWAITED
+      // before navigating: the connection surface on the next screen reads rows, and
+      // racing the copy against the route change would render an installed starter as
+      // declaring nothing. It writes a requirement, never a credential, and never an
+      // approval — see `installStarterConnections`.
+      await installStarterConnections(await getUserDb(), entry.id);
       navigate(`/run/${entry.id}`, { replace: true });
     } catch (err) {
       setInstallError(err instanceof Error ? err.message : String(err));
@@ -636,8 +643,20 @@ export default function RunView(): ReactElement {
             data-testid="starter-install-disclosure"
             style={{ margin: 'var(--space-3) var(--space-4) 0' }}
           >
-            🔌 this starter ships a declared connection to <strong>{starterDeclaration.providerName}</strong>
-            {starterDeclaration.declaredApiHosts !== undefined && starterDeclaration.declaredApiHosts.length > 0
+            {/*
+              v4 SEATS (P4-AC5): `provider.name` replaces the deleted `providerName`, and
+              `declaredApiHosts` now arrives from a strict `connectionRequirementSchema`
+              parse. A disclosure still reading the v3 seats would render EMPTY on every
+              migrated manifest — no provider, no host, just chrome.
+
+              DELIBERATELY NOT RENDERED: `fields`. The v4 manifest CAN now carry credential
+              field definitions, which the v3 proposal structurally could not. Showing "API
+              key" here would make a pre-install teaser look like the strong field-by-field
+              review and train the user to expect a credential prompt one click later. The
+              review happens after approval is sought, in the wizard, with provenance copy.
+            */}
+            🔌 this starter ships a declared connection to <strong>{starterDeclaration.provider.name}</strong>
+            {starterDeclaration.declaredApiHosts.length > 0
               ? ` (${starterDeclaration.declaredApiHosts.join(', ')})`
               : ''}
             . installing only copies the app — nothing is connected until you review and approve it yourself.

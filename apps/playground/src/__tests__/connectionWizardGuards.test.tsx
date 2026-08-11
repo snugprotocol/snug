@@ -27,6 +27,7 @@ import {
   __setConnectionOAuthHooksForTests,
   advanceFromReview,
   connectionFlowStatusStore,
+  connectionWizardStepStore,
   connectionWizardStore,
   isConnectionRepairableNetError,
   openConnectionWizard,
@@ -513,5 +514,96 @@ describe('GUARD 4 — the token scope is the FROZEN ROW union, and approval prec
 
     expect(result.ok).toBe(false);
     expect(result.ok === false ? result.message : '').toMatch(/approve this connection/i);
+  });
+});
+
+describe('GUARD 5 — a credential-bearing kind with ZERO fields REFUSES rather than reporting success', () => {
+  // THE FAILURE MODE THIS KILLS, and why it is worse than a plain bug.
+  //
+  // P4's registry-substitution defect (fixed in `requirement-admission.ts`) put registry-
+  // backed starters in front of the credential step carrying NO fields. The wizard did not
+  // error. `CredentialsScreen` computed `missing` by filtering an empty array — vacuously
+  // satisfied — so Save proceeded; `saveConnectionCredentials` looped `for (const field of
+  // row.requirement.fields ?? [])` for zero iterations, called `db.setSecret` zero times,
+  // and returned `{ok:true}`, advancing the machine to `done`. The user was shown a
+  // CONNECTED state with no credential stored.
+  //
+  // That is the same class the shipped comment at the `missing` filter already calls out:
+  // "showed connected, turning an answerable problem now into a NET_AUTH_FAILED round trip
+  // later". A silent success is strictly worse than a failure, because the user has no
+  // reason to look and the eventual 401 carries nothing pointing back here.
+  //
+  // So this guard is DEFENCE IN DEPTH, deliberately: the substitution fix is what makes
+  // fields arrive, and this is what guarantees their ABSENCE can never again present as a
+  // successful connection — whatever future path produces it. It is written against the
+  // function that touches the secret, for the same reason the B1 wall is restated there.
+  const NO_FIELDS_APP = 'app-p4-nofields';
+  const NO_FIELDS_SLOT = 'coingecko';
+
+  /** A requirement of a credential-bearing kind that declares no fields at all. */
+  const fieldlessRequirement = {
+    slot: NO_FIELDS_SLOT,
+    provider: { name: 'CoinGecko' },
+    kind: 'api_key',
+    declaredApiHosts: ['api.coingecko.com'],
+  } as const satisfies Record<string, unknown>;
+
+  async function seedApprovedFieldless(): Promise<void> {
+    db.installApp({ appId: NO_FIELDS_APP, displayName: 'Fieldless App', html: '<p>x</p>' });
+    db.putDeclaredConnection(NO_FIELDS_APP, NO_FIELDS_SLOT, fieldlessRequirement, 'registry' as never);
+    db.approveConnection(NO_FIELDS_APP, NO_FIELDS_SLOT);
+    openConnectionWizard({ appId: NO_FIELDS_APP, slot: NO_FIELDS_SLOT, source: 'settings' });
+    await settle();
+  }
+
+  it('refuses the save — it does NOT return ok having stored nothing', async () => {
+    await seedApprovedFieldless();
+
+    const result = await saveConnectionCredentials({ api_key: 'whatever-the-user-typed' });
+
+    expect(result.ok, 'zero fields must never report a successful connection').toBe(false);
+    expect(result.ok === false ? result.message : '').toMatch(/no credential fields|nothing to collect/i);
+  });
+
+  it('does NOT advance the machine to a connected state', async () => {
+    // The user-visible half. Refusing the write but still stepping to `done` would leave
+    // exactly the misleading screen the refusal exists to prevent.
+    await seedApprovedFieldless();
+
+    await saveConnectionCredentials({ api_key: 'whatever-the-user-typed' });
+
+    expect(connectionWizardStepStore.get()).not.toBe('done');
+  });
+
+  it('writes NO secret (C1 — the refusal is a refusal, not a partial write)', async () => {
+    await seedApprovedFieldless();
+    const setSecret = vi.spyOn(db, 'setSecret');
+
+    await saveConnectionCredentials({ api_key: 'whatever-the-user-typed' });
+
+    expect(setSecret).not.toHaveBeenCalled();
+  });
+
+  it("a kind:'none' requirement is UNAFFECTED — it legitimately collects nothing", async () => {
+    // The counterweight, and the reason the guard is kind-aware rather than a blanket
+    // "fields must be non-empty". `kind:'none'` declares a connection that needs no
+    // credential at all (P0's six kinds). Refusing it would break the one shape for which
+    // an empty field list is the CORRECT answer, and turn a working posture into a dead
+    // end — the inverse of the defect.
+    const NONE_APP = 'app-p4-none';
+    db.installApp({ appId: NONE_APP, displayName: 'No-Credential App', html: '<p>x</p>' });
+    db.putDeclaredConnection(
+      NONE_APP,
+      'public-api',
+      { slot: 'public-api', provider: { name: 'Public API' }, kind: 'none', declaredApiHosts: ['api.public.example'] },
+      'registry' as never,
+    );
+    db.approveConnection(NONE_APP, 'public-api');
+    openConnectionWizard({ appId: NONE_APP, slot: 'public-api', source: 'settings' });
+    await settle();
+
+    const result = await saveConnectionCredentials({});
+
+    expect(result.ok, "kind:'none' collects nothing BY DESIGN and must still succeed").toBe(true);
   });
 });

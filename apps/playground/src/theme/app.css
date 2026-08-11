@@ -1481,6 +1481,33 @@ img.identity-avatar {
   background: transparent;
 }
 
+/*
+  The desktop-only badge (HARVESTED from AL-09 / TASK-20260807 AC9). Same shape as the
+  installed badge but a MUTED colour and its own class: it reports a limitation, not an
+  achievement, so it must not read as a success state — and `.tile-installed-badge` must
+  stay unambiguous for the dedup spec that asserts on it.
+*/
+.tile-desktop-badge {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  /*
+    `--fg-muted` (tokens.css), NOT `--muted`. The example APPS define their own
+    `--muted` locally, and copying that name into the SHELL stylesheet silently
+    produced an undefined variable — the badge fell back to initial colours. Every
+    other muted colour in this file uses `--fg-muted`; so does this one.
+  */
+  color: var(--fg-muted);
+  border: 1px solid var(--fg-muted);
+  background: transparent;
+}
+
 .field-gap {
   margin-top: var(--space-4);
 }

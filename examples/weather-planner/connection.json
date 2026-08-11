@@ -1,0 +1,9 @@
+{
+  "slot": "openweather",
+  "provider": {
+    "name": "OpenWeather",
+    "docsUrl": "https://openweathermap.org/forecast5"
+  },
+  "kind": "api_key",
+  "declaredApiHosts": ["api.openweathermap.org"]
+}

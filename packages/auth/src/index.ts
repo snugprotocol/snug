@@ -115,17 +115,12 @@ export {
 
 export { paramsToAuthSpec, type ParamsToAuthSpecInput, type ParamsToAuthSpecResult } from './params-to-auth-spec.js';
 
-export {
-  AUTH_INFERENCE_CONFIDENCE_NOTE_THRESHOLD,
-  createAuthSpecInferrer,
-  needsUnsureConfidenceNote,
-  type AuthSpecInferrer,
-  type AuthSpecInferrerDeps,
-  type AuthSpecInferrerErrorCode,
-  type InferAuthSpecInput,
-  type InferAuthSpecResult,
-  type InferrerComplete,
-} from './auth-spec-inferrer.js';
+// The v3 `auth-spec-inferrer` export block was DELETED by TASK-20260810-p4-starters (the
+// named exit item), along with the module itself. It emitted `llmProposalSchema` — the
+// omit-list proposal shape whose missing `fields`/`registration`/`headerTemplate` seats
+// were the owner's founding defect — and its last production caller
+// (`runAuthSpecInference`) went with it. The v4 `connection-requirement-inferrer` below
+// is the successor and was already the only path the shipped wizard takes.
 
 /**
  * Dynamic Auth v2 (P2): the FULL-requirement inferrer. Additive — the v3 inferrer above

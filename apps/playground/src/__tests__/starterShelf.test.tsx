@@ -28,8 +28,15 @@ const PILLAR_FOLDERS = ['adventure-quest', 'quiz-me', 'trivia-night', 'trip-plan
 const ORIGINAL_FOLDERS = ['chess', 'flying-pig', 'habit-tracker'];
 /** The connected demo (TASK-20260807-connection-reachability) — the ninth folder. */
 const CONNECTED_FOLDERS = ['connection-demo'];
+/**
+ * The AUTH-SPECTRUM starters (TASK-20260810-p4-starters, harvested from the parked AL-09
+ * branch): one per credential shape, plus Hue as the deliberate LAN-posture negative.
+ * They reach the shelf through the same `examples/*` glob as every other folder — which
+ * is exactly why the count assertion below had to move with them rather than be relaxed.
+ */
+const SPECTRUM_FOLDERS = ['crypto-portfolio', 'weather-planner', 'my-repos', 'spotify-party-dj', 'hue-lights-party'];
 /** Every folder that must reach the shelf with its own look — the coverage loop's input. */
-const LOOK_COVERED = [...PILLAR_FOLDERS, ...CONNECTED_FOLDERS];
+const LOOK_COVERED = [...PILLAR_FOLDERS, ...CONNECTED_FOLDERS, ...SPECTRUM_FOLDERS];
 
 let container: HTMLDivElement | undefined;
 let root: Root | undefined;
@@ -79,15 +86,19 @@ afterEach(() => {
 });
 
 describe('the five pillar starters register through the ONE definition (AC3)', () => {
-  it('listStarterApps() carries all nine starters straight from the examples/ glob', () => {
+  it('listStarterApps() carries all fourteen starters straight from the examples/ glob', () => {
     const ids = listStarterApps().map((starter) => starter.id);
-    for (const folder of [...ORIGINAL_FOLDERS, ...PILLAR_FOLDERS, ...CONNECTED_FOLDERS]) {
+    for (const folder of [...ORIGINAL_FOLDERS, ...PILLAR_FOLDERS, ...CONNECTED_FOLDERS, ...SPECTRUM_FOLDERS]) {
       expect(ids, `examples/${folder}/app.html must be bundled on the shelf`).toContain(`${STARTER_PREFIX}${folder}`);
     }
     // The COUNT is pinned too (review fix 5a): the validate suite's APPS list and the
-    // vite glob can drift silently — a ninth folder that skips validation, or a listed
-    // app whose folder vanished, both surface here as a length mismatch.
-    expect(ids).toHaveLength(ORIGINAL_FOLDERS.length + PILLAR_FOLDERS.length + CONNECTED_FOLDERS.length);
+    // vite glob can drift silently — a folder that skips validation, or a listed app
+    // whose folder vanished, both surface here as a length mismatch. P4 EXTENDS the
+    // pinned membership rather than relaxing the check: each of the five new folders is
+    // named above, so the count still fails on a folder nobody declared.
+    expect(ids).toHaveLength(
+      ORIGINAL_FOLDERS.length + PILLAR_FOLDERS.length + CONNECTED_FOLDERS.length + SPECTRUM_FOLDERS.length,
+    );
   });
 
   // The loop covers PILLAR + CONNECTED folders (TASK-20260807-connection-reachability

@@ -38,13 +38,22 @@
  *
  * WHAT SUBSTITUTION CANNOT REACH, and why that is a REFUSAL (review MAJOR-1). The seats
  * that drive the credential prompt — `fields` (what the user is asked to type),
- * `request.headerTemplate` (where the typed secret is sent) and `testRequest` — have no
- * registry counterpart to substitute in: the registry pins hosts, endpoints and
- * registration copy, not a per-kind field list. Passing them through was strictly worse
- * than not substituting at all, because substitution ADDS legitimacy: a label reading
+ * `request.headerTemplate` (where the typed secret is sent) and `testRequest` — must never
+ * be carried over from a borrower, because substitution ADDS legitimacy: a label reading
  * "Paste your Spotify password" rendered beside registry-grade hosts and the registry's
- * own display name. So a borrow hit from a non-registry channel that occupies any of
- * those seats is REFUSED outright rather than admitted with a partial correction.
+ * own display name. So a borrow hit from a non-registry channel that OCCUPIES any of those
+ * seats is REFUSED outright rather than admitted with a partial correction.
+ *
+ * `fields` IS NOW SUBSTITUTABLE — and the asymmetry is the point (P4, fold T-M1). The
+ * registry carries a human-reviewed field list per provider, so a borrower that OMITS
+ * `fields` RECEIVES the pinned one, while a borrower that AUTHORS them is still refused.
+ * Refusing the authoring case only made sense once the omitting case was answered: before
+ * P4 the registry had nothing to substitute, so a bare borrower reached the credential
+ * step with ZERO input boxes and the wizard reported success having stored nothing. The
+ * borrower does not get to name the boxes; it no longer needs to.
+ *
+ * `request.headerTemplate` and `testRequest` remain unsubstitutable and therefore
+ * refusal-only: the registry pins WHAT to ask for, not where the typed value is sent.
  *
  * WHAT THIS IS NOT. Admission is not authorization. A clean pass here means "these claims
  * may be SHOWN to the user", never "this app may have a credential". The frozen host
@@ -170,10 +179,18 @@ function findBorrowedEntry(
  * The seats that DRIVE A CREDENTIAL PROMPT: what the user is asked to type, where the
  * typed value is sent, and the first request it is sent on.
  *
- * These are separated from the substitutable seats because the registry has nothing to
- * substitute them WITH. It pins hosts, endpoints and registration copy; it does not carry
- * a field list or a header template for a static kind (that data is P4). So on a borrow
- * hit from an authoring channel these seats cannot be corrected — only refused.
+ * These are refused rather than corrected on a borrow hit from an authoring channel. For
+ * `request.headerTemplate` and `testRequest` the reason is unchanged: the registry has
+ * nothing to substitute them WITH — it pins hosts, endpoints, registration copy and (since
+ * P4) a field list, but never where a typed secret is sent.
+ *
+ * `fields` stays on this list even though the registry CAN now substitute it, and that is
+ * deliberate. Correcting an authored field list would silently discard copy the borrower
+ * wrote and admit the requirement anyway, so an app that asked for the wrong secret would
+ * simply be fixed up and shown as legitimate. Refusal is the honest outcome: a borrower
+ * that authors prompt copy is telling us it disagrees with the pinned list, and that
+ * disagreement is not ours to paper over. The bare borrower — the shape starters actually
+ * ship — never reaches this list at all and receives the pinned fields.
  */
 const CREDENTIAL_PROMPT_SEATS = ['fields', 'request', 'testRequest'] as const;
 
@@ -220,10 +237,43 @@ function applyRegistryValues(
     declaredApiHosts: [...entry.apiHosts],
   };
 
-  // Only overwrite endpoint-shaped seats the declaration actually carries, or that the
-  // registry can fully supply. `oauth2AuthCodeSchema` requires authorize+token together,
-  // so a partial overwrite would produce a shape that fails its own schema.
-  if (requirement['endpoints'] !== undefined && entry.endpoints !== undefined) {
+  // THE CREDENTIAL FIELD LIST — the seat whose absence WAS the founding defect.
+  //
+  // Guard 2b refuses a borrowing channel that AUTHORS `fields`, and the stated reason is
+  // that the registry "has no pinned value to substitute". That is what these entries now
+  // are. Writing them here is what makes the refusal coherent rather than punitive: the
+  // borrower is not allowed to name the boxes, and it no longer has to — it receives the
+  // human-reviewed list instead. Without this branch a bare registry-backed starter
+  // reached the credential step with ZERO inputs and the wizard reported success having
+  // stored nothing, which is the founding defect in a worse form.
+  //
+  // Condition is on the REGISTRY, not the declaration: a bare manifest carries no `fields`
+  // by design (that is exactly what Guard 2b requires of it), so a
+  // declaration-must-already-have-it test would never fire on the shapes that ship.
+  //
+  // DEEP-COPIED per field. `WELL_KNOWN_PROVIDERS_REGISTRY` is a module singleton the
+  // borrow ban consults on every admission; handing out live references would let one
+  // downstream caller's edit repoint the pinned truth for every later substitution.
+  if (entry.fields !== undefined) {
+    substituted['fields'] = entry.fields.map((field) => ({ ...field }));
+  }
+
+  // Endpoint-shaped seats are written whenever the REGISTRY has them, regardless of what
+  // the declaration carried.
+  //
+  // The original condition also required `requirement['endpoints']`, and the rationale
+  // given was `oauth2AuthCodeSchema`'s authorize+token pairing — a partial overwrite would
+  // produce a shape failing its own schema. That argument holds against writing when the
+  // REGISTRY lacks endpoints; it says nothing about writing when the registry has a
+  // complete pair and the declaration has none. A registry entry always supplies
+  // authorize+token together, so this write is schema-complete by construction. The old
+  // condition meant a bare OAuth manifest (the shape starters actually ship) kept no
+  // endpoints at all and the flow was aimed at `?? ''` — an empty authorize URL.
+  //
+  // The `entry.endpoints !== undefined` half is load-bearing and stays: a static-kind
+  // provider has no authorize/token URLs, and inventing placeholders would union a
+  // nonexistent host into the FROZEN ceiling via `deriveConnectionAllowedHosts`.
+  if (entry.endpoints !== undefined) {
     substituted['endpoints'] = { ...entry.endpoints };
   }
   if (entry.registration !== undefined) {
@@ -232,7 +282,11 @@ function applyRegistryValues(
   if (entry.authorizeParams !== undefined) {
     substituted['authorizeParams'] = { ...entry.authorizeParams };
   }
-  if (entry.pkce !== undefined && requirement['pkce'] !== undefined) {
+  // Same correction as `endpoints`, and the same reason it matters: the registry's own
+  // Spotify walkthrough tells the user "this hub signs in with PKCE and never needs [a
+  // client secret]". Dropping `pkce` because the declaration omitted it made the pinned
+  // copy describe a flow the code would not perform.
+  if (entry.pkce !== undefined) {
     substituted['pkce'] = entry.pkce;
   }
   return substituted;
@@ -308,7 +362,15 @@ export function admitConnectionRequirement<T>(requirement: T, options: Admission
           path,
           // Names the seat AND the borrow, because the two together are the harm — the
           // wizard needs to say which claim it refused, not just "invalid requirement".
-          message: `'${path}' is credential-prompt copy that the '${options.channel}' channel may not author while borrowing registry provider '${borrowed.key}'; the registry has no pinned value to substitute, so the requirement is refused`,
+          //
+          // The reason given is REFUSAL, not absence. An earlier wording said the registry
+          // "has no pinned value to substitute", which was true when written and is now
+          // false for `fields`: the registry carries a reviewed field list and substitutes
+          // it for a borrower that OMITS the seat. What is refused is AUTHORING it — a
+          // borrower writing its own prompt copy is disagreeing with the pinned list, and
+          // silently correcting that disagreement would admit an app that asked for the
+          // wrong secret and show it as legitimate.
+          message: `'${path}' is credential-prompt copy that the '${options.channel}' channel may not author while borrowing registry provider '${borrowed.key}'; omit it and the registry's pinned value is substituted instead, so the requirement is refused as declared`,
         })),
       };
     }

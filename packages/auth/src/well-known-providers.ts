@@ -48,6 +48,34 @@ export interface WellKnownOauthProvider {
   pkce?: boolean;
   /** Human-reviewed API hosts this provider's credential may be injected against. */
   apiHosts: string[];
+  /**
+   * The provider's credential FIELD LIST — the seat the static-kind entries needed
+   * (TASK-20260810 P4, fold T-M1).
+   *
+   * THE DEFECT THIS CLOSES. Without it every static-kind provider collapsed to the
+   * transformer's one generic input, which is the owner's founding report: "Coinbase
+   * needs key + secret + passphrase" rendered as a single nameless box, so the user had
+   * no way to know which of three secrets to paste where. Field DEFINITIONS only —
+   * key/label/type — never values; this registry ships in a public repo (C1).
+   *
+   * WHY THE REGISTRY IS THE RIGHT HOME. `requirement-admission.ts` REFUSES a borrowing
+   * channel that authors `fields` (Guard 2b) precisely because the registry had nothing
+   * to substitute in. These entries are that missing pinned value: authored here, by a
+   * human, in a reviewed PR — the one channel Guard 2b exempts.
+   *
+   * Shape-compatible with `connectionFieldSchema` (packages/protocol) by construction;
+   * pinned by a test that composes each entry into a real `connectionRequirement` and
+   * parses it, so a drift here fails in packages/auth rather than mid-substitution in
+   * front of a user.
+   */
+  fields?: Array<{
+    key: string;
+    label: string;
+    type: 'text' | 'secret' | 'password' | 'url';
+    description?: string;
+    placeholder?: string;
+    required?: boolean;
+  }>;
   /** Extra authorize-URL query params this provider needs (e.g. Google offline access). */
   authorizeParams?: Record<string, string>;
   /**
@@ -80,14 +108,30 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     },
     pkce: true,
     apiHosts: ['api.spotify.com'],
-    // Stub-grade walkthrough (AL-04 plan D5) — AL-09 polishes the wording HERE, in
-    // the registry, never in wizard component copy.
+    // KEY IS `client_id`, matching the oauth2_auth_code shape used at
+    // demoRequirement.ts:265. A PKCE flow needs the Client ID and NOTHING else from the
+    // user — no client secret, which is exactly what the walkthrough below promises. A
+    // `client_secret` field here would contradict the pinned copy and teach the user to
+    // paste a secret this hub must never hold.
+    fields: [
+      {
+        key: 'client_id',
+        label: 'Client ID',
+        type: 'text',
+        description: 'From your Spotify app\'s settings page. Not the client secret — PKCE needs no secret.',
+      },
+    ],
+    // Wizard-grade walkthrough (HARVESTED from AL-09 / TASK-20260807 AC10, verbatim —
+    // polished HERE per AL-04 plan D5: registry data, never wizard component copy).
+    // PKCE flow: no client secret step.
     registration: {
       consoleUrl: 'https://developer.spotify.com/dashboard',
       instructions: [
-        'Open the Spotify developer dashboard and create an app.',
-        'Add this hub\'s OAuth callback URL as a Redirect URI in the app settings.',
-        'Copy the Client ID (and Client Secret if shown) into the fields below.',
+        'Open the Spotify developer dashboard (link above), sign in with your own Spotify account, and choose "Create app".',
+        'Give the app any name and description — this is YOUR registration; Snug never sees it.',
+        'In the app\'s settings, add the "redirect URI to register" shown below as a Redirect URI — copy it exactly as displayed, then save. Spotify matches it character for character and refuses sign-in on any mismatch.',
+        'On the same settings page, copy the Client ID into the field below. Leave the client secret alone — this hub signs in with PKCE and never needs one.',
+        'New Spotify apps start in Development mode: only users you list may sign in, which is fine for your own hub — add family members under "User Management" if they will use this app too.',
       ],
     },
   },
@@ -122,6 +166,31 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     },
     pkce: false,
     apiHosts: ['api.github.com'],
+    // KEY IS `token` — the field key `bearer_token` requirements are built around
+    // everywhere else (demoRequirement.ts:221, the taught-template lint's TAUGHT_FIELD_KEYS).
+    // The `my-repos` starter models a Personal Access Token as a bearer token rather than
+    // an OAuth app, which is honest: a PAT IS a bearer token, and asking the user to
+    // register an OAuth app to read their own repos is a worse walkthrough for the same
+    // access. The OAuth `endpoints` above stay for the requirements that DO run the app
+    // flow — substitution writes them, and a `bearer_token` requirement simply never
+    // reads them.
+    fields: [
+      {
+        key: 'token',
+        label: 'Personal access token',
+        type: 'secret',
+        description: 'A fine-grained or classic PAT with read access to the repositories you want listed.',
+      },
+    ],
+    registration: {
+      consoleUrl: 'https://github.com/settings/tokens',
+      instructions: [
+        'Open GitHub → Settings → Developer settings → Personal access tokens.',
+        'Generate a token with READ-ONLY repository access — this app only lists repositories.',
+        'Copy the token now: GitHub shows it once and cannot show it again.',
+        'Paste it below.',
+      ],
+    },
   },
   slack: {
     displayName: 'Slack',
@@ -131,6 +200,116 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     },
     pkce: false,
     apiHosts: ['slack.com'],
+  },
+  // ───────────────────────────────────────────────────── the STATIC-KIND entries (P4)
+  //
+  // Three providers with NO OAuth flow at all. They are here for two reasons, and the
+  // second is the security one:
+  //
+  //  1. They carry the `fields` and `registration` data that Guard 2b in
+  //     `requirement-admission.ts` needs in order to have something to substitute. A
+  //     static kind whose field list lives nowhere leaves the user at one generic input.
+  //  2. Listing them EXTENDS THE BORROW BAN to their names and hosts. `findBorrowedEntry`
+  //     indexes `apiHosts` at call time, so the moment these entries exist, a starter or
+  //     an LLM proposal that names "Coinbase" — or that declares `api.coinbase.com` under
+  //     a lookalike name — has the pinned values substituted over its own. That reach is
+  //     the point, and it is pinned by test rather than left as a side effect.
+  //
+  // NO `endpoints` (the reason P0 made the seat optional): these providers have no
+  // authorize/token URLs, and inventing placeholders would union a nonexistent host into
+  // the FROZEN ceiling via `deriveConnectionAllowedHosts`. NO `scopes`, per the standing
+  // registry posture — default scopes are silent privilege widening.
+  coinbase: {
+    displayName: 'Coinbase',
+    // The founding defect, fixed at the source: three DISTINCT secrets, each named and
+    // described, so the user knows which value goes in which box before pasting. The
+    // labels match Coinbase's own console wording — a label that renames the provider's
+    // artifact is how a user pastes the wrong secret.
+    apiHosts: ['api.coinbase.com'],
+    fields: [
+      {
+        key: 'api_key',
+        label: 'API key name',
+        type: 'text',
+        description: 'The key identifier shown when you created the key.',
+      },
+      {
+        key: 'api_secret',
+        label: 'API secret',
+        type: 'secret',
+        description: 'Shown ONCE at creation time. Coinbase cannot show it again.',
+      },
+      {
+        // KEY IS `passphrase`, NOT `api_passphrase` — and the difference is not cosmetic.
+        // The KB-taught Coinbase template signs with `CB-ACCESS-PASSPHRASE: {{passphrase}}`,
+        // and the template engine resolves a token against the FIELD KEY. An
+        // `api_passphrase` field would leave `{{passphrase}}` unresolved, sending the header
+        // present-but-empty and producing a generic Coinbase 401 with nothing in the UI to
+        // explain it. Seven other declaration sites (template-parity, template-lint,
+        // template-engine, taughtTemplatesLint, demoRequirement, the protocol contract test)
+        // all use `passphrase`; the registry was the one that forked. Pinned against the
+        // taught template by `registry-template-parity.test.ts` so it cannot fork again —
+        // the repo's own 2026-08-03 shared-literal lesson.
+        key: 'passphrase',
+        label: 'Passphrase',
+        type: 'secret',
+        description: 'The passphrase you chose when creating the key.',
+        required: false,
+      },
+    ],
+    registration: {
+      consoleUrl: 'https://www.coinbase.com/settings/api',
+      instructions: [
+        'Sign in to Coinbase and open Settings → API.',
+        'Create a new API key and choose READ-ONLY permissions — this app never needs to trade.',
+        'Copy the key name and secret now: the secret is shown only once.',
+        'Paste the key name, secret, and passphrase into the fields below.',
+      ],
+    },
+  },
+  openweather: {
+    displayName: 'OpenWeather',
+    apiHosts: ['api.openweathermap.org'],
+    // OpenWeather transports its key as `?appid=` — a QUERY-STRING credential. That
+    // placement is host-side (the template engine), never authored into app code: the
+    // AL-09 AC3 lint in examples/ fails any starter that writes `?appid=` itself.
+    fields: [
+      {
+        key: 'api_key',
+        label: 'API key',
+        type: 'secret',
+        description: 'Your OpenWeather API key. New keys can take a couple of hours to activate.',
+      },
+    ],
+    registration: {
+      consoleUrl: 'https://home.openweathermap.org/api_keys',
+      instructions: [
+        'Create a free OpenWeather account.',
+        'Open the API keys tab in your account page.',
+        'Copy the default key (or generate a new one) and paste it below.',
+        'A brand-new key can take up to two hours to become active.',
+      ],
+    },
+  },
+  coingecko: {
+    displayName: 'CoinGecko',
+    apiHosts: ['api.coingecko.com'],
+    fields: [
+      {
+        key: 'api_key',
+        label: 'Demo API key',
+        type: 'secret',
+        description: 'From the CoinGecko developer dashboard. The free Demo plan is enough for this app.',
+      },
+    ],
+    registration: {
+      consoleUrl: 'https://www.coingecko.com/en/developers/dashboard',
+      instructions: [
+        'Create a free CoinGecko account.',
+        'Open the developer dashboard and add a Demo API key.',
+        'Copy the key and paste it below.',
+      ],
+    },
   },
   // Apple Music's developer-token + music-user-token dance doesn't fit
   // oauth2_auth_code cleanly; listed so lookup returns SOME entry. Authors override.

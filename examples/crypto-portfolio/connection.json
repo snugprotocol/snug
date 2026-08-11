@@ -1,0 +1,9 @@
+{
+  "slot": "coingecko",
+  "provider": {
+    "name": "CoinGecko",
+    "docsUrl": "https://docs.coingecko.com/reference/simple-price"
+  },
+  "kind": "api_key",
+  "declaredApiHosts": ["api.coingecko.com"]
+}

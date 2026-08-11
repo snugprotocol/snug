@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto Portfolio</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #fff8ed; --fg: #3a2b12; --muted: #8a7a5f;
+      --card: #ffffff; --border: #d4e3f8;
+      --accent: #b45309; --accent-soft: #fef3c7;
+      --good: #15803d; --good-soft: #dcfce7;
+      --bad: #b45309; --bad-soft: #fef3c7;
+      --shadow: 0 10px 30px rgba(20, 50, 110, 0.10);
+    }
+    :root[data-theme="dark"] {
+      --bg: #1a1408; --fg: #f5e9d4; --muted: #b09a75;
+      --card: #15203a; --border: #26375c;
+      --accent: #fbbf24; --accent-soft: #3a2c0c;
+      --good: #4ade80; --good-soft: #14351f;
+      --bad: #fbbf24; --bad-soft: #3a2c0c;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh;
+    }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 16px 14px 40px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(1.5rem, 5vw, 2.1rem); margin: 6px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 14px; font-size: 0.92rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+    .btn {
+      min-height: 48px; width: 100%; border-radius: 999px; border: none; cursor: pointer;
+      background: var(--accent); color: #fff; font-size: 1rem; font-weight: 800; padding: 10px 20px;
+    }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .cities { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .chip {
+      min-height: 44px; border-radius: 999px; padding: 8px 16px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--card); color: var(--fg);
+      font-size: 0.95rem; font-weight: 700;
+    }
+    .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+    .notice {
+      display: flex; gap: 10px; align-items: flex-start;
+      background: var(--accent-soft); border: 1px solid var(--border);
+      border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; font-size: 0.95rem;
+    }
+    .days { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; }
+    .day {
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 6px;
+      text-align: center; background: var(--bg);
+    }
+    .day .emoji { font-size: 1.7rem; line-height: 1.2; }
+    .day .name { font-size: 0.78rem; color: var(--muted); font-weight: 700; }
+    .day .temp { font-size: 1rem; font-weight: 800; }
+    .skeleton { background: var(--border); border-radius: 12px; height: 84px; opacity: 0.55; }
+    .result { margin-top: 12px; border-radius: 12px; padding: 12px 14px; font-size: 0.92rem; }
+    .result.err { background: var(--bad-soft); border: 1px solid var(--bad); }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 800; }
+    .steps { margin: 8px 0 0; padding-left: 20px; font-size: 0.9rem; line-height: 1.6; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); }
+    .rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+    .row {
+      display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center;
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--bg);
+    }
+    .row-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .coin-emoji { font-size: 1.4rem; }
+    .coin-name { font-weight: 700; }
+    .ticker { color: var(--muted); font-weight: 600; font-size: 0.82rem; }
+    .row-amount { display: flex; align-items: center; gap: 6px; }
+    .step {
+      min-width: 44px; min-height: 44px; border-radius: 12px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--card); color: var(--fg);
+      font-size: 1.2rem; font-weight: 800; line-height: 1;
+    }
+    .held { min-width: 54px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .row-value { text-align: right; min-width: 96px; }
+    .value { display: block; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .delta { font-size: 0.78rem; font-weight: 700; }
+    .delta.up { color: var(--good); }
+    .delta.down { color: var(--bad); }
+    .skeleton-line { display: inline-block; width: 72px; height: 16px; border-radius: 6px; background: var(--border); opacity: 0.6; }
+    .total { text-align: right; font-size: 1.05rem; margin: 4px 0 12px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches your app's APPROVED hosts
+// THROUGH the host, which injects your saved credentials, blocks private ranges, caps
+// sizes, asks you before any write, and scrubs the response. You never see a token.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    // LLM-free (ADR-0011, AL-09 plan v4): the live prices ARE the wow. A model in the
+    // loop would blur exactly that — you could not tell whether a number came off the
+    // wire or out of a sentence generator.
+    const RESPONSE_SCHEMA = null;
+
+    // ============================================================
+    // 6. YOUR APP — Crypto Portfolio
+    // ============================================================
+    // D1: CoinGecko's free tier issues DEMO API KEYS, so this ships as a normal
+    // `api_key` starter rather than inventing a keyless credential kind (there is none
+    // at 1.0, and the runtime is fail-closed). This is exactly what the KB prescribes:
+    // when a provider issues free-tier keys, prefer it and declare it normally.
+    //
+    // C1 by construction: no key field, no Authorization header, no api-key string in
+    // this region. The host injects the user's demo key on the way out.
+    const HOST = 'https://api.coingecko.com';
+    const COINS = [
+      { id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', emoji: '₿' },
+      { id: 'ethereum', name: 'Ethereum', symbol: 'ETH', emoji: 'Ξ' },
+      { id: 'dogecoin', name: 'Dogecoin', symbol: 'DOGE', emoji: '🐕' },
+    ];
+    const PRICES_URL = `${HOST}/api/v3/simple/price?ids=${COINS.map((c) => c.id).join(',')}&vs_currencies=usd&include_24hr_change=true`;
+
+    const EXPLANATIONS = {
+      HOST_ERROR: 'You are previewing this app from the shelf, so it has no network yet. Press install at the top to make it yours — then connect CoinGecko and your prices will load.',
+      NET_NOT_APPROVED: 'This portfolio is not connected to CoinGecko yet. Use the connect button above to approve it and add your own free demo key — then refresh.',
+      NET_AUTH_FAILED: 'CoinGecko refused the saved key. It may have expired or been revoked; re-enter it from the connection panel.',
+      NET_CONFIRM_DENIED: 'You declined the confirmation prompt, so nothing was sent.',
+      NET_HOST_BLOCKED: 'That host is not on this app’s declared list, so the host refused to dial it.',
+      NET_SSRF_BLOCKED: 'That address resolves somewhere private. The host blocks those on purpose.',
+      NET_SIZE_EXCEEDED: 'The response was larger than the host allows through the bridge.',
+      NET_FETCH_FAILED: 'The host could not reach CoinGecko. It may be down, or the network may be offline.',
+    };
+
+    // Holdings are the user's own, kept in component state only. No browser storage
+    // (validate rule): a starter demonstrates the connected path, not persistence.
+    const START_HOLDINGS = { bitcoin: 0.05, ethereum: 1.2, dogecoin: 500 };
+
+    const money = (n) =>
+      n == null || Number.isNaN(n)
+        ? '—'
+        : n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: n < 1 ? 4 : 2 });
+
+    // Never throws — an odd payload must read as "we did not understand that", not a
+    // white screen. It also VALIDATES THE SHAPE rather than passing `JSON.parse` output
+    // through: CoinGecko answers with a flat `{ coinId: { usd, usd_24h_change } }`
+    // object, and valid JSON that is a number, a string, or an array is not that. Without
+    // this check those all survive as `prices`, every lookup yields `undefined`, and the
+    // total quietly renders $0.00 — a wrong answer stated confidently, which is worse
+    // than saying nothing. Its three sibling starters already validate; this one lagged.
+    const toPrices = (body) => {
+      let parsed;
+      try {
+        parsed = typeof body === 'string' ? JSON.parse(body) : body;
+      } catch {
+        return null;
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      return parsed;
+    };
+
+    function App() {
+      const { isReady, theme } = useSnugApp({
+        appId: 'crypto-portfolio',
+        displayName: 'Crypto Portfolio',
+        description: 'Track what your coins are worth with live CoinGecko prices — using your own free demo key, which the host holds and this app never sees.',
+        iconEmoji: '🪙',
+        iconColor: '#b45309',
+      });
+      const net = useConnectedFetch();
+      const [holdings, setHoldings] = useState(START_HOLDINGS);
+      const [prices, setPrices] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState(null);
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const refresh = async () => {
+        setBusy(true);
+        setError(null);
+        // The governed seam. ALWAYS resolves — never throws.
+        const response = await net.fetch(PRICES_URL, { method: 'GET' });
+        if (response.ok) {
+          setPrices(toPrices(response.body));
+        } else {
+          setError(response.error || {});
+        }
+        setBusy(false);
+      };
+
+      const nudge = (id, step) =>
+        setHoldings((prev) => ({ ...prev, [id]: Math.max(0, Number(((prev[id] || 0) + step).toFixed(4))) }));
+
+      if (!isReady) return <div className="connecting">connecting to the host…</div>;
+
+      const code = error ? (error.code || 'UNKNOWN') : null;
+      const preConnect = code === 'NET_NOT_APPROVED' || (prices === null && !busy && error === null);
+
+      const total = prices
+        ? COINS.reduce((sum, coin) => {
+            const price = prices[coin.id] && prices[coin.id].usd;
+            return sum + (price ? price * (holdings[coin.id] || 0) : 0);
+          }, 0)
+        : null;
+
+      return (
+        <div className="wrap">
+          <h1>Crypto Portfolio</h1>
+          <p className="sub">what your coins are worth — live prices, your key, held by the host.</p>
+
+          {preConnect ? (
+            <div className="notice" data-testid="preconnect-notice">
+              <span aria-hidden="true">🪙</span>
+              <p style={{ margin: 0 }}>
+                <b>connect CoinGecko to see live prices.</b> your holdings below are already
+                yours to edit — prices arrive once you approve the connection and add your own
+                free demo key. the host keeps it; this app never sees it.
+              </p>
+            </div>
+          ) : (
+            <div className="notice">
+              <span aria-hidden="true">🔐</span>
+              <p style={{ margin: 0 }}>
+                <b>your key stays yours.</b> this app has no network of its own. it asks the host
+                to call CoinGecko and the host adds your key on the way out — it never enters
+                this page, and never reaches a model.
+              </p>
+            </div>
+          )}
+
+          <section className="card">
+            <h2>💰 your coins</h2>
+            <div className="rows">
+              {COINS.map((coin) => {
+                const price = prices && prices[coin.id] ? prices[coin.id].usd : null;
+                const change = prices && prices[coin.id] ? prices[coin.id].usd_24h_change : null;
+                const amount = holdings[coin.id] || 0;
+                return (
+                  <div className="row" key={coin.id} data-testid={`coin-${coin.id}`}>
+                    <div className="row-main">
+                      <span className="coin-emoji" aria-hidden="true">{coin.emoji}</span>
+                      <span className="coin-name">{coin.name}<span className="ticker"> {coin.symbol}</span></span>
+                    </div>
+                    <div className="row-amount">
+                      <button
+                        type="button"
+                        className="step"
+                        aria-label={`less ${coin.name}`}
+                        onClick={() => nudge(coin.id, coin.id === 'dogecoin' ? -100 : -0.01)}
+                      >−</button>
+                      <span className="held">{amount}</span>
+                      <button
+                        type="button"
+                        className="step"
+                        aria-label={`more ${coin.name}`}
+                        onClick={() => nudge(coin.id, coin.id === 'dogecoin' ? 100 : 0.01)}
+                      >+</button>
+                    </div>
+                    <div className="row-value">
+                      {busy ? <span className="skeleton-line" /> : (
+                        <>
+                          <span className="value">{price ? money(price * amount) : '—'}</span>
+                          {change != null ? (
+                            <span className={change >= 0 ? 'delta up' : 'delta down'}>
+                              {change >= 0 ? '▲' : '▼'} {Math.abs(change).toFixed(1)}%
+                            </span>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {total !== null && !busy ? (
+              <p className="total" data-testid="portfolio-total">total <b>{money(total)}</b></p>
+            ) : null}
+
+            <button className="btn" onClick={refresh} disabled={busy} data-testid="refresh-button">
+              {busy ? 'checking prices…' : prices ? 'refresh prices' : 'get live prices'}
+            </button>
+          </section>
+
+          {error ? (
+            <div className="result err" data-testid="result-error">
+              <div>no prices — <span className="code" data-testid="error-code">{code}</span></div>
+              <p style={{ margin: '6px 0 0' }}>
+                {EXPLANATIONS[code] || error.message || 'The host refused this request and gave no further detail.'}
+              </p>
+              {code === 'NET_NOT_APPROVED' ? (
+                <ol className="steps" data-testid="not-approved-steps">
+                  <li>press connect in the bar above — you will see exactly what is being approved</li>
+                  <li>paste your own CoinGecko demo key — the host stores it, not this app</li>
+                  <li>press <b>get live prices</b> again</li>
+                </ol>
+              ) : null}
+              {error.retryable ? <p style={{ margin: '6px 0 0' }}>this one is worth retrying.</p> : null}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

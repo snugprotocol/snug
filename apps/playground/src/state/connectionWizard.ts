@@ -400,6 +400,33 @@ export async function saveConnectionCredentials(values: Record<string, string>):
       return { ok: false, message: 'approve this connection before saving credentials' };
     }
 
+    // A CREDENTIAL-BEARING KIND WITH NO FIELDS IS A REFUSAL, NEVER A SUCCESS.
+    //
+    // The loop below is field-driven: with an empty list it runs zero times, stores
+    // nothing, and used to fall through to `{ok:true}` — advancing the machine to `done`
+    // and showing the user a CONNECTED connection holding no credential. That is the exact
+    // failure the `missing`-field check in `CredentialsScreen` names ("showed connected,
+    // turning an answerable problem now into a NET_AUTH_FAILED round trip later"), except
+    // arrived at through an empty array rather than an empty value, so that check is
+    // vacuously satisfied and never fires.
+    //
+    // This is defence in depth. The cause was `applyRegistryValues` dropping the registry's
+    // pinned `fields` (fixed in packages/auth), and the field list should always arrive now.
+    // But "no boxes to type in" must never again be able to READ as success, whatever
+    // produces it — a silent success is worse than a failure because nothing prompts the
+    // user to look, and the eventual 401 points nowhere near here.
+    //
+    // `kind:'none'` is exempt and that exemption is the point of testing the kind rather
+    // than the array: it declares a connection that legitimately collects no credential, so
+    // an empty field list is the CORRECT shape and refusing it would break a working
+    // posture.
+    if (row.requirement.kind !== 'none' && (row.requirement.fields ?? []).length === 0) {
+      return {
+        ok: false,
+        message: 'this connection declares no credential fields — there is nothing to collect, so it cannot be connected',
+      };
+    }
+
     for (const field of row.requirement.fields ?? []) {
       const value = values[field.key];
       if (value === undefined) continue;

@@ -32,9 +32,39 @@ import { ARTIFACT_WRITE_TOOL_NAME } from './tools.js';
  * test that constructed the pipeline call itself would go green over a severed wire, which
  * is exactly the defect this variant was added to make impossible.
  */
-export type DemoRequirementVariant = 'coinbase' | 'bearer' | 'basic' | 'oauth' | 'undeclared';
+export type DemoBuildVariant = 'coinbase' | 'bearer' | 'basic' | 'oauth' | 'undeclared';
 
-const VARIANTS = new Set<string>(['coinbase', 'bearer', 'basic', 'oauth', 'undeclared']);
+/**
+ * The STARTER variants (P4-AC10), each named for the example folder whose shipped
+ * manifest it mirrors. `hue` is absent BY DESIGN: Hue declares nothing (AL-09 D10), so
+ * there is no requirement for a demo brain to emit and a variant would be a fiction.
+ *
+ * These are an EXTENSION, never a replacement — the P3 build variants above drive the
+ * wizard e2e and must keep resolving untouched.
+ */
+export type DemoStarterVariant =
+  | 'starter-coingecko'
+  | 'starter-openweather'
+  | 'starter-github'
+  | 'starter-spotify';
+
+export type DemoRequirementVariant = DemoBuildVariant | DemoStarterVariant;
+
+const STARTER_VARIANTS = [
+  'starter-coingecko',
+  'starter-openweather',
+  'starter-github',
+  'starter-spotify',
+] as const;
+
+const VARIANTS = new Set<string>([
+  'coinbase',
+  'bearer',
+  'basic',
+  'oauth',
+  'undeclared',
+  ...STARTER_VARIANTS,
+]);
 
 /** The active `?demoreq` variant, read per call (never cached across navigations). */
 export function demoRequirementVariant(): DemoRequirementVariant | null {
@@ -46,7 +76,8 @@ export function demoRequirementVariant(): DemoRequirementVariant | null {
 /**
  * A bridge-speaking app that fires ONE net-request at the e2e https stub.
  *
- * THE PORT IS THE WHOLE REMAP. The app dials the REAL provider host — `api.coinbase.com`
+ * THE PORT IS THE WHOLE REMAP. The app dials the REAL provider host —
+ * `api.exchange.coinbase.com`
  * — which is what the requirement declares and what the user reviews and freezes, so the
  * journey exercises a ceiling a real app would actually have. Only the resolution is
  * local: the connection-wizard Playwright project maps that name to 127.0.0.1, and the
@@ -76,7 +107,7 @@ const NET_DEMO_APP_HTML = `<!doctype html>
         parent.postMessage({ v: V, type: 'snug:app-announce', appId: 'demo-connected-app',
           displayName: 'connected app', iconColor: '#3ba36f' }, '*');
         parent.postMessage({ v: V, type: 'snug:net-request', requestId: 'net-1',
-          instanceId: instanceId, url: 'https://api.coinbase.com:43120/v2/accounts', method: 'GET' }, '*');
+          instanceId: instanceId, url: 'https://api.exchange.coinbase.com:43120/v2/accounts', method: 'GET' }, '*');
       }
       return;
     }
@@ -116,10 +147,28 @@ const UNDECLARED_CONNECTED_HTML = `<!doctype html>
  * in fixture form — three fields and an HMAC-signed header template, exactly the shape
  * v3's `llmProposalSchema` could not express.
  */
-const REQUIREMENTS: Record<Exclude<DemoRequirementVariant, 'undeclared'>, Record<string, unknown>> = {
+const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<string, unknown>> = {
+  /**
+   * THE MOTIVATING DEFECT IN FIXTURE FORM: three distinct secrets and an HMAC-signed
+   * header template — exactly the shape v3's `llmProposalSchema` could not express.
+   *
+   * IT NAMES "Coinbase Exchange" AND `api.exchange.coinbase.com`, and after P4 that is
+   * load-bearing rather than incidental. P4 added a `coinbase` REGISTRY ENTRY pinning
+   * `api.coinbase.com`, which extends the registry-borrow ban to that name and that host.
+   * A variant declaring plain "Coinbase" plus `api.coinbase.com` while authoring its own
+   * `fields` and `headerTemplate` is now REFUSED by Guard 2b — correctly, because the
+   * registry cannot substitute a per-app field list, and substitution would otherwise
+   * lend registry legitimacy to an authored credential prompt.
+   *
+   * Coinbase Exchange is a genuinely different product on a genuinely different host, so
+   * this is an honest declaration rather than an evasion — and it matches the shape the
+   * P3 build fixtures already use (`coinbaseBuildFixture.test.ts`). The three-field HMAC
+   * journey the wizard e2e drives is preserved intact; only the brand it names is the
+   * precise one it actually dials.
+   */
   coinbase: {
     slot: 'coinbase',
-    provider: { name: 'Coinbase', docsUrl: 'https://docs.cdp.coinbase.com/' },
+    provider: { name: 'Coinbase Exchange', docsUrl: 'https://docs.cdp.coinbase.com/exchange' },
     kind: 'api_key',
     fields: [
       { key: 'api_key', label: 'API key', type: 'secret', description: 'the key id from your API settings page', required: true },
@@ -142,14 +191,35 @@ const REQUIREMENTS: Record<Exclude<DemoRequirementVariant, 'undeclared'>, Record
           '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}',
       },
     },
-    declaredApiHosts: ['api.coinbase.com'],
+    declaredApiHosts: ['api.exchange.coinbase.com'],
   },
+  /**
+   * THE BEARER VARIANT EXISTS TO EXERCISE THE NO-REGISTRATION PATH: a requirement with no
+   * `registration` seat must SKIP the register screen rather than render it empty (the
+   * e2e's journey 2 asserts exactly that), and it must author its own single field.
+   *
+   * IT NAMES A NON-REGISTRY PROVIDER, and P4 made that deliberate. It used to be
+   * OpenWeather — until P4 added the OpenWeather REGISTRY ENTRY, which extended the
+   * registry-borrow ban to that name and host. Two things then broke at once, and both
+   * were the guard working correctly: the authored `fields` became a Guard 2b refusal
+   * (a borrowing channel may not author credential-prompt copy, because substitution
+   * would lend registry legitimacy to it), and the registry's own registration
+   * walkthrough was substituted IN — so the register screen appeared and the
+   * "skipped, not empty" property could no longer be tested at all.
+   *
+   * A pinned provider is simply the wrong fixture for this journey: once the registry
+   * knows a provider, it supplies the walkthrough, which is the whole point of P4. So the
+   * variant moved to a provider the registry does NOT pin, where "no registration seat"
+   * is a state that can genuinely exist. The alternative — keeping OpenWeather and
+   * deleting the skip assertion — would have removed real coverage to accommodate a
+   * fixture.
+   */
   bearer: {
-    slot: 'openweather',
-    provider: { name: 'OpenWeather' },
+    slot: 'tidegauge',
+    provider: { name: 'TideGauge' },
     kind: 'bearer_token',
     fields: [{ key: 'token', label: 'API token', type: 'secret', required: true }],
-    declaredApiHosts: ['api.openweathermap.org'],
+    declaredApiHosts: ['api.tidegauge.example'],
   },
   basic: {
     slot: 'basic-demo',
@@ -200,6 +270,79 @@ const REQUIREMENTS: Record<Exclude<DemoRequirementVariant, 'undeclared'>, Record
   },
 };
 
+/**
+ * THE STARTER REQUIREMENTS (P4-AC10) — one per shipped, manifest-bearing starter.
+ *
+ * THEY MIRROR THE SHIPPED MANIFESTS, and that is the whole property being bought. A demo
+ * variant emitting a requirement the six manifests do not contain would let the P4 e2e go
+ * green against a fictional provider while every real starter stayed broken. The seam's
+ * value is that it is the PRODUCTION path with a scripted model, so what it emits has to
+ * be the production artifact.
+ *
+ * WHY THESE ARE BARE (no `fields`, no `request`) while the BUILD variants above are rich.
+ * All four name a registry provider, so `admitConnectionRequirement` fires the
+ * registry-borrow ban and SUBSTITUTES the registry's pinned hosts, registration
+ * walkthrough, display name and — since the P4 review fold — its credential `fields`.
+ * Guard 2b still REFUSES any non-registry channel that AUTHORS credential-prompt seats
+ * beside a borrowed brand: a label reading "Paste your Spotify password" rendered next to
+ * registry-grade hosts is exactly what substitution would otherwise legitimize. The
+ * asymmetry is the contract — omit and you RECEIVE the pinned list, author and you are
+ * refused. So the registry supplies `fields`/`registration` and the manifest supplies only
+ * what it legitimately knows: the slot, the kind, and the host it dials. Verified against
+ * the real guard, not assumed.
+ *
+ * The spectrum is deliberate (AL-09's founding point): api_key, bearer_token, and
+ * oauth2_auth_code all appear, so no shape is left unrepresented by a table that collapsed
+ * to one kind.
+ *
+ * SCOPE, STATED HONESTLY (P4 review fold). These four variants are UNIT-LEVEL FIXTURES.
+ * No Playwright journey drives `?demoreq=starter-*` today — the e2e starter coverage runs
+ * through `starters-connect.spec.ts` (the shipped apps' degraded state and Hue's greyed
+ * posture) and `connection-declaration.spec.ts` (the full install → CTA → review → approve
+ * journey on `connection-demo`). What these variants DO buy is real but narrower: every
+ * one is pinned against the shipped manifest it mirrors, read off disk, and driven through
+ * the full production path (schema → admission → template lint) in
+ * `demoRequirementStarters.test.ts`. They are ready for an e2e that wants a scripted
+ * starter chat; claiming they already serve one would be the kind of coverage fiction this
+ * phase's review existed to catch.
+ *
+ * C1: field DEFINITIONS only, never values — and here, not even definitions. A scripted
+ * brain is precisely where someone would bake in a working key "to make the journey run
+ * end to end"; the e2e types its secrets, the requirement never carries one.
+ */
+export const DEMO_STARTER_REQUIREMENTS: Record<
+  DemoStarterVariant,
+  { slot: string; kind: string; declaredApiHosts: string[]; [key: string]: unknown }
+> = {
+  'starter-coingecko': {
+    slot: 'coingecko',
+    provider: { name: 'CoinGecko', docsUrl: 'https://docs.coingecko.com/reference/simple-price' },
+    kind: 'api_key',
+    declaredApiHosts: ['api.coingecko.com'],
+  },
+  'starter-openweather': {
+    slot: 'openweather',
+    provider: { name: 'OpenWeather', docsUrl: 'https://openweathermap.org/forecast5' },
+    kind: 'api_key',
+    declaredApiHosts: ['api.openweathermap.org'],
+  },
+  'starter-github': {
+    slot: 'github',
+    provider: { name: 'GitHub', docsUrl: 'https://docs.github.com/en/rest/repos/repos' },
+    kind: 'bearer_token',
+    declaredApiHosts: ['api.github.com'],
+  },
+  'starter-spotify': {
+    slot: 'spotify',
+    provider: { name: 'Spotify', docsUrl: 'https://developer.spotify.com/documentation/web-api' },
+    kind: 'oauth2_auth_code',
+    declaredApiHosts: ['api.spotify.com'],
+  },
+};
+
+const isStarterVariant = (variant: DemoRequirementVariant): variant is DemoStarterVariant =>
+  (STARTER_VARIANTS as readonly string[]).includes(variant);
+
 /** The scripted chat for a demoreq run: write the app, then emit the requirement. */
 export function demoRequirementChatScript(variant: DemoRequirementVariant): MockTurn[] {
   if (variant === 'undeclared') {
@@ -218,10 +361,15 @@ export function demoRequirementChatScript(variant: DemoRequirementVariant): Mock
       { deltas: [closing], text: closing },
     ];
   }
+  // The requirement is read from the table that OWNS this variant. Resolving both from
+  // one lookup would interpolate `undefined` for any name the table did not know and
+  // still emit two well-shaped turns — a directive with a hole where the requirement
+  // belongs, which reads as a working script and proves nothing.
+  const requirement = isStarterVariant(variant) ? DEMO_STARTER_REQUIREMENTS[variant] : REQUIREMENTS[variant];
   const directive = JSON.stringify({
     v: PROTOCOL_VERSION,
     kind: CONNECTION_REQUIREMENT_DIRECTIVE_KIND,
-    requirement: REQUIREMENTS[variant],
+    requirement,
   });
   const closing =
     '\n\nyour app is ready — it needs a provider connection before its network calls will work:\n\n```json\n' +

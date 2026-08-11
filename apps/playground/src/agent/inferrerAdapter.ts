@@ -15,26 +15,14 @@
 // (D10): pasted docs must never reach LLM-inspector state.
 
 import type { AgentAdapter } from '@snugprotocol/adapters';
-import { buildAuthSpecInferrerPrompt } from '@snugprotocol/knowledge';
-import {
-  createAuthSpecInferrer,
-  type InferAuthSpecResult,
-  type InferrerComplete,
-} from '@snugprotocol/auth';
-import type { AuthProvenance } from '@snugprotocol/protocol';
+// `RequirementInferrerComplete` (v4) replaces the deleted v3 `InferrerComplete`. The two
+// were structurally identical — `(prompt, { signal }) => Promise<string>` — so this is a
+// rename to the surviving contract, not a change of shape.
+import { type RequirementInferrerComplete } from '@snugprotocol/auth';
 
 import { getByokKey, localUrlStore, modelStore, modeStore, providerStore, type ByokProvider } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
-
-export interface RunAuthSpecInferenceInput {
-  providerName: string;
-  kindHint?: string;
-  docsText?: string;
-  signal?: AbortSignal;
-  /** Injectable for tests; defaults to the live settings-configured adapter. */
-  adapter?: AgentAdapter;
-}
 
 /**
  * A live-adapter resolution that can honestly FAIL: a real inference must never
@@ -143,7 +131,7 @@ export async function liveInferenceAdapter(): Promise<LiveAdapterResolution> {
  * come back as data from the adapter (`!ok`) and are re-thrown typed so the
  * inferrer maps them to `completion_failed`.
  */
-export function completeWithAdapter(adapter: AgentAdapter, system: string): InferrerComplete {
+export function completeWithAdapter(adapter: AgentAdapter, system: string): RequirementInferrerComplete {
   return async (prompt, { signal }) => {
     const result = await adapter.complete({
       system,
@@ -158,46 +146,15 @@ export function completeWithAdapter(adapter: AgentAdapter, system: string): Infe
   };
 }
 
-/**
- * ⚠️ NO PRODUCTION CALLER AS OF P3, AND DELIBERATELY LEFT IN PLACE. The v4 wizard routes
- * through `connectionInferrerAdapter.ts` instead. This function belongs to the v3
- * `llmProposalSchema` / `createAuthSpecInferrer` pair, whose retirement is P4's NAMED exit
- * item — not P3's, which was the `snug_auth_specs` TABLE. Deleting it here would reach
- * into the next phase's scope and take its tests with it; the honest move is to say it is
- * dead and let P4 remove it with its schema, in one reviewable step.
- *
- * The wizard's inference entry: render the D8 prompt (knowledge store), bind the
- * system slot into the seam, and run the DI-pure inferrer from @snugprotocol/auth
- * — whose registry rung never touches the seam at all.
- */
-export async function runAuthSpecInference(input: RunAuthSpecInferenceInput): Promise<InferAuthSpecResult> {
-  const { system, user } = buildAuthSpecInferrerPrompt({
-    providerName: input.providerName,
-    ...(input.kindHint !== undefined ? { kindHint: input.kindHint } : {}),
-    ...(input.docsText !== undefined ? { docsText: input.docsText } : {}),
-  });
-  let adapter = input.adapter;
-  if (adapter === undefined) {
-    const live = await liveInferenceAdapter();
-    if (!live.ok) {
-      // Visible, honest, and BEFORE any seam call: no mock run, no wire touched.
-      const provenance: AuthProvenance = input.docsText !== undefined ? 'user_docs' : 'inference';
-      return {
-        ok: false,
-        provenance,
-        code: 'completion_failed',
-        message:
-          'inference needs a bring-your-own-key model — the demo brain cannot read provider docs. Add a provider key (or a local model) in Settings, then try again.',
-      };
-    }
-    adapter = live.adapter;
-  }
-  const inferrer = createAuthSpecInferrer({ complete: completeWithAdapter(adapter, system) });
-  return inferrer.infer({
-    providerName: input.providerName,
-    ...(input.kindHint !== undefined ? { kindHint: input.kindHint } : {}),
-    ...(input.docsText !== undefined ? { docsText: input.docsText } : {}),
-    prompt: user,
-    ...(input.signal !== undefined ? { signal: input.signal } : {}),
-  });
-}
+// `runAuthSpecInference` was DELETED here by TASK-20260810-p4-starters, the named exit
+// item. It had no production caller as of P3 (the v4 wizard routes through
+// `connectionInferrerAdapter.ts`), and it was the last thing holding the v3
+// `createAuthSpecInferrer` / `llmProposalSchema` pair alive. P3 deliberately left it in
+// place rather than reaching into this phase's scope; it goes now, with its schema, in one
+// reviewable step.
+//
+// What SURVIVES in this file is shared with the v4 path and is not v3-specific:
+// `liveInferenceAdapter` (the settings/wire decision ladder) and `completeWithAdapter`
+// (the completion seam), both imported by `connectionInferrerAdapter.ts`. Two copies of
+// that ladder would eventually disagree, and the disagreement would surface as an
+// inference turn quietly running on the mock brain.

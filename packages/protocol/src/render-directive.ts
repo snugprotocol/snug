@@ -14,7 +14,12 @@
  * lives in the inferrer OUTPUT shape (`inferrerProposalSchema`), which is
  * wizard-ephemeral (wizardStore only, never written to any table).
  *
- * PROPOSAL LINE (M5): every LLM-authored shape uses `llmProposalSchema` =
+ * PROPOSAL LINE (M5), HISTORICAL as of TASK-20260810 P4: `llmProposalSchema` is no longer
+ * exported — the v4 authoring channel is `connectionRequirementSchema`, which re-admits
+ * the omitted seats and pays for them with bounds, a template lint, a registry-borrow ban
+ * and a field-by-field review (ADR-0017). The omit-list survives here as the PRIVATE
+ * `legacyProposalSchema` because two persisted shapes still embed it. The original
+ * reasoning, which still explains what those shapes contain: every LLM-authored shape was =
  * hints MINUS registration copy (`registrationConsoleUrl`/`registrationInstructions`
  * — surfaced verbatim by the wizard, so phishing copy would render with wizard-grade
  * legitimacy) MINUS `headerTemplate` (controls where the secret is injected) MINUS
@@ -64,21 +69,33 @@ export const AUTH_EVIDENCE_MAX_CHARS = 300;
 // ------------------------------------------------------------ proposal shapes
 
 /**
- * The ONLY shape an LLM-authored proposal may take (M5): transformer hints minus
- * registration copy + headerTemplate + credential field definitions (`fields`/
- * `userLayerFields` — the label surface the credentials step renders verbatim).
- * Strictness is preserved through `.omit` — a reply/directive carrying an excluded
- * key is a strict-schema rejection (`inferrer.poison-registration` /
- * `inferrer.poison-fields`, mutation M21).
+ * THE LEGACY v3 PROPOSAL SHAPE, no longer exported.
+ *
+ * `llmProposalSchema` and its `LlmProposal` type were DELETED from the public surface by
+ * TASK-20260810-p4-starters (the named exit item). Its last two consumers went with it:
+ * the starter-manifest resolver (`starterDeclaration.ts`, rewired to
+ * `connectionRequirementSchema`) and the v3 `auth-spec-inferrer` (deleted with its
+ * adapter entry point). What replaced it is `connectionRequirementSchema` — see the long
+ * rationale at the head of `connection-requirement.ts`: the five omissions below WERE the
+ * AL-04 answer to credential misdirection, and they were also exactly why a
+ * Coinbase-shaped requirement collapsed to one generic field.
+ *
+ * IT SURVIVES AS A PRIVATE CONSTANT, deliberately, because two shapes still embed it and
+ * both are PERSISTED: `authWizardDirectiveSchema` (chat-meta rows, re-validated strictly
+ * on every read) and `inferrerProposalSchema` (the wizard-ephemeral inferrer output whose
+ * few-shot examples a knowledge-package contract test still feeds through the real
+ * parser). Deleting the shape outright would stop historical `auth_wizard` messages from
+ * rendering — a silent data loss for a row the user can still see. So the EXPORT is gone,
+ * which is what closes the channel to new authors, and the validation behaviour of the
+ * persisted shapes is bit-for-bit unchanged.
  */
-export const llmProposalSchema = authSpecHintsSchema.omit({
+const legacyProposalSchema = authSpecHintsSchema.omit({
   registrationConsoleUrl: true,
   registrationInstructions: true,
   headerTemplate: true,
   fields: true,
   userLayerFields: true,
 });
-export type LlmProposal = z.infer<typeof llmProposalSchema>;
 
 /**
  * The inferrer's OUTPUT contract (plan D8): proposal + REQUIRED confidence in [0,1]
@@ -88,7 +105,7 @@ export type LlmProposal = z.infer<typeof llmProposalSchema>;
  * WIZARD-EPHEMERAL: it travels inside the wizardStore intent and never persists (M1).
  */
 export const inferrerProposalSchema = z.strictObject({
-  proposal: llmProposalSchema,
+  proposal: legacyProposalSchema,
   confidence: z.number().min(0).max(1),
   evidence: z.array(z.string().min(1).max(AUTH_EVIDENCE_MAX_CHARS)).max(AUTH_EVIDENCE_MAX_ITEMS),
 });
@@ -113,7 +130,7 @@ export const AUTH_WIZARD_DIRECTIVE_KIND = 'auth_wizard' as const;
 export const authWizardDirectiveSchema = z.strictObject({
   v: z.literal(PROTOCOL_VERSION),
   kind: z.literal(AUTH_WIZARD_DIRECTIVE_KIND),
-  proposal: llmProposalSchema,
+  proposal: legacyProposalSchema,
   /** Display-only. The host recomputes confidence at wizard open (B2). */
   confidence: z.number().min(0).max(1).optional(),
   /** Display-only. Provenance is HOST-computed at wizard open — never this claim (B2). */

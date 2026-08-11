@@ -25,29 +25,29 @@ import { AWAITS_INTEGRATION } from './helpers';
 const hasApp = process.env.SNUG_E2E_HAS_APP === '1';
 
 /**
- * ⚠️ PARKED BY THE P3 CUTOVER — NOT weakened, NOT deleted, and the reason matters.
+ * UN-PARKED BY P4 (TASK-20260810-p4-starters) — the dependency these journeys named is
+ * now satisfied, so they run.
  *
- * These journeys walk the INSTALL-ACT channel, whose declaration is an `llmProposal`
- * resolved by `starterDeclaration.ts` and previously persisted through the v3
- * `putAuthSpec`. P3 deleted that accessor and its table (fold B1's named exit), but
- * `llmProposalSchema` — and therefore the starter manifest format this channel reads —
- * is explicitly P4's exit item, NOT P3's. So the install act currently lands no v4
- * `snug_connections` row, the CTA has no slot to open, and the wizard has nothing to
- * review.
+ * P3 parked them with a precise reason: the install-act channel still read
+ * `llmProposalSchema`, so a chat-less starter landed no v4 `snug_connections` row, the CTA
+ * had no slot to open, and the wizard had nothing to review. The honest options at the time
+ * were to rewire into P4's scope, to weaken the assertions, or to park with the dependency
+ * named — and parking was correct.
  *
- * The honest options were: (a) rewire the starter channel to v4 here, which reaches into
- * P4's scope and would have to be undone when `llmProposalSchema` is retired; (b) weaken
- * these assertions to whatever passes today; or (c) park them with the dependency named.
- * (b) is forbidden and (a) trades a small gap for a larger one, so this is (c).
+ * P4 completed that rewire, so the premise is false and the skip had to go. Two stale
+ * references had to move with it, and BOTH were the kind of drift a parked test
+ * accumulates silently:
  *
- * WHAT IS ACTUALLY LOST until P4 rewires the starter channel: a chat-less starter cannot
- * reach a connection through the CTA. The pre-install DISCLOSURE still renders (RunView
- * reads the manifest directly and is unaffected), and every chat-built app — the path the
- * P3 wizard was built for — connects normally.
+ *   - `connection-declared-row` no longer exists in any component; P3 renamed it to
+ *     `connection-slot-row` (`ConnectionSlotsCard.tsx`). A test parked across a rename
+ *     cannot notice the rename.
+ *   - the strong-review copy is now the starter-provenance line the wizard actually
+ *     renders ("this connection ships with this starter, as its author wrote it"), which
+ *     says the same thing the old assertion meant while matching what ships.
+ *
+ * Neither change weakens a journey: the assertions still walk install → the app's own call
+ * → NET_NOT_APPROVED → CTA → prefilled STRONG review → approve → frozen row.
  */
-const AWAITS_P4_STARTER_REWIRE =
-  'the install-act channel still reads llmProposalSchema; its v4 rewire is P4\'s exit item';
-
 
 const FOLDER = 'connection-demo';
 const DECLARED_HOST = 'api.example.com';
@@ -73,7 +73,6 @@ async function installDemo(page: Page): Promise<FrameLocator> {
 
 test.describe('T8 — a chat-less starter reaches a connection through the CTA (the headline gap)', () => {
   test.skip(!hasApp, AWAITS_INTEGRATION);
-  test.skip(true, AWAITS_P4_STARTER_REWIRE);
 
   test('install → the app’s own call → NET_NOT_APPROVED → CTA → PREFILLED strong review → approve → frozen row', async ({
     page,
@@ -98,17 +97,38 @@ test.describe('T8 — a chat-less starter reaches a connection through the CTA (
 
     // 4. The STRONG, field-by-field review — never the light approve-as-is path — and the
     //    copy claims only what the install act proved.
-    await expect(wizard).toContainText(/ships with a declared connection/i);
+    await expect(wizard).toContainText(/ships with this starter, as its author wrote it/i);
     await expect(wizard).not.toContainText(/you approved this at install/i);
-    await expect(wizard.getByLabel('provider name')).toHaveValue(PROVIDER);
+    // The provider is RENDERED, not an editable input: P3's strong review presents the
+    // declaration for judgement rather than offering it for editing, so the v3
+    // `getByLabel('provider name')` field this line used to read no longer exists
+    // (`ReviewScreen` renders `<h3>{requirement.provider.name}</h3>`). Asserting the
+    // heading is the stronger claim anyway — it is what the user actually sees above the
+    // hosts they are about to approve.
+    await expect(wizard.getByRole('heading', { name: PROVIDER })).toBeVisible();
 
     // 5. The full host disclosure, prefilled from the manifest (AC7 — on EVERY path).
-    await expect(wizard.getByTestId('wizard-hosts')).toContainText(DECLARED_HOST);
+    //    `wizard-hosts` → `review-hosts`: P3's review renders the row's `allowedHosts`
+    //    through `HostList`. Same guarantee, and if anything a stronger one — the list
+    //    shown is the ceiling the user is about to freeze, not a restatement of what the
+    //    manifest asked for.
+    await expect(wizard.getByTestId('review-hosts')).toContainText(DECLARED_HOST);
 
     // 6. Approve. THIS is the write that was previously unreachable for a chat-less app.
-    await wizard.getByRole('button', { name: /approve connection/i }).click();
+    await wizard.getByRole('button', { name: /approve this connection/i }).click();
 
-    // Credentials only AFTER approval (B1) — reaching this step proves the row landed.
+    // 7. The REGISTRATION WALKTHROUGH stands between approval and the credential prompt —
+    //    the manifest declares one, and `nextStep('review')` routes to `register` whenever
+    //    it does. This step is not incidental: it is where the user is told where to go and
+    //    get the credential, and asserting it means the journey walks the shape a real user
+    //    walks rather than the shortest path to a green tick.
+    await expect(wizard.getByTestId('register-steps')).toBeVisible({ timeout: 20_000 });
+    await wizard.getByRole('button', { name: /I've got my credentials/i }).click();
+
+    // 8. Credentials only AFTER approval (B1) — reaching this step proves the row landed
+    //    AND that the manifest's field list survived the whole install path. An empty field
+    //    list would render the heading and the Save button with NO input, which is exactly
+    //    the P4 registry-substitution defect; this assertion fails on it.
     await expect(wizard.getByLabel(/api key/i)).toBeVisible({ timeout: 20_000 });
   });
 
@@ -146,7 +166,7 @@ test.describe('T8 — a chat-less starter reaches a connection through the CTA (
     // …and the way back is Settings, which is exactly what §V2-6 exists to provide.
     await page.getByRole('link', { name: /^settings$/i }).click();
     await expect(
-      page.getByTestId('connection-declared-row'),
+      page.getByTestId('connection-slot-row'),
       'closing the review must not strand the user',
     ).toBeVisible({ timeout: 20_000 });
   });
@@ -154,7 +174,6 @@ test.describe('T8 — a chat-less starter reaches a connection through the CTA (
 
 test.describe('T8b — the same review is reachable from Settings (the cheaper path)', () => {
   test.skip(!hasApp, AWAITS_INTEGRATION);
-  test.skip(true, AWAITS_P4_STARTER_REWIRE);
 
   // The connections panel lives inside SETTINGS — there is no separate /connections
   // route (found by this test failing on its first draft, which assumed one).
@@ -168,7 +187,7 @@ test.describe('T8b — the same review is reachable from Settings (the cheaper p
     // reason Settings could not help either (`listAuthSpecs()` returns nothing, so the
     // panel showed its empty state and the user had no route to a connection at all).
     await expect(
-      page.getByTestId('connection-declared-row'),
+      page.getByTestId('connection-slot-row'),
       'a declared-but-not-connected app must be visible and actionable',
     ).toBeVisible({ timeout: 20_000 });
   });

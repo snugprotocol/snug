@@ -151,7 +151,12 @@ export default defineConfig({
             // `api.coinbase.com` is mapped too: journey 1's app dials the REAL provider
             // host (on the stub's port) so what the user reviews and freezes is a ceiling
             // a real app would have. Only the RESOLUTION is local — no request leaves.
-            `--host-resolver-rules=MAP stub.snug.test 127.0.0.1,MAP idp.snug.test 127.0.0.1,MAP api.coinbase.com 127.0.0.1`,
+            // `api.exchange.coinbase.com`, not `api.coinbase.com`: P4 pinned the latter in
+            // the well-known registry, so a demo requirement declaring it would be caught
+            // by the registry-borrow ban (it authors its own fields + header template).
+            // The demo variant moved to the Exchange host it actually dials; this MAP
+            // moves with it, or the journey would resolve to the real internet.
+            `--host-resolver-rules=MAP stub.snug.test 127.0.0.1,MAP idp.snug.test 127.0.0.1,MAP api.exchange.coinbase.com 127.0.0.1`,
             '--ignore-certificate-errors',
           ],
         },

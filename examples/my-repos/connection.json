@@ -1,0 +1,9 @@
+{
+  "slot": "github",
+  "provider": {
+    "name": "GitHub",
+    "docsUrl": "https://docs.github.com/en/rest/repos/repos"
+  },
+  "kind": "bearer_token",
+  "declaredApiHosts": ["api.github.com"]
+}

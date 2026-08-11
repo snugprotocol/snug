@@ -31,11 +31,16 @@ function selfSignedCert() {
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
     '-keyout', keyPath, '-out', certPath, '-days', '2',
     '-subj', '/CN=stub.snug.test',
-    // `api.coinbase.com` is a SAN because the P3 connection-wizard journey dials the REAL
-    // provider host (resolver-mapped to this stub) rather than the stub's own name — the
-    // whole point being that what the user reviews and freezes is a ceiling a real app
-    // would have. Without the SAN that fetch fails the TLS check as NET_FETCH_FAILED.
-    '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:stub.snug.test,DNS:api.coinbase.com',
+    // `api.exchange.coinbase.com` is a SAN because the P3 connection-wizard journey dials
+    // the REAL provider host (resolver-mapped to this stub) rather than the stub's own
+    // name — the whole point being that what the user reviews and freezes is a ceiling a
+    // real app would have. Without the SAN that fetch fails the TLS check as
+    // NET_FETCH_FAILED.
+    //
+    // It is the EXCHANGE host, not `api.coinbase.com`: P4 pinned the latter in the
+    // well-known registry, so the demo requirement moved to the host it actually dials
+    // rather than one the registry-borrow ban would now substitute out from under it.
+    '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:stub.snug.test,DNS:api.exchange.coinbase.com',
   ], { stdio: 'ignore' });
   return { key: readFileSync(keyPath), cert: readFileSync(certPath) };
 }

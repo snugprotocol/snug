@@ -78,8 +78,27 @@ function wizard(page: Page): ReturnType<Page['locator']> {
   return page.locator('[data-testid="connection-wizard"]');
 }
 
+/**
+ * Open the wizard from the requirement card, tolerating the card's post-declaration
+ * re-render.
+ *
+ * THE RACE THIS FIXES (1 failure in 5 full-suite runs, never in isolation): the card
+ * mounts as soon as the directive is parsed, then re-renders when the declaration is
+ * finalized post-turn. A click dispatched between those two renders hits a node that is
+ * detached before the event lands — "element was detached from the DOM, retrying". Playwright's
+ * auto-retry usually outruns it; under full-suite scheduling it sometimes does not.
+ *
+ * Waiting for the BUTTON to be stable — rather than only for the card to be visible — is
+ * what makes this deterministic: `toBeEnabled` resolves against the currently-attached
+ * node, so the click that follows targets a node that has survived at least one settle.
+ * This is a test-harness fix; it changes no product behavior and weakens no assertion.
+ */
 async function openWizardFromCard(page: Page): Promise<void> {
-  await page.getByTestId('connection-requirement-card').getByRole('button', { name: /connect/i }).click();
+  const card = page.getByTestId('connection-requirement-card');
+  await expect(card).toBeVisible();
+  const connect = card.getByRole('button', { name: /connect/i });
+  await expect(connect).toBeEnabled();
+  await connect.click();
   await expect(wizard(page)).toBeVisible();
 }
 
@@ -102,7 +121,12 @@ test('journey 1 — api_key MULTI-FIELD (the Coinbase shape): review → registe
   await expect(review.getByTestId('review-header-template')).toContainText('CB-ACCESS-SIGN');
   await expect(review.getByTestId('review-header-template')).toContainText('{{request.timestamp}}');
   // The complete host list + the freeze copy.
-  await expect(review.getByTestId('review-hosts')).toContainText('api.coinbase.com');
+  // `api.exchange.coinbase.com` since P4: the demo requirement moved off the bare
+  // `api.coinbase.com`, which P4 pinned in the well-known registry — declaring it while
+  // authoring its own fields + header template is now refused by the registry-borrow ban
+  // (Guard 2b). Coinbase Exchange is a genuinely different host, so the three-field HMAC
+  // journey is unchanged; only the brand it names is the one it actually dials.
+  await expect(review.getByTestId('review-hosts')).toContainText('api.exchange.coinbase.com');
   await expect(review).toContainText(/freezes at approval/i);
   // Registration steps render as plain text — never a link (P3-AC5).
   await expect(review.getByTestId('review-registration-steps').locator('a')).toHaveCount(0);
@@ -146,7 +170,10 @@ test('journey 2 — bearer_token: review → credentials (no register screen) �
   await buildWithRequirement(page, 'bearer');
   await openWizardFromCard(page);
 
-  await expect(wizard(page)).toContainText('OpenWeather');
+  // `TideGauge` since P4: this journey's subject must be a provider the registry does NOT
+  // pin, or the registry supplies a walkthrough and the "register screen is SKIPPED"
+  // assertion below becomes untestable. OpenWeather gained a registry entry in P4.
+  await expect(wizard(page)).toContainText('TideGauge');
   await wizard(page).getByRole('button', { name: /approve this connection/i }).click();
 
   // No `registration` seat ⇒ the register screen is SKIPPED, not rendered empty.

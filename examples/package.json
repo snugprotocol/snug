@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test validate.test.mjs"
+    "test": "node --test validate.test.mjs connection-manifests.test.mjs infer-connection.test.mjs",
+    "infer-connection": "node infer-connection.mjs"
   },
   "devDependencies": {
     "@snugprotocol/protocol": "workspace:*"

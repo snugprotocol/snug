@@ -4,6 +4,89 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-10 — INTERNAL DRAFT, not staged for any push — TASK-20260810-p4-starters (Dynamic Auth v2, P4)
+**Excluded from every spec push** (owner decision 2026-08-05 spec-gating; the auth surface
+publishes no earlier than Beta exit). **`llmProposalSchema` and its `LlmProposal` type are
+DELETED from the `packages/protocol` public surface** — fold B1's last named exit item.
+
+**Why.** `llmProposalSchema` was `authSpecHintsSchema.omit({registrationConsoleUrl,
+registrationInstructions, headerTemplate, fields, userLayerFields})`. Those five omissions
+were AL-04's answer to credential misdirection, and they were also precisely why a
+Coinbase-shaped requirement collapsed to the transformer's one generic field (the owner's
+founding defect: "Coinbase needs key + secret + passphrase"). `connectionRequirementSchema`
+replaces it and pays for the re-admitted seats a different way — bounds at parse, the
+template lint, the registry-borrow ban, and a strong field-by-field review that renders
+every re-admitted byte verbatim before a credential is collected (ADR-0017).
+
+**What the deletion actually removes: the EXPORT, not the shape.** The omit-list survives
+as the module-private `legacyProposalSchema` because two shapes still embed it and both are
+PERSISTED: `authWizardDirectiveSchema` (chat-meta rows, strictly re-validated on every
+read) and `inferrerProposalSchema` (wizard-ephemeral inferrer output; a knowledge-package
+contract test still feeds the shipped prompt's few-shot examples through the real parser).
+Deleting the shape outright would stop historical `auth_wizard` chat messages from
+rendering — silent data loss on a row the user can still see. Removing the export is what
+closes the channel to new authors; the validation behaviour of both persisted shapes is
+bit-for-bit unchanged, which the in-package snapshot asserts: `directiveKeys` and
+`inferrerKeys` are byte-identical across this change and only `proposalKeys` disappears.
+
+**Consumers retired with it.** `apps/playground/src/starter/starterDeclaration.ts` (the
+starter-manifest resolver, rewired to `connectionRequirementSchema` — a manifest is now a
+full requirement and passes `admitConnectionRequirement` on the `starter` channel);
+`packages/auth/src/auth-spec-inferrer.ts` (the v3 inferrer, deleted with its export block)
+and its last entry point `runAuthSpecInference` in
+`apps/playground/src/agent/inferrerAdapter.ts`, which P3 had already recorded as having no
+production caller. `examples/validate.test.mjs` moves its manifest gate to
+`connectionRequirementSchema`. `inferrerProposalSchema` and `authWizardDirectiveSchema` are
+KEPT — verified consumer-by-consumer rather than assumed orphaned.
+
+**Registry data (`packages/auth`, no protocol change).** Three static-kind entries —
+`coinbase`, `openweather`, `coingecko` — with credential `fields` and registration
+walkthroughs, on the `WellKnownOauthProvider.endpoints` optionality P0 already shipped. No
+default scopes and no runtime `.well-known` discovery, per the standing registry posture.
+Adding them EXTENDS the registry-borrow ban's reach to those names and hosts, which is the
+intended effect and is pinned by test.
+
+**AMENDED after the fresh-context review — the SUBSTITUTION SEMANTICS of the borrow ban
+changed, and that is a contract-shaped change even though no schema moved.**
+
+1. **`fields` is now SUBSTITUTED, not merely refused.** As first shipped, the registry's
+   `fields` data was dead: `applyRegistryValues` never wrote it, so all four
+   registry-backed starters reached the credential step with ZERO input boxes and the
+   wizard reported SUCCESS having stored no credential. The founding defect was not closed
+   but inverted — from one nameless box to none. The ban's contract is now explicitly
+   ASYMMETRIC: a borrower that OMITS `fields` RECEIVES the registry's pinned list; a
+   borrower that AUTHORS them is still REFUSED (Guard 2b, unchanged). Refusing the
+   authoring case only ever made sense once the omitting case was answered.
+   `request.headerTemplate` and `testRequest` remain refusal-only — the registry pins WHAT
+   to ask for, never where a typed secret is sent.
+
+2. **`endpoints` and `pkce` are substituted whenever the REGISTRY has them**, rather than
+   only when the declaration already carried the key. The original condition's stated
+   rationale (`oauth2AuthCodeSchema` needs authorize+token together) argues against writing
+   when the registry LACKS endpoints, not against writing when it has a complete pair and
+   the declaration has none — which is the shape starters actually ship. A bare Spotify
+   manifest previously resolved to `authorizeUrl: ''`. The `entry.endpoints !== undefined`
+   guard stays: a static-kind provider must not sprout URLs that would union a nonexistent
+   host into the frozen ceiling via `deriveConnectionAllowedHosts`.
+
+3. **Substituted `fields` are DEEP-COPIED.** `WELL_KNOWN_PROVIDERS_REGISTRY` is a module
+   singleton consulted on every admission; handing out live references would let one
+   downstream caller's edit repoint the pinned truth process-wide.
+
+4. **Coinbase's third field key is `passphrase`, not `api_passphrase`** — matching the
+   KB-taught template (`CB-ACCESS-PASSPHRASE: {{passphrase}}`) and seven other declaration
+   sites. The template engine resolves tokens against the field key, so the fork would have
+   sent that header present-but-EMPTY once fields began arriving. Now pinned by a lint that
+   reads both sides, per the repo's 2026-08-03 shared-literal lesson.
+
+**Host-side hardening that rides with it (`apps/playground`, no protocol change).**
+`saveConnectionCredentials` now REFUSES when a credential-bearing kind resolves to zero
+fields, instead of returning `{ok:true}` and advancing the machine to `done`. `kind:'none'`
+is exempt — it collects nothing by design. This is defence in depth for the class, not the
+cause: the substitution fix is what makes fields arrive.
+
+---
+
 ## 2026-08-10 — INTERNAL DRAFT, not staged for any push — TASK-20260810-p3-wizard (Dynamic Auth v2, P3)
 **Excluded from every spec push** (owner decision 2026-08-05 spec-gating; the auth surface
 publishes no earlier than Beta exit). **userdb schema v4 → v5: `snug_auth_specs` is

@@ -44,10 +44,18 @@ const DECLARED_HOST = 'api.example.com';
  */
 const BUNDLED_HTML = '<!doctype html>\n<html>\n  <body>\n    <script>const app = 1;</script>\n  </body>\n</html>\n';
 
+/**
+ * MIGRATED TO v4 (TASK-20260810-p4-starters). This fixture was the v3 proposal shape
+ * (`kindHint`/`providerName`), which `connectionRequirementSchema` now REJECTS by
+ * construction — `strictObject` plus a required `slot`/`provider`/`kind`. The shape below
+ * is the one the six shipped manifests carry, so this suite keeps testing the resolver
+ * against the artifact that actually ships. Every assertion below is unchanged in
+ * strength; only the seat names moved (`providerName` → `provider.name`).
+ */
 const VALID_MANIFEST = JSON.stringify({
-  kindHint: 'api_key',
-  providerName: 'Example API',
-  docsUrl: 'https://docs.example.com/api',
+  slot: 'example-api',
+  provider: { name: 'Example API', docsUrl: 'https://docs.example.com/api' },
+  kind: 'api_key',
   declaredApiHosts: [DECLARED_HOST],
 });
 
@@ -71,12 +79,12 @@ function installDemo(html: string = BUNDLED_HTML): string {
 }
 
 describe('T2 — a genuinely-installed starter resolves to its declaration', () => {
-  it('returns the parsed, schema-valid proposal', async () => {
+  it('returns the parsed, schema-valid requirement', async () => {
     const appId = installDemo();
     const result = await starterDeclarationFor(db, appId);
 
     expect(result, 'a first-party install with a manifest must declare').not.toBeNull();
-    expect(result?.declaration.providerName).toBe('Example API');
+    expect(result?.declaration.provider.name).toBe('Example API');
     expect(result?.declaration.declaredApiHosts).toEqual([DECLARED_HOST]);
   });
 
@@ -196,7 +204,8 @@ describe('T2e — a malformed manifest is parsed-and-dropped, never a crash', ()
   });
 
   it('a schema-invalid manifest resolves to null and warns', async () => {
-    // Valid JSON, wrong shape: `providerName` is required by llmProposalSchema.
+    // Valid JSON, wrong shape: `slot`, `provider` and `kind` are required by
+    // connectionRequirementSchema.
     __setDeclarationManifestsForTests({
       [DEMO_FOLDER]: { manifest: JSON.stringify({ declaredApiHosts: [DECLARED_HOST] }), html: BUNDLED_HTML },
     });
@@ -207,14 +216,17 @@ describe('T2e — a malformed manifest is parsed-and-dropped, never a crash', ()
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('a manifest carrying an EXCLUDED key is rejected, not silently accepted', async () => {
-    // llmProposalSchema omits registration copy by strict-schema rejection (M5/M21). A
-    // manifest is first-party today, but the resolver must not be the one place that
-    // relaxes the proposal contract — an app-import channel would inherit that hole.
+  it('a manifest carrying an UNKNOWN key is rejected, not silently accepted', async () => {
+    // `connectionRequirementSchema` is `strictObject` at every level, so an unknown key
+    // anywhere is a rejection rather than a passthrough. The rule this preserves from v3
+    // is unchanged: the resolver must not be the one place that relaxes the manifest
+    // contract, or a future app-import channel would inherit that hole.
     __setDeclarationManifestsForTests({
       [DEMO_FOLDER]: {
         manifest: JSON.stringify({
-          providerName: 'Example API',
+          slot: 'example-api',
+          provider: { name: 'Example API' },
+          kind: 'api_key',
           declaredApiHosts: [DECLARED_HOST],
           registrationInstructions: ['click here to get owned'],
         }),
@@ -224,7 +236,41 @@ describe('T2e — a malformed manifest is parsed-and-dropped, never a crash', ()
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const appId = installDemo();
 
-    expect(await starterDeclarationFor(db, appId), 'excluded keys are a strict rejection').toBeNull();
+    expect(await starterDeclarationFor(db, appId), 'unknown keys are a strict rejection').toBeNull();
+  });
+
+  it('a manifest authoring a `userLayer` is REFUSED by admission (the v4 successor guard)', async () => {
+    // v3 defended the credential-prompt seats by OMITTING them from the schema. v4
+    // re-admits them and pays for it at admission instead, so the guard that matters here
+    // is the channel one: `userLayer` is registry-synthesized ONLY, and a starter
+    // declaring one would aim the three-legged consent flow at endpoints it chose.
+    // Schema-valid on purpose — this must be refused by ADMISSION, not by the parser.
+    __setDeclarationManifestsForTests({
+      [DEMO_FOLDER]: {
+        manifest: JSON.stringify({
+          slot: 'example-api',
+          provider: { name: 'Example API' },
+          kind: 'api_key',
+          declaredApiHosts: [DECLARED_HOST],
+          userLayer: {
+            kind: 'oauth2_auth_code',
+            endpoints: {
+              authorizeUrl: 'https://evil.example/authorize',
+              tokenUrl: 'https://evil.example/token',
+            },
+            declaredApiHosts: ['evil.example'],
+          },
+        }),
+        html: BUNDLED_HTML,
+      },
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const appId = installDemo();
+
+    expect(
+      await starterDeclarationFor(db, appId),
+      'the starter channel may not author a userLayer',
+    ).toBeNull();
   });
 });
 
@@ -280,23 +326,56 @@ describe('T2f — normalized comparison, and a mismatch REPORTS its reason', () 
   });
 });
 
-describe('the resolver never consults the well-known registry (posture)', () => {
-  it('returns the manifest’s own provider name verbatim, unenriched', async () => {
-    // `resolveDeclaredIntent` must not borrow registry legitimacy — the wizard applies
-    // the registry later, under the user’s eyes, in the strong review. A resolver that
-    // pre-enriched would be handing an app the registry's authority at install time.
+describe('the resolver applies the REGISTRY-BORROW BAN, and enriches nothing else', () => {
+  /**
+   * THE POSTURE INVERTED DELIBERATELY IN v4, and this pair of tests records both halves.
+   *
+   * v3's rule was "the resolver never consults the registry": enriching at install time
+   * would hand an app the registry's authority before the user ever looked. That reasoning
+   * still holds for ENRICHMENT — and it is asserted by the second test below, unchanged in
+   * force.
+   *
+   * What changed is that consulting the registry is now how the BORROW BAN works
+   * (P0, fold S-M3). A manifest naming a registry provider no longer keeps its own
+   * declared values: the registry's pinned host list REPLACES them. That is not
+   * enrichment, it is substitution in the opposite direction — the manifest cannot trade
+   * on a brand while pointing the credential somewhere else. Asserting the old "verbatim"
+   * behavior for a registry name would now be asserting that the ban does not fire.
+   */
+  it('SUBSTITUTES pinned values when the manifest names a registry provider', async () => {
     __setDeclarationManifestsForTests({
       [DEMO_FOLDER]: {
-        manifest: JSON.stringify({ providerName: 'github', declaredApiHosts: [DECLARED_HOST] }),
+        manifest: JSON.stringify({
+          slot: 'github',
+          provider: { name: 'github' },
+          kind: 'bearer_token',
+          declaredApiHosts: [DECLARED_HOST],
+        }),
         html: BUNDLED_HTML,
       },
     });
     const appId = installDemo();
     const result = await starterDeclarationFor(db, appId);
 
-    expect(result?.declaration.providerName).toBe('github');
+    // The registry's display name and hosts win; the manifest's declared host is GONE,
+    // not merged — a merge would let a starter keep an attacker host beside a real one.
+    expect(result?.declaration.provider.name).toBe('GitHub');
+    expect(result?.declaration.declaredApiHosts).toEqual(['api.github.com']);
+    expect(result?.declaration.declaredApiHosts).not.toContain(DECLARED_HOST);
+  });
+
+  it('leaves a NON-registry provider completely unenriched', async () => {
+    // The surviving half of the v3 posture, and the one that still guards install-time
+    // authority: an unknown provider is passed through verbatim. Nothing is spliced in,
+    // no endpoints appear, and the wizard applies the registry later under the user's
+    // eyes in the strong review.
+    const appId = installDemo();
+    const result = await starterDeclarationFor(db, appId);
+
+    expect(result?.declaration.provider.name).toBe('Example API');
     expect(result?.declaration.declaredApiHosts, 'declared hosts survive verbatim').toEqual([DECLARED_HOST]);
     expect(result?.declaration.endpoints, 'no registry endpoints may be spliced in').toBeUndefined();
+    expect(result?.declaration.registration, 'no registration copy may be spliced in').toBeUndefined();
   });
 });
 
@@ -308,7 +387,7 @@ describe('the PRE-INSTALL lookup — what the run view discloses before anything
     // declared connection", made about BUNDLED bytes the user has not yet copied.
     const declaration = await starterDeclarationForStarterId(`starter--${DEMO_FOLDER}`);
 
-    expect(declaration?.providerName).toBe('Example API');
+    expect(declaration?.provider.name).toBe('Example API');
     expect(declaration?.declaredApiHosts).toEqual([DECLARED_HOST]);
   });
 

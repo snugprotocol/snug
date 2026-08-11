@@ -1,0 +1,9 @@
+{
+  "slot": "spotify",
+  "provider": {
+    "name": "Spotify",
+    "docsUrl": "https://developer.spotify.com/documentation/web-api"
+  },
+  "kind": "oauth2_auth_code",
+  "declaredApiHosts": ["api.spotify.com"]
+}
