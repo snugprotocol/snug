@@ -49,6 +49,7 @@ import {
   advanceFromRegister,
   advanceFromReview,
   closeConnectionWizard,
+  forceCloseWizard,
   connectionFlowStatusStore,
   connectionWizardRevisionStore,
   connectionWizardStepStore,
@@ -751,6 +752,8 @@ export function ConnectionWizardSheet(): ReactElement | null {
   const [row, setRow] = useState<ConnectionRow | undefined>(undefined);
   const [revoked, setRevoked] = useState<RevokedBefore | undefined>(undefined);
   const [loaded, setLoaded] = useState(false);
+  /** Set only when the store REFUSES a close because a sign-in is mid-flight (M9). */
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const appId = session?.appId;
   const slot = session?.slot;
@@ -805,9 +808,38 @@ export function ConnectionWizardSheet(): ReactElement | null {
 
   const title = row === undefined ? 'connect' : `connect ${row.requirement.provider.name}`;
 
+  // Dismissal is GATED while a sign-in is mid-flight (owner decision 2026-08-10). The store
+  // decides — this component only asks the question and routes the answer, so the rule
+  // lives in one place and the Esc key, the backdrop and the close button all obey it.
+  const requestClose = (): void => {
+    if (closeConnectionWizard() === 'needs_confirm') setConfirmDiscard(true);
+  };
+
   return (
-    <Sheet title={title} open onClose={closeConnectionWizard}>
+    <Sheet title={title} open onClose={requestClose}>
       <div data-testid="connection-wizard">
+      {confirmDiscard ? (
+        <div className="hint" role="alertdialog" data-testid="discard-signin-confirm">
+          <p>
+            you are in the middle of signing in to {row?.requirement.provider.name ?? 'this provider'}. close anyway and
+            the sign-in is discarded — you can start it again.
+          </p>
+          <button type="button" onClick={() => setConfirmDiscard(false)}>
+            keep signing in
+          </button>
+          <button
+            type="button"
+            data-testid="discard-signin-confirm-yes"
+            onClick={() => {
+              setConfirmDiscard(false);
+              forceCloseWizard();
+            }}
+          >
+            discard the sign-in
+          </button>
+        </div>
+      ) : null}
+
       {revoked !== undefined ? (
         <div className="hint" data-testid="revoked-before-notice">
           you revoked {revoked.providerName} for this app before
@@ -819,12 +851,12 @@ export function ConnectionWizardSheet(): ReactElement | null {
       {!loaded ? (
         <span className="hint">loading this connection…</span>
       ) : row === undefined ? (
-        <MissingRowScreen session={session} onClose={closeConnectionWizard} />
+        <MissingRowScreen session={session} onClose={requestClose} />
       ) : showDiff ? (
         <ReapprovalDiffScreen
           row={row}
           onReapprove={() => void reapproveFromDiff()}
-          onDismiss={closeConnectionWizard}
+          onDismiss={requestClose}
         />
       ) : step === 'review' ? (
         <ReviewScreen row={row} onApprove={() => void advanceFromReview()} />
@@ -842,7 +874,7 @@ export function ConnectionWizardSheet(): ReactElement | null {
           }}
         />
       ) : (
-        <DoneScreen row={row} onClose={closeConnectionWizard} />
+        <DoneScreen row={row} onClose={requestClose} />
       )}
       </div>
     </Sheet>

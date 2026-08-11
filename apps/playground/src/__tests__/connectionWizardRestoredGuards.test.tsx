@@ -32,6 +32,7 @@ import {
   __resetConnectionWizardForTests,
   __setConnectionOAuthHooksForTests,
   closeConnectionWizard,
+  forceCloseWizard,
   connectionFlowStatusStore,
   connectionWizardNoteStore,
   connectionWizardStepStore,
@@ -769,32 +770,30 @@ describe('RESTORED 11 — the full frozen host list, and the empty state', () =>
 });
 
 // ---------------------------------------------------------------------------
-// RESTORED 13 — dismissal semantics: v4 tears down UNCONDITIONALLY
+// RESTORED 13 — dismissal semantics: an in-flight sign-in DEMANDS CONFIRMATION
 // ---------------------------------------------------------------------------
 //
-// THIS IS A PINNING TEST FOR A BEHAVIOR CHANGE, NOT A RESTORATION. Read it as a record of
-// what v4 does, not as an endorsement of it.
+// OWNER DECISION (2026-08-10): "let v4 also ask for confirmation (if the oauth is mid
+// flight)". The v3 semantics are restored deliberately, and this block is now a
+// RESTORATION rather than the pinning record it was written as.
 //
-// THE CHANGE. v3's `closeConnectionWizard` equivalent (`requestCloseWizard`) demanded
-// CONFIRMATION before dismissing a wizard with an OAuth flow in flight — deleted
-// wizardStore.test.ts:173, "dismiss-confirm: closing while a flow is in flight demands
-// confirmation (M9)": `requestCloseWizard()` returned 'needs_confirm', the session
-// SURVIVED, and only an explicit `forceCloseWizard()` tore it down. One stray Esc
-// discarded nothing. v4's `closeConnectionWizard` (connectionWizard.ts:209-219) tears
-// down unconditionally: the channel closes, the poll clears, the popup is closed and the
-// session is nulled, whatever state the flow is in.
+// WHAT WAS LOST. v3's `requestCloseWizard` returned 'needs_confirm' when a flow was in
+// flight — the session SURVIVED and only an explicit `forceCloseWizard()` tore it down
+// (deleted wizardStore.test.ts:173, "dismiss-confirm ... (M9)"). The P3 rebuild dropped
+// the gate, so one stray Esc discarded a sign-in the user was halfway through.
 //
-// The teardown itself is CORRECT and must not be weakened — leaving a channel or a poll
-// alive over a dismissed session is the leak the v3 flow was hardened against, and the
-// module comment at :210-213 is right about why. What changed is who decides: a user
-// mid-sign-in who presses Esc now loses the flow with no prompt.
+// WHAT MUST NOT CHANGE. The TEARDOWN is correct and stays exactly as it is: leaving a
+// channel or a poll alive over a dismissed session means a returning callback writing
+// into a flow nobody is watching, and a poll that later errors a status belonging to
+// somebody else's flow. The v3 hardening at connectionWizard.ts:210-213 is right about
+// why. This change adds a gate IN FRONT of that teardown; it does not weaken it.
 //
-// WHY THIS FILE ONLY PINS IT. Restoring the confirm would change what a documented,
-// shipped UI gesture does. That is a product decision about dismissal semantics, not a
-// test decision, so it is reported to the owner rather than made here. These tests pin the
-// ACTUAL v4 behavior so that whichever way the owner decides, the change is deliberate and
-// visible in a diff instead of drifting silently a second time.
-describe('RESTORED 13 (pinning, not endorsing) — v4 dismissal tears down an in-flight flow with no confirm', () => {
+// THE SHAPE. `closeConnectionWizard()` returns 'closed' | 'needs_confirm'. Idle/settled
+// sessions close immediately as before (no new friction on the common path — closing a
+// finished wizard must not nag). Only `awaiting_callback` and `exchanging` — the two
+// genuinely mid-flight states — ask. `forceCloseWizard()` is the explicit confirm and is
+// unconditional.
+describe('RESTORED 13 — an in-flight sign-in is not discarded without confirmation (M9)', () => {
   async function startAFlow(): Promise<{ closeCalls: () => number }> {
     declare(oauthRequirement, { approve: true });
     openConnectionWizard({ appId: APP, slot: 'fake-idp', source: 'settings' });
@@ -823,21 +822,43 @@ describe('RESTORED 13 (pinning, not endorsing) — v4 dismissal tears down an in
     return { closeCalls: () => closeCalls + channelClosed };
   }
 
-  it('CURRENT BEHAVIOR: one close discards an in-flight sign-in immediately, with no confirmation step', async () => {
-    await startAFlow();
+  it('a close mid-flight RETURNS needs_confirm and the session SURVIVES', async () => {
+    const flow = await startAFlow();
 
-    closeConnectionWizard();
+    const outcome = closeConnectionWizard();
 
-    // No 'needs_confirm', no surviving session, no second call required. This is the
-    // documented v4 contract and the owner-facing decision named in `notRestored`.
-    expect(connectionWizardStore.get(), 'v4 dismissal is unconditional').toBeNull();
+    expect(outcome, 'a mid-flight dismissal must ask, not act').toBe('needs_confirm');
+    expect(connectionWizardStore.get(), 'the session survives an unconfirmed close').not.toBeNull();
+    expect(connectionFlowStatusStore.get().state, 'the flow is still in flight').toBe('awaiting_callback');
+    expect(flow.closeCalls(), 'nothing is torn down until the user confirms').toBe(0);
+  });
+
+  it('the confirm — forceCloseWizard — tears down unconditionally', async () => {
+    const flow = await startAFlow();
+
+    expect(closeConnectionWizard()).toBe('needs_confirm');
+    forceCloseWizard();
+
+    expect(connectionWizardStore.get(), 'the explicit confirm closes').toBeNull();
     expect(connectionFlowStatusStore.get().state).toBe('idle');
+    expect(flow.closeCalls(), 'the popup and channel go with the session').toBeGreaterThan(0);
+  });
+
+  it('an IDLE session still closes immediately — the gate must not nag on the common path', () => {
+    // Without this direction, "ask before closing" degrades into "ask every time", which
+    // trains the user to dismiss the prompt and defeats the point of having one.
+    declare(coinbaseRequirement, { approve: true });
+    openConnectionWizard({ appId: APP, slot: 'coinbase', source: 'settings' });
+
+    expect(connectionFlowStatusStore.get().state, 'precondition: no flow in flight').toBe('idle');
+    expect(closeConnectionWizard(), 'a settled wizard closes without a prompt').toBe('closed');
+    expect(connectionWizardStore.get()).toBeNull();
   });
 
   it('the teardown is COMPLETE — channel and popup both go with the session (the half that must stay)', async () => {
     const flow = await startAFlow();
 
-    closeConnectionWizard();
+    forceCloseWizard();
 
     // Whatever the owner decides about the confirm, THIS must not regress: a channel or a
     // poll outliving a dismissed session means a returning callback writing into a flow
@@ -847,11 +868,34 @@ describe('RESTORED 13 (pinning, not endorsing) — v4 dismissal tears down an in
     expect(connectionWizardStepStore.get()).toBe('review');
   });
 
+  it('THE UI HONOURS THE GATE — the sheet shows a confirm instead of closing, and only "discard" closes', async () => {
+    // The store rule is worth nothing if the component ignores the return value, which is
+    // exactly the shape of mistake a `void closeConnectionWizard()` would make. This drives
+    // the rendered sheet: dismiss -> prompt appears, session survives; "keep signing in" ->
+    // prompt goes, session STILL survives; "discard" -> gone.
+    const flow = await startAFlow();
+    await render(<ConnectionWizardSheet />);
+
+    await click(/close|dismiss|×/i);
+    expect(container!.querySelector('[data-testid="discard-signin-confirm"]'), 'the confirm must render').not.toBeNull();
+    expect(connectionWizardStore.get(), 'dismissing does not close a mid-flight wizard').not.toBeNull();
+    expect(flow.closeCalls(), 'nothing is torn down while the prompt is up').toBe(0);
+
+    await click(/keep signing in/i);
+    expect(connectionWizardStore.get(), 'backing out of the prompt keeps the session').not.toBeNull();
+    expect(connectionFlowStatusStore.get().state).toBe('awaiting_callback');
+
+    await click(/close|dismiss|×/i);
+    await click(/discard the sign-in/i);
+    expect(connectionWizardStore.get(), 'the explicit confirm closes').toBeNull();
+    expect(flow.closeCalls(), 'and the teardown still runs').toBeGreaterThan(0);
+  });
+
   it('a close during an in-flight flow leaves a LATER flow able to start cleanly', async () => {
     // The consequence of a complete teardown, asserted where a user would feel it: a leaked
     // poll from flow 1 killed every later flow within 500ms of `awaiting_callback` in v3.
     await startAFlow();
-    closeConnectionWizard();
+    forceCloseWizard();
 
     openConnectionWizard({ appId: APP, slot: 'fake-idp', source: 'settings' });
     await startConnectionOAuthFlow({ client_id: 'cid-2' });

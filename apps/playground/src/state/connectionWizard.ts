@@ -206,11 +206,48 @@ export function isConnectionRepairableNetError(code: string): boolean {
   return AUTH_REPAIRABLE_NET_CODES.has(code);
 }
 
-export function closeConnectionWizard(): void {
-  // An in-flight sign-in is torn down WITH the wizard: its channel, poll and popup all
-  // belong to a session the user has just dismissed, and leaving any of them alive means a
-  // returning callback writing into a flow nobody is watching (and a poll that will later
-  // error a status belonging to somebody else's flow).
+/**
+ * The two states in which a sign-in is genuinely MID-FLIGHT: the popup is open and we are
+ * waiting for the provider to call back, or the code came back and the token exchange is
+ * running. Everything else — idle, connected, error — is settled, and a settled wizard
+ * must close without ceremony.
+ */
+const IN_FLIGHT_FLOW_STATES = new Set<ConnectionFlowStatus['state']>(['awaiting_callback', 'exchanging']);
+
+export function isConnectionFlowInFlight(): boolean {
+  return IN_FLIGHT_FLOW_STATES.has(connectionFlowStatusStore.get().state);
+}
+
+/**
+ * Dismissal, gated (owner decision 2026-08-10; restores the v3 `requestCloseWizard`
+ * semantics the P3 rebuild dropped).
+ *
+ * Returns `'needs_confirm'` WITHOUT touching anything when a sign-in is mid-flight — the
+ * session survives, the popup stays open, the channel stays subscribed — so one stray Esc
+ * can no longer discard a sign-in the user is halfway through. The caller then asks, and
+ * an explicit yes calls `forceCloseWizard`.
+ *
+ * The gate is deliberately narrow: only `awaiting_callback` and `exchanging` ask. A prompt
+ * on every close would train the user to dismiss it reflexively, which costs the
+ * protection it was added for.
+ */
+export function closeConnectionWizard(): 'closed' | 'needs_confirm' {
+  if (isConnectionFlowInFlight()) return 'needs_confirm';
+  forceCloseWizard();
+  return 'closed';
+}
+
+/**
+ * The unconditional close — the confirm's landing point, and the only path that tears down
+ * an in-flight flow.
+ *
+ * The teardown itself is UNCHANGED and must not be weakened: a channel, poll or popup left
+ * alive over a dismissed session means a returning callback writing into a flow nobody is
+ * watching, and a poll that will later error a status belonging to somebody else's flow.
+ * This function is what the v3 hardening protected; the confirm above only decides WHO
+ * triggers it.
+ */
+export function forceCloseWizard(): void {
   teardownFlow();
   connectionWizardStore.set(null);
   connectionWizardStepStore.set('review');
