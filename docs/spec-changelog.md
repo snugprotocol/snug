@@ -4,6 +4,46 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-11 — INTERNAL DRAFT, not staged for any push — TASK-20260811-lean-runtime-data-chat (P0)
+**Excluded from every spec push** (AL-12 HELD). Three internal-draft additions, none of
+which touches the published v1 wire surface: `schemas/*.json` is byte-unchanged, and the
+export guard tests assert that the new shapes stay OUT of `json-schemas.ts` SOURCES —
+the same publication line `auth-schema.ts`, `render-directive.ts` and the net frames sit
+behind.
+
+**1. `runtimeContractSchema` (`packages/protocol/src/runtime-contract.ts`, ADR-0018.)** The
+compact per-app artifact from which an installed app's LLM turns are assembled: a required
+`overview` plus optional `personaNote`, `stateGuidance`, `responseGuidance`, a bounded
+`settings` slice, and an opt-in `maxOutputTokens`. Strict (unknown key = rejection, unlike
+the deliberately tolerant frame parsers — an unknown field here would be unreviewed text
+reaching the system slot), every seat bounded, and the whole serialized artifact capped at
+2560 bytes because the per-seat bounds sum to more than any turn should carry.
+`parseRuntimeContract` is the tolerant READ path — a corrupt row reads as "no contract" so
+an app degrades to generic layers instead of failing a move. `canonicalRuntimeContract`
+supplies key-order-independent bytes for the import guard.
+
+**2. `chatIntentSchema` (`packages/protocol/src/chat-intent.ts`, ADR-0019.)** The app-chat
+router's input: one of six intents, a confidence, an optional clarification.
+`parseChatIntent` returns `undefined` for every unusable reply — there is no default lane,
+which is what keeps a malformed classification from landing in the lane that writes code.
+
+**3. userdb `PRAGMA user_version` 5 → 6.** One nullable column,
+`snug_app_versions.runtime_contract_json`. **Additive**: no table added, removed or
+reshaped; `USERDB_TABLES` unchanged. Because it alters an EXISTING table it is the first
+migration since v2 that needs `addColumnIfMissing` rather than the idempotent
+`CREATE TABLE IF NOT EXISTS` replay — a bare replay would leave a v5-shaped table under a
+v6 stamp, which is exactly the "the persisted version lied" failure the self-heal guard
+exists to catch. Three custody rules ship WITH the column and are normative, not
+incidental: contracts copy forward on an ordinary version write; revert/reset copy from
+the **target** version (reverted code must run under the contract that shipped with it);
+and an IMPORTED contract is dropped unless canonically byte-identical to one the hub
+already holds, because a contract speaks with system authority at runtime.
+
+Staged prose: **NEW `docs/spec-drafts/spec-v0.4-runtime.md`** (contract shape, custody
+rules, and the app-data surface constraints) plus a v6 version note in
+`docs/spec-drafts/spec-v0.2-userdb.md`, which continues to describe v2 as published.
+Nothing pushed to `snugprotocol/spec` (needs an explicit ask).
+
 ## 2026-08-10 — INTERNAL DRAFT, not staged for any push — TASK-20260810-p4-starters (Dynamic Auth v2, P4)
 **Excluded from every spec push** (owner decision 2026-08-05 spec-gating; the auth surface
 publishes no earlier than Beta exit). **`llmProposalSchema` and its `LlmProposal` type are

@@ -14,6 +14,19 @@
 > surface is deliberately excluded from the AL-13 push and publishes no earlier than
 > Beta exit (staged v0.3 prose is AL-12). A v3 file is a superset of v2: the v2→v3
 > migration is purely additive.
+>
+> **Version note (TASK-20260811, 2026-08-11):** the reference implementation now carries
+> an **internal v6 draft** (`PRAGMA user_version = 6`), adding one nullable column,
+> `snug_app_versions.runtime_contract_json` — the compact per-app **runtime contract**
+> from which an installed app's LLM turns are assembled (ADR-0018; prose staged in
+> `spec-v0.4-runtime.md`). **This v0.2 document still describes v2 and is published as
+> such.** v6 is additive over v5: no table is added, removed, or reshaped, and the
+> `USERDB_TABLES` set is unchanged, so a v6 file remains readable by anything that reads
+> the columns it knows. Two behaviors a conforming hub MUST carry with the column, both
+> normative and both stated in the v0.4 draft: the contract is **copied forward** on an
+> ordinary version write and copied from the **target** version on revert/reset, and an
+> **imported** contract is dropped unless byte-identical to one the importing hub already
+> holds.
 
 ## 1. The three actors
 
@@ -40,7 +53,7 @@ forward-only (v1→v2 is structural; v1 blob app data does not survive). Size ca
 | `snug_settings` | mode, provider, model, endpoints (key/value, JSON values) |
 | `snug_secrets` | BYOK keys, personal-origin tokens (opaque strings; see §4) |
 | `snug_apps` | one row per app: display metadata, `current_version`, `install_source` (unique when present — a marketplace/starter identity may be installed at most once) |
-| `snug_app_versions` | complete HTML per version; hubs retain ≥ `VERSIONS_RETAINED` (5) unpinned versions, pruning oldest; the factory version (v1 of a build or install) is `pinned` and NEVER pruned; revert/reset = copy-forward as a NEW version |
+| `snug_app_versions` | complete HTML per version; hubs retain ≥ `VERSIONS_RETAINED` (5) unpinned versions, pruning oldest; the factory version (v1 of a build or install) is `pinned` and NEVER pruned; revert/reset = copy-forward as a NEW version. *(internal v6 draft adds a nullable `runtime_contract_json` on this row — see the v6 version note above and `spec-v0.4-runtime.md`.)* |
 | `snug_app_schemas` | one row per app with data: the app's runtime `sqlite_master` DDL **verbatim** (`schema_json`: objects in creation order + AUTOINCREMENT sequence counters) and its namespace `token` |
 | `snug_app_migrations` | append-only DDL audit per app (`seq`, statement, applied-at) |
 | `snug_app_docs` | per-app knowledge wiki: `(app_id, slug)` → markdown (`vision`, `requirements`, `plan`, `lessons`, `memory`, `next-tasks` are advisory slug values; the table shape is normative) |
