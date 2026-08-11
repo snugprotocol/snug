@@ -16,7 +16,7 @@ import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } f
 
 import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
-import { useBuilderChat } from '../agent/useBuilderChat.js';
+import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import { createNetHandlerFor } from '../state/net.js';
 import {
   isConnectionRepairableNetError,
@@ -536,6 +536,8 @@ export default function RunView(): ReactElement {
             onConnectionConnect={(connection) =>
               openConnectionWizard({ appId: connection.appId, slot: connection.slot, source: 'directive' })
             }
+            onApproveDataWrite={chat.approveDataWrite}
+            onDeclineDataWrite={chat.declineDataWrite}
           />
         </>
       )}
@@ -789,6 +791,9 @@ interface RailChatProps {
   onDirectiveConnect?: () => void;
   /** The v4 connect card's mount — the persisted (appId, slot) to open the wizard on. */
   onConnectionConnect?: (connection: { appId: string; slot: string }) => void;
+  /** The data-write approval card's actions (ADR-0019 D8). */
+  onApproveDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
+  onDeclineDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
@@ -801,6 +806,8 @@ function RailChat({
   onStop,
   onDirectiveConnect,
   onConnectionConnect,
+  onApproveDataWrite,
+  onDeclineDataWrite,
 }: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
   const submit = (): void => {
@@ -819,13 +826,19 @@ function RailChat({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minHeight: '100%' }}>
       {messages.length === 0 ? (
-        <EmptyState glyph="✎" title="keep talking" lesson="ask for tweaks — the agent can rebuild the app from here." />
+        <EmptyState
+          glyph="✎"
+          title="keep talking"
+          lesson="ask about your data (“what did I spend on food?”), change it (“add lunch on Tuesday”), or change the app itself."
+        />
       ) : (
         <ChatLog
           messages={messages}
           steps={steps}
           activity={activity}
           busy={busy}
+          {...(onApproveDataWrite !== undefined ? { onApproveDataWrite } : {})}
+          {...(onDeclineDataWrite !== undefined ? { onDeclineDataWrite } : {})}
           phase="edit"
           onDirectiveConnect={onDirectiveConnect}
           onConnectionConnect={onConnectionConnect}

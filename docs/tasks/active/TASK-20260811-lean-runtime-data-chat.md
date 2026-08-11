@@ -654,3 +654,53 @@ materialized DB; every file:line citation in §0 checked accurate.
   `useBuilderChat.send()` with F-M4's three lifecycle tests, `buildIntentTurnContext`,
   then `data_query`/`data_propose_write` over `db.scratchRun` with the approval card.
 - Open questions: none new.
+
+### 2026-08-11 — Claude (implementation session, P3) — session
+
+- Done: **P3 complete — intent-routed app chat, tests-first**, in two commits.
+  - **Classifier**: `tools/chat-intent-classifier.md` in the two-slot shape (static system
+    slot; user message delimited; output contract restated AFTER the block). Few-shot
+    fixtures are SCRAPED from the rendered prompt and run through the shipped
+    `parseChatIntent` + schema, so prompt and fixtures cannot drift. Replayed history is
+    defanged too — prior user text is exactly as untrusted as the live message.
+  - **Router** (`chatRouter.ts`): classify → dispatch, failing closed on every path (bad
+    JSON, unknown intent, adapter error, thrown exception, low confidence). A test asserts
+    no unusable reply EVER reaches the feature lane.
+  - **`buildIntentTurnContext`** (D9): data intents get DDL + doc TITLES and neither the
+    HTML nor the rewrite instruction; feature intents keep today's builder context;
+    `app_question`/`other` get docs without code.
+  - **Data tools** over `db.scratchRun`: `data_query` (bounded, truncation stated in-band)
+    and `data_propose_write` (dry-run preview + staged proposal). `executeApprovedWrite`
+    is host-only, re-runs the dry run, and HALTS on drift (F-Sm1).
+  - **Router wired into `useBuilderChat.send()`** with the three F-M4 lifecycle tests
+    (abort reaches the classifier; the clarify path settles the placeholder AND persists
+    both sides; a thrown error routes to clarify, never to the outer TURN_FAILED).
+  - **Lane-scoped TOOLS** via a new `BuilderTurn.tools` override — the second lock beside
+    context scoping (AC-F2-5). `data_read` gets the read tool only; the answer lane gets
+    none.
+  - **Approval card** in `ChatLog` showing the summary, the VERBATIM SQL and the row
+    counts, with approve/decline wired through RunView to `executeApprovedWrite`; once
+    resolved the buttons are gone so an approved change cannot be re-applied unreviewed.
+    Rail empty-state copy no longer promises only rebuilds.
+- **Three things worth recording:**
+  (a) **The driver has no affected-row count.** `DbDriverResult` is
+  `{rows, columns, value, bytesBase64}`, so `executeApprovedWrite` records the
+  RE-VALIDATED counts. Because it halts on ANY drift, a recorded count can never describe
+  a change the user did not approve — but the honest fix (a real count out of the driver)
+  means widening a protocol-facing result shape, which belongs in its own change. Noted at
+  the call site and going into the P4 threat-model delta.
+  (b) **A test-only mock defect I had to fix properly.** `vi.mock` with `importOriginal`
+  spread let the REAL `liveInferenceAdapter` answer on the first call in a fresh module
+  graph (`ok:false`, no key configured), so the router silently skipped and two lifecycle
+  tests failed for a reason unrelated to their subject. The stub is now total and
+  deterministic; the ladder keeps its own tests.
+  (c) **`playground:build` caught two type errors `playground:test` did not** — a missing
+  `db` export and a props interface that never received its new fields. Same lesson as
+  P0's: package-level green is not a type-clean claim.
+- State: **all 19 turbo tasks green, uncached: 2132 tests + 185 examples** (protocol 250,
+  knowledge 160, runner 108, db 280, server 123, adapters 103, sdk 41, auth 357,
+  playground 710, examples 185).
+- Next step: **P4 — `artifact_edit`, the whole-surface review, the threat-model delta, and
+  the docs close** (code-map rows, architecture status, ADRs proposed→accepted, lessons,
+  next-steps, product-vision differentiators).
+- Open questions: none new.

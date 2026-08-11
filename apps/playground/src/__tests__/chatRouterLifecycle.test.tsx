@@ -1,0 +1,215 @@
+/**
+ * TASK-20260811-lean-runtime-data-chat, P3 — the router stage's TURN-LIFECYCLE
+ * obligations (fold F-M4).
+ *
+ * The router's routing rules are tested in `chatRouter.test.ts`. This file tests the
+ * things a new stage inside `send()` can break that have nothing to do with routing:
+ *
+ *  (a) ABORT — the classifier takes the turn's signal, so stop and unmount cancel it.
+ *  (b) SETTLEMENT + PERSISTENCE — the clarify path settles the already-rendered streaming
+ *      placeholder AND persists the exchange. A stage that returns early without doing
+ *      both leaves a forever-spinner that also vanishes on reload.
+ *  (c) ERROR LANE — a thrown classifier error routes to clarify, never to the outer
+ *      TURN_FAILED catch, so a routing bug never masquerades as a model failure.
+ *
+ * These are asserted at the HOOK because that is where the obligations live.
+ */
+
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import type { ReactElement } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { useBuilderChat, type BuilderChat } from '../agent/useBuilderChat.js';
+import { modeStore } from '../state/mode.js';
+import { installTestUserDb } from './userdbTestHelper.js';
+
+declare global {
+  // eslint-disable-next-line no-var
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+const HTML = '<!DOCTYPE html><html><body>ledger</body></html>';
+const THREAD = 'app:router-lifecycle';
+
+let container: HTMLDivElement | undefined;
+let root: Root | undefined;
+let db: Awaited<ReturnType<typeof installTestUserDb>>;
+let appId: string;
+
+/** What the stubbed classifier adapter should do on its next call. */
+let classifierBehavior: 'clarify' | 'throw' | 'hang' = 'clarify';
+let sawSignal: AbortSignal | undefined;
+
+// NOT spread from importOriginal: the real module resolves a live adapter from the
+// settings ladder, and on the first call in a fresh module graph it answered `ok:false`
+// (no key configured), so the router silently skipped. The stub is total and
+// deterministic — this file tests the LIFECYCLE, and the ladder has its own tests.
+vi.mock('../agent/inferrerAdapter.js', () => {
+  return {
+    completeWithAdapter: () => async () => ({ ok: true as const, text: '{}' }),
+    liveInferenceAdapter: async () => ({
+      ok: true as const,
+      adapter: {
+        complete: async (request: { signal?: AbortSignal }) => {
+          sawSignal = request.signal;
+          if (classifierBehavior === 'throw') throw new Error('classifier exploded');
+          if (classifierBehavior === 'hang') {
+            return await new Promise((_resolve, reject) => {
+              request.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+            });
+          }
+          return {
+            ok: true as const,
+            // A clarification is the cheapest lane to assert: it settles inside the
+            // router stage without running a builder turn at all.
+            text: '{"intent":"data_write","confidence":0.9,"clarification":"Rows or feature?"}',
+            toolCalls: [],
+            stopReason: 'end' as const,
+          };
+        },
+      },
+    }),
+  };
+});
+
+function renderChat(): { chat: () => BuilderChat; unmount: () => void } {
+  const holder: { current: BuilderChat | null } = { current: null };
+  function Harness(): ReactElement {
+    holder.current = useBuilderChat(THREAD, { pinnedAppId: appId });
+    return <span />;
+  }
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  act(() => {
+    root!.render(<Harness />);
+  });
+  return {
+    chat: () => {
+      if (holder.current === null) throw new Error('hook not rendered');
+      return holder.current;
+    },
+    unmount: () => {
+      act(() => root?.unmount());
+      root = undefined;
+    },
+  };
+}
+
+/** Let queued microtasks and effects flush. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+beforeEach(async () => {
+  classifierBehavior = 'clarify';
+  sawSignal = undefined;
+  modeStore.set('byok');
+  db = await installTestUserDb();
+  const app = db.installApp({ displayName: 'Pocket Ledger', html: HTML });
+  appId = app.appId;
+  await db.applyAppDdl(appId, ['CREATE TABLE expenses (id INTEGER PRIMARY KEY, cents INTEGER)']);
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = undefined;
+  container?.remove();
+  container = undefined;
+  vi.restoreAllMocks();
+});
+
+describe('F-M4b — the clarify path settles the placeholder AND persists', () => {
+  it('renders the clarifying question and stops spinning', async () => {
+    const { chat } = renderChat();
+
+    act(() => chat().send('drop the gym habit'));
+    await settle();
+
+    const agentMessage = chat().messages.find((message) => message.role === 'agent');
+    expect(agentMessage?.displayText).toBe('Rows or feature?');
+    expect(agentMessage?.streaming, 'a settled message must not still be streaming').toBeFalsy();
+    expect(chat().busy, 'the turn must not stay busy').toBe(false);
+  });
+
+  it('persists BOTH sides, so the exchange survives a reload', async () => {
+    const { chat } = renderChat();
+
+    act(() => chat().send('drop the gym habit'));
+    await settle();
+
+    const persisted = db.listChatMessages(THREAD);
+    expect(persisted.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(persisted[1]?.content).toBe('Rows or feature?');
+  });
+
+  it('runs NO builder turn — clarifying must not cost a rebuild', async () => {
+    const { chat } = renderChat();
+
+    act(() => chat().send('drop the gym habit'));
+    await settle();
+
+    // A builder turn would have produced steps and/or an artifact.
+    expect(chat().steps).toHaveLength(0);
+    expect(chat().lastArtifact).toBeUndefined();
+  });
+});
+
+describe('F-M4a — the classifier takes the turn’s abort signal', () => {
+  it('passes a live signal into the classifier turn', async () => {
+    const { chat } = renderChat();
+
+    act(() => chat().send('how much did I spend?'));
+    await settle();
+
+    expect(sawSignal, 'the classifier must receive the turn signal').toBeDefined();
+    expect(sawSignal?.aborted).toBe(false);
+  });
+
+  it('stop() aborts a classifier still in flight', async () => {
+    classifierBehavior = 'hang';
+    const { chat } = renderChat();
+
+    act(() => chat().send('how much did I spend?'));
+    await settle();
+    expect(sawSignal?.aborted).toBe(false);
+
+    act(() => chat().stop());
+    await settle();
+
+    expect(sawSignal?.aborted, 'stop must reach the classifier').toBe(true);
+  });
+
+  it('unmounting aborts a classifier still in flight', async () => {
+    classifierBehavior = 'hang';
+    const { chat, unmount } = renderChat();
+
+    act(() => chat().send('how much did I spend?'));
+    await settle();
+
+    unmount();
+    await settle();
+
+    expect(sawSignal?.aborted, 'leaving the view must not leave a headless request').toBe(true);
+  });
+});
+
+describe('F-M4c — a thrown classifier error routes to clarify, not to TURN_FAILED', () => {
+  it('shows a clarifying reply rather than a turn-failure error', async () => {
+    classifierBehavior = 'throw';
+    const { chat } = renderChat();
+
+    act(() => chat().send('how much did I spend?'));
+    await settle();
+
+    const agentMessage = chat().messages.find((message) => message.role === 'agent');
+    expect(agentMessage?.error, 'a routing failure must not render as a model failure').toBeUndefined();
+    expect(agentMessage?.displayText).toMatch(/data|app/i);
+    expect(agentMessage?.streaming).toBeFalsy();
+    expect(chat().busy).toBe(false);
+  });
+});
