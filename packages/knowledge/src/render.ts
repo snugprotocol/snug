@@ -33,10 +33,14 @@ export const SCHEMA_APPLY_TOOL_NAME = 'schema_apply';
 /** Host tool that writes the app's knowledge-wiki docs. Single home of the name. */
 export const APP_DOC_WRITE_TOOL_NAME = 'app_doc_write';
 
+/** Host tool that records the app's RUNTIME contract (ADR-0018). Single home of the name. */
+export const RUNTIME_CONTRACT_WRITE_TOOL_NAME = 'runtime_contract_write';
+
 /** Static substitutions available to every prompt source — all derived from protocol constants. */
 const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   envelopeTag: SNUG_APP_REQUEST_TAG,
   appBuilderToolName: APP_BUILDER_TOOL_NAME,
+  runtimeContractWriteToolName: RUNTIME_CONTRACT_WRITE_TOOL_NAME,
   schemaApplyToolName: SCHEMA_APPLY_TOOL_NAME,
   appDocWriteToolName: APP_DOC_WRITE_TOOL_NAME,
   appObjectNameRule: APP_OBJECT_NAME_RULE.source,

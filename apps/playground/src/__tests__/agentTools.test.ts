@@ -4,7 +4,11 @@
 // (the sink pre-mints the builder thread's app id so schema-first building is possible).
 
 import { describe, expect, it } from 'vitest';
-import { APP_DOC_WRITE_TOOL_NAME, SCHEMA_APPLY_TOOL_NAME } from '@snugprotocol/knowledge';
+import {
+  APP_DOC_WRITE_TOOL_NAME,
+  RUNTIME_CONTRACT_WRITE_TOOL_NAME,
+  SCHEMA_APPLY_TOOL_NAME,
+} from '@snugprotocol/knowledge';
 
 import { createAppTargetSink } from '../agent/artifactSink.js';
 import { buildByokTools } from '../agent/tools.js';
@@ -90,7 +94,7 @@ describe('app_doc_write tool', () => {
 });
 
 describe('tool set shape', () => {
-  it('ships four tools with store-sourced names', async () => {
+  it('ships five tools with store-sourced names', async () => {
     const db = await installTestUserDb();
     const sink = createAppTargetSink({ getDb: () => Promise.resolve(db) });
     const tools = buildByokTools(sink, noopHooks, { getDb: () => Promise.resolve(db) });
@@ -99,6 +103,8 @@ describe('tool set shape', () => {
       'artifact_write',
       SCHEMA_APPLY_TOOL_NAME,
       APP_DOC_WRITE_TOOL_NAME,
+      // TASK-20260811 (ADR-0018 D5): the builder also authors the app's RUNTIME contract.
+      RUNTIME_CONTRACT_WRITE_TOOL_NAME,
     ]);
     for (const tool of tools) expect(tool.def.description.length).toBeGreaterThan(100);
   });

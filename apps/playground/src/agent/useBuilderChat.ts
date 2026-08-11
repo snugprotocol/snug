@@ -24,6 +24,7 @@ import { resolveTurnMode, useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { buildAppTurnContext } from './appContext.js';
 import { createAppTargetSink } from './artifactSink.js';
+import { needsSynthesizedContract } from './runtimeContractSynthesis.js';
 import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import {
   createDirectBuilder,
@@ -130,6 +131,7 @@ const STEP_LABELS: Record<string, string> = {
   artifact_write: 'writing the app file…',
   schema_apply: 'designing the app’s database…',
   app_doc_write: 'updating the app’s docs…',
+  runtime_contract_write: 'noting how the app should think at run time…',
 };
 
 const stepLabel = (tool: string): string => STEP_LABELS[tool] ?? `${tool.replace(/_/g, ' ')}…`;
@@ -449,6 +451,49 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   outcome.reason === 'connected_html_without_requirement'
                     ? 'this app calls out to a provider but the agent declared no connection, so there is no connect card yet — ask it to declare the connection'
                     : 'the agent proposed a connection that failed validation — the app was saved without it';
+              }
+
+              /**
+               * ADR-0018 D5 — the runtime-contract guarantee, on the same seam and for the
+               * same reason as the connection declaration above: this is the earliest
+               * moment the artifact exists AND the reply is final, and it is still
+               * strictly before the app is first RUN.
+               *
+               * Scope (fold F-B1): only when the app's whole version lineage has no
+               * contract — with copy-forward that means first build/install, never a
+               * cosmetic edit, so an authored contract can never be replaced by a
+               * synthesized one.
+               *
+               * byok/local only (fold F-M2): `liveInferenceAdapter` is the shared wire
+               * ladder, and it refuses on a keyless/demo configuration. Subscription mode
+               * has no server twin for this turn, so those apps simply stay
+               * contract-less — a stated gap, not a silent one.
+               *
+               * Failure NEVER blocks the build: the app runs on the lean generic layers.
+               * Imported dynamically so the synthesis wire stays off the hot path of a
+               * normal turn, matching the inferrer precedent directly above.
+               */
+              if (needsSynthesizedContract(db, turn.artifact.artifactId, appHtml)) {
+                try {
+                  const [{ synthesizeRuntimeContract }, { liveInferenceAdapter }] = await Promise.all([
+                    import('./runtimeContractSynthesis.js'),
+                    import('./inferrerAdapter.js'),
+                  ]);
+                  const live = await liveInferenceAdapter();
+                  if (live.ok) {
+                    await synthesizeRuntimeContract({
+                      db,
+                      appId: turn.artifact.artifactId,
+                      html: appHtml,
+                      adapter: live.adapter,
+                      signal: controller.signal,
+                      ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+                    });
+                  }
+                } catch {
+                  // Contract-less is a supported state (AC-F1-4). A bonus step must never
+                  // fail a build the user has already completed.
+                }
               }
             }
           }

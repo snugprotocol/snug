@@ -117,7 +117,11 @@ export type ToolPromptName =
   | 'app-doc-write'
   | 'auth-spec-inferrer'
   /** Dynamic Auth v2 (P2): the FULL-requirement successor to `auth-spec-inferrer`. */
-  | 'connection-requirement-inferrer';
+  | 'connection-requirement-inferrer'
+  /** TASK-20260811 (ADR-0018): authors the app's RUNTIME contract at build time. */
+  | 'runtime-contract-write'
+  /** TASK-20260811 (ADR-0018 D5): the host's post-turn synthesis fallback. */
+  | 'runtime-contract-synthesis';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);

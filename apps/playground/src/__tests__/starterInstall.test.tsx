@@ -242,7 +242,12 @@ describe('an uninstalled starter OPENS read-only; Install lives in the run view 
     act(() => {
       runInstallButton(el)!.click();
     });
-    await settleUntil(() => db.listApps().length > 0, 'the starter to be installed');
+    // Wait for the NAVIGATION, not merely for the app row: install now performs more
+    // than one awaited act after the row lands (the connection copy and, since
+    // TASK-20260811, the runtime-contract copy), so "the row exists" no longer implies
+    // "the route has changed". Waiting on the row alone made this test sensitive to how
+    // many awaits the install act happens to contain.
+    await settleUntil(() => !path().includes(STARTER_PREFIX), 'the run view to navigate to the copy');
 
     const apps = db.listApps();
     expect(apps).toHaveLength(1);

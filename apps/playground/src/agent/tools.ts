@@ -9,10 +9,12 @@ import type { UserDb } from '@snugprotocol/db';
 import {
   APP_BUILDER_TOOL_NAME,
   APP_DOC_WRITE_TOOL_NAME,
+  RUNTIME_CONTRACT_WRITE_TOOL_NAME,
   SCHEMA_APPLY_TOOL_NAME,
   getToolPrompt,
   searchKnowledge,
 } from '@snugprotocol/knowledge';
+import { runtimeContractSchema } from '@snugprotocol/protocol';
 
 import { getUserDb } from '../state/userdb.js';
 import type { ArtifactSink, ArtifactWriteResult } from './artifactSink.js';
@@ -27,6 +29,8 @@ export interface ByokToolHooks {
   /** UI refresh signals for the app's schema/docs panels (child 3). */
   onSchemaApplied?: (appId: string) => void;
   onDocWritten?: (appId: string, slug: string) => void;
+  /** The app's runtime contract was authored/replaced (ADR-0018). */
+  onRuntimeContractWritten?: (appId: string) => void;
 }
 
 export interface BuildByokToolsOptions {
@@ -139,6 +143,53 @@ export function buildByokTools(
           db.putAppDoc(appId, slug, { content: input.content, ...(title !== undefined ? { title } : {}) });
           hooks.onDocWritten?.(appId, slug);
           return `Updated app doc "${slug}".`;
+        } catch (err) {
+          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    {
+      def: {
+        name: RUNTIME_CONTRACT_WRITE_TOOL_NAME,
+        description: getToolPrompt('runtime-contract-write'),
+        inputSchema: {
+          type: 'object',
+          properties: {
+            overview: { type: 'string' },
+            personaNote: { type: 'string' },
+            stateGuidance: { type: 'string' },
+            responseGuidance: { type: 'string' },
+            settings: { type: 'object' },
+            maxOutputTokens: { type: 'number' },
+          },
+          required: ['overview'],
+        },
+      },
+      run: async (input) => {
+        // The REAL schema does the validating (bounds-at-parse, ADR-0018 D2) — the
+        // JSON-Schema above only shapes the tool list the model sees. Re-implementing the
+        // bounds here would give the contract two definitions that could disagree.
+        const parsed = runtimeContractSchema.safeParse(input);
+        if (!parsed.success) {
+          const issues = parsed.error.issues
+            .slice(0, 3)
+            .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+            .join('; ');
+          return `Error: the runtime contract was rejected — ${issues}`;
+        }
+        const db = await getDb();
+        const appId = await sink.ensureTargetId();
+        // A contract belongs to a VERSION row. Before the first artifact write the sink
+        // has pre-minted an id but no app exists, so there is nothing to attach to —
+        // saying so beats writing a contract that would be silently lost (AC-F1-2).
+        const app = db.getApp(appId);
+        if (app === undefined) {
+          return 'Error: write the app artifact first — a runtime contract attaches to an app version, and this app has none yet.';
+        }
+        try {
+          db.putRuntimeContract(appId, app.currentVersion, parsed.data);
+          hooks.onRuntimeContractWritten?.(appId);
+          return `Recorded the runtime contract for v${app.currentVersion}. Its own turns will now be assembled from this, not from the build conversation.`;
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }

@@ -553,13 +553,20 @@ function useConnectedFetch() {
       const pushBanter = (entry) => (prev) => ({ ...prev, banter: [...prev.banter, entry].slice(-6) });
 
       const requestAgentMove = async (fen, history, replies, personality) => {
+        // LEAN RUNTIME REQUEST (ADR-0018). Every field here is sent on EVERY move, so the
+        // request carries the current situation once and nothing else:
+        //  - `fen` lives in `state` only. It used to be in BOTH payload and state.
+        //  - `history` is capped at the last 12 plies and lives in `state` only; the old
+        //    state copy was unbounded, so a long game grew the prompt without limit.
+        //  - the persona PROSE is gone: the app's runtime contract carries the persona,
+        //    stored once, instead of re-sending a paragraph every move. The payload keeps
+        //    the persona's ID so the reply can still be voiced correctly.
+        //  - `yourLegalMoves` stays: it is derived state the model genuinely needs.
         const result = await sendMessage('player_move', {
-          fen,
-          moveHistory: history.slice(-12),
           yourColor: 'black',
           yourLegalMoves: replies.map(([f, t]) => ({ from: sqName(f), to: sqName(t) })),
-          personality: (PERSONAS.find((p) => p.id === personality) || PERSONAS[0]).prompt,
-        }, { state: { fen, history }, responseSchema: RESPONSE_SCHEMA });
+          personality: (PERSONAS.find((p) => p.id === personality) || PERSONAS[0]).id,
+        }, { state: { fen, moveHistory: history.slice(-12) }, responseSchema: RESPONSE_SCHEMA });
 
         if (!result.ok) {
           // Errors are data — surface them in the banter bubble, never crash.

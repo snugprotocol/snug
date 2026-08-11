@@ -72,11 +72,21 @@ seam).
 ## Consequences
 
 - Every mode — including subscription and the WebLLM 4K-context brain (whose adapter
-  accepts a custom system on tool-free turns) — sheds ~3 KB net of misfit system prompt
-  per app turn immediately (builder layer + KB summary out; host identity and the
-  response-format layer are retained; a thin runtime layer comes in); contract-bearing
-  apps additionally send authored-minimal state and receive bounded JSON replies. This is
-  the enabling fix for the queued WebLLM app-context truncation item (2026-08-06).
+  accepts a custom system on tool-free turns) — sheds misfit system prompt per app turn
+  immediately (builder layer + KB summary out; host identity and the response-format
+  layer are retained; a thin runtime layer comes in); contract-bearing apps additionally
+  send authored-minimal state and receive bounded JSON replies. This is the enabling fix
+  for the queued WebLLM app-context truncation item (2026-08-06).
+
+  **MEASURED at implementation (2026-08-11), correcting this ADR's own estimate:** the net
+  saving is **~1.26 KB (~315 tokens) per app turn**, not the ~3 KB drafted here.
+  `30-app-builder-summary` (1439 bytes) + the inlined KB summary (864) = 2303 out;
+  `45-app-runtime` (1043) back in; 4077 → 2816 bytes for the assembly as a whole. The
+  drafted figure — itself already corrected down from ~4.5 KB by plan-review fold F-m6 —
+  counted the removals and overlooked that the replacement layer is not free. The
+  direction and the WebLLM consequence are unchanged; the magnitude is a third of the
+  claim, and a test in `packages/knowledge` now pins the measured floor so the number
+  cannot quietly regress.
 - A new failure mode exists: a WRONG contract (stale overview, over-tight response shape)
   degrades an app's runtime quality. Version pinning contains it (revert restores the pair)
   and the refresh rule (re-emit when the LLM surface changes) is KB-taught and post-turn

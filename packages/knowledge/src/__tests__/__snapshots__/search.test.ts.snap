@@ -127,6 +127,14 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
       "### What the user sees (net requests in the frames timeline)",
     ],
   },
+  {
+    "file": "knowledge-base/app-authoring/95-runtime-contract.md",
+    "headingTree": [
+      "## Runtime requests: what an app sends when it asks the model",
+      "## The runtime contract: how your app talks to the model after it is built",
+      "### When to write it again",
+    ],
+  },
 ]
 `;
 

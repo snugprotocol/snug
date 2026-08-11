@@ -605,3 +605,52 @@ materialized DB; every file:line citation in §0 checked accurate.
   fallback on the `finalizeConnectionDeclaration` seam (through `runAgentTurn` with
   `onLlmEvent` wired, per F-m7), and starter contracts + the Chess payload dedup.
 - Open questions: none new.
+
+### 2026-08-11 — Claude (implementation session, P2) — session
+
+- Done: **P2 complete — contract authoring, tests-first.** A six-probe recon workflow
+  (P2+P3 surfaces) ran first and corrected the plan twice (below).
+  - **`runtime_contract_write` tool** + `tools/runtime-contract-write.md`. Sink-pinned
+    like every other write tool (no appId seat in the schema); version-attached; refuses
+    before the first artifact write, because a contract with no version to attach to
+    would be silently lost.
+  - **KB section `95-runtime-contract.md`** teaching lean requests (state vs payload, no
+    duplication, no persona prose per turn) and contract emission. Content-sync tests pull
+    the tool name and every bound from the shipped constants; retrieval tests pin the
+    phrasings that must reach it.
+  - **Post-turn synthesis fallback** (`runtimeContractSynthesis.ts`) on the
+    `finalizeConnectionDeclaration` seam: fires only when the app's whole version lineage
+    has no contract (F-B1), goes through `runAgentTurn` with `onLlmEvent` wired (F-m7 —
+    tested by asserting both event kinds), runs tool-free, takes the turn's abort signal,
+    and degrades to contract-less on every failure path. byok/local-scoped via the shared
+    `liveInferenceAdapter` ladder (F-M2).
+  - **Starter contracts** for all four LLM-using starters + `installStarterRuntimeContract`
+    on the install act. Never overwrites an existing contract; drops malformed or
+    over-bound ones rather than installing something the runtime would refuse.
+  - **Chess payload dedup**: `fen` was in BOTH payload and state; `state.history` was
+    UNBOUNDED while the payload copy was capped at 12; persona PROSE was re-sent every
+    move. Now: state carries `fen` + last-12 only, and the payload carries the persona's
+    ID while the contract carries the persona itself.
+- **Two plan corrections from recon** (both folded):
+  (a) **There are FOUR LLM-using starters, not three** — the plan named chess,
+  adventure-quest and quiz-me and missed **habit-tracker**, which calls `sendMessage` at
+  `examples/habit-tracker/app.html:487`. All four now ship contracts, and the examples
+  suite asserts posture BOTH ways (agent-driven ⇒ must ship one; LLM-free ⇒ must not).
+  (b) **`agent/tools.ts` uses hand-written JSON Schema + manual narrowing, not zod** —
+  D5's "zod-validated payload" describes a pattern this file does not use. Resolved by
+  keeping the file's convention for `inputSchema` and validating with the REAL
+  `runtimeContractSchema.safeParse` in the handler, so the contract keeps ONE definition.
+- **One test I had to correct, and why it is not a weakening:** `starterInstall.test.tsx`
+  waited for `db.listApps().length > 0` and then asserted the route had changed. Install
+  now performs more awaited work after the row lands, so "row exists" no longer implies
+  "navigated". It now waits for the navigation it actually asserts. The AC is unchanged;
+  the timing assumption was the bug.
+- Also corrected **ADR-0018's own consequence line** with the measured ~1.26 KB (was ~3 KB).
+- State: **all 19 turbo tasks green, uncached: 2030 tests + 185 examples** (protocol 250,
+  knowledge 145, runner 108, db 280, server 123, adapters 103, sdk 41, auth 357,
+  playground 638, examples 185).
+- Next step: **P3 — intent-routed app chat**: the classifier prompt (two-slot, untrusted
+  user text delimited) + `buildChatIntentClassifierPrompt`, the router stage in
+  `useBuilderChat.send()` with F-M4's three lifecycle tests, `buildIntentTurnContext`,
+  then `data_query`/`data_propose_write` over `db.scratchRun` with the approval card.
+- Open questions: none new.

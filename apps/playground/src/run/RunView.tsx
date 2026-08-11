@@ -33,6 +33,7 @@ import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
+import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -331,7 +332,13 @@ export default function RunView(): ReactElement {
       // racing the copy against the route change would render an installed starter as
       // declaring nothing. It writes a requirement, never a credential, and never an
       // approval — see `installStarterConnections`.
-      await installStarterConnections(await getUserDb(), entry.id);
+      const installedDb = await getUserDb();
+      await installStarterConnections(installedDb, entry.id);
+      // The starter's authored runtime contract (ADR-0018), copied onto v1 for the same
+      // reason and on the same act: a starter is installed rather than built, so no
+      // authoring turn ever runs to write one. Failure is a no-op — the app simply runs
+      // on the lean generic layers.
+      await installStarterRuntimeContract(installedDb, entry.id);
       navigate(`/run/${entry.id}`, { replace: true });
     } catch (err) {
       setInstallError(err instanceof Error ? err.message : String(err));
