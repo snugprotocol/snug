@@ -1,6 +1,8 @@
 // assemble.ts — prompt pipelines: host system prompt and skill-builder prompt.
 // Golden snapshot tests lock both assemblies so any edit shows its blast radius.
 
+import type { RuntimeContract } from '@snugprotocol/protocol';
+
 import {
   getKnowledgeSummary,
   getSkillBuilderPreamble,
@@ -12,11 +14,32 @@ import {
 
 const SEPARATOR = '\n\n---\n\n';
 
+/**
+ * The separator between system blocks. EXPORTED because the two app-turn call sites
+ * append a rendered runtime contract as a system suffix and must join it exactly the way
+ * the assembler joins layers — retyping the literal at a call site is how two "identical"
+ * separators drift (ADR-0004's no-retyped-constants rule).
+ */
+export const SYSTEM_BLOCK_SEPARATOR = SEPARATOR;
+
 export interface HostSystemPromptOptions {
   /** Include the app-builder layers (30-summary + 40-response-format). */
   appBuilder: boolean;
   /** Include the file-creation capability layer (20-capability-file-creation). */
   artifacts: boolean;
+  /**
+   * RUNTIME turn of an already-installed app (ADR-0018 D1) — assembles
+   * 10-host-identity + 45-app-runtime + 40-app-response-format and NOTHING else.
+   *
+   * Mutually exclusive with `appBuilder`, and it WINS when both are set: a turn is either
+   * authoring an app or running one, and the failure mode of guessing wrong is the bug
+   * this option exists to fix (the builder assembly riding every Chess move).
+   *
+   * Note 40 is RETAINED here: the app still needs parseable JSON back. The saving comes
+   * from dropping 30 plus the inlined KB summary — roughly 3 KB per turn, uncached by
+   * design (ADR-0012).
+   */
+  appRuntime?: boolean;
 }
 
 /**
@@ -27,6 +50,13 @@ export interface HostSystemPromptOptions {
  * 30-app-builder-summary layer so that layer's "summary below" sentence is true.
  */
 export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
+  // The runtime branch is checked FIRST and returns: an app's own turn must never carry
+  // authoring layers, whatever else the caller asked for (ADR-0018 D1).
+  if (opts.appRuntime === true) {
+    return [getSystemLayer('host-identity'), getSystemLayer('app-runtime'), getSystemLayer('app-response-format')].join(
+      SEPARATOR,
+    );
+  }
   const layers: string[] = [getSystemLayer('host-identity')];
   if (opts.artifacts) layers.push(getSystemLayer('capability-file-creation'));
   if (opts.appBuilder) {
@@ -36,6 +66,42 @@ export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
     );
   }
   return layers.join(SEPARATOR);
+}
+
+/**
+ * Render a runtime contract into the system text appended after the stable layers
+ * (ADR-0018 D3).
+ *
+ * ONE RENDERER, TWO CALL SITES — the playground transport (direct mode) and the hub's
+ * `/invoke` (subscription mode) both use this. Fold F-M3: two hand-written renderings of
+ * one artifact is the shared-literal fork that bit us on 2026-08-03, so the contract has
+ * exactly one rendering and it lives in the prompt store with every other LLM-bound
+ * string (ADR-0004).
+ *
+ * The contract is DATA. Its text is authored by a model and stored on the app's version
+ * row, so it is framed as a DESCRIPTION of the app rather than as host authority — the
+ * 45-app-runtime layer says so explicitly, and this block's heading matches the sentence
+ * that layer uses to introduce it.
+ *
+ * `maxOutputTokens` is deliberately NOT rendered: it is an adapter parameter, and telling
+ * the model its own token ceiling invites it to narrate the limit instead of answering.
+ */
+export function renderRuntimeContract(contract: RuntimeContract): string {
+  const lines: string[] = ['## About This App', '', contract.overview];
+  const section = (heading: string, body: string): void => {
+    lines.push('', heading, '', body);
+  };
+  if (contract.personaNote !== undefined) section('### Voice', contract.personaNote);
+  if (contract.stateGuidance !== undefined) section('### What Each Request Sends', contract.stateGuidance);
+  if (contract.responseGuidance !== undefined) section('### What To Reply', contract.responseGuidance);
+  if (contract.settings !== undefined && Object.keys(contract.settings).length > 0) {
+    const entries = Object.entries(contract.settings).map(([key, value]) => `- ${key}: ${String(value)}`);
+    section('### Current Settings', entries.join('\n'));
+  }
+  // A contract must never be able to forge a LAYER boundary: the assembler joins layers
+  // with SEPARATOR, so a contract containing that exact sequence could otherwise present
+  // its own text as a new top-level system block.
+  return lines.join('\n').split(SEPARATOR).join('\n---\n');
 }
 
 export interface SkillBuilderContext {

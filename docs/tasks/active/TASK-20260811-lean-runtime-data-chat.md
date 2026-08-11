@@ -556,3 +556,52 @@ materialized DB; every file:line citation in §0 checked accurate.
 - Open questions: none new. Note for P1: `renderRuntimeContract` must land in
   `packages/knowledge` as ONE renderer used by both call sites (F-M3's two-artifact-fork
   risk).
+
+### 2026-08-11 — Claude (implementation session, P1) — session
+
+- Done: **P1 complete — lean runtime turns, tests-first.** A four-probe recon workflow
+  verified the seams before any code; it overturned two plan premises (below).
+  - **45-app-runtime.md** + `appRuntime` branch on `buildHostSystemPrompt`. The branch is
+    checked FIRST and returns: an app turn must never carry authoring layers whatever else
+    the caller passed (a test pins `appRuntime` winning over `appBuilder`). Golden
+    snapshot matrix grew to 5.
+  - **`renderRuntimeContract` + `SYSTEM_BLOCK_SEPARATOR` exported from `packages/knowledge`**
+    — ONE renderer for both call sites (F-M3's two-artifact fork), and the separator is
+    exported rather than retyped at call sites (ADR-0004). The renderer strips any
+    embedded layer separator so a contract cannot forge a system-block boundary.
+  - **Playground transport**: reads the contract PER SEND inside `send()` (F-M1), appends
+    it as a system suffix, and applies `maxOutputTokens` only when the contract sets one.
+    `appId` threaded from RunView through `createAppTransport`/`resolveAppTransport` into
+    all three direct-transport constructions. DB failures and unknown appIds degrade to
+    contract-less rather than throwing.
+  - **Server `/invoke`**: optional `contract` field parsed STRICT with the real
+    `runtimeContractSchema` (400 on over-bound/extra-field/wrong-type/out-of-range, and
+    the adapter is never reached), covered by the C1 credential scan, rendered through the
+    same shared renderer. The hub is stateless about apps, so this is the only channel by
+    which a synced app's contract can reach the model.
+- **Three findings the plan did not have** (all folded into the code + tests):
+  (a) **`runAgentTurn` had no `maxOutputTokens` seat** — `AdapterRequest` accepted the
+  field but nothing populated it, so P0.5's cap had NO path from a call site to the wire.
+  Added to `RunAgentTurnOptions` and forwarded; `spyAdapter` now captures it for the same
+  reason it captures `cache`.
+  (b) **The saving is ~1.26 KB/turn, not ~3 KB.** MEASURED: 30-app-builder-summary (1439)
+  + inlined KB summary (864) out = 2303; new 45 layer (1043) back in. The plan's estimate
+  (already corrected once by F-m6 from ~4.5 KB) counted the removals and forgot the new
+  layer is not free. ADR-0018 and the test comment now carry the measured number.
+  (c) **The C1 scanner's `KNOWN_KEY_PREFIX` is `^`-anchored**, so a key embedded in prose
+  is missed — on the new contract field AND on the pre-existing `payload`/`state` path.
+  The contract seat is therefore no weaker than the envelope seat, which is what F-Sm3a
+  actually claims; a test PINS this limit honestly rather than implying the scan is
+  airtight. Widening the pattern is a scanner-level change with its own false-positive
+  budget — out of scope, and going into the P4 threat-model delta.
+- **Process note:** prompt content is code-generated into `src/generated/content.ts`
+  (`pnpm --filter @snugprotocol/knowledge gen:content`, run automatically by `build`), and
+  downstream packages consume `dist/` — so a new prompt file needs BOTH a regen and a
+  build before dependents see it. Two failures this session were stale `dist`, not logic.
+- State: **all 19 turbo tasks green, uncached: 1996 tests** (protocol 250, knowledge 132,
+  runner 108, db 280, server 123, adapters 103, sdk 41, auth 357, playground 602).
+- Next step: **P2 — contract authoring**: `runtime_contract_write` tool + prompt, the
+  app-authoring KB section (scanner-sync + retrieval tested), the post-turn synthesis
+  fallback on the `finalizeConnectionDeclaration` seam (through `runAgentTurn` with
+  `onLlmEvent` wired, per F-m7), and starter contracts + the Chess payload dedup.
+- Open questions: none new.

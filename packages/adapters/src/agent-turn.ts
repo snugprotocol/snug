@@ -71,6 +71,14 @@ export interface RunAgentTurnOptions {
    * a large repeated prefix worth caching, an app-frame envelope does not (D0/Q2).
    */
   cache?: boolean;
+  /**
+   * Per-turn output ceiling, forwarded verbatim to the adapter (ADR-0018 D4).
+   *
+   * Set by the CALLER for the same reason as `cache`: only the call site knows whether
+   * this turn is a Chess move under a runtime contract or an open-ended build. Adapters
+   * clamp it against their own ceiling, so this can narrow but never widen.
+   */
+  maxOutputTokens?: number;
   signal?: AbortSignal;
   /** Streamed deltas from every iteration, in order — callers accumulate. */
   onDelta?: (delta: string) => void;
@@ -118,6 +126,7 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       signal,
       onDelta,
       ...(options.cache === true ? { cache: true } : {}),
+      ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
     });
     onEvent?.({ type: 'round_trip', index: iteration, request, response: result, durationMs: now() - startedAt });
     if (!result.ok) {

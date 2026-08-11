@@ -51,12 +51,14 @@ export async function buildTestApp(options: Partial<AppOptions> & { config?: Ser
 
 /** JSON-snapshot spy: records exactly what reaches the adapter (the C1 assertion surface). */
 export function spyAdapter(inner: AgentAdapter): {
-  calls: Array<Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache'>>;
+  calls: Array<Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache' | 'maxOutputTokens'>>;
   adapter: AgentAdapter;
 } {
   // `cache` is captured too: it is a per-TURN decision the ROUTE makes, so asserting it
   // at the adapter alone cannot prove the right paths opt in (Gate-5 review).
-  const calls: Array<Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache'>> = [];
+  // `maxOutputTokens` is captured for exactly the same reason (ADR-0018 D4): the route
+  // decides it from the request's runtime contract.
+  const calls: Array<Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache' | 'maxOutputTokens'>> = [];
   return {
     calls,
     adapter: {
@@ -68,8 +70,9 @@ export function spyAdapter(inner: AgentAdapter): {
               messages: request.messages,
               tools: request.tools ?? null,
               cache: request.cache ?? false,
+              maxOutputTokens: request.maxOutputTokens ?? null,
             }),
-          ) as Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache'>,
+          ) as Pick<AdapterRequest, 'system' | 'messages' | 'tools' | 'cache' | 'maxOutputTokens'>,
         );
         return inner.complete(request);
       },

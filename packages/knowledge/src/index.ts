@@ -28,6 +28,8 @@ export {
   buildConnectionRequirementInferrerPrompt,
   buildHostSystemPrompt,
   buildSkillBuilderPrompt,
+  renderRuntimeContract,
+  SYSTEM_BLOCK_SEPARATOR,
   type AuthSpecInferrerPrompt,
   type AuthSpecInferrerPromptInput,
   type HostSystemPromptOptions,

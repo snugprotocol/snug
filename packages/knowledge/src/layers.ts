@@ -38,12 +38,16 @@ export type SystemLayerName =
   | 'host-identity'
   | 'capability-file-creation'
   | 'app-builder-summary'
+  | 'app-runtime'
   | 'app-response-format';
 
 const SYSTEM_LAYER_FILES: Readonly<Record<SystemLayerName, string>> = {
   'host-identity': 'system/10-host-identity.md',
   'capability-file-creation': 'system/20-capability-file-creation.md',
   'app-builder-summary': 'system/30-app-builder-summary.md',
+  // 45 sits between the builder summary and the response format by injection order, and
+  // is mutually exclusive with 30: a turn is either authoring an app or running one.
+  'app-runtime': 'system/45-app-runtime.md',
   'app-response-format': 'system/40-app-response-format.md',
 };
 

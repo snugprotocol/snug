@@ -218,7 +218,14 @@ export default function RunView(): ReactElement {
   // onLlmEvent is stable (useCallback with [] deps), so threading it here does not
   // rebuild the transport on every render. This is what makes an APP's LLM turn —
   // e.g. a Chess move — visible in the LLM surface alongside the builder's turns.
-  const transport = useMemo(() => createAppTransport(mode, provider, onLlmEvent), [mode, provider, onLlmEvent]);
+  // `id` is threaded so the transport can read this app's runtime contract (ADR-0018).
+  // It is a memo dep for correctness on app-to-app navigation; the contract itself is
+  // read PER SEND inside the transport, so an edit or revert needs no rebuild here
+  // (fold F-M1 — there is no contentEpoch dependency and there does not need to be).
+  const transport = useMemo(
+    () => createAppTransport(mode, provider, onLlmEvent, id),
+    [mode, provider, onLlmEvent, id],
+  );
   // The envelope net capability (AL-03): a value-blind NetHandler the runner routes
   // net-request frames to. The executor (in state/net.ts) reads the app's frozen host
   // ceiling + credentials from the page user DB per use — the runner never sees a token.

@@ -17,9 +17,11 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { runAgentTurn } from '../agent-turn.js';
 import { anthropicAdapter } from '../anthropic.js';
 import { localAdapter, LOCAL_DEFAULT_MAX_TOKENS } from '../local.js';
 import { openaiAdapter } from '../openai.js';
+import type { AgentAdapter } from '../types.js';
 import { block, fakeFetch, sseResponse } from './helpers.js';
 
 const ANTHROPIC_FIXTURE =
@@ -99,6 +101,36 @@ describe('openai adapter', () => {
     await adapter.complete({ system: 'S', ...turn, maxOutputTokens: 99_999 });
 
     expect(calls[0]!.bodyJson.max_completion_tokens).toBe(2048);
+  });
+});
+
+describe('runAgentTurn forwards the per-turn cap (the seam between caller and adapter)', () => {
+  /** Minimal adapter that records what it was asked for. */
+  function recordingAdapter(): { calls: Array<Record<string, unknown>>; adapter: AgentAdapter } {
+    const calls: Array<Record<string, unknown>> = [];
+    return {
+      calls,
+      adapter: {
+        complete: async (request) => {
+          calls.push({ ...request });
+          return { ok: true as const, text: '{"ok":true}', toolCalls: [], stopReason: 'end' as const };
+        },
+      },
+    };
+  }
+
+  it('passes maxOutputTokens through to the adapter', async () => {
+    // Without this the contract's cap has no path from the transport to the wire —
+    // the option existed on AdapterRequest but nothing populated it (found in P1 recon).
+    const { calls, adapter } = recordingAdapter();
+    await runAgentTurn({ adapter, system: 'S', messages: [{ role: 'user', content: 'x' }], maxOutputTokens: 512 });
+    expect(calls[0]?.maxOutputTokens).toBe(512);
+  });
+
+  it('omits the field entirely when the caller sets none (contract-less apps unchanged)', async () => {
+    const { calls, adapter } = recordingAdapter();
+    await runAgentTurn({ adapter, system: 'S', messages: [{ role: 'user', content: 'x' }] });
+    expect(calls[0]).not.toHaveProperty('maxOutputTokens');
   });
 });
 

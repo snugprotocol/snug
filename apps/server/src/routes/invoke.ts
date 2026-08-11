@@ -12,11 +12,12 @@
 //   plus `:hb` comment heartbeats every heartbeatMs.
 
 import { runAgentTurn, type AdapterMessage, type AgentAdapter } from '@snugprotocol/adapters';
-import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
+import { buildHostSystemPrompt, renderRuntimeContract, SYSTEM_BLOCK_SEPARATOR } from '@snugprotocol/knowledge';
 import {
   ERROR_CODES,
   LIMITS,
   parseAppRequest,
+  runtimeContractSchema,
   scanForCredentialValues,
   stripCredentialHeaders,
 } from '@snugprotocol/protocol';
@@ -47,6 +48,21 @@ const invokeBodySchema = z.object({
   message: z.string().min(1),
   threadId: z.string().min(1).max(LIMITS.ID_CHARS).optional(),
   model: z.string().min(1).max(128).optional(),
+  /**
+   * The app's runtime contract, for subscription mode (ADR-0018 D3, fold F-M3).
+   *
+   * The hub is STATELESS about apps — it has no user DB and cannot look a contract up —
+   * so for a synced or exported app this is the only channel by which its contract can
+   * reach the model. That makes it CLIENT-CONTROLLED SYSTEM CONTENT, and it is treated
+   * accordingly: parsed with the real `runtimeContractSchema` (strict, fully bounded, so
+   * an over-bound or extra-field contract is a 400 rather than a silent truncation), and
+   * covered by the C1 credential scan below like every other client-supplied field.
+   *
+   * JSON only — never rendered text. The ONE renderer lives in `packages/knowledge` and
+   * serves both this call site and the playground's, so the contract can never exist as
+   * two hand-maintained renderings.
+   */
+  contract: runtimeContractSchema.optional(),
 });
 
 export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps): void {
@@ -77,7 +93,7 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
         retryable: false,
       });
     }
-    const { message, threadId, model } = parsedBody.data;
+    const { message, threadId, model, contract } = parsedBody.data;
     const turnDeps: InvokeRouteDeps =
       model !== undefined && deps.makeAdapter !== undefined ? { ...deps, adapter: deps.makeAdapter(model) } : deps;
 
@@ -87,7 +103,11 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
       // wire string to the adapter, so every field (payload, state, responseSchema,
       // ids, action) is LLM-bound. High-confidence rejects only: key-name-only hits
       // like {token:'rook'} are warnings, never rejects.
-      const scan = scanForCredentialValues(appRequest.envelope);
+      // Defense in depth: the scan covers the CONTRACT as well as the envelope (fold
+      // F-Sm3a). The contract is bound for the system slot, which is the most trusted
+      // position in the request — a credential reaching it would be the worst case of
+      // the leak this scan exists to stop.
+      const scan = scanForCredentialValues({ envelope: appRequest.envelope, ...(contract !== undefined ? { contract } : {}) });
       if (scan.rejects.length > 0) {
         return reply.status(400).send({
           code: 'CREDENTIAL_REJECTED',
@@ -99,10 +119,18 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
       }
       // App path: envelope is self-contained — NO thread history, JSON-only (no tools),
       // raw passthrough (the runner parses the reply; the server never does).
+      // The RUNTIME assembly (ADR-0018 D1), with the contract appended as a system
+      // SUFFIX after the stable layers (ADR-0012's end-of-system rule). The app-builder
+      // layers no longer ride app turns in ANY mode.
+      const runtimeSystem = buildHostSystemPrompt({ appBuilder: false, artifacts: false, appRuntime: true });
       return streamTurn(reply, turnDeps, {
-        system: buildHostSystemPrompt({ appBuilder: true, artifacts: false }),
+        system:
+          contract === undefined
+            ? runtimeSystem
+            : `${runtimeSystem}${SYSTEM_BLOCK_SEPARATOR}${renderRuntimeContract(contract)}`,
         messages: [{ role: 'user', content: message }],
         withTools: false,
+        ...(contract?.maxOutputTokens !== undefined ? { maxOutputTokens: contract.maxOutputTokens } : {}),
       });
     }
 
@@ -155,6 +183,12 @@ interface TurnPlan {
    * Derived rather than a separate flag so the two can never drift apart.
    */
   withTools: boolean;
+  /**
+   * Per-turn output ceiling from the app's runtime contract (ADR-0018 D4). App path only,
+   * and only when the contract asks for one — absent leaves today's default exactly, so a
+   * contract-less app is never silently truncated (AC-F1-4).
+   */
+  maxOutputTokens?: number;
   /** Called with the final text on success (chat path with a threadId). */
   persist?: (text: string) => void;
 }
@@ -195,6 +229,7 @@ async function streamTurn(reply: FastifyReply, deps: InvokeRouteDeps, plan: Turn
       maxIterations: deps.maxIterations,
       // Builder turns only — never the app-frame envelopes (AC12, D0/Q2).
       ...(plan.withTools ? { cache: true } : {}),
+      ...(plan.maxOutputTokens !== undefined ? { maxOutputTokens: plan.maxOutputTokens } : {}),
       signal: abort.signal,
       onDelta: (delta) => send('delta', { text: delta }),
       // Progress for the client's step timeline. Tool NAME and phase only — never the

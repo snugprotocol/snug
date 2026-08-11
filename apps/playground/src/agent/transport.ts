@@ -7,8 +7,8 @@
 // re-confirms endpoint settings — an imported DB is executable config.
 
 import { createHttpTransport, runAgentTurn, type AgentTurnEvent } from '@snugprotocol/adapters';
-import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
-import { ERROR_CODES } from '@snugprotocol/protocol';
+import { buildHostSystemPrompt, renderRuntimeContract, SYSTEM_BLOCK_SEPARATOR } from '@snugprotocol/knowledge';
+import { ERROR_CODES, type RuntimeContract } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
 import {
@@ -20,6 +20,7 @@ import {
   type ByokProvider,
   type PlaygroundMode,
 } from '../state/mode.js';
+import { getUserDb } from '../state/userdb.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 
@@ -48,13 +49,39 @@ export interface DirectTransportOptions {
    * round trips happen on the hub and are never serialized to the client.
    */
   onLlmEvent?: (event: AgentTurnEvent) => void;
+  /**
+   * The installed app this transport serves, when there is one (ADR-0018 P1).
+   *
+   * Absent for an UNINSTALLED starter, which RunView runs against an ephemeral memory DB
+   * with no app row — those turns simply run contract-less on the lean generic layers.
+   */
+  appId?: string;
+  /** Injectable for tests; default reads the contract from the user DB per send. */
+  getRuntimeContract?: (appId: string) => Promise<RuntimeContract | undefined>;
+}
+
+/**
+ * Read the app's runtime contract. Failures degrade to `undefined` — a hub whose DB is
+ * unavailable must still run the app's turn on generic layers rather than fail the move
+ * (AC-F1-4).
+ */
+async function readRuntimeContract(appId: string): Promise<RuntimeContract | undefined> {
+  try {
+    const db = await getUserDb();
+    return db.getRuntimeContract(appId);
+  } catch {
+    return undefined;
+  }
 }
 
 export function createDirectAppTransport(options: DirectTransportOptions): AgentTransport {
   const readKey = options.getKey ?? getByokKey;
   const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
-  // Mirrors the server's app path: app-builder KB summary in, artifact tools out.
-  const system = buildHostSystemPrompt({ appBuilder: true, artifacts: false });
+  const readContract = options.getRuntimeContract ?? readRuntimeContract;
+  // The RUNTIME assembly (ADR-0018 D1) — identity + runtime doctrine + response format.
+  // The app-builder layers and the inlined KB summary used to ride every app turn here;
+  // a move cannot act on authoring instructions, so they are gone (~1.26 KB/turn).
+  const baseSystem = buildHostSystemPrompt({ appBuilder: false, artifacts: false, appRuntime: true });
   return {
     async send(wire, { signal, onDelta }) {
       if (needsConfirm()) {
@@ -78,10 +105,21 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
         },
         'app',
       );
+      // PER SEND, never at creation (fold F-M1, and the same rule the brain/settings
+      // stores follow for the reason recorded in the 2026-08-06 adversarial review):
+      // RunView memoizes this transport, so a contract captured at construction would be
+      // frozen for the life of the view — an edit or revert would keep serving the old
+      // one. The contract is appended as a system SUFFIX after the stable layers, per
+      // ADR-0012's end-of-system rule.
+      const contract = options.appId === undefined ? undefined : await readContract(options.appId);
+      const system = contract === undefined ? baseSystem : `${baseSystem}${SYSTEM_BLOCK_SEPARATOR}${renderRuntimeContract(contract)}`;
       const result = await runAgentTurn({
         adapter,
         system,
         messages: [{ role: 'user', content: wire }],
+        // Contract-driven output bound (D4). OPT-IN: absent leaves today's default
+        // exactly, so a contract-less legacy app is never silently truncated.
+        ...(contract?.maxOutputTokens !== undefined ? { maxOutputTokens: contract.maxOutputTokens } : {}),
         signal,
         ...(onDelta !== undefined ? { onDelta } : {}),
         // The app-frame LLM feed. Every event is forwarded — an app turn offers no
@@ -118,10 +156,11 @@ export function createAppTransport(
   mode: PlaygroundMode,
   provider: ByokProvider,
   onLlmEvent?: (event: AgentTurnEvent) => void,
+  appId?: string,
 ): AgentTransport {
   return {
     send(wire, options) {
-      return resolveAppTransport(mode, provider, onLlmEvent).send(wire, options);
+      return resolveAppTransport(mode, provider, onLlmEvent, appId).send(wire, options);
     },
   };
 }
@@ -134,6 +173,7 @@ export function resolveAppTransport(
   mode: PlaygroundMode,
   provider: ByokProvider,
   onLlmEvent?: (event: AgentTurnEvent) => void,
+  appId?: string,
 ): AgentTransport {
   // AL-07: the experimental webllm brain OVERRIDES the configured mode entirely —
   // including subscription. `'webllm'` runs the in-page engine; `'demo'` is the
@@ -144,6 +184,7 @@ export function resolveAppTransport(
     return createDirectAppTransport({
       mode: 'webllm',
       provider,
+      ...(appId !== undefined ? { appId } : {}),
       ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
     });
   }
@@ -151,6 +192,7 @@ export function resolveAppTransport(
     return createDirectAppTransport({
       mode: 'byok',
       provider: 'mock',
+      ...(appId !== undefined ? { appId } : {}),
       ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
     });
   }
@@ -159,6 +201,7 @@ export function resolveAppTransport(
   return createDirectAppTransport({
     mode,
     provider,
+    ...(appId !== undefined ? { appId } : {}),
     ...(model !== undefined ? { model } : {}),
     localUrl: localUrlStore.get(),
     ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
