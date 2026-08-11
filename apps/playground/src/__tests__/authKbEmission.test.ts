@@ -55,7 +55,7 @@ describe('AC4b — the KB-taught emission format round-trips the real scanner', 
     if (scan !== null && 'directive' in scan) {
       expect(scan.directive.kind).toBe(CONNECTION_REQUIREMENT_DIRECTIVE_KIND);
       if (scan.directive.kind === CONNECTION_REQUIREMENT_DIRECTIVE_KIND) {
-        expect(scan.directive.requirement.provider.name).toBe('Coinbase Exchange');
+        expect(scan.directive.requirement.provider.name).toBe('Meridian Exchange');
         // The re-admitted seats survive the KB→scanner round trip. This is the half the
         // v3 assertion could not make: a three-key hint had nothing to check.
         expect(scan.directive.requirement.fields?.map((f) => f.key)).toEqual([
@@ -75,5 +75,63 @@ describe('AC4b — the KB-taught emission format round-trips the real scanner', 
     ].join('\n\n');
 
     expect(scanForRenderDirective(reply)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P5 — every requirement the KB TEACHES must SURVIVE the real admission guard.
+// ---------------------------------------------------------------------------
+
+/**
+ * THE DEFECT CLASS THIS CLOSES, found by execution during the P5 review.
+ *
+ * The KB's flagship worked example named "Coinbase Exchange" and authored its own
+ * `fields` + `headerTemplate`. Once P4 pinned `coinbase` in the well-known registry, the
+ * OpenWeather example was ALREADY being refused by Guard 2b on shipped code (verified by
+ * running the P4 tree, before any P5 change) — the KB was teaching the model an emission
+ * the pipeline rejects, so a model that followed the KB exactly produced a build whose
+ * connection silently failed to persist. P5's brand-adjacent fix put the Coinbase example
+ * in the same position.
+ *
+ * A round-trip through the SCANNER (above) cannot catch this: the scanner validates
+ * SHAPE, and both examples are shape-valid. Only admission has an opinion about brand
+ * borrowing, so the KB has to be pinned against admission itself.
+ *
+ * This walks EVERY fenced requirement in the auth KB rather than a chosen one, so a
+ * future example added to the page is covered on arrival instead of silently unguarded.
+ */
+describe('P5 — the KB teaches only requirements the ADMISSION GUARD actually admits', () => {
+  it('every requirement example in the auth KB is admitted on the inference channel', async () => {
+    const { admitConnectionRequirement } = await import('@snugprotocol/auth');
+    const doc = getKnowledgeBase().find((d) => d.file === KB_AUTH_FILE);
+    expect(doc, `${KB_AUTH_FILE} missing from the knowledge base`).toBeDefined();
+
+    const blocks = [...doc!.text.matchAll(/```json\r?\n([\s\S]*?)\r?\n```/g)].map((m) => m[1]!.trim());
+    const requirements = blocks
+      .map((block) => {
+        try {
+          return JSON.parse(block) as { requirement?: unknown };
+        } catch {
+          // Template placeholders ({{protocolVersion}}) render to real values in the
+          // shipped KB; anything still unparseable is not a requirement example.
+          return undefined;
+        }
+      })
+      .map((parsed) => parsed?.requirement)
+      .filter((requirement): requirement is Record<string, unknown> => requirement !== undefined);
+
+    // PREMISE: if the page stops carrying examples, this test must fail loudly rather
+    // than pass vacuously over an empty list.
+    expect(requirements.length, 'no requirement examples found in the auth KB').toBeGreaterThan(0);
+
+    for (const requirement of requirements) {
+      const result = admitConnectionRequirement(requirement, { channel: 'inference' });
+      const provider = (requirement['provider'] as { name?: string } | undefined)?.name ?? '(unnamed)';
+      expect(
+        result.ok,
+        `the KB teaches a requirement for "${provider}" that admission REFUSES: ` +
+          result.issues.map((issue) => `${issue.path}: ${issue.message}`).join('; '),
+      ).toBe(true);
+    }
   });
 });

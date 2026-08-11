@@ -54,13 +54,13 @@ const APP = 'app-p3-wizard';
 // ---------------------------------------------------------------------------
 
 /**
- * The Coinbase-shaped multi-field static requirement from the parent plan's motivating
+ * The multi-field static requirement from the parent plan's motivating
  * defect: three fields, an HMAC-signed header template, a registration walkthrough. This
  * is the fixture P3-AC2 exists for — every one of these seats must reach the screen.
  */
 const coinbaseRequirement = {
   slot: 'coinbase',
-  provider: { name: 'Coinbase', docsUrl: 'https://docs.cdp.coinbase.com/' },
+  provider: { name: 'Meridian Exchange', docsUrl: 'https://docs.meridian-exchange.example/' },
   kind: 'api_key',
   fields: [
     { key: 'api_key', label: 'API key', type: 'secret', description: 'the key id from your API settings page', required: true },
@@ -70,7 +70,7 @@ const coinbaseRequirement = {
   registration: {
     consoleUrl: 'https://portal.cdp.coinbase.com/access/api',
     instructions: [
-      'sign in to your Coinbase account',
+      'sign in to your Meridian Exchange account',
       'open API settings and choose new API key',
       'copy the key, the secret, and the passphrase',
     ],
@@ -82,32 +82,32 @@ const coinbaseRequirement = {
         '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}',
     },
   },
-  declaredApiHosts: ['api.coinbase.com', 'api.exchange.coinbase.com'],
+  declaredApiHosts: ['api.meridian-exchange.example', 'api.eu.meridian-exchange.example'],
 } as const satisfies Record<string, unknown>;
 
 const bearerRequirement = {
   slot: 'openweather',
-  provider: { name: 'OpenWeather' },
+  provider: { name: 'Zephyr Weather' },
   kind: 'bearer_token',
   fields: [{ key: 'token', label: 'API token', type: 'secret', required: true }],
-  declaredApiHosts: ['api.openweathermap.org'],
+  declaredApiHosts: ['api.zephyr-weather.example'],
 } as const satisfies Record<string, unknown>;
 
 const oauthRequirement = {
   slot: 'spotify',
-  provider: { name: 'Spotify' },
+  provider: { name: 'Tunecast' },
   kind: 'oauth2_auth_code',
   endpoints: {
-    authorizeUrl: 'https://accounts.spotify.com/authorize',
-    tokenUrl: 'https://accounts.spotify.com/api/token',
+    authorizeUrl: 'https://accounts.tunecast.example/authorize',
+    tokenUrl: 'https://accounts.tunecast.example/api/token',
   },
   pkce: true,
   fields: [{ key: 'client_id', label: 'Client ID', type: 'text', required: true }],
   registration: {
-    consoleUrl: 'https://developer.spotify.com/dashboard',
-    instructions: ['create an app in the Spotify developer dashboard', 'paste the redirect uri below into it'],
+    consoleUrl: 'https://developer.tunecast.example/dashboard',
+    instructions: ['create an app in the Tunecast developer dashboard', 'paste the redirect uri below into it'],
   },
-  declaredApiHosts: ['api.spotify.com'],
+  declaredApiHosts: ['api.tunecast.example'],
 } as const satisfies Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
@@ -258,7 +258,7 @@ describe('P3-AC1 — step machine: review → register → credentials → conne
       clientId!.value = 'client-id-public-value';
       clientId!.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    await click(/connect (my )?(spotify )?account/i);
+    await click(/connect (my )?(tunecast )?account/i);
     expect(connectionWizardStepStore.get()).toBe<ConnectionWizardStep>('connect');
   });
 
@@ -308,10 +308,10 @@ describe('P3-AC2 — review screen renders everything the requirement carries', 
   });
 
   it('names the provider and states the kind in PLAIN WORDS, not the discriminator', () => {
-    expect(text()).toContain('Coinbase');
+    expect(text()).toContain('Meridian Exchange');
     // The whole point of the plain-words line is that a non-technical reader learns what
     // will happen. Leaking the raw enum onto the screen is the failure mode.
-    expect(text()).toMatch(/uses .*(secret|value)s? from your Coinbase/i);
+    expect(text()).toMatch(/uses .*(secret|value)s? from your Meridian Exchange/i);
     expect(container.querySelector('[data-testid="review-kind-plain"]')?.textContent ?? '').not.toMatch(/api_key/);
   });
 
@@ -630,7 +630,7 @@ describe('P3 fold — a staged widening shows its diff at EVERY entry point, not
    */
   const widened = {
     ...coinbaseRequirement,
-    declaredApiHosts: ['api.coinbase.com', 'evil.attacker.example'],
+    declaredApiHosts: ['api.meridian-exchange.example', 'evil.attacker.example'],
   };
 
   beforeEach(() => {
@@ -751,7 +751,7 @@ describe('P3 fold — the connect screen offers a way forward and names the prov
       clientId!.value = 'client-id-public-value';
       clientId!.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    await click(/connect (my )?(spotify )?account/i);
+    await click(/connect (my )?(tunecast )?account/i);
     expect(connectionWizardStepStore.get()).toBe<ConnectionWizardStep>('connect');
     /**
      * The flow start is genuinely ASYNC after the credential save — it awaits the DB, the
@@ -782,7 +782,7 @@ describe('P3 fold — the connect screen offers a way forward and names the prov
     expect(status, 'the connect screen must state what is happening').not.toBeNull();
     // "waiting for Spotify sign-in" tells a person which window to look for; "please wait"
     // tells them nothing they can act on. The grammar is OProject's, ported with the flow.
-    expect(status!.textContent ?? '').toMatch(/waiting for Spotify sign-in/i);
+    expect(status!.textContent ?? '').toMatch(/waiting for Tunecast sign-in/i);
   });
 
   it('an IDLE or ERRORED connect screen always offers a way forward — it is never button-less', async () => {
@@ -798,7 +798,7 @@ describe('P3 fold — the connect screen offers a way forward and names the prov
       .map((b) => b.textContent ?? '')
       .filter((label) => !/^\s*close\s*$/i.test(label));
     expect(forward, 'an errored connect screen must offer a retry').not.toEqual([]);
-    expect(button(/sign(ing)? in to Spotify/i)).toBeDefined();
+    expect(button(/sign(ing)? in to Tunecast/i)).toBeDefined();
   });
 
   it('a BLOCKED popup surfaces its authorize URL as a real route through', async () => {
@@ -806,14 +806,14 @@ describe('P3 fold — the connect screen offers a way forward and names the prov
       connectionFlowStatusStore.set({
         state: 'error',
         message: 'the sign-in window was blocked — allow popups for this site and try again',
-        authorizeUrl: 'https://accounts.spotify.com/authorize?client_id=cid&state=s',
+        authorizeUrl: 'https://accounts.tunecast.example/authorize?client_id=cid&state=s',
       });
     });
     await settle();
 
     const link = container.querySelector<HTMLAnchorElement>('[data-testid="connect-fallback-link"]');
     expect(link, 'a blocked popup must leave the user a way to reach the provider').not.toBeNull();
-    expect(link!.getAttribute('href')).toContain('accounts.spotify.com/authorize');
+    expect(link!.getAttribute('href')).toContain('accounts.tunecast.example/authorize');
   });
 });
 
@@ -895,7 +895,7 @@ describe('P3 fold — Q7: the done screen probes the connection when the require
 
     expect(outcome.ok).toBe(true);
     // The probe was built from the FROZEN host and the DECLARED path — never a guess.
-    expect(seenUrl).toBe('https://api.openweathermap.org/data/2.5/weather?q=London');
+    expect(seenUrl).toBe('https://api.zephyr-weather.example/data/2.5/weather?q=London');
     // The credential DID reach the provider (proving this is the real injection path)…
     expect(JSON.stringify(seenHeaders)).toContain('token-value-for-the-probe');
     // …and NOTHING derived from it comes back to the caller. The outcome carries a status

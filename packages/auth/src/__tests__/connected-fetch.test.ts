@@ -24,6 +24,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { authConnectionCredentialSecretKey, authConnectionStateSecretKey } from '@snugprotocol/db';
 import { createConnectedFetch, type ConnectedFetch, type NetConnectionRow } from '../connected-fetch.js';
 import { UserDbCredentialStore } from '../credential-store.js';
+import { WELL_KNOWN_PROVIDERS_REGISTRY } from '../well-known-providers.js';
 
 // ---------------------------------------------------------------------- fixtures
 
@@ -578,5 +579,146 @@ describe('gate 10 — response size cap (B1) and the scrubber (D4/R1/A2)', () =>
       confirmGate: { confirm: async () => true },
     });
     expect(await executor.execute(APP, GET())).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_FETCH_FAILED, retryable: true });
+  });
+});
+
+// --------------------------------------------------- optional fields (P5 BLOCKER)
+
+/**
+ * `required: false` FIELDS, END TO END.
+ *
+ * The defect these pin: two lints disagreed about which key list a header template is
+ * legal against. The executor lints the requirement's DECLARED field keys
+ * (`spec.fields.map(f => f.key)`); `renderAuthHeaderTemplate` then re-linted only the
+ * keys whose values were actually LOADED. A declared-but-blank OPTIONAL field is absent
+ * from the loaded set by design (the loader `continue`s past it), so every template
+ * mentioning that field passed the outer lint and was rejected by the inner one.
+ *
+ * This landed on the rewrite's own founding example: the shipped Coinbase registry entry
+ * pins `passphrase` as `required: false`, the wizard permits leaving it blank
+ * (`field.required !== false`), and the KB-taught Coinbase template signs with
+ * `{{passphrase}}`. The wizard reported CONNECTED and every later request failed closed
+ * with NET_AUTH_FAILED and zero fetches — precisely the "shows connected, fails later"
+ * outcome the credential-save path claims to have closed.
+ *
+ * These tests are deliberately at EXECUTOR altitude and use the REAL shipped registry
+ * entry rather than a local fixture, because the bug lived in the disagreement between
+ * two layers and a fixture that declared its own fields would not have reproduced it.
+ */
+describe('optional credential fields — declared but not stored', () => {
+  const coinbaseFields = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.fields;
+  if (coinbaseFields === undefined) {
+    throw new Error('the shipped registry lost its coinbase field list — these tests depend on it');
+  }
+
+  const coinbaseSpec: ConnectionRequirement = {
+    slot: SLOT,
+    kind: 'api_key',
+    provider: { name: 'Coinbase' },
+    fields: coinbaseFields,
+    request: {
+      headerTemplate: {
+        'CB-ACCESS-KEY': '{{api_key}}',
+        'CB-ACCESS-PASSPHRASE': '{{passphrase}}',
+        'CB-ACCESS-TIMESTAMP': '{{request.timestamp}}',
+        'CB-ACCESS-SIGN':
+          '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery)}}',
+      },
+    },
+    declaredApiHosts: ['api.example.com'],
+  };
+
+  /** The registry entry itself must keep `passphrase` optional, or these tests prove nothing. */
+  it('the shipped Coinbase entry really does pin passphrase as optional', () => {
+    expect(coinbaseFields.find((f) => f.key === 'passphrase')?.required).toBe(false);
+  });
+
+  function coinbaseHarness(stored: Record<string, string>): Harness {
+    const quartet = memoryQuartet();
+    for (const [key, value] of Object.entries(stored)) {
+      quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, key), value);
+    }
+    const calls: FetchCall[] = [];
+    const executor = createConnectedFetch({
+      credentialStore: new UserDbCredentialStore(quartet),
+      connectionReader: { listConnections: () => [rowFor(coinbaseSpec, 'approved')] },
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init: init ?? {} });
+        return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+      confirmGate: { confirm: async () => true },
+    });
+    return { executor, calls, quartet, confirm: vi.fn(), setRow: () => {} };
+  }
+
+  it('SENDS the request with the optional header empty when the field was left blank', async () => {
+    const { executor, calls } = coinbaseHarness({ api_key: 'KEY123', api_secret: 'c2VjcmV0' });
+
+    const result = await executor.execute(APP, GET());
+
+    // The whole point: this used to be NET_AUTH_FAILED with zero fetches.
+    expect(result).toMatchObject({ ok: true, status: 200 });
+    expect(calls).toHaveLength(1);
+    expect(headerOf(calls[0]!, 'CB-ACCESS-KEY')).toBe('KEY123');
+    // Declared-but-unstored optional field resolves to empty, not to a throw.
+    expect(headerOf(calls[0]!, 'CB-ACCESS-PASSPHRASE')).toBe('');
+  });
+
+  it('signs over the SAME memoized timestamp it sends, even with the optional field blank', async () => {
+    const { executor, calls } = coinbaseHarness({ api_key: 'KEY123', api_secret: 'c2VjcmV0' });
+    await executor.execute(APP, GET());
+
+    const sent = headerOf(calls[0]!, 'CB-ACCESS-TIMESTAMP')!;
+    const sign = headerOf(calls[0]!, 'CB-ACCESS-SIGN')!;
+    expect(sent).toMatch(/^\d+$/);
+    expect(sign).not.toBe('');
+
+    // Recompute the signature over the timestamp that was actually sent. If the engine
+    // had evaluated `request.timestamp` twice, these would disagree across a second
+    // boundary — the memoization and the optional-field fix must not have broken it.
+    //
+    // `hmac_sha256_b64` base64-DECODES its secret argument before signing (the fused
+    // Coinbase-Exchange shape), so the key here is the decoded bytes of 'c2VjcmV0'.
+    const secretBytes = Uint8Array.from(atob('c2VjcmV0'), (c) => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey(
+      'raw',
+      secretBytes as BufferSource,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const mac = new Uint8Array(
+      await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${sent}GET/v1/data`)),
+    );
+    const expected = btoa(String.fromCharCode(...mac));
+    expect(sign).toBe(expected);
+  });
+
+  it('a REQUIRED field that is missing still fails closed — the fix did not widen to required fields', async () => {
+    const { executor, calls } = coinbaseHarness({ api_key: 'KEY123' }); // api_secret absent
+    expect(await executor.execute(APP, GET())).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_AUTH_FAILED });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a token naming NO declared field is still rejected — the typo guard survives', async () => {
+    const typoSpec: ConnectionRequirement = {
+      ...coinbaseSpec,
+      request: { headerTemplate: { 'X-Typo': '{{passphrasee}}' } },
+    };
+    const quartet = memoryQuartet();
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'), 'KEY123');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_secret'), 'c2VjcmV0');
+    const calls: FetchCall[] = [];
+    const executor = createConnectedFetch({
+      credentialStore: new UserDbCredentialStore(quartet),
+      connectionReader: { listConnections: () => [rowFor(typoSpec, 'approved')] },
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init: init ?? {} });
+        return new Response('{}', { status: 200 });
+      },
+      confirmGate: { confirm: async () => true },
+    });
+    expect(await executor.execute(APP, GET())).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_AUTH_FAILED });
+    expect(calls).toHaveLength(0);
   });
 });

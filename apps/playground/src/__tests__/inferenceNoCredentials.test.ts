@@ -50,10 +50,10 @@ describe('P2-AC7(a) — the requirement inferrer is handed no credential, struct
           JSON.stringify({
             requirement: {
               slot: 'coinbase',
-              provider: { name: 'Coinbase Exchange' },
+              provider: { name: 'Meridian Exchange' },
               kind: 'api_key',
               fields: [{ key: 'api_key', label: 'API Key', type: 'text', required: true }],
-              declaredApiHosts: ['api.exchange.coinbase.com'],
+              declaredApiHosts: ['api.meridian-exchange.example'],
             },
             confidence: 0.8,
             evidence: [],
@@ -63,9 +63,9 @@ describe('P2-AC7(a) — the requirement inferrer is handed no credential, struct
     });
 
     await inferrer.infer({
-      providerName: 'Coinbase Exchange',
+      providerName: 'Meridian Exchange',
       slot: 'coinbase',
-      prompt: 'INFER the connection requirement for Coinbase Exchange.',
+      prompt: 'INFER the connection requirement for Meridian Exchange.',
     });
 
     const wire = seen.join('\n');
@@ -88,7 +88,7 @@ describe('P2-AC7(a) — the requirement inferrer is handed no credential, struct
     // deliberately: this asserts the RUNTIME behaviour a compile error alone would not
     // cover on an imported/synced call path.
     const result = await inferrer.infer({
-      providerName: 'Coinbase Exchange',
+      providerName: 'Meridian Exchange',
       slot: 'coinbase',
       prompt: 'INFER',
       credentials: { api_secret: REAL_API_SECRET },
@@ -112,7 +112,7 @@ describe('P2-AC7(b) — the docs-paste tripwire STILL fires before the completio
     >[0]['adapter'];
 
     const outcome = await runConnectionRequirementInferenceGuarded({
-      providerName: 'Coinbase Exchange',
+      providerName: 'Meridian Exchange',
       slot: 'coinbase',
       docsText: `Authorization: Bearer sk-live-${REAL_PASSPHRASE}abcdef1234567890`,
       ...(adapter !== undefined ? { adapter } : {}),
@@ -126,7 +126,7 @@ describe('P2-AC7(b) — the docs-paste tripwire STILL fires before the completio
     expect(docsTripwire(`the secret is ${REAL_API_SECRET}`)).toBe(true);
     expect(docsTripwire('ghp_abcdefghijklmnop1234567890abcdef')).toBe(true);
     // ...and ordinary provider docs stay clean, so the warning keeps its meaning.
-    expect(docsTripwire('Pass your API key in the CB-ACCESS-KEY header. Requests go to https://api.exchange.coinbase.com.')).toBe(false);
+    expect(docsTripwire('Pass your API key in the CB-ACCESS-KEY header. Requests go to https://api.meridian-exchange.example.')).toBe(false);
   });
 });
 

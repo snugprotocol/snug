@@ -53,6 +53,7 @@ Optimize for **clarity and maintainability** over cleverness.
 | [lessons.md](lessons.md) | Append-only rules learned the hard way | **Always at Gate 2**; append at Gate 6 |
 | [glossary.md](glossary.md) | Domain terms (envelope, bridge, micro app…) | Meeting an unfamiliar term |
 | [good-first-issues.md](good-first-issues.md) | Curated contributor entry points, mirrored on the `good first issue` label | Community/contributor work; keep true when fixing a listed item |
+| [security/](security/) | Threat models and security deltas — what each change added to the attack surface, and what is **accepted and not mitigated** | Any auth/credential/sandbox change; before shipping a security-bearing rewrite |
 | [solutions/](solutions/) · [runbooks/](runbooks/) | Root-cause write-ups · ops how-tos | As needed |
 
 ## Pre-launch strategy (private)

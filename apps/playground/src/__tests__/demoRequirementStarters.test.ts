@@ -220,3 +220,66 @@ describe('P4-AC10 — the starter variants MIRROR the shipped manifests', () => 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// P5 — the starters must actually PERSIST through the production seam.
+// ---------------------------------------------------------------------------
+
+/**
+ * THE SHIPPED BLOCKER THIS PINS, found by driving `?demoreq=starter-github` through a real
+ * browser during the P5 review.
+ *
+ * Everything above this line checks the variants against the manifests and pushes them
+ * through schema → admission → template lint. All of it passed while the product was
+ * broken, because none of it ever CALLED the persist path. On that path admission runs a
+ * SECOND time inside the db accessor, and the substituted `fields` the first pass had just
+ * added were read by the second pass as borrower-authored credential copy — so
+ * `putDeclaredConnection` threw `ConnectionNotAdmitted`, the post-turn seam reported
+ * `write_refused`, and the user saw "the agent proposed a connection that failed
+ * validation" with NO connect card. Every registry-backed starter, which is all of them.
+ *
+ * Two things had to be true for that to stay invisible, and both are fixed:
+ *   - admission was not idempotent (packages/auth, `fieldsMatchRegistry`);
+ *   - `installTestUserDb` opened the db WITHOUT the production `admissionGate`, so no
+ *     playground test exercised the second pass at all.
+ *
+ * This test is the vitest half of the guard — `connection-wizard.spec.ts` journey 5 is the
+ * browser half. It asserts what the unit layer can honestly assert: the row LANDS, and it
+ * lands carrying the registry's pinned credential fields.
+ */
+describe('P5 — every starter variant PERSISTS through the real post-turn seam', () => {
+  it('lands a declared row carrying the registry-pinned fields, for each variant', async () => {
+    const { finalizeConnectionDeclaration } = await import('../agent/connectionPipeline.js');
+    const { installTestUserDb } = await import('./userdbTestHelper.js');
+    const db = await installTestUserDb();
+
+    for (const variant of STARTER_VARIANTS) {
+      const turns = demoRequirementChatScript(variant);
+      const reply = turns.map((turn) => turn.text ?? '').join('');
+      const html = (turns[0]!.toolCalls![0]!.input as { content: string }).content;
+      const appId = `app-${variant}`;
+      db.installApp({ appId, displayName: variant, html });
+
+      const outcome = await finalizeConnectionDeclaration(db, {
+        appId,
+        html,
+        reply,
+        channel: 'inference',
+      });
+
+      expect(outcome, `${variant}: the seam returned nothing`).toBeDefined();
+      expect(
+        outcome!.ok,
+        `${variant} FAILED TO PERSIST: ${outcome!.ok === false ? outcome!.message : ''}`,
+      ).toBe(true);
+
+      // The row is really there, and it really carries the pinned credential fields —
+      // "admitted" and "stored with usable fields" are different claims, and the P4 defect
+      // lived in the gap between them.
+      const row = db.getConnection(appId, DEMO_STARTER_REQUIREMENTS[variant].slot);
+      expect(row, `${variant}: no row was written`).toBeDefined();
+      const fields = row!.requirement.fields ?? [];
+      expect(fields.length, `${variant}: the stored row has ZERO credential fields`).toBeGreaterThan(0);
+    }
+  });
+});

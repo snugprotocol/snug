@@ -35,7 +35,7 @@ const PLAIN_HTML = '<!doctype html><html><body><h1>Tic Tac Toe</h1></body></html
 
 const coinbaseRequirement = {
   slot: SLOT,
-  provider: { name: 'Coinbase Exchange', docsUrl: 'https://docs.cdp.coinbase.com/exchange' },
+  provider: { name: 'Meridian Exchange', docsUrl: 'https://docs.meridian-exchange.example' },
   kind: 'api_key',
   fields: [
     { key: 'api_key', label: 'API Key', type: 'text', required: true },
@@ -43,7 +43,7 @@ const coinbaseRequirement = {
     { key: 'passphrase', label: 'Passphrase', type: 'secret', required: true },
   ],
   registration: {
-    consoleUrl: 'https://exchange.coinbase.com/profile/api',
+    consoleUrl: 'https://meridian-exchange.example/profile/api',
     instructions: ['Open Profile then API.', 'Create a key with View permission.'],
   },
   request: {
@@ -55,13 +55,13 @@ const coinbaseRequirement = {
         '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}',
     },
   },
-  declaredApiHosts: ['api.exchange.coinbase.com'],
+  declaredApiHosts: ['api.meridian-exchange.example'],
 } as const;
 
 /** A build reply in the shape the KB teaches: prose, then ONE closing fenced directive. */
 function replyWithDirective(requirement: unknown = coinbaseRequirement): string {
   return [
-    'I built the tracker. It needs your Coinbase Exchange key before it can load balances.',
+    'I built the tracker. It needs your Meridian Exchange key before it can load balances.',
     '',
     '```json',
     JSON.stringify({ v: PROTOCOL_VERSION, kind: CONNECTION_REQUIREMENT_DIRECTIVE_KIND, requirement }),
@@ -130,7 +130,7 @@ describe('P2 FOLD — the pipeline is reachable from the PRODUCTION caller', () 
     expect(row).toBeDefined();
     expect(row!.status).toBe('declared');
     expect(row!.provenance).toBe('inference');
-    expect(row!.requirement.provider.name).toBe('Coinbase Exchange');
+    expect(row!.requirement.provider.name).toBe('Meridian Exchange');
     await db.close();
   });
 

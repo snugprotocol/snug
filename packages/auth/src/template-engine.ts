@@ -37,6 +37,19 @@ export interface AuthTemplateRequest {
 export interface AuthTemplateContext {
   /** Credential field values, keyed by AuthField.key — read from the CredentialStore per use. */
   fields: Record<string, string>;
+  /**
+   * Every field key the requirement DECLARES, including declared-but-optional fields the
+   * user left blank (which are therefore absent from `fields`).
+   *
+   * The two lists are not the same, and conflating them was a shipped defect: a template
+   * naming a `required: false` field passed the executor's lint (which checks the
+   * declaration) and was then rejected by the render seat's lint (which checked only what
+   * was loaded), so the connection reported CONNECTED and every request failed closed.
+   *
+   * Omit it and the declaration is taken to be exactly the loaded keys — correct for
+   * callers with no optional fields, and it keeps the engine standalone-safe (AC8).
+   */
+  declaredFieldKeys?: readonly string[];
   /** Optional request shape for helpers like hmac_sha256(secret, body). */
   request?: AuthTemplateRequest;
 }
@@ -183,12 +196,20 @@ export async function renderAuthTemplateString(
  * (no templating) — only values support `{{...}}`.
  *
  * THE LINT GATE (AC8). Every template is linted here, immediately before any credential
- * is touched, against the field keys present in `ctx.fields`. The render seat ENFORCES
- * rather than trusts: a caller that forgets to lint at authoring time still cannot emit
- * a signature computed over a typo'd literal, and no future call site can be added that
- * bypasses the check. `ctx.fields` is the right key source precisely because it is what
- * the engine would substitute FROM — linting against anything else would leave a gap
- * between what was checked and what gets resolved.
+ * is touched. The render seat ENFORCES rather than trusts: a caller that forgets to lint
+ * at authoring time still cannot emit a signature computed over a typo'd literal, and no
+ * future call site can be added that bypasses the check.
+ *
+ * The key source is the requirement's DECLARED fields (`ctx.declaredFieldKeys`), falling
+ * back to the loaded keys when a caller declares nothing. It used to be `ctx.fields`
+ * unconditionally, on the reasoning that the engine should lint what it would substitute
+ * FROM. That reasoning was wrong for one case and it shipped: a `required: false` field
+ * the user left blank is declared but never loaded, so a legitimate template naming it
+ * passed the executor's declaration-based lint and was rejected HERE. The gap this lint
+ * exists to close — a token naming nothing in the declaration — is still closed, because
+ * the declaration is a superset of what may legally be referenced; what is no longer
+ * rejected is a token naming a real field that simply has no value today, which
+ * `resolveExpression` now renders as empty.
  *
  * One `RenderState` is shared across every header value so `{{timestamp()}}` in the
  * timestamp header and `{{timestamp()}}` inside the signature agree — see `RenderState`.
@@ -197,7 +218,7 @@ export async function renderAuthHeaderTemplate(
   headerTemplate: Record<string, string>,
   ctx: AuthTemplateContext,
 ): Promise<Record<string, string>> {
-  assertLintedTemplate(headerTemplate, { fieldKeys: Object.keys(ctx.fields) });
+  assertLintedTemplate(headerTemplate, { fieldKeys: [...(ctx.declaredFieldKeys ?? Object.keys(ctx.fields))] });
   const state: RenderState = {};
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(headerTemplate)) {
@@ -231,6 +252,14 @@ async function resolveExpression(expr: string, ctx: AuthTemplateContext, state: 
   }
   if (Object.prototype.hasOwnProperty.call(ctx.fields, expr)) {
     return ctx.fields[expr]!;
+  }
+  // A DECLARED field with no stored value renders empty rather than throwing. This is the
+  // `required: false` case: the user was invited to leave the box blank, so the header is
+  // sent present-but-empty, which is what these APIs expect. A token naming nothing in the
+  // declaration still throws — that is the typo guard, and it is the only reason this
+  // branch cannot simply return '' for everything.
+  if (ctx.declaredFieldKeys?.includes(expr) === true) {
+    return '';
   }
   throw new AuthTemplateError(`Unknown template field: ${expr}`);
 }
@@ -314,6 +343,13 @@ function resolveArgToken(token: string, quoted: boolean, ctx: AuthTemplateContex
   }
   if (Object.prototype.hasOwnProperty.call(ctx.fields, token)) {
     return ctx.fields[token]!;
+  }
+  // A DECLARED field with no stored value resolves to empty, matching `resolveExpression`.
+  // This branch must come BEFORE the literal fallback below: without it a blank optional
+  // field used as a helper argument would sign over the literal string "passphrase"
+  // instead of the empty value — a silently wrong signature rather than a loud failure.
+  if (ctx.declaredFieldKeys?.includes(token) === true) {
+    return '';
   }
   // Anything else is a literal — covers numeric values and unrecognized bare tokens. The
   // lint makes this branch unreachable from an accepted template (see template-lint.ts);

@@ -35,21 +35,21 @@ const OTHER_APP = 'app-p3-settings-2';
 
 const coinbaseRequirement = {
   slot: 'coinbase',
-  provider: { name: 'Coinbase' },
+  provider: { name: 'Meridian Exchange' },
   kind: 'api_key',
   fields: [
     { key: 'api_key', label: 'API key', type: 'secret', required: true },
     { key: 'api_secret', label: 'API secret', type: 'secret', required: true },
   ],
-  declaredApiHosts: ['api.coinbase.com'],
+  declaredApiHosts: ['api.meridian-exchange.example'],
 } as const satisfies Record<string, unknown>;
 
 const weatherRequirement = {
   slot: 'openweather',
-  provider: { name: 'OpenWeather' },
+  provider: { name: 'Zephyr Weather' },
   kind: 'bearer_token',
   fields: [{ key: 'token', label: 'API token', type: 'secret', required: true }],
-  declaredApiHosts: ['api.openweathermap.org'],
+  declaredApiHosts: ['api.zephyr-weather.example'],
 } as const satisfies Record<string, unknown>;
 
 let container: HTMLDivElement;
@@ -127,7 +127,7 @@ describe('P3-AC7 — one Settings row per (app, slot) with provider, kind, and a
     expect(new Set(keys)).toEqual(new Set([`${APP}:coinbase`, `${APP}:openweather`, `${OTHER_APP}:openweather`]));
 
     const coinbaseRow = rows().find((row) => row.dataset['slot'] === 'coinbase')!;
-    expect(coinbaseRow.textContent ?? '').toContain('Coinbase');
+    expect(coinbaseRow.textContent ?? '').toContain('Meridian Exchange');
 
     /**
      * THE KIND CELL IS ASSERTED BY ITS ACTUAL COPY (fold), not merely for being non-empty.
@@ -214,7 +214,7 @@ describe('P3-AC7 — one Settings row per (app, slot) with provider, kind, and a
     db.approveConnection(APP, 'coinbase');
     db.stagePendingRequirement(APP, 'coinbase', {
       ...coinbaseRequirement,
-      declaredApiHosts: ['api.coinbase.com', 'api.exchange.coinbase.com'],
+      declaredApiHosts: ['api.meridian-exchange.example', 'api.eu.meridian-exchange.example'],
     });
 
     await render(<ConnectionSlotsCard />);
@@ -256,7 +256,7 @@ describe('P3-AC8 — a staged pending requirement renders a field-by-field old�
       { key: 'api_secret', label: 'API secret', type: 'secret', required: true },
       { key: 'passphrase', label: 'Passphrase', type: 'secret', required: true },
     ],
-    declaredApiHosts: ['api.coinbase.com', 'api.exchange.coinbase.com'],
+    declaredApiHosts: ['api.meridian-exchange.example', 'api.eu.meridian-exchange.example'],
   };
 
   beforeEach(async () => {
@@ -273,19 +273,19 @@ describe('P3-AC8 — a staged pending requirement renders a field-by-field old�
 
     const added = [...diff!.querySelectorAll('[data-diff="added"]')].map((n) => n.textContent ?? '').join(' | ');
     expect(added).toContain('Passphrase');
-    expect(added).toContain('api.exchange.coinbase.com');
+    expect(added).toContain('api.eu.meridian-exchange.example');
 
     // What did NOT change must read as unchanged — a diff that flags everything teaches
     // the user to approve without reading, which is the failure this screen exists to stop.
     const unchanged = [...diff!.querySelectorAll('[data-diff="unchanged"]')].map((n) => n.textContent ?? '').join(' | ');
-    expect(unchanged).toContain('api.coinbase.com');
+    expect(unchanged).toContain('api.meridian-exchange.example');
   });
 
   it('ONLY re-approval promotes the pending requirement — rendering the diff changes nothing', () => {
     const row = db.getConnection(APP, 'coinbase')!;
     expect(row.pendingRequirement).toBeDefined();
     expect(row.requirement.fields).toHaveLength(2);
-    expect(row.allowedHosts).toEqual(['api.coinbase.com']);
+    expect(row.allowedHosts).toEqual(['api.meridian-exchange.example']);
   });
 
   it('re-approving promotes pending → live and re-freezes the ceiling', async () => {
@@ -294,7 +294,7 @@ describe('P3-AC8 — a staged pending requirement renders a field-by-field old�
     const row = db.getConnection(APP, 'coinbase')!;
     expect(row.pendingRequirement).toBeUndefined();
     expect(row.requirement.fields).toHaveLength(3);
-    expect(row.allowedHosts).toEqual(expect.arrayContaining(['api.coinbase.com', 'api.exchange.coinbase.com']));
+    expect(row.allowedHosts).toEqual(expect.arrayContaining(['api.meridian-exchange.example', 'api.eu.meridian-exchange.example']));
     expect(row.status).toBe('approved');
   });
 
@@ -306,7 +306,7 @@ describe('P3-AC8 — a staged pending requirement renders a field-by-field old�
 
     const row = db.getConnection(APP, 'coinbase')!;
     expect(row.pendingRequirement).toBeDefined();
-    expect(row.allowedHosts).toEqual(['api.coinbase.com']);
+    expect(row.allowedHosts).toEqual(['api.meridian-exchange.example']);
   });
 });
 
@@ -354,7 +354,7 @@ describe('P3-AC9 — the post-revoke disclosure is keyed by provider/host and su
     await render(<ConnectionWizardSheet />);
 
     expect(container.querySelector('[data-testid="revoked-before-notice"]')).not.toBeNull();
-    expect(text()).toMatch(/Coinbase/);
+    expect(text()).toMatch(/Meridian Exchange/);
   });
 
   it('discloses on a HOST match even when the provider NAME was changed too', async () => {

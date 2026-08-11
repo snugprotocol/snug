@@ -130,6 +130,23 @@ export default defineConfig({
       use: {
         ...devices['Desktop Chrome'],
         ignoreHTTPSErrors: true,
+        /*
+          REDUCED MOTION, and it is a determinism fix rather than a preference.
+
+          `.artifact-card` slides in with a 220ms `sheet-up` transform, so for those 220ms
+          the connect button is a MOVING hit area. Playwright refuses to click a target
+          that is not stable, and under full-suite scheduling the retry budget was
+          occasionally spent before the transform settled — the observed failure's call log
+          reads `element is not stable` / `retrying click action`, which is what the
+          intermittent journey-1 failure actually was (it was previously read as a DOM
+          detach, which the reconciliation does not in fact produce).
+
+          Asking the BROWSER for reduced motion is the honest lever: it is a real user
+          setting the app already has to honor, so this exercises a supported configuration
+          rather than disabling app behavior for the test. The card still mounts and still
+          renders identically — only the transform is skipped.
+        */
+        reducedMotion: 'reduce',
         launchOptions: {
           args: [
             /*
@@ -148,15 +165,15 @@ export default defineConfig({
               and what the ceiling freezes are all `idp.snug.test` — a name that passes
               every real gate — while the bytes land on the local fake IdP.
             */
-            // `api.coinbase.com` is mapped too: journey 1's app dials the REAL provider
-            // host (on the stub's port) so what the user reviews and freezes is a ceiling
-            // a real app would have. Only the RESOLUTION is local — no request leaves.
-            // `api.exchange.coinbase.com`, not `api.coinbase.com`: P4 pinned the latter in
-            // the well-known registry, so a demo requirement declaring it would be caught
-            // by the registry-borrow ban (it authors its own fields + header template).
-            // The demo variant moved to the Exchange host it actually dials; this MAP
-            // moves with it, or the journey would resolve to the real internet.
-            `--host-resolver-rules=MAP stub.snug.test 127.0.0.1,MAP idp.snug.test 127.0.0.1,MAP api.exchange.coinbase.com 127.0.0.1`,
+            // Journey 1's app dials the host its requirement DECLARES (on the stub's
+            // port), so what the user reviews and freezes is a ceiling a real app would
+            // have. Only the RESOLUTION is local — no request leaves the machine.
+            // `api.meridian-exchange.example` since P5: P4 pinned `coinbase` in the
+            // well-known registry and P5 widened the borrow ban to brand-adjacent names,
+            // so any coinbase-segment name or host would be refused for authoring its own
+            // fields + header template. The demo variant moved to an unpinned provider and
+            // this MAP moves with it, or the journey would resolve to the real internet.
+            `--host-resolver-rules=MAP stub.snug.test 127.0.0.1,MAP idp.snug.test 127.0.0.1,MAP api.meridian-exchange.example 127.0.0.1`,
             '--ignore-certificate-errors',
           ],
         },

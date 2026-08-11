@@ -39,16 +39,16 @@ const SLOT = 'coinbase';
  * five ordered message parts through `hmac_sha256_b64`, which base64-decodes the secret
  * and base64-encodes the digest — the shape hex-output `hmac_sha256` cannot produce.
  *
- * Host is `api.exchange.coinbase.com` (Exchange), not the retail `api.coinbase.com`: the
+ * Host is `api.meridian-exchange.example` (Exchange), not the retail `api.coinbase.com`: the
  * declared host becomes the FROZEN ceiling at approval, so a wrong host here would refuse
  * every real request and present to the user as an auth failure.
  */
 const COINBASE_REQUIREMENT = {
   slot: SLOT,
   provider: {
-    name: 'Coinbase Exchange',
-    homepageUrl: 'https://exchange.coinbase.com',
-    docsUrl: 'https://docs.cdp.coinbase.com/exchange',
+    name: 'Meridian Exchange',
+    homepageUrl: 'https://meridian-exchange.example',
+    docsUrl: 'https://docs.meridian-exchange.example',
   },
   kind: 'api_key',
   fields: [
@@ -75,9 +75,9 @@ const COINBASE_REQUIREMENT = {
     },
   ],
   registration: {
-    consoleUrl: 'https://exchange.coinbase.com/profile/api',
+    consoleUrl: 'https://meridian-exchange.example/profile/api',
     instructions: [
-      'Sign in at exchange.coinbase.com and open Profile then API.',
+      'Sign in at meridian-exchange.example and open Profile then API.',
       'Choose New API Key and give it View permission only.',
       'Choose a passphrase and write it down — it is not shown again.',
       'Copy the API key and the secret before closing the dialog.',
@@ -92,11 +92,11 @@ const COINBASE_REQUIREMENT = {
         '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}',
     },
   },
-  declaredApiHosts: ['api.exchange.coinbase.com'],
+  declaredApiHosts: ['api.meridian-exchange.example'],
 } as const;
 
 const RECORDED_BUILD_REPLY = [
-  'your coinbase portfolio tracker is ready. it renders a "connect Coinbase Exchange to see',
+  'your meridian portfolio tracker is ready. it renders a "connect Meridian Exchange to see',
   'your balances" panel until the connection is approved, so it is useful straight away.',
   '',
   'coinbase exchange signs every request, so it needs three values from your account — the',
@@ -194,13 +194,13 @@ describe('P2-AC3 — the Coinbase case: a build reply lands a THREE-FIELD declar
     // 4. The registration walkthrough survives the trip — the whole point of re-admitting
     //    the seat `llmProposalSchema` omitted. Order is meaning here (step 3 warns the
     //    passphrase is not shown again), so it is asserted as a sequence.
-    expect(row!.requirement.registration?.consoleUrl).toBe('https://exchange.coinbase.com/profile/api');
+    expect(row!.requirement.registration?.consoleUrl).toBe('https://meridian-exchange.example/profile/api');
     expect(row!.requirement.registration?.instructions).toHaveLength(4);
     expect(row!.requirement.registration?.instructions?.[2]).toMatch(/passphrase/i);
 
     // 5. The declared ceiling is the EXCHANGE host, and only it.
-    expect(row!.requirement.declaredApiHosts).toEqual(['api.exchange.coinbase.com']);
-    expect(row!.allowedHosts).toEqual(['api.exchange.coinbase.com']);
+    expect(row!.requirement.declaredApiHosts).toEqual(['api.meridian-exchange.example']);
+    expect(row!.allowedHosts).toEqual(['api.meridian-exchange.example']);
 
     await db.close();
   });

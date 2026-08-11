@@ -63,6 +63,7 @@
 
 import {
   WELL_KNOWN_PROVIDERS_REGISTRY,
+  findBrandAdjacentRegistryKeys,
   lookupWellKnownProvider,
   type WellKnownOauthProvider,
 } from './well-known-providers.js';
@@ -151,6 +152,20 @@ function registryHostIndex(): Map<string, string> {
  * the Spotify entry, so a stricter equality check in the ban would miss exactly the
  * spellings the rest of the system already treats as Spotify. The evasion would be free
  * and the borrow would still land.
+ *
+ * BUT EXACT-KEY NORMALIZATION IS NOT ENOUGH, and P5 closes that gap (carried finding (a),
+ * reproduced by execution). It collapses case and punctuation but not ADDED WORDS, so
+ * `Spotify Inc` / `Spotify Connect` / `CoinbaseInc` all MISSED the registry and were
+ * admitted with attacker-authored fields, an attacker-authored header template and
+ * attacker-chosen hosts — under a brand the review screen renders as trusted. So the name
+ * path now falls through to `findBrandAdjacentRegistryKeys`, a boundary-aware
+ * segment-run match that catches the added-word family without firing on unrelated names
+ * that merely contain a registry name's letters (`Slackline Weather`, `Gmailer Tools`).
+ *
+ * DETERMINISM WHEN A NAME BORROWS FROM SEVERAL ENTRIES: the adjacent keys are sorted and
+ * the first is taken, so `borrowedFrom` is stable for a given name rather than dependent
+ * on registry insertion order. Which entry wins matters less than that the ban FIRES —
+ * every candidate is a registry brand the declaration had no right to trade on.
  */
 function findBorrowedEntry(
   requirement: Record<string, unknown>,
@@ -161,6 +176,12 @@ function findBorrowedEntry(
     if (entry !== undefined) {
       const key = Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY).find(([, value]) => value === entry)?.[0];
       if (key !== undefined) return { key, entry };
+    }
+    // Brand-adjacent fallback — an EXACT hit above always wins, so a legitimate
+    // "Google Drive" still resolves to `googledrive` rather than to `google`.
+    for (const key of findBrandAdjacentRegistryKeys(name).sort()) {
+      const adjacent = WELL_KNOWN_PROVIDERS_REGISTRY[key];
+      if (adjacent !== undefined) return { key, entry: adjacent };
     }
   }
 
@@ -200,8 +221,51 @@ const CREDENTIAL_PROMPT_SEATS = ['fields', 'request', 'testRequest'] as const;
  * `request` counts only when it carries a `headerTemplate` — an empty `request` object
  * says nothing about where a secret goes, and refusing on it would reject shapes that
  * declare no prompt at all.
+ *
+ * A `fields` list that is EXACTLY the registry's pinned list does not count, and that
+ * exemption is what makes admission IDEMPOTENT (P5, shipped-blocker fix).
+ *
+ * WHY IT IS NEEDED. Admission deliberately runs twice on the production path: once in
+ * `persistConnectionRequirement` (the pipeline) and again in the db accessor's
+ * `admissionGate`, so no write can bypass the guard. But pass 1 SUBSTITUTES the
+ * registry's `fields` into a bare requirement, so pass 2 saw a requirement occupying
+ * `fields` and refused it — the guard rejecting the very value it had just produced. Every
+ * registry-backed starter failed to persist with `write_refused` and the user got no
+ * connect card at all. Verified in a real browser, and confirmed present on the P4
+ * baseline, so this closes a shipped defect rather than one introduced by P5.
+ *
+ * WHY IT IS SAFE. What Guard 2b refuses is a borrower AUTHORING credential-prompt copy —
+ * choosing what the user is asked to type beside someone else's brand. A list that is
+ * byte-for-byte the human-reviewed registry list is not an authoring act: it is the
+ * pinned value, and admitting it grants exactly the legitimacy the registry already
+ * confers. Anything that DIFFERS in any field — one relabelled input, one extra key, one
+ * dropped key — is still an authored list and is still refused, which the negative test
+ * beside this one pins.
+ *
+ * The comparison is structural rather than reference-based on purpose: the value has been
+ * through JSON round-trips (persistence, the directive envelope) by the time the second
+ * admission sees it, so identity is long gone but the bytes are the same.
  */
-function occupiedPromptSeats(requirement: Record<string, unknown>): string[] {
+function fieldsMatchRegistry(value: unknown, entry: WellKnownOauthProvider): boolean {
+  if (entry.fields === undefined || !Array.isArray(value)) return false;
+  if (value.length !== entry.fields.length) return false;
+  return value.every((field, index) => {
+    const pinned = entry.fields![index]!;
+    const candidate = asRecord(field);
+    if (candidate === undefined) return false;
+    // Compare the union of both key sets, so neither an added nor a dropped property
+    // can slip through as "equal".
+    const keys = new Set([...Object.keys(candidate), ...Object.keys(pinned)]);
+    return [...keys].every(
+      (key) => candidate[key] === (pinned as unknown as Record<string, unknown>)[key],
+    );
+  });
+}
+
+function occupiedPromptSeats(
+  requirement: Record<string, unknown>,
+  entry: WellKnownOauthProvider,
+): string[] {
   const occupied: string[] = [];
   for (const seat of CREDENTIAL_PROMPT_SEATS) {
     const value = requirement[seat];
@@ -211,6 +275,8 @@ function occupiedPromptSeats(requirement: Record<string, unknown>): string[] {
       continue;
     }
     if (seat === 'fields' && Array.isArray(value) && value.length === 0) continue;
+    // The pinned list is not an authoring act — see `fieldsMatchRegistry`.
+    if (seat === 'fields' && fieldsMatchRegistry(value, entry)) continue;
     occupied.push(seat);
   }
   return occupied;
@@ -343,7 +409,7 @@ export function admitConnectionRequirement<T>(requirement: T, options: Admission
   // The `registry` channel is exempt for the same reason it is exempt in Guard 1: it is
   // the seat's legitimate AUTHOR, not a borrower of someone else's brand.
   if (options.channel !== 'registry') {
-    const occupied = occupiedPromptSeats(record);
+    const occupied = occupiedPromptSeats(record, borrowed.entry);
     if (occupied.length > 0) {
       return {
         ok: false,

@@ -117,7 +117,7 @@ an app that cannot authenticate and a user with no way to supply the missing val
 connect card asks for what you declared, the host injects what it collected, and the
 provider rejects the request.
 
-So count the values the provider's own sign-in flow hands out. Coinbase Exchange issues
+So count the values the provider's own sign-in flow hands out. Meridian Exchange issues
 three — a key, a secret, and a passphrase — and all three must be declared. A provider
 issuing one key gets one field.
 
@@ -193,30 +193,61 @@ re-emit, because a requirement you changed WHILE re-emitting — a reordered wal
 dropped field — reads as a real edit and asks the user to approve again. When in doubt
 about whether your edit touched the auth surface, it did not; skip.
 
-### Example: a three-value signed API (Coinbase Exchange)
+### Providers the host already knows: declare the SHAPE, never the brand's copy
+
+Some providers are pinned in the host's own registry — Spotify, GitHub, Google, Gmail,
+Coinbase, OpenWeather, CoinGecko and friends. For those, the host already holds a
+human-reviewed field list, registration walkthrough and host list, and it substitutes them
+over anything you write.
+
+So when the provider is one the host knows, declare only what you legitimately know — the
+`slot`, the `kind`, and `declaredApiHosts` — and **omit `fields`, `request.headerTemplate`
+and `testRequest`**. Omit them and you receive the pinned, reviewed versions. Author them
+next to a known brand and the whole requirement is **refused**, because credential-prompt
+copy sitting beside a trusted brand is exactly how a user is talked into pasting the wrong
+secret.
+
+This is matched on the brand, not on an exact spelling: "Spotify", "Spotify Inc",
+"Spotify Connect" and "SpotifyPremium" are all treated as naming Spotify. **Do not reach
+for a brand-adjacent name to get around the rule** — a name that merely borrows a known
+brand's word is refused the same way, and that is deliberate.
+
+If you are describing a genuinely different provider, give it its own name that does not
+contain a known brand's, and declare its fields normally. The example below does exactly
+that.
+
+### Example: a three-value signed API (Meridian Exchange)
 
 The user asks for a portfolio tracker. The app calls
-`https://api.exchange.coinbase.com/...` through `useConnectedFetch`, renders a
-"connect Coinbase Exchange to see your balances" state while unconnected, and the reply
-ends with the declaration below. Coinbase Exchange issues three values and signs every
-request, so all three are declared and the signature is expressed as a template:
+`https://api.meridian-exchange.example/...` through `useConnectedFetch`, renders a
+"connect Meridian Exchange to see your balances" state while unconnected, and the reply
+ends with the declaration below. Meridian Exchange is NOT a provider the host pins, so the
+app declares the credential shape itself. It issues three values and signs every request,
+so all three are declared and the signature is expressed as a template:
 
 ```json
-{"v": {{protocolVersion}}, "kind": "{{connectionRequirementDirectiveKind}}", "requirement": {"slot": "coinbase", "provider": {"name": "Coinbase Exchange", "docsUrl": "https://docs.cdp.coinbase.com/exchange"}, "kind": "api_key", "fields": [{"key": "api_key", "label": "API Key", "type": "text", "required": true}, {"key": "api_secret", "label": "API Secret", "type": "secret", "description": "Shown once at creation. Copy it before closing the dialog.", "required": true}, {"key": "passphrase", "label": "Passphrase", "type": "secret", "description": "The passphrase you chose while creating the key.", "required": true}], "registration": {"consoleUrl": "https://exchange.coinbase.com/profile/api", "instructions": ["Sign in at exchange.coinbase.com and open Profile then API.", "Choose New API Key and give it View permission only.", "Choose a passphrase and write it down — it is not shown again.", "Copy the API key and the secret before closing the dialog."]}, "request": {"headerTemplate": {"CB-ACCESS-KEY": "{{{api_key}}}", "CB-ACCESS-PASSPHRASE": "{{{passphrase}}}", "CB-ACCESS-TIMESTAMP": "{{request.timestamp}}", "CB-ACCESS-SIGN": "{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}"}}, "declaredApiHosts": ["api.exchange.coinbase.com"]}}
+{"v": {{protocolVersion}}, "kind": "{{connectionRequirementDirectiveKind}}", "requirement": {"slot": "meridian", "provider": {"name": "Meridian Exchange", "docsUrl": "https://docs.meridian-exchange.example"}, "kind": "api_key", "fields": [{"key": "api_key", "label": "API Key", "type": "text", "required": true}, {"key": "api_secret", "label": "API Secret", "type": "secret", "description": "Shown once at creation. Copy it before closing the dialog.", "required": true}, {"key": "passphrase", "label": "Passphrase", "type": "secret", "description": "The passphrase you chose while creating the key.", "required": true}], "registration": {"consoleUrl": "https://meridian-exchange.example/profile/api", "instructions": ["Sign in at meridian-exchange.example and open Profile then API.", "Choose New API Key and give it View permission only.", "Choose a passphrase and write it down — it is not shown again.", "Copy the API key and the secret before closing the dialog."]}, "request": {"headerTemplate": {"CB-ACCESS-KEY": "{{{api_key}}}", "CB-ACCESS-PASSPHRASE": "{{{passphrase}}}", "CB-ACCESS-TIMESTAMP": "{{request.timestamp}}", "CB-ACCESS-SIGN": "{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}"}}, "declaredApiHosts": ["api.meridian-exchange.example"]}}
 ```
 
 Three values, three inputs on the connect card, and a signature the host computes with a
 secret you never see. Declaring only `api_key` here would produce an app that cannot sign
 a single request.
 
-### Example: a single-key API (OpenWeather)
+Had this been a provider the host pins, the same app would declare only the slot, the kind
+and `declaredApiHosts`, and the reviewed field list would be filled in for it.
 
-The user asks for a weather dashboard. OpenWeather issues one key and takes it as a query
-parameter the host adds, so one field and no header template:
+### Example: a single-key API the host already knows (OpenWeather)
+
+The user asks for a weather dashboard. OpenWeather **is** a provider the host pins, so the
+declaration carries only the slot, the kind and the host — no `fields`, no `registration`,
+no header template. The reviewed field list and walkthrough are filled in by the host:
 
 ```json
-{"v": {{protocolVersion}}, "kind": "{{connectionRequirementDirectiveKind}}", "requirement": {"slot": "openweather", "provider": {"name": "OpenWeather"}, "kind": "api_key", "fields": [{"key": "api_key", "label": "API Key", "type": "secret", "required": true}], "registration": {"consoleUrl": "https://home.openweathermap.org/api_keys", "instructions": ["Create a free OpenWeather account.", "Open API keys and copy the default key."]}, "declaredApiHosts": ["api.openweathermap.org"]}}
+{"v": {{protocolVersion}}, "kind": "{{connectionRequirementDirectiveKind}}", "requirement": {"slot": "openweather", "provider": {"name": "OpenWeather"}, "kind": "api_key", "declaredApiHosts": ["api.openweathermap.org"]}}
 ```
+
+This is the shape to copy for every pinned provider. Adding a `fields` array here — even a
+correct one — would get the whole requirement refused.
 
 ### Example: no directive — an app with no external API
 

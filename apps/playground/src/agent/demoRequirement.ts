@@ -76,9 +76,9 @@ export function demoRequirementVariant(): DemoRequirementVariant | null {
 /**
  * A bridge-speaking app that fires ONE net-request at the e2e https stub.
  *
- * THE PORT IS THE WHOLE REMAP. The app dials the REAL provider host —
- * `api.exchange.coinbase.com`
- * — which is what the requirement declares and what the user reviews and freezes, so the
+ * THE PORT IS THE WHOLE REMAP. The app dials the host the requirement DECLARES —
+ * `api.meridian-exchange.example`
+ * — which is what the user reviews and freezes, so the
  * journey exercises a ceiling a real app would actually have. Only the resolution is
  * local: the connection-wizard Playwright project maps that name to 127.0.0.1, and the
  * non-default port picks the stub's listener. An e2e that authored `stub.snug.test` would
@@ -107,7 +107,7 @@ const NET_DEMO_APP_HTML = `<!doctype html>
         parent.postMessage({ v: V, type: 'snug:app-announce', appId: 'demo-connected-app',
           displayName: 'connected app', iconColor: '#3ba36f' }, '*');
         parent.postMessage({ v: V, type: 'snug:net-request', requestId: 'net-1',
-          instanceId: instanceId, url: 'https://api.exchange.coinbase.com:43120/v2/accounts', method: 'GET' }, '*');
+          instanceId: instanceId, url: 'https://api.meridian-exchange.example:43120/v2/accounts', method: 'GET' }, '*');
       }
       return;
     }
@@ -152,23 +152,31 @@ const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<strin
    * THE MOTIVATING DEFECT IN FIXTURE FORM: three distinct secrets and an HMAC-signed
    * header template — exactly the shape v3's `llmProposalSchema` could not express.
    *
-   * IT NAMES "Coinbase Exchange" AND `api.exchange.coinbase.com`, and after P4 that is
-   * load-bearing rather than incidental. P4 added a `coinbase` REGISTRY ENTRY pinning
-   * `api.coinbase.com`, which extends the registry-borrow ban to that name and that host.
-   * A variant declaring plain "Coinbase" plus `api.coinbase.com` while authoring its own
-   * `fields` and `headerTemplate` is now REFUSED by Guard 2b — correctly, because the
-   * registry cannot substitute a per-app field list, and substitution would otherwise
-   * lend registry legitimacy to an authored credential prompt.
+   * IT NAMES AN UNPINNED PROVIDER — "Meridian Exchange" on
+   * `api.meridian-exchange.example` — and that is load-bearing rather than incidental.
    *
-   * Coinbase Exchange is a genuinely different product on a genuinely different host, so
-   * this is an honest declaration rather than an evasion — and it matches the shape the
-   * P3 build fixtures already use (`coinbaseBuildFixture.test.ts`). The three-field HMAC
-   * journey the wizard e2e drives is preserved intact; only the brand it names is the
-   * precise one it actually dials.
+   * P4 pinned a `coinbase` REGISTRY ENTRY, and P5 widened the registry-borrow ban to
+   * BRAND-ADJACENT names (`findBrandAdjacentRegistryKeys`). Under that ban any name
+   * carrying the "coinbase" segment — plain "Coinbase", and "Coinbase Exchange" too —
+   * is a borrow, so a variant that also authors its own `fields` and `headerTemplate` is
+   * REFUSED by Guard 2b. That refusal is correct: credential-prompt copy rendered beside
+   * a registry-grade brand is exactly what substitution would otherwise legitimize.
+   *
+   * The earlier "Coinbase Exchange is a genuinely different product, so this is honest"
+   * reasoning is deliberately NOT preserved. It is true about the world and useless as a
+   * guard: admission cannot verify that a brand-adjacent name belongs to a real
+   * neighbouring product, and an attacker's "Coinbase Pro" makes exactly the same claim.
+   * A genuinely different provider earns a registry entry of its own through a reviewed
+   * PR; a FIXTURE just needs a name it does not have to borrow.
+   *
+   * So the variant moved to an unpinned provider. What this journey exists to exercise —
+   * three distinct secrets, an HMAC-signed header template, a registration walkthrough —
+   * is preserved byte-for-byte; only the brand changed, and it changed to one the fixture
+   * is entitled to author.
    */
   coinbase: {
     slot: 'coinbase',
-    provider: { name: 'Coinbase Exchange', docsUrl: 'https://docs.cdp.coinbase.com/exchange' },
+    provider: { name: 'Meridian Exchange', docsUrl: 'https://docs.meridian-exchange.example' },
     kind: 'api_key',
     fields: [
       { key: 'api_key', label: 'API key', type: 'secret', description: 'the key id from your API settings page', required: true },
@@ -176,9 +184,9 @@ const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<strin
       { key: 'passphrase', label: 'Passphrase', type: 'secret', description: 'the passphrase you chose at key creation', required: true },
     ],
     registration: {
-      consoleUrl: 'https://portal.cdp.coinbase.com/access/api',
+      consoleUrl: 'https://meridian-exchange.example/access/api',
       instructions: [
-        'sign in to your Coinbase account',
+        'sign in to your Meridian Exchange account',
         'open API settings and choose new API key',
         'copy the key, the secret, and the passphrase',
       ],
@@ -191,7 +199,7 @@ const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<strin
           '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}',
       },
     },
-    declaredApiHosts: ['api.exchange.coinbase.com'],
+    declaredApiHosts: ['api.meridian-exchange.example'],
   },
   /**
    * THE BEARER VARIANT EXISTS TO EXERCISE THE NO-REGISTRATION PATH: a requirement with no

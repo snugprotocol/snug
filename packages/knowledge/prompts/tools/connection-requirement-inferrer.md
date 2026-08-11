@@ -88,12 +88,12 @@ Documentation says: "Every request must include CB-ACCESS-KEY, CB-ACCESS-SIGN,
 CB-ACCESS-TIMESTAMP and CB-ACCESS-PASSPHRASE. The CB-ACCESS-SIGN header is the
 base64-encoded HMAC-SHA256 of the timestamp + method + requestPath + body, signed
 with your base64-decoded secret key. The API is at
-https://api.exchange.coinbase.com."
+https://api.meridian-exchange.example."
 
 Output:
 
 ```json
-{"requirement":{"slot":"coinbase","provider":{"name":"Coinbase Exchange"},"kind":"api_key","fields":[{"key":"api_key","label":"API Key","type":"text","required":true},{"key":"api_secret","label":"API Secret","type":"secret","required":true},{"key":"passphrase","label":"Passphrase","type":"secret","required":true}],"registration":{"consoleUrl":"https://exchange.coinbase.com/profile/api","instructions":["Open your Coinbase Exchange profile and choose API.","Create a new API key with View permission.","Choose a passphrase and write it down — it is not shown again.","Copy the key and secret before closing the dialog."]},"request":{"headerTemplate":{"CB-ACCESS-KEY":"{{{api_key}}}","CB-ACCESS-PASSPHRASE":"{{{passphrase}}}","CB-ACCESS-TIMESTAMP":"{{request.timestamp}}","CB-ACCESS-SIGN":"{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}"}},"declaredApiHosts":["api.exchange.coinbase.com"]},"confidence":0.9,"evidence":["Every request must include CB-ACCESS-KEY, CB-ACCESS-SIGN, CB-ACCESS-TIMESTAMP and CB-ACCESS-PASSPHRASE.","The API is at https://api.exchange.coinbase.com."]}
+{"requirement":{"slot":"meridian","provider":{"name":"Meridian Exchange"},"kind":"api_key","fields":[{"key":"api_key","label":"API Key","type":"text","required":true},{"key":"api_secret","label":"API Secret","type":"secret","required":true},{"key":"passphrase","label":"Passphrase","type":"secret","required":true}],"registration":{"consoleUrl":"https://meridian-exchange.example/profile/api","instructions":["Open your Meridian Exchange profile and choose API.","Create a new API key with View permission.","Choose a passphrase and write it down — it is not shown again.","Copy the key and secret before closing the dialog."]},"request":{"headerTemplate":{"CB-ACCESS-KEY":"{{{api_key}}}","CB-ACCESS-PASSPHRASE":"{{{passphrase}}}","CB-ACCESS-TIMESTAMP":"{{request.timestamp}}","CB-ACCESS-SIGN":"{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}"}},"declaredApiHosts":["api.meridian-exchange.example"]},"confidence":0.9,"evidence":["Every request must include CB-ACCESS-KEY, CB-ACCESS-SIGN, CB-ACCESS-TIMESTAMP and CB-ACCESS-PASSPHRASE.","The API is at https://api.meridian-exchange.example."]}
 ```
 
 All three credentials are declared because the provider requires all three.

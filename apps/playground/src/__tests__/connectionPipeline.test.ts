@@ -47,12 +47,12 @@ const SLOT = 'coinbase';
 /**
  * The parent plan's motivating requirement, in the shape P0 verified expressible. The
  * signature is the Coinbase-Exchange one pinned in the task brief — five message parts,
- * `hmac_sha256_b64`, EXCHANGE host (`api.exchange.coinbase.com`, not the retail host: a
+ * `hmac_sha256_b64`, EXCHANGE host (`api.meridian-exchange.example`, not the retail host: a
  * wrong host freezes a ceiling that refuses every real request and presents as an auth bug).
  */
 const coinbaseRequirement = {
   slot: SLOT,
-  provider: { name: 'Coinbase Exchange', docsUrl: 'https://docs.cdp.coinbase.com/exchange' },
+  provider: { name: 'Meridian Exchange', docsUrl: 'https://docs.meridian-exchange.example' },
   kind: 'api_key',
   fields: [
     { key: 'api_key', label: 'API Key', type: 'text', required: true },
@@ -60,9 +60,9 @@ const coinbaseRequirement = {
     { key: 'passphrase', label: 'Passphrase', type: 'secret', required: true },
   ],
   registration: {
-    consoleUrl: 'https://exchange.coinbase.com/profile/api',
+    consoleUrl: 'https://meridian-exchange.example/profile/api',
     instructions: [
-      'Open your Coinbase Exchange profile',
+      'Open your Meridian Exchange profile',
       'Create an API key',
       'Copy the key, secret and passphrase',
     ],
@@ -76,7 +76,7 @@ const coinbaseRequirement = {
         '{{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}',
     },
   },
-  declaredApiHosts: ['api.exchange.coinbase.com'],
+  declaredApiHosts: ['api.meridian-exchange.example'],
 } as const;
 
 const requirementWith = (patch: Record<string, unknown>): Record<string, unknown> => ({
@@ -87,7 +87,7 @@ const requirementWith = (patch: Record<string, unknown>): Record<string, unknown
 /** A build reply closing with the directive, exactly as the KB teaches it. */
 function replyWithDirective(requirement: unknown): string {
   return [
-    'your coinbase portfolio tracker is ready — it shows a "connect Coinbase" state until you connect.',
+    'your meridian portfolio tracker is ready — it shows a "connect Coinbase" state until you connect.',
     '```json',
     JSON.stringify({
       v: PROTOCOL_VERSION,
@@ -104,7 +104,7 @@ const CONNECTED_HTML = [
   '<!DOCTYPE html><html><head><title>Coinbase Tracker</title></head><body>',
   '<script type="text/babel">',
   '  const { fetch: connectedFetch } = useConnectedFetch();',
-  '  connectedFetch("https://api.exchange.coinbase.com/accounts");',
+  '  connectedFetch("https://api.meridian-exchange.example/accounts");',
   '</script></body></html>',
 ].join('\n');
 
@@ -405,7 +405,7 @@ describe('P2-AC4 — an identical re-emitted requirement is a deterministic NO-O
     const outcome = await persistConnectionRequirement(db, {
       appId: 'app-edit',
       requirement: requirementWith({
-        declaredApiHosts: ['api.exchange.coinbase.com', 'ws-feed.exchange.coinbase.com'],
+        declaredApiHosts: ['api.meridian-exchange.example', 'ws-feed.meridian-exchange.example'],
       }),
       channel: 'inference',
     });
@@ -436,7 +436,7 @@ describe('P2-AC5 — a changed requirement on an APPROVED row STAGES, never repl
     // The edit widens the host set — the exact silent-widening the pending column exists
     // to prevent.
     const widened = requirementWith({
-      declaredApiHosts: ['api.exchange.coinbase.com', 'exfil.example.com'],
+      declaredApiHosts: ['api.meridian-exchange.example', 'exfil.example.com'],
     });
     const outcome = await persistConnectionRequirement(db, {
       appId: APP,
@@ -501,7 +501,7 @@ describe("P2-AC6 — a `user`-provenance requirement is NEVER overwritten by inf
 
     const outcome = await persistConnectionRequirement(db, {
       appId: APP,
-      requirement: requirementWith({ declaredApiHosts: ['api.exchange.coinbase.com', 'other.example.com'] }),
+      requirement: requirementWith({ declaredApiHosts: ['api.meridian-exchange.example', 'other.example.com'] }),
       channel: 'inference',
     });
 

@@ -54,13 +54,13 @@ const OTHER_APP = 'app-p3-restored-2';
 
 const coinbaseRequirement = {
   slot: 'coinbase',
-  provider: { name: 'Coinbase' },
+  provider: { name: 'Meridian Exchange' },
   kind: 'api_key',
   fields: [
     { key: 'api_key', label: 'API key', type: 'secret', required: true },
     { key: 'api_secret', label: 'API secret', type: 'secret', required: true },
   ],
-  declaredApiHosts: ['api.coinbase.com', 'api.exchange.coinbase.com'],
+  declaredApiHosts: ['api.meridian-exchange.example', 'api.eu.meridian-exchange.example'],
 } as const satisfies Record<string, unknown>;
 
 const oauthRequirement = {
@@ -416,7 +416,7 @@ describe('RESTORED 7 — a second open is REFUSED and the first session survives
     expect(connectionWizardStepStore.get()).toBe('credentials');
     expect(connectionWizardStore.get()?.appId).toBe(APP);
     expect(connectionWizardStore.get()?.slot).toBe('coinbase');
-    expect(text()).toContain('Coinbase');
+    expect(text()).toContain('Meridian Exchange');
     expect(text()).not.toContain('Fake IdP');
   });
 
@@ -550,7 +550,7 @@ describe('RESTORED 8 — a blank REQUIRED field blocks the save and names the fi
 // is the entire REMOVED side, and deleting it leaves every existing test green while the
 // diff silently drops what is going away. That is a half-truth in the one screen whose
 // only job is to be complete: a user re-approving a connection that DROPS
-// `api.exchange.coinbase.com` would be shown a screen implying nothing was lost, and would
+// `api.eu.meridian-exchange.example` would be shown a screen implying nothing was lost, and would
 // have no way to notice that the app is about to stop reaching a host they depend on.
 //
 // MUTATIONS THIS KILLS: deleting the `before`-side loop in `diffLines`; dropping the
@@ -564,7 +564,7 @@ describe('RESTORED 9 — the diff shows what is being REMOVED, not only what is 
   const narrowed = {
     ...coinbaseRequirement,
     fields: [{ key: 'api_key', label: 'API key', type: 'secret', required: true }],
-    declaredApiHosts: ['api.coinbase.com'],
+    declaredApiHosts: ['api.meridian-exchange.example'],
   };
 
   beforeEach(async () => {
@@ -580,10 +580,10 @@ describe('RESTORED 9 — the diff shows what is being REMOVED, not only what is 
 
     const removed = [...diff!.querySelectorAll('[data-diff="removed"]')].map((n) => n.textContent ?? '');
     const joined = removed.join(' | ');
-    expect(joined, 'the host leaving the ceiling must be on screen').toContain('api.exchange.coinbase.com');
+    expect(joined, 'the host leaving the ceiling must be on screen').toContain('api.eu.meridian-exchange.example');
     // STILL LISTED, not deleted from the view: a host that vanishes from the list is
     // indistinguishable from a host that was never there, which is the failure mode.
-    expect(diff!.textContent ?? '').toContain('api.exchange.coinbase.com');
+    expect(diff!.textContent ?? '').toContain('api.eu.meridian-exchange.example');
     // And it says WHY it is there, in words. An unlabeled row reads as "unchanged".
     expect(joined).toMatch(/no longer requested|removed/i);
   });
@@ -602,12 +602,12 @@ describe('RESTORED 9 — the diff shows what is being REMOVED, not only what is 
     const byState = (state: string): string =>
       [...diff.querySelectorAll(`[data-diff="${state}"]`)].map((n) => n.textContent ?? '').join(' | ');
 
-    expect(byState('removed')).toContain('api.exchange.coinbase.com');
-    expect(byState('added'), 'a dropped host is not an addition').not.toContain('api.exchange.coinbase.com');
-    expect(byState('unchanged'), 'a dropped host is not unchanged').not.toContain('api.exchange.coinbase.com');
+    expect(byState('removed')).toContain('api.eu.meridian-exchange.example');
+    expect(byState('added'), 'a dropped host is not an addition').not.toContain('api.eu.meridian-exchange.example');
+    expect(byState('unchanged'), 'a dropped host is not unchanged').not.toContain('api.eu.meridian-exchange.example');
     // The host that survives reads as unchanged, so the removal is legible AS a removal by
     // contrast rather than by the user having to remember the old list.
-    expect(byState('unchanged')).toContain('api.coinbase.com');
+    expect(byState('unchanged')).toContain('api.meridian-exchange.example');
   });
 });
 
@@ -624,8 +624,8 @@ describe('RESTORED 9 — the diff shows what is being REMOVED, not only what is 
 // renders `row.allowedHosts` verbatim, shows the punycode. After the rebuild there is not
 // one `xn--` assertion anywhere in v4.
 //
-// WHY IT IS A DISCLOSURE PROPERTY RATHER THAN A COSMETIC ONE. `аpi.coinbase.com` with a
-// Cyrillic 'а' is a DIFFERENT host from `api.coinbase.com` and renders identically in
+// WHY IT IS A DISCLOSURE PROPERTY RATHER THAN A COSMETIC ONE. `аpi.meridian-exchange.example` with a
+// Cyrillic 'а' is a DIFFERENT host from `api.meridian-exchange.example` and renders identically in
 // every font a user will ever see. The punycode form is the only rendering in which the
 // two are visibly different, and the review screen is the exact moment the user is being
 // asked to freeze a ceiling that includes it. Showing the unicode form back would mean
@@ -647,7 +647,7 @@ describe('RESTORED 10 — a unicode homograph host is disclosed in its xn-- puny
     // A Cyrillic 'а' (U+0430) in place of the Latin 'a', plus a plainly non-ASCII host.
     // Both must reach the screen as xn-- forms, or the review is drawing the attacker's
     // disguise for them.
-    declaredApiHosts: ['аpi.coinbase.com', 'bücher.example'],
+    declaredApiHosts: ['аpi.meridian-exchange.example', 'bücher.example'],
   };
 
   it('the review screen renders the punycode form, and NOT the unicode one', async () => {
@@ -658,15 +658,15 @@ describe('RESTORED 10 — a unicode homograph host is disclosed in its xn-- puny
     const hosts = container!.querySelector('[data-testid="review-hosts"]')?.textContent ?? '';
     expect(hosts, 'a unicode host must be disclosed as punycode').toContain('xn--');
     expect(hosts).toContain('xn--bcher-kva.example');
-    // The Cyrillic homograph of api.coinbase.com — visually identical, cryptographically
+    // The Cyrillic homograph of api.meridian-exchange.example — visually identical, cryptographically
     // and DNS-wise a different host entirely.
-    expect(hosts).toContain('xn--pi-6kc.coinbase.com');
+    expect(hosts).toContain('xn--pi-6kc.meridian-exchange.example');
 
     // THE LOAD-BEARING NEGATIVE: the raw unicode must not be what the user reads, or the
     // punycode assertion above is satisfied by a screen that shows BOTH and still lets the
     // homograph pass as the real thing.
     expect(hosts, 'the unicode form is the disguise — it must not be the disclosure').not.toContain(
-      'аpi.coinbase.com',
+      'аpi.meridian-exchange.example',
     );
     expect(hosts).not.toContain('bücher.example');
   });
@@ -677,7 +677,7 @@ describe('RESTORED 10 — a unicode homograph host is disclosed in its xn-- puny
     declare(homographRequirement, { approve: true });
     const frozen = db.getConnection(APP, 'homograph')!.allowedHosts;
     expect(frozen).toContain('xn--bcher-kva.example');
-    expect(frozen).toContain('xn--pi-6kc.coinbase.com');
+    expect(frozen).toContain('xn--pi-6kc.meridian-exchange.example');
     expect(frozen).not.toContain('bücher.example');
 
     openConnectionWizard({ appId: APP, slot: 'homograph', source: 'settings' });
@@ -712,8 +712,8 @@ describe('RESTORED 11 — the full frozen host list, and the empty state', () =>
       slot: 'many-hosts',
       fields: [{ key: 'api_key', label: 'API key', type: 'secret', required: true }],
       declaredApiHosts: [
-        'api.coinbase.com',
-        'api.exchange.coinbase.com',
+        'api.meridian-exchange.example',
+        'api.eu.meridian-exchange.example',
         'api.prime.coinbase.com',
         'ws.coinbase.com',
         'files.coinbase.com',

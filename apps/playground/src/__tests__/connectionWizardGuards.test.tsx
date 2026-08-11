@@ -51,10 +51,10 @@ const SLOT = 'coinbase';
 
 const coinbaseRequirement = {
   slot: SLOT,
-  provider: { name: 'Coinbase' },
+  provider: { name: 'Meridian Exchange' },
   kind: 'api_key',
   fields: [{ key: 'api_key', label: 'API key', type: 'secret', required: true }],
-  declaredApiHosts: ['api.coinbase.com'],
+  declaredApiHosts: ['api.meridian-exchange.example'],
 } as const satisfies Record<string, unknown>;
 
 /**
@@ -405,7 +405,7 @@ describe('GUARD 3 — every approval transition invalidates the app net grants (
     // verdict from the OLD ceiling becomes a bypass of the new one.
     db.stagePendingRequirement(APP, SLOT, {
       ...coinbaseRequirement,
-      declaredApiHosts: ['api.coinbase.com', 'api.exchange.coinbase.com'],
+      declaredApiHosts: ['api.meridian-exchange.example', 'api.eu.meridian-exchange.example'],
     });
     const invalidate = vi.spyOn(net, 'invalidateNetGrants');
     openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings', mode: 'reapprove' });
@@ -538,14 +538,24 @@ describe('GUARD 5 — a credential-bearing kind with ZERO fields REFUSES rather 
   // successful connection — whatever future path produces it. It is written against the
   // function that touches the secret, for the same reason the B1 wall is restated there.
   const NO_FIELDS_APP = 'app-p4-nofields';
-  const NO_FIELDS_SLOT = 'coingecko';
+  const NO_FIELDS_SLOT = 'nomad-metrics';
 
-  /** A requirement of a credential-bearing kind that declares no fields at all. */
+  /**
+   * A requirement of a credential-bearing kind that declares no fields at all.
+   *
+   * THE PROVIDER MUST BE ONE THE REGISTRY DOES NOT PIN (P5). It used to name CoinGecko,
+   * and once P4 gave CoinGecko a pinned `fields` entry the registry-borrow ban SUBSTITUTES
+   * that field in — so the fixture stopped being fieldless and this guard silently stopped
+   * testing its own property. (It only surfaced when the playground test helper began
+   * wiring the production `admissionGate`, which it previously omitted.) An unpinned
+   * provider is the only way a genuinely fieldless credential requirement can exist, which
+   * is exactly the state this guard exists to refuse.
+   */
   const fieldlessRequirement = {
     slot: NO_FIELDS_SLOT,
-    provider: { name: 'CoinGecko' },
+    provider: { name: 'Nomad Metrics' },
     kind: 'api_key',
-    declaredApiHosts: ['api.coingecko.com'],
+    declaredApiHosts: ['api.nomad-metrics.example'],
   } as const satisfies Record<string, unknown>;
 
   async function seedApprovedFieldless(): Promise<void> {

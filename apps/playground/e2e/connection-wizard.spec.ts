@@ -2,13 +2,18 @@
 // the GRANDMA WALKTHROUGH end-to-end through the real app shell, on the v4
 // `snug_connections` step machine.
 //
-// FOUR JOURNEYS, one per credential shape the wizard must actually carry:
-//   1. api_key MULTI-FIELD — the motivating Coinbase defect: key + secret + passphrase,
+// FIVE JOURNEYS — one per credential shape the wizard must carry, plus the starter shape:
+//   1. api_key MULTI-FIELD — the motivating three-secret defect: key + secret + passphrase,
 //      an HMAC-signed header template, a registration walkthrough. This is the journey
 //      whose absence started the rewrite.
 //   2. bearer_token — the single-token shape.
 //   3. basic_auth   — the two-field username/password shape.
 //   4. oauth2_auth_code — register (redirect URI) → connect popup → done.
+//   5. STARTER shape (P5) — a requirement declaring NO fields, whose credential boxes come
+//      from the well-known REGISTRY via the borrow ban's substitution. Added because the
+//      four `?demoreq=starter-*` variants had unit coverage only, and the P4 defect it
+//      guards against (registry field lists as dead code ⇒ zero input boxes, wizard still
+//      reporting success) is invisible to a test that never mounts the wizard.
 //
 // `oauth2_client_creds` IS DELIBERATELY NOT A JOURNEY HERE, and that is stated rather
 // than silently skipped (fold T-mn4): it is covered at the P1 EXECUTOR layer, where the
@@ -16,13 +21,18 @@
 // beyond a save). Adding a UX journey for it would assert nothing the P1 tests do not
 // already assert, at the cost of a slow browser round-trip.
 //
-// STUB-HOST PATTERN, unchanged from AL-03/AL-04: the AUTHORED hosts in each requirement
-// are the REAL provider hosts (api.coinbase.com and friends) — an e2e that authored
-// `stub.snug.test` would prove the wizard works on a host no real app declares. What is
-// reviewed and frozen is therefore the real ceiling, while resolution happens at the
-// BROWSER: the connection-wizard project maps those names to 127.0.0.1 with
-// `--host-resolver-rules`, and the non-default port picks the local stub's listener. No
-// request leaves the machine.
+// STUB-HOST PATTERN, unchanged from AL-03/AL-04: each requirement's AUTHORED hosts are
+// ordinary provider-shaped hostnames — an e2e that authored `stub.snug.test` would prove
+// the wizard works on a host no real app declares. What is reviewed and frozen is
+// therefore a realistic ceiling, while resolution happens at the BROWSER: the
+// connection-wizard project maps those names to 127.0.0.1 with `--host-resolver-rules`,
+// and the non-default port picks the local stub's listener. No request leaves the machine.
+//
+// Journey 1's provider is UNPINNED (`Meridian Exchange` / `api.meridian-exchange.example`)
+// as of P5: P4 pinned `coinbase` in the well-known registry and P5 widened the borrow ban
+// to brand-adjacent names, so a fixture authoring its own fields + header template beside
+// any coinbase-segment name is refused. The journey's subject is the three-field HMAC
+// shape, which is unchanged.
 //
 // Journey 4's host is `idp.snug.test` rather than a real IdP, and that is a CONSTRAINT
 // worth naming: an OAuth journey NAVIGATES the browser to the authorize URL and POSTs to
@@ -56,6 +66,8 @@ const CB_SECRET = 'ZTJlLWNiLXNlY3JldC0yMjIyLW5vdC1hLXJlYWwtc2VjcmV0';
 const CB_PASSPHRASE = 'e2e-cb-passphrase-3333';
 const BEARER = 'e2e-bearer-4444';
 const BASIC_PASSWORD = 'e2e-basic-password-5555';
+/** Journey 5's starter token — a bearer secret typed into a REGISTRY-pinned field. */
+const STARTER_TOKEN = 'e2e-starter-token-6666';
 
 test.use({ ignoreHTTPSErrors: true });
 
@@ -79,19 +91,42 @@ function wizard(page: Page): ReturnType<Page['locator']> {
 }
 
 /**
- * Open the wizard from the requirement card, tolerating the card's post-declaration
- * re-render.
+ * Open the wizard from the requirement card.
  *
- * THE RACE THIS FIXES (1 failure in 5 full-suite runs, never in isolation): the card
- * mounts as soon as the directive is parsed, then re-renders when the declaration is
- * finalized post-turn. A click dispatched between those two renders hits a node that is
- * detached before the event lands — "element was detached from the DOM, retrying". Playwright's
- * auto-retry usually outruns it; under full-suite scheduling it sometimes does not.
+ * THE FLAKE THIS FIXES, and the correction to its earlier diagnosis (P5).
  *
- * Waiting for the BUTTON to be stable — rather than only for the card to be visible — is
- * what makes this deterministic: `toBeEnabled` resolves against the currently-attached
- * node, so the click that follows targets a node that has survived at least one settle.
- * This is a test-harness fix; it changes no product behavior and weakens no assertion.
+ * This helper used to say the card "mounts as soon as the directive is parsed, then
+ * re-renders when the declaration is finalized post-turn", so a click could land on a
+ * DETACHED node. That reading is wrong on two counts, both checked rather than reasoned
+ * about. The card renders only from `message.connection`, which is written by ONE
+ * `patchMessage` in useBuilderChat (the post-turn patch) — there is no earlier mount to
+ * race. And the sibling render that follows (`setBusy(false)` inserting the
+ * `builder-resume` note before `<ChatLog>`) does not remount the subtree at all: React
+ * keeps the node across that insertion, which a reconciliation probe confirmed
+ * (same node, still connected).
+ *
+ * What the failing run's call log ACTUALLY says, captured by reproducing it under
+ * `--repeat-each=4 --workers=3`:
+ *
+ *     waiting for element to be visible, enabled and stable
+ *       - element is not stable
+ *     ...
+ *       - <header class="shell-header">…</header> intercepts pointer events
+ *
+ * Two real, product-side causes, neither of them a detach:
+ *   1. `.artifact-card` animates in with a 220ms `sheet-up` transform, so the button is a
+ *      MOVING hit area and Playwright correctly refuses to click it;
+ *   2. after `scrollIntoView`, the sticky `.shell-header` (z-index 20) covers the button,
+ *      so the pointer event is routed to the header.
+ *
+ * Both are fixed IN THE PRODUCT, where they were: `.artifact-card` now honors
+ * `prefers-reduced-motion` and carries `scroll-margin-top` to clear the sticky header
+ * (theme/app.css), and this project runs with `reducedMotion: 'reduce'`. Cause 2 was a
+ * genuine user-facing defect — a real user scrolling that card to the top could not click
+ * it either.
+ *
+ * So this helper stays deliberately plain: the assertions below are the real ones, and no
+ * retry loop is hiding a moving or covered target.
  */
 async function openWizardFromCard(page: Page): Promise<void> {
   const card = page.getByTestId('connection-requirement-card');
@@ -115,18 +150,19 @@ test('journey 1 — api_key MULTI-FIELD (the Coinbase shape): review → registe
 
   // ---- REVIEW: everything the requirement carries is on this screen (P3-AC2).
   const review = wizard(page);
-  await expect(review).toContainText('Coinbase');
+  await expect(review).toContainText('Meridian');
   await expect(review).toContainText(/a guess, not an authority/i);
   // The header template, verbatim, in a code box — the "exactly what will be sent" claim.
   await expect(review.getByTestId('review-header-template')).toContainText('CB-ACCESS-SIGN');
   await expect(review.getByTestId('review-header-template')).toContainText('{{request.timestamp}}');
   // The complete host list + the freeze copy.
-  // `api.exchange.coinbase.com` since P4: the demo requirement moved off the bare
-  // `api.coinbase.com`, which P4 pinned in the well-known registry — declaring it while
-  // authoring its own fields + header template is now refused by the registry-borrow ban
-  // (Guard 2b). Coinbase Exchange is a genuinely different host, so the three-field HMAC
-  // journey is unchanged; only the brand it names is the one it actually dials.
-  await expect(review.getByTestId('review-hosts')).toContainText('api.exchange.coinbase.com');
+  // `api.meridian-exchange.example` since P5. P4 pinned `coinbase` in the well-known
+  // registry and P5 widened the borrow ban to BRAND-ADJACENT names, so "Coinbase
+  // Exchange" is now a borrow just as plain "Coinbase" was — and a fixture that also
+  // authors its own fields + header template is refused by Guard 2b. The journey's
+  // subject is the three-field HMAC SHAPE, not the brand, so the fixture moved to an
+  // unpinned provider it is entitled to author and the shape is unchanged.
+  await expect(review.getByTestId('review-hosts')).toContainText('api.meridian-exchange.example');
   await expect(review).toContainText(/freezes at approval/i);
   // Registration steps render as plain text — never a link (P3-AC5).
   await expect(review.getByTestId('review-registration-steps').locator('a')).toHaveCount(0);
@@ -238,6 +274,55 @@ test('journey 4 — oauth2_auth_code: register (redirect uri) → connect popup 
 
   await expect(wizard(page)).toContainText(/connected/i, { timeout: 15_000 });
   expect(await page.content()).not.toContain('e2e-access-token-abc');
+});
+
+/**
+ * JOURNEY 5 — a STARTER-shaped requirement, where the credential boxes come from the
+ * REGISTRY rather than from the declaration (P5, carried finding (d)).
+ *
+ * WHY THIS NEEDED A BROWSER, when `demoRequirementStarters.test.ts` already drives all
+ * four variants through schema → admission → template lint. That unit test proves the
+ * requirement is ADMITTED and that substitution returns the pinned fields. It cannot prove
+ * the wizard RENDERS them, because it never mounts the wizard — and "the registry field
+ * list is present in the admitted object" and "the user sees a labelled input" are exactly
+ * the two facts that came apart in P4, where the registry field lists were dead code and
+ * starters reached the credential step with ZERO input boxes while the wizard still
+ * reported success. A unit test of the same shape was green throughout that defect.
+ *
+ * So this journey asserts the thing only a browser can see: a requirement that declares NO
+ * `fields` at all still puts a real, correctly-labelled credential input on screen, and the
+ * value typed into it is stored and scrubbed. `starter-github` is the variant used because
+ * its pinned field (`token` / "Personal access token") is a single unambiguous box and its
+ * kind is `bearer_token`, so no OAuth popup is involved.
+ */
+test('journey 5 — a STARTER requirement renders the REGISTRY-pinned credential field (P5 (d))', async ({ page }) => {
+  test.skip(!hasApp, AWAITS);
+  await buildWithRequirement(page, 'starter-github');
+  await openWizardFromCard(page);
+
+  // The declaration names GitHub and nothing else — the display name on screen is the
+  // registry's, substituted by the borrow ban rather than authored by the manifest.
+  await expect(wizard(page)).toContainText('GitHub');
+  await expect(wizard(page).getByTestId('review-hosts')).toContainText('api.github.com');
+  await wizard(page).getByRole('button', { name: /approve this connection/i }).click();
+
+  // The registry carries a `registration` walkthrough for GitHub, so the register screen
+  // renders it — the manifest supplied none.
+  await expect(wizard(page).getByTestId('register-steps').locator('li').first()).toBeVisible();
+  await wizard(page).getByRole('button', { name: /i've got my credentials/i }).click();
+
+  // THE ASSERTION THIS JOURNEY EXISTS FOR: the credential step shows the REGISTRY's
+  // labelled input even though the requirement declared no `fields`. Zero boxes here is
+  // precisely the P4 defect, and it would be invisible to a unit test.
+  await expect(wizard(page)).toContainText(CLAUSE_5);
+  const token = wizard(page).getByLabel('Personal access token');
+  await expect(token).toBeVisible();
+  await token.fill(STARTER_TOKEN);
+  await wizard(page).getByRole('button', { name: /save my credentials/i }).click();
+
+  await expect(wizard(page)).toContainText(/connected/i);
+  // C1 — the typed secret is nowhere in the page once the wizard closes.
+  expect(await page.content()).not.toContain(STARTER_TOKEN);
 });
 
 test('the run surface carries NO inference affordance in any wizard session (P3-AC6, Q5)', async ({ page }) => {

@@ -142,13 +142,56 @@ mistaken for a lookalike defense:
 |---|---|
 | non-ASCII homoglyph (`ѕpotify`) | the charset guard, at the schema |
 | registry-key evasion via homoglyph | the charset guard, at the schema |
+| **brand-adjacent name (`Spotify Inc`, `Coinbase Pro`, `CoinbaseInc`)** | **the registry-borrow ban's name trigger** — see the P5 amendment below |
 | ASCII lookalike (`5potify`) that names a real host | the **registry-borrow ban's host trigger** — declaring `api.spotify.com` hits the ban regardless of the name |
 | ASCII lookalike that names no trusted host | the **strong review's provenance copy** — "proposed by a model — a guess, not an authority" |
 
-The host trigger is the load-bearing one. A lookalike name is only *useful* to an
-attacker if it also reaches a real provider's host, and that is exactly what the
-intersection check catches. A lookalike that borrows nothing is a human-judgment problem,
-and we say so rather than implying a technical control we do not have.
+The host trigger is the load-bearing one for the LOOKALIKE row. A lookalike name is only
+*useful* to an attacker if it also reaches a real provider's host, and that is exactly what
+the intersection check catches. A lookalike that borrows nothing is a human-judgment
+problem, and we say so rather than implying a technical control we do not have.
+
+#### P5 amendment — the name trigger also fires on BRAND-ADJACENT names
+
+**Recorded 2026-08-10 (TASK-20260810-p5-security-close), reproduced by execution before it
+was fixed.**
+
+As originally shipped the name trigger used `lookupWellKnownProvider`, i.e. exact-key
+lookup after `toLowerCase().replace(/[^a-z0-9]/g,'')`. That collapses case and punctuation
+but **not added words**, so:
+
+- `Spotify`, `SPOTIFY!`, `S-p-o-t-i-f-y` → **hit** the registry (ban fires);
+- `Spotify Inc`, `Spotify Connect`, `Spotify-Premium`, `Coinbase Pro`, `CoinbaseInc`,
+  `GitHub Enterprise` → **missed** it entirely, and were admitted with attacker-authored
+  `fields`, an attacker-authored `headerTemplate` and attacker-chosen hosts, while the
+  review screen rendered the trusted brand.
+
+The host trigger caught this only when the attacker *also* declared a registry host — which
+an attacker aiming a credential at their own server never does.
+
+The name trigger now falls through to a **boundary-aware segment-run match**
+(`findBrandAdjacentRegistryKeys`, packages/auth): the name is split on non-alphanumerics
+*and* camelCase/digit humps, and any contiguous run of segments that joins to a registry
+key is a borrow. `CoinbaseInc` is reachable because of the hump split; `GITHUB ENTERPRISE`
+because a run of capitals is not itself a hump.
+
+**The false-positive side was weighed and is pinned by test.** A plain substring test would
+have fired on `Slackline Weather`, `Slacker Radio`, `Googol Analytics` and `Gmailer Tools`
+— genuinely different providers whose names merely contain a registry name's letters.
+Boundary-aware matching misses all of them, and a negative test holds that line.
+
+**A brand-adjacent name is treated as borrowing even when the product is genuinely
+different.** `Coinbase Exchange` is a real, distinct product on a distinct host and it
+still fires the ban. This is deliberate: admission cannot verify that a brand-adjacent name
+belongs to a real neighbouring product, an attacker's `Coinbase Pro` makes exactly the same
+claim, and a user reading either one beside an authored credential prompt cannot tell them
+apart. A genuinely different provider earns a registry entry of its own through a reviewed
+PR — the one channel the ban exempts. The in-repo fixtures that named `Coinbase Exchange`
+moved to unpinned providers rather than the guard being softened for them.
+
+**Still out of scope, unchanged:** pure-ASCII lookalikes (`5potify`, `Spotlfy`). They share
+no segment with a registry key, so this amendment does not reach them and must not be
+described as doing so.
 
 ### The registry-borrow ban fires on name OR host, for all kinds
 
@@ -170,6 +213,46 @@ Inventing placeholder endpoint URLs would have been worse than absent —
 `deriveConnectionAllowedHosts` unions endpoint hosts into the frozen ceiling, so a
 placeholder would silently widen it. **P0 widens the type only; the static-kind data
 entries are P4.**
+
+#### P5 amendment — admission must be IDEMPOTENT (a shipped defect, now closed)
+
+**Recorded 2026-08-10 (TASK-20260810-p5-security-close), found by driving a starter through
+a real browser and confirmed present on the P4 baseline.**
+
+Admission deliberately runs **twice** on the production path: once in
+`persistConnectionRequirement` (the pipeline), and again inside the db accessor via the
+injected `admissionGate`, so that no write can bypass the guard. That is the right design —
+`packages/db` owns the rule "nothing persists unadmitted" and the composition root supplies
+the registry-aware gate.
+
+But substitution was not idempotent with respect to Guard 2b. Pass 1 **adds** the registry's
+pinned `fields` to a bare requirement; pass 2 then read that seat as *borrower-authored
+credential-prompt copy* and refused it. The guard rejected the value it had itself just
+produced.
+
+**Blast radius: every registry-backed starter.** All six shipped manifests declare a pinned
+provider and (correctly) omit `fields`, so all of them failed to persist with
+`write_refused`. The user saw "the agent proposed a connection that failed validation" and
+**no connect card at all** — the same user-visible outcome as the P4 dead-field-list defect
+it was supposed to have fixed.
+
+**Why nothing caught it.** Two gaps compounded, and both are now closed:
+
+1. no test drove a starter through `putDeclaredConnection` — the starter coverage stopped
+   at schema/admission/manifest parity, which passed throughout;
+2. the playground's `installTestUserDb` opened the db **without** the production
+   `admissionGate`, so the entire suite ran against a database whose write accessors had no
+   registry-aware admission. The second pass was structurally unreachable from any test.
+
+**The fix.** A `fields` list that is byte-for-byte the registry's pinned list no longer
+counts as an occupied prompt seat (`fieldsMatchRegistry`). Receiving the pinned value is not
+an authoring act. Anything that differs in any property — one relabelled input, one added or
+dropped key — is still authored and still refused, which a negative test pins alongside the
+idempotence test.
+
+The general rule this leaves behind: **a test double for the user DB may differ from
+production in its backend and nothing else.** Guards are behavior under test, never
+scaffolding to omit.
 
 ### `userLayer` is registry-synthesized only
 
@@ -383,12 +466,26 @@ three:
    (which decides *who* receives it) and the human who read the template verbatim in the
    review. This is the direct cost of admitting LLM-authored templates, and it is why the
    review renders them uncollapsed.
-2. **Helper encoding defeats the value-match scrubber by design.** `{{base64(api_secret)}}`
-   — the UNQUOTED form, which genuinely references the credential — in an odd header is
-   not caught by `scrub.ts`, which documents re-encoded values as out of scope
-   (`scrub.ts:16–19`). `hmac_sha256_b64` adds one row to this: the decoded key never
-   leaves the render, but the base64 digest output is outside the scrubber's reach by the
-   same documented boundary. The host ceiling remains the wall. Note the *quoted* form
+2. **Helper encoding defeats the value-match scrubber by design.** The boundary is
+   narrower than "base64 output is not caught", and stating it loosely understates one
+   case while overstating another. The scrubber matches the values it actually INJECTED,
+   and the executor feeds it the RENDERED headers — so with `{{base64(api_secret)}}`
+   injected, a response echoing that same base64 string IS redacted. Executed:
+
+   ```
+   scrub('x=U1VQRVJTRUNSRVRLRVk=', {'X-Debug':'U1VQRVJTRUNSRVRLRVk='}) -> "x=***"     (redacted)
+   scrub('raw: SUPERSECRETKEY',    {'X-Debug':'U1VQRVJTRUNSRVRLRVk='}) -> unchanged   (NOT redacted)
+   scrub('raw: SUPERSECRETKEY',    {'X-Debug':'SUPERSECRETKEY'})       -> "raw: ***"  (redacted)
+   ```
+
+   The genuinely uncaught case is sharper: the UNDERLYING raw secret is never in the
+   candidate set, because the base64 form is what was injected — so a response echoing the
+   raw value passes through untouched. URL-escaped, hex, double-base64 and
+   split-across-JSON echoes are uncaught for the same reason (`scrub.ts:16–19` documents
+   re-encoded values as out of scope). `hmac_sha256_b64` adds one row: the decoded key
+   never leaves the render, but the digest output is outside the scrubber's reach by the
+   same boundary. The host ceiling remains the wall — the scrubber was never the primary
+   one. Note the *quoted* form
    `{{base64('api_secret')}}` is no longer an instance of this risk at all — it renders
    the literal string, per §Quoted helper arguments above — and a reviewer may now rely on
    quotes meaning what they appear to mean.

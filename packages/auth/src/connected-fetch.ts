@@ -527,14 +527,20 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
     if (template !== undefined) {
       // Lint against the spec's DECLARED field keys, not the keys actually loaded above.
       // The two differ whenever an optional field has no stored value: `fields` would be
-      // missing that key, so the engine's own gate (which lints `Object.keys(ctx.fields)`)
-      // would reject a template that is legitimately correct for this spec. Linting the
-      // declaration here is both stricter in the case that matters — a key naming nothing
-      // in the spec is rejected even if a same-named value happened to be loaded — and
-      // kinder in the case that does not.
-      assertLintedTemplate(template, { fieldKeys: spec.fields.map((field) => field.key) });
+      // missing that key. Linting the declaration here is both stricter in the case that
+      // matters — a key naming nothing in the spec is rejected even if a same-named value
+      // happened to be loaded — and kinder in the case that does not.
+      //
+      // The SAME list is handed to the render seat as `declaredFieldKeys`. That is the
+      // whole fix for the shipped optional-field defect: this lint and the engine's own
+      // lint used to consult different lists, so a template naming a blank `required:
+      // false` field passed here and was rejected there, and the connection reported
+      // CONNECTED while every request failed closed. One key source, checked twice.
+      const declaredFieldKeys = spec.fields.map((field) => field.key);
+      assertLintedTemplate(template, { fieldKeys: declaredFieldKeys });
       return renderAuthHeaderTemplate(template, {
         fields,
+        declaredFieldKeys,
         request: { method: request.method, url: request.url, ...(request.body !== undefined ? { body: request.body } : {}) },
       });
     }
