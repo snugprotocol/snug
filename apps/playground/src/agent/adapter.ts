@@ -14,6 +14,7 @@ import {
 
 import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
 import { demoAuthChatScript, demoAuthVariant } from './demoAuth.js';
+import { demoRequirementChatScript, demoRequirementVariant } from './demoRequirement.js';
 import { DEMO_APP_HTML, DEMO_APP_REPLY, DEMO_APP_TITLE } from './demoApp.js';
 import { ARTIFACT_WRITE_TOOL_NAME } from './tools.js';
 import { webllmAdapter } from './webllm/webllmAdapter.js';
@@ -42,6 +43,10 @@ function demoChatScript(): MockTurn[] {
   // a deterministic auth-directive script; zero footprint when the flag is absent.
   const authVariant = demoAuthVariant();
   if (authVariant !== null) return demoAuthChatScript(authVariant);
+  // P3 e2e seam (`?demoreq=<variant>`): the v4 `connection_requirement` script. Separate
+  // from `?demoauth=` so the v3 variants keep working untouched.
+  const requirementVariant = demoRequirementVariant();
+  if (requirementVariant !== null) return demoRequirementChatScript(requirementVariant);
   return [
     {
       deltas: ['let me check the app template first…'],

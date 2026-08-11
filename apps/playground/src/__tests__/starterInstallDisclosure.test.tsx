@@ -22,7 +22,7 @@ import type { UserDb } from '@snugprotocol/db';
 
 import RunView from '../run/RunView.js';
 import { modeStore } from '../state/mode.js';
-import { STARTER_PREFIX } from '../starter/starterApps.js';
+import { loadStarterHtml, STARTER_PREFIX } from '../starter/starterApps.js';
 import {
   __setDeclarationManifestsForTests,
   __resetDeclarationManifestsForTests,
@@ -40,9 +40,17 @@ const DEMO_STARTER = `${STARTER_PREFIX}${DEMO_FOLDER}`;
 const DECLARED_HOST = 'api.example.com';
 const BUNDLED_HTML = '<!doctype html>\n<html><body><script>const app = 1;</script></body></html>\n';
 
+/**
+ * MIGRATED TO v4 (TASK-20260810-p4-starters). The v3 proposal shape is now a strict
+ * rejection, so a suite still injecting it would assert that the disclosure renders
+ * nothing — passing for the wrong reason. The rendering assertions here are unchanged;
+ * `starterInstallDisclosureV4.test.tsx` owns the new-behaviour ones (field labels stay
+ * hidden, the declared row appears, a v3 manifest discloses nothing).
+ */
 const VALID_MANIFEST = JSON.stringify({
-  kindHint: 'api_key',
-  providerName: 'Example API',
+  slot: 'example-api',
+  provider: { name: 'Example API' },
+  kind: 'api_key',
   declaredApiHosts: [DECLARED_HOST],
 });
 
@@ -99,8 +107,12 @@ beforeEach(async () => {
   sessionStorage.clear();
   modeStore.set('subscription');
   db = await installTestUserDb();
+  // The bundled HTML must be the bytes the install path actually writes (the real
+  // `examples/*/app.html` the glob serves), or the two-fact vouch fails for a reason
+  // unrelated to what this suite asserts. See the same note in the V4 disclosure suite.
+  const bundledHtml = (await loadStarterHtml(DEMO_STARTER)) ?? BUNDLED_HTML;
   __setDeclarationManifestsForTests({
-    [DEMO_FOLDER]: { manifest: VALID_MANIFEST, html: BUNDLED_HTML },
+    [DEMO_FOLDER]: { manifest: VALID_MANIFEST, html: bundledHtml },
   });
 });
 
@@ -142,9 +154,15 @@ describe('a declaring starter discloses its connection before install', () => {
     expect(copy, 'installing must never read as connecting').not.toContain('will connect');
   });
 
-  it('installing is still the plain act — no auth row, no credential', async () => {
-    // Guards the claim the copy makes. If install ever started writing an auth row, this
-    // test fails and the copy above becomes a lie.
+  it('installing never GRANTS — a row may appear, an approval may not', async () => {
+    // The claim the copy makes, restated at the exact line P4 moved.
+    //
+    // WHAT CHANGED: install now COPIES the manifest into `snug_connections` as a
+    // `declared` row (AC3), so "no row appears" is no longer the property to assert —
+    // asserting it would now be asserting that the copy is broken. What the copy PROMISES
+    // is untouched and is what this test guards: a declared row grants nothing. No
+    // `approved` status, no `approved_at`, and no credential — so the copy above ("nothing
+    // is connected until you review and approve it yourself") stays true.
     const el = await renderRun(DEMO_STARTER);
     await settleUntil(() => disclosure() !== null, 'the install disclosure');
 
@@ -155,8 +173,12 @@ describe('a declaring starter discloses its connection before install', () => {
       await new Promise((r) => setTimeout(r, 5));
     });
     await settleUntil(() => db.listApps().length > 0, 'the starter to be installed');
+    await settleUntil(() => db.listConnections().length > 0, 'the copied declared row');
 
-    expect(db.listAuthSpecs(), 'installing must not approve or create a connection').toHaveLength(0);
+    for (const row of db.listConnections()) {
+      expect(row.status, 'installing declares — it never approves').toBe('declared');
+      expect(row.approvedAt, 'no grant may exist without a review').toBeUndefined();
+    }
   });
 });
 

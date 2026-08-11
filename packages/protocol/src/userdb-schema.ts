@@ -29,7 +29,11 @@
 // v3 (AL-02, internal draft — excluded from the AL-13 spec push): adds `snug_auth_specs`
 // (Dynamic Auth spec metadata; see auth-schema.ts). Credential VALUES live in
 // `snug_secrets` under `auth:` keys (ADR-0014) — never in this table.
-export const USERDB_SCHEMA_VERSION = 3 as const;
+// v4 (TASK-20260810, Dynamic Auth v2 — still internal draft): adds `snug_connections`, the
+// slot-keyed requirement/grant split (see connection-requirement.ts). ADDITIVE by the
+// cutover rule (fold B1): `snug_auth_specs` keeps shipping until its last consumers are
+// rewired in P3, so BOTH tables exist at v4 and neither migration replays over the other.
+export const USERDB_SCHEMA_VERSION = 5 as const;
 
 /** Size/retention limits for the user DB (spec-normative, rule R6 family). */
 export const USERDB_LIMITS = {
@@ -61,10 +65,23 @@ export const USERDB_TABLES = {
   chatThreads: 'snug_chat_threads',
   chatMessages: 'snug_chat_messages',
   sync: 'snug_sync',
+  /**
+   * DROPPED AT v5 (TASK-20260810-p3-wizard, fold B1's named exit). The NAME survives the
+   * table because the v5 migration has to say what it is dropping, and because the
+   * self-heal guard must be able to assert the table's ABSENCE. Nothing creates it: it is
+   * gone from `USERDB_DDL`, and no accessor reads or writes it any more.
+   */
   authSpecs: 'snug_auth_specs',
+  connections: 'snug_connections',
 } as const;
 
 export type UserDbTable = (typeof USERDB_TABLES)[keyof typeof USERDB_TABLES];
+
+/**
+ * The v4 connection table, single-homed for the accessors and the self-heal guard in
+ * @snugprotocol/db (which interpolate it into SQL and must never retype the literal).
+ */
+export const USERDB_CONNECTIONS_TABLE = USERDB_TABLES.connections;
 
 // ---------------------------------------------------------------- app-data namespace
 
@@ -207,20 +224,60 @@ export const USERDB_DDL: readonly string[] = [
     meta TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.sync} (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-  // v3 (AL-02, plan D5/N3): approval-stable Dynamic Auth spec metadata ONLY. Dynamic
-  // connection state lives at secret key `auth:<appId>:_connection` and pending flow
-  // state in memory / `auth:_flow:<flowId>` — a token refresh must not dirty this
-  // synced table (content-hash gate) nor change default-export bytes. `allowed_hosts`
-  // is the FROZEN host union (JSON array, sorted/unique/lowercase), computed at
-  // approval and enforced at the accessor write boundary (HostFreezeViolation).
-  `CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.authSpecs} (
-    app_id TEXT PRIMARY KEY,
-    spec_json TEXT NOT NULL,
+  // v3's `snug_auth_specs` was DROPPED at v5 (TASK-20260810-p3-wizard, fold B1's named
+  // exit). It is deliberately absent from this DDL rather than kept as a tombstone: a
+  // `CREATE TABLE IF NOT EXISTS` left here would be re-created by the self-heal replay on
+  // every open, resurrecting the surface the v5 migration exists to remove.
+  // v4 (TASK-20260810, Dynamic Auth v2): the REQUIREMENT/GRANT split, slot-keyed.
+  //
+  // The composite PK is the whole point of the table (R6): v3 put `app_id` alone on the
+  // PK, which made one-connection-per-app STRUCTURAL — "Dropbox + OneDrive + Google Drive
+  // in one app" was unrepresentable, not merely discouraged.
+  //
+  // REQUIREMENT half (what the app NEEDS — written at authoring moments, credential-free):
+  // `requirement_json` (a connectionRequirement, validated by connection-requirement.ts),
+  // `requirement_version` (bumped on every persisted replacement whose canonical hash
+  // differs — fold T-mn3), `provenance`, `confidence`.
+  //
+  // GRANT half (what the user ALLOWED — written only on explicit approval): `status`,
+  // `allowed_hosts` (the FROZEN union, JSON array, sorted/unique/normalized, computed by
+  // `deriveConnectionAllowedHosts` at approval and enforced at the accessor write
+  // boundary), `approved_at`.
+  //
+  // `pending_requirement_json` (fold B2): an edit's changed requirement for an APPROVED
+  // row STAGES here while the grant keeps serving `requirement_json` and its OLD frozen
+  // hosts, so no edit can silently widen a ceiling. The Settings "needs re-approval" pill
+  // is DERIVED from `status='approved' AND pending_requirement_json IS NOT NULL` — never a
+  // fourth status value.
+  //
+  // `imported` (fold T-M5) is a COLUMN, not a JSON key: the requirement schema is a
+  // strictObject with no seat for an envelope flag, so an embedded flag would be a
+  // strict-parse rejection at the very boundary that must not fail closed on our own data.
+  //
+  // `revoked_at` is a TOMBSTONE — the row SURVIVES revoke. That is what closes the
+  // revoke-reversal finding: the wizard can tell the user "you revoked this before, on
+  // <date>" instead of silently re-offering a clean-looking connection.
+  //
+  // Custody is ADR-0014 byte-for-byte unchanged: credential VALUES live in `snug_secrets`
+  // at `auth:<appId>:<slot>:<fieldKey>` and dynamic connection state at
+  // `auth:<appId>:<slot>:_connection`. Nothing dynamic lives here, so a credential refresh
+  // never dirties this synced table (content-hash gate) nor changes default-export bytes.
+  `CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.connections} (
+    app_id TEXT NOT NULL,
+    slot TEXT NOT NULL,
+    requirement_json TEXT NOT NULL,
+    requirement_version INTEGER NOT NULL,
+    provenance TEXT NOT NULL,
+    confidence REAL,
     status TEXT NOT NULL,
-    allowed_hosts TEXT NOT NULL,
+    pending_requirement_json TEXT,
+    imported INTEGER NOT NULL DEFAULT 0,
+    allowed_hosts TEXT NOT NULL DEFAULT '[]',
     approved_at TEXT,
+    revoked_at TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, slot)
   )`,
 ];
 

@@ -68,6 +68,24 @@ export function createAppTargetSink(options: CreateAppTargetSinkOptions = {}): A
       return ensureThreadTargetId();
     },
 
+    /**
+     * WHY THERE IS NO CONNECTION WORK HERE (P2 fold).
+     *
+     * The first cut of P2 scanned a `reply` option for the build's
+     * `connection_requirement` directive and gated the save on it. That could never work,
+     * and the review proved it by execution: `artifact_write` is a MID-TURN TOOL CALL, but
+     * the KB instructs the model to emit the directive AFTER the app write, as the closing
+     * fenced block of its reply. The reply text — and therefore the directive — does not
+     * exist when `write()` runs. The option was consequently never passed by any of the
+     * three production callers, `declared` was structurally always undefined, and the gate
+     * refused EVERY connected build.
+     *
+     * So the declaration moved to where the reply actually exists: the post-turn
+     * finalizer, `finalizeConnectionDeclaration` in connectionPipeline.ts, called from the
+     * same seam that already scans for the v3 `auth_wizard` directive. `write()` is back to
+     * what it has always been — the place an app version lands — and it saves the user's
+     * HTML unconditionally.
+     */
     async write(html, title) {
       const db = await getDb();
       const targetId = options.pinnedAppId ?? (await ensureThreadTargetId());

@@ -4,6 +4,304 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-10 — INTERNAL DRAFT, not staged for any push — TASK-20260810-p4-starters (Dynamic Auth v2, P4)
+**Excluded from every spec push** (owner decision 2026-08-05 spec-gating; the auth surface
+publishes no earlier than Beta exit). **`llmProposalSchema` and its `LlmProposal` type are
+DELETED from the `packages/protocol` public surface** — fold B1's last named exit item.
+
+**Why.** `llmProposalSchema` was `authSpecHintsSchema.omit({registrationConsoleUrl,
+registrationInstructions, headerTemplate, fields, userLayerFields})`. Those five omissions
+were AL-04's answer to credential misdirection, and they were also precisely why a
+Coinbase-shaped requirement collapsed to the transformer's one generic field (the owner's
+founding defect: "Coinbase needs key + secret + passphrase"). `connectionRequirementSchema`
+replaces it and pays for the re-admitted seats a different way — bounds at parse, the
+template lint, the registry-borrow ban, and a strong field-by-field review that renders
+every re-admitted byte verbatim before a credential is collected (ADR-0017).
+
+**What the deletion actually removes: the EXPORT, not the shape.** The omit-list survives
+as the module-private `legacyProposalSchema` because two shapes still embed it and both are
+PERSISTED: `authWizardDirectiveSchema` (chat-meta rows, strictly re-validated on every
+read) and `inferrerProposalSchema` (wizard-ephemeral inferrer output; a knowledge-package
+contract test still feeds the shipped prompt's few-shot examples through the real parser).
+Deleting the shape outright would stop historical `auth_wizard` chat messages from
+rendering — silent data loss on a row the user can still see. Removing the export is what
+closes the channel to new authors; the validation behaviour of both persisted shapes is
+bit-for-bit unchanged, which the in-package snapshot asserts: `directiveKeys` and
+`inferrerKeys` are byte-identical across this change and only `proposalKeys` disappears.
+
+**Consumers retired with it.** `apps/playground/src/starter/starterDeclaration.ts` (the
+starter-manifest resolver, rewired to `connectionRequirementSchema` — a manifest is now a
+full requirement and passes `admitConnectionRequirement` on the `starter` channel);
+`packages/auth/src/auth-spec-inferrer.ts` (the v3 inferrer, deleted with its export block)
+and its last entry point `runAuthSpecInference` in
+`apps/playground/src/agent/inferrerAdapter.ts`, which P3 had already recorded as having no
+production caller. `examples/validate.test.mjs` moves its manifest gate to
+`connectionRequirementSchema`. `inferrerProposalSchema` and `authWizardDirectiveSchema` are
+KEPT — verified consumer-by-consumer rather than assumed orphaned.
+
+**Registry data (`packages/auth`, no protocol change).** Three static-kind entries —
+`coinbase`, `openweather`, `coingecko` — with credential `fields` and registration
+walkthroughs, on the `WellKnownOauthProvider.endpoints` optionality P0 already shipped. No
+default scopes and no runtime `.well-known` discovery, per the standing registry posture.
+Adding them EXTENDS the registry-borrow ban's reach to those names and hosts, which is the
+intended effect and is pinned by test.
+
+**AMENDED after the fresh-context review — the SUBSTITUTION SEMANTICS of the borrow ban
+changed, and that is a contract-shaped change even though no schema moved.**
+
+1. **`fields` is now SUBSTITUTED, not merely refused.** As first shipped, the registry's
+   `fields` data was dead: `applyRegistryValues` never wrote it, so all four
+   registry-backed starters reached the credential step with ZERO input boxes and the
+   wizard reported SUCCESS having stored no credential. The founding defect was not closed
+   but inverted — from one nameless box to none. The ban's contract is now explicitly
+   ASYMMETRIC: a borrower that OMITS `fields` RECEIVES the registry's pinned list; a
+   borrower that AUTHORS them is still REFUSED (Guard 2b, unchanged). Refusing the
+   authoring case only ever made sense once the omitting case was answered.
+   `request.headerTemplate` and `testRequest` remain refusal-only — the registry pins WHAT
+   to ask for, never where a typed secret is sent.
+
+2. **`endpoints` and `pkce` are substituted whenever the REGISTRY has them**, rather than
+   only when the declaration already carried the key. The original condition's stated
+   rationale (`oauth2AuthCodeSchema` needs authorize+token together) argues against writing
+   when the registry LACKS endpoints, not against writing when it has a complete pair and
+   the declaration has none — which is the shape starters actually ship. A bare Spotify
+   manifest previously resolved to `authorizeUrl: ''`. The `entry.endpoints !== undefined`
+   guard stays: a static-kind provider must not sprout URLs that would union a nonexistent
+   host into the frozen ceiling via `deriveConnectionAllowedHosts`.
+
+3. **Substituted `fields` are DEEP-COPIED.** `WELL_KNOWN_PROVIDERS_REGISTRY` is a module
+   singleton consulted on every admission; handing out live references would let one
+   downstream caller's edit repoint the pinned truth process-wide.
+
+4. **Coinbase's third field key is `passphrase`, not `api_passphrase`** — matching the
+   KB-taught template (`CB-ACCESS-PASSPHRASE: {{passphrase}}`) and seven other declaration
+   sites. The template engine resolves tokens against the field key, so the fork would have
+   sent that header present-but-EMPTY once fields began arriving. Now pinned by a lint that
+   reads both sides, per the repo's 2026-08-03 shared-literal lesson.
+
+**Host-side hardening that rides with it (`apps/playground`, no protocol change).**
+`saveConnectionCredentials` now REFUSES when a credential-bearing kind resolves to zero
+fields, instead of returning `{ok:true}` and advancing the machine to `done`. `kind:'none'`
+is exempt — it collects nothing by design. This is defence in depth for the class, not the
+cause: the substitution fix is what makes fields arrive.
+
+---
+
+## 2026-08-10 — INTERNAL DRAFT, not staged for any push — TASK-20260810-p3-wizard (Dynamic Auth v2, P3)
+**Excluded from every spec push** (owner decision 2026-08-05 spec-gating; the auth surface
+publishes no earlier than Beta exit). **userdb schema v4 → v5: `snug_auth_specs` is
+DROPPED.** This is fold B1's named exit and the first DESTRUCTIVE userdb migration.
+
+**What changed in `packages/protocol`.** `USERDB_SCHEMA_VERSION` 4 → 5. The
+`snug_auth_specs` CREATE TABLE is REMOVED from `USERDB_DDL` — deliberately not left as a
+tombstone, because the Q9 self-heal guard replays the DDL on every open and a surviving
+`CREATE TABLE IF NOT EXISTS` would rebuild the surface the migration exists to remove. The
+table NAME stays in `USERDB_TABLES` so the v5 migration can name what it drops and so the
+DDL-absence test has something to assert against. The DDL snapshot (SPEC_SYNC-gated) moves
+by exactly those 9 lines.
+
+**What changed in `packages/db`.** The v5 migration runs `DROP TABLE IF EXISTS
+snug_auth_specs` (IF EXISTS because the self-heal path can produce an open whose stamped
+version never had its tables created; a throw there would make the file permanently
+unopenable). Removed with it: the six accessors (`putAuthSpec`, `approveAuthSpec`,
+`reapproveAuthSpec`, `getAuthSpec`, `listAuthSpecs`, `deleteAuthSpec`), `AuthSpecRow`,
+`HostFreezeViolation` (v4 STAGES a changed requirement instead of throwing),
+`parseAuthSpecStrict`, and the `reconcileImportedAuthSpecs` import pass —
+unreachable because `migrate()` runs before reconciliation, so an imported v3-era file has
+already had the table dropped. `UserDbImportReport.droppedAuthSpecs` is gone; the
+`droppedConnections` half is unchanged.
+
+**CREDENTIAL VALUES ARE NOT TOUCHED.** They live in `snug_secrets` and survive. What a
+v3-era user loses is the v3 GRANT, so a previously-connected app re-enters the wizard and
+is re-approved into a v4 row. That re-approval is deliberate: v4 freezes a SLOT-KEYED
+ceiling that v3's app-keyed row cannot express, and inheriting an approval across that
+change would mean honoring consent for a shape the user never saw.
+
+**What changed in `packages/auth`.** The executor's v3 branch is gone: `NetSpecReader`,
+`NetSpecRow`, the `specReader` half of the `ConnectedFetchDeps` union (now a plain object
+carrying `connectionReader`), and `spec-scope.ts` / `requireApprovedSpecScope`.
+`NetConnectionReader` / `NetConnectionRow` are newly EXPORTED — until a host could name
+them, the v3 reader was the only reachable path out of this package, which is why the
+playground had not cut over. `llmProposalSchema` and `createAuthSpecInferrer` are
+deliberately UNTOUCHED: their retirement is P4's named exit item, not this one.
+
+**One error-code rename, no behavior change.** An off-ceiling host now returns
+`NET_NOT_APPROVED` rather than `NET_HOST_BLOCKED`. v3 read one app-keyed row and could say
+"this host violates THAT row's ceiling"; v4 routes BY host, so an off-ceiling host matches
+no row at all — there is no ceiling that was violated, only a host nothing was approved
+for. The refusal and the zero-fetch guarantee are identical.
+
+---
+
+## 2026-08-10 — INTERNAL DRAFT, not staged for any push — TASK-20260810-p0-contracts (Dynamic Auth v2, P0)
+**Excluded from every spec push** (owner decision 2026-08-05 spec-gating; the auth surface
+publishes no earlier than Beta exit, AL-12 stays HELD). The REQUIREMENT/GRANT SPLIT —
+ADR-0017, amending ADR-0016. Root cause it fixes, verified at source: `llmProposalSchema`
+(render-directive.ts:63–69) is `authSpecHintsSchema.omit({registrationConsoleUrl,
+registrationInstructions, headerTemplate, fields, userLayerFields})`, so every static-kind
+proposal collapsed to one generic field and a Coinbase-shaped requirement (key + secret +
+passphrase + signed CB-ACCESS-* header) was unauthorable through any channel.
+
+**New protocol surface** (`packages/protocol`, INTERNAL — deliberately NOT added to
+`json-schemas.ts` SOURCES, the AL-02/AL-03/AL-04 precedent; the publishes-to-spec line is
+unchanged and the export-set guard still pins it): `connectionRequirementSchema`
+(connection-requirement.ts) — one strict, fully-bounded schema serving three call sites
+(build directive, starter manifest, wizard/user entry). Re-admits the five seats
+`llmProposalSchema` omits and pays for them differently: bounds at parse, a template lint
++ registry-borrow ban in `packages/auth`, and a strong review that renders every
+re-admitted byte verbatim. Seats and bounds: `slot` (`^[a-z0-9][a-z0-9-]{0,39}$`, the
+second half of the new PK) · `provider.name` ≤120 printable-ASCII + NFC (the confusable
+guard, promoted from AL-10) · `kind` — SIX literals, v3's five `AUTH_KINDS` (derived,
+never retyped) plus `none` (Q6, with a parse-time coherence rule: no `fields`, no
+`request`, but `declaredApiHosts` still REQUIRED — keyless never means no host gate) ·
+`fields` 1..8 · `registration.instructions` ≤10 × ≤300 plain text · `request.headerTemplate`
+≤8 entries · `userLayer` (registry-synthesized only) · `declaredApiHosts` 1..32 × ≤253,
+`normalizeAuthHost`-normalized · `testRequest` (GET + path only, Q7). Exported alongside:
+`CONNECTION_KINDS`, `CONNECTION_PROVENANCES`, `CONNECTION_STATUS(ES)`,
+`CONNECTION_SLOT_RULE`, `AUTH_MAX_SLOTS_PER_APP = 8` (fold S-M1),
+`deriveConnectionAllowedHosts` (v3 `deriveAuthAllowedHosts` semantics re-homed on the flat
+shape; sorted+unique+normalized OUTPUT STABILITY is load-bearing — import branch 1 compares
+`allowed_hosts` BYTES, so unstable output would mass-demote every approval on the first
+sync pull after cutover), and `canonicalRequirementHash` (recursive KEY sort,
+whitespace-free JSON; ARRAY order deliberately PRESERVED — `instructions` is a numbered
+walkthrough and `fields` is input order, so sorting would collapse two requirements a user
+reads as different into one identity).
+
+**Directive:** new `connection_requirement` kind + `connectionRequirementDirectiveSchema`
+(`{v, kind, requirement, confidence?, provenance?}`), added ADDITIVELY to the
+`renderDirectiveSchema` union; `confidence`/`provenance` are DISPLAY-ONLY exactly as in
+`auth_wizard` (the host computes provenance from the RECEIVING channel and recomputes
+confidence from the resolved ladder rung; no gating code reads the wire claim).
+`authWizardDirectiveSchema`/`llmProposalSchema` KEEP SHIPPING under the additive cutover
+rule (fold B1: `apps/playground/src/starter/starterDeclaration.ts:31` runtime-imports the
+latter; 33 files touch the v3 surface) — their deletions are named exit items of P4/P3.
+
+**DELETED:** `authRequiredPayloadSchema` — the orphaned unbounded display payload for the
+reserved `AUTH_REQUIRED` code, re-confirmed at ZERO non-test consumers before removal
+(test churn only). The R5 reserved wire CODE is untouched; only the internal payload shape
+goes.
+
+**Storage schema moves to v4** — new table `snug_connections`, the slot-keyed
+requirement/grant split: `PRIMARY KEY (app_id, slot)` (v3's `snug_auth_specs.app_id` was
+the whole PK, making one-connection-per-app STRUCTURAL; v4 makes it doctrine, Q4/R6),
+`requirement_json` + `requirement_version` (bumps on every persisted replacement whose
+canonical form differs, fold T-mn3), `provenance` ∈ {registry, inference, user_docs,
+starter, user}, `status` ∈ {declared, approved, revoked} — exactly THREE, "needs
+re-approval" is DERIVED (`status='approved' AND pending_requirement_json IS NOT NULL`,
+fold B2) and never a fourth value, `pending_requirement_json` (an approved row's staged
+change; the grant keeps serving `requirement_json` + its OLD frozen hosts until
+re-approval), `imported` (a COLUMN — the strict requirement schema has no seat for an
+envelope flag, fold T-M5), `allowed_hosts` (the FROZEN union, unchanged semantics),
+`revoked_at` (TOMBSTONE — closes the revoke-reversal finding). v3→v4 is ADDITIVE: a bare
+idempotent DDL replay, correct here only because v4 adds a whole NEW table; `snug_auth_specs`
+is NOT migrated and keeps shipping alongside (cutover rule), so a v4 file carries both.
+Credential VALUES never enter the table — `snug_secrets` under `auth:<appId>:<slot>:<fieldKey>`,
+connection state `auth:<appId>:<slot>:_connection`, flow `auth:_flow:<flowId>` (slot in
+payload), `auth:_state_hmac` unchanged. ADR-0014 custody byte-for-byte unchanged.
+
+**Two host obligations documented in the draft because omitting them is expensive:** the
+DDL-replay SELF-HEAL guard (Q9 — `migrate()` stamps `user_version` unconditionally, so the
+stamp claims which migrations RAN, never that their tables EXIST; the expected table set is
+verified against `sqlite_master` and idempotent DDL replayed on any miss), and the
+FIRST-V4-OPEN legacy-slice wipe (fold T-M4 — v3's `authCredentialSecretKey` builds
+`auth:<appId>:<field>` with NO slot, so under v4's shape those rows hold REAL credential
+values nothing in v4 lists, reads, or wipes; scoped by SEGMENT COUNT, never by prefix,
+since both shapes start `auth:<appId>:` and a prefix delete would take every live v4
+credential; run ONCE, not per open, because the v3 writer legitimately keeps running
+through the cutover).
+
+**Validation contract** (`packages/auth`, no wire change): the template LINT reconciles the
+enforced surface with the pinned one (fold S-M2) — the engine's HELPERS map is TRIMMED from
+six to four (`unix_ms`/`hmac_sha512`/`sha256` deleted: shipped with no requirement behind
+them, and every unused helper is signing surface), the pinned enum is `timestamp |
+hmac_sha256 | hmac_sha256_b64 | base64`, request tokens are exactly `readRequestField`'s
+switch (`request.method|url|pathAndQuery|body|timestamp`), and the lint makes the engine's
+unknown-token→literal fallback UNREACHABLE from an accepted template. `hmac_sha256_b64` is
+the ONE added encoding-capable variant (ADR-0017 §Coinbase): `base64(HMAC-SHA256(base64decode(secret),
+concat(parts)))` FUSED into one fixed-shape helper rather than exposing a general
+`base64decode()` — Coinbase-Exchange's scheme was inexpressible in three independent ways
+at once (hex-only HMAC, utf8-in base64, no grammar nesting).
+
+**Two Gate-2 review blockers, both PROVEN BY EXECUTION against the built package and fixed
+in this phase, are folded into the above** (ADR-0017 §`request.timestamp` and §Quoted
+helper arguments): (1) **quoted-argument parity was a credential-exfiltration hole** —
+the lint skips quoted arguments as literals-by-authorial-intent, but the engine's
+`parseHelperArgs` stripped quotes WITHOUT recording quoted-ness and `resolveArgToken`
+resolved the bare text as a FIELD, so `{{base64('api_key')}}` linted `ok: true` and
+rendered `base64('SUPERSECRET')`. Fixed in the ENGINE (quoted arguments return VERBATIM,
+consulting neither `ctx.fields` nor the request tokens), because widening the lint would
+have left the engine still able to resolve a quoted token to a secret. The spec draft now
+states this as a normative host obligation, not an implementation detail.
+(2) **the pinned Coinbase-Exchange template was INEXPRESSIBLE**, so the fourth helper's
+justification was unrealized and the timestamp memoization protected nothing reachable: a
+helper CALL is not an accepted ARGUMENT form in either the lint or the engine, so
+`timestamp()` could be sent but never SIGNED. Fixed by adding the fifth pinned request
+token `request.timestamp` — a RENDER fact minted by the pass and served from the SAME
+memoized slot as `{{timestamp()}}`, so the two spellings cannot disagree. Nested helper
+calls in argument position remain REJECTED by both lint and engine (the grammar stays
+flat); that rejection is tested, not assumed. The acceptance property is that an HMAC
+recomputed independently from the value SENT in `CB-ACCESS-TIMESTAMP` equals the value
+sent in `CB-ACCESS-SIGN`. The timestamp is memoized per render pass (two evaluations can
+straddle a second boundary → intermittently-invalid signatures).
+
+**Four post-implementation review findings, all reproduced by probe before fixing and all
+mutation-evidenced** (no wire change; admission and storage behavior only):
+(1) the registry-borrow ban left ATTACKER-AUTHORED CREDENTIAL-PROMPT COPY intact —
+substituting hosts and pinning `provider.name` while passing `fields`,
+`request.headerTemplate` and `testRequest` through verbatim made the borrow strictly more
+dangerous, because substitution ADDS legitimacy ("Paste your Spotify password" rendered
+beside registry-grade hosts). Those three seats have no registry counterpart to substitute
+with, so a borrow hit from a non-registry channel that occupies any of them is now REFUSED
+outright; the substituted requirement is still returned on the rejection so a "we refused
+this" review row can never surface `evil.example` or an attacker's rename.
+(2) the AC5 userLayer channel guard had **NO PRODUCTION CALLER** — the property held on
+the function while `putDeclaredConnection` persisted requirements without consulting it,
+so an `inference`-provenance `userLayer` reached storage and its endpoint hosts were
+unioned into the frozen ceiling at approval. Enforcement now sits ON the persist path:
+`putDeclaredConnection` and `stagePendingRequirement` call an admission gate before any
+write, admission runs BEFORE validation so the SUBSTITUTED requirement is what gets
+hashed, host-derived and persisted, and the row's own `provenance` is the channel (staging
+inherits it from the stored row), so the channel judged and the channel recorded cannot
+drift. **Dependency direction, checked and reported:** `@snugprotocol/auth` already depends
+on `@snugprotocol/db`, so calling admission from packages/db would close an import cycle —
+the gate is therefore INJECTED (`OpenUserDbOptions.admissionGate`) and assembled at the
+composition root (`apps/playground/src/state/userdb.ts`, which depends on both). The seam
+is not an on/off switch: packages/db ships `defaultAdmissionGate`, which enforces the
+registry-FREE half (the AC5 userLayer channel rule needs only provenance) and is installed
+whenever a caller injects nothing, so the persist path fails closed on the motivating seat
+even unwired.
+(3) `approveConnection` neither cleared nor refused a STAGED PENDING requirement, so the
+derived "needs re-approval" pill read TRUE on a row the user had just approved and a later
+`reapproveConnection` promoted a never-re-reviewed requirement. It now DISCARDS the staged
+edit (it re-affirms the current requirement and derives its ceiling from
+`requirement_json`, never from the pending column). Discarding rather than throwing is
+deliberate: an app can stage an edit at any time, so throwing would let an attacker deny
+the user their own approval. `reapproveConnection` remains the only promotion path.
+(4) `putDeclaredConnection` never checked `slot === requirement.slot`, producing rows whose
+PK and reviewed content disagreed — the canonical hash and review screen read the
+requirement JSON while the PK, the `auth:<appId>:<slot>:*` credential prefix and the
+revoke/wipe path key off the COLUMN. Now a named `CONNECTION_SLOT_MISMATCH` at
+`putDeclaredConnection`, `stagePendingRequirement` AND `reapproveConnection` (a promoted
+pending row can carry a foreign slot that no current accessor validated). Refused rather
+than normalized to the column: silently rewriting the requirement would change the exact
+bytes the caller is about to hash and show.
+
+Registry-borrow ban now fires on provider-name match **OR** `declaredApiHosts ∩`
+registry `apiHosts`, for ALL kinds (fold S-M3), substituting pinned values rather than
+merging. `WellKnownOauthProvider.endpoints` becomes OPTIONAL (fold T-M1) so static-kind
+providers are representable by `apiHosts`/`registration` alone — TYPE change only, data
+entries are P4; placeholder endpoint URLs were rejected as worse than absent because
+`deriveConnectionAllowedHosts` unions endpoint hosts into the FROZEN ceiling.
+
+**Wire frames/envelope UNCHANGED at v1; `schemas/*.json` UNCHANGED** (no published schema
+delta at all in this phase). Staged prose: `docs/spec-drafts/spec-v0.3-auth.md` — CREATED
+under the owner's explicit 2026-08-10 carve-out from HELD AL-12 (only `spec-v0.2-userdb.md`
+existed; fold T-M2). Doctrine: ADR-0017 (amends ADR-0016 — clause 2 "never persisted" and
+clause 5 "approval is the only writer" amended/refined; "an app may never propose a
+connection at runtime" RE-AFFIRMED, not repealed). **SPEC_SYNC steps 1–3 + 6 taken; steps
+4–5 (push to `snugprotocol/spec`) explicitly NOT taken** — publication requires an explicit
+human ask and the Beta-exit gate stands.
+
 ## 2026-08-06 — INTERNAL DRAFT, not staged for any push — TASK-20260806-auth-wizard (AL-04)
 Render-directive contract + AUTH_REQUIRED payload, INTERNAL protocol surface out of the
 `schemas/` SOURCES (the AL-02/AL-03 precedent; export-set guard extended; prose staged by

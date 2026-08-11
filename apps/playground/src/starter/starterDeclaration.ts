@@ -28,7 +28,8 @@
 // swallowed, because a silent withdrawal drops the user back into the empty wizard this
 // task exists to eliminate, with no diagnostic.
 
-import { llmProposalSchema, type LlmProposal } from '@snugprotocol/protocol';
+import { connectionRequirementSchema, type ConnectionRequirement } from '@snugprotocol/protocol';
+import { admitConnectionRequirement } from '@snugprotocol/auth';
 import type { UserDb } from '@snugprotocol/db';
 
 import { STARTER_PREFIX } from './starterApps.js';
@@ -53,8 +54,8 @@ const htmlModules = import.meta.glob('../../../../examples/*/app.html', {
 export type DeclarationMismatch = 'html_mismatch';
 
 export interface DeclaredIntent {
-  /** The manifest's proposal, verbatim and unenriched. Absent when nothing declared. */
-  declaration?: LlmProposal;
+  /** The manifest's requirement, verbatim and unenriched. Absent when nothing declared. */
+  declaration?: ConnectionRequirement;
   /**
    * Set when a manifest EXISTS for this app's starter but the app no longer matches it.
    * The Settings surface renders this ("this app's code no longer matches its starter");
@@ -105,13 +106,34 @@ function normalize(html: string): string {
 }
 
 /**
- * Parse-and-drop. Invalid JSON and schema-invalid shapes both yield `null` plus ONE
- * console warning — never a throw, never a partial object. The strict `llmProposalSchema`
- * is deliberately reused rather than relaxed: a manifest is first-party today, but this
- * must not become the one place where the proposal contract is looser than the directive
- * channel's, or a future app-import channel would inherit that hole.
+ * Parse-and-drop. Invalid JSON, schema-invalid shapes, and admission refusals all yield
+ * `null` plus ONE console warning — never a throw, never a partial object.
+ *
+ * REWIRED TO v4 (TASK-20260810-p4-starters, the named exit item). This used to parse with
+ * `llmProposalSchema`, which is now DELETED. The change is not cosmetic and is asserted
+ * BEHAVIOURALLY rather than by grep, precisely because this function fails soft: a v3
+ * manifest (`kindHint`/`providerName`) is now REFUSED — it was the only accepted shape
+ * before — and a v4 requirement carrying `fields`/`registration` is now ACCEPTED, which
+ * the omit-list contract structurally could not express. That asymmetry is the proof.
+ *
+ * ADMISSION RUNS HERE, ON THE `starter` CHANNEL. A manifest is first-party and
+ * PR-reviewed, but it is still a CHANNEL, and admission is where a channel's claims are
+ * judged. Two things it does that the schema cannot:
+ *
+ *   1. REFUSES a manifest that authors a `userLayer` (registry-synthesized only). Without
+ *      this the install act would be the one hole every other channel is gated against.
+ *   2. Applies the REGISTRY-BORROW BAN. This is why the four registry-backed starters
+ *      ship BARE manifests: naming CoinGecko or declaring `api.coingecko.com` substitutes
+ *      the registry's pinned hosts, registration walkthrough and display name over
+ *      whatever the manifest said. The user therefore reviews registry-grade copy, and a
+ *      manifest that tried to author its own credential-prompt seats beside a borrowed
+ *      brand is refused outright (Guard 2b) rather than admitted with a partial fix.
+ *
+ * The SUBSTITUTED requirement is what we return, so every downstream surface — the
+ * disclosure, the copied row, the review — sees the pinned values rather than the
+ * declared ones.
  */
-function parseManifest(raw: string, folder: string): LlmProposal | null {
+function parseManifest(raw: string, folder: string): ConnectionRequirement | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -119,12 +141,28 @@ function parseManifest(raw: string, folder: string): LlmProposal | null {
     console.warn(`[snug] examples/${folder}/connection.json is not valid JSON — ignoring its declaration`);
     return null;
   }
-  const result = llmProposalSchema.safeParse(parsed);
+  const result = connectionRequirementSchema.safeParse(parsed);
   if (!result.success) {
-    console.warn(`[snug] examples/${folder}/connection.json does not match the proposal schema — ignoring it`);
+    console.warn(`[snug] examples/${folder}/connection.json does not match the requirement schema — ignoring it`);
     return null;
   }
-  return result.data;
+
+  const admitted = admitConnectionRequirement(result.data, { channel: 'starter' });
+  if (!admitted.ok) {
+    console.warn(
+      `[snug] examples/${folder}/connection.json was refused by requirement admission ` +
+        `(${admitted.issues.map((issue) => issue.path).join(', ')}) — ignoring it`,
+    );
+    return null;
+  }
+  // Re-parse the SUBSTITUTED record: admission is a structural pass over `unknown`, so
+  // this is what turns its output back into a typed requirement rather than casting.
+  const substituted = connectionRequirementSchema.safeParse(admitted.requirement);
+  if (!substituted.success) {
+    console.warn(`[snug] examples/${folder}/connection.json did not survive registry substitution — ignoring it`);
+    return null;
+  }
+  return substituted.data;
 }
 
 /**
@@ -188,7 +226,7 @@ export async function resolveDeclaredIntent(db: UserDb, appId: string): Promise<
 export async function starterDeclarationFor(
   db: UserDb,
   appId: string,
-): Promise<{ declaration: LlmProposal } | null> {
+): Promise<{ declaration: ConnectionRequirement } | null> {
   const intent = await resolveDeclaredIntent(db, appId);
   return intent.declaration === undefined ? null : { declaration: intent.declaration };
 }
@@ -196,6 +234,61 @@ export async function starterDeclarationFor(
 /** The starter id a declaring folder installs as — pinned through the ONE prefix rule. */
 export function declaringStarterId(folder: string): string {
   return `${STARTER_PREFIX}${folder}`;
+}
+
+/**
+ * THE INSTALL ACT AS A COPY (TASK-20260810-p4-starters, AC3/AC4; parent plan R4).
+ *
+ * WHAT CHANGED. Before this phase the declaration was resolved ON DEMAND and never
+ * persisted: every read re-globbed the bundle, re-parsed it, and re-ran the two-fact
+ * vouch. Install now COPIES the manifest into `snug_connections` as a `declared` row, and
+ * from that moment the requirement is the USER'S OWN ROW. That is what makes the zero-key
+ * path work — running an installed starter needs no LLM, no re-resolution and no glob,
+ * because the row is already there.
+ *
+ * WHAT IT NEVER COPIES: a credential. A manifest ships in a public repo. It declares field
+ * DEFINITIONS ("you will need an API key and a secret") and never values, so there is
+ * nothing here that could carry one — and the row lands as `declared`, never `approved`,
+ * so there is no grant for a value to attach to. Install PREFILLS a review; it never
+ * shortens or skips one (C1).
+ *
+ * THE TWO-FACT VOUCH STILL GATES THE COPY, and persistence makes it MORE important rather
+ * than less: an on-demand resolution that was wrong got withdrawn on the next read, but a
+ * wrong ROW persists until someone revokes it. So this routes through
+ * `starterDeclarationFor` — install_source AND both HTML versions — rather than reading
+ * the bundle directly.
+ *
+ * THE LOCK (AC4). Reinstalling is a routine click (the hub dedups on install_source), and
+ * a reinstall that refreshed an APPROVED row would swap the requirement out from under a
+ * grant the user reviewed field-by-field — silently re-pointing a live credential at
+ * whatever the new manifest declares. `putDeclaredConnection` already encodes exactly this
+ * rule: it THROWS on an approved row and on a revoked tombstone. The install act's job is
+ * to HONOR that rather than catch-and-ignore it, so it checks status FIRST and declines
+ * quietly, leaving the throw as the db's backstop rather than this function's control flow.
+ *
+ * Never throws: a starter the user already owns must stay installable.
+ */
+export async function installStarterConnections(db: UserDb, appId: string): Promise<void> {
+  const resolved = await starterDeclarationFor(db, appId);
+  if (resolved === null) return; // declares nothing, or the vouch failed — either way, no row
+
+  const requirement = resolved.declaration;
+  const existing = db.getConnection(appId, requirement.slot);
+
+  // Only a still-`declared` row may be refreshed. An APPROVED row protects a grant the
+  // user reviewed; a REVOKED row is a tombstone, and flipping it back to `declared` would
+  // turn the user's "no" into "ask me again" without them acting. Both decline silently —
+  // a reinstall is not an error.
+  if (existing !== undefined && existing.status !== 'declared') return;
+
+  try {
+    db.putDeclaredConnection(appId, requirement.slot, requirement, 'starter');
+  } catch (error) {
+    // Defense in depth for the races and the caps the status check above cannot see
+    // (AUTH_MAX_SLOTS_PER_APP, a concurrent approval). An install must never break on a
+    // connection that could not be written.
+    console.warn(`[snug] could not copy the declared connection for "${appId}":`, error);
+  }
 }
 
 /**
@@ -211,7 +304,7 @@ export function declaringStarterId(folder: string): string {
  * The id guard matters: an installed app's uuid must never resolve here, or the HTML
  * check could be sidestepped by asking this question instead of the real one.
  */
-export async function starterDeclarationForStarterId(starterId: string): Promise<LlmProposal | null> {
+export async function starterDeclarationForStarterId(starterId: string): Promise<ConnectionRequirement | null> {
   if (!starterId.startsWith(STARTER_PREFIX)) return null;
 
   const folder = starterId.slice(STARTER_PREFIX.length);

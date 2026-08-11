@@ -75,11 +75,25 @@ describe('AL-04 M7 — import-specifier lint + clean-isolation load gate (mutati
     expect(offenders).toEqual([]);
   });
 
-  it('auth-spec-inferrer.test.ts loads and passes standalone — not only in a warmed batch run', () => {
-    // A child vitest run of ONLY the inferrer suite: an import that resolves solely
-    // because a sibling suite warmed the resolver fails here, where it belongs.
+  it('static-kind-registry.test.ts loads and passes standalone — not only in a warmed batch run', () => {
+    // A child vitest run of ONE suite: an import that resolves solely because a sibling
+    // suite warmed the resolver fails here, where it belongs.
+    //
+    // P4 re-pointed this from the v3 `auth-spec-inferrer.test.ts`, deleted with its module
+    // (the named exit item). It does NOT point at the v4 inferrer, and that is a fact
+    // worth recording rather than papering over: `connection-requirement-inferrer.ts` has
+    // no in-package suite — it is exercised from the playground
+    // (`connectionRecovery`/`inferenceNoCredentials`/`connectionSettings`), so naming a
+    // file here that does not exist made vitest exit "No test files found" and the gate
+    // failed for a reason unrelated to module loading. Verified by listing the directory,
+    // not by grep.
+    //
+    // `static-kind-registry.test.ts` is the right subject for the property being pinned:
+    // it is in-package, it is new in this phase, and it imports the full
+    // protocol → well-known-providers → requirement-admission chain that P4 touched — so
+    // a specifier that only resolves in a warmed batch still fails here.
     const packageRoot = join(srcDir, '..');
-    execFileSync('pnpm', ['exec', 'vitest', 'run', 'src/__tests__/auth-spec-inferrer.test.ts'], {
+    execFileSync('pnpm', ['exec', 'vitest', 'run', 'src/__tests__/static-kind-registry.test.ts'], {
       cwd: packageRoot,
       stdio: 'pipe',
       timeout: 120_000,
@@ -87,17 +101,19 @@ describe('AL-04 M7 — import-specifier lint + clean-isolation load gate (mutati
   }, 150_000);
 });
 
-describe('AL-04 — inferrer + spec-scope walk (D2: no knobs, pinned arity)', () => {
-  it('createAuthSpecInferrer takes exactly the deps object; requireApprovedSpecScope exactly (reader, appId)', async () => {
-    const { createAuthSpecInferrer } = await import('../auth-spec-inferrer.js');
-    const { requireApprovedSpecScope } = await import('../spec-scope.js');
-    expect(createAuthSpecInferrer.length).toBe(1);
-    expect(requireApprovedSpecScope.length).toBe(2);
+// P3: `spec-scope.ts` was deleted with the v3 grant surface; this walk now covers the
+// inferrer alone. P4: that inferrer is the v4 `connection-requirement-inferrer` — the v3
+// one was deleted with `llmProposalSchema`. The no-knobs / no-env claims are unchanged,
+// and they matter MORE on the v4 module, which is the one a live wizard calls.
+describe('AL-04 — inferrer walk (D2: no knobs, pinned arity)', () => {
+  it('createConnectionRequirementInferrer takes exactly the deps object', async () => {
+    const { createConnectionRequirementInferrer } = await import('../connection-requirement-inferrer.js');
+    expect(createConnectionRequirementInferrer.length).toBe(1);
   });
 
   it('the inferrer exposes no strictness knob and reads no environment', () => {
-    const files = walkSources().filter(({ name }) => ['auth-spec-inferrer.ts', 'spec-scope.ts'].includes(name));
-    expect(files.map(({ name }) => name).sort()).toEqual(['auth-spec-inferrer.ts', 'spec-scope.ts']);
+    const files = walkSources().filter(({ name }) => ['connection-requirement-inferrer.ts'].includes(name));
+    expect(files.map(({ name }) => name).sort()).toEqual(['connection-requirement-inferrer.ts']);
     for (const { name, text } of files) {
       expect(/\bprocess\.env\b|\bimport\.meta\.env\b/.test(text), `${name} reads environment`).toBe(false);
       expect(/skipValidation|allowInsecure|bypass|insecureMode/i.test(text), `${name} carries a knob`).toBe(false);
@@ -160,7 +176,7 @@ describe('AL-03 named AC — audit bug 3 dies by construction (no strictness fla
         clearApp: async () => undefined,
         getOrCreateStateHmacKey: async () => 'k',
       },
-      specReader: { getAuthSpec: () => undefined },
+      connectionReader: { listConnections: () => [] },
       fetchImpl: async () => new Response(''),
       confirmGate: { confirm: async () => false },
     });

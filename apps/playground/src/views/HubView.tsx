@@ -12,7 +12,7 @@ import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Skeleton } from '../ui/Skeleton.js';
 
-const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blurb: string }>> = {
+const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blurb: string; desktopOnly?: boolean }>> = {
   chess: { emoji: '♞', color: '#8b5cf6', blurb: 'play an opponent with opinions — no server needed' },
   'flying-pig': { emoji: '🐷', color: '#ec4899', blurb: 'tap to keep a pig airborne — pure offline arcade' },
   'habit-tracker': { emoji: '✅', color: '#22c55e', blurb: 'track streaks in a real sqlite file you can export' },
@@ -24,6 +24,15 @@ const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blu
   'pocket-ledger': { emoji: '💰', color: '#16a34a', blurb: 'money in, money out — honest totals you can export' },
   // The connected demo (TASK-20260807-connection-reachability).
   'connection-demo': { emoji: '🔌', color: '#0ea5e9', blurb: 'watch an app reach a real API — and see who approves it' },
+  // The five auth-spectrum starters (HARVESTED from AL-09 / TASK-20260807, roadmap A8b):
+  // one per credential shape, so the connect→approve→inject→scrub path is visible.
+  'crypto-portfolio': { emoji: '🪙', color: '#f59e0b', blurb: 'live coin prices with your own free key — the host holds it' },
+  'weather-planner': { emoji: '🌦️', color: '#3b82f6', blurb: 'plan around real forecasts — connect a weather key you control' },
+  'my-repos': { emoji: '📦', color: '#64748b', blurb: 'your GitHub repos at a glance — a token the app never sees' },
+  'spotify-party-dj': { emoji: '🎧', color: '#10b981', blurb: 'queue the party from your own Spotify — sign in, never share' },
+  // Desktop-labeled (A6 deferred): the Hue bridge lives on your LAN, which a web page
+  // cannot reach — the tile says so instead of offering a connect that cannot work.
+  'hue-lights-party': { emoji: '💡', color: '#e11d48', blurb: 'sync your lights to the party — needs the desktop app', desktopOnly: true },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };
@@ -285,6 +294,21 @@ export function HubView(): ReactElement {
                 data-starter-name={starter.name}
               >
                 {installed ? <span className="tile-installed-badge">installed</span> : null}
+                {/*
+                  HARVESTED from AL-09 with its bug fix intact. Its OWN class,
+                  deliberately — not a reuse of `.tile-installed-badge`. These two badges
+                  mean opposite things ("you own this" vs "you cannot run this here"), and
+                  sharing the class made `.tile-installed-badge` ambiguous:
+                  `dedup.spec.ts` asserts that selector is visible to prove a starter
+                  installed exactly once, and a permanently-present desktop badge turned
+                  that into a strict-mode violation (two elements). Found by the full
+                  Playwright run on the parked branch, 2026-08-08.
+                */}
+                {look.desktopOnly === true ? (
+                  <span className="tile-desktop-badge" data-testid="desktop-only-badge" title="this starter needs the desktop app — its device lives on your home network, which a web page cannot reach">
+                    desktop only
+                  </span>
+                ) : null}
                 {/*
                   The CARD is the control (AC1), matching the installed-app tiles above —
                   a separate "open" button on a card that already looks clickable was two

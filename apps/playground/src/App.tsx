@@ -9,7 +9,7 @@ import { initWebllm } from './state/webllm.js';
 import { initSync, signOut } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
 import { bootUserDb, recoverFresh, useUserDbStatus } from './state/userdb.js';
-import { AuthWizardSheet } from './connections/AuthWizardSheet.js';
+import { ConnectionWizardSheet } from './connections/ConnectionWizardSheet.js';
 import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
 import { Button } from './ui/Button.js';
 import { Logo } from './ui/Logo.js';
@@ -118,10 +118,11 @@ export function App(): ReactElement {
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
         </Routes>
       </main>
-      {/* AL-04 M9: ONE app-level wizard mount — the two entry points (chat directive
-          card, ConnectionsCard) live in different views, and a per-view mount would
-          strand the minutes-lived singleton (and its OAuth flow) on navigation. */}
-      <AuthWizardSheet />
+      {/* ONE app-level wizard mount (P3, inheriting AL-04's M9 reason): the three entry
+          points — chat directive card, Settings slot row, run-header error CTA — live in
+          different views, and a per-view mount would strand the minutes-lived singleton
+          (and any in-flight OAuth exchange) the moment the user navigated. */}
+      <ConnectionWizardSheet />
     </div>
   );
 }

@@ -29,7 +29,8 @@
 └──────────────────────────────────────────────────────────────────────────────────────────┘
    packages/protocol = envelope/frames (v1) + net-request/net-response (AL-03 internal
      draft, own size class, NOT in schemas/) + userdb-schema.ts (spec v0.2 storage
-     surface; v3 internal draft adds snug_auth_specs) + auth-schema.ts (internal)
+     surface; v5 internal draft: snug_connections — snug_auth_specs was dropped at v5)
+     + auth-schema.ts + connection-requirement.ts (internal)
    apps/server (OPTIONAL hub) = /invoke + artifact cache + Google OIDC + /userdb + static
    packages/auth (AL-02/AL-03, ADR-0014) = Dynamic Auth pure core + connected-fetch
      runtime, LOCAL-FIRST: browser-safe DI-pure OAuth service + CredentialStore over the

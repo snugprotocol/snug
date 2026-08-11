@@ -22,9 +22,17 @@ import { fileURLToPath } from 'node:url';
 /**
  * The manifest contract, imported from the SOURCE OF TRUTH rather than restated
  * (TASK-20260807-connection-reachability MINOR 10). `connection.json` is validated at
- * runtime by `llmProposalSchema` in the playground; restating that shape here would let
- * the curation gate and the runtime drift, and the drift would show up as a manifest
- * that passes review and then silently resolves to nothing.
+ * runtime by `connectionRequirementSchema` in the playground; restating that shape here
+ * would let the curation gate and the runtime drift, and the drift would show up as a
+ * manifest that passes review and then silently resolves to nothing.
+ *
+ * REPOINTED AT v4 (TASK-20260810-p4-starters, the NAMED EXIT ITEM). This import used to
+ * be `llmProposalSchema`, which is now DELETED. That schema was the v3 proposal shape —
+ * `authSpecHintsSchema` minus registration copy, header template, and credential field
+ * definitions — and those omissions were exactly why a Coinbase-shaped requirement
+ * collapsed to one generic input. The six shipped manifests are full
+ * `connectionRequirement`s now, so validating them against the old contract would reject
+ * every one of them (verified: it did, loudly, before this line changed).
  *
  * NO try/catch, deliberately. A gate that degrades to "skip the check" when its own
  * dependency is missing is not a gate — it reports success for work it never did. If
@@ -33,7 +41,7 @@ import { fileURLToPath } from 'node:url';
  * resolve (verified: with `packages/protocol/dist` deleted, `turbo run test
  * --filter=examples` rebuilds protocol BEFORE this file runs).
  */
-import { llmProposalSchema } from '@snugprotocol/protocol';
+import { connectionRequirementSchema } from '@snugprotocol/protocol';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -53,6 +61,20 @@ const APPS = [
   // other app — no exemption, no skip — which is what made the rule repair above
   // necessary in the first place.
   'connection-demo',
+  // The AUTH-SPECTRUM starters (harvested from the parked AL-09 branch by
+  // TASK-20260810-p4-starters). One starter per credential shape, so every rung of the
+  // spectrum has a working, reviewable example rather than a doc paragraph:
+  //   crypto-portfolio → api_key (CoinGecko)      weather-planner  → api_key (OpenWeather)
+  //   my-repos         → bearer_token (GitHub)    spotify-party-dj → oauth2_auth_code
+  // `hue-lights-party` is the DELIBERATE NEGATIVE: it reaches a bridge on the user's own
+  // LAN, which a sandboxed web iframe cannot do, so it ships fully alive with the one
+  // impossible control greyed and NO manifest at all. It is in APPS (it has an app.html
+  // and is validated like everything else) and absent from the manifest set on purpose.
+  'crypto-portfolio',
+  'weather-planner',
+  'my-repos',
+  'spotify-party-dj',
+  'hue-lights-party',
 ];
 
 /**
@@ -71,6 +93,21 @@ const LLM_FREE_APPS = new Set([
   // you could not tell whether the body on screen came off the wire or out of a
   // sentence generator.
   'connection-demo',
+  // The five auth-spectrum starters (AL-09 plan v4), LLM-free for the SAME reason as
+  // connection-demo and stated in each app's own section-5 comment: the live data IS the
+  // wow. A model in the loop would make it impossible to tell whether the prices, the
+  // forecast, the repo list, or the playlist came off the wire or out of a sentence
+  // generator — which is precisely what these starters exist to demonstrate.
+  //
+  // Registering them here selects the STRICTER branch of the posture lint (RESPONSE_SCHEMA
+  // must be null AND authored code must never call sendMessage), not a lenient one.
+  // Verified against the harvested source before adding: all five set RESPONSE_SCHEMA to
+  // null and make zero authored sendMessage calls.
+  'crypto-portfolio',
+  'weather-planner',
+  'my-repos',
+  'spotify-party-dj',
+  'hue-lights-party',
 ]);
 /**
  * The no-network-APIs rule, as a PAIR of patterns with one home (so the per-app rule
@@ -100,12 +137,15 @@ function readDeclaredHosts(app) {
   }
   const parsed = JSON.parse(raw); // a malformed manifest MUST fail the suite loudly
 
-  // The SAME strict schema the runtime resolver applies. A manifest carrying a key the
-  // proposal contract excludes (registration copy, credential field definitions) is a
-  // strict-schema rejection at runtime — catching it here means it never reaches a
-  // review, rather than being silently dropped once shipped.
-  const result = llmProposalSchema.safeParse(parsed);
-  assert.ok(result.success, `${app}: connection.json must satisfy llmProposalSchema — ${result.error?.message ?? ''}`);
+  // The SAME strict schema the runtime resolver applies. `strictObject` throughout means
+  // an unknown key anywhere is a rejection rather than a passthrough — catching it here
+  // means a bad manifest never reaches a review, rather than being silently dropped once
+  // shipped. The v3 keys (`kindHint`/`providerName`) now fail here by construction.
+  const result = connectionRequirementSchema.safeParse(parsed);
+  assert.ok(
+    result.success,
+    `${app}: connection.json must satisfy connectionRequirementSchema — ${result.error?.message ?? ''}`,
+  );
 
   const hosts = parsed.declaredApiHosts;
   assert.ok(Array.isArray(hosts) && hosts.length > 0, `${app}: connection.json declares a non-empty declaredApiHosts`);
@@ -430,27 +470,40 @@ test('every example folder ships a README.md (the documented contributor rule, n
 /**
  * MINOR 10's self-check: the imported contract must really BE the contract.
  *
- * The failure this guards is subtle. If `llmProposalSchema` were ever swapped for a
- * permissive stand-in — or if a future editor wrapped the import in a try/catch and fell
- * back to `{ safeParse: () => ({ success: true }) }` to "make CI green on a fresh clone"
- * — every manifest check above would still pass, and this suite would report success for
- * validation it no longer performs. So assert the schema REFUSES something: a proposal
- * carrying an excluded key (registration copy) is a strict rejection, and a schema that
- * accepts it is not the real one.
+ * The failure this guards is subtle. If the schema were ever swapped for a permissive
+ * stand-in — or if a future editor wrapped the import in a try/catch and fell back to
+ * `{ safeParse: () => ({ success: true }) }` to "make CI green on a fresh clone" — every
+ * manifest check above would still pass, and this suite would report success for
+ * validation it no longer performs. So assert the schema REFUSES something.
+ *
+ * REPOINTED AT v4 with the import above. The probe changed with it, and deliberately:
+ * the sharpest thing to refuse is now the V3 SHAPE ITSELF (`kindHint`/`providerName`),
+ * because that is exactly what all six manifests carried before this phase. A schema
+ * that still accepts it has not migrated, and every check above would be validating the
+ * old contract while the runtime used the new one.
  */
-test('the imported llmProposalSchema is the REAL strict contract, not a permissive stand-in', () => {
-  assert.equal(typeof llmProposalSchema?.safeParse, 'function', 'the protocol import must resolve');
+test('the imported connectionRequirementSchema is the REAL strict contract, not a permissive stand-in', () => {
+  assert.equal(typeof connectionRequirementSchema?.safeParse, 'function', 'the protocol import must resolve');
 
-  const valid = llmProposalSchema.safeParse({ providerName: 'Example API', declaredApiHosts: ['api.example.com'] });
-  assert.ok(valid.success, 'a well-formed proposal must pass');
-
-  // `llmProposalSchema` omits registration copy (M5/M21) — strictness is the point.
-  const poisoned = llmProposalSchema.safeParse({
-    providerName: 'Example API',
-    registrationInstructions: ['go here and paste your key'],
+  const valid = connectionRequirementSchema.safeParse({
+    slot: 'example-api',
+    provider: { name: 'Example API' },
+    kind: 'api_key',
+    declaredApiHosts: ['api.example.com'],
   });
-  assert.equal(poisoned.success, false, 'an excluded key must be a strict rejection');
+  assert.ok(valid.success, 'a well-formed v4 requirement must pass');
 
-  const missingName = llmProposalSchema.safeParse({ declaredApiHosts: ['api.example.com'] });
-  assert.equal(missingName.success, false, 'providerName is required');
+  const v3Shaped = connectionRequirementSchema.safeParse({
+    kindHint: 'api_key',
+    providerName: 'Example API',
+    declaredApiHosts: ['api.example.com'],
+  });
+  assert.equal(v3Shaped.success, false, 'the v3 proposal shape must be a strict rejection');
+
+  const missingHosts = connectionRequirementSchema.safeParse({
+    slot: 'example-api',
+    provider: { name: 'Example API' },
+    kind: 'api_key',
+  });
+  assert.equal(missingHosts.success, false, 'declaredApiHosts is required — there is no ungated kind');
 });

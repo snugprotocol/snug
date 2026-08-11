@@ -27,12 +27,13 @@ prompts/
 │       ├── 60-design-quality.md
 │       ├── 70-defensive-coding.md
 │       ├── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)
-│       └── 90-auth-and-connected-apis.md  ← connected APIs: useConnectedFetch design + the auth_wizard directive contract (AL-05; headings are retrieval-tested)
+│       └── 90-auth-and-connected-apis.md  ← connected APIs: useConnectedFetch design + the connection_requirement directive contract, completeness bar, edit skip-rules (AL-05, rewritten by Dynamic Auth v2 P2; headings are retrieval-tested)
 ├── tools/                           ← tool + parameter descriptions
 │   ├── app-builder.md
 │   ├── app-doc-write.md
 │   ├── artifact-write.md
-│   ├── auth-spec-inferrer.md        ← D8 inference prompt (few-shot outputs contract-tested)
+│   ├── auth-spec-inferrer.md        ← D8 inference prompt, v3 hints (few-shot outputs contract-tested; retired by P4)
+│   ├── connection-requirement-inferrer.md  ← Dynamic Auth v2: FULL-requirement inference (few-shot outputs contract-tested)
 │   └── schema-apply.md
 ├── skills/                          ← skill-builder prompts (workstream B)
 │   ├── skill-creator/               ← VENDORED Anthropic skill-creator — verbatim, commit-pinned,

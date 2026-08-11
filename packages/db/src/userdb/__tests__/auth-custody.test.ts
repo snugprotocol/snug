@@ -59,6 +59,7 @@ function capturingProvider(kind: string, secretsAllowed: boolean): SyncProvider 
 let backend: MemoryBackend;
 let db: UserDb;
 const APP = 'app-under-test';
+const SLOT = 'github';
 
 beforeEach(async () => {
   backend = createMemoryBackend();
@@ -113,15 +114,21 @@ describe('AC2 — custody-line byte probes (ADR-0014 / plan D3)', () => {
   });
 });
 
-describe('AC3/N3 — dynamic state never dirties the synced spec surface', () => {
-  it('a connection-state write leaves the snug_auth_specs content of the default export unchanged', async () => {
-    db.putAuthSpec(APP, {
+// P3 CUTOVER: `snug_auth_specs` was DROPPED at userdb v5, so the "synced spec surface"
+// this guarantee protects is now `snug_connections`. The CLAIM is unchanged and still
+// load-bearing: a token refresh writes dynamic state, and if that write dirtied the
+// synced grant table it would move the content hash on every refresh — turning a silent
+// background rotation into a sync push, and a grant table into a mutable one.
+describe('AC3/N3 — dynamic state never dirties the synced grant surface', () => {
+  it('a connection-state write leaves the snug_connections content of the default export unchanged', async () => {
+    db.putDeclaredConnection(APP, SLOT, {
+      slot: SLOT,
       kind: 'bearer_token',
       provider: { name: 'GitHub' },
       fields: [{ key: 'token', label: 'PAT', type: 'secret' }],
       declaredApiHosts: ['api.github.com'],
-    });
-    db.approveAuthSpec(APP);
+    }, 'inference');
+    db.approveConnection(APP, SLOT);
     const before = await db.exportUserDb();
 
     // What a token refresh persists: dynamic connection state + rotated token — all
@@ -137,17 +144,26 @@ describe('AC3/N3 — dynamic state never dirties the synced spec surface', () =>
     // both exports. (Whole-file byte identity is unattainable — SQLite's header change
     // counter moves on ANY transaction, including the stripped secret writes.)
     const SQL = await initSqlJs({ locateFile: () => locateWasm() });
-    const dumpSpecs = (bytes: Uint8Array): string => {
+    const dumpGrants = (bytes: Uint8Array): string => {
       const opened = new SQL.Database(bytes);
       try {
-        return JSON.stringify(opened.exec('SELECT * FROM snug_auth_specs ORDER BY app_id'));
+        return JSON.stringify(opened.exec('SELECT * FROM snug_connections ORDER BY app_id, slot'));
       } finally {
         opened.close();
       }
     };
-    expect(dumpSpecs(after)).toBe(dumpSpecs(before));
+    expect(dumpGrants(after)).toBe(dumpGrants(before));
     // And no dynamic-state bytes leak into the synced default export at all.
-    expect(bytesContain(after, '_connection')).toBe(false);
+    //
+    // NEEDLE SHARPENED, not weakened (TASK-20260810-p0-contracts): this probed the bare
+    // substring `'_connection'`, which userdb schema v4 made AMBIGUOUS — the new
+    // `snug_connections` table name contains it, so `sqlite_master` alone tripped the
+    // probe and the test went red on a table name rather than on leaked state. The claim
+    // is unchanged and the assertion is now STRICTER: it looks for the exact secret key
+    // `auth:<appId>:_connection` that the write above created, so it can only pass by the
+    // state genuinely being stripped, and can no longer be satisfied-or-broken by any
+    // table whose name happens to share the suffix.
+    expect(bytesContain(after, authConnectionSecretKey(APP))).toBe(false);
     expect(bytesContain(after, `${SENTINEL}-rotated`)).toBe(false);
     await db.close();
   });

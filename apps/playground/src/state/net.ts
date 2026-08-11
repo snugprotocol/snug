@@ -12,12 +12,13 @@ import {
   createConnectedFetch,
   createSessionConfirmGate,
   UserDbCredentialStore,
+  type ConnectedFetchDeps,
   type NetConfirmDecision,
   type NetConfirmRequest,
-  type NetSpecReader,
 } from '@snugprotocol/auth';
 import type { NetHandler, NetHandlerResult } from '@snugprotocol/runner';
 import type { NetRequestFrame } from '@snugprotocol/protocol';
+import type { UserDb } from '@snugprotocol/db';
 
 import { getUserDb } from './userdb.js';
 import { createStore } from './store.js';
@@ -55,6 +56,49 @@ export function invalidateNetGrants(appId: string): void {
   confirmGate.invalidate(appId);
 }
 
+/**
+ * The executor deps for ONE app, assembled from the page user DB.
+ *
+ * EXPORTED so the wizard's Q7 probe uses the SAME assembly as the app runtime — the same
+ * confirm gate instance (so a probe cannot bypass a confirm the app would face, and a
+ * remembered grant means the same thing on both surfaces), the same credential store, the
+ * same unfiltered reader. Building a second deps object in the wizard would be building a
+ * second network path with its own gate configuration: the exact "small dedicated fetch"
+ * that `executeConnectionTestRequest` was written to avoid.
+ */
+export function connectedFetchDepsFor(
+  db: UserDb,
+  fetchImpl: (input: string, init?: RequestInit) => Promise<Response> = (input, init) =>
+    globalThis.fetch(input, init),
+): ConnectedFetchDeps {
+  return {
+    credentialStore: new UserDbCredentialStore(db),
+    /**
+     * EVERY row is handed over, unfiltered. Selection IS the routing decision and the
+     * executor is the seat accountable for it — a reader that pre-picked a row would hide
+     * the two-match ambiguity (NET_AMBIGUOUS_CONNECTION) inside this accessor, where no
+     * executor-altitude test could observe it. The narrowing here is about ENTITLEMENT,
+     * not convenience: only the seats the executor may read are passed.
+     */
+    connectionReader: {
+      listConnections: (appId) =>
+        db.listConnections(appId).map((row) => ({
+          appId: row.appId,
+          slot: row.slot,
+          requirement: row.requirement,
+          status: row.status,
+          allowedHosts: row.allowedHosts,
+          // Carried so the executor's refusal to bind a staged edit stays EXPLICIT
+          // (folds B2/S-m2) rather than being invisible through omission.
+          ...(row.pendingRequirement !== undefined ? { pendingRequirement: row.pendingRequirement } : {}),
+          imported: row.imported,
+        })),
+    },
+    fetchImpl,
+    confirmGate,
+  };
+}
+
 export interface CreateNetHandlerOptions {
   /** Injectable for tests + the e2e stub; defaults to the browser's fetch. */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
@@ -76,18 +120,10 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
   return {
     async handle(netAppId: string, request: NetRequestFrame): Promise<NetHandlerResult> {
       const db = await getUserDb();
-      const specReader: NetSpecReader = {
-        getAuthSpec: (appId) => {
-          const row = db.getAuthSpec(appId);
-          return row === undefined ? undefined : { spec: row.spec, status: row.status, allowedHosts: row.allowedHosts };
-        },
-      };
-      const executor = createConnectedFetch({
-        credentialStore: new UserDbCredentialStore(db),
-        specReader,
-        fetchImpl,
-        confirmGate,
-      });
+      // THE v4 READER (P3, fold B1's named exit) is assembled by `connectedFetchDepsFor`,
+      // shared with the wizard's Q7 probe so both surfaces route through ONE configured
+      // executor rather than two that could drift apart on gates.
+      const executor = createConnectedFetch(connectedFetchDepsFor(db, fetchImpl));
       // The runner already validated the frame shape (strict schema); pass the app-facing
       // request fields straight through — the executor re-validates and enforces D3.
       const result = await executor.execute(netAppId, {

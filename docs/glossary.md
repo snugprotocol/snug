@@ -9,7 +9,7 @@
 - **Knowledge base (KB)** — the markdown corpus that teaches an LLM to author bridge-aware Snug apps (`packages/knowledge`).
 - **Adapter** — server-side connector from the reference backend to an LLM provider (`packages/adapters`).
 - **Broker** — the server-side credential component enforcing the token boundary (v1.1, `packages/auth`).
-- **Connection** — an approved credential grant tying one app to one provider and a frozen host list (`snug_auth_specs`; `app_id` is a PRIMARY KEY, so one connection per app). Only an explicit user approval in the wizard ever creates one.
+- **Connection** — an approved credential grant tying one app to one provider and a frozen host list (`snug_connections`; `(app_id, slot)` is the PRIMARY KEY, so an app may hold SEVERAL independent connections). Only an explicit user approval in the wizard ever creates one. Its `requirement` (what the app NEEDS) and its `status`/`allowed_hosts` (what the user ALLOWED) are deliberately separate halves — see **Requirement/grant split**.
 - **Auth wizard** — the host-side review surface where a proposed connection is inspected and approved (`apps/playground/src/connections/`). Its **strong** review is field-by-field (`spec_confirm`); its **light** review is approve-as-is, reachable only for a registry-resolved builder directive.
 - **Declaration / install act** — a starter's `examples/<folder>/connection.json`, the third and newest way a connection may be proposed: it travels with the *install*, never at runtime, is resolved on demand rather than persisted, and always gets the strong review. See the trust ladder in [architecture.md](architecture.md).
 - **Dual-layer auth** — publisher/org credentials (client_id/secret) + per-user OAuth tokens, resolved server-side.

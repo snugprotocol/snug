@@ -24,8 +24,14 @@ import {
 } from '../userdb-schema.js';
 
 describe('userdb schema constants (spec surface)', () => {
-  it('declares schema version 3 (AL-02: snug_auth_specs — internal draft, excluded from the AL-13 spec push)', () => {
-    expect(USERDB_SCHEMA_VERSION).toBe(3);
+  // TASK-20260810-p0-contracts AC20: v4 adds `snug_connections` (Dynamic Auth v2, requirement/
+  // grant split). Version 3's assertion is REPLACED, not duplicated — `PRAGMA user_version` is a
+  // single scalar and `migrate()` stamps it unconditionally (userdb.ts:498), so a test asserting
+  // two versions at once would be asserting an impossible file.
+  // TASK-20260810-p3-wizard: v5 DROPS `snug_auth_specs`. Again REPLACED rather than
+  // duplicated, for the same reason — one scalar, one true answer.
+  it('declares schema version 5 (Dynamic Auth v2 cutover: snug_auth_specs dropped)', () => {
+    expect(USERDB_SCHEMA_VERSION).toBe(5);
   });
 
   it('caps the whole user DB at 64 MiB and retains at least 5 versions per app', () => {
@@ -54,7 +60,12 @@ describe('userdb schema constants (spec surface)', () => {
         'snug_chat_threads',
         'snug_chat_messages',
         'snug_sync',
+        // v3's table stays listed: P0 is ADDITIVE (fold B1). `snug_auth_specs` has live
+        // consumers across packages/db, packages/auth, and the playground, and its deletion is
+        // a NAMED EXIT ITEM of P3 — removing it here would make "every phase ends green" false.
         'snug_auth_specs',
+        // v4 (Dynamic Auth v2): slot-keyed connections, PRIMARY KEY (app_id, slot) — R6.
+        'snug_connections',
       ].sort(),
     );
     for (const table of Object.values(USERDB_TABLES)) {
@@ -64,9 +75,13 @@ describe('userdb schema constants (spec surface)', () => {
     expect(Object.values(USERDB_TABLES)).not.toContain('snug_app_data');
   });
 
-  it('ships one CREATE TABLE IF NOT EXISTS statement per table (indexes live in USERDB_INDEX_DDL)', () => {
-    expect(USERDB_DDL).toHaveLength(Object.values(USERDB_TABLES).length);
-    for (const table of Object.values(USERDB_TABLES)) {
+  it('ships one CREATE TABLE IF NOT EXISTS statement per LIVE table (indexes live in USERDB_INDEX_DDL)', () => {
+    // `authSpecs` keeps its NAME in USERDB_TABLES so the v5 migration can name what it
+    // drops, but it has no DDL — creating it would resurrect the surface v5 removes on
+    // every self-heal replay. So the DDL set is the table set MINUS that one name.
+    const liveTables = Object.values(USERDB_TABLES).filter((table) => table !== USERDB_TABLES.authSpecs);
+    expect(USERDB_DDL).toHaveLength(liveTables.length);
+    for (const table of liveTables) {
       expect(
         USERDB_DDL.some((ddl) => ddl.replace(/\s+/g, ' ').startsWith(`CREATE TABLE IF NOT EXISTS ${table} `)),
       ).toBe(true);
@@ -84,18 +99,72 @@ describe('userdb schema constants (spec surface)', () => {
     expect(dedup!.replace(/\s+/g, ' ')).toContain('WHERE install_source IS NOT NULL');
   });
 
-  it('v3 table snug_auth_specs holds ONLY approval-stable spec metadata (plan D5/N3 — no token, no connection, no flow columns)', () => {
-    const specs = USERDB_DDL.find((d) => d.includes('snug_auth_specs '))!.replace(/\s+/g, ' ');
-    expect(specs).toContain('app_id TEXT PRIMARY KEY');
-    expect(specs).toContain('spec_json TEXT NOT NULL');
-    expect(specs).toContain('status TEXT NOT NULL');
-    expect(specs).toContain('allowed_hosts TEXT NOT NULL');
-    expect(specs).toContain('approved_at TEXT');
-    // Dynamic state NEVER lives here: connection state → auth:<appId>:_connection secret,
-    // flow state → in-memory / auth:_flow:<flowId> secret (a refresh must not dirty the
-    // synced table nor change default-export bytes).
+  /**
+   * P3 (fold B1's named exit): the v3 table is GONE at v5, and its absence is asserted
+   * rather than assumed. A `CREATE TABLE IF NOT EXISTS` left behind here would be replayed
+   * by the self-heal guard on every open, quietly rebuilding the second grant surface the
+   * migration exists to remove — so this is the test that keeps the deletion deleted.
+   *
+   * The COLUMN-PURITY claim the old v3 test carried (no token/flow/session columns in the
+   * synced grant table) is not dropped: it is asserted on `snug_connections` immediately
+   * below, which is now the only grant table there is.
+   */
+  it('v3 table snug_auth_specs has NO DDL — it was dropped at v5 and must never be re-created', () => {
+    expect(USERDB_DDL.some((ddl) => ddl.includes('snug_auth_specs'))).toBe(false);
+  });
+
+  it('v4 table snug_connections is slot-keyed and carries the requirement/grant split (parent plan §3)', () => {
+    const conns = USERDB_DDL.find((d) => d.includes('snug_connections '))!.replace(/\s+/g, ' ');
+    // R6: one row per (app, slot) — the v3 shape made one-connection-per-app STRUCTURAL by
+    // putting app_id alone on the PK. Lifting that is the whole point of the composite key.
+    expect(conns).toContain('PRIMARY KEY (app_id, slot)');
+    expect(conns).toContain('app_id TEXT NOT NULL');
+    expect(conns).toContain('slot TEXT NOT NULL');
+    // The requirement half — what the app NEEDS. Written at authoring moments only.
+    expect(conns).toContain('requirement_json TEXT NOT NULL');
+    expect(conns).toContain('requirement_version INTEGER NOT NULL');
+    expect(conns).toContain('provenance TEXT NOT NULL');
+    expect(conns).toContain('confidence REAL');
+    // The grant half — what the user ALLOWED. Written only on explicit approval.
+    expect(conns).toContain('status TEXT NOT NULL');
+    expect(conns).toContain('allowed_hosts TEXT NOT NULL');
+    expect(conns).toContain('approved_at TEXT');
+    // Fold B2: an edit's changed requirement for an APPROVED row STAGES here; the grant keeps
+    // serving requirement_json + its old frozen hosts until re-approval. "needs re-approval" is
+    // DERIVED (status='approved' AND pending_requirement_json IS NOT NULL), never a 4th status.
+    expect(conns).toContain('pending_requirement_json TEXT');
+    // Fold T-M5: `imported` is a COLUMN — the strictObject requirement schema has no seat for
+    // an envelope flag, so a JSON-embedded flag would be a strict-parse rejection.
+    expect(conns).toContain('imported INTEGER NOT NULL DEFAULT 0');
+    // TOMBSTONE: the row survives revoke, which is what closes the revoke-reversal finding.
+    expect(conns).toContain('revoked_at TEXT');
+    expect(conns).toContain('created_at TEXT NOT NULL');
+    expect(conns).toContain('updated_at TEXT NOT NULL');
+
+    // COLUMN PURITY (plan D5/N3), inherited from the deleted v3 assertion and now stated
+    // on the only grant table there is. Dynamic state NEVER lives here: connection state
+    // goes to the `auth:<appId>:<slot>:_connection` secret and flow state to memory /
+    // `auth:_flow:<flowId>`. The reason is not tidiness — this table is SYNCED under a
+    // content-hash gate, so a token refresh that touched it would dirty the synced surface
+    // and change default-export bytes on every silent background rotation.
+    //
+    // `revoked_at` is excluded from the scan: it is a GRANT fact (the user's own act,
+    // stable until they reconnect), not dynamic state, and it legitimately contains the
+    // substring the loop would otherwise trip on.
+    const scanned = conns.replace(/revoked_at/g, '');
     for (const forbidden of ['token', 'refresh', 'expires', 'verifier', 'flow', 'session', 'last_error']) {
-      expect(specs.toLowerCase()).not.toContain(forbidden);
+      expect(scanned.toLowerCase(), `snug_connections must not carry a ${forbidden} column`).not.toContain(forbidden);
+    }
+  });
+
+  it('v4 table snug_connections holds NO credential or dynamic-connection state (ADR-0014 custody, unchanged)', () => {
+    const conns = USERDB_DDL.find((d) => d.includes('snug_connections '))!.replace(/\s+/g, ' ');
+    // Same posture as the v3 table, restated because the table is new: credential VALUES live
+    // at `auth:<appId>:<slot>:<fieldKey>` and connection state at `auth:<appId>:<slot>:_connection`
+    // in snug_secrets. A token refresh must not dirty this synced table (content-hash gate) nor
+    // change default-export bytes.
+    for (const forbidden of ['token', 'secret', 'refresh', 'expires', 'verifier', 'flow', 'session', 'password']) {
+      expect(conns.toLowerCase(), forbidden).not.toContain(forbidden);
     }
   });
 

@@ -35,3 +35,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0014 — Credentials are local-first (custody doctrine)](0014-credentials-local-first.md)
 - [0015 — WebLLM experimental mode: engine, model default, fallback](0015-webllm-experimental-mode.md)
 - [0016 — Who may propose a connection (the trust ladder)](0016-connection-proposal-trust-ladder.md)
+- [0017 — The requirement/grant split (amends ADR-0016)](0017-connection-requirement-and-grant.md)

@@ -25,6 +25,7 @@ export {
 
 export {
   buildAuthSpecInferrerPrompt,
+  buildConnectionRequirementInferrerPrompt,
   buildHostSystemPrompt,
   buildSkillBuilderPrompt,
   type AuthSpecInferrerPrompt,

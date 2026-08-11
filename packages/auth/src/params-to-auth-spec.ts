@@ -168,10 +168,10 @@ export function paramsToAuthSpec(input: ParamsToAuthSpecInput): ParamsToAuthSpec
       break;
     }
     case 'oauth2_auth_code': {
-      const authorizeUrl = input.endpoints?.authorizeUrl ?? wellKnown?.endpoints.authorizeUrl;
-      const tokenUrl = input.endpoints?.tokenUrl ?? wellKnown?.endpoints.tokenUrl;
-      const refreshUrl = input.endpoints?.refreshUrl ?? wellKnown?.endpoints.refreshUrl;
-      const revokeUrl = input.endpoints?.revokeUrl ?? wellKnown?.endpoints.revokeUrl;
+      const authorizeUrl = input.endpoints?.authorizeUrl ?? wellKnown?.endpoints?.authorizeUrl;
+      const tokenUrl = input.endpoints?.tokenUrl ?? wellKnown?.endpoints?.tokenUrl;
+      const refreshUrl = input.endpoints?.refreshUrl ?? wellKnown?.endpoints?.refreshUrl;
+      const revokeUrl = input.endpoints?.revokeUrl ?? wellKnown?.endpoints?.revokeUrl;
       if (authorizeUrl === undefined || tokenUrl === undefined) {
         return fail(
           `oauth2_auth_code requires endpoints.authorizeUrl + endpoints.tokenUrl, and provider "${input.providerName}" is not in the well-known registry. Pass them explicitly.`,
@@ -247,10 +247,10 @@ function buildUserLayerSpec(input: ParamsToAuthSpecInput): { spec: Oauth2AuthCod
   const overrides = input.userLayerEndpoints ?? {};
   const wellKnown = lookupWellKnownProvider(input.providerName);
 
-  const authorizeUrl = overrides.authorizeUrl ?? wellKnown?.endpoints.authorizeUrl;
-  const tokenUrl = overrides.tokenUrl ?? wellKnown?.endpoints.tokenUrl;
-  const refreshUrl = overrides.refreshUrl ?? wellKnown?.endpoints.refreshUrl;
-  const revokeUrl = overrides.revokeUrl ?? wellKnown?.endpoints.revokeUrl;
+  const authorizeUrl = overrides.authorizeUrl ?? wellKnown?.endpoints?.authorizeUrl;
+  const tokenUrl = overrides.tokenUrl ?? wellKnown?.endpoints?.tokenUrl;
+  const refreshUrl = overrides.refreshUrl ?? wellKnown?.endpoints?.refreshUrl;
+  const revokeUrl = overrides.revokeUrl ?? wellKnown?.endpoints?.revokeUrl;
 
   if (authorizeUrl === undefined || tokenUrl === undefined) {
     return {

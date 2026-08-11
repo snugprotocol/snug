@@ -31,7 +31,18 @@ function selfSignedCert() {
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
     '-keyout', keyPath, '-out', certPath, '-days', '2',
     '-subj', '/CN=stub.snug.test',
-    '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:stub.snug.test',
+    // `api.meridian-exchange.example` is a SAN because the P3 connection-wizard journey
+    // dials the requirement's declared host (resolver-mapped to this stub) rather than the
+    // stub's own name — the whole point being that what the user reviews and freezes is a
+    // ceiling a real app would have. Without the SAN that fetch fails the TLS check as
+    // NET_FETCH_FAILED.
+    //
+    // It is an UNPINNED host as of P5. P4 pinned `coinbase` in the well-known registry and
+    // P5 widened the borrow ban to brand-adjacent names, so a fixture on any
+    // coinbase-segment host or name would be refused for authoring its own fields and
+    // header template. The fixture's subject is the three-field HMAC shape, so it moved to
+    // a provider it is entitled to author.
+    '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:stub.snug.test,DNS:api.meridian-exchange.example',
   ], { stdio: 'ignore' });
   return { key: readFileSync(keyPath), cert: readFileSync(certPath) };
 }
@@ -39,7 +50,11 @@ function selfSignedCert() {
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE',
-  'access-control-allow-headers': 'x-api-key,authorization,content-type',
+  // The CB-ACCESS-* trio is the P3 signed-template shape: an injected header the browser
+  // has never seen before triggers a preflight, and a preflight that does not list it is
+  // refused — which surfaced as NET_FETCH_FAILED with no clue that CORS was the cause.
+  'access-control-allow-headers':
+    'x-api-key,authorization,content-type,cb-access-key,cb-access-sign,cb-access-timestamp,cb-access-passphrase',
 };
 
 const server = https.createServer(selfSignedCert(), (req, res) => {
@@ -57,6 +72,42 @@ const server = https.createServer(selfSignedCert(), (req, res) => {
     res.end();
     return;
   }
+  /**
+   * THE COINBASE SHAPE (P3 fold). The v4 wizard's motivating journey signs its requests
+   * with a header TEMPLATE — `CB-ACCESS-TIMESTAMP` plus an HMAC `CB-ACCESS-SIGN` — rather
+   * than presenting a bare key, so this stub answered it with a 401 and journey 1 failed
+   * at its final assertion with NET_AUTH_FAILED. The stub had simply never been taught the
+   * shape the phase exists to support.
+   *
+   * WHAT IT PROVES, and why the echo is deliberately `***`: a real signature is a
+   * credential-derived value, and echoing it verbatim would make this fixture the one
+   * place in the suite that hands a signing artifact back to the page. The spec asserts
+   * `"sawSignature":"***"` — presence WITHOUT disclosure — which is exactly the property
+   * that matters: the template was rendered HOST-side and reached the provider, and
+   * nothing derived from the secret came back through the bridge.
+   */
+  const signature = req.headers['cb-access-sign'];
+  if (typeof signature === 'string' && signature.length > 0) {
+    const timestamp = req.headers['cb-access-timestamp'];
+    res.writeHead(200, {
+      ...CORS,
+      'access-control-expose-headers': 'etag,x-ratelimit-remaining,content-type',
+      'content-type': 'application/json',
+      'x-ratelimit-remaining': '42',
+    });
+    res.end(
+      JSON.stringify({
+        method,
+        path: url.pathname,
+        // Presence, never the value — see above.
+        sawSignature: '***',
+        sawTimestamp: typeof timestamp === 'string' && timestamp.length > 0 ? '***' : null,
+        sawAuthorization: req.headers['authorization'] ?? null,
+      }),
+    );
+    return;
+  }
+
   const receivedKey = req.headers['x-api-key'];
   if (receivedKey !== REQUIRED_KEY) {
     res.writeHead(401, { 'content-type': 'application/json', ...CORS });

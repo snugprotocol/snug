@@ -23,13 +23,20 @@ describe('lookupWellKnownProvider (lookup normalization)', () => {
 describe('registry entries', () => {
   it('returns the Spotify endpoints we depend on', () => {
     const spotify = lookupWellKnownProvider('Spotify');
-    expect(spotify?.endpoints.authorizeUrl).toBe('https://accounts.spotify.com/authorize');
-    expect(spotify?.endpoints.tokenUrl).toBe('https://accounts.spotify.com/api/token');
+    // `endpoints` is OPTIONAL on the type as of P0 (fold T-M1) so static-kind entries need
+    // not invent OAuth URLs. Asserted defined FIRST: an optional chain alone would compare
+    // undefined-to-a-string and fail loudly here, but the same pattern elsewhere goes
+    // vacuous, so the premise is stated explicitly wherever the type is now nullable.
+    expect(spotify?.endpoints, 'Spotify must carry OAuth endpoints').toBeDefined();
+    expect(spotify!.endpoints!.authorizeUrl).toBe('https://accounts.spotify.com/authorize');
+    expect(spotify!.endpoints!.tokenUrl).toBe('https://accounts.spotify.com/api/token');
     expect(spotify?.pkce).toBe(true);
   });
 
   it('returns a Google entry with revoke URL', () => {
-    expect(lookupWellKnownProvider('Google')?.endpoints.revokeUrl).toBe('https://oauth2.googleapis.com/revoke');
+    const google = lookupWellKnownProvider('Google');
+    expect(google?.endpoints, 'Google must carry OAuth endpoints').toBeDefined();
+    expect(google!.endpoints!.revokeUrl).toBe('https://oauth2.googleapis.com/revoke');
   });
 
   it('does not default scopes for ANY entry (no silent privilege widening)', () => {

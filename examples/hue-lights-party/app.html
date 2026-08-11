@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hue Lights Party</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #fff5f7; --fg: #3d1020; --muted: #96667a;
+      --card: #ffffff; --border: #d4e3f8;
+      --accent: #be123c; --accent-soft: #ffe4e9;
+      --good: #15803d; --good-soft: #dcfce7;
+      --bad: #b45309; --bad-soft: #fef3c7;
+      --shadow: 0 10px 30px rgba(20, 50, 110, 0.10);
+    }
+    :root[data-theme="dark"] {
+      --bg: #1c0a11; --fg: #fbe4ea; --muted: #b98a99;
+      --card: #15203a; --border: #26375c;
+      --accent: #fb7185; --accent-soft: #3d1020;
+      --good: #4ade80; --good-soft: #14351f;
+      --bad: #fbbf24; --bad-soft: #3a2c0c;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh;
+    }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 16px 14px 40px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(1.5rem, 5vw, 2.1rem); margin: 6px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 14px; font-size: 0.92rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+    .btn {
+      min-height: 48px; width: 100%; border-radius: 999px; border: none; cursor: pointer;
+      background: var(--accent); color: #fff; font-size: 1rem; font-weight: 800; padding: 10px 20px;
+    }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .cities { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .chip {
+      min-height: 44px; border-radius: 999px; padding: 8px 16px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--card); color: var(--fg);
+      font-size: 0.95rem; font-weight: 700;
+    }
+    .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+    .notice {
+      display: flex; gap: 10px; align-items: flex-start;
+      background: var(--accent-soft); border: 1px solid var(--border);
+      border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; font-size: 0.95rem;
+    }
+    .days { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; }
+    .day {
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 6px;
+      text-align: center; background: var(--bg);
+    }
+    .day .emoji { font-size: 1.7rem; line-height: 1.2; }
+    .day .name { font-size: 0.78rem; color: var(--muted); font-weight: 700; }
+    .day .temp { font-size: 1rem; font-weight: 800; }
+    .skeleton { background: var(--border); border-radius: 12px; height: 84px; opacity: 0.55; }
+    .result { margin-top: 12px; border-radius: 12px; padding: 12px 14px; font-size: 0.92rem; }
+    .result.err { background: var(--bad-soft); border: 1px solid var(--bad); }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 800; }
+    .steps { margin: 8px 0 0; padding-left: 20px; font-size: 0.9rem; line-height: 1.6; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); }
+    .notice.desktop { background: var(--card); }
+    .preview {
+      border-radius: 14px; height: 120px; margin: 4px 0 14px;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 800; font-size: 1.1rem;
+      text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45); border: 1px solid var(--border);
+    }
+    .slider-label { display: block; font-size: 0.9rem; margin-bottom: 6px; }
+    .slider { width: 100%; min-height: 44px; accent-color: var(--accent); }
+    .hint { margin: 8px 0 0; font-size: 0.85rem; color: var(--muted); text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches your app's APPROVED hosts
+// THROUGH the host, which injects your saved credentials, blocks private ranges, caps
+// sizes, asks you before any write, and scrubs the response. You never see a token.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    // LLM-free (ADR-0011): the lights are the point, not a narrator.
+    const RESPONSE_SCHEMA = null;
+
+    // ============================================================
+    // 6. YOUR APP — Hue Lights Party
+    // ============================================================
+    // THE HONEST ONE. Philips Hue's real model is a bridge discovered on your LOCAL
+    // NETWORK, authenticated with a bridge username you obtain by pressing the physical
+    // link button. That does not fit the five-kind credential union at all — every kind
+    // assumes an internet host the connected-fetch executor can reach and a credential
+    // the host can inject. A LAN address is exactly what the SSRF guard blocks, and
+    // rightly so.
+    //
+    // So this app (D5/D10, AC9):
+    //   - ships AUTHORED, not stubbed, so the desktop child can light it up later
+    //     without a rewrite (A6 was dropped from this run, not cancelled);
+    //   - constructs NO AuthSpec and ships NO connection.json — there is no honest
+    //     declaration to make;
+    //   - calls NO seam. It is deliberately outside CONNECTED_APPS in the validate
+    //     suite, and that exemption is the whole reason this file must not grow a
+    //     `useConnectedFetch` call;
+    //   - offers NO connect button that could not work. Greying the control and SAYING
+    //     WHY is the honest move; a dead button that opens a wizard leading nowhere
+    //     would be the dishonest one.
+    //
+    // The scene preview below is real UI running on real state — you can play with it on
+    // the web. Only the "apply to my lights" action is unavailable, and it says so.
+    const SCENES = [
+      { id: 'sunset', name: 'Sunset', emoji: '🌇', colors: ['#f97316', '#e11d48', '#7c3aed'] },
+      { id: 'ocean', name: 'Ocean', emoji: '🌊', colors: ['#0ea5e9', '#2563eb', '#14b8a6'] },
+      { id: 'forest', name: 'Forest', emoji: '🌲', colors: ['#16a34a', '#65a30d', '#0f766e'] },
+      { id: 'disco', name: 'Disco', emoji: '🪩', colors: ['#ec4899', '#8b5cf6', '#22d3ee'] },
+    ];
+
+    const ROOMS = ['Living room', 'Kitchen', 'Bedroom'];
+
+    function App() {
+      const { isReady, theme } = useSnugApp({
+        appId: 'hue-lights-party',
+        displayName: 'Hue Lights Party',
+        description: 'Design a lighting scene for the party and sync it to your Philips Hue bridge — a desktop feature, because the bridge lives on your local network.',
+        iconEmoji: '💡',
+        iconColor: '#be123c',
+      });
+      const [scene, setScene] = useState(SCENES[0]);
+      const [brightness, setBrightness] = useState(80);
+      const [rooms, setRooms] = useState(() => ({ 'Living room': true, Kitchen: false, Bedroom: false }));
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      if (!isReady) return <div className="connecting">connecting to the host…</div>;
+
+      const chosen = ROOMS.filter((room) => rooms[room]);
+
+      return (
+        <div className="wrap">
+          <h1>Hue Lights Party</h1>
+          <p className="sub">design the scene here — sync it to your bridge from the desktop app.</p>
+
+          {/*
+            AC9: the "why desktop" notice. It names the REASON (a LAN-local bridge, no
+            desktop runtime yet), not a vague "unsupported" — a user who understands why
+            can decide whether to care.
+          */}
+          <div className="notice desktop" data-testid="desktop-only-notice">
+            <span aria-hidden="true">🖥️</span>
+            <p style={{ margin: 0 }}>
+              <b>syncing needs the desktop app.</b> your Hue bridge lives on your home network,
+              and a web page cannot reach it — that is a browser security boundary, not a missing
+              feature. the desktop app talks to the bridge directly. everything below works right
+              here; only <i>apply to my lights</i> waits for desktop.
+            </p>
+          </div>
+
+          <section className="card">
+            <h2>🎨 pick a scene</h2>
+            <div className="cities">
+              {SCENES.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className="chip"
+                  aria-pressed={scene.id === option.id}
+                  data-testid={`scene-${option.id}`}
+                  onClick={() => setScene(option)}
+                >
+                  <span aria-hidden="true">{option.emoji}</span> {option.name}
+                </button>
+              ))}
+            </div>
+
+            <div
+              className="preview"
+              data-testid="scene-preview"
+              style={{
+                background: `linear-gradient(120deg, ${scene.colors.join(', ')})`,
+                opacity: 0.25 + (brightness / 100) * 0.75,
+              }}
+            >
+              <span>{scene.emoji} {scene.name}</span>
+            </div>
+
+            <label className="slider-label" htmlFor="brightness">
+              brightness <b>{brightness}%</b>
+            </label>
+            <input
+              id="brightness"
+              className="slider"
+              type="range"
+              min="10"
+              max="100"
+              step="5"
+              value={brightness}
+              onChange={(event) => setBrightness(Number(event.target.value))}
+            />
+          </section>
+
+          <section className="card">
+            <h2>🏠 rooms</h2>
+            <div className="cities">
+              {ROOMS.map((room) => (
+                <button
+                  key={room}
+                  type="button"
+                  className="chip"
+                  aria-pressed={Boolean(rooms[room])}
+                  data-testid={`room-${room.toLowerCase().replace(/\s+/g, '-')}`}
+                  onClick={() => setRooms((prev) => ({ ...prev, [room]: !prev[room] }))}
+                >
+                  {room}
+                </button>
+              ))}
+            </div>
+
+            {/*
+              Greyed, never hidden, and never wired to a connect flow that cannot work.
+              `disabled` + `aria-disabled` + the explanation beneath it — the button says
+              what it would do and why it cannot do it yet.
+            */}
+            <button
+              className="btn"
+              type="button"
+              disabled
+              aria-disabled="true"
+              data-testid="apply-button"
+            >
+              apply to my lights
+            </button>
+            <p className="hint" data-testid="apply-hint">
+              available in the desktop app — {chosen.length > 0
+                ? `${chosen.length} room${chosen.length === 1 ? '' : 's'} selected and ready`
+                : 'pick a room to include'}.
+            </p>
+          </section>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

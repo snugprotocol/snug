@@ -106,7 +106,14 @@ export function getKnowledgeSummary(): string {
 // Tool prompts — prompts/tools/*.md.
 // ---------------------------------------------------------------------------
 
-export type ToolPromptName = 'app-builder' | 'artifact-write' | 'schema-apply' | 'app-doc-write' | 'auth-spec-inferrer';
+export type ToolPromptName =
+  | 'app-builder'
+  | 'artifact-write'
+  | 'schema-apply'
+  | 'app-doc-write'
+  | 'auth-spec-inferrer'
+  /** Dynamic Auth v2 (P2): the FULL-requirement successor to `auth-spec-inferrer`. */
+  | 'connection-requirement-inferrer';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);

@@ -78,6 +78,11 @@ test.describe('AL-03 net capability — production bridge + executor', () => {
     await expect(app.locator('#net-status')).toHaveText('err:NET_IMPORTED_UNAPPROVED', { timeout: 15_000 });
   });
 
+  // P3: the REFUSAL is unchanged; the code's NAME moved with the v4 cutover. v3 read one
+  // app-keyed row and could say "this host violates THAT row's ceiling"; v4 routes BY
+  // host, so an off-ceiling host matches no row at all — there is no ceiling that was
+  // violated, only a host nothing was approved for. The app still gets an error and the
+  // stub still sees nothing, which is the property this test exists for.
   test('a host off the frozen ceiling is blocked', async ({ page }) => {
     await mountNet(page, {
       html: netAppHtml({ netUrl: 'https://not-the-stub.example/data' }),
@@ -85,7 +90,7 @@ test.describe('AL-03 net capability — production bridge + executor', () => {
       allowedHosts: [API_HOST], // ceiling does NOT include the requested host
     });
     const app = page.frameLocator('iframe[sandbox="allow-scripts"]');
-    await expect(app.locator('#net-status')).toHaveText('err:NET_HOST_BLOCKED', { timeout: 15_000 });
+    await expect(app.locator('#net-status')).toHaveText('err:NET_NOT_APPROVED', { timeout: 15_000 });
   });
 
   test('A1: an http URL is blocked even for a ceiling host (the localhost exception is dead)', async ({ page }) => {

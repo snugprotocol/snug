@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Repos</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f6f8fa; --fg: #1f2328; --muted: #656d76;
+      --card: #ffffff; --border: #d4e3f8;
+      --accent: #24292f; --accent-soft: #eaeef2;
+      --good: #15803d; --good-soft: #dcfce7;
+      --bad: #b45309; --bad-soft: #fef3c7;
+      --shadow: 0 10px 30px rgba(20, 50, 110, 0.10);
+    }
+    :root[data-theme="dark"] {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e;
+      --card: #15203a; --border: #26375c;
+      --accent: #58a6ff; --accent-soft: #161b22;
+      --good: #4ade80; --good-soft: #14351f;
+      --bad: #fbbf24; --bad-soft: #3a2c0c;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh;
+    }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 16px 14px 40px; }
+    h1 { font-family: Georgia, serif; font-size: clamp(1.5rem, 5vw, 2.1rem); margin: 6px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 14px; font-size: 0.92rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+    .btn {
+      min-height: 48px; width: 100%; border-radius: 999px; border: none; cursor: pointer;
+      background: var(--accent); color: #fff; font-size: 1rem; font-weight: 800; padding: 10px 20px;
+    }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .cities { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .chip {
+      min-height: 44px; border-radius: 999px; padding: 8px 16px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--card); color: var(--fg);
+      font-size: 0.95rem; font-weight: 700;
+    }
+    .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+    .notice {
+      display: flex; gap: 10px; align-items: flex-start;
+      background: var(--accent-soft); border: 1px solid var(--border);
+      border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; font-size: 0.95rem;
+    }
+    .days { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; }
+    .day {
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 6px;
+      text-align: center; background: var(--bg);
+    }
+    .day .emoji { font-size: 1.7rem; line-height: 1.2; }
+    .day .name { font-size: 0.78rem; color: var(--muted); font-weight: 700; }
+    .day .temp { font-size: 1rem; font-weight: 800; }
+    .skeleton { background: var(--border); border-radius: 12px; height: 84px; opacity: 0.55; }
+    .result { margin-top: 12px; border-radius: 12px; padding: 12px 14px; font-size: 0.92rem; }
+    .result.err { background: var(--bad-soft); border: 1px solid var(--bad); }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 800; }
+    .steps { margin: 8px 0 0; padding-left: 20px; font-size: 0.9rem; line-height: 1.6; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); }
+    .rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; list-style: none; padding: 0; }
+    .repo { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--bg); }
+    .repo-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .repo-name { font-weight: 800; }
+    .badge {
+      font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+      border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; color: var(--muted);
+    }
+    .repo-desc { margin: 4px 0 0; font-size: 0.88rem; color: var(--muted); }
+    .repo-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; font-size: 0.8rem; color: var(--muted); }
+    .lang { display: inline-flex; align-items: center; gap: 5px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches your app's APPROVED hosts
+// THROUGH the host, which injects your saved credentials, blocks private ranges, caps
+// sizes, asks you before any write, and scrubs the response. You never see a token.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    // LLM-free (ADR-0011, AL-09 plan v4): the repo list IS the wow, and it must be
+    // verifiably real. A model in the loop would make it impossible to tell whether a
+    // repo name came off the wire or was invented.
+    const RESPONSE_SCHEMA = null;
+
+    // ============================================================
+    // 6. YOUR APP — My Repos
+    // ============================================================
+    // D2: a GitHub PERSONAL ACCESS TOKEN is a user-pasted long-lived token, which is the
+    // `bearer_token` kind — NOT `oauth2_auth_code`. The registry has a `github` OAuth
+    // entry, but a PAT is honestly a bearer token, and modelling it as one keeps the five
+    // starters spanning genuinely different credential shapes. The registry's
+    // `apiHosts` (`api.github.com`) is still the host authority (AC6).
+    //
+    // C1 by construction: no token field, no Authorization header, no PAT string in this
+    // region. The host injects the token on the way out.
+    const HOST = 'https://api.github.com';
+    const REPOS_URL = `${HOST}/user/repos?per_page=20&sort=updated`;
+
+    const EXPLANATIONS = {
+      HOST_ERROR: 'You are previewing this app from the shelf, so it has no network yet. Press install at the top to make it yours — then connect GitHub and your repositories will load.',
+      NET_NOT_APPROVED: 'This app is not connected to GitHub yet. Use the connect button above to approve it and paste a personal access token — then load your repos.',
+      NET_AUTH_FAILED: 'GitHub refused the saved token. Personal access tokens expire and can be revoked; create a new one and re-enter it from the connection panel.',
+      NET_CONFIRM_DENIED: 'You declined the confirmation prompt, so nothing was sent.',
+      NET_HOST_BLOCKED: 'That host is not on this app’s declared list, so the host refused to dial it.',
+      NET_SSRF_BLOCKED: 'That address resolves somewhere private. The host blocks those on purpose.',
+      NET_SIZE_EXCEEDED: 'GitHub sent back more than the host allows through the bridge.',
+      NET_FETCH_FAILED: 'The host could not reach GitHub. It may be down, or the network may be offline.',
+    };
+
+    // Language dots, kept tiny and offline — no icon CDN, no remote images (C2).
+    const LANG_COLOR = {
+      TypeScript: '#3178c6', JavaScript: '#f1e05a', Python: '#3572A5', Go: '#00ADD8',
+      Rust: '#dea584', Ruby: '#701516', Java: '#b07219', 'C#': '#178600',
+      HTML: '#e34c26', CSS: '#563d7c', Shell: '#89e051',
+    };
+
+    const ago = (iso) => {
+      const then = new Date(iso);
+      if (Number.isNaN(then.getTime())) return '';
+      const days = Math.floor((Date.now() - then.getTime()) / 86400000);
+      if (days <= 0) return 'today';
+      if (days === 1) return 'yesterday';
+      if (days < 30) return `${days}d ago`;
+      if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+      return `${Math.floor(days / 365)}y ago`;
+    };
+
+    // Never throws — an odd payload reads as "we did not understand that".
+    const toRepos = (body) => {
+      let parsed;
+      try {
+        parsed = typeof body === 'string' ? JSON.parse(body) : body;
+      } catch {
+        return [];
+      }
+      if (!Array.isArray(parsed)) return [];
+      return parsed.map((repo) => ({
+        id: repo && repo.id,
+        name: repo && repo.name ? repo.name : '(unnamed)',
+        private: Boolean(repo && repo.private),
+        language: repo && repo.language ? repo.language : null,
+        stars: repo && typeof repo.stargazers_count === 'number' ? repo.stargazers_count : 0,
+        updated: repo && repo.updated_at ? repo.updated_at : '',
+        description: repo && repo.description ? repo.description : '',
+      }));
+    };
+
+    function App() {
+      const { isReady, theme } = useSnugApp({
+        appId: 'my-repos',
+        displayName: 'My Repos',
+        description: 'Your GitHub repositories at a glance, fetched with a personal access token the host holds — this app never sees it.',
+        iconEmoji: '📦',
+        iconColor: '#24292f',
+      });
+      const net = useConnectedFetch();
+      const [repos, setRepos] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState(null);
+      const [filter, setFilter] = useState('all');
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const load = async () => {
+        setBusy(true);
+        setError(null);
+        // The governed seam. ALWAYS resolves — never throws.
+        const response = await net.fetch(REPOS_URL, { method: 'GET' });
+        if (response.ok) {
+          setRepos(toRepos(response.body));
+        } else {
+          setError(response.error || {});
+        }
+        setBusy(false);
+      };
+
+      if (!isReady) return <div className="connecting">connecting to the host…</div>;
+
+      const code = error ? (error.code || 'UNKNOWN') : null;
+      const preConnect = code === 'NET_NOT_APPROVED' || (repos === null && !busy && error === null);
+      const shown = repos
+        ? repos.filter((r) => (filter === 'all' ? true : filter === 'public' ? !r.private : r.private))
+        : [];
+
+      return (
+        <div className="wrap">
+          <h1>My Repos</h1>
+          <p className="sub">your repositories at a glance — a token the app never sees.</p>
+
+          {preConnect ? (
+            <div className="notice" data-testid="preconnect-notice">
+              <span aria-hidden="true">📦</span>
+              <p style={{ margin: 0 }}>
+                <b>connect GitHub to see your repositories.</b> nothing is loaded yet. approve the
+                connection above and paste a personal access token — the host stores it and adds
+                it to each request; this app never sees it.
+              </p>
+            </div>
+          ) : (
+            <div className="notice">
+              <span aria-hidden="true">🔐</span>
+              <p style={{ margin: 0 }}>
+                <b>your token stays yours.</b> this app has no network of its own. it asks the host
+                to call GitHub and the host adds your token on the way out — it never enters this
+                page, and never reaches a model.
+              </p>
+            </div>
+          )}
+
+          <section className="card">
+            <h2>📦 repositories</h2>
+
+            {repos ? (
+              <div className="cities" role="group" aria-label="filter repositories">
+                {['all', 'public', 'private'].map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className="chip"
+                    aria-pressed={filter === value}
+                    data-testid={`filter-${value}`}
+                    onClick={() => setFilter(value)}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {busy ? (
+              <div className="rows" data-testid="repos-skeleton">
+                {[0, 1, 2, 3].map((n) => <div key={n} className="skeleton" />)}
+              </div>
+            ) : null}
+
+            {!busy && repos && shown.length > 0 ? (
+              <ul className="rows" data-testid="repo-list">
+                {shown.map((repo) => (
+                  <li className="repo" key={repo.id || repo.name}>
+                    <div className="repo-head">
+                      <span className="repo-name">{repo.name}</span>
+                      {repo.private ? <span className="badge">private</span> : null}
+                    </div>
+                    {repo.description ? <p className="repo-desc">{repo.description}</p> : null}
+                    <div className="repo-meta">
+                      {repo.language ? (
+                        <span className="lang">
+                          <span
+                            className="dot"
+                            aria-hidden="true"
+                            style={{ background: LANG_COLOR[repo.language] || 'var(--muted)' }}
+                          />
+                          {repo.language}
+                        </span>
+                      ) : null}
+                      {repo.stars > 0 ? <span>★ {repo.stars}</span> : null}
+                      {repo.updated ? <span>{ago(repo.updated)}</span> : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!busy && repos && shown.length === 0 ? (
+              <p style={{ margin: '0 0 12px', color: 'var(--muted)' }}>
+                no {filter === 'all' ? '' : `${filter} `}repositories came back for this token.
+              </p>
+            ) : null}
+
+            <button className="btn" onClick={load} disabled={busy} data-testid="load-button">
+              {busy ? 'loading…' : repos ? 'reload repositories' : 'load my repositories'}
+            </button>
+          </section>
+
+          {error ? (
+            <div className="result err" data-testid="result-error">
+              <div>nothing loaded — <span className="code" data-testid="error-code">{code}</span></div>
+              <p style={{ margin: '6px 0 0' }}>
+                {EXPLANATIONS[code] || error.message || 'The host refused this request and gave no further detail.'}
+              </p>
+              {code === 'NET_NOT_APPROVED' ? (
+                <ol className="steps" data-testid="not-approved-steps">
+                  <li>press connect in the bar above — you will see exactly what is being approved</li>
+                  <li>paste a personal access token with <b>repo</b> scope — the host stores it, not this app</li>
+                  <li>press <b>load my repositories</b> again</li>
+                </ol>
+              ) : null}
+              {error.retryable ? <p style={{ margin: '6px 0 0' }}>this one is worth retrying.</p> : null}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

@@ -649,6 +649,26 @@
   border: 1px solid var(--ember-deep);
   background: linear-gradient(135deg, var(--ember-glow), transparent 70%), var(--surface);
   animation: sheet-up var(--dur-2) var(--ease-out);
+  /* The sticky `.shell-header` (position:sticky, top:0, z-index:20) floats OVER this
+     scroll area, so a card scrolled to the top of the viewport lands underneath it and
+     its buttons cannot be clicked — the browser routes the pointer to the header.
+     `.builder .chat-log` already reserves `padding-bottom` for the sticky composer for
+     exactly this reason; the top edge had no equivalent. Diagnosed from a Playwright
+     failure whose call log reads `<header class="shell-header">…</header> intercepts
+     pointer events` after `scrolling into view if needed`. The value clears the header's
+     resolved height (padding + content) with margin to spare. */
+  scroll-margin-top: 5rem;
+}
+
+/* Reduced motion removes the card's slide-in. Beyond the accessibility rule this is what
+   makes the connect button immediately CLICKABLE rather than in-flight for 220ms: a
+   moving target is not a stable hit area, which is the second half of the same Playwright
+   failure ("element is not stable" / "retrying click action"). The card still appears —
+   only the transform is dropped — so nothing about the layout or the copy changes. */
+@media (prefers-reduced-motion: reduce) {
+  .artifact-card {
+    animation: none;
+  }
 }
 
 .artifact-card .artifact-name {
@@ -1478,6 +1498,33 @@ img.identity-avatar {
   border-radius: 999px;
   color: var(--ok);
   border: 1px solid var(--ok);
+  background: transparent;
+}
+
+/*
+  The desktop-only badge (HARVESTED from AL-09 / TASK-20260807 AC9). Same shape as the
+  installed badge but a MUTED colour and its own class: it reports a limitation, not an
+  achievement, so it must not read as a success state — and `.tile-installed-badge` must
+  stay unambiguous for the dedup spec that asserts on it.
+*/
+.tile-desktop-badge {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  /*
+    `--fg-muted` (tokens.css), NOT `--muted`. The example APPS define their own
+    `--muted` locally, and copying that name into the SHELL stylesheet silently
+    produced an undefined variable — the badge fell back to initial colours. Every
+    other muted colour in this file uses `--fg-muted`; so does this one.
+  */
+  color: var(--fg-muted);
+  border: 1px solid var(--fg-muted);
   background: transparent;
 }
 
