@@ -96,7 +96,7 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/, /net\.spec\.ts/, /auth-wizard\.spec\.ts/],
+      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/, /net\.spec\.ts/, /connection-wizard\.spec\.ts/],
     },
     {
       // AL-03 net e2e: its OWN project so the self-signed-cert allowance and the
@@ -118,17 +118,42 @@ export default defineConfig({
       },
     },
     {
-      // AL-04 auth-wizard e2e: its OWN project (the net-project precedent) — the
-      // connected fetch at the end of the api_key flow hits the self-signed stub
+      // P3 connection-wizard e2e: its OWN project (the net-project precedent) — the
+      // connected fetch at the end of the api_key journey hits the self-signed stub
       // through the real app shell, so the cert allowance + resolver rule stay
       // scoped here and never touch the plain app contexts.
-      name: 'auth-wizard',
-      testMatch: /auth-wizard\.spec\.ts/,
+      //
+      // Renamed from `auth-wizard` when the v3 sheet was deleted; the four v4 journeys
+      // in connection-wizard.spec.ts supersede its three scenarios.
+      name: 'connection-wizard',
+      testMatch: /connection-wizard\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         ignoreHTTPSErrors: true,
         launchOptions: {
-          args: [`--host-resolver-rules=MAP stub.snug.test 127.0.0.1`, '--ignore-certificate-errors'],
+          args: [
+            /*
+              TWO resolver rules, and the second one is load-bearing for journey 4.
+
+              `idp.snug.test` is the OAuth journey's authorize/token host. It cannot be
+              `127.0.0.1`: `isForbiddenNetHost` refuses every loopback literal — correctly,
+              and that guard must never be relaxed for a test — so a requirement declaring
+              it is rejected at admission and no connect card ever renders. It also cannot
+              be a real provider host, because an OAuth journey NAVIGATES the browser to
+              the authorize URL and POSTs to the token URL, neither of which the page can
+              remap the way an injected header's target is remapped.
+
+              So the resolution happens where it belongs for this one case: at the BROWSER,
+              scoped to this project. What the requirement declares, what the user reviews,
+              and what the ceiling freezes are all `idp.snug.test` — a name that passes
+              every real gate — while the bytes land on the local fake IdP.
+            */
+            // `api.coinbase.com` is mapped too: journey 1's app dials the REAL provider
+            // host (on the stub's port) so what the user reviews and freezes is a ceiling
+            // a real app would have. Only the RESOLUTION is local — no request leaves.
+            `--host-resolver-rules=MAP stub.snug.test 127.0.0.1,MAP idp.snug.test 127.0.0.1,MAP api.coinbase.com 127.0.0.1`,
+            '--ignore-certificate-errors',
+          ],
         },
       },
     },

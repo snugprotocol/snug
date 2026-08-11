@@ -8,7 +8,8 @@
 >
 > **Version note (AL-02, 2026-08-06):** the reference implementation now carries an
 > **internal v3 draft** of the storage schema (`PRAGMA user_version = 3`, adding the
-> `snug_auth_specs` table for Dynamic Auth — see the spec-changelog internal-draft
+> `snug_connections` table for Dynamic Auth v2 (v3's `snug_auth_specs` was dropped at
+> userdb v5) — see the spec-changelog internal-draft
 > entry). **This v0.2 document describes v2 and is published as such**; the v3 auth
 > surface is deliberately excluded from the AL-13 push and publishes no earlier than
 > Beta exit (staged v0.3 prose is AL-12). A v3 file is a superset of v2: the v2→v3

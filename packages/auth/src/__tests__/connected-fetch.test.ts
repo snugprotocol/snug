@@ -1,3 +1,10 @@
+// P3 CUTOVER: the FIXTURES moved from the v3 `snug_auth_specs` reader (deleted with that
+// table at userdb v5) to the v4 `snug_connections` reader. Every ASSERTION below is
+// unchanged, and that is the whole reason this file was migrated rather than deleted:
+// these are the C1 injection gates — credential-header stripping, body scrubbing, the
+// redirect block, the size cap, host-assigned binding — and a cutover of the READER must
+// not quietly change which traffic they apply to.
+//
 // AL-03 plan D2/D3 — the connected-fetch executor, one test per enforcement gate in the
 // pinned D3 order, all at the executor altitude with a fake fetch. Amendments under
 // test: A1 (https-only — the http-localhost exception is dead), B1 (response cap →
@@ -5,23 +12,54 @@
 // at check time), R2 (GET/HEAD body), R5 (host-assigned binding; strict input), C1
 // (app-supplied credential headers stripped before fetchImpl; injected values scrubbed
 // from bodies AND whitelisted headers), A2 (set-cookie never crosses).
-import { LIMITS, NET_ERROR_CODES, type AuthSpec, type AuthSpecStatus } from '@snugprotocol/protocol';
+import {
+  CONNECTION_STATUS,
+  LIMITS,
+  NET_ERROR_CODES,
+  deriveConnectionAllowedHosts,
+  type ConnectionRequirement,
+  type ConnectionStatus,
+} from '@snugprotocol/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { authConnectionSecretKey, authCredentialSecretKey } from '@snugprotocol/db';
-import { createConnectedFetch, type ConnectedFetch, type NetSpecRow } from '../connected-fetch.js';
+import { authConnectionCredentialSecretKey, authConnectionStateSecretKey } from '@snugprotocol/db';
+import { createConnectedFetch, type ConnectedFetch, type NetConnectionRow } from '../connected-fetch.js';
 import { UserDbCredentialStore } from '../credential-store.js';
 
 // ---------------------------------------------------------------------- fixtures
 
 const APP = 'app-net';
+const SLOT = 'example';
 
-const apiKeySpec: AuthSpec = {
+const apiKeySpec: ConnectionRequirement = {
+  slot: SLOT,
   kind: 'api_key',
   provider: { name: 'Example' },
   fields: [{ key: 'api_key', label: 'API key', type: 'secret' }],
   request: { headerTemplate: { 'X-Api-Key': '{{api_key}}' } },
   declaredApiHosts: ['api.example.com'],
 };
+
+/**
+ * v4 rows carry an `imported` flag rather than v3's `imported_unapproved` STATUS, so the
+ * old three-value status maps onto (status, imported). The distinction is preserved, not
+ * flattened: the executor still owes NET_IMPORTED_UNAPPROVED its own code.
+ */
+function rowFor(
+  requirement: ConnectionRequirement,
+  status: 'approved' | 'unapproved' | 'imported_unapproved',
+  allowedHosts?: string[],
+): NetConnectionRow {
+  const persisted: ConnectionStatus =
+    status === 'approved' ? CONNECTION_STATUS.approved : CONNECTION_STATUS.declared;
+  return {
+    appId: APP,
+    slot: requirement.slot,
+    requirement,
+    status: persisted,
+    allowedHosts: allowedHosts ?? deriveConnectionAllowedHosts(requirement),
+    ...(status === 'imported_unapproved' ? { imported: true } : {}),
+  };
+}
 
 const API_KEY_VALUE = 'stored-key-abc123';
 
@@ -47,30 +85,32 @@ interface Harness {
   calls: FetchCall[];
   quartet: ReturnType<typeof memoryQuartet>;
   confirm: ReturnType<typeof vi.fn>;
-  setRow(appId: string, row: NetSpecRow | undefined): void;
+  setRow(appId: string, row: NetConnectionRow | undefined): void;
 }
 
 function harness(opts: {
-  spec?: AuthSpec;
-  status?: AuthSpecStatus;
+  spec?: ConnectionRequirement;
+  status?: 'approved' | 'unapproved' | 'imported_unapproved';
   allowedHosts?: string[];
   respond?: (url: string, init: RequestInit) => Response;
   confirmResult?: boolean;
 } = {}): Harness {
   const quartet = memoryQuartet();
-  quartet.setSecret(authCredentialSecretKey(APP, 'api_key'), API_KEY_VALUE);
-  const rows = new Map<string, NetSpecRow>();
-  rows.set(APP, {
-    spec: opts.spec ?? apiKeySpec,
-    status: opts.status ?? 'approved',
-    allowedHosts: opts.allowedHosts ?? ['api.example.com'],
-  });
+  // SLOT-KEYED (P1): `auth:<appId>:<slot>:<fieldKey>`.
+  quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'), API_KEY_VALUE);
+  const rows = new Map<string, NetConnectionRow>();
+  rows.set(APP, rowFor(opts.spec ?? apiKeySpec, opts.status ?? 'approved', opts.allowedHosts ?? ['api.example.com']));
   const calls: FetchCall[] = [];
   const respond = opts.respond ?? (() => new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }));
   const confirm = vi.fn(async () => opts.confirmResult ?? true);
   const executor = createConnectedFetch({
     credentialStore: new UserDbCredentialStore(quartet),
-    specReader: { getAuthSpec: (appId) => rows.get(appId) },
+    connectionReader: {
+      listConnections: (appId) => {
+        const row = rows.get(appId);
+        return row === undefined ? [] : [row];
+      },
+    },
     fetchImpl: async (url, init) => {
       calls.push({ url, init: init ?? {} });
       return respond(url, init ?? {});
@@ -176,6 +216,15 @@ describe('gate 4 — https-only scheme + frozen-host ceiling (A1/B3)', () => {
     });
   });
 
+  /**
+   * THE REFUSAL IS UNCHANGED; ONLY THE CODE'S NAME MOVED (P1, restated at the P3 cutover).
+   * v3 read one app-keyed row and could say "this host violates THAT row's ceiling" —
+   * NET_HOST_BLOCKED. v4 ROUTES BY HOST, so an off-ceiling host matches no row at all:
+   * there is no ceiling that was violated, only a host nothing was ever approved for, and
+   * NET_NOT_APPROVED is the honest name for that. The security property under test is
+   * identical and is carried by the `calls` assertion below — every one of these URLs,
+   * suffix tricks included, is refused with ZERO fetches.
+   */
   it('blocks a host outside the frozen ceiling, including suffix tricks', async () => {
     const { executor, calls } = harness();
     for (const url of [
@@ -183,7 +232,7 @@ describe('gate 4 — https-only scheme + frozen-host ceiling (A1/B3)', () => {
       'https://api.example.com.evil.com/x', // suffix trick — exact hostname match only
       'https://apiXexample.com/x'.replace('X', '-'),
     ]) {
-      expect(await executor.execute(APP, { url, method: 'GET' })).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_HOST_BLOCKED });
+      expect(await executor.execute(APP, { url, method: 'GET' })).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_NOT_APPROVED });
     }
     expect(calls).toHaveLength(0);
   });
@@ -296,26 +345,28 @@ describe('gate 8 — credential injection per kind (values read PER USE, AL-02 D
   it('re-reads the store on every call — no cached credential serves a later request', async () => {
     const { executor, calls, quartet } = harness();
     await executor.execute(APP, GET());
-    quartet.setSecret(authCredentialSecretKey(APP, 'api_key'), 'rotated-key-xyz789');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'), 'rotated-key-xyz789');
     await executor.execute(APP, GET());
     expect(headerOf(calls[1]!, 'x-api-key')).toBe('rotated-key-xyz789');
   });
 
   it('bearer_token without a template defaults to Authorization: Bearer <field[0]>', async () => {
-    const spec: AuthSpec = {
+    const spec: ConnectionRequirement = {
+      slot: SLOT,
       kind: 'bearer_token',
       provider: { name: 'Tok' },
       fields: [{ key: 'token', label: 'Token', type: 'secret' }],
       declaredApiHosts: ['api.example.com'],
     };
     const { executor, calls, quartet } = harness({ spec });
-    quartet.setSecret(authCredentialSecretKey(APP, 'token'), 'bearer-value-123');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'token'), 'bearer-value-123');
     expect((await executor.execute(APP, GET())).ok).toBe(true);
     expect(headerOf(calls[0]!, 'authorization')).toBe('Bearer bearer-value-123');
   });
 
   it('basic_auth without a template defaults to Authorization: Basic base64(user:pass)', async () => {
-    const spec: AuthSpec = {
+    const spec: ConnectionRequirement = {
+      slot: SLOT,
       kind: 'basic_auth',
       provider: { name: 'Basic' },
       fields: [
@@ -325,31 +376,32 @@ describe('gate 8 — credential injection per kind (values read PER USE, AL-02 D
       declaredApiHosts: ['api.example.com'],
     };
     const { executor, calls, quartet } = harness({ spec });
-    quartet.setSecret(authCredentialSecretKey(APP, 'username'), 'alice');
-    quartet.setSecret(authCredentialSecretKey(APP, 'password'), 'p4ss:w0rd');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'username'), 'alice');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'password'), 'p4ss:w0rd');
     expect((await executor.execute(APP, GET())).ok).toBe(true);
     expect(headerOf(calls[0]!, 'authorization')).toBe(`Basic ${btoa('alice:p4ss:w0rd')}`);
   });
 
   it('a missing required credential is NET_AUTH_FAILED with no fetch', async () => {
     const { executor, calls, quartet } = harness();
-    quartet.deleteSecret(authCredentialSecretKey(APP, 'api_key'));
+    quartet.deleteSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'));
     expect(await executor.execute(APP, GET())).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_AUTH_FAILED });
     expect(calls).toHaveLength(0);
   });
 
   it('oauth2_auth_code: injects Bearer <access_token> from the store', async () => {
-    const spec: AuthSpec = {
+    const spec: ConnectionRequirement = {
+      slot: SLOT,
       kind: 'oauth2_auth_code',
       provider: { name: 'Spotify' },
       endpoints: { authorizeUrl: 'https://accounts.example.com/authorize', tokenUrl: 'https://accounts.example.com/token' },
-      clientCreds: [{ key: 'client_id', label: 'Client ID', type: 'text' }],
+      fields: [{ key: 'client_id', label: 'Client ID', type: 'text' }],
       declaredApiHosts: ['api.example.com'],
     };
     const { executor, calls, quartet } = harness({ spec, allowedHosts: ['api.example.com', 'accounts.example.com'] });
-    quartet.setSecret(authCredentialSecretKey(APP, 'access_token'), 'oauth-access-token-1');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'access_token'), 'oauth-access-token-1');
     quartet.setSecret(
-      authConnectionSecretKey(APP),
+      authConnectionStateSecretKey(APP, SLOT),
       JSON.stringify({ status: 'connected', obtainedAt: Date.now(), expiresIn: 3600 }),
     );
     expect((await executor.execute(APP, GET())).ok).toBe(true);
@@ -357,7 +409,8 @@ describe('gate 8 — credential injection per kind (values read PER USE, AL-02 D
   });
 
   it('oauth 401 → ONE transparent refresh through the frozen ceiling → retried with the new token', async () => {
-    const spec: AuthSpec = {
+    const spec: ConnectionRequirement = {
+      slot: SLOT,
       kind: 'oauth2_auth_code',
       provider: { name: 'Spotify' },
       endpoints: {
@@ -365,7 +418,7 @@ describe('gate 8 — credential injection per kind (values read PER USE, AL-02 D
         tokenUrl: 'https://accounts.example.com/token',
         refreshUrl: 'https://accounts.example.com/token',
       },
-      clientCreds: [{ key: 'client_id', label: 'Client ID', type: 'text' }],
+      fields: [{ key: 'client_id', label: 'Client ID', type: 'text' }],
       declaredApiHosts: ['api.example.com'],
     };
     let apiCalls = 0;
@@ -385,11 +438,11 @@ describe('gate 8 — credential injection per kind (values read PER USE, AL-02 D
           : new Response('{"fine":true}', { status: 200 });
       },
     });
-    quartet.setSecret(authCredentialSecretKey(APP, 'access_token'), 'stale-token-1');
-    quartet.setSecret(authCredentialSecretKey(APP, 'refresh_token'), 'refresh-token-1');
-    quartet.setSecret(authCredentialSecretKey(APP, 'client_id'), 'client-1');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'access_token'), 'stale-token-1');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'refresh_token'), 'refresh-token-1');
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'client_id'), 'client-1');
     quartet.setSecret(
-      authConnectionSecretKey(APP),
+      authConnectionStateSecretKey(APP, SLOT),
       JSON.stringify({ status: 'connected', obtainedAt: Date.now(), expiresIn: 3600 }),
     );
     const result = await executor.execute(APP, GET());
@@ -515,10 +568,10 @@ describe('gate 10 — response size cap (B1) and the scrubber (D4/R1/A2)', () =>
 
   it('a thrown fetch (network/timeout) maps to NET_FETCH_FAILED, retryable', async () => {
     const quartet = memoryQuartet();
-    quartet.setSecret(authCredentialSecretKey(APP, 'api_key'), API_KEY_VALUE);
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'), API_KEY_VALUE);
     const executor = createConnectedFetch({
       credentialStore: new UserDbCredentialStore(quartet),
-      specReader: { getAuthSpec: () => ({ spec: apiKeySpec, status: 'approved', allowedHosts: ['api.example.com'] }) },
+      connectionReader: { listConnections: () => [rowFor(apiKeySpec, 'approved')] },
       fetchImpl: async () => {
         throw new TypeError('network down');
       },

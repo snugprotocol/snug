@@ -4,6 +4,52 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-10 — INTERNAL DRAFT, not staged for any push — TASK-20260810-p3-wizard (Dynamic Auth v2, P3)
+**Excluded from every spec push** (owner decision 2026-08-05 spec-gating; the auth surface
+publishes no earlier than Beta exit). **userdb schema v4 → v5: `snug_auth_specs` is
+DROPPED.** This is fold B1's named exit and the first DESTRUCTIVE userdb migration.
+
+**What changed in `packages/protocol`.** `USERDB_SCHEMA_VERSION` 4 → 5. The
+`snug_auth_specs` CREATE TABLE is REMOVED from `USERDB_DDL` — deliberately not left as a
+tombstone, because the Q9 self-heal guard replays the DDL on every open and a surviving
+`CREATE TABLE IF NOT EXISTS` would rebuild the surface the migration exists to remove. The
+table NAME stays in `USERDB_TABLES` so the v5 migration can name what it drops and so the
+DDL-absence test has something to assert against. The DDL snapshot (SPEC_SYNC-gated) moves
+by exactly those 9 lines.
+
+**What changed in `packages/db`.** The v5 migration runs `DROP TABLE IF EXISTS
+snug_auth_specs` (IF EXISTS because the self-heal path can produce an open whose stamped
+version never had its tables created; a throw there would make the file permanently
+unopenable). Removed with it: the six accessors (`putAuthSpec`, `approveAuthSpec`,
+`reapproveAuthSpec`, `getAuthSpec`, `listAuthSpecs`, `deleteAuthSpec`), `AuthSpecRow`,
+`HostFreezeViolation` (v4 STAGES a changed requirement instead of throwing),
+`parseAuthSpecStrict`, and the `reconcileImportedAuthSpecs` import pass —
+unreachable because `migrate()` runs before reconciliation, so an imported v3-era file has
+already had the table dropped. `UserDbImportReport.droppedAuthSpecs` is gone; the
+`droppedConnections` half is unchanged.
+
+**CREDENTIAL VALUES ARE NOT TOUCHED.** They live in `snug_secrets` and survive. What a
+v3-era user loses is the v3 GRANT, so a previously-connected app re-enters the wizard and
+is re-approved into a v4 row. That re-approval is deliberate: v4 freezes a SLOT-KEYED
+ceiling that v3's app-keyed row cannot express, and inheriting an approval across that
+change would mean honoring consent for a shape the user never saw.
+
+**What changed in `packages/auth`.** The executor's v3 branch is gone: `NetSpecReader`,
+`NetSpecRow`, the `specReader` half of the `ConnectedFetchDeps` union (now a plain object
+carrying `connectionReader`), and `spec-scope.ts` / `requireApprovedSpecScope`.
+`NetConnectionReader` / `NetConnectionRow` are newly EXPORTED — until a host could name
+them, the v3 reader was the only reachable path out of this package, which is why the
+playground had not cut over. `llmProposalSchema` and `createAuthSpecInferrer` are
+deliberately UNTOUCHED: their retirement is P4's named exit item, not this one.
+
+**One error-code rename, no behavior change.** An off-ceiling host now returns
+`NET_NOT_APPROVED` rather than `NET_HOST_BLOCKED`. v3 read one app-keyed row and could say
+"this host violates THAT row's ceiling"; v4 routes BY host, so an off-ceiling host matches
+no row at all — there is no ceiling that was violated, only a host nothing was approved
+for. The refusal and the zero-fetch guarantee are identical.
+
+---
+
 ## 2026-08-10 — INTERNAL DRAFT, not staged for any push — TASK-20260810-p0-contracts (Dynamic Auth v2, P0)
 **Excluded from every spec push** (owner decision 2026-08-05 spec-gating; the auth surface
 publishes no earlier than Beta exit, AL-12 stays HELD). The REQUIREMENT/GRANT SPLIT —

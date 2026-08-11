@@ -14,7 +14,7 @@
 // v3 `snug_auth_specs` surface — the v3 tests keep shipping green alongside these.
 import initSqlJs from 'sql.js';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { USERDB_FILE } from '@snugprotocol/protocol';
+import { USERDB_FILE, USERDB_SCHEMA_VERSION } from '@snugprotocol/protocol';
 import {
   AUTH_MAX_SLOTS_PER_APP,
   CONNECTION_STATUS,
@@ -923,13 +923,18 @@ describe('AC17 — DDL-replay self-healing guard (Q9: `migrate()` stamps user_ve
     db.setSetting('theme', 'dark');
     await db.close();
 
-    // The failure Q9 exists to catch: `PRAGMA user_version` says v4, so `migrate()`'s
-    // forward-only loop runs NOTHING, yet the table is absent. Without the guard the
-    // first accessor call fails with a raw SQLite "no such table".
+    // The failure Q9 exists to catch: `PRAGMA user_version` says the CURRENT version, so
+    // `migrate()`'s forward-only loop runs NOTHING, yet the table is absent. Without the
+    // guard the first accessor call fails with a raw SQLite "no such table".
+    //
+    // Asserted against `USERDB_SCHEMA_VERSION` rather than a literal: the claim is "the
+    // stamp equals current, so no migration will run", which is what makes the table's
+    // absence unrecoverable without the heal. A hardcoded number states the same thing
+    // only until the next bump, and then silently becomes a different (weaker) claim.
     const SQL = await initSqlJs({ locateFile: () => locateWasm() });
     const raw = new SQL.Database(backend.files.get(USERDB_FILE));
     raw.run(`DROP TABLE ${USERDB_CONNECTIONS_TABLE}`);
-    expect(raw.exec('PRAGMA user_version')[0]?.values).toEqual([[4]]); // the version LIED
+    expect(raw.exec('PRAGMA user_version')[0]?.values).toEqual([[USERDB_SCHEMA_VERSION]]); // the version LIED
     await backend.save(USERDB_FILE, raw.export());
     raw.close();
 

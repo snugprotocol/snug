@@ -105,7 +105,7 @@ describe('D9 — the chat card mounts the wizard intent', () => {
     container?.remove();
   });
 
-  async function renderLog(messages: ChatMessage[], onDirectiveConnect?: (d: AuthWizardDirective) => void): Promise<void> {
+  async function renderLog(messages: ChatMessage[], onDirectiveConnect?: () => void): Promise<void> {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -114,7 +114,15 @@ describe('D9 — the chat card mounts the wizard intent', () => {
     });
   }
 
-  it('a message carrying a directive renders the card; connect passes the directive to the mount', async () => {
+  /**
+   * P3: the card is a DOORBELL and no longer hands the directive to the mount. In v4 the
+   * requirement was already persisted at build time through the gated pipeline, so what
+   * the wizard reviews comes from the ROW — a card that could pass a proposal at click
+   * time would be re-opening the channel the persisted-requirement design closed. The
+   * guarantee under test is unchanged: the card renders for a validated directive and its
+   * button fires the mount.
+   */
+  it('a message carrying a directive renders the card; connect fires the mount', async () => {
     const onConnect = vi.fn();
     await renderLog(
       [{ id: 1, role: 'agent', displayText: 'this app needs a weather connection', directive }],
@@ -128,7 +136,10 @@ describe('D9 — the chat card mounts the wizard intent', () => {
     await act(async () => {
       connect!.click();
     });
-    expect(onConnect).toHaveBeenCalledWith(directive);
+    expect(onConnect).toHaveBeenCalledTimes(1);
+    // The mount is rung with NOTHING: the directive is not an authority over what is
+    // reviewed, and there is no argument through which it could become one.
+    expect(onConnect).toHaveBeenCalledWith();
   });
 
   it('without a directive there is no card and no connect button', async () => {

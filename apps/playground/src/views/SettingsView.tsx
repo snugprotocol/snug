@@ -32,14 +32,11 @@ import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm
 import { UserDbCredentialStore } from '@snugprotocol/auth';
 import { getUserDb } from '../state/userdb.js';
 import { invalidateNetGrants } from '../state/net.js';
-import { noteAuthSpecRevoked, openWizard, wizardStore } from '../state/wizard.js';
-import { resolveDeclaredIntent } from '../starter/starterDeclaration.js';
-import type { LlmProposal } from '@snugprotocol/protocol';
 import { useStore } from '../state/store.js';
 import { downloadBlob } from '../run/exportDb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
-import type { AuthSpecRow } from '@snugprotocol/db';
+import { ConnectionSlotsCard } from './ConnectionSlotsCard.js';
 
 
 export function SettingsView(): ReactElement {
@@ -188,7 +185,12 @@ export function SettingsView(): ReactElement {
 
       <AccountCard />
       <DataCard />
-      <ConnectionsCard />
+      {/*
+        P3 (fold B1): the v4 slot-aware card replaces AL-03's app-keyed ConnectionsCard.
+        One row per (app, SLOT) rather than one per app — the same provider connected in
+        two apps is two independent grants, and the old card could not say so.
+      */}
+      <ConnectionSlotsCard />
 
       <Card>
         <div className="field">
@@ -399,223 +401,3 @@ function DataCard(): ReactElement {
   );
 }
 
-/**
- * Connections (AL-03 D5): the minimal, PERMANENT settings seat for the envelope net
- * capability. Lists each app's auth spec — kind, provider, the FULL frozen host list,
- * and status — with Approve / Re-approve / Revoke wired to the AL-02 db accessors. Every
- * approval transition invalidates that app's remembered session grants (R3). AL-04's
- * wizard replaces the approval INNARDS; this panel survives. Dev-grade visuals.
- */
-/**
- * An installed app that DECLARES a connection but has no auth row yet
- * (TASK-20260807-connection-reachability §V2-6), or whose declaration has withdrawn
- * because its code no longer matches the starter it came from.
- */
-interface DeclaredEntry {
-  appId: string;
-  displayName: string;
-  declaration?: LlmProposal;
-  mismatch?: 'html_mismatch';
-}
-
-export function ConnectionsCard(): ReactElement {
-  const [rows, setRows] = useState<AuthSpecRow[]>([]);
-  const [declared, setDeclared] = useState<DeclaredEntry[]>([]);
-  const [error, setError] = useState<string | undefined>(undefined);
-  const [epoch, setEpoch] = useState(0);
-  // AL-04: approvals happen INSIDE the wizard now — refresh the rows whenever the
-  // wizard session ends so status pills reflect what it changed.
-  const wizardSession = useStore(wizardStore);
-
-  useEffect(() => {
-    let cancelled = false;
-    void getUserDb().then((db) => {
-      if (!cancelled) setRows(db.listAuthSpecs());
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [epoch, wizardSession]);
-
-  /**
-   * The install-act half of the panel. Without it a chat-less app is INVISIBLE here:
-   * this card renders `listAuthSpecs()`, which stays empty until something writes a row,
-   * and for a starter nothing ever could — so the panel said "no connections yet" while
-   * an installed app sat unable to reach the network, with no route to fix it.
-   *
-   * An app that already HAS a row is deliberately excluded: the list above owns it, and
-   * two controls for one connection is worse than none.
-   */
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const db = await getUserDb();
-      const withRows = new Set(db.listAuthSpecs().map((row) => row.appId));
-      const found: DeclaredEntry[] = [];
-      for (const app of db.listApps()) {
-        if (withRows.has(app.appId)) continue;
-        const intent = await resolveDeclaredIntent(db, app.appId);
-        if (intent.declaration === undefined && intent.mismatch === undefined) continue;
-        found.push({
-          appId: app.appId,
-          displayName: app.displayName,
-          ...(intent.declaration !== undefined ? { declaration: intent.declaration } : {}),
-          ...(intent.mismatch !== undefined ? { mismatch: intent.mismatch } : {}),
-        });
-      }
-      if (!cancelled) setDeclared(found);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [epoch, wizardSession]);
-
-  const act = async (appId: string, fn: (db: Awaited<ReturnType<typeof getUserDb>>) => void | Promise<void>): Promise<void> => {
-    setError(undefined);
-    try {
-      const db = await getUserDb();
-      // AWAITED (nonBlocking 5): a rejection inside the action must surface here —
-      // a floating `void` promise silently swallowed a failed credential wipe.
-      await fn(db);
-      invalidateNetGrants(appId); // R3: approve/reapprove/revoke drops remembered grants
-      setEpoch((n) => n + 1);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  return (
-    <Card>
-      <div className="field">
-        <label>connections</label>
-        <span className="hint">
-          apps you build can reach the network only through connections you approve here. the host attaches your saved
-          credentials, blocks private ranges, asks before any change, and scrubs responses — the app never sees a token.
-        </span>
-        {error !== undefined ? (
-          <div className="error-note" role="alert">
-            {error}
-          </div>
-        ) : null}
-        {rows.length === 0 && declared.length === 0 ? (
-          <span className="hint">no connections yet — an app declares one when it needs an API.</span>
-        ) : null}
-
-        {/*
-          Declared — NOT connected (§V2-6). These apps shipped a `connection.json` that
-          the install act carried in; nothing is approved and no credential exists. The
-          control opens the SAME strong review the CTA opens, just user-initiated.
-        */}
-        {declared.length > 0 ? (
-          <ul className="connections-list" style={{ listStyle: 'none', padding: 0, margin: 'var(--space-2) 0 0' }}>
-            {declared.map((entry) => (
-              <li
-                key={entry.appId}
-                className="connection-row"
-                data-testid="connection-declared-row"
-                style={{ padding: 'var(--space-2) 0', borderTop: '1px solid var(--hairline, #8882)' }}
-              >
-                <div className="connection-head" style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                  <strong>{entry.declaration?.providerName ?? entry.displayName}</strong>
-                  <span className="connection-status">declared — not connected</span>
-                </div>
-                {entry.mismatch !== undefined ? (
-                  // NEVER a silent withdrawal (fidelity check C1): withdrawing quietly
-                  // drops the user into the empty wizard this whole task exists to kill.
-                  <div className="hint">
-                    “{entry.displayName}” no longer matches the starter it was installed from, so its declared
-                    connection was withdrawn. reinstall it from the shelf to restore the guided setup.
-                  </div>
-                ) : (
-                  <>
-                    <div className="connection-hosts hint">
-                      wants to reach: {entry.declaration?.declaredApiHosts?.join(', ') ?? '(unstated)'}
-                    </div>
-                    <div className="field-row" style={{ gap: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
-                      <Button
-                        onClick={() =>
-                          openWizard({
-                            source: 'settings',
-                            appId: entry.appId,
-                            mode: 'connect',
-                            ...(entry.declaration !== undefined ? { declaration: entry.declaration } : {}),
-                          })
-                        }
-                      >
-                        review and connect
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        {rows.length === 0 ? null : (
-          <ul className="connections-list" style={{ listStyle: 'none', padding: 0, margin: 'var(--space-2) 0 0' }}>
-            {rows.map((row) => (
-              <li key={row.appId} className="connection-row" style={{ padding: 'var(--space-2) 0', borderTop: '1px solid var(--hairline, #8882)' }}>
-                <div className="connection-head" style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                  <strong>{row.spec.provider.name}</strong>
-                  <code>{row.spec.kind}</code>
-                  <span className={`connection-status status-${row.status}`}>{statusLabel(row.status)}</span>
-                </div>
-                <div className="connection-hosts hint">
-                  hosts: {row.allowedHosts.length > 0 ? row.allowedHosts.join(', ') : '(none)'}
-                </div>
-                <div className="field-row" style={{ gap: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
-                  {/* AL-04 AC9: the wizard replaces the approval INNARDS — these
-                      buttons open it; the approval transition (and its
-                      invalidateNetGrants call, R3) happens inside the wizard. */}
-                  {row.status !== 'approved' ? (
-                    <Button onClick={() => openWizard({ source: 'settings', appId: row.appId, mode: row.status === 'imported_unapproved' ? 'reapprove' : 'connect' })}>
-                      approve
-                    </Button>
-                  ) : (
-                    <Button variant="ghost" onClick={() => openWizard({ source: 'settings', appId: row.appId, mode: 'reapprove' })}>
-                      re-approve
-                    </Button>
-                  )}
-                  <Button
-                    variant="danger"
-                    onClick={() =>
-                      void act(row.appId, async (db) => {
-                        // AL-04 (AL-03 sweep follow-up): revoke is DISCONNECT — the
-                        // credential slice goes with the spec, or a re-declared spec
-                        // for the same appId would resume injecting the old value
-                        // without re-entry. AWAITED, and wiped BEFORE the spec row is
-                        // deleted (nonBlocking 5): if the wipe fails, the row stays
-                        // and the failure is a visible error — never a deleted spec
-                        // with a silently surviving credential slice.
-                        await new UserDbCredentialStore(db).clearApp(row.appId);
-                        db.deleteAuthSpec(row.appId);
-                        // §V2-5: from here, this app's OWN retry loop gets the plain
-                        // wizard rather than the prefilled review. Recorded at the revoke
-                        // itself so the note cannot drift from the act.
-                        noteAuthSpecRevoked(row.appId);
-                      })
-                    }
-                  >
-                    revoke
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-function statusLabel(status: AuthSpecRow['status']): string {
-  switch (status) {
-    case 'approved':
-      return 'approved';
-    case 'imported_unapproved':
-      return 'imported — needs re-approval';
-    default:
-      return 'not approved';
-  }
-}

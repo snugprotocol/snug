@@ -69,15 +69,6 @@ CREATE TABLE IF NOT EXISTS snug_chat_messages (
     meta TEXT
   );
 CREATE TABLE IF NOT EXISTS snug_sync (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS snug_auth_specs (
-    app_id TEXT PRIMARY KEY,
-    spec_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    allowed_hosts TEXT NOT NULL,
-    approved_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
 CREATE TABLE IF NOT EXISTS snug_connections (
     app_id TEXT NOT NULL,
     slot TEXT NOT NULL,

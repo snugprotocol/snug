@@ -98,8 +98,17 @@ export async function inferenceWireCopy(): Promise<string> {
   }
 }
 
-/** Resolve the settings-configured adapter, brain override included (per CALL, not creation). */
-async function liveAdapter(): Promise<LiveAdapterResolution> {
+/**
+ * Resolve the settings-configured adapter, brain override included (per CALL, not
+ * creation).
+ *
+ * EXPORTED for the v2 requirement inferrer (`connectionInferrerAdapter.ts`): the wire
+ * decision — which model, which key, and whether there is a real one at all — is a
+ * property of the user's SETTINGS, not of which inferrer is asking. Two copies of this
+ * ladder would eventually disagree, and the disagreement would show up as an inference
+ * turn quietly running on the mock brain.
+ */
+export async function liveInferenceAdapter(): Promise<LiveAdapterResolution> {
   const wire = await decideWire();
   if (wire.kind === 'unavailable') return { ok: false };
   if (wire.kind === 'webllm') {
@@ -150,6 +159,13 @@ export function completeWithAdapter(adapter: AgentAdapter, system: string): Infe
 }
 
 /**
+ * ⚠️ NO PRODUCTION CALLER AS OF P3, AND DELIBERATELY LEFT IN PLACE. The v4 wizard routes
+ * through `connectionInferrerAdapter.ts` instead. This function belongs to the v3
+ * `llmProposalSchema` / `createAuthSpecInferrer` pair, whose retirement is P4's NAMED exit
+ * item — not P3's, which was the `snug_auth_specs` TABLE. Deleting it here would reach
+ * into the next phase's scope and take its tests with it; the honest move is to say it is
+ * dead and let P4 remove it with its schema, in one reviewable step.
+ *
  * The wizard's inference entry: render the D8 prompt (knowledge store), bind the
  * system slot into the seam, and run the DI-pure inferrer from @snugprotocol/auth
  * — whose registry rung never touches the seam at all.
@@ -162,7 +178,7 @@ export async function runAuthSpecInference(input: RunAuthSpecInferenceInput): Pr
   });
   let adapter = input.adapter;
   if (adapter === undefined) {
-    const live = await liveAdapter();
+    const live = await liveInferenceAdapter();
     if (!live.ok) {
       // Visible, honest, and BEFORE any seam call: no mock run, no wire touched.
       const provenance: AuthProvenance = input.docsText !== undefined ? 'user_docs' : 'inference';

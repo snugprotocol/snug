@@ -14,11 +14,16 @@ import { createDbDriver, createMemoryBackend, type SnugDbDriver } from '@snugpro
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } from '@snugprotocol/runner';
 
-import type { AuthWizardDirective, LlmProposal } from '@snugprotocol/protocol';
+import { NET_ERROR_CODES, type LlmProposal } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { createNetHandlerFor } from '../state/net.js';
-import { netErrorCta, openWizard, openWizardForNetError } from '../state/wizard.js';
+import {
+  isConnectionRepairableNetError,
+  openConnectionWizard,
+  openConnectionWizardForApp,
+  openConnectionWizardForNetError,
+} from '../state/connectionWizard.js';
 import { NetConfirmDialog } from './NetConfirmDialog.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
@@ -220,7 +225,7 @@ export default function RunView(): ReactElement {
   // Starters get no net: an uninstalled starter has no auth spec, and its ephemeral DB
   // would carry none anyway. Installed apps bind net to their own id (host-assigned).
   // AL-04 AC9: auth-repairable net errors surface a host-side connect/re-approve
-  // CTA. The mapping is code-keyed (netErrorCta) — blocked/denied codes surface
+  // CTA. The mapping is code-keyed — blocked/denied codes surface
   // NOTHING here (offering a connect CTA on an off-ceiling attempt would coach
   // ceiling-widening in direct response to the attack, M12).
   const [netAuthError, setNetAuthError] = useState<{ appId: string; code: string } | null>(null);
@@ -230,7 +235,7 @@ export default function RunView(): ReactElement {
         ? undefined
         : createNetHandlerFor({
             onNetError: (appId, code) => {
-              if (netErrorCta(code) !== null) setNetAuthError({ appId, code });
+              if (isConnectionRepairableNetError(code)) setNetAuthError({ appId, code });
             },
           }),
     [id],
@@ -504,7 +509,12 @@ export default function RunView(): ReactElement {
             busy={chat.busy}
             onSend={chat.send}
             onStop={chat.stop}
-            onDirectiveConnect={(directive) => openWizard({ source: 'directive', appId: id, directive })}
+            onDirectiveConnect={() => void openConnectionWizardForApp(id, 'directive')}
+            // The v4 card opens the wizard on the EXACT persisted (appId, slot) rather
+            // than re-deriving "which connection did they mean" from the app id.
+            onConnectionConnect={(connection) =>
+              openConnectionWizard({ appId: connection.appId, slot: connection.slot, source: 'directive' })
+            }
           />
         </>
       )}
@@ -520,17 +530,19 @@ export default function RunView(): ReactElement {
           <div className="field-row">
             <Button
               onClick={() => {
-                // `openWizardForNetError` is async (it resolves the install-act
-                // declaration from the user DB). Dismiss the banner ONLY on a real
+                // `openConnectionWizardForNetError` is async (it reads the app's
+                // connection rows to pick a slot). Dismiss the banner ONLY on a real
                 // open: a Promise is always truthy, so `if (open(...))` here would
                 // clear the CTA even when the wizard refused — e.g. because another
                 // wizard is already parked — and strand the user with no way back.
-                void openWizardForNetError(netAuthError.appId, netAuthError.code).then((opened) => {
+                void openConnectionWizardForNetError(netAuthError.appId, netAuthError.code).then((opened) => {
                   if (opened) setNetAuthError(null);
                 });
               }}
             >
-              {netErrorCta(netAuthError.code) === 'reapprove' ? 're-approve this connection' : 'connect this app'}
+              {netAuthError.code === NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED
+                ? 're-approve this connection'
+                : 'connect this app'}
             </Button>
             <Button variant="ghost" onClick={() => setNetAuthError(null)}>
               dismiss
@@ -736,12 +748,27 @@ interface RailChatProps {
   busy: boolean;
   onSend: (text: string) => void;
   onStop: () => void;
-  /** AL-04 D9: directive-card mount — the run view always has an appId to attach. */
-  onDirectiveConnect?: (directive: AuthWizardDirective) => void;
+  /**
+   * Directive-card mount — the run view always has an appId to attach. It takes NO
+   * argument in v4: the requirement was persisted at build time and the card can only
+   * ring the doorbell, never propose what is reviewed.
+   */
+  onDirectiveConnect?: () => void;
+  /** The v4 connect card's mount — the persisted (appId, slot) to open the wizard on. */
+  onConnectionConnect?: (connection: { appId: string; slot: string }) => void;
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
-function RailChat({ messages, steps, activity, busy, onSend, onStop, onDirectiveConnect }: RailChatProps): ReactElement {
+function RailChat({
+  messages,
+  steps,
+  activity,
+  busy,
+  onSend,
+  onStop,
+  onDirectiveConnect,
+  onConnectionConnect,
+}: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
   const submit = (): void => {
     if (draft.trim() === '') return;
@@ -761,7 +788,15 @@ function RailChat({ messages, steps, activity, busy, onSend, onStop, onDirective
       {messages.length === 0 ? (
         <EmptyState glyph="✎" title="keep talking" lesson="ask for tweaks — the agent can rebuild the app from here." />
       ) : (
-        <ChatLog messages={messages} steps={steps} activity={activity} busy={busy} phase="edit" onDirectiveConnect={onDirectiveConnect} />
+        <ChatLog
+          messages={messages}
+          steps={steps}
+          activity={activity}
+          busy={busy}
+          phase="edit"
+          onDirectiveConnect={onDirectiveConnect}
+          onConnectionConnect={onConnectionConnect}
+        />
       )}
       <div className="composer" style={{ position: 'static', padding: 0, background: 'none' }}>
         <textarea

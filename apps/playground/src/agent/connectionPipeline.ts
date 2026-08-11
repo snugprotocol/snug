@@ -51,6 +51,7 @@
 import type { UserDb } from '@snugprotocol/db';
 import {
   CONNECTION_REQUIREMENT_DIRECTIVE_KIND,
+  CONNECTION_SLOT_RULE,
   CONNECTION_STATUS,
   canonicalRequirementHash,
   connectionRequirementSchema,
@@ -305,6 +306,79 @@ export interface FinalizeConnectionDeclarationInput {
   reply: string;
   channel: AdmissionChannel;
   confidence?: number;
+  /**
+   * BUILD-TIME REQUIREMENT RECOVERY (P3, plan §6 item 5) — the seam that finally gives
+   * `createConnectionRequirementInferrer` a production caller.
+   *
+   * It fires in exactly ONE situation: the model wrote an app that calls
+   * `useConnectedFetch` but closed its reply WITHOUT declaring a requirement. That app is
+   * unconnectable and unfixable from the user's side — every call resolves `{ ok: false }`
+   * and no connect card can render, because a card draws from a row and there is no row.
+   * Rather than hand the user a note telling them to go ask the agent again, the host asks
+   * on their behalf, using the provider name the app's own code reveals.
+   *
+   * INJECTED rather than imported so this module stays DI-pure and testable offline; the
+   * app wires `connectionInferrerAdapter.ts` in. Absent, the behavior is exactly P2's:
+   * report `connected_html_without_requirement` and write nothing.
+   *
+   * A recovered requirement is NOT trusted more than a declared one. It goes through the
+   * identical `persistConnectionRequirement` gate chain — schema, admission, re-parse,
+   * template lint — and lands `declared`, facing the same strong review before a single
+   * credential is collected. What inference buys is a REVIEWABLE STARTING POINT, never an
+   * approval.
+   *
+   * C1 — this runs at BUILD, before any credential for the connection exists. There is no
+   * credential seat in the input and nothing here reads `snug_secrets`.
+   */
+  recoverRequirement?: (request: {
+    providerName: string;
+    slot: string;
+    signal?: AbortSignal;
+  }) => Promise<{ requirement: unknown; provenance: AdmissionChannel; confidence?: number } | undefined>;
+}
+
+/**
+ * The provider host an undeclared connected build is reaching for.
+ *
+ * A best-effort read of the app's OWN CODE, which is the only honest evidence available
+ * at this point — the reply text is prose and the model already declined to declare
+ * anything structured. The first absolute URL in a `useConnectedFetch` call is the
+ * provider the app is actually talking to, and its hostname is the ladder key.
+ *
+ * Returns undefined rather than guessing when no host is legible. A wrong provider name
+ * would send the inferrer confidently down the wrong rung and put a plausible, wrong
+ * requirement in front of the user for review — strictly worse than the honest note.
+ */
+export function guessConnectedHost(html: string): string | undefined {
+  if (!htmlUsesConnectedFetch(html)) return undefined;
+  for (const match of html.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)) {
+    const host = match[1]?.toLowerCase();
+    if (host === undefined) continue;
+    // Skip the hub's own origin and the usual schema/doc URLs — they are never the
+    // provider, and treating one as the ladder key would be the wrong-guess failure above.
+    if (host === 'localhost' || host.endsWith('.w3.org') || host.endsWith('schema.org')) continue;
+    return host;
+  }
+  return undefined;
+}
+
+/**
+ * A slot id derived from a provider host: the registrable-looking label, dash-cased and
+ * charset-clipped to `CONNECTION_SLOT_RULE` (`api.coinbase.com` → `coinbase`).
+ *
+ * The slot is a PERSISTED identifier and half the `(app_id, slot)` primary key, so it is
+ * computed HOST-side from the host the app's own code names — never taken from the model,
+ * which has no business choosing a storage key. Returns undefined when nothing legal can
+ * be derived, so an unusable host declines recovery rather than inventing a slot.
+ */
+export function slotFromHost(host: string): string | undefined {
+  const labels = host.toLowerCase().split('.').filter((label) => label.length > 0);
+  // Drop the public-suffix-ish tail and any leading `api`/`www` service label; what is
+  // left is the name a person would recognize, which is what a slot should read as.
+  const meaningful = labels.slice(0, -1).filter((label) => label !== 'api' && label !== 'www');
+  const candidate = (meaningful[meaningful.length - 1] ?? labels[0] ?? '').replace(/[^a-z0-9-]/g, '');
+  const slot = candidate.replace(/^-+/, '').slice(0, 40);
+  return CONNECTION_SLOT_RULE.test(slot) ? slot : undefined;
 }
 
 /**
@@ -345,10 +419,45 @@ export async function finalizeConnectionDeclaration(
 
   if (declared === undefined) {
     // No requirement was declared. If the app never touches the connected surface that is
-    // simply a normal build; if it DOES, the app is connected-but-unconnectable and the
-    // user needs to be told, because there is no connect card to discover.
+    // simply a normal build; if it DOES, the app is connected-but-unconnectable.
     const verdict = validateConnectedBuild({ html: input.html });
-    return verdict.ok ? undefined : { ok: false, reason: verdict.reason, message: verdict.message };
+    if (verdict.ok) return undefined;
+
+    // RECOVERY (P3): ask the inferrer what this provider needs, so the user gets a
+    // reviewable row instead of a dead end. Every failure mode below falls through to
+    // P2's honest note — a recovery that cannot answer must never become a silence.
+    const host = guessConnectedHost(input.html);
+    if (input.recoverRequirement !== undefined && host !== undefined) {
+      const slot = slotFromHost(host);
+      if (slot !== undefined) {
+        /**
+         * THE PROVIDER NAME IS THE RECOGNIZABLE LABEL, NOT THE RAW HOST (fold).
+         *
+         * It used to pass `host` verbatim, and that quietly disabled the inferrer's best
+         * rung: the pinned registry normalizes its lookup key to alphanumerics, so
+         * 'api.spotify.com' became 'apispotifycom' and matched nothing. Every recovery for
+         * a provider WE PIN therefore fell through to the model — costing tokens for a
+         * constant we ship, and failing outright on a keyless configuration. Since
+         * `slotFromHost` already strips the service label and the public-suffix tail to
+         * produce exactly the name a person would recognize, the same derivation is the
+         * right lookup key; the registry itself is the thing that decides whether it is a
+         * hit, which keeps the ladder's authority where it belongs.
+         */
+        const recovered = await input.recoverRequirement({ providerName: slot, slot });
+        if (recovered !== undefined) {
+          const outcome = await persistConnectionRequirement(db, {
+            appId: input.appId,
+            requirement: recovered.requirement,
+            channel: recovered.provenance,
+            ...(recovered.confidence !== undefined ? { confidence: recovered.confidence } : {}),
+          });
+          // Only a SUCCESSFUL recovery replaces the note. A refused one still leaves the
+          // app unconnectable, and that is what the user needs to hear.
+          if (outcome.ok) return outcome;
+        }
+      }
+    }
+    return { ok: false, reason: verdict.reason, message: verdict.message };
   }
 
   return persistConnectionRequirement(db, {

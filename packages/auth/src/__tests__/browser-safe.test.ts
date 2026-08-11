@@ -87,17 +87,17 @@ describe('AL-04 M7 — import-specifier lint + clean-isolation load gate (mutati
   }, 150_000);
 });
 
-describe('AL-04 — inferrer + spec-scope walk (D2: no knobs, pinned arity)', () => {
-  it('createAuthSpecInferrer takes exactly the deps object; requireApprovedSpecScope exactly (reader, appId)', async () => {
+// P3: `spec-scope.ts` was deleted with the v3 grant surface; this walk now covers the
+// inferrer alone. The no-knobs / no-env claims it pins are unchanged.
+describe('AL-04 — inferrer walk (D2: no knobs, pinned arity)', () => {
+  it('createAuthSpecInferrer takes exactly the deps object', async () => {
     const { createAuthSpecInferrer } = await import('../auth-spec-inferrer.js');
-    const { requireApprovedSpecScope } = await import('../spec-scope.js');
     expect(createAuthSpecInferrer.length).toBe(1);
-    expect(requireApprovedSpecScope.length).toBe(2);
   });
 
   it('the inferrer exposes no strictness knob and reads no environment', () => {
-    const files = walkSources().filter(({ name }) => ['auth-spec-inferrer.ts', 'spec-scope.ts'].includes(name));
-    expect(files.map(({ name }) => name).sort()).toEqual(['auth-spec-inferrer.ts', 'spec-scope.ts']);
+    const files = walkSources().filter(({ name }) => ['auth-spec-inferrer.ts'].includes(name));
+    expect(files.map(({ name }) => name).sort()).toEqual(['auth-spec-inferrer.ts']);
     for (const { name, text } of files) {
       expect(/\bprocess\.env\b|\bimport\.meta\.env\b/.test(text), `${name} reads environment`).toBe(false);
       expect(/skipValidation|allowInsecure|bypass|insecureMode/i.test(text), `${name} carries a knob`).toBe(false);
@@ -160,7 +160,7 @@ describe('AL-03 named AC — audit bug 3 dies by construction (no strictness fla
         clearApp: async () => undefined,
         getOrCreateStateHmacKey: async () => 'k',
       },
-      specReader: { getAuthSpec: () => undefined },
+      connectionReader: { listConnections: () => [] },
       fetchImpl: async () => new Response(''),
       confirmGate: { confirm: async () => false },
     });

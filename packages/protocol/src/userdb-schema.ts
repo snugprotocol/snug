@@ -33,7 +33,7 @@
 // slot-keyed requirement/grant split (see connection-requirement.ts). ADDITIVE by the
 // cutover rule (fold B1): `snug_auth_specs` keeps shipping until its last consumers are
 // rewired in P3, so BOTH tables exist at v4 and neither migration replays over the other.
-export const USERDB_SCHEMA_VERSION = 4 as const;
+export const USERDB_SCHEMA_VERSION = 5 as const;
 
 /** Size/retention limits for the user DB (spec-normative, rule R6 family). */
 export const USERDB_LIMITS = {
@@ -65,6 +65,12 @@ export const USERDB_TABLES = {
   chatThreads: 'snug_chat_threads',
   chatMessages: 'snug_chat_messages',
   sync: 'snug_sync',
+  /**
+   * DROPPED AT v5 (TASK-20260810-p3-wizard, fold B1's named exit). The NAME survives the
+   * table because the v5 migration has to say what it is dropping, and because the
+   * self-heal guard must be able to assert the table's ABSENCE. Nothing creates it: it is
+   * gone from `USERDB_DDL`, and no accessor reads or writes it any more.
+   */
   authSpecs: 'snug_auth_specs',
   connections: 'snug_connections',
 } as const;
@@ -218,21 +224,10 @@ export const USERDB_DDL: readonly string[] = [
     meta TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.sync} (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-  // v3 (AL-02, plan D5/N3): approval-stable Dynamic Auth spec metadata ONLY. Dynamic
-  // connection state lives at secret key `auth:<appId>:_connection` and pending flow
-  // state in memory / `auth:_flow:<flowId>` — a token refresh must not dirty this
-  // synced table (content-hash gate) nor change default-export bytes. `allowed_hosts`
-  // is the FROZEN host union (JSON array, sorted/unique/lowercase), computed at
-  // approval and enforced at the accessor write boundary (HostFreezeViolation).
-  `CREATE TABLE IF NOT EXISTS ${USERDB_TABLES.authSpecs} (
-    app_id TEXT PRIMARY KEY,
-    spec_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    allowed_hosts TEXT NOT NULL,
-    approved_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
+  // v3's `snug_auth_specs` was DROPPED at v5 (TASK-20260810-p3-wizard, fold B1's named
+  // exit). It is deliberately absent from this DDL rather than kept as a tombstone: a
+  // `CREATE TABLE IF NOT EXISTS` left here would be re-created by the self-heal replay on
+  // every open, resurrecting the surface the v5 migration exists to remove.
   // v4 (TASK-20260810, Dynamic Auth v2): the REQUIREMENT/GRANT split, slot-keyed.
   //
   // The composite PK is the whole point of the table (R6): v3 put `app_id` alone on the

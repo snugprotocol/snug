@@ -1,8 +1,14 @@
 // AL-03 playground half — the net state module wires the connected-fetch executor to
-// the page user DB and exposes a NetHandler the runner routes to. Under test: the spec
-// reader maps AuthSpecRow → NetSpecRow, the confirm gate is the session-remember gate
-// keyed (app, host, method) with re-approval invalidation, and the Connections actions
-// (approve/reapprove/revoke) invalidate remembered grants.
+// the page user DB and exposes a NetHandler the runner routes to. Under test: the
+// connection reader maps ConnectionRow → NetConnectionRow, the confirm gate is the
+// session-remember gate keyed (app, host, method) with re-approval invalidation, and the
+// Connections actions (approve/reapprove/revoke) invalidate remembered grants.
+//
+// P3 CUTOVER: the FIXTURES moved from v3 `snug_auth_specs` to v4 `snug_connections` — the
+// surface the playground now routes through. Every ASSERTION below is unchanged, which is
+// the point: the executor wiring, the status contract, and the confirm gate's remember +
+// invalidate behavior must all survive the cutover byte-for-byte, and this file is what
+// proves they did rather than being quietly re-scoped along with the storage.
 import { NET_ERROR_CODES } from '@snugprotocol/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -17,7 +23,10 @@ import { getUserDb } from '../state/userdb.js';
 
 const APP = 'app-net-1';
 
-const apiKeySpec = {
+const SLOT = 'example';
+
+const apiKeyRequirement = {
+  slot: SLOT,
   kind: 'api_key' as const,
   provider: { name: 'Example' },
   fields: [{ key: 'api_key', label: 'API key', type: 'secret' as const }],
@@ -28,9 +37,12 @@ const apiKeySpec = {
 async function seedApprovedApp(): Promise<void> {
   const db = await getUserDb();
   db.installApp({ appId: APP, displayName: 'Net App', html: '<p>net</p>' });
-  db.setSecret(`auth:${APP}:api_key`, 'stored-key-abc123');
-  db.putAuthSpec(APP, apiKeySpec);
-  db.approveAuthSpec(APP);
+  // SLOT-KEYED (P1): `auth:<appId>:<slot>:<fieldKey>`. The v3 app-keyed path is gone, so
+  // a credential written the old way would simply not be found — which is exactly what
+  // the injection assertion below would catch.
+  db.setSecret(`auth:${APP}:${SLOT}:api_key`, 'stored-key-abc123');
+  db.putDeclaredConnection(APP, SLOT, apiKeyRequirement, 'inference');
+  db.approveConnection(APP, SLOT);
 }
 
 beforeEach(async () => {
@@ -69,7 +81,7 @@ describe('createNetHandlerFor — executor wiring', () => {
   it('bars an unapproved app with NET_NOT_APPROVED (status contract)', async () => {
     const db = await getUserDb();
     db.installApp({ appId: APP, displayName: 'Net App', html: '<p>net</p>' });
-    db.putAuthSpec(APP, apiKeySpec); // unapproved
+    db.putDeclaredConnection(APP, SLOT, apiKeyRequirement, 'inference'); // declared, unapproved
     const handler = createNetHandlerFor({ fetchImpl: async () => new Response('') });
     const result = await handler.handle(APP, {
       v: 1,

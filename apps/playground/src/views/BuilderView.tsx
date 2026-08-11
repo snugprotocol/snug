@@ -9,7 +9,7 @@ import { useBuilderChat } from '../agent/useBuilderChat.js';
 import { LlmInspectorPanel } from '../run/LlmInspectorPanel.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
 import { useMode } from '../state/mode.js';
-import { openWizard } from '../state/wizard.js';
+import { openConnectionWizard, openConnectionWizardForApp } from '../state/connectionWizard.js';
 import { Button } from '../ui/Button.js';
 import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -134,12 +134,18 @@ export function BuilderView(): ReactElement {
             activity={chat.activity}
             busy={chat.busy}
             phase={chat.attachedAppId !== undefined ? 'edit' : 'build'}
-            // AL-04 D9: the directive card's mount — only once an app exists to
-            // attach the connection to (the wizard needs an appId to scope rows).
+            // The directive card's mount — only once an app exists to attach the
+            // connection to (the wizard is keyed by appId + slot, and both come from
+            // the persisted row rather than from anything the card carries).
             onDirectiveConnect={
               chat.attachedAppId !== undefined
-                ? (directive) => openWizard({ source: 'directive', appId: chat.attachedAppId!, directive })
+                ? () => void openConnectionWizardForApp(chat.attachedAppId!, 'directive')
                 : undefined
+            }
+            // The v4 card opens the wizard on the EXACT persisted (appId, slot) rather
+            // than re-deriving "which connection did they mean" from the app id.
+            onConnectionConnect={(connection) =>
+              openConnectionWizard({ appId: connection.appId, slot: connection.slot, source: 'directive' })
             }
           />
         </>

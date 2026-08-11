@@ -293,12 +293,14 @@ describe('AC8 — poisoned-docs fixtures (the quintet, D8)', () => {
 // ---------------------------------------------------- no-fetch lint (D4/M6)
 
 describe('AC4 — no fetch call exists on the inference path (executable lint, mutation M6)', () => {
-  it('auth-spec-inferrer.ts and spec-scope.ts contain no fetch call or fetch import', () => {
+  it('auth-spec-inferrer.ts contains no fetch call or fetch import', () => {
     // Call-site shaped on purpose: module docs legitimately EXPLAIN why there is no
     // fetch rung (and spec-scope type-imports from ./connected-fetch.js); what must
     // never exist is an invocation or an injected fetch seam.
     const fetchShape = /\bfetch\s*\(|\bfetchImpl\b|\bFetchLike\b/;
-    for (const name of ['auth-spec-inferrer.ts', 'spec-scope.ts']) {
+    // P3: `spec-scope.ts` was deleted with the v3 grant surface, so it is no longer
+    // in this walk. The lint's claim is unchanged for the file that remains.
+    for (const name of ['auth-spec-inferrer.ts']) {
       const text = readFileSync(join(__dirname, '..', name), 'utf8');
       const match = fetchShape.exec(text);
       expect(match, `${name} touches fetch (${match?.[0] ?? ''}) — the docs ladder has no live-fetch rung`).toBeNull();

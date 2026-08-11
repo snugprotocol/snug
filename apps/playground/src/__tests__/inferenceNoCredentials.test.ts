@@ -24,7 +24,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createConnectionRequirementInferrer } from '@snugprotocol/auth';
 
-import { docsTripwire, runWizardInference, __setWizardHooksForTests } from '../state/wizard.js';
+import { docsTripwire, runConnectionRequirementInferenceGuarded } from '../agent/connectionInferrerAdapter.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 /** Credential-shaped canaries. Never `'x'` — a probe for `'x'` proves nothing. */
@@ -99,19 +99,27 @@ describe('P2-AC7(a) — the requirement inferrer is handed no credential, struct
   });
 });
 
-describe('P2-AC7(b) — the docs-paste tripwire STILL fires before the completion seam (D10/M2, unchanged by P2)', () => {
+// P3 CUTOVER: the tripwire moved OFF the deleted v3 wizard store and onto the v2
+// requirement-inferrer adapter — the surface that now owns the pasted-docs rung. The
+// guarantee is unchanged and is why it was rehomed rather than deleted with its old
+// host: `docsText` transits to the user's BYOK provider by design, so this is the last
+// moment to catch an accidental secret, and it must fire BEFORE the seam is invoked.
+describe('P2-AC7(b) — the docs-paste tripwire STILL fires before the completion seam (D10/M2)', () => {
   it('a pasted credential blocks the call: the seam is never invoked', async () => {
-    const runInference = vi.fn();
-    __setWizardHooksForTests({ runInference });
+    const complete = vi.fn();
+    const adapter = { complete } as unknown as Parameters<
+      typeof runConnectionRequirementInferenceGuarded
+    >[0]['adapter'];
 
-    const outcome = await runWizardInference({
+    const outcome = await runConnectionRequirementInferenceGuarded({
       providerName: 'Coinbase Exchange',
+      slot: 'coinbase',
       docsText: `Authorization: Bearer sk-live-${REAL_PASSPHRASE}abcdef1234567890`,
+      ...(adapter !== undefined ? { adapter } : {}),
     });
 
     expect(outcome).toEqual({ blocked: 'tripwire' });
-    expect(runInference, 'the completion seam ran despite the tripwire').not.toHaveBeenCalled();
-    __setWizardHooksForTests({});
+    expect(complete, 'the completion seam ran despite the tripwire').not.toHaveBeenCalled();
   });
 
   it('the tripwire patterns themselves still catch the shapes P2 must not regress', () => {
@@ -119,5 +127,63 @@ describe('P2-AC7(b) — the docs-paste tripwire STILL fires before the completio
     expect(docsTripwire('ghp_abcdefghijklmnop1234567890abcdef')).toBe(true);
     // ...and ordinary provider docs stay clean, so the warning keeps its meaning.
     expect(docsTripwire('Pass your API key in the CB-ACCESS-KEY header. Requests go to https://api.exchange.coinbase.com.')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3 fold — the REGISTRY rung must not be gated behind a live model
+// ---------------------------------------------------------------------------
+
+describe('P3 fold — a PINNED provider resolves with no model configured at all', () => {
+  /**
+   * FOUND BY EXECUTION, not by reading. This adapter's own doc comment says "the registry
+   * rung short-circuits inside the inferrer and never touches the seam at all, so a
+   * well-known provider costs no tokens" — but the adapter resolved a LIVE ADAPTER first
+   * and returned `completion_failed` when there was none, so the inferrer was never
+   * reached and the registry rung never ran. On the demo brain (or any keyless
+   * configuration), recovering a connection to Spotify — a provider WE pin, whose whole
+   * requirement is a constant in this repo — failed with "needs a bring-your-own-key
+   * model". That is a wrong refusal: nothing about answering from the registry needs a
+   * model, and the user was told to go buy one to get a value we already had.
+   *
+   * The ordering fix is what makes the doc comment true: the adapter is now resolved
+   * LAZILY, inside the completion seam, so it is demanded only if a rung actually reaches
+   * the model. A keyless configuration still fails honestly for an UNPINNED provider —
+   * asserted below, because a fix that swallowed that failure would be worse than the bug.
+   */
+  it('resolves Spotify from the pinned registry with no key and no live adapter', async () => {
+    await installTestUserDb(); // no byok key stored; provider defaults to the mock brain
+    // 'spotify', not 'api.spotify.com' — the recovery path derives the RECOGNIZABLE label
+    // host-side (`slotFromHost`) precisely because the registry normalizes its key to
+    // alphanumerics and a raw host would match nothing. Passing the host here is what the
+    // production wire used to do, and it is what silently disabled this rung.
+    const outcome = await runConnectionRequirementInferenceGuarded({
+      providerName: 'spotify',
+      slot: 'spotify',
+    });
+
+    expect(outcome.blocked).toBeUndefined();
+    const result = outcome.result!;
+    expect(result.ok, `a pinned provider must not need a model: ${JSON.stringify(result)}`).toBe(true);
+    if (!result.ok) return;
+    expect(result.provenance).toBe('registry');
+    expect(result.requirement?.provider.name).toMatch(/spotify/i);
+    expect(result.requirement?.declaredApiHosts).toContain('api.spotify.com');
+  });
+
+  it('an UNPINNED provider with no model still fails honestly — the fix must not swallow that', async () => {
+    await installTestUserDb();
+    const outcome = await runConnectionRequirementInferenceGuarded({
+      providerName: 'api.some-obscure-service.example',
+      slot: 'obscure',
+    });
+
+    expect(outcome.blocked).toBeUndefined();
+    const result = outcome.result!;
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('completion_failed');
+    // The copy must still name the actual repair — a keyless user needs to know why.
+    expect(result.message).toMatch(/bring-your-own-key|provider key|local model/i);
   });
 });

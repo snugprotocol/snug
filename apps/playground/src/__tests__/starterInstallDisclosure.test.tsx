@@ -156,7 +156,9 @@ describe('a declaring starter discloses its connection before install', () => {
     });
     await settleUntil(() => db.listApps().length > 0, 'the starter to be installed');
 
-    expect(db.listAuthSpecs(), 'installing must not approve or create a connection').toHaveLength(0);
+    // P3: the grant surface is v4 `snug_connections`; the claim is unchanged — installing
+    // is the plain act, and no grant row (let alone an approved one) may appear from it.
+    expect(db.listConnections(), 'installing must not approve or create a connection').toHaveLength(0);
   });
 });
 

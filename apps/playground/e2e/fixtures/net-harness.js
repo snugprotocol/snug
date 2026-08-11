@@ -7,7 +7,7 @@
 
 import { SnugAppFrame } from '@snugprotocol/runner';
 import { createConnectedFetch, UserDbCredentialStore, createSessionConfirmGate } from '@snugprotocol/auth';
-import { authCredentialSecretKey } from '@snugprotocol/db';
+import { authConnectionCredentialSecretKey } from '@snugprotocol/db';
 
 const React = window.React;
 const { createRoot } = window.ReactDOM;
@@ -35,14 +35,30 @@ function memoryQuartet(seed) {
  */
 window.__mount = (opts) => {
   const appId = opts.appId ?? 'e2e-net-app';
+  // P3 CUTOVER: the harness drives the v4 `snug_connections` reader — the v3 spec reader
+  // was deleted with its table at userdb v5. The `spec`/`status`/`allowedHosts` option
+  // names are kept so every existing net.spec case reads unchanged; only the SHAPE handed
+  // to the executor moved. `status: 'imported_unapproved'` becomes a `declared` row with
+  // `imported: true`, which is how v4 expresses the same barred state.
+  const slot = opts.slot ?? 'stub';
   const quartet = memoryQuartet({
-    [authCredentialSecretKey(appId, 'api_key')]: opts.apiKey ?? 'e2e-secret-key-9999',
+    [authConnectionCredentialSecretKey(appId, slot, 'api_key')]: opts.apiKey ?? 'e2e-secret-key-9999',
   });
-  const specReader = {
-    getAuthSpec: (id) =>
+  const status = opts.status ?? 'approved';
+  const connectionReader = {
+    listConnections: (id) =>
       id === appId
-        ? { spec: opts.spec, status: opts.status ?? 'approved', allowedHosts: opts.allowedHosts ?? [] }
-        : undefined,
+        ? [
+            {
+              appId,
+              slot,
+              requirement: { ...opts.spec, slot },
+              status: status === 'approved' ? 'approved' : 'declared',
+              allowedHosts: opts.allowedHosts ?? [],
+              ...(status === 'imported_unapproved' ? { imported: true } : {}),
+            },
+          ]
+        : [],
   };
   const confirmGate = createSessionConfirmGate(async (request) => {
     window.__confirmPrompts.push(request);
@@ -50,7 +66,7 @@ window.__mount = (opts) => {
   });
   const executor = createConnectedFetch({
     credentialStore: new UserDbCredentialStore(quartet),
-    specReader,
+    connectionReader,
     // The real browser fetch — the stub runs HTTPS with a self-signed cert; the net spec
     // scopes ignoreHTTPSErrors to its OWN context only.
     fetchImpl: (input, init) => window.fetch(input, init),

@@ -53,17 +53,6 @@ import type { NetConfirmRequest } from './session-confirm.js';
 
 // ------------------------------------------------------------------------ types
 
-/** The slice of a `snug_auth_specs` row the executor consumes (AL-02's AuthSpecRow shape). */
-export interface NetSpecRow {
-  spec: AuthSpec;
-  status: AuthSpecStatus;
-  /** The FROZEN ceiling (`allowed_hosts` column). The runtime injection ceiling IS this set. */
-  allowedHosts: readonly string[];
-}
-
-export interface NetSpecReader {
-  getAuthSpec(appId: string): NetSpecRow | undefined | Promise<NetSpecRow | undefined>;
-}
 
 /**
  * The v4 (Dynamic Auth v2) projection of a `snug_connections` row — a NARROWED view of
@@ -132,15 +121,13 @@ interface ConnectedFetchBaseDeps {
 }
 
 /**
- * v3 (`snug_auth_specs`) or v4 (`snug_connections`) — exactly one, never both.
- *
- * THE CUTOVER RULE (fold B1) IS WHY BOTH EXIST. v4 is ADDITIVE: `snug_auth_specs` and its
- * shipped consumers keep working until P3 rewires the last one, so deleting the v3 reader
- * here would break a surface whose removal is a named exit item of a LATER phase. The
- * union lets one executor serve both without either path branching on the other's absence.
+ * P3 (fold B1's named exit): the v3 `snug_auth_specs` reader is GONE and the deps are a
+ * plain object again. The discriminated union that used to live here existed only to let
+ * one executor serve both eras during the cutover; with the last v3 consumer rewired,
+ * keeping it would preserve a second grant path that nothing can reach but that every
+ * future reader of this file would have to reason about.
  */
-export type ConnectedFetchDeps = ConnectedFetchBaseDeps &
-  ({ specReader: NetSpecReader; connectionReader?: never } | { connectionReader: NetConnectionReader; specReader?: never });
+export type ConnectedFetchDeps = ConnectedFetchBaseDeps & { connectionReader: NetConnectionReader };
 
 export interface ConnectedFetch {
   /** `appId` is the HOST-assigned binding (R5) — never anything the app claimed. */
@@ -291,7 +278,7 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<{ b
  * credential under the NEW provider's requirement — the executor would hand Dropbox's
  * token to whatever host the renamed slot now declares.
  */
-class SlotScopedCredentialStore implements CredentialStore {
+export class SlotScopedCredentialStore implements CredentialStore {
   constructor(
     private readonly inner: CredentialStore,
     private readonly slot: string,
@@ -374,7 +361,7 @@ class SlotScopedCredentialStore implements CredentialStore {
  *
  * `none` returns null: a keyless kind has no spec because there is nothing to inject.
  */
-function requirementToSpec(requirement: ConnectionRequirement): AuthSpec | null {
+export function requirementToSpec(requirement: ConnectionRequirement): AuthSpec | null {
   if (requirement.kind === 'none') return null;
   const provider = { name: requirement.provider.name };
   const fields = requirement.fields ?? [];
@@ -487,8 +474,6 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       fetch: deps.fetchImpl,
     });
 
-  const v3Oauth = deps.specReader !== undefined ? oauthFor(deps.credentialStore) : null;
-
   /**
    * The era-neutral view the injection path consumes. Both readers collapse to this, so
    * gates 5–10 are ONE code path rather than two — a v4-only duplicate of the scrub, the
@@ -582,35 +567,6 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
     appId: string,
     host: string,
   ): Promise<{ ok: true; grant: ResolvedGrant } | { ok: false; failure: ConnectedFetchResult }> {
-    if (deps.specReader !== undefined) {
-      const row = await deps.specReader.getAuthSpec(appId);
-      if (row === undefined) {
-        return { ok: false, failure: failure(NET_ERROR_CODES.NET_NOT_APPROVED, 'no approved connection exists for this app') };
-      }
-      if (row.status === AUTH_SPEC_STATUS.importedUnapproved) {
-        return {
-          ok: false,
-          failure: failure(
-            NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED,
-            'this connection arrived via import/sync — re-approve it in settings before the app can use it',
-          ),
-        };
-      }
-      if (row.status !== AUTH_SPEC_STATUS.approved) {
-        return { ok: false, failure: failure(NET_ERROR_CODES.NET_NOT_APPROVED, 'this connection has not been approved yet') };
-      }
-      if (!isHostAllowed(host, row.allowedHosts)) {
-        return {
-          ok: false,
-          failure: failure(NET_ERROR_CODES.NET_HOST_BLOCKED, `host '${host}' is outside this app's approved host set`),
-        };
-      }
-      return {
-        ok: true,
-        grant: { spec: row.spec, allowedHosts: row.allowedHosts, store: deps.credentialStore, oauth: v3Oauth! },
-      };
-    }
-
     const rows = await deps.connectionReader.listConnections(appId);
     const resolution = resolveSlot(rows, host);
 

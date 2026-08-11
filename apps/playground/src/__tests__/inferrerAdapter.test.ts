@@ -143,8 +143,16 @@ describe('D10/M6 — source lint: the inference path carries no transport, loop,
     }
   });
 
-  it('the wizard store and sheet are likewise inspector-free (docs never reach inspector state)', () => {
-    for (const rel of [['state', 'wizard.ts'], ['connections', 'AuthWizardSheet.tsx']] as const) {
+  // P3 CUTOVER: the v3 wizard store/sheet this lint used to name are DELETED. The
+  // guarantee is unchanged and follows the surface to its v4 home — pasted provider docs
+  // must never reach LLM-inspector state, and the v2 inferrer adapter is now the seat
+  // where that could go wrong.
+  it('the connection wizard surface and the v2 inferrer adapter are likewise inspector-free', () => {
+    for (const rel of [
+      ['state', 'connectionWizard.ts'],
+      ['connections', 'ConnectionWizardSheet.tsx'],
+      ['agent', 'connectionInferrerAdapter.ts'],
+    ] as const) {
       const text = readFileSync(join(__dirname, '..', ...rel), 'utf8');
       for (const forbidden of ['onLlmEvent', 'llmInspector', 'AgentTurnEvent']) {
         expect(text.includes(forbidden), `${rel.join('/')} must not reference ${forbidden}`).toBe(false);
@@ -222,16 +230,26 @@ describe('AL-05 AC7 — inferenceWireCopy: the paste-box names the wire the infe
     expect(copy).toContain('http://127.0.0.1:1234/v1');
   });
 
-  it('the sheet RENDERS the wire copy in the docs label — import-presence alone is not enough (source pin, M61)', () => {
-    const source = readFileSync(
-      join(__dirname, '..', 'connections', 'AuthWizardSheet.tsx'),
-      'utf8',
-    );
-    expect(source).toContain('inferenceWireCopy');
-    // Review C2: the ${wireCopy} interpolation must sit INSIDE the docs label
-    // expression — an orphaned import/useEffect with a reverted static label kept
-    // the weaker containment assertions green.
-    expect(source).toMatch(/provider docs \(optional[\s\S]{0,120}?\$\{wireCopy\}/);
-    expect(source).not.toContain('your configured model');
-  });
-});
+  /**
+   * P3/Q5 SUPERSEDES THE ORIGINAL M61 PIN. This test used to assert that the RUN-TIME
+   * paste-docs box interpolated `inferenceWireCopy()` into its label, so a user pasting
+   * provider documentation was told which wire it would travel on. That box is now
+   * DELETED rather than disclosed — Q5 removes run-time inference outright — so the
+   * honest successor assertion is that no such affordance exists to disclose.
+   *
+   * The disclosure guarantee itself is NOT dropped: `inferenceWireCopy` still ships and is
+   * still pinned by the four wire-decision tests below. What changed is that the only
+   * surface which could have pasted docs at RUN time no longer exists, and this asserts
+   * that removal at the source rather than trusting it.
+   */
+  it('the run-time wizard surface offers NO paste-docs box to disclose a wire for (Q5)', () => {
+    for (const rel of [
+      ['state', 'connectionWizard.ts'],
+      ['connections', 'ConnectionWizardSheet.tsx'],
+    ] as const) {
+      const source = readFileSync(join(__dirname, '..', ...rel), 'utf8');
+      expect(source, `${rel.join('/')} must carry no paste-docs affordance`).not.toMatch(
+        /provider docs \(optional|inferenceWireCopy|docsText/,
+      );
+    }
+  });});

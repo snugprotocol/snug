@@ -1,7 +1,6 @@
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
-import type { AuthWizardDirective } from '@snugprotocol/protocol';
 
 import type { BuildStepView, ChatMessage } from '../agent/useBuilderChat.js';
 import { Button } from '../ui/Button.js';
@@ -35,11 +34,21 @@ export interface ChatLogProps {
   /** Compact mode for the run-view chat rail (smaller artifact cards). */
   compact?: boolean;
   /**
-   * Mount for a VALIDATED `auth_wizard` directive card (AL-04 D9): the caller wires
-   * this to `openWizard({source:'directive', …})` with the attached appId. Absent ⇒
-   * the card renders with a disabled CTA (no app to attach the connection to yet).
+   * Mount for a VALIDATED `auth_wizard` directive card: the caller wires this to the
+   * connection wizard with the attached appId. Absent ⇒ the card renders with a disabled
+   * CTA (no app to attach the connection to yet).
+   *
+   * It takes NO argument. In v4 the card is a DOORBELL: the requirement was already
+   * persisted at build time through the gated pipeline, so what the wizard reviews comes
+   * from the row and the card cannot propose anything at click time.
    */
-  onDirectiveConnect?: (directive: AuthWizardDirective) => void;
+  onDirectiveConnect?: () => void;
+  /**
+   * Mount for the v4 connect card. Receives the (appId, slot) of the PERSISTED row so
+   * the caller can open the wizard on exactly that connection — not a provider name the
+   * caller would have to resolve back to a row.
+   */
+  onConnectionConnect?: (connection: { appId: string; slot: string }) => void;
 }
 
 /** The streamed conversation: user bubbles, streaming agent text with a soft caret,
@@ -52,6 +61,7 @@ export function ChatLog({
   phase = 'build',
   compact = false,
   onDirectiveConnect,
+  onConnectionConnect,
 }: ChatLogProps): ReactElement {
   return (
     <div className="chat-log" aria-live="polite">
@@ -76,7 +86,27 @@ export function ChatLog({
               </span>
               <span className="artifact-name">connect {message.directive.proposal.providerName}</span>
               {onDirectiveConnect !== undefined ? (
-                <Button onClick={() => onDirectiveConnect(message.directive!)}>connect</Button>
+                <Button onClick={() => onDirectiveConnect()}>connect</Button>
+              ) : (
+                <span className="hint">run the app once to attach this connection</span>
+              )}
+            </Card>
+          ) : null}
+          {/*
+            The v4 CONNECT CARD. It renders only when the post-turn pipeline actually
+            PERSISTED a row, so it can never advertise a connection that does not exist —
+            the v3 card rendered from the reply's directive and could outlive a refused
+            requirement. Clicking it opens the wizard on that (appId, slot); everything
+            the user reviews is read from the row.
+          */}
+          {message.connection !== undefined ? (
+            <Card className="artifact-card" data-testid="connection-requirement-card">
+              <span aria-hidden="true" style={{ fontSize: '1.5rem' }}>
+                🔌
+              </span>
+              <span className="artifact-name">connect {message.connection.providerName}</span>
+              {onConnectionConnect !== undefined ? (
+                <Button onClick={() => onConnectionConnect(message.connection!)}>connect</Button>
               ) : (
                 <span className="hint">run the app once to attach this connection</span>
               )}
