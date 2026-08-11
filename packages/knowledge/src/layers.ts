@@ -121,7 +121,12 @@ export type ToolPromptName =
   /** TASK-20260811 (ADR-0018): authors the app's RUNTIME contract at build time. */
   | 'runtime-contract-write'
   /** TASK-20260811 (ADR-0018 D5): the host's post-turn synthesis fallback. */
-  | 'runtime-contract-synthesis';
+  | 'runtime-contract-synthesis'
+  /** TASK-20260811 (ADR-0019 D6): routes an app-chat message to its lane. */
+  | 'chat-intent-classifier'
+  /** TASK-20260811 (ADR-0019 D7/D8): the data lane's read and propose-write tools. */
+  | 'data-query'
+  | 'data-propose-write';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);

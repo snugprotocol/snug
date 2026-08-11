@@ -32,6 +32,7 @@ export {
 export {
   buildAuthSpecInferrerPrompt,
   buildConnectionRequirementInferrerPrompt,
+  buildChatIntentClassifierPrompt,
   buildHostSystemPrompt,
   buildRuntimeContractSynthesisPrompt,
   buildSkillBuilderPrompt,
