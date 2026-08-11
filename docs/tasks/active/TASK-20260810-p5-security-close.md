@@ -292,3 +292,64 @@ Nothing here is swept under. Grouped by who must act.
 
 **Final counts, re-run live by the orchestrator: root 19/19 UNCACHED (`Cached: 0 cached`) ·
 protocol 221 · auth 357 · db 236 · knowledge 120 · playground 596 · examples 170/170.**
+
+---
+
+## Session journal
+
+### 2026-08-10 — Claude (orchestrator) — Gate 6 close: the full P0–P5 rewrite is built, reviewed and green; NOTHING IS MERGED
+
+**DONE this session.** The owner directed an autonomous P0→P5 run at `/pickup`. All six
+phases shipped, each on its own branch cut from its predecessor (a linear chain), each
+test-first, each with a fresh-context adversarial review folded before the next opened.
+
+**EXACT STATE — six unmerged branches, in mandatory merge order:**
+
+| Branch | Head | What it carries |
+|---|---|---|
+| `docs/TASK-20260810-plan` | `f28b109` | docs-only, off fresh `main` (fold F-M2's cherry-pick path) |
+| `feat/TASK-20260810-p0-contracts` | `b731c70` | v4 contracts, template lint, slot-keyed storage, ADR-0017, staged v0.3 draft |
+| `feat/TASK-20260810-p1-runtime` | `8ed1ffd` | slot routing, amended gate order, AC5(b) closed |
+| `feat/TASK-20260810-p2-pipeline` | `171134a` | build-time declaration at the post-turn seam, KB doctrine, inferrer |
+| `feat/TASK-20260810-p3-wizard` | `1f65044` | the grandma wizard, v3 table deleted (schema v5), coverage restored, **+ the owner's in-flight-sign-in confirm** |
+| `feat/TASK-20260810-p4-starters` | `1cc026a` | registry entries, six manifests, install copy-to-rows, `llmProposalSchema` deleted |
+| `feat/TASK-20260810-p5-security-close` | `5b118f7` | threat-model delta, whole-surface review, this close-out |
+
+**MERGE ORDER IS LOAD-BEARING, not a preference.** P0 is deliberately ADDITIVE — v4 lands
+*alongside* v3 — because `starterDeclaration.ts` imported `llmProposalSchema` at runtime and
+33 files touched the `snug_auth_specs` surface. The two deletions are the named exit items
+of P3 and P4 respectively. PR'ing out of order breaks the cutover rule and makes "every
+phase ends green" unsatisfiable.
+
+**FINAL COUNTS, re-run live and UNCACHED (`Cached: 0 cached, 19 total`):** root **19/19** ·
+protocol 221 · auth 357 · db 236 · knowledge 120 · playground 596 · examples 170/170.
+
+**THE SINGLE NEXT STEP:** the owner reviews the six branches and opens PRs **in P0→P5
+order**. Nothing else should start on this surface first.
+
+**OPEN QUESTIONS / ITEMS FOR THE OWNER (nothing swept under):**
+1. **AL-12 stays HELD.** P0 created only the LOCAL staged v0.3 draft under the owner's
+   2026-08-10 carve-out. SPEC_SYNC steps 1–3 + 6 taken; **steps 4–5 NOT taken; nothing was
+   pushed to `snugprotocol/spec`.** Publication remains an explicit-ask gate.
+2. **A flaky Playwright journey** — 1 failure in 5 full-suite runs, a DOM-detach race in
+   `openWizardFromCard` (`connection-wizard.spec.ts:82`); passes 5/5 in isolation. Not
+   diagnosed. Worth fixing before it teaches anyone to re-run a red.
+3. **The `?demoreq=starter-*` variants** have vitest coverage but no Playwright journey.
+4. **ASCII-lookalike registry-borrow** (`Sp0tify`) is accepted-with-disclosure per ADR-0017 —
+   carried by the review's provenance copy, not the guard. Revisit if an untrusted
+   declaration channel ever opens.
+5. **ADR-0017 residual-risk #2** is slightly imprecise versus shipped scrub behavior in both
+   directions; the threat-model delta states it correctly. Align when convenient.
+6. **The AL-09 branch stays parked** at `86a564c`, never merged (Q8). Its harvested HTML was
+   reviewed as it came across; the branch itself is now spent as a source.
+
+**PROCESS NOTE, recorded because the owner should weigh it against the next autonomous run.**
+The bar found real defects on **twelve consecutive reviews** — including a live
+credential-exfiltration hole (P0), a pipeline unreachable from production (P2), 14 shipped
+behaviors silently losing their guard (P3), registry field lists that were dead code so
+starters showed ZERO credential boxes (P4), and `required: false` fields broken end-to-end on
+the rewrite's own founding example (P5). Folding the review INTO each phase preserved the
+bar's substance, which is what the autonomous run was betting on. What it could not replace
+is the owner's eyes at a phase boundary: four of those were BLOCKERs that would have been
+cheaper to catch there than after the next phase had built on top. **Recommendation: keep the
+per-phase adversarial review, and keep the owner gate for High-tier children.**
