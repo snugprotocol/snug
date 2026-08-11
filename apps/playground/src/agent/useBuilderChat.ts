@@ -215,6 +215,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   const [threadAppId, setThreadAppId] = useState<string | undefined>(undefined);
   const threadAppIdRef = useRef<string | undefined>(undefined);
   const abortRef = useRef<AbortController | null>(null);
+  /** Message ids whose approval is mid-execution — the double-click guard's state. */
+  const approvalsInFlight = useRef<Set<number>>(new Set());
   const streamAccumRef = useRef('');
 
   useEffect(() => {
@@ -340,6 +342,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       streamAccumRef.current = '';
       const controller = new AbortController();
       abortRef.current = controller;
+      /** True once this turn has staged a write proposal — one card per turn (see below). */
+      const stagedProposal = { current: false };
       /** Per-turn state for bootstrap pinning (F9) + artifact-card persistence. */
       const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean } = { installedV1: false };
       /** Subscription-mode artifact fetch+write runs detached — awaited before the turn finalizes. */
@@ -430,7 +434,23 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             appId: contextTarget,
             getDb: () => Promise.resolve(db),
             allowWrites: route.intent === 'data_write',
-            onProposal: (proposal) => patchMessage(agentId, { dataWrite: proposal }),
+            /**
+             * ONE PROPOSAL PER TURN (whole-surface review, 2026-08-11).
+             *
+             * `ChatMessage.dataWrite` is a single slot and the tool loop allows several
+             * tool calls per turn, so a second `data_propose_write` used to silently
+             * REPLACE the first: the earlier proposal vanished with no trace and the user
+             * approved whichever the model happened to stage last. Keeping the FIRST and
+             * refusing the rest makes the card and the tool result agree — the model is
+             * told, in its own tool result, that the extra proposal was not staged, so it
+             * can tell the user rather than believing both are pending.
+             */
+            onProposal: (proposal) => {
+              if (stagedProposal.current) return false;
+              stagedProposal.current = true;
+              patchMessage(agentId, { dataWrite: proposal });
+              return true;
+            },
           });
         } else if (route?.lane === 'answer') {
           laneTools = [];
@@ -665,7 +685,15 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
    * "the LLM proposes, the human approves" structural rather than procedural.
    */
   const approveDataWrite = useCallback((proposal: DataWriteCardState, messageId: number): void => {
+    // DOUBLE-CLICK GUARD (whole-surface review, 2026-08-11). `outcome` is only set after
+    // several awaits — a DB open, a dynamic import, and two scratch runs — so two clicks
+    // inside that window would BOTH reach `executeApprovedWrite`, and a non-idempotent
+    // INSERT would land twice. Each run passes its own drift check, so the TOCTOU guard
+    // cannot catch this: it is a re-entrancy problem, not a staleness one.
+    if (approvalsInFlight.current.has(messageId)) return;
+    approvalsInFlight.current.add(messageId);
     void (async () => {
+      try {
       const db = await getUserDb();
       const { executeApprovedWrite } = await import('./dataTools.js');
       const outcome = await executeApprovedWrite(db, proposal);
@@ -676,6 +704,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           ...(outcome.ok ? { executed: outcome.executed } : {}),
         },
       }));
+      } finally {
+        approvalsInFlight.current.delete(messageId);
+      }
     })();
   }, [patchMessage]);
 

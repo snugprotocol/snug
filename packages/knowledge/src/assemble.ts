@@ -98,10 +98,21 @@ export function renderRuntimeContract(contract: RuntimeContract): string {
     const entries = Object.entries(contract.settings).map(([key, value]) => `- ${key}: ${String(value)}`);
     section('### Current Settings', entries.join('\n'));
   }
-  // A contract must never be able to forge a LAYER boundary: the assembler joins layers
-  // with SEPARATOR, so a contract containing that exact sequence could otherwise present
-  // its own text as a new top-level system block.
-  return lines.join('\n').split(SEPARATOR).join('\n---\n');
+  /**
+   * A contract must never be able to forge a LAYER boundary.
+   *
+   * Stripping the EXACT separator was not enough (found by the P4 whole-surface review): a
+   * contract containing `\n\n\n---\n\n\n` passes an exact-sequence filter untouched, and
+   * its own surrounding newlines then supply the blank lines the separator needs — so the
+   * text after the rule became a peer of `10-host-identity`, reading as a fresh host
+   * directive. Verified: 5 system blocks where 4 were expected.
+   *
+   * Neutralizing any horizontal-rule LINE removes the primitive rather than one spelling
+   * of it, and it holds for every free-text seat plus settings VALUES (whose charset is
+   * unbounded — only KEYS are `[a-z0-9_]`). Ordinary prose with dashes is untouched
+   * because the pattern anchors on a whole line.
+   */
+  return lines.join('\n').replace(/^[ \t]*-{3,}[ \t]*$/gm, '—');
 }
 
 /**

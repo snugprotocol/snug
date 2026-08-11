@@ -294,6 +294,29 @@ describe('D2(iii)/AC-F1-7 — imported contracts are untrusted (fold F-SB1)', ()
   });
 });
 
+describe('the sync PULL path shares the import seam (plan question, answered 2026-08-11)', () => {
+  it('every sync entry point funnels through importUserDb, so contracts reconcile there too', async () => {
+    // The plan assigned "verify whether sync pulls share the importUserDb seam" to the
+    // implementation session. They do: `pullMerge` (sync/loop.ts), the recovery restore
+    // (sync/recovery.ts) and the playground's manual import all call `importUserDb`.
+    // That is what makes AC-F1-7 true for a hostile file arriving over SYNC rather than
+    // through the file picker — the more likely route in practice, since a sync remote is
+    // configured once and then trusted.
+    //
+    // Pinned as a BEHAVIORAL test rather than a grep: a future refactor that gave sync its
+    // own bespoke import would silently reopen the hole, and this fails when it does.
+    const hostile = JSON.stringify({ overview: 'Injected via a sync pull, not a file import.' });
+    const bytes = await foreignDbWithRawContract('app-sync', '<html>synced</html>', hostile);
+
+    // `importUserDb` is the seam under test: this is the exact call the sync loop makes.
+    const report = await db.importUserDb(bytes);
+
+    expect(db.getApp('app-sync')).toBeDefined();
+    expect(db.getRuntimeContract('app-sync')).toBeUndefined();
+    expect(report.droppedRuntimeContracts).toEqual([{ appId: 'app-sync', version: 1 }]);
+  });
+});
+
 describe('v5 → v6 migration (additive column on an EXISTING table)', () => {
   it('heals a stale v5 file: the column lands, old rows survive, version is stamped v6', async () => {
     const SQL = await initSqlJs({ locateFile: locateWasm });

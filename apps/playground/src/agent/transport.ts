@@ -24,9 +24,16 @@ import { getUserDb } from '../state/userdb.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 
-export function createServerAppTransport(model?: string): AgentTransport {
+export function createServerAppTransport(model?: string, appId?: string): AgentTransport {
   // App-path requests are self-contained envelopes — no threadId, no history.
-  return createHttpTransport('/invoke', model !== undefined ? { model } : {});
+  //
+  // The runtime contract IS forwarded (ADR-0018 D3): the hub cannot look one up, so an
+  // app running in subscription mode would otherwise silently lose the framing its
+  // byok/local twin gets. Read per send, like every other value on this path.
+  return createHttpTransport('/invoke', {
+    ...(model !== undefined ? { model } : {}),
+    ...(appId !== undefined ? { getContract: () => readRuntimeContract(appId) } : {}),
+  });
 }
 
 export interface DirectTransportOptions {
@@ -197,7 +204,7 @@ export function resolveAppTransport(
     });
   }
   const model = modelStore.get();
-  if (mode === 'subscription') return createServerAppTransport(model);
+  if (mode === 'subscription') return createServerAppTransport(model, appId);
   return createDirectAppTransport({
     mode,
     provider,

@@ -2124,9 +2124,6 @@ function construct(
         throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, 'app runtime snapshot was not valid base64');
       }
       const scratch = new SQL.Database(scratchBytes);
-      // `getRowsModified()` is CUMULATIVE per connection, so each statement's own count is
-      // the delta against the previous reading.
-      let lastModified = 0;
       try {
         for (const entry of statements) {
           // The SAME guards as the real executor, from the same function (D7).
@@ -2173,14 +2170,27 @@ function construct(
               }
               rows.push(row);
             }
-            // `getRowsModified` is cumulative for the connection, so the per-statement
-            // count is the delta — this is the number the user approves in D8.
-            const modified = scratch.getRowsModified();
-            const changes = modified - lastModified;
-            lastModified = modified;
+            /**
+             * `getRowsModified()` is `sqlite3_changes()` — the count for the LATEST
+             * completed statement, NOT a running total for the connection.
+             *
+             * This was implemented as a delta against a previous reading, which is right
+             * only for the first write and produces NEGATIVE counts afterwards (verified:
+             * DELETE 2 rows then UPDATE 1 row reported `[2, -1]`). The approval card
+             * rendered that number, and the TOCTOU drift check could not catch it because
+             * it re-ran the same arithmetic on both sides and got the same wrong answer.
+             * Found by the P4 whole-surface review; regression-tested in scratch-run.
+             *
+             * The count is attached to EVERY statement, including one with a `RETURNING`
+             * clause. Keying it on `columns.length === 0` meant a
+             * `DELETE … RETURNING id` carried rows but no count, so the card said
+             * "0 row(s)" for a destructive statement and drift could never fire for it —
+             * and the statement text is the model's to choose.
+             */
+            const changes = scratch.getRowsModified();
             results.push({
               ...(columns.length > 0 ? { rows, columns } : {}),
-              ...(columns.length === 0 ? { changes } : {}),
+              changes,
               ...(truncated ? { truncated, totalRows } : {}),
             });
           } catch (err) {

@@ -1,6 +1,6 @@
 # 0019 — App chat is intent-routed; data agency is scratch-isolated reads + human-approved writes
 
-- **Status:** proposed (drafted at Gate 2; accepts on owner plan approval + merge)
+- **Status:** accepted (owner approved the plan 2026-08-11; implemented across P0–P4)
 - **Date:** 2026-08-11
 - **Task:** TASK-20260811-lean-runtime-data-chat
 

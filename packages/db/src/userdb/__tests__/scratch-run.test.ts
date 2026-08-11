@@ -128,6 +128,43 @@ describe('D7 — mutations physically cannot reach the real DB', () => {
     expect(after.statements[0]?.rows?.[0]?.[0]).toBe(3);
   });
 
+  it('reports the RIGHT count for every statement, not just the first', async () => {
+    // REGRESSION (whole-surface review, 2026-08-11). The first implementation treated
+    // `getRowsModified()` as cumulative per connection and took a delta. It is
+    // `sqlite3_changes()` — the count for the LATEST completed statement — so the delta
+    // was only correct for the first write and produced NEGATIVE counts afterwards.
+    //
+    // Verified against the shipped sql.js: DELETE(2 rows) then UPDATE(1 row) yielded
+    // [2, -1]. The approval card rendered "-1 row(s)", and the TOCTOU drift check could
+    // not catch it because it re-ran the same broken arithmetic on both sides.
+    const result = await db.scratchRun(appId, [
+      { sql: "DELETE FROM expenses WHERE label = 'coffee'" }, // 2 rows
+      { sql: "UPDATE expenses SET cents = 1 WHERE label = 'rent'" }, // 1 row
+    ]);
+
+    expect(result.statements.map((statement) => statement.changes)).toEqual([2, 1]);
+  });
+
+  it('reports 0 for a write that matches nothing, even after a larger write', async () => {
+    const result = await db.scratchRun(appId, [
+      { sql: "UPDATE expenses SET cents = 1 WHERE label = 'coffee'" }, // 2 rows
+      { sql: 'UPDATE expenses SET cents = 2 WHERE id = 9999' }, // 0 rows
+    ]);
+
+    expect(result.statements.map((statement) => statement.changes)).toEqual([2, 0]);
+  });
+
+  it('reports a count for a write that also RETURNS rows (RETURNING clause)', async () => {
+    // The result shape keyed `changes` on `columns.length === 0`, so a
+    // `DELETE ... RETURNING id` carried rows but NO count — the card said "0 row(s)"
+    // for a destructive statement, and drift could never fire for it.
+    const result = await db.scratchRun(appId, [
+      { sql: "DELETE FROM expenses WHERE label = 'coffee' RETURNING id" },
+    ]);
+
+    expect(result.statements[0]?.changes).toBe(2);
+  });
+
   it('later statements SEE earlier ones within the same scratch run (a real dry run)', async () => {
     // D8's preview must reflect the batch as a whole: statement 2 has to observe
     // statement 1's effect or the previewed counts would be a lie.

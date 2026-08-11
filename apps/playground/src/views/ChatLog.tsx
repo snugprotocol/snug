@@ -160,7 +160,7 @@ export function ChatLog({
                       : message.dataWrite.outcome === 'declined'
                         ? 'cancelled — nothing was changed'
                         : message.dataWrite.outcome === 'drifted'
-                          ? 'your data changed since this was previewed, so nothing was applied — ask again to get a fresh preview'
+                          ? 'the number of rows this would affect changed since the preview, so nothing was applied — ask again for a fresh one'
                           : 'the change could not be applied — nothing was changed'}
                   </span>
                 )}

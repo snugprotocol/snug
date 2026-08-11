@@ -42,6 +42,16 @@ export interface HttpTransportOptions {
   headers?: Record<string, string>;
   /** Injectable for tests; defaults to the global fetch. */
   fetch?: FetchLike;
+  /**
+   * Resolve the app's runtime contract for THIS send (ADR-0018 D3).
+   *
+   * The hub is stateless about apps and cannot look a contract up, so subscription mode
+   * has to carry it. Called per send rather than captured at construction, matching the
+   * direct path's rule — a contract read once would go stale on an edit or revert.
+   * Returning `undefined` (or omitting the option) sends no contract, which is exactly
+   * what a contract-less app should do.
+   */
+  getContract?: () => Promise<unknown | undefined>;
 }
 
 export function createHttpTransport(invokeUrl: string, options: HttpTransportOptions = {}): HttpTransport {
@@ -49,6 +59,7 @@ export function createHttpTransport(invokeUrl: string, options: HttpTransportOpt
 
   return {
     async send(wire, { signal, onDelta }) {
+      const contract = await options.getContract?.();
       let response: Response;
       try {
         response = await fetchImpl(invokeUrl, {
