@@ -9,6 +9,7 @@ import type { UserDb } from '@snugprotocol/db';
 import {
   APP_BUILDER_TOOL_NAME,
   APP_DOC_WRITE_TOOL_NAME,
+  ARTIFACT_EDIT_TOOL_NAME,
   RUNTIME_CONTRACT_WRITE_TOOL_NAME,
   SCHEMA_APPLY_TOOL_NAME,
   getToolPrompt,
@@ -83,6 +84,75 @@ export function buildByokTools(
         return artifact.version === 1
           ? `Created "${artifact.displayName}" at /artifacts/${artifact.id}`
           : `Updated "${artifact.displayName}" (version ${artifact.version}) at /artifacts/${artifact.id}`;
+      },
+    },
+    {
+      def: {
+        name: ARTIFACT_EDIT_TOOL_NAME,
+        description: getToolPrompt('artifact-edit'),
+        inputSchema: {
+          type: 'object',
+          properties: {
+            edits: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { oldString: { type: 'string' }, newString: { type: 'string' } },
+                required: ['oldString', 'newString'],
+              },
+            },
+          },
+          required: ['edits'],
+        },
+      },
+      run: async (input) => {
+        const raw = Array.isArray(input.edits) ? input.edits : undefined;
+        if (raw === undefined || raw.length === 0) {
+          return 'Error: "edits" must be a non-empty array of {oldString, newString} objects.';
+        }
+        const edits: Array<{ oldString: string; newString: string }> = [];
+        for (const entry of raw) {
+          if (typeof entry !== 'object' || entry === null) return 'Error: each edit must be an object.';
+          const { oldString, newString } = entry as Record<string, unknown>;
+          if (typeof oldString !== 'string' || oldString === '') {
+            return 'Error: each edit needs a non-empty "oldString" copied verbatim from the file.';
+          }
+          if (typeof newString !== 'string') return 'Error: each edit needs a string "newString".';
+          edits.push({ oldString, newString });
+        }
+
+        const db = await getDb();
+        const appId = await sink.ensureTargetId();
+        const current = db.getApp(appId) === undefined ? undefined : db.getAppHtml(appId);
+        if (current === undefined) {
+          return 'Error: this app has no file to edit yet — write the whole file first.';
+        }
+
+        /**
+         * UNIQUE-MATCH-OR-FAIL, applied to a WORKING COPY.
+         *
+         * Uniqueness is re-checked against the text as it stands after each earlier edit,
+         * because applying edits in sequence can CREATE an ambiguity that did not exist in
+         * the original. Nothing is persisted until every edit has succeeded — a
+         * half-applied batch would be worse than a refused one.
+         */
+        let next = current;
+        for (const [index, edit] of edits.entries()) {
+          const occurrences = next.split(edit.oldString).length - 1;
+          if (occurrences === 0) {
+            return `Error: edit ${index + 1} did not match — "${edit.oldString.slice(0, 60)}" is not in the file. Nothing was changed.`;
+          }
+          if (occurrences > 1) {
+            return `Error: edit ${index + 1} is ambiguous — "${edit.oldString.slice(0, 60)}" appears ${occurrences} times. Include more surrounding text so it matches exactly once. Nothing was changed.`;
+          }
+          next = next.replace(edit.oldString, edit.newString);
+        }
+
+        // The SAME sink path artifact_write uses, so the result is a version like any
+        // other: same pinning, same reload, same contract copy-forward.
+        const artifact = await sink.write(next);
+        hooks.onArtifact(artifact);
+        return `Applied ${edits.length} edit(s) — "${artifact.displayName}" is now version ${artifact.version}.`;
       },
     },
     {

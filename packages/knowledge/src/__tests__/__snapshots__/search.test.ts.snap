@@ -133,6 +133,7 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
       "## Runtime requests: what an app sends when it asks the model",
       "## The runtime contract: how your app talks to the model after it is built",
       "### When to write it again",
+      "## Changing an app: edit the parts, or rewrite the file",
     ],
   },
 ]

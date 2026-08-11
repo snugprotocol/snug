@@ -55,3 +55,18 @@ A cosmetic edit needs no new contract: the stored one carries forward to the new
 automatically. Writing one anyway is not harmful, but leaving it alone is correct.
 
 An app that never calls `sendMessage` needs no contract at all.
+
+## Changing an app: edit the parts, or rewrite the file
+
+Two tools change an installed app, and the choice is about the SHAPE of the change:
+
+- **A change you can point at** — a colour, a label, one handler, a function body — is an
+  edit. Give the exact text to find and what to replace it with. Cheaper, faster, and it
+  cannot disturb the parts you did not name.
+- **A structural change** — new sections, moved markup, a different organization — is a
+  whole-file write. Trying to express a restructure as a dozen edits is how an app ends up
+  half-migrated.
+
+Each piece of text you ask to replace must appear EXACTLY ONCE in the file. If it appears
+twice the whole edit is refused rather than guessing, so include enough surrounding text to
+make it unique. If any edit in a batch fails, none of them are applied.

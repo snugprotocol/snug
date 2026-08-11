@@ -36,6 +36,9 @@ export const APP_DOC_WRITE_TOOL_NAME = 'app_doc_write';
 /** Host tool that records the app's RUNTIME contract (ADR-0018). Single home of the name. */
 export const RUNTIME_CONTRACT_WRITE_TOOL_NAME = 'runtime_contract_write';
 
+/** Host tool that applies targeted edits to the app file (ADR-0019 D10). Single home. */
+export const ARTIFACT_EDIT_TOOL_NAME = 'artifact_edit';
+
 /** Static substitutions available to every prompt source — all derived from protocol constants. */
 const STATIC_SUBSTITUTIONS: Readonly<Record<string, string>> = {
   envelopeTag: SNUG_APP_REQUEST_TAG,
