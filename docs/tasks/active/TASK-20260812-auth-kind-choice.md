@@ -1,6 +1,6 @@
 # TASK-20260812-auth-kind-choice: multi-option auth-kind resolution — the user decides when a provider has more than one way in
 
-- **Status**: **APPROVED by owner 2026-08-12 (incl. the D3 widening — Guard 2b substitution becomes matched-option-aware) — implementation in progress, P0 first**
+- **Status**: **IMPLEMENTED P0–P4 (2026-08-12, tests-first) — awaiting review; PR after the parent branch, in chain order**
 - **Owner**: Jeetu (commissioned 2026-08-12, from a live repro of the wrong-flow symptom); planning session by Claude
 - **Risk tier**: **High** (auto-escalated: `packages/auth` — including a change to Guard 2b, a security guard, in `requirement-admission.ts`; decides which credential flow a user is walked into)
 - **Branch**: `feat/TASK-20260812-auth-kind-choice` — **CHAINED off `feat/TASK-20260812-registry-authoritative-auth`** (owner decision Q4: this task needs the `kind` seat + `requirementFromRegistryEntry` emitter that branch adds; PR'd after it in order, the P0→P5 chain precedent)
@@ -338,3 +338,49 @@ precedent exists as claimed; no C1 hole in variant field definitions.
 - Done: **owner APPROVED the reviewed plan including the D3 widening.** Implementation
   begins, P0 tests-first.
 - State: implementing.
+
+### 2026-08-12 — Claude (implementation session, P0–P4 complete) — session
+
+- **P0 (auth):** RED-first variant suite in `registry-self-containment.test.ts` (5 red),
+  then `WellKnownAuthOption` + `optionLabel`/`authOptions` seats, Coinbase retail-OAuth
+  + GitHub OAuth-app variants (authored walkthroughs; GitHub's OAuth option collects a
+  client_secret as a credential field — its OAuth apps have no PKCE), emitter option
+  argument (identity seats always the ENTRY's). Exported the emitter/alias API from the
+  package index (it wasn't — first consumer outside the package found that).
+- **P1 (auth, the security phase):** `matched-option-admission.test.ts` RED on exactly
+  the three variant paths, then D3: `matchAuthOption` (default first, then each
+  option's list, byte-structural) feeds BOTH `occupiedPromptSeats` and
+  `applyRegistryValues`; substitution honors the MATCHED option's flow seats; hosts +
+  provider name unconditional on every path; kind never substituted (parent AC10 green
+  throughout). auth 462 → 468.
+- **P2 (auth + knowledge):** `alternatives` on the inferrer result — registry rung maps
+  `authOptions` through the one emitter (parse-gated per option); model rung accepts a
+  bounded (≤3) `alternatives` envelope key, each validated through the SAME chain as
+  the primary (host slot/name override → schema → admission → re-parse → lint),
+  fail-soft, considered only after the primary fully passed. Prompt contract updated +
+  `gen:content` regenerated. Caught my own test bug: the valid alternative sat outside
+  the ≤3 bound (the bound slices before validation — correct behavior, wrong fixture).
+- **P3 (playground):** `state/authKindChoice.ts` (the ONE `user`-channel writer, D7),
+  `agent/authChoiceCard.ts` (seed derivation + `metaToAuthChoice` validate-on-read with
+  re-admission), `views/AuthChoiceCard.tsx` (live-row-gated, registry options resolved
+  at render, forged payloads ignored for registry providers), wiring through
+  `useBuilderChat` (turn attach + `PersistedMeta.authChoice` + rehydration) and
+  `ChatLog`. AC13's executable source scan walks `src/` and fails on any new
+  `channel: 'user'` writer. 13/13 new tests; playground 764.
+- **P4:** whole-surface journeys extended — Coinbase switched-to-OAuth (row `user` +
+  `oauth2_auth_code` + client_id + login.coinbase.com in the derived ceiling, routes
+  `credentials → connect`) and GitHub both options. ADR-0020 written. Docs: code-map
+  rows, next-steps entry, lessons entry (two-half guards derive both halves from one
+  resolution). **One flake fixed during the close run:** the PARENT task's AC7 path-3
+  test raced under a loaded worker pool (the PKCE mint's WebCrypto runs before the
+  throw) — its fixed microtask settle became a bounded DOM poll; passes isolated AND
+  under root `--force`.
+- **Evidence: root `pnpm test -- --force` → 19/19 uncached green** (auth 468 ·
+  knowledge 164 · playground 764 · everything else unchanged).
+- State: branch `feat/TASK-20260812-auth-kind-choice`, tree clean, unpushed, chained on
+  the parent branch.
+- Next step: **owner review of BOTH branches → push → PRs in chain order** (parent
+  first). Queued follow-ups recorded in next-steps: borrower-declared endpoints
+  surviving substitution when the matched option has none (pre-existing, threat-model
+  pass); model-proposed option labels; more provider variants on request.
+- Open questions: none.
