@@ -100,3 +100,27 @@ describe('parseAgentReply — TASK-20260812 diagnosis characterization', () => {
     expect(r.ok).toBe(false);
   });
 });
+
+/**
+ * TASK-20260812 AC2 — the owner's REAL delivered reply bytes (fixture verbatim in the
+ * task file; byte-faithful stream replay in adapters' stream-fidelity.test.ts). The
+ * network delivered `{{ streaks AS (…` — the `"sql":"WITH ordered AS (…)` head never
+ * arrived (end_turn, 215 billed output tokens vs ~245 delivered chars). Refusing this
+ * text is CORRECT: braces reach depth 2 and never re-balance, so no candidate object
+ * exists. The defect is upstream delivery, not this parser — this test pins that no
+ * future parser change starts "accepting" corrupt bytes to make the symptom go away.
+ */
+describe('parseAgentReply — TASK-20260812 AC2 owner repro (delivered bytes)', () => {
+  const DELIVERED_TEXT =
+    '{{ streaks AS (SELECT habit_id, COUNT(*) AS streak_len FROM ordered GROUP BY habit_id, grp) ' +
+    'SELECT h.name, h.emoji, s.streak_len FROM streaks s JOIN habits h ON h.id = s.habit_id ' +
+    'ORDER BY s.streak_len DESC LIMIT 1;","message":"Let\'s see which habit has your longest streak!"}';
+
+  it('fails typed with PARSE_FAILED — the delivered text holds no balanced object', () => {
+    const r = parseAgentReply(DELIVERED_TEXT);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe(ERROR_CODES.PARSE_FAILED);
+    expect(r.error.rawExcerpt).toContain('streaks AS');
+  });
+});

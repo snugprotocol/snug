@@ -86,6 +86,45 @@ the two 2026-08-12 auth branches.
 2. Feed it to `parseAgentReply` in a RED test (AC2). Rank the hypotheses with evidence.
 3. Gate 2 plan (interview if AC4's contract question is live), then tests-first.
 
+## AC2 fixture — the owner's real failing round trip (captured 2026-08-12, raw network view)
+
+**Request wire** (app "kept", BYOK, provider model `claude-sonnet-5`):
+
+```
+[SNUG_APP_REQUEST]
+{"appId":"kept-habits","instanceId":"ins-da202382-78ff-439d-9a0c-dc840b2894dd","requestId":"5be5358a-3dcf-40b5-8c03-de47a8214c68","action":"ask_about_habits","payload":{"question":"which habit has my longest streak?","schema":"habits(id INTEGER PK, name TEXT, emoji TEXT, created_at TEXT 'YYYY-MM-DD') ; checks(habit_id INTEGER → habits.id, day TEXT 'YYYY-MM-DD', one row per habit per completed day)","today":"2026-08-12"},"state":{"habitCount":5,"today":"2026-08-12"},"responseSchema":{"sql":"string: exactly ONE SQLite SELECT statement (SELECT or WITH … SELECT) answering the user's question over the schema provided in the payload. Read-only — never INSERT/UPDATE/DELETE/DROP.","message":"string: a one-line, friendly preamble for the result the query will return (ALWAYS include)"},"snug":1}
+```
+
+**Response SSE events, in order** (data payloads verbatim; note the doubled `{` delta and
+the interior whitespace padding — preserved byte-faithfully in the replay test fixture):
+
+1. `message_start` — model `claude-sonnet-5`, `input_tokens: 1426`
+2. `content_block_start` (index 0, text)
+3. `ping`
+4. `content_block_delta` — text `{`
+5. `content_block_delta` — text `{`
+6. `content_block_delta` — text ` streaks AS (SELECT habit_id, COUNT(*) AS streak_len FROM ordered GROUP BY habit_id, grp) SELECT h.name, h.emoji, s.streak_len FROM streaks s J`
+7. `content_block_delta` — text `OIN habits h ON h.id = s.habit_id ORDER BY s.streak_len DESC LIMIT 1;","message":"Let's see which habit has your longest streak!"}`
+8. `content_block_stop`
+9. `message_delta` — **`stop_reason: "end_turn"`**, `output_tokens: 215`
+10. `message_stop`
+
+**What the fixture proves:**
+
+- **Truncation (hypothesis 3) REFUTED for this repro** — `stop_reason` is `end_turn`,
+  not `max_tokens`. (AC1/AC3 stay correct on their own terms, per the owner rule.)
+- **The generation was COMPLETE; the delivery was not.** The assembled text (~245 chars,
+  ≲90 tokens) is far short of the billed `output_tokens: 215`, and the delivered tail
+  says `FROM ordered` — referencing a CTE whose definition sits in the never-delivered
+  head. The model wrote `{"sql":"WITH ordered AS (…),` — the wire shows `{`, `{`,
+  ` streaks AS (`.
+- **The parser is NOT the defect**: the assembled text has depth-2 braces that never
+  re-balance; `parseAgentReply` refusing it is correct (pinned in reply.test.ts).
+- **Intermittent**: the owner's later retry (same app, same question class) parsed and
+  executed — "the query ran fine — it just found nothing". Delivery loss, not content.
+  (The zero-row result itself is a separate concern: model-SQL correctness or genuinely
+  empty `checks` — NOT this task.)
+
 ## Session journal (append-only, newest last)
 
 ### 2026-08-12 — Claude (diagnosis session, read-only) — session
@@ -156,3 +195,56 @@ the two 2026-08-12 auth branches.
   bridge keeps old behavior by design).
 - Next step: owner pastes the failing round trip here → AC2 RED test → AC4 decision
   interview → Gate 5 full pass + PR.
+
+### 2026-08-12 — Claude (same pickup session, continued) — owner delivered the fixture
+
+- **Owner pasted the real failing round trip** (recorded verbatim in the AC2 fixture
+  section above) and, mid-session, reported a retry that WORKED: *"now it said 'the
+  query ran fine — it just found nothing'"* — the failure is INTERMITTENT.
+- **AC2 CLOSED with a re-diagnosis.** The fixture refutes BOTH remaining ranked
+  hypotheses and convicts a new culprit:
+  - `stop_reason` is `end_turn` → **cap truncation refuted for this repro** (AC1/AC3
+    stand on the owner rule and the confirmed stopReason drop, as built).
+  - The delivered text `{{ streaks AS (…` is missing the `"sql":"WITH ordered AS (…)`
+    head, yet the tail references `FROM ordered` and `message_delta` bills **215 output
+    tokens against ~245 delivered chars** (a physical impossibility at ≥1 char/token
+    for the full generation) → **the model generated the complete reply; deltas were
+    LOST IN DELIVERY** upstream of the app.
+  - **Our client layer is exonerated WITH PROOF, not inspection**:
+    `packages/adapters/src/__tests__/stream-fidelity.test.ts` replays the fixture
+    byte-faithfully (interior whitespace padding, doubled `{` delta and all) through
+    the real anthropic adapter at EVERY possible two-chunk boundary (~2.7k splits) plus
+    one-byte-per-chunk — identical assembled text every time. parseSse buffers
+    partial lines correctly; nothing in our stack can drop a delta from a byte-complete
+    stream. If this suite ever goes red, our layer has ACQUIRED the bug — treat as P0.
+  - **The parser is confirmed correct**: the delivered bytes hold no balanced object
+    (depth 2, never re-balances); `parseAgentReply` refusing them is right. Pinned in
+    `reply.test.ts` ("AC2 owner repro") so no future parser change can "accept" corrupt
+    bytes to hide the symptom. AC2's "goes green after" clause is VOIDED by this
+    re-diagnosis — there is no parser change to make; the fixture test pins refusal.
+- **Where the loss actually is**: between Anthropic's generation and the browser —
+  provider edge, an intermediary (proxy/VPN/extension), or conceivably a copy artifact
+  of the devtools EventStream view (the doubled `{` delta is odd either way). SSE has
+  no per-delta sequence numbers, so a client cannot DETECT a lost delta reliably.
+  **Owner-side captures that would settle it**: reproduce with a HAR save ("Save all
+  as HAR" in the Network tab) or replay the identical request via curl and diff the
+  streams; if curl shows the full reply while the browser shows loss, the intermediary
+  is between browser and edge.
+- **Client-side options recorded for the Gate-2 conversation (not built — each is an
+  owner policy call):** (a) a token-gap tripwire (`usage.outputTokens` far above any
+  plausible tokens-for-delivered-chars floor → classify as delivery corruption, no
+  strike, honest copy) — CAVEAT: floors are content-dependent (CJK ≈ 1 char/token), so
+  this can only ever fire on a conservative threshold; (b) leave strikes as-is and let
+  the AC3 copy improvements stand; (c) non-streaming fallback retry (stream:false) after
+  a parse failure — the response arrives as one JSON body with no delta framing to
+  lose, at the cost of no streaming on that retry. (c) is the strongest candidate: it
+  converts an undetectable delivery fault into a self-healing retry.
+- **Separate follow-up surfaced (NOT this task):** the successful retry returned zero
+  rows ("found nothing") — either `checks` genuinely has no qualifying data or the
+  model's streak SQL is subtly wrong. Check the successful turn's SQL in the inspector;
+  if wrong, that is a KB/responseGuidance teaching item for "kept", not a bridge bug.
+- **Tests**: protocol 254 · adapters 120 (both green; rest of workspace untouched since
+  the 2,342-green run this session).
+- Next step: owner runs the settling capture (HAR/curl) if they want the culprit hop
+  named; Gate-2 mini-interview on the retry policy option (c) and the AC4 array
+  decision (first-row-wins hazard) — then Gate 5 full pass + PR.
