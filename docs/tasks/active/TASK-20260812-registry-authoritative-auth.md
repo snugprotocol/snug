@@ -1,6 +1,6 @@
 # TASK-20260812-registry-authoritative-auth: registry-authoritative auth shapes + connect-error surfacing
 
-- **Status**: **REPLANNED after a fresh-context review found 3 BLOCKERs — awaiting owner input on one open question, then approval (Gate 2 stop)**
+- **Status**: **REPLANNED twice (fresh-context review: 3 BLOCKERs; then the owner's real symptom revealed F4, a third defect neither diagnosis had) — awaiting approval (Gate 2 stop)**
 - **Owner**: Jeetu (commissioned 2026-08-12); planning session by Claude
 - **Risk tier**: **High** (auto-escalated: `packages/auth` is the credential broker; the change decides which credential FIELDS a user is asked for and which hosts a credential may be injected against — C1-adjacent by construction)
 - **Branch**: `feat/TASK-20260812-registry-authoritative-auth` (off `main` at `bac5562`)
@@ -107,6 +107,16 @@ NOT grant them registry authority anywhere else.
    `connectionFieldSchema` and no others (the structural rule
    `static-kind-registry.test.ts:102-127` already uses), plus the existing credential-scan
    and borrow-ban suites stay green.
+11. **AC11 (the net-error CTA never silently no-ops) — NEW (F4, the owner's ACTUAL bug):**
+   clicking `connect this app` on a `NET_NOT_APPROVED` banner for an app with **zero**
+   connection rows must produce a visible outcome — an explanation of why there is nothing
+   to connect, and a route forward — never today's silent `return false`. Test asserts at
+   the CTA handler (the decision altitude), with a zero-row fixture.
+12. **AC12 (connected-but-unconnectable is never silent) — NEW:** when the post-turn
+   recovery cannot persist a requirement for an app whose HTML calls `connectedFetch`, the
+   user is left with EITHER a reviewable row OR a visible explanation. Negative test: a
+   recovery that returns nothing does not yield an app that merely fails at runtime with no
+   route to fix it.
 10. **AC10 (the kind split-brain is pinned, not latent) — NEW (D6/BLOCKER 3):** a test
    documents that `applyRegistryValues` substitutes fields but NOT `kind`, so a borrowing
    declaration keeps its own kind while receiving registry fields. Named behavior with a
@@ -266,25 +276,53 @@ on by playground; the root run is the evidence standard per lessons 2026-08-10).
 - **Risk 3 — alias collisions** (two entries claiming one alias). Prevented by a P0 test
   asserting the alias map has no duplicate keys.
 
-## 5. Open question for the owner (blocks nothing; changes what P2 fixes)
+## 5. Q-A ANSWERED (owner, 2026-08-12) — it was (c): a THIRD defect, upstream of both models
 
-**Q-A — what exactly did you see on the Coinbase Connect click?** The plan's model of your
-row (registry hit → `oauth2_auth_code` + no fields) predicts the CREDENTIALS screen refuses
-it with a visible message — *"this connection declares no credential fields — there is
-nothing to collect, so it cannot be connected"* — because that path already catches and
-calls `setError`. You reported nothing at all.
+The owner's real symptom: opening the Coinbase app shows *"this app tried to use the
+network but its connection is not ready (NET_NOT_APPROVED)"* and **the banner's CTA does
+nothing.** Neither my model nor the reviewer's had this — both of us were reasoning about
+the wizard's internal screens, and **the owner never reached them.**
 
-Three possibilities, and they lead to different fixes:
-- **(a)** You saw that message but read it as "nothing happened" → F2 alone fixes it, P2
-  shrinks to closing the line-873 swallow site defensively.
-- **(b)** Your row differs from the model (e.g. authored before the registry hit, or with
-  fields) → the diagnosis needs redoing against the real row.
-- **(c)** There is a third defect — something silent BEFORE the credentials screen.
+**F4 (NEW) — the net-error CTA silently no-ops when the app has no connection row.**
+Traced to source:
+1. `connectedFetch` finds no APPROVED row → `connected-fetch.ts:611` returns
+   `NET_NOT_APPROVED`. Correct behavior, not a bug.
+2. `RunView.tsx:551` renders the banner with a `connect this app` CTA.
+3. The CTA calls `openConnectionWizardForNetError` → `openConnectionWizardForApp`, which
+   returns at **`connectionWizard.ts:166`: `if (rows.length === 0) return false;`**
+4. `false` means "not opened", so `RunView.tsx:562` correctly does NOT dismiss the banner
+   (that guard is well-commented and right). **Net effect: a CTA whose only failure mode is
+   silence** — no wizard, no error, no state change.
 
-**Resolution costs one minute and no guessing:** with the app open, run
-`(await getUserDb()).listDeclaredConnections('<appId>')` in the console, or tell me what the
-screen showed. **P2's first step is reading your actual row** — I will not implement an
-error surface for a path I have not confirmed you were on.
+**So the app has NO connection row at all** — the declaration never persisted one. The
+recovery path exists for exactly this case (`connectionPipeline.ts:420-455`, which already
+calls the state "connected-but-unconnectable"), and its chain resolves correctly for
+Coinbase — probed: `usesConnectedFetch → true`, host `api.coinbase.com`, slot `coinbase`.
+So the most likely cause is that recovery RAN, called the inferrer, received F2's broken
+shape (`oauth2_auth_code` + zero fields), and `persistConnectionRequirement` refused it —
+leaving no row. **That would make F2 the root cause of F4 too**, but the chain is NOT yet
+proven end to end; **P0 proves it rather than assuming it.**
+
+**Consequences:**
+- **F4 gets its own AC11** — a CTA whose only failure mode is silence is F1's bug class, one
+  layer up, and it is what the owner actually hit.
+- **AC12** — the connected-but-unconnectable recovery must leave the user with EITHER a
+  reviewable row OR a visible explanation, never a silent no-op.
+- **P2 re-scoped**: the banner CTA is the priority; line 873 stays a defensive fix.
+- **Both earlier diagnoses were wrong in the same way** — the reviewer and I each traced
+  inward from a screen the owner never saw. Recorded in lessons: when a user reports "the
+  button does nothing", trace from THEIR entry point, not from the component that looks
+  most related.
+
+### Superseded hypotheses (kept for the record)
+- **(a)** owner saw the empty-fields message and read it as nothing → **no**, wrong screen.
+- **(b)** the stored row differs from the model → **partly**: there is no row at all.
+- **(c)** a third defect → **yes, F4.**
+
+**Still worth reading the real row in P0** (`(await getUserDb()).listConnections('<appId>')`)
+to confirm it is genuinely empty rather than present-but-unapproved — the two produce the
+same banner but different fixes, and F4's `rows.length === 0` branch is only reached by the
+first.
 
 ## Decisions & surprises
 
@@ -356,3 +394,27 @@ kinds (verified through the real `deriveConnectionAllowedHosts`).
 - Next step: **owner answers Q-A (§5) → approval → P0 tests-first.** Q-A does not block
   approval of P0/P1 (the registry work is independent); it only decides what P2 fixes.
 - Open questions: Q-A above.
+
+### 2026-08-12 — Claude (planning session, Q-A answered → F4 found) — session
+
+- Done: owner supplied the REAL symptom — `NET_NOT_APPROVED` banner on opening the Coinbase
+  app, and a CTA that does nothing. **Traced to a third defect (F4)** neither my diagnosis
+  nor the reviewer's had found: `openConnectionWizardForApp` returns `false` at
+  `connectionWizard.ts:166` when the app has NO connection rows, and the CTA's (correct)
+  "only dismiss on a real open" guard then leaves the banner up with nothing having
+  happened. Added AC11 + AC12; re-scoped P2 around the banner CTA.
+- **Both earlier diagnoses were wrong the same way.** The reviewer and I each traced inward
+  from a wizard screen the owner never reached. The lesson (queued for `docs/lessons.md` at
+  close): when a user says "the button does nothing", trace from THEIR entry point — the
+  first thing they see — not from the component that looks most related to the feature.
+  Neither of us asked what the screen actually said until the owner volunteered it.
+- **Probable root cause chain, NOT yet proven:** F2's broken emitter → recovery gets an
+  `oauth2_auth_code` requirement with zero fields → `persistConnectionRequirement` refuses
+  it → no row → F4's silent CTA. The Coinbase recovery chain itself resolves correctly
+  (probed: `usesConnectedFetch → true`, `api.coinbase.com` → slot `coinbase`), so the break
+  is at persistence. **P0 proves this end to end before any fix is written** — it is the
+  difference between fixing the cause and fixing three symptoms.
+- State: **replanned, still NO implementation code** (High-tier gate honored).
+- Next step: **owner approval → P0 tests-first**, starting with the end-to-end reproduction
+  of the chain above against a real userdb.
+- Open questions: none. Q-A is answered.
