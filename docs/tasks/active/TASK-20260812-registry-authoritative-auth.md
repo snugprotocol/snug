@@ -545,3 +545,16 @@ every package.
   resolution and ban semantics are untouched, so the trust story is unchanged.
 - Evidence: root `pnpm test -- --force` run at close (result recorded in the commit
   below). No test deleted or weakened; every RED observed before its GREEN.
+- **State at close:** P0–P3 all implemented and committed; branch
+  `feat/TASK-20260812-registry-authoritative-auth` at 13 commits, **unpushed**, tree
+  clean. Root **19/19 uncached green** (auth 409 · playground 750 · runner 108, all
+  three now tsc-gated; runner+sdk gates are NEW). All 12 ACs have passing tests.
+- **Single next step: owner review of the branch → push → PR** (AI review is folded —
+  the Gate 2 adversarial review's findings are all pinned by tests; a fresh post-merge
+  review remains the owner's call for High tier). Owner-assist item alongside review:
+  run `(await getUserDb()).listConnections('<coinbase appId>')` in the browser console
+  of the affected hub to confirm the historical no-row diagnosis (forward-only either
+  way; the CTA now explains itself regardless).
+- **Open questions:** none blocking. Queued follow-ups: admission kind-substitution
+  (D6/AC10 — own task + ADR), Apple Music's truthful kind, alias-list extensions as
+  owners name more near-misses.
