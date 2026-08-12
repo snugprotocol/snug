@@ -21,6 +21,47 @@
 import type { ConnectionKind, ConnectionRequirement } from '@snugprotocol/protocol';
 
 /**
+ * How a provider's OAuth flow can receive its redirect on the DESKTOP shell
+ * (TASK-20260812-desktop-hub-scaffold, plan decision 1; RFC 8252's transport ladder).
+ *
+ * Human-authored, dashboard-verified REGISTRY DATA — never a requirement seat, never
+ * inferred. The wizard renders the posture-matched registration walkthrough and, when
+ * the running shell build does not implement a posture, refuses HONESTLY at wizard
+ * entry instead of failing mid-flow (AC6).
+ *
+ *  - 'loopback'            — any-port `http://127.0.0.1:{port}` listener (RFC 8252 §7.3);
+ *                            only for providers that honor any port at request time.
+ *  - 'loopback-fixed-port' — exact-match providers: ONE registered loopback URI on the
+ *                            pinned desktop port, so the user's dashboard registration
+ *                            survives restarts.
+ *  - 'custom-scheme'       — private-use scheme deep link (reserved; not built).
+ *  - 'https-bridge'        — provider accepts only https redirects; needs the hosted
+ *                            bridge page (reserved; refusal path ships first).
+ *  - 'device-flow'         — RFC 8628; the refusing posture for flows where every
+ *                            redirect transport is unusable (e.g. no PKCE → loopback
+ *                            is undefendable).
+ */
+export type DesktopRedirectPosture =
+  | 'loopback'
+  | 'loopback-fixed-port'
+  | 'custom-scheme'
+  | 'https-bridge'
+  | 'device-flow';
+
+/**
+ * Resolve the desktop redirect posture for a FLOW — the same `option ?? entry` seat
+ * rule `requirementFromRegistryEntry` uses (ADR-0020: an option overrides credential-
+ * FLOW seats; hosts/identity stay the entry's). `undefined` means the registry does
+ * not vouch for ANY desktop OAuth transport — the wizard must refuse, never guess.
+ */
+export function resolveDesktopPosture(
+  entry: WellKnownOauthProvider,
+  option?: WellKnownAuthOption,
+): DesktopRedirectPosture | undefined {
+  return option?.desktopRedirectPosture ?? entry.desktopRedirectPosture;
+}
+
+/**
  * One ALTERNATE way in to a provider (TASK-20260812-auth-kind-choice, D1).
  *
  * An option is a COMPLETE credential flow: its own kind, fields, endpoints and
@@ -40,6 +81,13 @@ export interface WellKnownAuthOption {
   registration?: WellKnownOauthProvider['registration'];
   authorizeParams?: Record<string, string>;
   pkce?: boolean;
+  /**
+   * Desktop redirect transport for THIS option's flow — overrides the entry's posture
+   * (flow seat per ADR-0020; hosts/identity stay the entry's). Deliberately NO
+   * `browserCallable` here: whether a provider's API answers a browser is a
+   * per-provider fact, never a per-flow one.
+   */
+  desktopRedirectPosture?: DesktopRedirectPosture;
 }
 
 export interface WellKnownOauthProvider {
@@ -81,6 +129,21 @@ export interface WellKnownOauthProvider {
   scopes?: string[];
   /** PKCE recommended by the provider? Defaults to true at the transformer. */
   pkce?: boolean;
+  /**
+   * Desktop redirect transport for the DEFAULT flow, verified against the provider's
+   * own redirect-URI documentation (source cited per entry). Options may override
+   * (flow seat). Absent on non-OAuth entries. STRUCTURAL RULE, pinned by test: a
+   * loopback-class posture is only representable beside PKCE — `pkce:false` +
+   * loopback leaves auth-code injection undefendable (P0 amendment 2).
+   */
+  desktopRedirectPosture?: DesktopRedirectPosture;
+  /**
+   * Can this provider's API be called from a BROWSER page (CORS)? Tri-state on
+   * purpose (2026-08-12 BYOK CORS advisory, docs/next-steps.md): `true`/`false` are
+   * DOCUMENTED facts the wizard may disclose; ABSENT means unknown and is disclosed
+   * as unknown — never rendered as "works". Entry-level only, like `apiHosts`.
+   */
+  browserCallable?: boolean;
   /**
    * Human-authored near-miss names that should short-circuit INFERENCE to this entry —
    * "Coinbase Pro" is Coinbase for authoring purposes (D3, TASK-20260812).
@@ -170,6 +233,13 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       tokenUrl: 'https://accounts.spotify.com/api/token',
     },
     pkce: true,
+    // VERIFIED 2026-08-12: Spotify permits loopback redirect URIs ONLY as the explicit
+    // literal `http://127.0.0.1:PORT` (or `[::1]`), BANS `localhost`, and matches the
+    // registered URI exactly — so the desktop flow needs ONE stable registered port,
+    // not an ephemeral one (an ephemeral port would invalidate the user's dashboard
+    // registration on every restart).
+    // https://developer.spotify.com/documentation/web-api/tutorials/migration-insecure-redirect-uri
+    desktopRedirectPosture: 'loopback-fixed-port',
     apiHosts: ['api.spotify.com'],
     // KEY IS `client_id`, matching the oauth2_auth_code shape used at
     // demoRequirement.ts:265. A PKCE flow needs the Client ID and NOTHING else from the
@@ -203,6 +273,12 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     kind: 'oauth2_auth_code',
     endpoints: { ...GOOGLE_ENDPOINTS },
     pkce: true,
+    // VERIFIED 2026-08-12: Google's Desktop-app client type accepts loopback redirects
+    // `http://127.0.0.1:{port}` with ANY port chosen at request time (RFC 8252 §7.3);
+    // the loopback deprecation applies to Android/Chrome-app/iOS client types, NOT
+    // desktop. Same posture for gmail/googledrive below — one Google OAuth surface.
+    // https://developers.google.com/identity/protocols/oauth2/native-app
+    desktopRedirectPosture: 'loopback',
     apiHosts: ['www.googleapis.com'],
     authorizeParams: { ...GOOGLE_AUTHORIZE_PARAMS },
   },
@@ -213,6 +289,8 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     kind: 'oauth2_auth_code',
     endpoints: { ...GOOGLE_ENDPOINTS },
     pkce: true,
+    // Same Google desktop-client loopback policy — citation at the `google` entry.
+    desktopRedirectPosture: 'loopback',
     apiHosts: ['gmail.googleapis.com'],
     authorizeParams: { ...GOOGLE_AUTHORIZE_PARAMS },
   },
@@ -221,6 +299,8 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     kind: 'oauth2_auth_code',
     endpoints: { ...GOOGLE_ENDPOINTS },
     pkce: true,
+    // Same Google desktop-client loopback policy — citation at the `google` entry.
+    desktopRedirectPosture: 'loopback',
     apiHosts: ['www.googleapis.com'],
     authorizeParams: { ...GOOGLE_AUTHORIZE_PARAMS },
   },
@@ -240,6 +320,10 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     },
     pkce: false,
     apiHosts: ['api.github.com'],
+    // VERIFIED 2026-08-12: the GitHub REST API "supports cross-origin resource sharing
+    // (CORS) for AJAX requests from any origin" (Access-Control-Allow-Origin: *).
+    // https://docs.github.com/en/rest/using-the-rest-api/using-cors-and-jsonp-to-make-cross-origin-requests
+    browserCallable: true,
     // OAUTH APP — the alternate way in (TASK-20260812-auth-kind-choice). The endpoints
     // above already exist for exactly this flow (D5); the option makes it CHOOSABLE
     // instead of latent. GitHub OAuth apps do not support PKCE, so the token exchange
@@ -255,6 +339,14 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
           tokenUrl: 'https://github.com/login/oauth/access_token',
         },
         pkce: false,
+        // VERIFIED 2026-08-12: GitHub supports the device flow (RFC 8628, opt-in per
+        // app). NOT a loopback posture, structurally: this option is `pkce:false`, so
+        // a local process racing the loopback redirect could inject its own code with
+        // the valid state and nothing would refuse it. The shell does not implement
+        // device flow yet — the wizard therefore refuses honestly and steers to the
+        // PAT default, which is the intended outcome.
+        // https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
+        desktopRedirectPosture: 'device-flow',
         fields: [
           {
             key: 'client_id',
@@ -313,6 +405,13 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       tokenUrl: 'https://slack.com/api/oauth.v2.access',
     },
     pkce: false,
+    // VERIFIED 2026-08-12: Slack requires HTTPS redirect URLs ("must match or be a
+    // subdirectory of a Redirect URL configured under App Management") — a loopback
+    // http listener is unregistrable, so desktop needs the hosted https bridge.
+    // Until the bridge ships, the wizard refuses honestly (AC6); Slack's non-OAuth
+    // options, where authored, stay connectable.
+    // https://docs.slack.dev/authentication/installing-with-oauth/
+    desktopRedirectPosture: 'https-bridge',
     apiHosts: ['slack.com'],
   },
   // ───────────────────────────────────────────────────── the STATIC-KIND entries (P4)
@@ -354,6 +453,14 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
           tokenUrl: 'https://login.coinbase.com/oauth2/token',
         },
         pkce: true,
+        // VERIFIED 2026-08-12 (as AMBIGUOUS): Coinbase's OAuth2 docs show only
+        // `http://localhost:{port}` development examples and never state that the
+        // `127.0.0.1` loopback LITERAL is registrable, nor an any-port policy — and
+        // registered URIs are matched exactly. Ambiguity resolves to the REFUSING
+        // posture, never an optimistic loopback (task rule): the wizard refuses on
+        // desktop until the https bridge ships; the api_key default stays usable.
+        // https://docs.cdp.coinbase.com/coinbase-app/oauth2-integration/integrations
+        desktopRedirectPosture: 'https-bridge',
         fields: [
           {
             key: 'client_id',
@@ -377,6 +484,11 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // labels match Coinbase's own console wording — a label that renames the provider's
     // artifact is how a user pastes the wrong secret.
     apiHosts: ['api.coinbase.com'],
+    // VERIFIED 2026-08-12: api.coinbase.com does not answer browser CORS preflights —
+    // the motivating case of the 2026-08-12 BYOK CORS advisory (docs/next-steps.md):
+    // a browser hub gets an opaque "Failed to fetch"; desktop's native fetch is the
+    // advisory's rung 2. The wizard discloses this BEFORE credentials are pasted.
+    browserCallable: false,
     fields: [
       {
         key: 'api_key',
@@ -423,6 +535,10 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     kind: 'api_key',
     aliases: ['OpenWeatherMap'],
     apiHosts: ['api.openweathermap.org'],
+    // VERIFIED 2026-08-12: OpenWeather serves CORS headers on its data API — direct
+    // browser fetch is a documented, widely-exercised path (OpenWeather's own support
+    // answer confirms CORS is enabled: https://openweathermap.desk.com/customer/portal/questions/16823835-cors).
+    browserCallable: true,
     // OpenWeather transports its key as `?appid=` — a QUERY-STRING credential. That
     // placement is host-side (the template engine), never authored into app code: the
     // AL-09 AC3 lint in examples/ fails any starter that writes `?appid=` itself.
@@ -448,6 +564,10 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     displayName: 'CoinGecko',
     kind: 'api_key',
     apiHosts: ['api.coingecko.com'],
+    // VERIFIED 2026-08-12: the CoinGecko API is CORS-enabled for client-side browser
+    // requests (the reason it is the standing browser-side alternative to APIs that
+    // block them; https://www.coingecko.com/en/api).
+    browserCallable: true,
     fields: [
       {
         key: 'api_key',
@@ -481,6 +601,14 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       tokenUrl: 'https://api.music.apple.com/v1/me/storefront',
     },
     pkce: false,
+    // VERIFIED 2026-08-12: Apple Music has NO OAuth redirect flow at all — the Music
+    // User Token is provisioned by MusicKit's `authorize()` popup inside a secure
+    // browser context; there is no redirect URI to register, so no loopback transport
+    // exists to point at. The refusing https-bridge posture keeps the desktop wizard
+    // honest until a truthful MusicKit kind exists (queued follow-up), consistent
+    // with this entry's status-quo `oauth2_auth_code` pin.
+    // https://developer.apple.com/documentation/applemusicapi/user-authentication-for-musickit
+    desktopRedirectPosture: 'https-bridge',
     apiHosts: ['api.music.apple.com'],
   },
 };
