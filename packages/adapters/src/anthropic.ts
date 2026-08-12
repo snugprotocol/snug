@@ -153,6 +153,7 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
       const toolCalls: ToolCall[] = [];
       const pending = new Map<number, { id: string; name: string; json: string }>();
       let completed = false;
+      let truncated = false;
       let wireModel: string | undefined;
       const usage: TokenUsage = {};
       try {
@@ -212,6 +213,7 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
           } else if (type === 'message_delta') {
             const usageRecord = asRecord(payload.usage);
             if (typeof usageRecord?.output_tokens === 'number') usage.outputTokens = usageRecord.output_tokens;
+            if (asRecord(payload.delta)?.stop_reason === 'max_tokens') truncated = true;
           }
           // ping — nothing to collect
         }
@@ -226,7 +228,7 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
         ok: true,
         text,
         toolCalls,
-        stopReason: toolCalls.length > 0 ? 'tool_use' : 'end',
+        stopReason: toolCalls.length > 0 ? 'tool_use' : truncated ? 'max_tokens' : 'end',
         ...(Object.keys(usage).length > 0 ? { usage } : {}),
         ...(wireModel !== undefined ? { model: wireModel } : {}),
       };

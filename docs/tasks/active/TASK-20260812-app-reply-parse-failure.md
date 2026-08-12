@@ -1,7 +1,7 @@
 # TASK-20260812-app-reply-parse-failure: in-app agent replies with visible JSON/SQL still fail the bridge parser
 
-- **Status**: **draft — QUEUED for a fresh session (`/pickup TASK-20260812-app-reply-parse-failure`); diagnosis recorded, reproduction is step 1**
-- **Owner**: Jeetu (reported live 2026-08-12 on the app "kept"); diagnosis session by Claude
+- **Status**: **in progress — AC1 + AC3 BUILT and green on the branch (unpushed); AC2/AC4 BLOCKED on the owner's raw reply bytes (see 2026-08-12 pickup journal — hypothesis 1 REFUTED by parser mechanics, truncation/scanner-edge promoted)**
+- **Owner**: Jeetu (reported live 2026-08-12 on the app "kept"); diagnosis session by Claude; pickup session (AC1/AC3 build) by Claude 2026-08-12
 - **Risk tier**: **provisional Medium — auto-escalates to High** if the fix touches `packages/protocol` (`reply.ts` lives there; it is an internal parser, not a published schema, so spec impact is expected NONE — but the tier rule keys on the package)
 - **Branch**: none yet — cut `fix/TASK-20260812-app-reply-parse-failure` off `main` at pickup (this bug is INDEPENDENT of the two 2026-08-12 auth branches; nothing here depends on them)
 - **Packages likely touched**: `adapters` (stopReason threading), `runner` (bridge error copy/strike rule), `protocol` (only if `parseAgentReply` itself changes), `playground` (transport cap rule), `db`/none for storage
@@ -98,3 +98,61 @@ the two 2026-08-12 auth branches.
 - State: draft task, queued. Independent of the auth branches.
 - Next step: pickup in a fresh session; repro from the real reply bytes FIRST.
 - Open questions: the raw reply + stop reason + "kept"'s contract (owner-assist, step 1).
+
+### 2026-08-12 — Claude (pickup session, autonomous) — session
+
+- **Step-1 blocker worked around, not solved**: the LLM inspector persists browser-side
+  (OPFS/IndexedDB) — the raw failing reply is NOT reachable from this machine. AC2's
+  real-bytes repro fixture stays **owner-assist**: paste the failing round trip (raw
+  reply text + stop reason + whether "kept"'s contract sets `maxOutputTokens`) into this
+  file. Everything below is the owner-approved-regardless half of the task.
+- **Branch**: `fix/TASK-20260812-app-reply-parse-failure` cut off `main` (`4d97695`).
+- **DIAGNOSTIC FINDING — hypothesis 1 REFUTED by the parser's own mechanics** (pinned in
+  `packages/protocol/src/__tests__/reply.test.ts` characterization block; protocol
+  SOURCE untouched, tier stays Medium): a bare array of ROW OBJECTS does not
+  PARSE_FAIL — `balancedObjects` yields the first `{…}` INSIDE the array, so
+  `parseAgentReply` silently succeeds with ONE row and drops the rest (a distinct
+  latent hazard, now documented; feeds AC4). The shape that DOES produce the owner's
+  exact symptom (PARSE_FAILED + valid JSON visibly on screen + retry failing
+  identically) is an envelope whose outer `{` never closes — exactly what a
+  `max_tokens` cut produces. **Re-ranked: (1) truncation, (2) scanner edge (needs real
+  bytes), (3) array-of-SCALARS reply.** The owner's doubt about truncation predates
+  knowing the host could not SEE truncation (stopReason was dropped); with AC3 built,
+  the next occurrence will name itself in the inspector and the app error copy.
+- **AC1 BUILT (owner cap rule), test-first at both cap seams**: the wire self-describes
+  via `parseAppRequest`, so each seam checks `envelope.responseSchema !== undefined`
+  and drops the contract's `maxOutputTokens` — direct path
+  `apps/playground/src/agent/transport.ts` (+3 tests in
+  `runtimeContractTransport.test.ts`), subscription path
+  `apps/server/src/routes/invoke.ts` app-path plan (+2 tests in
+  `invoke-runtime-contract.test.ts`). Schema-less requests still honor the cap (D4
+  tests unchanged); the rest of the contract still rides the turn (asserted).
+- **AC3 BUILT (stopReason surfaced end-to-end), test-first bottom-up** — the drop was
+  one layer DEEPER than diagnosed: the adapters never read the wire's stop reason at
+  all (`AdapterResult.stopReason` was synthesized from tool calls; the type could not
+  even express `max_tokens`). Chain now: `anthropic.ts` reads `message_delta`'s
+  `stop_reason`, `openai.ts` maps `finish_reason:"length"`, `mock.ts` scripts it
+  (`MockTurn.stopReason`) → `AdapterResult`/`AgentTurnResult` unions widened →
+  playground direct transport + server SSE `done` event (`{text, stopReason}`) +
+  `createHttpTransport` all carry it (optional on `TransportResult`, so older servers
+  degrade to today's behavior) → **bridge** (`packages/runner/src/host.ts`): a parse
+  failure with `stopReason === 'max_tokens'` charges NO strike and answers
+  `HOST_ERROR` "agent reply was cut off by the output token limit before it finished"
+  (retryable) instead of PARSE_FAILED "not a parseable JSON object". A truncated reply
+  whose JSON still parses succeeds normally (tested). New suite
+  `packages/adapters/src/__tests__/stop-reason.test.ts` (9 tests) + 2 bridge tests in
+  `host-messaging.test.ts` + SSE/done tests server & http-transport.
+- **Bonus surface**: the round-trip snapshot now carries `maxOutputTokens`
+  (`AgentRoundTrip.request`) so the LLM inspector shows the cap as sent (also the AC1
+  test seam); the inspector's stop-reason chip renders `max_tokens` verbatim.
+- **Tests**: protocol 253 · adapters 117 · runner 110 · server 126 · playground 769 —
+  all green (tsc-gated); ~10 pre-existing exact-shape assertions updated to include
+  the new `stopReason`/`stopReason:'end'` fields (strengthened, none weakened).
+- **NOT done / open**: AC2 (real-bytes RED repro — owner-assist as above); AC4 (the
+  first-row-wins array hazard is a CONTRACT decision — wrap as `{data:[...]}`, refuse
+  honestly, or teach the KB harder; needs owner); e2e/habit-tracker path rerun at
+  Gate 5; OAuth-popup-era subscription servers emit `stopReason` only after deploy —
+  until then subscription truncations still strike (transport omits the field,
+  bridge keeps old behavior by design).
+- Next step: owner pastes the failing round trip here → AC2 RED test → AC4 decision
+  interview → Gate 5 full pass + PR.

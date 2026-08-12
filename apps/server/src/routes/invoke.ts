@@ -130,7 +130,12 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
             : `${runtimeSystem}${SYSTEM_BLOCK_SEPARATOR}${renderRuntimeContract(contract)}`,
         messages: [{ role: 'user', content: message }],
         withTools: false,
-        ...(contract?.maxOutputTokens !== undefined ? { maxOutputTokens: contract.maxOutputTokens } : {}),
+        // Owner rule (TASK-20260812 AC1): a request carrying a responseSchema is NEVER
+        // bound by the contract's maxOutputTokens — a structured reply cut off mid-JSON
+        // is unparseable, and the runner bridge would blame the model for the cap.
+        ...(appRequest.envelope.responseSchema === undefined && contract?.maxOutputTokens !== undefined
+          ? { maxOutputTokens: contract.maxOutputTokens }
+          : {}),
       });
     }
 
@@ -243,7 +248,9 @@ async function streamTurn(reply: FastifyReply, deps: InvokeRouteDeps, plan: Turn
     settled = true;
     if (result.ok) {
       plan.persist?.(result.text);
-      send('done', { text: result.text });
+      // stopReason lets the client's bridge tell a cap-truncated reply from model
+      // non-compliance (TASK-20260812 AC3); older clients ignore the extra field.
+      send('done', { text: result.text, stopReason: result.stopReason });
     } else {
       send('error', { code: result.code, message: result.message, retryable: result.retryable });
     }

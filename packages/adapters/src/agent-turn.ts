@@ -27,7 +27,7 @@ export interface AgentTool {
 export interface AgentRoundTrip {
   /** 0-based iteration index within this turn. */
   index: number;
-  request: { system: string; messages: AdapterMessage[]; tools?: ToolDef[] };
+  request: { system: string; messages: AdapterMessage[]; tools?: ToolDef[]; maxOutputTokens?: number };
   response: AdapterResult;
   durationMs: number;
 }
@@ -40,7 +40,7 @@ export interface AgentRoundTrip {
  */
 export interface AgentRoundTripStart {
   index: number;
-  request: { system: string; messages: AdapterMessage[]; tools?: ToolDef[] };
+  request: { system: string; messages: AdapterMessage[]; tools?: ToolDef[]; maxOutputTokens?: number };
 }
 
 export type AgentTurnEvent =
@@ -85,7 +85,14 @@ export interface RunAgentTurnOptions {
   onEvent?: (event: AgentTurnEvent) => void;
 }
 
-export type AgentTurnResult = { ok: true; text: string } | AdapterError;
+/**
+ * `stopReason` is the FINAL iteration's — the one that produced the reply the caller
+ * will parse. `max_tokens` means that reply was cut off by the output cap and is
+ * incomplete through no fault of the model (TASK-20260812 AC3: the bridge must not
+ * charge a parse-failure strike for it). `tool_use` never reaches the caller: the
+ * loop only returns after an iteration with no tool calls.
+ */
+export type AgentTurnResult = { ok: true; text: string; stopReason: 'end' | 'max_tokens' } | AdapterError;
 
 /**
  * Cap on adapter round-trips per turn — a runaway-loop backstop, NOT a task budget.
@@ -114,7 +121,12 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Snapshot the request as sent — the inspector renders this, and `conversation`
     // keeps growing, so a live reference would show the wrong thing later.
-    const request = { system, messages: [...conversation], ...(defs !== undefined ? { tools: defs } : {}) };
+    const request = {
+      system,
+      messages: [...conversation],
+      ...(defs !== undefined ? { tools: defs } : {}),
+      ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
+    };
     const startedAt = now();
     // Emitted BEFORE the await: a 30-minute build must show the call in flight, not an
     // empty panel until it returns. Same `index` correlates it with the `round_trip`.
@@ -136,7 +148,9 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       return partial === '' ? result : { ...result, partialText: partial };
     }
     text += result.text;
-    if (result.toolCalls.length === 0) return { ok: true, text };
+    if (result.toolCalls.length === 0) {
+      return { ok: true, text, stopReason: result.stopReason === 'max_tokens' ? 'max_tokens' : 'end' };
+    }
 
     conversation.push({ role: 'assistant', content: result.text, toolCalls: result.toolCalls });
     for (const call of result.toolCalls) {

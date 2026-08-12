@@ -52,7 +52,7 @@ export interface LlmInspectorEntry {
   toolCalls: ToolCall[];
   /** Tools that actually RAN as a result of this round trip, each with its own time (AC5). */
   tools: LlmInspectorTool[];
-  stopReason?: 'end' | 'tool_use';
+  stopReason?: 'end' | 'tool_use' | 'max_tokens';
   usage?: TokenUsage;
   /** The model as reported on the wire, never inferred from config (AC4). */
   model?: string;

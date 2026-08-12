@@ -64,7 +64,7 @@ describe('POST /invoke — chat path', () => {
     const artifactEvent = JSON.parse(events[artifactIndex]!.data) as { artifactId: string; displayName: string };
     expect(artifactEvent.displayName).toBe('My App');
     expect(artifactEvent.artifactId).toBe(stored[0]!.id);
-    expect(JSON.parse(events[doneIndex]!.data)).toEqual({ text: 'Here you go' });
+    expect(JSON.parse(events[doneIndex]!.data)).toEqual({ text: 'Here you go', stopReason: 'end' });
   });
 
   it('appends the user and assistant turns to the thread and feeds capped history back on the next turn', async () => {

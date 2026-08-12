@@ -96,6 +96,40 @@ describe('POST /invoke — runtime contract seat', () => {
   });
 });
 
+describe('TASK-20260812 AC1 — a responseSchema request is never bound by the contract cap', () => {
+  // Owner rule, recorded verbatim in the task file: "Never let a contract's
+  // maxOutputTokens bind a request that carries a responseSchema — structured replies
+  // must be allowed to finish." A structured reply cut off mid-JSON is unparseable and
+  // unretryable; the schema-less D4 test above stays the cap's positive case.
+  const SCHEMA_WIRE = buildAppRequest({
+    appId: 'chess',
+    instanceId: 'i1',
+    requestId: 'r1',
+    action: 'chat',
+    payload: { move: 'e4' },
+    responseSchema: { type: 'object', properties: { move: { type: 'string' } } },
+  });
+
+  it('drops the cap when the envelope carries a responseSchema', async () => {
+    const { calls, adapter } = spyAdapter(mockAdapter([{ text: '{"move":"e7e5"}' }]));
+    app = await buildTestApp({ adapter });
+
+    await post({ ...invokeBody(SCHEMA_WIRE), contract: { ...CONTRACT, maxOutputTokens: 512 } });
+
+    // The spy records null when the adapter received no cap at all.
+    expect(calls[0]!.maxOutputTokens).toBeNull();
+  });
+
+  it('the REST of the contract still rides the turn — only the cap is dropped', async () => {
+    const { calls, adapter } = spyAdapter(mockAdapter([{ text: '{"move":"e7e5"}' }]));
+    app = await buildTestApp({ adapter });
+
+    await post({ ...invokeBody(SCHEMA_WIRE), contract: { ...CONTRACT, maxOutputTokens: 512 } });
+
+    expect(calls[0]!.system).toContain('A chess app. You are the opponent; reply with one legal move.');
+  });
+});
+
 describe('F-M3 — the contract is parsed STRICT; a bad one is a 400, never a truncation', () => {
   it('rejects an over-bound overview', async () => {
     const { adapter } = spyAdapter(mockAdapter([{ text: '{}' }]));

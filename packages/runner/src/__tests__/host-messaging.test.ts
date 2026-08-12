@@ -193,6 +193,40 @@ describe('PARSE_FAILED strike budget (F8, R6)', () => {
     expect(ctx.budget.get('test-budget')).toBe(1);
   });
 
+  it('a cap-truncated unparseable reply is NOT a strike and names the cut-off, not the model (TASK-20260812 AC3)', async () => {
+    // The owner's unwinnable loop: stopReason max_tokens means the OUTPUT CAP cut the
+    // reply off — blaming the model ("not parseable JSON") and charging a strike turns
+    // a host-imposed limit into a parse-failure budget exhaustion the app cannot escape.
+    const ctx = await mount({
+      transportHandler: async () => ({ ok: true, text: '{"rows":[{"day":"Mon","count":3},{"day":"Tu', stopReason: 'max_tokens' }),
+    });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, messageFrame('req-1', instanceId));
+    await flush();
+    expect(ctx.budget.get('test-budget')).toBe(0);
+    expect(responsesFor(ctx, 'req-1').at(-1)).toMatchObject({
+      ok: false,
+      error: {
+        code: ERROR_CODES.HOST_ERROR,
+        message: expect.stringContaining('cut off'),
+        retryable: true,
+      },
+    });
+  });
+
+  it('a cap-truncated reply whose JSON still parses succeeds normally', async () => {
+    // max_tokens only matters when the parse fails — a reply that closed its object
+    // before the cut is complete enough to serve.
+    const ctx = await mount({
+      transportHandler: async () => ({ ok: true, text: '{"message":"done"}', stopReason: 'max_tokens' }),
+    });
+    const instanceId = await ctx.connect();
+    postFromApp(ctx.iframe, messageFrame('req-1', instanceId));
+    await flush();
+    expect(ctx.budget.get('test-budget')).toBe(0);
+    expect(responsesFor(ctx, 'req-1').at(-1)).toMatchObject({ ok: true, streaming: false, data: { message: 'done' } });
+  });
+
   it('a transport-level failure is NOT a strike — only terminal parse failures count (F8)', async () => {
     const ctx = await mount({
       transportHandler: async () => ({ ok: false, code: ERROR_CODES.NETWORK_ERROR, message: 'down', retryable: true }),

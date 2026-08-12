@@ -7,7 +7,18 @@ import type { DbRequestFrame, NetRequestFrame } from '@snugprotocol/protocol';
  * everything else to the app as a terminal error frame honoring `retryable`.
  */
 export type TransportResult =
-  | { ok: true; text: string }
+  | {
+      ok: true;
+      text: string;
+      /**
+       * Why the agent stopped, when the transport knows. `max_tokens` marks a reply the
+       * OUTPUT CAP cut off mid-generation: the host must not read its unparseable tail
+       * as model non-compliance — no PARSE_FAILED strike, and the app gets told the
+       * reply was cut off rather than "not JSON" (TASK-20260812 AC3). Transports that
+       * cannot know (older servers) omit it and keep today's behavior.
+       */
+      stopReason?: 'end' | 'max_tokens';
+    }
   | { ok: false; code: string; message: string; retryable: boolean };
 
 export interface AgentTransportOptions {
