@@ -997,3 +997,22 @@ Owner directed: fix all seven findings with the approach I recommended. Done, te
   reports NO status checks**, so every green on this branch is a local claim; (2)
   `DbDriverResult` still carries no affected-row count, so `executed` remains the
   re-validated number — queued as follow-up (d), deliberately not smuggled into this task.
+
+### 2026-08-12 — Claude (merge) — session
+
+- Done: **PR #35 MERGED** (squash, `71e557c` on `main`, merged 2026-08-12T03:42Z); the
+  feature branch is deleted locally and remotely. Verified AFTER the merge rather than
+  assumed: `main` runs **19/19 turbo tasks green, uncached**, and the three highest-impact
+  fixes are present in the merged tree (`nonDataStatementReason` in both the db guard and
+  the playground write handler, `trustedOrigin` in the import reconciler, and the
+  `contract` field in the HTTP transport body). Branch merged as a clean fast-forward —
+  `main` had not moved since the branch was cut, so what was tested locally is what landed.
+- **Merged with no CI and no second human reviewer.** PR #35 carried zero status checks,
+  so the only evidence for this merge is local runs plus the two fresh-context AI reviews;
+  the owner merged on that basis knowingly. Worth stating plainly because the P0 fix in
+  this branch was written and reviewed by the same agent.
+- State: **task COMPLETE and merged.** Task file moved `active/` → `done/`.
+- Next step: none for this task. Standing follow-ups remain in `docs/next-steps.md` —
+  most notably **there is still no CI on this repo**, which is what made this merge a
+  trust decision rather than a verified one.
+- Open questions: none.
