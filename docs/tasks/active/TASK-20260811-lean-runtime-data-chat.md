@@ -953,3 +953,47 @@ Owner directed: fix all seven findings with the approach I recommended. Done, te
   checks, so every green remains a local claim.
 - Open questions: none. One thing deliberately NOT done: `DbDriverResult` still carries no
   affected-row count, so `executed` remains the re-validated number (queued follow-up (d)).
+
+### 2026-08-11 — Claude (session close, Gate 6) — session
+
+- Done: Gate 6 as a VERIFICATION pass, each item checked against the repo rather than
+  re-asserted from the entries above:
+  - **Journal**: this session added three entries (pickup/lost-context, the PR-review +
+    type-check follow-up, and the seven review fixes). This is the fourth.
+  - **Lessons**: one new entry added this session — the gate/statement-class rule from the
+    P0 (when a human gate's whole impact signal is one metric, REFUSE the statement classes
+    that metric cannot describe; put the guard where preview and executor share one
+    definition; stateful C counters like `sqlite3_changes()` describe the last op that SET
+    them; **absence of local state is not consent**; and when a fix reddens existing
+    security tests, the tests are the hypothesis to check first — mine were right and my
+    approach was wrong). The earlier type-check entry was also updated in place with what
+    switching the guard on actually surfaced.
+  - **Spec-sync (C3)**: `packages/protocol` was touched by THIS session only in
+    `package.json` (the `tsc` prefix) and a new `tsconfig.test.json` — **build config, no
+    schema change** (verified by diffing those two files and confirming
+    `packages/protocol/schemas/` is byte-untouched across both commits). So no new
+    spec-changelog entry is owed; the branch's earlier internal-draft entries stand.
+    Nothing pushed — **AL-12 remains HELD**.
+  - **Docs drift fixed this session**: `pnpm run update-code-map` found REAL drift and
+    corrected it (db 201→294, adapters 103→106, server 110→123, playground 482→740,
+    starterDeclaration 19→31). Added a code-map row for the **data-lane execution surface**
+    (scratchRun + the shared statement guards incl. the new DML-only rule + the
+    transactional execute), which had no row at all, and a header note that the Tests
+    column now means "compiles AND passes" everywhere. Threat-model delta updated in the
+    fixes commit (DDL section + the corrected import-provenance rule).
+  - **Root-file sync rule**: `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` bodies verified
+    byte-identical below line 1 (md5 match); untouched by this session.
+  - **ADRs**: no new architectural decision this session. The fixes were corrections WITHIN
+    ADR-0018/0019's existing decisions, so those ADRs stand as accepted; the DML-only rule
+    is recorded where it is enforced (code-map + threat-model delta) rather than as a new
+    ADR.
+- State: **19/19 turbo tasks green, uncached — 2183 tests** (protocol 250, knowledge 164,
+  runner 108, db 294, server 123, adapters 106, sdk 41, auth 357, playground 740); root
+  build type-clean 9/9; working tree clean; **13 commits on the branch, 2 of them unpushed**
+  (`a48e3e1` type-check follow-up, `4404c40` the seven review fixes).
+- Next step: **push the 2 commits to update PR #35, then owner review → merge.** The task
+  file stays in `active/` until the branch merges (PROCESS: `done/` is merged-and-finished).
+- Open questions: none blocking. Two standing notes for the owner: (1) **PR #35 still
+  reports NO status checks**, so every green on this branch is a local claim; (2)
+  `DbDriverResult` still carries no affected-row count, so `executed` remains the
+  re-validated number — queued as follow-up (d), deliberately not smuggled into this task.
