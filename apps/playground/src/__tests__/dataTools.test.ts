@@ -311,3 +311,134 @@ describe('AC-F2-5 — the data lane cannot write code', () => {
     }
   });
 });
+
+/**
+ * R-B1 (2026-08-11): the approval card's only impact signal is the affected-row count, and
+ * `sqlite3_changes()` is 0 for ALL DDL — so `DROP TABLE expenses` previewed as
+ * "would affect 0 row(s)", the drift check compared 0 to 0 and passed, and the table was
+ * permanently gone. Reproduced end to end before the fix.
+ *
+ * Closed by CLASS, not by copy: the data lane is INSERT/UPDATE/DELETE only. The guard is
+ * `nonDataStatementReason` in `packages/db`, shared with the executor so the preview and
+ * the execution cannot disagree about what a write may contain.
+ */
+describe('R-B1 — the data lane is DML-only; DDL never reaches an approval card', () => {
+  it('refuses to PREVIEW a DROP TABLE, and stages nothing', async () => {
+    const { db, appId, proposals } = await ledger();
+
+    const out = await runTool(toolsFor(db, appId, proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ['DROP TABLE expenses'],
+      summary: 'Tidy up a stray label',
+    });
+
+    expect(out).toMatch(/^Error:/);
+    expect(out).toMatch(/DROP/i);
+    expect(proposals, 'nothing may be staged for approval').toHaveLength(0);
+  });
+
+  it('refuses every DDL shape that a row count cannot describe', async () => {
+    const { db, appId, proposals } = await ledger();
+    const tools = toolsFor(db, appId, proposals);
+    for (const sql of [
+      'ALTER TABLE expenses DROP COLUMN label',
+      'ALTER TABLE expenses RENAME TO gone',
+      'CREATE TABLE sneaky (a INTEGER)',
+      'DROP INDEX IF EXISTS idx',
+      'VACUUM',
+    ]) {
+      const out = await runTool(tools, DATA_PROPOSE_WRITE_TOOL_NAME, { statements: [sql], summary: 'x' });
+      expect(out, sql).toMatch(/^Error:/);
+    }
+    expect(proposals).toHaveLength(0);
+  });
+
+  it('refuses a batch where only ONE statement is DDL — all or nothing', async () => {
+    // The realistic smuggle: a plausible write beside a destructive one, where the card's
+    // row counts would look entirely normal for the batch as a whole.
+    const { db, appId, proposals } = await ledger();
+
+    const out = await runTool(toolsFor(db, appId, proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ["UPDATE expenses SET cents = 500 WHERE id = 1", 'DROP TABLE expenses'],
+      summary: 'Correct the coffee entry',
+    });
+
+    expect(out).toMatch(/^Error:/);
+    expect(proposals).toHaveLength(0);
+  });
+
+  it('still allows the writes the lane exists for', async () => {
+    const { db, appId, proposals } = await ledger();
+    const out = await runTool(toolsFor(db, appId, proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ["INSERT INTO expenses (id, label, cents) VALUES (7, 'lunch', 1240)"],
+      summary: 'Add a lunch expense',
+    });
+    expect(out).not.toMatch(/^Error:/);
+    expect(proposals).toHaveLength(1);
+  });
+
+  it('a DDL statement smuggled onto an APPROVED proposal is refused at execute time too', async () => {
+    // Defense in depth: the guard is re-applied at the execute gate, so a proposal object
+    // mutated between staging and approval cannot carry DDL through.
+    const { db, appId, proposals } = await ledger();
+    await runTool(toolsFor(db, appId, proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: ["UPDATE expenses SET cents = 500 WHERE id = 1"],
+      summary: 'Correct the coffee entry',
+    });
+    const tampered = { ...proposals[0]!, statements: ['DROP TABLE expenses'] };
+    const before = await bytes(db, appId);
+
+    const outcome = await executeApprovedWrite(db, tampered);
+
+    expect(outcome.ok).toBe(false);
+    expect(await bytes(db, appId), 'the real DB is untouched').toBe(before);
+  });
+});
+
+/**
+ * R-M4 (2026-08-11): the execute loop ran statements one at a time with no transaction, so
+ * a mid-batch failure left the data half-changed — while the UI rendered "the change could
+ * not be applied — nothing was changed", which was false. The user had no signal to go look.
+ */
+describe('R-M4 — an approved multi-statement write is all-or-nothing', () => {
+  it('rolls back the statements that already succeeded when a later one fails', async () => {
+    const { db, appId, proposals } = await ledger();
+    // Statement 2 violates NOT NULL, and the scratch dry run cannot see it coming because
+    // the app writes a conflicting row between preview and execute in the real world; here
+    // we stage a valid pair and then tamper, which reaches the same executor state.
+    await runTool(toolsFor(db, appId, proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: [
+        'DELETE FROM expenses WHERE id = 1',
+        "INSERT INTO expenses (id, label, cents) VALUES (8, 'ok', 1)",
+      ],
+      summary: 'Replace an entry',
+    });
+    const staged = proposals[0]!;
+    const tampered = {
+      ...staged,
+      statements: ['DELETE FROM expenses WHERE id = 1', 'INSERT INTO expenses (id, label, cents) VALUES (9, NULL, 1)'],
+    };
+    const before = await bytes(db, appId);
+
+    const outcome = await executeApprovedWrite(db, tampered);
+
+    expect(outcome.ok).toBe(false);
+    expect(await bytes(db, appId), 'a failed batch leaves NOTHING behind').toBe(before);
+  });
+
+  it('commits every statement when the whole batch succeeds', async () => {
+    const { db, appId, proposals } = await ledger();
+    await runTool(toolsFor(db, appId, proposals), DATA_PROPOSE_WRITE_TOOL_NAME, {
+      statements: [
+        "INSERT INTO expenses (id, label, cents) VALUES (10, 'book', 1200)",
+        "UPDATE expenses SET cents = 1300 WHERE id = 10",
+      ],
+      summary: 'Add and correct a book expense',
+    });
+
+    const outcome = await executeApprovedWrite(db, proposals[0]!);
+
+    expect(outcome.ok).toBe(true);
+    const check = await db.driver.handle(appId, execFrame('SELECT cents FROM expenses WHERE id = 10'));
+    expect(check.ok && check.rows?.[0]?.[0]).toBe(1300);
+  });
+});

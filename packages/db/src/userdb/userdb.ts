@@ -56,6 +56,7 @@ import {
   KV_TABLE_DDL,
   createDbDriver,
   forbiddenStatementReason,
+  isRowModifyingStatement,
   isSqlTailEmpty,
   normalizeCell,
   type DbPersistence,
@@ -406,6 +407,21 @@ export interface ConnectionRow {
   updatedAt: string;
 }
 
+/**
+ * Caller-supplied provenance for `importUserDb`.
+ *
+ * `trustedOrigin` says "these bytes came from the user's OWN configured sync origin" —
+ * true only for the recovery restore and the sync pull, which fetch from that origin
+ * themselves. A file the user picked off disk is NEVER trusted, however empty the hub is:
+ * emptiness cannot tell a restore from a hostile donor, but the caller can (R-M2).
+ *
+ * Deliberately absent-means-untrusted, so a new call site that forgets it gets the safe
+ * behavior rather than the convenient one.
+ */
+export interface UserDbImportOptions {
+  trustedOrigin?: boolean;
+}
+
 /** What `importUserDb` surfaces about the auth reconciliation passes (plan D5/N1). */
 export interface UserDbImportReport {
   /** Structurally unusable `snug_connections` rows that were dropped, with reasons. */
@@ -611,6 +627,15 @@ export interface UserDb {
   ): ChatMessage;
   /** Marks an already-stored message as bootstrap (review F9: the v1-artifact turn). */
   pinChatMessage(id: number): void;
+  /**
+   * Replace one message's `meta`, leaving content and pinning alone (R-M5).
+   *
+   * Exists so a resolved data-write proposal persists its outcome: without it, a reload
+   * re-renders an already-applied change as still awaiting approval. Narrow on purpose —
+   * meta is the only mutable column, because rewriting a stored message's CONTENT would
+   * let a later turn silently rewrite history the user already read.
+   */
+  updateChatMessageMeta(id: number, meta: unknown): void;
   /** Deletes unpinned messages beyond the newest `keepUnpinned`; pinned rows always survive. */
   pruneChatMessages(threadId: string, keepUnpinned: number): void;
   listThreads(): ChatThread[];
@@ -637,7 +662,7 @@ export interface UserDb {
    * Runs the delta-aware auth-spec reconciliation pass (plan D5/N1) — pull-merge,
    * applyRemote, recovery restore, and UI import all inherit it through here.
    */
-  importUserDb(bytes: Uint8Array): Promise<UserDbImportReport>;
+  importUserDb(bytes: Uint8Array, options?: UserDbImportOptions): Promise<UserDbImportReport>;
 
   flush(): Promise<void>;
   close(): Promise<void>;
@@ -2181,16 +2206,28 @@ function construct(
              * it re-ran the same arithmetic on both sides and got the same wrong answer.
              * Found by the P4 whole-surface review; regression-tested in scratch-run.
              *
-             * The count is attached to EVERY statement, including one with a `RETURNING`
-             * clause. Keying it on `columns.length === 0` meant a
+             * The count is attached to every MODIFYING statement, including one with a
+             * `RETURNING` clause. Keying it on `columns.length === 0` meant a
              * `DELETE … RETURNING id` carried rows but no count, so the card said
              * "0 row(s)" for a destructive statement and drift could never fire for it —
              * and the statement text is the model's to choose.
+             *
+             * But `sqlite3_changes()` is also STICKY (R-M1, 2026-08-11): it keeps
+             * reporting the last modifying statement's count for every statement that
+             * follows. A `DELETE` then `SELECT` batch therefore previewed as `[3, 3]`,
+             * and the approval card told the user a SELECT would change 3 rows. Worse,
+             * that second number is not an independent measurement — it is a copy of the
+             * first — so the TOCTOU drift check could never derive a real signal from it.
+             *
+             * The discriminator is the statement's KIND, not a runtime counter: a DELETE
+             * matching nothing must still report 0 (the user needs to see it), while a
+             * SELECT must report nothing at all. `total_changes()` cannot tell those two
+             * apart — both leave it untouched — which is why this keys off the verb.
              */
-            const changes = scratch.getRowsModified();
+            const modifies = isRowModifyingStatement(entry.sql);
             results.push({
               ...(columns.length > 0 ? { rows, columns } : {}),
-              changes,
+              ...(modifies ? { changes: scratch.getRowsModified() } : {}),
               ...(truncated ? { truncated, totalRows } : {}),
             });
           } catch (err) {
@@ -2622,6 +2659,14 @@ function construct(
       };
     },
 
+    updateChatMessageMeta(id, meta) {
+      assertOpen();
+      const metaJson = meta === undefined ? null : JSON.stringify(meta);
+      guardAddedBytes(metaJson?.length ?? 0, 'chat message meta');
+      // An unknown id updates zero rows — a stale click handler must not throw.
+      run(`UPDATE ${USERDB_TABLES.chatMessages} SET meta = ? WHERE id = ?`, [metaJson, id]);
+    },
+
     pinChatMessage(id) {
       assertOpen();
       run(`UPDATE ${USERDB_TABLES.chatMessages} SET pinned = 1 WHERE id = ?`, [id]);
@@ -2750,7 +2795,7 @@ function construct(
       }
     },
 
-    async importUserDb(bytes) {
+    async importUserDb(bytes, options) {
       assertOpen();
       if (bytes.byteLength > maxBytes) {
         throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `import is ${bytes.byteLength} bytes — cap is ${maxBytes}`);
@@ -2810,9 +2855,28 @@ function construct(
         const parsed = parseRuntimeContract(row[0] === null || row[0] === undefined ? null : String(row[0]));
         if (parsed !== undefined) localContractBytes.add(canonicalRuntimeContract(parsed));
       }
+      /**
+       * TRUSTED RESTORE (R-M2, 2026-08-11). Keying "known" off the open DB's contracts made
+       * an EMPTY hub mean "nothing is known", so every contract was nulled — and an empty
+       * hub is exactly what a legitimate restore looks like. Corruption recovery imports
+       * the user's own origin image into `openFresh()`, and a new device's first
+       * `pullMerge` does the same; both lost every contract permanently, since
+       * `needsSynthesizedContract` only fires on first build.
+       *
+       * The exemption is keyed on the CALLER, not on local state. "The hub is empty" cannot
+       * distinguish a restore from a hostile file — both arrive at an empty hub — so
+       * inferring trust from emptiness would trade AC-F1-7 away to fix a usability bug.
+       * What actually differs is provenance the caller knows and the bytes cannot forge:
+       * recovery and sync pull the image from the user's OWN configured sync origin, while
+       * a file the user picked off disk is an untrusted donor no matter how empty the hub.
+       * So `trustedOrigin` is passed in by those two call sites and defaults to false.
+       */
       const report: UserDbImportReport = {
         droppedConnections: reconcileImportedConnections(next, localApprovedConnections),
-        droppedRuntimeContracts: reconcileImportedRuntimeContracts(next, localContractBytes),
+        droppedRuntimeContracts:
+          options?.trustedOrigin === true
+            ? []
+            : reconcileImportedRuntimeContracts(next, localContractBytes),
       };
       // Close the inner driver FIRST: its cached app databases came from the old handle.
       // Its close-flush writes into the old handle, which is discarded right after.

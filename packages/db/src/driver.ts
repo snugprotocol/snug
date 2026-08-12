@@ -145,6 +145,54 @@ export function forbiddenStatementReason(sql: string): string | undefined {
   return undefined;
 }
 
+/**
+ * True when the statement's KIND modifies rows, so `sqlite3_changes()` describes IT.
+ *
+ * `getRowsModified()` is sticky — it keeps reporting the previous modifying statement's
+ * count for anything that follows — so a count must be attached by kind, not unconditionally
+ * (R-M1). Keyed on the verb rather than a runtime counter because a modifying statement
+ * that matched zero rows still needs to report 0, and no counter can distinguish that from
+ * a SELECT after the fact.
+ */
+export function isRowModifyingStatement(sql: string): boolean {
+  const cleaned = sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\n]*/g, ' ')
+    .trim();
+  return /^(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(cleaned);
+}
+
+/**
+ * The DATA-WRITE lane is DML-only: INSERT, UPDATE, DELETE and nothing else.
+ *
+ * Why a class allowlist rather than better copy on the card (R-B1, 2026-08-11): the data
+ * lane's single security control is a human approving a proposal, and the only impact
+ * signal that proposal carries is the affected-row count. `sqlite3_changes()` is 0 for ALL
+ * DDL, so `DROP TABLE expenses` previewed as "would affect 0 row(s)" — the most destructive
+ * statement available rendering as the most harmless, and the TOCTOU drift check comparing
+ * 0 to 0 and passing. Reproduced end to end: the table was gone, and unlike the feature
+ * lane the data lane has no versioning and no revert, so there was no way back.
+ *
+ * Restricting the class removes the primitive instead of relabeling it. It also matches
+ * what the lane is FOR — adding and correcting entries — while schema change keeps its own
+ * reviewed path through `schema_apply` (ADR-0010's verbatim-DDL registry) in the feature
+ * lane, which versions and reloads. A statement kind whose blast radius a row count cannot
+ * express does not belong behind a gate whose only signal is a row count.
+ *
+ * Lives beside `forbiddenStatementReason` deliberately: the scratch preview and the real
+ * executor must share one definition, or they can disagree about what a write may contain
+ * — and the preview is what the user approved.
+ */
+export function nonDataStatementReason(sql: string): string | undefined {
+  const cleaned = sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\n]*/g, ' ')
+    .trim();
+  if (/^(INSERT|UPDATE|DELETE)\b/i.test(cleaned)) return undefined;
+  const verb = /^\s*([A-Za-z]+)/.exec(cleaned)?.[1]?.toUpperCase() ?? 'that';
+  return `${verb} is not allowed in a data change — only INSERT, UPDATE and DELETE are. Schema changes go through the app's schema tools, not a data write.`;
+}
+
 /** Minimal structural view of window/document so lifecycle hooks need no DOM lib in node. */
 interface LifecycleTarget {
   addEventListener?: (type: string, listener: () => void) => void;

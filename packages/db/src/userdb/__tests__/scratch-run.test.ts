@@ -22,6 +22,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
+import { nonDataStatementReason } from '../../driver.js';
 import { execFrame, exportFrame, kvSetFrame, locateWasm } from '../../__tests__/helpers.js';
 import { createMemoryBackend, type MemoryBackend } from '../../persistence.js';
 import { openUserDb, type UserDb } from '../userdb.js';
@@ -176,6 +177,34 @@ describe('D7 — mutations physically cannot reach the real DB', () => {
     expect(result.statements[1]?.rows?.[0]?.[0]).toBe(1);
   });
 
+  /**
+   * `sqlite3_changes()` is STICKY: it keeps reporting the last MODIFYING statement's count
+   * for every statement that follows, until another modifying statement runs. Verified
+   * against the shipped sql.js: INSERT 3 rows then SELECT reports 3 for the SELECT.
+   *
+   * A count attached to a statement that modified nothing is not a harmless extra: it is
+   * rendered on the approval card as "— 3 row(s)" beside a SELECT, and it is fed to the
+   * TOCTOU drift check as if it were an independent measurement, when it is a copy of the
+   * previous statement's number. Absent is the honest answer, and `changes` is optional
+   * precisely so it can be absent.
+   */
+  it('does NOT attach a sticky row count to a statement that modified nothing', async () => {
+    const result = await db.scratchRun(appId, [
+      { sql: "DELETE FROM expenses WHERE label = 'coffee'" },
+      { sql: 'SELECT COUNT(*) FROM expenses' },
+    ]);
+    expect(result.statements[0]?.changes, 'the DELETE really did change 2 rows').toBe(2);
+    expect(result.statements[1]?.changes, 'a SELECT changes nothing — no count at all').toBeUndefined();
+  });
+
+  it('reports a real zero for a modifying statement that matched no rows', async () => {
+    // The negative half of the rule above: absent means "not a modifying statement",
+    // NOT "modified zero rows". A DELETE matching nothing must still say 0, or the
+    // approval card would render nothing for a statement the user should see.
+    const result = await db.scratchRun(appId, [{ sql: "DELETE FROM expenses WHERE label = 'nope'" }]);
+    expect(result.statements[0]?.changes).toBe(0);
+  });
+
   it('two scratch runs are independent — no state leaks between them', async () => {
     await db.scratchRun(appId, [{ sql: 'DELETE FROM expenses' }]);
     const second = await db.scratchRun(appId, [{ sql: 'SELECT COUNT(*) FROM expenses' }]);
@@ -311,5 +340,67 @@ describe('errors and edges', () => {
   it('an empty statement list is a no-op', async () => {
     const result = await db.scratchRun(appId, []);
     expect(result.statements).toEqual([]);
+  });
+});
+
+/**
+ * The data lane's write gate is the approval card, and the card's only impact signal is
+ * the affected-row count. `sqlite3_changes()` is 0 for ALL DDL, so `DROP TABLE expenses`
+ * renders as "would affect 0 row(s)" — the most destructive statements present as the most
+ * harmless, and the TOCTOU drift check compares 0 to 0 and passes. Unlike the feature lane
+ * there is no versioning and no revert, so a dropped table is simply gone.
+ *
+ * The honest fix is to close the class rather than describe it better: the data lane exists
+ * to add and correct ENTRIES, and schema change already has its own reviewed path through
+ * `schema_apply` (ADR-0010's verbatim-DDL registry) in the feature lane. This guard lives
+ * beside `forbiddenStatementReason` in the db package on purpose — the scratch preview and
+ * the real executor must not be able to disagree about what a data write may contain.
+ */
+describe('nonDataStatementReason — the data lane is DML-only (R-B1)', () => {
+  it('allows the three statement kinds the data lane exists for', () => {
+    for (const sql of [
+      "INSERT INTO expenses (label, cents) VALUES ('lunch', 1240)",
+      "UPDATE expenses SET cents = 1300 WHERE label = 'book'",
+      "DELETE FROM expenses WHERE id = 4",
+      "  insert into expenses (label) values ('x')", // leading space + lowercase
+      "/* a comment */ UPDATE expenses SET cents = 1",
+      "INSERT INTO expenses (label) VALUES ('x') RETURNING id",
+    ]) {
+      expect(nonDataStatementReason(sql), sql).toBeUndefined();
+    }
+  });
+
+  it('refuses DDL — the class whose destructiveness a row count cannot express', () => {
+    for (const sql of [
+      'DROP TABLE expenses',
+      'drop table expenses',
+      'ALTER TABLE expenses DROP COLUMN label',
+      'ALTER TABLE expenses RENAME TO gone',
+      'CREATE TABLE sneaky (a INTEGER)',
+      'CREATE INDEX i ON expenses (label)',
+      'DROP INDEX i',
+      'CREATE TRIGGER t AFTER INSERT ON expenses BEGIN SELECT 1; END',
+      'CREATE VIEW v AS SELECT * FROM expenses',
+      'DROP VIEW v',
+      'REINDEX',
+      'VACUUM',
+      'VACUUM INTO \'/tmp/out.db\'',
+      'ANALYZE',
+      '/* tidy up */ DROP TABLE expenses', // the comment-stripping path
+      '-- harmless\nDROP TABLE expenses',
+    ]) {
+      expect(nonDataStatementReason(sql), sql).toBeDefined();
+    }
+  });
+
+  it('refuses a bare SELECT in the WRITE lane — a proposal is for changes, not reads', () => {
+    // A read in a write proposal is how the sticky-count confusion reached the card in the
+    // first place. `data_query` is the read tool; the write lane has no business with one.
+    expect(nonDataStatementReason('SELECT * FROM expenses')).toBeDefined();
+  });
+
+  it('names the statement so the refusal tells the model what to do instead', () => {
+    expect(nonDataStatementReason('DROP TABLE expenses')).toMatch(/DROP/i);
+    expect(nonDataStatementReason('DROP TABLE expenses')).toMatch(/schema/i);
   });
 });

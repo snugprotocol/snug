@@ -73,6 +73,10 @@ export function createHttpTransport(invokeUrl: string, options: HttpTransportOpt
             message: wire,
             ...(options.threadId !== undefined ? { threadId: options.threadId } : {}),
             ...(options.model !== undefined ? { model: options.model } : {}),
+            // Omitted entirely when absent: the route distinguishes "no contract" from a
+            // present-but-empty one, and a legacy app must assemble byte-identically to
+            // before this feature existed (AC-F1-4).
+            ...(contract !== undefined ? { contract } : {}),
           }),
           signal,
         });

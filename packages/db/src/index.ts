@@ -5,6 +5,11 @@
 
 export {
   createDbDriver,
+  // The data lane's statement-class guards. Exported so the playground's write-proposal
+  // handler refuses out-of-class SQL with the SAME definition the executor uses — a second
+  // copy is a second thing to forget to update (R-B1).
+  nonDataStatementReason,
+  isRowModifyingStatement,
   type CreateDbDriverOptions,
   type DbDriverResult,
   type DbPersistence,

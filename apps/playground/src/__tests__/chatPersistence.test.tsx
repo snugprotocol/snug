@@ -105,6 +105,124 @@ describe('chat persistence (AC9)', () => {
   });
 });
 
+/**
+ * R-M5 (2026-08-11): a staged write proposal lived in React state only, so a reload left
+ * the assistant's persisted "waiting for your approval" text with no card and no route
+ * back to it — the chat making a durable claim the UI could not honor.
+ *
+ * Persisting it needs a staleness rule, which is why it was queued rather than rushed: the
+ * preview was computed against data that may have moved. The rule here is to rehydrate the
+ * card only as an UNRESOLVED proposal and let the existing execute-time drift guard do the
+ * deciding — the counts are re-validated against live data at approve, and a proposal whose
+ * data moved halts there exactly as it would have without a reload.
+ */
+describe('R-M5 — a staged write proposal survives a reload', () => {
+  const PROPOSAL = {
+    appId: 'app-1',
+    statements: ["INSERT INTO expenses (label, cents) VALUES ('lunch', 1240)"],
+    params: [[]],
+    summary: 'Add a £12.40 lunch',
+    previewed: [1],
+  };
+
+  it('rehydrates the approval card from the persisted message', async () => {
+    const db = await installTestUserDb();
+    db.upsertThread('app:m5', { appId: 'app-1' });
+    db.appendChatMessage('app:m5', 'user', 'add a lunch expense');
+    db.appendChatMessage('app:m5', 'assistant', 'I have proposed a change; it is waiting for your approval.', {
+      meta: { dataWrite: PROPOSAL },
+    });
+
+    const chat = renderChat('app:m5');
+    await settle();
+
+    const card = chat.chat().messages.find((m) => m.dataWrite !== undefined)?.dataWrite;
+    expect(card, 'the card the assistant text promises must come back').toBeDefined();
+    expect(card?.statements).toEqual(PROPOSAL.statements);
+    expect(card?.summary).toBe(PROPOSAL.summary);
+    expect(card?.outcome, 'it comes back UNRESOLVED — still awaiting approval').toBeUndefined();
+    chat.unmount();
+  });
+
+  it('rehydrates a RESOLVED proposal as settled, so an applied change cannot be re-applied', async () => {
+    const db = await installTestUserDb();
+    db.upsertThread('app:m5b', { appId: 'app-1' });
+    db.appendChatMessage('app:m5b', 'assistant', 'Applied.', {
+      meta: { dataWrite: { ...PROPOSAL, outcome: 'applied', executed: [1] } },
+    });
+
+    const chat = renderChat('app:m5b');
+    await settle();
+
+    expect(chat.chat().messages.find((m) => m.dataWrite !== undefined)?.dataWrite?.outcome).toBe('applied');
+    chat.unmount();
+  });
+
+  it('persists the RESOLUTION, so an applied change is not re-offered after a reload', async () => {
+    const db = await installTestUserDb();
+    db.upsertThread('app:m5d', { appId: 'app-1' });
+    const row = db.appendChatMessage('app:m5d', 'assistant', 'waiting', {
+      meta: { dataWrite: PROPOSAL },
+    });
+
+    const chat = renderChat('app:m5d');
+    await settle();
+    const card = chat.chat().messages.find((m) => m.dataWrite !== undefined)!;
+    act(() => chat.chat().declineDataWrite({ ...card.dataWrite!, messageRowId: row.id }, card.id));
+    await settle();
+    chat.unmount();
+
+    // A SECOND mount reads only what the DB holds — the true reload oracle.
+    const reloaded = renderChat('app:m5d');
+    await settle();
+    expect(
+      reloaded.chat().messages.find((m) => m.dataWrite !== undefined)?.dataWrite?.outcome,
+      'the decline must survive the reload',
+    ).toBe('declined');
+    reloaded.unmount();
+  });
+
+  it('keeps a co-existing artifact card when a data write resolves', async () => {
+    // `updateChatMessageMeta` replaces the whole meta blob, so resolving a proposal must
+    // MERGE rather than overwrite — one message can carry both cards.
+    const db = await installTestUserDb();
+    db.upsertThread('app:m5e', { appId: 'app-1' });
+    const row = db.appendChatMessage('app:m5e', 'assistant', 'built and proposed', {
+      meta: { artifact: { appId: 'app-1', displayName: 'Ledger', version: 2 }, dataWrite: PROPOSAL },
+    });
+
+    const chat = renderChat('app:m5e');
+    await settle();
+    const card = chat.chat().messages.find((m) => m.dataWrite !== undefined)!;
+    act(() => chat.chat().declineDataWrite({ ...card.dataWrite!, messageRowId: row.id }, card.id));
+    await settle();
+    chat.unmount();
+
+    const reloaded = renderChat('app:m5e');
+    await settle();
+    const message = reloaded.chat().messages.find((m) => m.dataWrite !== undefined);
+    expect(message?.artifact, 'the artifact card must not be collateral damage').toBeDefined();
+    expect(message?.dataWrite?.outcome).toBe('declined');
+    reloaded.unmount();
+  });
+
+  it('drops a structurally invalid persisted proposal rather than rendering a broken card', async () => {
+    // Same rule the artifact and directive seats follow: re-validated on every read, so an
+    // imported or corrupted row renders as no card at all rather than a card that lies.
+    const db = await installTestUserDb();
+    db.upsertThread('app:m5c', { appId: 'app-1' });
+    db.appendChatMessage('app:m5c', 'assistant', 'waiting', {
+      meta: { dataWrite: { appId: 'app-1', summary: 'no statements' } },
+    });
+
+    const chat = renderChat('app:m5c');
+    await settle();
+
+    expect(chat.chat().messages.find((m) => m.dataWrite !== undefined)).toBeUndefined();
+    chat.unmount();
+  });
+});
+
 describe('subscription mode is client-authoritative (AC13/F4)', () => {
   it('fetches the artifact HTML from the hub cache and versions the pinned app in the user DB', async () => {
     const db = await installTestUserDb();

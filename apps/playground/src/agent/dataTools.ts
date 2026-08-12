@@ -29,8 +29,13 @@
  */
 
 import type { AgentTool } from '@snugprotocol/adapters';
-import type { UserDb, ScratchStatementResult } from '@snugprotocol/db';
+import { nonDataStatementReason, type UserDb, type ScratchStatementResult } from '@snugprotocol/db';
 import { getToolPrompt } from '@snugprotocol/knowledge';
+import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
+
+/** Instance id for host-issued approved writes — never an app's own instance. */
+const APPROVED_WRITE_INSTANCE = 'host-approved-write';
+let approvedSeq = 0;
 
 export const DATA_QUERY_TOOL_NAME = 'data_query';
 export const DATA_PROPOSE_WRITE_TOOL_NAME = 'data_propose_write';
@@ -170,6 +175,21 @@ export function buildDataTools(options: BuildDataToolsOptions): AgentTool[] {
       if (typeof input.summary !== 'string' || input.summary.trim() === '') {
         return 'Error: "summary" must describe the change in plain language for the user to approve.';
       }
+      /**
+       * DML ONLY, checked BEFORE the dry run (R-B1).
+       *
+       * `sqlite3_changes()` is 0 for every DDL statement, so a `DROP TABLE` would preview
+       * as "would affect 0 row(s)" — the most destructive statement available rendering as
+       * the most harmless on the one card the user is asked to judge. The drift guard could
+       * not help either: it compares 0 to 0 and agrees. The data lane exists to add and
+       * correct ENTRIES; schema change keeps its own reviewed path through the feature
+       * lane, which versions and reloads. Refusing the whole batch (not filtering it) keeps
+       * the approved SQL exactly the SQL the model proposed.
+       */
+      const outOfClass = statements.map((sql) => nonDataStatementReason(sql)).find((r) => r !== undefined);
+      if (outOfClass !== undefined) {
+        return `Error: ${outOfClass}`;
+      }
       const params = normalizeParams(input.params, statements.length);
       try {
         const db = await getDb();
@@ -229,6 +249,26 @@ export async function executeApprovedWrite(
   proposal: PendingWriteProposal,
 ): Promise<ExecuteApprovedWriteOutcome> {
   const entries = proposal.statements.map((sql, i) => ({ sql, params: proposal.params[i] ?? [] }));
+  /**
+   * The class guard again, at the gate that actually touches data (R-B1, defense in depth).
+   * The propose handler refuses DDL before staging, so reaching here with any means the
+   * proposal was mutated after the user approved it — exactly the case a second check is
+   * for. Cheap, and it keeps the two ends of the approval honest about the same rule.
+   */
+  const outOfClass = proposal.statements.map((sql) => nonDataStatementReason(sql)).find((r) => r !== undefined);
+  if (outOfClass !== undefined) return { ok: false, reason: 'failed', message: outOfClass };
+
+  const exec = (sql: string, params: unknown[] = []): Promise<{ ok: boolean; message?: string }> =>
+    db.driver.handle(proposal.appId, {
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.dbRequest,
+      requestId: `approved-${approvedSeq++}`,
+      instanceId: APPROVED_WRITE_INSTANCE,
+      op: 'exec',
+      sql,
+      params,
+    });
+
   try {
     const dryRun = await db.scratchRun(proposal.appId, entries);
     const failure = dryRun.statements.find((statement) => statement.error !== undefined);
@@ -242,19 +282,31 @@ export async function executeApprovedWrite(
       return { ok: false, reason: 'drifted', previewed: proposal.previewed, current };
     }
 
-    // Now — and only now — the real executor.
-    for (const [index, entry] of entries.entries()) {
-      const result = await db.driver.handle(proposal.appId, {
-        v: 1,
-        type: 'db-request',
-        id: `approved-${index}`,
-        op: 'exec',
-        sql: entry.sql,
-        params: entry.params as unknown[],
-      } as never);
+    /**
+     * ALL OR NOTHING (R-M4). The loop used to run statements one at a time with no
+     * transaction, so a mid-batch failure left the data half-changed — while the UI said
+     * "the change could not be applied — nothing was changed". That copy is only true if
+     * it is MADE true here: a two-statement "delete the old row, insert the corrected one"
+     * that failed on the insert silently destroyed the row and reported success-of-nothing.
+     *
+     * The dry run passing is not a guarantee the batch will apply: it ran against a
+     * snapshot, and the app owns the live DB in between.
+     */
+    const begin = await exec('BEGIN IMMEDIATE');
+    if (!begin.ok) {
+      return { ok: false, reason: 'failed', message: begin.message ?? 'could not start a transaction' };
+    }
+    for (const entry of entries) {
+      const result = await exec(entry.sql, entry.params as unknown[]);
       if (!result.ok) {
+        await exec('ROLLBACK'); // best effort: the failure below is what the user is told
         return { ok: false, reason: 'failed', message: result.message ?? 'the write was refused' };
       }
+    }
+    const commit = await exec('COMMIT');
+    if (!commit.ok) {
+      await exec('ROLLBACK');
+      return { ok: false, reason: 'failed', message: commit.message ?? 'the change could not be committed' };
     }
     /**
      * `executed` is the RE-VALIDATED count, not the previewed one.

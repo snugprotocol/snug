@@ -891,3 +891,65 @@ REPRODUCED BY EXECUTION by me before reporting** — neither is a review hypothe
   `forbiddenStatementReason` (my recommendation — the guard belongs where the real executor
   and the scratch preview cannot disagree, and `schema_apply` already owns the reviewed DDL
   path) or a card that states non-row-count impact; owner's call.
+
+### 2026-08-11 — Claude (pickup, review fixes) — session
+
+Owner directed: fix all seven findings with the approach I recommended. Done, tests-first
+(every test shown red for the right reason first).
+
+- **R-B1 (P0) — DML-only data lane.** New `nonDataStatementReason` in `packages/db/driver.ts`,
+  beside `forbiddenStatementReason` for the stated reason: the scratch PREVIEW and the real
+  EXECUTOR must share one definition or they can disagree about what the user approved.
+  Applied at the propose handler (before staging, so DDL never reaches a card) and AGAIN at
+  the execute gate (defense in depth: a proposal mutated after approval). Refuses the whole
+  BATCH rather than filtering it, so approved SQL stays exactly the SQL proposed.
+  **Verified by re-running the original exploit**: `DROP TABLE expenses` now returns
+  `Error: DROP is not allowed in a data change…`, stages nothing, all 3 rows intact.
+- **R-B2 — subscription contract.** One-line body fix plus the three seam tests that were
+  missing; `contract` is OMITTED (not null) when absent, so a legacy app assembles
+  byte-identically (AC-F1-4). Also pinned the per-send read with a two-turn test.
+- **R-M1 — sticky row counts.** `changes` is now attached by statement KIND via
+  `isRowModifyingStatement`, not unconditionally. Probed the shipped sql.js first to
+  confirm the semantics: INSERT 3 → SELECT still reports 3. `total_changes()` was the
+  obvious discriminator and is WRONG — it cannot distinguish a zero-row DELETE (which must
+  still report 0) from a SELECT (which must report nothing), which is why this keys off the
+  verb. The pre-existing DELETE-then-SELECT test asserted `[0].changes` and `[1].rows` but
+  never `[1].changes`; it does now.
+- **R-M2 — fresh-hub import.** **My first attempt was wrong and the existing tests caught
+  it.** I keyed the exemption on "the hub has no apps", which failed three AC-F1-7 tests —
+  correctly, because a hostile donor arrives at exactly the same empty hub a legitimate
+  restore does, so emptiness cannot carry the distinction and inferring trust from it would
+  have traded a security guarantee for a usability fix. Re-done keyed on the CALLER: a new
+  `UserDbImportOptions.trustedOrigin`, set only by the recovery restore and the sync pull
+  (both of which fetch from the user's own configured origin), absent-means-untrusted so a
+  future call site that forgets it gets the safe behavior. A user-picked file into an empty
+  hub is still fully guarded — that is now its own test.
+- **R-M3 — abort during classify.** `controller.signal.aborted` checked before the clarify
+  branch. The check is at the CALLER, not in the router, because whether the user is still
+  waiting is the caller's knowledge, not the classifier's. New test asserts what was
+  PERSISTED (zero messages), which is where the defect actually lived — the existing test
+  asserted only signal propagation.
+- **R-M4 — transactional writes.** The approved batch runs inside `BEGIN IMMEDIATE` /
+  `COMMIT` with rollback on any failure, so the UI's "nothing was changed" is now made true
+  rather than merely asserted. Also replaced a stale `as never`-cast db frame at that call
+  site (`type: 'db-request'` + `id`) with the real `FRAME_TYPES.dbRequest` shape — the same
+  drift the type-check follow-up found in the test helper.
+- **R-M5 — proposal persistence.** Staged proposals persist on message meta with
+  validate-on-read (an invalid row renders NO card, matching the artifact/directive seats).
+  Resolutions persist too, via a new narrow `updateChatMessageMeta` in `packages/db` —
+  narrow on purpose: meta is the only mutable column, since rewriting stored CONTENT would
+  let a later turn silently rewrite history the user already read. It MERGES rather than
+  replaces, because one message can carry both an artifact card and a data-write card
+  (its own test). Not re-previewed on rehydration: the execute path already re-runs the dry
+  run and halts on drift, so a stale card cannot execute a stale change.
+  **Worth recording:** I probed whether re-approving an already-applied proposal was
+  actually harmful before building this. It failed safely in the fixture (UNIQUE
+  constraint) — but that is incidental to the fixture, and a constraint-free INSERT would
+  duplicate silently, so the persistence is warranted rather than belt-and-braces.
+- **State: 19/19 turbo tasks green, uncached — 2183 tests** (protocol 250, knowledge 164,
+  runner 108, db 294, server 123, adapters 106, sdk 41, auth 357, playground 740); root
+  build type-clean 9/9. No test deleted or weakened.
+- Next step: **owner review → PR #35 update → merge.** Note PR #35 still reports NO status
+  checks, so every green remains a local claim.
+- Open questions: none. One thing deliberately NOT done: `DbDriverResult` still carries no
+  affected-row count, so `executed` remains the re-validated number (queued follow-up (d)).

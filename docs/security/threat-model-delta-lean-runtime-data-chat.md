@@ -30,7 +30,8 @@ whole-artifact cap):
 | Post-turn synthesis | Same `safeParse`; tool-free turn; failure leaves the app contract-less |
 | Starter manifest | Same `safeParse` at install; never overwrites an existing contract |
 | `/invoke` body | Same schema at the route; over-bound/extra-field/wrong-type ⇒ 400 before any adapter call; covered by the C1 credential scan |
-| Whole-DB import (incl. **sync pull**) | Dropped unless canonically byte-identical to a contract the hub already holds |
+| Whole-DB import from an untrusted donor (a file the user picked) | Dropped unless canonically byte-identical to a contract the hub already holds |
+| Restore from the user's OWN sync origin (recovery restore, sync pull) | Kept — the caller declares `trustedOrigin`; see below |
 
 **Import is the sharpest case.** A user database is a file that can arrive from anywhere —
 a backup, a sync remote, someone else's export. Accepting its contracts would let a foreign
@@ -38,6 +39,23 @@ file dictate the model's instructions for apps the user already trusts. So an im
 contract survives only when its canonical bytes match one the importing hub already knows;
 everything else is dropped and reported in `UserDbImportReport.droppedRuntimeContracts`.
 The affected app runs contract-less — degraded, never compromised.
+
+*Corrected 2026-08-11 (review finding R-M2).* As first written, "known" was read off the
+CURRENTLY OPEN database, so an EMPTY hub meant "nothing is known" and every imported
+contract was nulled — and an empty hub is exactly what a legitimate restore looks like.
+Corruption recovery imports the user's own origin image into `openFresh()`, and a new
+device's first pull does the same, so the one case this guard exists to protect (a backup
+round trip must not silently degrade every app) was the case it broke, permanently:
+`needsSynthesizedContract` only fires on first build, so an existing app never regained one.
+
+The exemption is keyed on the **caller**, not on local state. "The hub is empty" cannot
+carry the distinction — a hostile donor arrives at exactly the same empty hub a restore
+does — so trusting emptiness would trade this guarantee away to fix a usability bug. What
+actually differs is provenance the bytes cannot forge: the recovery restore and the sync
+pull fetch from the user's own configured origin and pass `trustedOrigin: true`. The flag is
+absent-means-untrusted, so a future call site that forgets it gets the safe behavior rather
+than the convenient one, and a user-picked file into an empty hub remains fully guarded
+(its own negative test).
 
 *Verified during implementation:* all three sync entry points (`pullMerge` in
 `sync/loop.ts`, the recovery restore in `sync/recovery.ts`, and the playground's manual
@@ -80,6 +98,30 @@ execution-guarded, because it is the app's own data.
 proposal; only the user's approve action calls `executeApprovedWrite`, which is host code
 the model cannot invoke. At execution the dry run is re-run and execution HALTS if the
 affected-row counts have drifted from what was approved (TOCTOU).
+
+**The write lane is DML-only** (added 2026-08-11 by review finding R-B1, which was
+reproduced end to end before the fix). `nonDataStatementReason` restricts an approved data
+change to INSERT/UPDATE/DELETE; it is applied when the proposal is staged and re-applied at
+the execute gate, and it lives in `packages/db` beside the other statement guards so the
+scratch preview and the real executor cannot disagree about what a write may contain.
+
+The reason the class is closed rather than merely described better: the approval card's ONLY
+impact signal is the affected-row count, and `sqlite3_changes()` is **0 for all DDL**. So
+`DROP TABLE expenses` previewed as "would affect 0 row(s)" — the most destructive statement
+available rendering as the most harmless on the one control the user is asked to judge — and
+the TOCTOU guard could not help, because it compared 0 to 0 and agreed. Unlike the feature
+lane, the data lane has no versioning and no revert, so the table was simply gone. A
+statement kind whose blast radius a row count cannot express does not belong behind a gate
+whose only signal is a row count; schema change keeps its own reviewed path through
+`schema_apply` (ADR-0010's verbatim-DDL registry), which versions and reloads. This is the
+same FAMILY as the earlier whole-surface-review blocker but a different instance: that one
+fixed the count being *dropped*, this one closes the count being legitimately *0 while the
+statement is destructive*.
+
+**Approved writes are atomic** (R-M4). The execute loop runs inside `BEGIN IMMEDIATE` /
+`COMMIT` and rolls back on any failure. Previously a mid-batch failure left the data
+half-changed while the UI stated "nothing was changed" — the copy is now made true rather
+than merely asserted.
 
 **Statement guards** are shared with the real executor rather than copied:
 single-statement, no `ATTACH`, no `load_extension`, no `PRAGMA writable_schema`. The

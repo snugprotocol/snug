@@ -196,6 +196,47 @@ describe('F-M4a — the classifier takes the turn’s abort signal', () => {
 
     expect(sawSignal?.aborted, 'leaving the view must not leave a headless request').toBe(true);
   });
+
+  /**
+   * R-M3 (2026-08-11): the adapters collapse a user abort into the same `ok:false` a model
+   * failure produces, and `routeChatMessage` maps every `ok:false` to the clarify lane —
+   * which PERSISTS both sides. So cancelling a turn wrote a canned assistant reply the
+   * model never produced, attributed to it, and durable.
+   *
+   * Second-order and worse: that fabricated pair becomes real history, so it steers the
+   * NEXT turn's classifier and the app-turn context. A cancelled turn must leave no trace
+   * beyond the settled placeholder — which is exactly how every other cancellation in this
+   * hook behaves.
+   *
+   * The assertion is on what was PERSISTED, not on signal propagation (the test above
+   * already covers that) — persistence is where the defect actually lived.
+   */
+  it('a turn cancelled DURING classification persists nothing (R-M3)', async () => {
+    classifierBehavior = 'hang';
+    const { chat } = renderChat();
+
+    act(() => chat().send('how much did I spend on food?'));
+    await settle();
+    act(() => chat().stop());
+    await settle();
+
+    expect(
+      db.listChatMessages(THREAD),
+      'a cancelled turn must not invent an assistant reply',
+    ).toHaveLength(0);
+  });
+
+  it('stops spinning when cancelled during classification (no forever-placeholder)', async () => {
+    classifierBehavior = 'hang';
+    const { chat } = renderChat();
+
+    act(() => chat().send('how much did I spend on food?'));
+    await settle();
+    act(() => chat().stop());
+    await settle();
+
+    expect(chat().messages.some((m) => m.streaming === true)).toBe(false);
+  });
 });
 
 describe('F-M4c — a thrown classifier error routes to clarify, not to TURN_FAILED', () => {

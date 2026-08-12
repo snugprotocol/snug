@@ -76,6 +76,14 @@ export interface DataWriteCardState extends PendingWriteProposal {
   outcome?: 'applied' | 'declined' | 'drifted' | 'failed';
   /** Rows actually affected, recorded once applied. */
   executed?: number[];
+  /**
+   * The USER-DB row this card is persisted on, so resolving it can persist too (R-M5).
+   *
+   * Absent until the turn finalizes (the row does not exist while the turn is streaming)
+   * and on any card whose message predates this field — resolution then stays in-memory
+   * for that session, which is the pre-R-M5 behavior rather than a new failure.
+   */
+  messageRowId?: number;
 }
 
 /**
@@ -142,6 +150,77 @@ interface PersistedMeta {
   wireText?: string;
   /** The VALIDATED render directive — the only directive shape that persists (M1). */
   directive?: RenderDirective;
+  /** A staged/resolved data-write proposal, so the card survives a reload (R-M5). */
+  dataWrite?: DataWriteCardState;
+}
+
+/**
+ * Persist a resolved proposal's outcome onto its stored message (R-M5).
+ *
+ * Without this, approving a change and reloading re-renders the card as still pending and
+ * offers "apply" a second time — and the drift guard cannot always save that, since an
+ * INSERT into a table with no unique constraint re-applies cleanly.
+ *
+ * Best-effort by design: a card with no `messageRowId` (turn still streaming, or a message
+ * that predates the field) keeps its in-memory resolution, which is exactly the behavior
+ * before this fix. Failing to write an audit field must never break the surface that just
+ * successfully applied the user's change.
+ */
+function persistResolution(
+  db: {
+    updateChatMessageMeta(id: number, meta: unknown): void;
+    listChatMessages(threadId: string): { id: number; meta?: unknown }[];
+  },
+  threadId: string,
+  proposal: DataWriteCardState,
+  resolved: DataWriteCardState,
+): void {
+  const rowId = proposal.messageRowId;
+  if (rowId === undefined) return;
+  try {
+    // MERGE, never replace: the same message can also carry an artifact card or a render
+    // directive, and resolving a data write must not delete them.
+    const existing = db.listChatMessages(threadId).find((m) => m.id === rowId)?.meta;
+    const base = typeof existing === 'object' && existing !== null ? (existing as PersistedMeta) : {};
+    db.updateChatMessageMeta(rowId, { ...base, dataWrite: resolved });
+  } catch {
+    // The change itself already landed; an unwritable audit field is not worth a throw.
+  }
+}
+
+/**
+ * Rebuild a data-write card from a persisted row, or `undefined` if the row cannot be
+ * trusted to render one (R-M5).
+ *
+ * Validated on every READ rather than on write alone, matching the artifact and directive
+ * seats: these rows travel through export/import and sync, so a shape that drifted or was
+ * crafted elsewhere must render as NO card rather than as a card that misrepresents what
+ * the user would be approving.
+ *
+ * Deliberately NOT re-previewed here. The counts were computed when the proposal was
+ * staged and the data may have moved since — but `executeApprovedWrite` already re-runs
+ * the dry run at approve time and halts on drift, so a stale card cannot execute a stale
+ * change. Re-previewing on every rehydration would mean a scratch run per render for a
+ * number the execute path recomputes anyway.
+ */
+function metaToDataWrite(meta: unknown): DataWriteCardState | undefined {
+  if (typeof meta !== 'object' || meta === null) return undefined;
+  const staged = (meta as PersistedMeta).dataWrite;
+  if (staged === undefined || typeof staged !== 'object') return undefined;
+  const { appId, statements, params, summary, previewed, outcome, executed } = staged;
+  if (typeof appId !== 'string' || typeof summary !== 'string') return undefined;
+  if (!Array.isArray(statements) || statements.length === 0) return undefined;
+  if (!statements.every((sql) => typeof sql === 'string')) return undefined;
+  if (!Array.isArray(previewed) || !previewed.every((n) => typeof n === 'number')) return undefined;
+  return {
+    appId,
+    statements,
+    params: Array.isArray(params) ? params : statements.map(() => []),
+    summary,
+    previewed,
+    ...(outcome !== undefined ? { outcome } : {}),
+    ...(Array.isArray(executed) ? { executed } : {}),
+  };
 }
 
 let messageSeq = 0;
@@ -297,12 +376,14 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 // Re-validated strictly on every read (D9): an imported row whose
                 // directive grew fields renders as no card at all.
                 const directive = metaToDirective(m.meta);
+                const dataWrite = metaToDataWrite(m.meta);
                 return {
                   id: ++messageSeq,
                   role: m.role === 'user' ? ('user' as const) : ('agent' as const),
                   displayText: m.content,
                   ...(artifact !== undefined ? { artifact } : {}),
                   ...(directive !== undefined && directive.kind === AUTH_WIZARD_DIRECTIVE_KIND ? { directive } : {}),
+                  ...(dataWrite !== undefined ? { dataWrite } : {}),
                 };
               }),
       );
@@ -343,7 +424,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       const controller = new AbortController();
       abortRef.current = controller;
       /** True once this turn has staged a write proposal — one card per turn (see below). */
-      const stagedProposal = { current: false };
+      // Holds the proposal itself (not just a flag) so turn finalization can persist it
+      // onto the assistant message's meta — the card must survive a reload (R-M5).
+      const stagedProposal: { current: DataWriteCardState | undefined } = { current: undefined };
       /** Per-turn state for bootstrap pinning (F9) + artifact-card persistence. */
       const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean } = { installedV1: false };
       /** Subscription-mode artifact fetch+write runs detached — awaited before the turn finalizes. */
@@ -395,6 +478,25 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         // The CLARIFY lane settles here and returns: no builder turn runs, no tool is
         // offered, and the exchange persists like any other so it survives a reload
         // (F-M4b — the placeholder must never be left spinning).
+        /**
+         * A CANCELLED turn is not a clarification (R-M3). The adapters collapse a user
+         * abort into the same `ok:false` a model failure produces, and the router maps
+         * every `ok:false` to the clarify lane — so without this check, pressing stop
+         * persisted a canned assistant reply the model never produced, which then became
+         * real history steering the next turn's classifier.
+         *
+         * Checked before the clarify branch rather than inside the router because the
+         * router is a pure classification function: whether the user is still waiting for
+         * an answer is the caller's knowledge, not the classifier's.
+         */
+        if (controller.signal.aborted) {
+          patchMessage(agentId, { streaming: false });
+          setBusy(false);
+          setActivity(undefined);
+          abortRef.current = null;
+          return;
+        }
+
         if (route?.lane === 'clarify') {
           db.upsertThread(threadId, {
             ...(pinnedAppId !== undefined ? { appId: pinnedAppId } : {}),
@@ -446,8 +548,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
              * can tell the user rather than believing both are pending.
              */
             onProposal: (proposal) => {
-              if (stagedProposal.current) return false;
-              stagedProposal.current = true;
+              if (stagedProposal.current !== undefined) return false;
+              stagedProposal.current = proposal;
               patchMessage(agentId, { dataWrite: proposal });
               return true;
             },
@@ -636,7 +738,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             // F9: the turn that produced v1 is the bootstrap — pin both sides of it.
             if (turn.installedV1 && turn.userDbId !== undefined) db.pinChatMessage(turn.userDbId);
             const meta: PersistedMeta | undefined =
-              turn.artifact !== undefined || directive !== undefined
+              turn.artifact !== undefined || directive !== undefined || stagedProposal.current !== undefined
                 ? {
                     ...(turn.artifact !== undefined
                       ? {
@@ -650,12 +752,23 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                     // M1: the persisted directive is the VALIDATED shape — evidence-free
                     // by construction (the schema has no such field).
                     ...(directive !== undefined ? directiveToMeta(directive) : {}),
+                    // R-M5: the assistant's text says a change is awaiting approval, so the
+                    // card it refers to has to outlive the React tree that rendered it.
+                    ...(stagedProposal.current !== undefined ? { dataWrite: stagedProposal.current } : {}),
                   }
                 : undefined;
-            db.appendChatMessage(threadId, 'assistant', finalText, {
+            const stored = db.appendChatMessage(threadId, 'assistant', finalText, {
               ...(turn.installedV1 ? { pinned: true } : {}),
               ...(meta !== undefined ? { meta } : {}),
             });
+            // R-M5: hand the card the row it now lives on, so approve/decline can persist
+            // their outcome instead of leaving a reload to re-offer an applied change.
+            if (stagedProposal.current !== undefined) {
+              const rowId = stored.id;
+              patchMessage(agentId, (m) => ({
+                dataWrite: { ...(m.dataWrite ?? stagedProposal.current!), messageRowId: rowId },
+              }));
+            }
           }
         } else {
           patchMessage(agentId, {
@@ -697,13 +810,13 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       const db = await getUserDb();
       const { executeApprovedWrite } = await import('./dataTools.js');
       const outcome = await executeApprovedWrite(db, proposal);
-      patchMessage(messageId, (m) => ({
-        dataWrite: {
-          ...(m.dataWrite ?? proposal),
-          outcome: outcome.ok ? ('applied' as const) : outcome.reason === 'drifted' ? ('drifted' as const) : ('failed' as const),
-          ...(outcome.ok ? { executed: outcome.executed } : {}),
-        },
-      }));
+      const resolved: DataWriteCardState = {
+        ...proposal,
+        outcome: outcome.ok ? ('applied' as const) : outcome.reason === 'drifted' ? ('drifted' as const) : ('failed' as const),
+        ...(outcome.ok ? { executed: outcome.executed } : {}),
+      };
+      patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), ...resolved } }));
+      persistResolution(db, threadId, proposal, resolved);
       } finally {
         approvalsInFlight.current.delete(messageId);
       }
@@ -712,7 +825,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
 
   const declineDataWrite = useCallback((proposal: DataWriteCardState, messageId: number): void => {
     // Nothing to undo: a proposal never touched the real database.
-    patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), outcome: 'declined' as const } }));
+    const resolved: DataWriteCardState = { ...proposal, outcome: 'declined' as const };
+    patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), ...resolved } }));
+    void (async () => persistResolution(await getUserDb(), threadId, proposal, resolved))();
   }, [patchMessage]);
 
   const stop = useCallback((): void => {
