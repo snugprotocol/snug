@@ -1,0 +1,39 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Snug main window. C2 note (AC7): capabilities are scoped to the top-level main window ONLY \u2014 the sandboxed app iframes must never reach the IPC bridge; the in-shell hard gate asserts unreachability from inside a srcdoc iframe.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "opener:allow-open-url",
+    "oauth:allow-start",
+    "oauth:allow-cancel",
+    {
+      "identifier": "http:default",
+      "allow": [
+        {
+          "url": "https://**"
+        },
+        {
+          "url": "http://10.*.*.*:*"
+        },
+        {
+          "url": "http://172.*.*.*:*"
+        },
+        {
+          "url": "http://192.168.*.*:*"
+        },
+        {
+          "url": "http://127.0.0.1:*"
+        },
+        {
+          "url": "http://localhost:*"
+        }
+      ]
+    }
+  ]
+}

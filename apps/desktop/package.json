@@ -1,0 +1,45 @@
+{
+  "name": "desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Snug desktop hub \u2014 Tauri 2 shell around the playground (BYOK/local only)",
+  "license": "MIT",
+  "scripts": {
+    "dev:web": "vite --port 41419 --strictPort",
+    "build:web": "tsc -p tsconfig.json --noEmit && vite build",
+    "build": "pnpm build:web",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "bundle": "tauri build",
+    "test": "tsc -p tsconfig.test.json && vitest run",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+  },
+  "dependencies": {
+    "@mlc-ai/web-llm": "0.2.84",
+    "@snugprotocol/adapters": "workspace:*",
+    "@snugprotocol/auth": "workspace:*",
+    "@snugprotocol/db": "workspace:*",
+    "@snugprotocol/knowledge": "workspace:*",
+    "@snugprotocol/protocol": "workspace:*",
+    "@snugprotocol/runner": "workspace:*",
+    "@snugprotocol/sdk": "workspace:*",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-http": "^2.5.9",
+    "@tauri-apps/plugin-opener": "^2.5.0",
+    "react": "^18",
+    "react-dom": "^18",
+    "react-router-dom": "^6.26.0",
+    "sql.js": "^1.13.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@vitejs/plugin-react": "^4.3.0",
+    "fake-indexeddb": "^6.0.1",
+    "jsdom": "^30.0.1",
+    "vite": "^5.4.0"
+  }
+}
