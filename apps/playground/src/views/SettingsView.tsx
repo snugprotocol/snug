@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import {
+  availableModes,
   confirmEndpoints,
   getByokKey,
   setByokKey,
@@ -15,7 +16,10 @@ import {
   useModel,
   useProvider,
   type ByokProvider,
+  type PlaygroundMode,
 } from '../state/mode.js';
+import { useOllama } from '../state/ollama.js';
+import { getPlatform } from '../platform/platform.js';
 import { login, useAuth } from '../state/auth.js';
 import {
   applyRemote,
@@ -39,6 +43,15 @@ import { Card } from '../ui/Card.js';
 import { ConnectionSlotsCard } from './ConnectionSlotsCard.js';
 
 
+const MODE_LABELS: Record<PlaygroundMode, string> = {
+  byok: 'bring your own key',
+  local: 'local model',
+  subscription: 'hub subscription',
+};
+
+/** The model select's escape hatch back to free text. */
+const OTHER_MODEL_CHOICE = '__other__';
+
 export function SettingsView(): ReactElement {
   const mode = useMode();
   const provider = useProvider();
@@ -46,7 +59,19 @@ export function SettingsView(): ReactElement {
   const localUrl = useLocalUrl();
   const needsConfirm = useEndpointsNeedConfirm();
   const theme = useTheme();
+  const ollama = useOllama();
   const [keyDraft, setKeyDraft] = useState('');
+  const [modelOther, setModelOther] = useState(false);
+
+  // AC3: detection results only ever exist where a platform probe ran (desktop) —
+  // on web `ollama` stays 'unknown' and every branch below keeps today's rendering.
+  const detectedModels =
+    mode === 'local' && ollama !== 'unknown' && ollama.running && ollama.models.length > 0 ? ollama.models : undefined;
+  const modelSelectValue =
+    modelOther || (model !== undefined && detectedModels !== undefined && !detectedModels.includes(model))
+      ? OTHER_MODEL_CHOICE
+      : (model ?? '');
+  const showModelInput = detectedModels === undefined || modelSelectValue === OTHER_MODEL_CHOICE;
 
   // Keys live in the user DB (async) — load the draft when the provider changes.
   useEffect(() => {
@@ -84,15 +109,13 @@ export function SettingsView(): ReactElement {
         <div className="field">
           <label id="mode-label">where the agent runs</label>
           <div className="seg" role="group" aria-labelledby="mode-label">
-            <button type="button" aria-pressed={mode === 'byok'} onClick={() => setMode('byok')}>
-              bring your own key
-            </button>
-            <button type="button" aria-pressed={mode === 'local'} onClick={() => setMode('local')}>
-              local model
-            </button>
-            <button type="button" aria-pressed={mode === 'subscription'} onClick={() => setMode('subscription')}>
-              hub subscription
-            </button>
+            {/* Decision 10: the platform decides which modes exist — the desktop shell
+                never offers subscription, and that is a capability, not a hidden flag. */}
+            {availableModes().map((option) => (
+              <button key={option} type="button" aria-pressed={mode === option} onClick={() => setMode(option)}>
+                {MODE_LABELS[option]}
+              </button>
+            ))}
           </div>
           <span className="hint">
             {mode === 'byok'
@@ -157,10 +180,14 @@ export function SettingsView(): ReactElement {
               onChange={(event) => setLocalUrl(event.target.value)}
               placeholder="http://localhost:11434/v1"
             />
-            <span className="hint">
-              any OpenAI-compatible server. for Ollama, set OLLAMA_ORIGINS to allow this hub, and mind that an https
-              hub cannot reach http://localhost in Safari.
-            </span>
+            {ollama !== 'unknown' && !ollama.running ? (
+              <span className="hint">Ollama not found — install it from ollama.com or paste an endpoint.</span>
+            ) : (
+              <span className="hint">
+                any OpenAI-compatible server. for Ollama, set OLLAMA_ORIGINS to allow this hub, and mind that an https
+                hub cannot reach http://localhost in Safari.
+              </span>
+            )}
           </div>
         </Card>
       ) : null}
@@ -168,17 +195,46 @@ export function SettingsView(): ReactElement {
       {mode !== 'byok' || provider !== 'mock' ? (
         <Card>
           <div className="field">
-            <label htmlFor="model-id">model</label>
-            <input
-              id="model-id"
-              type="text"
-              value={model ?? ''}
-              onChange={(event) => setModel(event.target.value)}
-              placeholder={
-                mode === 'local' ? 'llama3.2' : provider === 'openai' ? 'gpt-4o' : 'claude-sonnet-5'
-              }
-            />
-            <span className="hint">leave empty for the provider’s default.</span>
+            <label htmlFor={detectedModels !== undefined ? 'model-select' : 'model-id'}>model</label>
+            {detectedModels !== undefined ? (
+              <select
+                id="model-select"
+                value={modelSelectValue}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === OTHER_MODEL_CHOICE) {
+                    setModelOther(true);
+                    return;
+                  }
+                  setModelOther(false);
+                  setModel(value);
+                }}
+              >
+                <option value="">let the endpoint choose</option>
+                {detectedModels.map((detected) => (
+                  <option key={detected} value={detected}>
+                    {detected}
+                  </option>
+                ))}
+                <option value={OTHER_MODEL_CHOICE}>other…</option>
+              </select>
+            ) : null}
+            {showModelInput ? (
+              <input
+                id="model-id"
+                type="text"
+                value={model ?? ''}
+                onChange={(event) => setModel(event.target.value)}
+                placeholder={
+                  mode === 'local' ? 'llama3.2' : provider === 'openai' ? 'gpt-4o' : 'claude-sonnet-5'
+                }
+              />
+            ) : null}
+            <span className="hint">
+              {detectedModels !== undefined
+                ? 'these models are installed in your Ollama — pick one, or choose other… to type a name.'
+                : 'leave empty for the provider’s default.'}
+            </span>
           </div>
         </Card>
       ) : null}
@@ -293,8 +349,11 @@ function DataCard(): ReactElement {
 
   const onExport = (): void => {
     setDataError(undefined);
+    // Desktop names the portable file `.snug` (Decision 8) — same sqlite bytes, same
+    // magic, only the suggested name changes; the web download keeps `.sqlite`.
+    const filename = getPlatform().kind === 'desktop' ? 'snug-user.snug' : 'snug-user.sqlite';
     void exportUserFile(includeSecrets)
-      .then((blob) => downloadBlob(blob, 'snug-user.sqlite'))
+      .then((blob) => downloadBlob(blob, filename))
       .catch((err: unknown) => setDataError(err instanceof Error ? err.message : String(err)));
   };
 
@@ -315,7 +374,12 @@ function DataCard(): ReactElement {
           an origin you choose — or nowhere.
         </span>
         <div className="seg" role="group" aria-labelledby="origin-label">
-          {(['none', 'hub', 'dropbox'] as SyncOriginKind[]).map((kind) => (
+          {/* Amendment 13: the hub origin only exists where the platform can reach a
+              hub (relative /userdb URLs mean nothing against tauri://). */}
+          {(getPlatform().capabilities.hubSyncOrigin
+            ? (['none', 'hub', 'dropbox'] as SyncOriginKind[])
+            : (['none', 'dropbox'] as SyncOriginKind[])
+          ).map((kind) => (
             <button
               key={kind}
               type="button"

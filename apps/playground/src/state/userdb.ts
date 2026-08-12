@@ -10,6 +10,7 @@ import {
   type UserDb,
 } from '@snugprotocol/db';
 import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol/auth';
+import { getPlatform } from '../platform/platform.js';
 import { locateWasm } from '../run/wasm.js';
 import { createStore, useStore } from './store.js';
 
@@ -55,7 +56,10 @@ export function bootUserDb(): Promise<UserDb> {
   const ready = ensureReadyPromise();
   if (opened) return ready;
   opened = true;
-  void openUserDb({ locateWasm, admissionGate }).then((result) => {
+  // Desktop installs its file backend through the platform seam (Decision 7); web
+  // passes nothing and keeps the package's OPFS detection byte-for-byte (AC10).
+  const backend = getPlatform().userdbBackend;
+  void openUserDb({ locateWasm, admissionGate, ...(backend !== undefined ? { backend } : {}) }).then((result) => {
     if (result.status === 'ok') {
       userDbStatusStore.set({ state: 'ready' });
       resolveReady?.(result.userDb);

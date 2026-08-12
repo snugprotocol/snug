@@ -17,6 +17,7 @@
 import { LOCAL_DEFAULT_BASE_URL } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
 
+import { getPlatform } from '../platform/platform.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
 
@@ -39,6 +40,15 @@ export const localUrlStore = createStore<string>(LOCAL_DEFAULT_BASE_URL);
 export const endpointsNeedConfirmStore = createStore<boolean>(false);
 
 const isMode = (v: unknown): v is PlaygroundMode => v === 'subscription' || v === 'byok' || v === 'local';
+
+/**
+ * Modes the current platform offers (TASK-20260812 Decision 10): the desktop shell is
+ * BYOK/local only — subscription is a capability the platform declares, never a flag
+ * the picker could re-enable.
+ */
+export function availableModes(): PlaygroundMode[] {
+  return getPlatform().capabilities.subscriptionMode ? ['byok', 'local', 'subscription'] : ['byok', 'local'];
+}
 const isProvider = (v: unknown): v is ByokProvider => v === 'mock' || v === 'anthropic' || v === 'openai';
 
 /** Load settings from an opened user DB into the stores (boot, and after import/pull). */
