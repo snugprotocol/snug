@@ -750,3 +750,34 @@ materialized DB; every file:line citation in §0 checked accurate.
   driver-reported row counts; row-identity drift detection; persisting a staged proposal
   across reload; an optional pre-write confirm on classifier-routed `app_change`).
 - Open questions: none.
+
+### 2026-08-11 — Claude (session close, Gate 6) — session
+
+- Done: Gate 6 verification pass over the whole session rather than a re-assertion of it.
+  Each item was CHECKED against the repo, not assumed:
+  - **Journal**: the P0/P1/P2/P3/P4 entries are all present and current (this is the sixth).
+  - **Lessons**: three entries on this branch — the symptom/mechanism one from planning,
+    the test-matrix + delimiter one from the P4 review, and a NEW one added at close:
+    **only `packages/adapters` type-checks in its `test` script**, so `db`, `protocol` and
+    `playground` can report green while not compiling. That asymmetry cost three separate
+    false-greens this task; the durable fix (add the `tsc &&` prefix to those three) is
+    queued in next-steps rather than done here, because changing test scripts mid-close is
+    exactly the kind of unrequested scope creep that should be its own task.
+  - **Spec-sync (protocol DID change)**: `spec-changelog.md` carries the internal-draft
+    entry; `spec-v0.2-userdb.md` has the v6 note; `spec-v0.4-runtime.md` is the new staged
+    draft. **`packages/protocol/schemas/*.json` is byte-unchanged** (verified by diff), and
+    the export-guard tests assert both new shapes stay out of the published SOURCES.
+    Nothing pushed — AL-12 remains HELD.
+  - **Root-file sync rule**: this branch touched none of `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`,
+    and their shared bodies are byte-identical (verified) — only the per-tool first line
+    differs, which is the intended shape.
+  - **Docs**: architecture status, code-map (call-site count corrected to a verified four),
+    conventions/glossary needed no change, next-steps dated and updated, ADR-0018/0019
+    accepted, threat-model delta written.
+- State: **19/19 turbo tasks green, uncached — 2156 tests + 185 examples**; root build
+  type-clean 9/9; working tree clean; 11 commits on
+  `feat/TASK-20260811-lean-runtime-data-chat`, none pushed.
+- Next step: **owner review → PR → merge.** The task file stays in `active/` until the
+  branch merges (PROCESS: `done/` is for merged-and-finished work), then moves.
+- Open questions: none. Six follow-ups are queued in `docs/next-steps.md`, all
+  non-blocking, each with the reason it was NOT closed here.
