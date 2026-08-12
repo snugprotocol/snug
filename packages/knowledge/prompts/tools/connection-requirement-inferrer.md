@@ -167,6 +167,16 @@ top-level keys:
 - `confidence` — required number between 0 and 1.
 - `evidence` — required array of verbatim documentation quotes; `[]` when no
   documentation was given.
+- `alternatives` — OPTIONAL array (at most 3) of additional requirement objects, in
+  the same shape as `requirement`. Include it ONLY when the documentation genuinely
+  describes MORE THAN ONE way to authenticate (for example an API-key surface AND an
+  OAuth flow); `requirement` stays your best default and each alternative must be a
+  complete, self-sufficient requirement in its own right. Never restate the same
+  method twice with cosmetic differences, and never invent a second method the
+  documentation does not describe — an honest single `requirement` with no
+  `alternatives` is the normal reply. The host validates every alternative exactly
+  as strictly as the primary and silently drops any that fail; the user chooses
+  between the survivors in a review UI before anything is stored.
 
 Any other key, and any missing or out-of-range `confidence`, makes the entire reply
 invalid.

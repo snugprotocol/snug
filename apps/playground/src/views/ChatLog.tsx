@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
+import { AuthChoiceCard } from './AuthChoiceCard.js';
 import { StatusLine, type StatusPhase } from './StatusLine.js';
 
 export interface ChatLogProps {
@@ -118,6 +119,12 @@ export function ChatLog({
               )}
             </Card>
           ) : null}
+          {/*
+            The AUTH-OPTION CHOICE CARD (TASK-20260812-auth-kind-choice). Rendered from
+            a pointer + the live row; the component itself hides once the row is chosen,
+            approved, or gone — so this mount can stay unconditional on the seed.
+          */}
+          {message.authChoice !== undefined ? <AuthChoiceCard choice={message.authChoice} /> : null}
           {/*
             The DATA-WRITE APPROVAL CARD (ADR-0019 D8). Everything the user is agreeing
             to is ON the card — the plain-language summary, the VERBATIM statements, and

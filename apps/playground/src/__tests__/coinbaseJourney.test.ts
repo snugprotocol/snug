@@ -16,9 +16,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
+import { deriveConnectionAllowedHosts } from '@snugprotocol/protocol';
+import { requirementFromRegistryEntry, WELL_KNOWN_PROVIDERS_REGISTRY } from '@snugprotocol/auth';
 
 import { finalizeConnectionDeclaration } from '../agent/connectionPipeline.js';
 import { runConnectionRequirementInference } from '../agent/connectionInferrerAdapter.js';
+import { authChoiceForPersistedRow } from '../agent/authChoiceCard.js';
+import { chooseAuthOption } from '../state/authKindChoice.js';
 import {
   __resetConnectionWizardForTests,
   connectionWizardSlotStore,
@@ -93,5 +97,94 @@ describe('P3 — the owner journey: undeclared Coinbase build → reviewable api
     //    button, no OAuth flow, no 'this connection does not sign you in' dead end.
     expect(needsOAuthConnectStep(row.requirement)).toBe(false);
     expect(nextStep('credentials', row.requirement)).toBe('done');
+  });
+});
+
+describe('P4 (auth-kind-choice) — the SWITCHED journey: the user picks Coinbase OAuth instead', () => {
+  it('recovery seeds the choice; choosing OAuth rebinds the row and routes to the connect step', async () => {
+    // Same build as above, condensed: recovery lands the api_key default.
+    const outcome = await finalizeConnectionDeclaration(db, {
+      appId: APP,
+      html: COINBASE_HTML,
+      reply: 'here is your tracker!',
+      channel: 'inference',
+      recoverRequirement: async (request) => {
+        const result = await runConnectionRequirementInference({
+          ...request,
+          adapter: { complete: async () => { throw new Error('registry must answer'); } },
+        });
+        if (!result.ok || result.requirement === null) return undefined;
+        return { requirement: result.requirement, provenance: result.provenance };
+      },
+    });
+    expect(outcome?.ok).toBe(true);
+    if (outcome?.ok !== true) return;
+
+    // The turn seeds a choice card for this multi-option provider (AC3's other half).
+    const seed = authChoiceForPersistedRow({ appId: APP, requirement: outcome.requirement });
+    expect(seed).toBeDefined();
+    expect(seed!.providerName).toBe('Coinbase');
+
+    // The user picks the OAuth option (the card builds this exact requirement).
+    const entry = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!;
+    const oauthOption = entry.authOptions![0]!;
+    const chosen = await chooseAuthOption({
+      appId: APP,
+      slot: 'coinbase',
+      requirement: requirementFromRegistryEntry(entry, 'Coinbase', 'coinbase', oauthOption),
+    });
+    expect(chosen.ok).toBe(true);
+
+    // The STORED row is the user's choice, durably (AC12 + R3), and routing follows it.
+    const row = db.getConnection(APP, 'coinbase')!;
+    expect(row.provenance).toBe('user');
+    expect(row.requirement.kind).toBe('oauth2_auth_code');
+    expect(row.requirement.fields?.map((field) => field.key)).toEqual(['client_id']);
+    expect(row.requirement.endpoints?.authorizeUrl).toBe('https://login.coinbase.com/oauth2/auth');
+    expect(needsOAuthConnectStep(row.requirement)).toBe(true);
+    expect(nextStep('credentials', row.requirement)).toBe('connect');
+    // The frozen-ceiling derivation now includes the OAuth host, from the option's own
+    // endpoints — never from anything a message proposed.
+    expect(deriveConnectionAllowedHosts(row.requirement)).toEqual(['api.coinbase.com', 'login.coinbase.com']);
+  });
+});
+
+describe('P4 (auth-kind-choice) — the GitHub journey: PAT default, OAuth app on request', () => {
+  it('an undeclared GitHub app recovers as bearer_token; choosing the OAuth app rebinds fully', async () => {
+    const html = `<!doctype html><html><body><script>
+      const { fetch: connectedFetch } = useConnectedFetch();
+      connectedFetch('https://api.github.com/user/repos');
+    </script></body></html>`;
+    const outcome = await finalizeConnectionDeclaration(db, {
+      appId: 'app-github-journey',
+      html,
+      reply: 'repo browser, done!',
+      channel: 'inference',
+      recoverRequirement: async (request) => {
+        const result = await runConnectionRequirementInference({
+          ...request,
+          adapter: { complete: async () => { throw new Error('registry must answer'); } },
+        });
+        if (!result.ok || result.requirement === null) return undefined;
+        return { requirement: result.requirement, provenance: result.provenance };
+      },
+    });
+    expect(outcome?.ok).toBe(true);
+    if (outcome?.ok !== true) return;
+    expect(outcome.requirement.kind).toBe('bearer_token');
+    expect(nextStep('credentials', outcome.requirement)).toBe('done');
+
+    const entry = WELL_KNOWN_PROVIDERS_REGISTRY['github']!;
+    const chosen = await chooseAuthOption({
+      appId: 'app-github-journey',
+      slot: 'github',
+      requirement: requirementFromRegistryEntry(entry, 'GitHub', 'github', entry.authOptions![0]!),
+    });
+    expect(chosen.ok).toBe(true);
+    const row = db.getConnection('app-github-journey', 'github')!;
+    expect(row.provenance).toBe('user');
+    expect(row.requirement.kind).toBe('oauth2_auth_code');
+    expect(row.requirement.fields?.map((field) => field.key)).toEqual(['client_id', 'client_secret']);
+    expect(nextStep('credentials', row.requirement)).toBe('connect');
   });
 });

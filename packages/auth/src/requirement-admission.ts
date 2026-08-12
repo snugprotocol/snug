@@ -65,6 +65,7 @@ import {
   WELL_KNOWN_PROVIDERS_REGISTRY,
   findBrandAdjacentRegistryKeys,
   lookupWellKnownProvider,
+  type WellKnownAuthOption,
   type WellKnownOauthProvider,
 } from './well-known-providers.js';
 
@@ -246,11 +247,11 @@ const CREDENTIAL_PROMPT_SEATS = ['fields', 'request', 'testRequest'] as const;
  * through JSON round-trips (persistence, the directive envelope) by the time the second
  * admission sees it, so identity is long gone but the bytes are the same.
  */
-function fieldsMatchRegistry(value: unknown, entry: WellKnownOauthProvider): boolean {
-  if (entry.fields === undefined || !Array.isArray(value)) return false;
-  if (value.length !== entry.fields.length) return false;
+function fieldsMatchPinnedList(value: unknown, pinnedList: WellKnownOauthProvider['fields']): boolean {
+  if (pinnedList === undefined || !Array.isArray(value)) return false;
+  if (value.length !== pinnedList.length) return false;
   return value.every((field, index) => {
-    const pinned = entry.fields![index]!;
+    const pinned = pinnedList[index]!;
     const candidate = asRecord(field);
     if (candidate === undefined) return false;
     // Compare the union of both key sets, so neither an added nor a dropped property
@@ -260,6 +261,32 @@ function fieldsMatchRegistry(value: unknown, entry: WellKnownOauthProvider): boo
       (key) => candidate[key] === (pinned as unknown as Record<string, unknown>)[key],
     );
   });
+}
+
+/**
+ * THE MATCHED-OPTION HANDLE (TASK-20260812-auth-kind-choice, D3 — plan review B1/B2).
+ *
+ * Resolves WHICH human-authored option of a multi-option entry a declared field list
+ * is, byte-identically: the DEFAULT (the entry itself, checked first) or one of its
+ * `authOptions`. Undefined means "not any pinned list" — an authored list, which
+ * Guard 2b refuses on borrowing channels exactly as before.
+ *
+ * ONE handle feeds BOTH halves of Guard 2b. Before it existed the exemption could
+ * bless a variant's list while substitution wrote the DEFAULT's fields back over it —
+ * a user's chosen flow silently undone between the click and the row, or (hostile
+ * form) one option's fields passing the guard while another option's shape came back.
+ * Deriving both halves from this single resolution makes that class unrepresentable:
+ * the list that matched IS the flow that substitutes.
+ */
+function matchAuthOption(
+  value: unknown,
+  entry: WellKnownOauthProvider,
+): WellKnownOauthProvider | WellKnownAuthOption | undefined {
+  if (fieldsMatchPinnedList(value, entry.fields)) return entry;
+  for (const option of entry.authOptions ?? []) {
+    if (fieldsMatchPinnedList(value, option.fields)) return option;
+  }
+  return undefined;
 }
 
 function occupiedPromptSeats(
@@ -275,8 +302,11 @@ function occupiedPromptSeats(
       continue;
     }
     if (seat === 'fields' && Array.isArray(value) && value.length === 0) continue;
-    // The pinned list is not an authoring act — see `fieldsMatchRegistry`.
-    if (seat === 'fields' && fieldsMatchRegistry(value, entry)) continue;
+    // A list byte-identical to ANY human-authored option's pinned list is not an
+    // authoring act — see `matchAuthOption`. The DEFAULT-only form of this exemption
+    // was the plan-review BLOCKER: it made a user's chosen variant refusable here and
+    // corruptible below.
+    if (seat === 'fields' && matchAuthOption(value, entry) !== undefined) continue;
     occupied.push(seat);
   }
   return occupied;
@@ -296,6 +326,16 @@ function applyRegistryValues(
 ): Record<string, unknown> {
   const provider = { ...(asRecord(requirement['provider']) ?? {}) };
   if (entry.displayName !== undefined) provider['name'] = entry.displayName;
+
+  // WHICH option's flow seats substitution honors (D3, TASK-20260812-auth-kind-choice):
+  // the option whose pinned field list the declaration matches — the SAME resolution
+  // the exemption above used, so the blessed list and the substituted shape can never
+  // disagree. No match (an authored/absent list) ⇒ the DEFAULT, which is exactly the
+  // pre-option behavior. Identity seats below (provider name, declaredApiHosts) are
+  // ALWAYS the entry's regardless of option — a flow choice never moves which hosts
+  // receive the credential.
+  const matched = matchAuthOption(requirement['fields'], entry);
+  const flow = matched ?? entry;
 
   const substituted: Record<string, unknown> = {
     ...requirement,
@@ -320,8 +360,8 @@ function applyRegistryValues(
   // DEEP-COPIED per field. `WELL_KNOWN_PROVIDERS_REGISTRY` is a module singleton the
   // borrow ban consults on every admission; handing out live references would let one
   // downstream caller's edit repoint the pinned truth for every later substitution.
-  if (entry.fields !== undefined) {
-    substituted['fields'] = entry.fields.map((field) => ({ ...field }));
+  if (flow.fields !== undefined) {
+    substituted['fields'] = flow.fields.map((field) => ({ ...field }));
   }
 
   // Endpoint-shaped seats are written whenever the REGISTRY has them, regardless of what
@@ -339,21 +379,21 @@ function applyRegistryValues(
   // The `entry.endpoints !== undefined` half is load-bearing and stays: a static-kind
   // provider has no authorize/token URLs, and inventing placeholders would union a
   // nonexistent host into the FROZEN ceiling via `deriveConnectionAllowedHosts`.
-  if (entry.endpoints !== undefined) {
-    substituted['endpoints'] = { ...entry.endpoints };
+  if (flow.endpoints !== undefined) {
+    substituted['endpoints'] = { ...flow.endpoints };
   }
-  if (entry.registration !== undefined) {
-    substituted['registration'] = { ...entry.registration };
+  if (flow.registration !== undefined) {
+    substituted['registration'] = { ...flow.registration };
   }
-  if (entry.authorizeParams !== undefined) {
-    substituted['authorizeParams'] = { ...entry.authorizeParams };
+  if (flow.authorizeParams !== undefined) {
+    substituted['authorizeParams'] = { ...flow.authorizeParams };
   }
   // Same correction as `endpoints`, and the same reason it matters: the registry's own
   // Spotify walkthrough tells the user "this hub signs in with PKCE and never needs [a
   // client secret]". Dropping `pkce` because the declaration omitted it made the pinned
   // copy describe a flow the code would not perform.
-  if (entry.pkce !== undefined) {
-    substituted['pkce'] = entry.pkce;
+  if (flow.pkce !== undefined) {
+    substituted['pkce'] = flow.pkce;
   }
   return substituted;
 }

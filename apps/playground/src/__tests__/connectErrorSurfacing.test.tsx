@@ -120,14 +120,29 @@ async function clickSignIn(): Promise<void> {
   await settle();
 }
 
+/**
+ * Wait until the connect error region exists (bounded). Path 3 crosses real async work
+ * (the PKCE mint uses WebCrypto) before it throws, so a fixed microtask settle is a
+ * race under a loaded worker pool — poll the DOM the user would be watching instead.
+ */
+async function waitForConnectError(): Promise<Element> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const error = container?.querySelector('[data-testid="connect-error"]');
+    if (error !== null && error !== undefined) return error;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+  throw new Error('connect-error region never rendered');
+}
+
 describe('AC7 — each pre-status throw path renders its SPECIFIC message', () => {
   it("path 1: an unapproved row → 'approve this connection before signing in' reaches the DOM", async () => {
     await renderSheetAtConnect(oauthRequirement, { approve: false });
     await clickSignIn();
 
-    const error = container?.querySelector('[data-testid="connect-error"]');
-    expect(error, 'the throw must surface in the connect error region').not.toBeNull();
-    expect(error?.textContent).toContain('approve this connection before signing in');
+    const error = await waitForConnectError();
+    expect(error.textContent).toContain('approve this connection before signing in');
   });
 
   it("path 2: a non-OAuth kind at the connect step → 'this connection does not sign you in'", async () => {
@@ -137,18 +152,16 @@ describe('AC7 — each pre-status throw path renders its SPECIFIC message', () =
     await renderSheetAtConnect(apiKeyRequirement, { approve: true });
     await clickSignIn();
 
-    const error = container?.querySelector('[data-testid="connect-error"]');
-    expect(error).not.toBeNull();
-    expect(error?.textContent).toContain('this connection does not sign you in');
+    const error = await waitForConnectError();
+    expect(error.textContent).toContain('this connection does not sign you in');
   });
 
   it('path 3: the mint rethrow — the retry sends {} creds, and the missing client_id is SAID', async () => {
     await renderSheetAtConnect(oauthRequirement, { approve: true });
     await clickSignIn();
 
-    const error = container?.querySelector('[data-testid="connect-error"]');
-    expect(error).not.toBeNull();
-    expect(error?.textContent).toContain('Missing required client credential: client_id');
+    const error = await waitForConnectError();
+    expect(error.textContent).toContain('Missing required client credential: client_id');
   });
 });
 
