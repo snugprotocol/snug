@@ -111,11 +111,64 @@ export type InferConnectionRequirementResult =
       /** True when the registry-borrow ban substituted pinned values. */
       borrowed?: boolean;
       borrowedFrom?: string;
+      /**
+       * ALTERNATE complete requirements for providers that genuinely offer more than
+       * one way in (TASK-20260812-auth-kind-choice, AC6/AC11). One seat for BOTH
+       * sources — registry `authOptions` and model-proposed alternatives — so every
+       * caller (runtime choice card, dev-time authoring) reads the same shape.
+       * Candidates for a USER decision, never rows: each has passed the same schema +
+       * admission + lint gates as `requirement`, but persisting one happens only via
+       * the choice handler, on the `user` channel, after a real click. Present only
+       * when at least one alternative survived validation.
+       */
+      alternatives?: ConnectionRequirement[];
     }
   | { ok: false; provenance: ConnectionProvenance; code: ConnectionRequirementInferrerErrorCode; message: string };
 
+/** Model-proposed alternatives considered per reply — a bound, not a target (D5). */
+const MAX_PROPOSED_ALTERNATIVES = 3;
+
 export interface ConnectionRequirementInferrer {
   infer(input: InferConnectionRequirementInput): Promise<InferConnectionRequirementResult>;
+}
+
+/**
+ * Validate ONE model-proposed alternative through the SAME gate chain as the primary —
+ * host-authoritative slot/name, schema, admission on the rung's channel, re-parse
+ * post-substitution, template lint — but FAIL-SOFT (D5): an unfit alternative returns
+ * undefined and is dropped from the list; it never fails the turn, because the primary
+ * requirement already answered the build and alternatives are only candidates for a
+ * user choice.
+ */
+function validateProposedAlternative(
+  raw: unknown,
+  input: InferConnectionRequirementInput,
+  provenance: ConnectionProvenance,
+): ConnectionRequirement | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const claimed = { ...(raw as Record<string, unknown>) };
+  claimed['slot'] = input.slot;
+  const claimedProvider = claimed['provider'];
+  claimed['provider'] = {
+    ...(typeof claimedProvider === 'object' && claimedProvider !== null && !Array.isArray(claimedProvider)
+      ? (claimedProvider as Record<string, unknown>)
+      : {}),
+    name: input.providerName,
+  };
+  const validated = connectionRequirementSchema.safeParse(claimed);
+  if (!validated.success) return undefined;
+  const admitted = admitConnectionRequirement<ConnectionRequirement>(validated.data, { channel: provenance });
+  if (!admitted.ok) return undefined;
+  const readmitted = connectionRequirementSchema.safeParse(admitted.requirement);
+  if (!readmitted.success) return undefined;
+  const headerTemplate = readmitted.data.request?.headerTemplate;
+  if (headerTemplate !== undefined) {
+    const lint = lintAuthHeaderTemplate(headerTemplate, {
+      fieldKeys: (readmitted.data.fields ?? []).map((field) => field.key),
+    });
+    if (!lint.ok) return undefined;
+  }
+  return readmitted.data;
 }
 
 export function createConnectionRequirementInferrer(
@@ -143,11 +196,22 @@ export function createConnectionRequirementInferrer(
         const built = connectionRequirementSchema.safeParse(
           requirementFromRegistryEntry(wellKnown, input.providerName, input.slot),
         );
+        // The entry's ALTERNATE options ride the same seat model alternatives use
+        // (AC11 parity) — emitted through the same one emitter, parse-gated per
+        // option so a malformed authored variant drops here, in this package's
+        // structural suite's territory, never in front of a user.
+        const alternatives = (wellKnown.authOptions ?? [])
+          .map((option) => connectionRequirementSchema.safeParse(
+            requirementFromRegistryEntry(wellKnown, input.providerName, input.slot, option),
+          ))
+          .filter((parsed): parsed is typeof parsed & { success: true } => parsed.success)
+          .map((parsed) => parsed.data);
         return {
           ok: true,
           provenance: 'registry',
           requirement: built.success ? built.data : null,
           evidence: [],
+          ...(alternatives.length > 0 ? { alternatives } : {}),
         };
       }
 
@@ -272,6 +336,18 @@ export function createConnectionRequirementInferrer(
         }
       }
 
+      // ALTERNATIVES (TASK-20260812-auth-kind-choice, AC6) — bounded, per-item
+      // validated on the same channel, fail-soft. Considered only once the PRIMARY
+      // has fully passed: a reply whose main proposal was refused has not earned a
+      // secondary channel into the review UI.
+      const rawAlternatives = envelope['alternatives'];
+      const alternatives = Array.isArray(rawAlternatives)
+        ? rawAlternatives
+            .slice(0, MAX_PROPOSED_ALTERNATIVES)
+            .map((raw) => validateProposedAlternative(raw, input, provenance))
+            .filter((candidate): candidate is ConnectionRequirement => candidate !== undefined)
+        : [];
+
       return {
         ok: true,
         provenance,
@@ -279,6 +355,7 @@ export function createConnectionRequirementInferrer(
         confidence,
         evidence,
         ...(admitted.borrowed === true ? { borrowed: true, borrowedFrom: admitted.borrowedFrom } : {}),
+        ...(alternatives.length > 0 ? { alternatives } : {}),
       };
     },
   };

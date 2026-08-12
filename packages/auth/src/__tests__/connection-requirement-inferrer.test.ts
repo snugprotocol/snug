@@ -165,6 +165,115 @@ describe('AC5 — the registry is a short-circuit, never a whitelist', () => {
   });
 });
 
+/**
+ * TASK-20260812-auth-kind-choice P2 — ALTERNATIVES (AC6/AC11).
+ *
+ * A provider may genuinely offer more than one way in. The result seat is the SAME for
+ * both sources — registry `authOptions` and model-proposed `alternatives` — so every
+ * caller (the runtime card, a dev-time authoring flow) reads one seat (AC11 parity;
+ * this suite itself is the headless caller). Alternatives are candidates for a USER
+ * choice, never rows: persisting one is P3's job, on the `user` channel, after a click.
+ */
+describe('P2/AC6 — registry hits surface authOptions as alternatives (no model involved)', () => {
+  it('coinbase: the OAuth option arrives parsed as an alternative beside the api_key default', async () => {
+    const { complete, calls } = recordingComplete();
+    const inferrer = createConnectionRequirementInferrer({ complete });
+    const result = await inferrer.infer({ providerName: 'Coinbase', slot: 'coinbase', prompt: PROMPT });
+    expect(calls.length, 'options come from the ENTRY, never the seam').toBe(0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.requirement?.kind).toBe('api_key');
+    expect(result.alternatives).toHaveLength(1);
+    const alternative = result.alternatives![0]!;
+    expect(alternative.kind).toBe('oauth2_auth_code');
+    expect(alternative.endpoints?.authorizeUrl).toBe('https://login.coinbase.com/oauth2/auth');
+    expect(alternative.slot, 'the HOST\'s slot on every option').toBe('coinbase');
+    expect(alternative.declaredApiHosts).toEqual(['api.coinbase.com']);
+  });
+
+  it('a single-option entry carries NO alternatives seat (google)', async () => {
+    const { complete } = recordingComplete();
+    const inferrer = createConnectionRequirementInferrer({ complete });
+    const result = await inferrer.infer({ providerName: 'Google', slot: 'google', prompt: PROMPT });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alternatives).toBeUndefined();
+  });
+});
+
+describe('P2/AC6 — model-proposed alternatives: validated like the primary, dropped when unfit', () => {
+  const primary = {
+    slot: 'x',
+    provider: { name: 'TideGauge' },
+    kind: 'oauth2_auth_code',
+    endpoints: { authorizeUrl: 'https://auth.tidegauge.example/a', tokenUrl: 'https://auth.tidegauge.example/t' },
+    declaredApiHosts: ['api.tidegauge.example'],
+  };
+  const validAlternative = {
+    slot: 'x',
+    provider: { name: 'TideGauge' },
+    kind: 'bearer_token',
+    fields: [{ key: 'token', label: 'Access token', type: 'secret' }],
+    declaredApiHosts: ['api.tidegauge.example'],
+  };
+
+  function replyWith(alternatives: unknown[]): string {
+    return JSON.stringify({ requirement: primary, confidence: 0.8, evidence: [], alternatives });
+  }
+
+  async function inferWithReply(reply: string) {
+    const inferrer = createConnectionRequirementInferrer({ complete: async () => reply });
+    return inferrer.infer({ providerName: 'TideGauge', slot: 'tidegauge', prompt: PROMPT });
+  }
+
+  it('a valid alternative survives, with the HOST\'s slot and provider name overriding the echo', async () => {
+    const result = await inferWithReply(replyWith([{ ...validAlternative, slot: 'model-chosen', provider: { name: 'Evil Rename' } }]));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alternatives).toHaveLength(1);
+    expect(result.alternatives![0]!.slot).toBe('tidegauge');
+    expect(result.alternatives![0]!.provider.name).toBe('TideGauge');
+    expect(result.alternatives![0]!.kind).toBe('bearer_token');
+  });
+
+  it('unparseable and over-reaching alternatives are DROPPED, never fatal (fail-soft, D5)', async () => {
+    const overreaching = {
+      ...validAlternative,
+      // userLayer is registry-synthesized only — admission refuses it on 'inference'.
+      userLayer: {
+        kind: 'oauth2_auth_code',
+        endpoints: { authorizeUrl: 'https://evil.example/a', tokenUrl: 'https://evil.example/t' },
+        declaredApiHosts: ['evil.example'],
+      },
+    };
+    // The valid one sits INSIDE the ≤3 bound — the bound slices before validation,
+    // so a valid candidate in position 4 would be (correctly) never considered.
+    const result = await inferWithReply(replyWith(['garbage', overreaching, validAlternative, { nonsense: true }]));
+    expect(result.ok, 'bad alternatives must never fail the turn').toBe(true);
+    if (!result.ok) return;
+    expect(result.alternatives).toHaveLength(1);
+    expect(result.alternatives![0]!.kind).toBe('bearer_token');
+  });
+
+  it('the bound holds: at most 3 alternatives are even considered', async () => {
+    const many = Array.from({ length: 6 }, (_, index) => ({
+      ...validAlternative,
+      fields: [{ key: `token_${index}`, label: `Token ${index}`, type: 'secret' }],
+    }));
+    const result = await inferWithReply(replyWith(many));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((result.alternatives ?? []).length).toBeLessThanOrEqual(3);
+  });
+
+  it('no alternatives key ⇒ behavior byte-identical to today (regression)', async () => {
+    const result = await inferWithReply(JSON.stringify({ requirement: primary, confidence: 0.8, evidence: [] }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alternatives).toBeUndefined();
+  });
+});
+
 describe('AC6 — aliases are human-authored ONLY; lookalikes fall through', () => {
   it("'Coinbase Pro' resolves to the Coinbase entry with its real kind and fields", async () => {
     const { complete, calls } = recordingComplete();
