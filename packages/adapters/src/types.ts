@@ -46,6 +46,22 @@ export interface AdapterRequest {
    * knows which turn it is running. Providers that do not support caching ignore it.
    */
   cache?: boolean;
+  /**
+   * Output ceiling for THIS turn (TASK-20260811, ADR-0018 D4).
+   *
+   * Per-turn for the same reason as `cache`: one adapter instance serves turns of very
+   * different shapes, and only the caller knows whether this one is a Chess move (a few
+   * hundred tokens of JSON) or an open-ended generation. A construction-time cap cannot
+   * tell them apart.
+   *
+   * CLAMPED, NEVER RAISED — adapters narrow their own ceiling by this value and ignore a
+   * larger one, so local mode's 8K rule survives a contract that asks for more.
+   *
+   * OPT-IN: omitted means today's default exactly. The app transport sets it only when the
+   * app's runtime contract specifies one, because capping a contract-less legacy app would
+   * be a silent truncation regression (AC-F1-4).
+   */
+  maxOutputTokens?: number;
 }
 
 /** Errors as data — never thrown across the adapter boundary. */

@@ -36,6 +36,15 @@ export interface BuilderTurn {
   message: string;
   contextBlock?: string;
   history?: TurnHistoryMessage[];
+  /**
+   * Replace the turn's tool set (ADR-0019 D9).
+   *
+   * The DATA lane passes the two data tools here, which is the second half of intent
+   * scoping: the context assembler decides what the turn can SEE and this decides what
+   * it can DO. An empty array is a legitimate value — the `app_question`/`other` lanes
+   * answer tool-free — so the check is `!== undefined`, never truthiness.
+   */
+  tools?: AgentTool[];
 }
 
 /**
@@ -198,7 +207,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
     : buildHostSystemPrompt({ appBuilder: true, artifacts: true });
   return {
     async send(turn, handlers, signal) {
-      const { message, contextBlock, history } = asTurn(turn);
+      const { message, contextBlock, history, tools: toolOverride } = asTurn(turn);
       // F15: an imported/pulled DB is executable config — its endpoint/provider
       // settings must be re-confirmed before ANY direct turn, builder included.
       if (needsConfirm()) {
@@ -226,6 +235,8 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
       // mode and offers the adapter NO tools (which would refuse them anyway).
       const tools: AgentTool[] = isWebllm
         ? []
+        : toolOverride !== undefined
+        ? toolOverride
         : buildByokTools(options.sink, {
             onArtifact: (artifact) =>
               handlers.onArtifact?.({ artifactId: artifact.id, displayName: artifact.displayName, version: artifact.version }),

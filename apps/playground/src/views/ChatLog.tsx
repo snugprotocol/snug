@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
 
-import type { BuildStepView, ChatMessage } from '../agent/useBuilderChat.js';
+import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { StatusLine, type StatusPhase } from './StatusLine.js';
@@ -49,6 +49,10 @@ export interface ChatLogProps {
    * caller would have to resolve back to a row.
    */
   onConnectionConnect?: (connection: { appId: string; slot: string }) => void;
+  /** Approve a staged data-write proposal (ADR-0019 D8). Absent ⇒ the card is read-only. */
+  onApproveDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
+  /** Decline it. Declining executes nothing — there is no path from here to the DB. */
+  onDeclineDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
 }
 
 /** The streamed conversation: user bubbles, streaming agent text with a soft caret,
@@ -62,6 +66,8 @@ export function ChatLog({
   compact = false,
   onDirectiveConnect,
   onConnectionConnect,
+  onApproveDataWrite,
+  onDeclineDataWrite,
 }: ChatLogProps): ReactElement {
   return (
     <div className="chat-log" aria-live="polite">
@@ -110,6 +116,55 @@ export function ChatLog({
               ) : (
                 <span className="hint">run the app once to attach this connection</span>
               )}
+            </Card>
+          ) : null}
+          {/*
+            The DATA-WRITE APPROVAL CARD (ADR-0019 D8). Everything the user is agreeing
+            to is ON the card — the plain-language summary, the VERBATIM statements, and
+            the affected-row counts — because "the human approves" only means something
+            if the human can see what they are approving.
+
+            Once resolved the buttons are gone: an approved change that still offers
+            "apply" invites a second, unreviewed execution.
+          */}
+          {message.dataWrite !== undefined ? (
+            <Card className="artifact-card" data-testid="data-write-card">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%' }}>
+                <span className="artifact-name">{message.dataWrite.summary}</span>
+                <ol style={{ margin: 0, paddingInlineStart: '1.25rem' }}>
+                  {message.dataWrite.statements.map((statement, index) => (
+                    <li key={`${message.id}-sql-${index}`}>
+                      <code style={{ wordBreak: 'break-word' }}>{statement}</code>
+                      <span className="hint">
+                        {' '}
+                        — {message.dataWrite?.previewed[index] ?? 0} row(s)
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+                {message.dataWrite.outcome === undefined ? (
+                  <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                    {onApproveDataWrite !== undefined ? (
+                      <Button variant="primary" onClick={() => onApproveDataWrite(message.dataWrite!, message.id)}>
+                        apply to my data
+                      </Button>
+                    ) : null}
+                    {onDeclineDataWrite !== undefined ? (
+                      <Button onClick={() => onDeclineDataWrite(message.dataWrite!, message.id)}>cancel</Button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <span className="hint">
+                    {message.dataWrite.outcome === 'applied'
+                      ? `applied — ${(message.dataWrite.executed ?? message.dataWrite.previewed).join(', ')} row(s) changed`
+                      : message.dataWrite.outcome === 'declined'
+                        ? 'cancelled — nothing was changed'
+                        : message.dataWrite.outcome === 'drifted'
+                          ? 'the number of rows this would affect changed since the preview, so nothing was applied — ask again for a fresh one'
+                          : 'the change could not be applied — nothing was changed'}
+                  </span>
+                )}
+              </div>
             </Card>
           ) : null}
           {message.artifact !== undefined ? (

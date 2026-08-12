@@ -38,12 +38,16 @@ export type SystemLayerName =
   | 'host-identity'
   | 'capability-file-creation'
   | 'app-builder-summary'
+  | 'app-runtime'
   | 'app-response-format';
 
 const SYSTEM_LAYER_FILES: Readonly<Record<SystemLayerName, string>> = {
   'host-identity': 'system/10-host-identity.md',
   'capability-file-creation': 'system/20-capability-file-creation.md',
   'app-builder-summary': 'system/30-app-builder-summary.md',
+  // 45 sits between the builder summary and the response format by injection order, and
+  // is mutually exclusive with 30: a turn is either authoring an app or running one.
+  'app-runtime': 'system/45-app-runtime.md',
   'app-response-format': 'system/40-app-response-format.md',
 };
 
@@ -113,7 +117,18 @@ export type ToolPromptName =
   | 'app-doc-write'
   | 'auth-spec-inferrer'
   /** Dynamic Auth v2 (P2): the FULL-requirement successor to `auth-spec-inferrer`. */
-  | 'connection-requirement-inferrer';
+  | 'connection-requirement-inferrer'
+  /** TASK-20260811 (ADR-0018): authors the app's RUNTIME contract at build time. */
+  | 'runtime-contract-write'
+  /** TASK-20260811 (ADR-0018 D5): the host's post-turn synthesis fallback. */
+  | 'runtime-contract-synthesis'
+  /** TASK-20260811 (ADR-0019 D6): routes an app-chat message to its lane. */
+  | 'chat-intent-classifier'
+  /** TASK-20260811 (ADR-0019 D7/D8): the data lane's read and propose-write tools. */
+  | 'data-query'
+  | 'data-propose-write'
+  /** TASK-20260811 (ADR-0019 D10): targeted edits as a cheaper route to a new version. */
+  | 'artifact-edit';
 
 export function getToolPrompt(name: ToolPromptName): string {
   return renderedFile(`tools/${name}.md`);

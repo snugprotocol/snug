@@ -15,7 +15,7 @@
 // Unlike the per-app driver (errors-as-data at the frame boundary), the typed CRUD API
 // throws UserDbError — it is an in-process API, mirroring useAppDB's throwing contract.
 import initSqlJs from 'sql.js';
-import type { Database, SqlJsStatic } from 'sql.js';
+import type { BindParams, Database, SqlJsStatic } from 'sql.js';
 import {
   APP_KV_TABLE,
   AUTH_MAX_SLOTS_PER_APP,
@@ -34,10 +34,13 @@ import {
   appDataToken,
   appRestTableName,
   canonicalRequirementHash,
+  canonicalRuntimeContract,
   connectionRequirementSchema,
   deriveConnectionAllowedHosts,
   hostSetEquals,
   isValidAppObjectName,
+  parseRuntimeContract,
+  runtimeContractSchema,
   type AppSchemaJson,
   type AppSchemaObject,
   type AuthSpecStatus,
@@ -45,9 +48,20 @@ import {
   type ConnectionRequirement,
   type ConnectionStatus,
   type DbRequestFrame,
+  type RuntimeContract,
 } from '@snugprotocol/protocol';
 import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
-import { KV_TABLE_DDL, createDbDriver, type DbPersistence, type SnugDbDriver } from '../driver.js';
+import { base64ToBytes } from '../base64.js';
+import {
+  KV_TABLE_DDL,
+  createDbDriver,
+  forbiddenStatementReason,
+  isRowModifyingStatement,
+  isSqlTailEmpty,
+  normalizeCell,
+  type DbPersistence,
+  type SnugDbDriver,
+} from '../driver.js';
 import { namespaceToFileName } from '../namespace.js';
 import { detectPersistenceBackend, type PersistenceBackend } from '../persistence.js';
 
@@ -80,6 +94,13 @@ export const USERDB_ERROR_CODES = {
   CONNECTION_SLOT_MISMATCH: 'USERDB_CONNECTION_SLOT_MISMATCH',
   /** Channel admission refused the requirement at the persist boundary (review MAJOR-2). */
   CONNECTION_NOT_ADMITTED: 'USERDB_CONNECTION_NOT_ADMITTED',
+  /**
+   * `scratchRun` could not build the throwaway copy of the app runtime (snapshot export or
+   * its base64 decode failed). Distinct from a SQL error inside the scratch DB, which is
+   * reported per statement as DATA — this one means the sandbox itself never existed, so
+   * the caller must not read "no rows" as an answer.
+   */
+  SCRATCH_UNAVAILABLE: 'USERDB_SCRATCH_UNAVAILABLE',
 } as const;
 
 export type UserDbErrorCode = (typeof USERDB_ERROR_CODES)[keyof typeof USERDB_ERROR_CODES];
@@ -386,11 +407,70 @@ export interface ConnectionRow {
   updatedAt: string;
 }
 
+/**
+ * Caller-supplied provenance for `importUserDb`.
+ *
+ * `trustedOrigin` says "these bytes came from the user's OWN configured sync origin" —
+ * true only for the recovery restore and the sync pull, which fetch from that origin
+ * themselves. A file the user picked off disk is NEVER trusted, however empty the hub is:
+ * emptiness cannot tell a restore from a hostile donor, but the caller can (R-M2).
+ *
+ * Deliberately absent-means-untrusted, so a new call site that forgets it gets the safe
+ * behavior rather than the convenient one.
+ */
+export interface UserDbImportOptions {
+  trustedOrigin?: boolean;
+}
+
 /** What `importUserDb` surfaces about the auth reconciliation passes (plan D5/N1). */
 export interface UserDbImportReport {
   /** Structurally unusable `snug_connections` rows that were dropped, with reasons. */
   droppedConnections: Array<{ appId: string; slot: string; reason: string }>;
+  /**
+   * Imported runtime contracts that were REFUSED because they are not byte-identical to a
+   * contract this hub already knows (ADR-0018, AC-F1-7). A contract is rendered into the
+   * SYSTEM slot of every runtime turn, so an imported one is a system-authority claim from
+   * an untrusted file — same doctrine as the connection reconciliation above.
+   */
+  droppedRuntimeContracts: Array<{ appId: string; version: number }>;
 }
+
+/** One statement submitted to `scratchRun` — SQL plus its bound parameters. */
+export interface ScratchStatement {
+  sql: string;
+  params?: readonly unknown[];
+}
+
+/**
+ * Per-statement outcome of a scratch run. `rows`/`columns` for reads, `changes` for
+ * writes (the dry-run preview), `error` instead of both when the statement was refused or
+ * failed — errors are DATA here, exactly as they are in the driver.
+ */
+export interface ScratchStatementResult {
+  rows?: unknown[][];
+  columns?: string[];
+  /** Rows the statement would affect. The number D8 shows the user and re-checks at execute. */
+  changes?: number;
+  /** True when `rows` was cut by the row or byte cap (AC-F2-6). */
+  truncated?: boolean;
+  /** Rows the query actually produced, present only when `truncated`. */
+  totalRows?: number;
+  error?: string;
+}
+
+export interface ScratchRunResult {
+  statements: ScratchStatementResult[];
+}
+
+/**
+ * Row cap for a scratch read before results re-enter the LLM context (AC-F2-6). Generous
+ * enough for a real answer ("my expenses last quarter"), far below what would blow a
+ * context window.
+ */
+export const MAX_QUERY_ROWS = 200;
+
+/** Byte cap on a scratch read's rows — the guard for few-but-huge rows the row cap misses. */
+export const MAX_QUERY_RESULT_BYTES = 32 * 1024;
 
 export interface AppMigrationRecord {
   seq: number;
@@ -417,7 +497,12 @@ export interface UserDb {
   readonly driver: SnugDbDriver;
 
   installApp(input: InstallAppInput): AppRecord;
-  saveAppVersion(appId: string, html: string, note?: string): AppVersionMeta;
+  /**
+   * Append a new version. The runtime contract is COPIED FORWARD from
+   * `contractSourceVersion` (default: the app's current version) so an ordinary edit never
+   * strands it — ADR-0018 D2(i). Revert/reset pass the version they restore.
+   */
+  saveAppVersion(appId: string, html: string, note?: string, contractSourceVersion?: number): AppVersionMeta;
   /** Patch display metadata (announce overlay, usesDb observation) — versions untouched. */
   updateAppMeta(
     appId: string,
@@ -439,6 +524,36 @@ export interface UserDb {
   revertApp(appId: string, toVersion: number): AppVersionMeta;
   /** Copy-forward to the pinned factory version (the never-pruned v1 of build/install). */
   resetToFactory(appId: string): AppVersionMeta;
+
+  /**
+   * The runtime contract for `version` (default: the app's current version), or undefined
+   * when the app has none or the stored row is unusable (ADR-0018).
+   *
+   * NEVER THROWS on a bad row: an app whose contract is corrupt must run on the lean
+   * generic layers, not fail its turn (AC-F1-4).
+   */
+  getRuntimeContract(appId: string, version?: number): RuntimeContract | undefined;
+  /**
+   * Write (or, with `undefined`, clear) the runtime contract on a specific version row.
+   * Validates through `runtimeContractSchema` — an over-bound contract is rejected at this
+   * boundary, because this is the write side of the only artifact that reaches the SYSTEM
+   * slot of a runtime turn.
+   */
+  putRuntimeContract(appId: string, version: number, contract: RuntimeContract | undefined): void;
+
+  /**
+   * Run statements against a THROWAWAY copy of the app's materialized runtime DB
+   * (ADR-0019 D7). Reads answer data questions; writes execute against the copy and die
+   * with it, which is what makes the data lane read-only BY CONSTRUCTION and gives D8's
+   * approval flow a truthful dry-run preview (`changes` per statement).
+   *
+   * There is no `readonly` flag on purpose: a flag is a knob a call site can get wrong,
+   * and nothing here can reach the real file at all.
+   *
+   * Throws NOT_FOUND for an unknown app. SQL errors are reported per statement as DATA;
+   * a refused statement stops the batch.
+   */
+  scratchRun(appId: string, statements: readonly ScratchStatement[]): Promise<ScratchRunResult>;
 
   /** The app's registered schema (verbatim natural DDL), or undefined when it has none. */
   getAppSchema(appId: string): AppSchemaJson | undefined;
@@ -512,6 +627,15 @@ export interface UserDb {
   ): ChatMessage;
   /** Marks an already-stored message as bootstrap (review F9: the v1-artifact turn). */
   pinChatMessage(id: number): void;
+  /**
+   * Replace one message's `meta`, leaving content and pinning alone (R-M5).
+   *
+   * Exists so a resolved data-write proposal persists its outcome: without it, a reload
+   * re-renders an already-applied change as still awaiting approval. Narrow on purpose —
+   * meta is the only mutable column, because rewriting a stored message's CONTENT would
+   * let a later turn silently rewrite history the user already read.
+   */
+  updateChatMessageMeta(id: number, meta: unknown): void;
   /** Deletes unpinned messages beyond the newest `keepUnpinned`; pinned rows always survive. */
   pruneChatMessages(threadId: string, keepUnpinned: number): void;
   listThreads(): ChatThread[];
@@ -538,7 +662,7 @@ export interface UserDb {
    * Runs the delta-aware auth-spec reconciliation pass (plan D5/N1) — pull-merge,
    * applyRemote, recovery restore, and UI import all inherit it through here.
    */
-  importUserDb(bytes: Uint8Array): Promise<UserDbImportReport>;
+  importUserDb(bytes: Uint8Array, options?: UserDbImportOptions): Promise<UserDbImportReport>;
 
   flush(): Promise<void>;
   close(): Promise<void>;
@@ -680,6 +804,23 @@ const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
     for (const ddl of USERDB_DDL) db.run(ddl);
     for (const ddl of USERDB_INDEX_DDL) db.run(ddl);
   },
+  // v5 → v6 (TASK-20260811, ADR-0018): add `snug_app_versions.runtime_contract_json`, the
+  // per-version runtime contract a lean app turn assembles FROM.
+  //
+  // THIS ONE CANNOT BE A BARE REPLAY, and it is the case the v4 comment above predicted:
+  // v6 adds a COLUMN to an EXISTING table, and `CREATE TABLE IF NOT EXISTS` does nothing
+  // to a table that already exists — so a replay-only migration would leave a v5-shaped
+  // `snug_app_versions` under a v6 stamp, and every contract read/write would fail with a
+  // raw "no such column" that looks like a code bug. `addColumnIfMissing` is what makes
+  // the stamp true, exactly as it did for v1 → v2's four columns.
+  //
+  // The replay still runs alongside it, for a file that arrives at v6 missing whole tables
+  // (the self-heal path can produce one).
+  (db) => {
+    for (const ddl of USERDB_DDL) db.run(ddl);
+    addColumnIfMissing(db, USERDB_TABLES.appVersions, 'runtime_contract_json', 'TEXT');
+    for (const ddl of USERDB_INDEX_DDL) db.run(ddl);
+  },
 ];
 
 /**
@@ -818,6 +959,49 @@ const connectionKey = (appId: string, slot: string): string => `${appId}\u0000${
  * everything". Both sides of that comparison are produced by the same function, and the
  * approval path stores exactly what it derives.
  */
+/**
+ * IMPORTED CONTRACTS ARE UNTRUSTED (ADR-0018 D2(iii), AC-F1-7, fold F-SB1).
+ *
+ * A runtime contract is rendered into the SYSTEM slot of every turn the app takes, so an
+ * imported one is an untrusted file asking to speak with system authority — the same shape
+ * of claim `reconcileImportedConnections` refuses for grants, and refused the same way:
+ * keep it ONLY when its canonical bytes match a contract this hub already knows.
+ *
+ * Comparison is CANONICAL, not raw: an identical contract re-serialized with different key
+ * order must still match, or every legitimate sync/backup round trip would silently strip
+ * contracts and degrade every app to generic layers.
+ *
+ * The local set is keyed by bytes alone, deliberately — not by (app, version). A contract
+ * the user has already reviewed on one version is the same reviewed artifact arriving on
+ * another, and pinning to the version number would drop legitimate rows after any local
+ * edit shifted the numbering.
+ */
+function reconcileImportedRuntimeContracts(
+  next: Database,
+  localContractBytes: ReadonlySet<string>,
+): UserDbImportReport['droppedRuntimeContracts'] {
+  const dropped: UserDbImportReport['droppedRuntimeContracts'] = [];
+  const rows = selectRows(
+    next,
+    `SELECT app_id, version, runtime_contract_json FROM ${USERDB_TABLES.appVersions}
+     WHERE runtime_contract_json IS NOT NULL`,
+  );
+  for (const row of rows) {
+    const appId = String(row[0]);
+    const version = Number(row[1]);
+    const parsed = parseRuntimeContract(String(row[2]));
+    // An unparseable/over-bound imported contract is dropped for the same reason a
+    // non-matching one is: it cannot be shown to have been reviewed here.
+    if (parsed !== undefined && localContractBytes.has(canonicalRuntimeContract(parsed))) continue;
+    dropped.push({ appId, version });
+    next.run(
+      `UPDATE ${USERDB_TABLES.appVersions} SET runtime_contract_json = NULL WHERE app_id = ? AND version = ?`,
+      [appId, version],
+    );
+  }
+  return dropped;
+}
+
 function reconcileImportedConnections(
   next: Database,
   localApproved: ReadonlyMap<string, LocalApprovedConnection>,
@@ -1593,17 +1777,41 @@ function construct(
     return row === undefined ? undefined : toAppRecord(row);
   }
 
+  /**
+   * Raw contract text for a version row — the pre-validation bytes, used by copy-forward
+   * (which must move a row verbatim, not re-serialize it) and by the import comparison.
+   */
+  function rawRuntimeContract(appId: string, version: number): string | null {
+    const raw = select(
+      `SELECT runtime_contract_json FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND version = ?`,
+      [appId, version],
+    )[0]?.[0];
+    return raw === null || raw === undefined ? null : String(raw);
+  }
+
   function insertVersion(
     appId: string,
     version: number,
     html: string,
     note: string | undefined,
     pinned: boolean,
+    /**
+     * The version to COPY THE RUNTIME CONTRACT FORWARD FROM (ADR-0018 D2(i–ii)).
+     *
+     * Explicit rather than "always the current version" on purpose. `revertApp` and
+     * `resetToFactory` both land their new version through here, and for them the correct
+     * source is the version being restored — copying the CURRENT one would run reverted
+     * HTML under the contract the user just backed out of (fold F-B1). Passing `undefined`
+     * means "no contract", which is how a fresh install starts.
+     */
+    contractSourceVersion: number | undefined,
   ): AppVersionMeta {
     const createdAt = now();
+    const contractJson =
+      contractSourceVersion === undefined ? null : rawRuntimeContract(appId, contractSourceVersion);
     run(
-      `INSERT INTO ${USERDB_TABLES.appVersions} (app_id, version, html, note, created_at, pinned) VALUES (?, ?, ?, ?, ?, ?)`,
-      [appId, version, html, note ?? null, createdAt, pinned ? 1 : 0],
+      `INSERT INTO ${USERDB_TABLES.appVersions} (app_id, version, html, note, created_at, pinned, runtime_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [appId, version, html, note ?? null, createdAt, pinned ? 1 : 0, contractJson],
     );
     // Retention: the newest N unpinned versions plus every pinned (factory) version.
     run(`DELETE FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND version <= ? AND pinned = 0`, [
@@ -1649,17 +1857,30 @@ function construct(
         }
         throw err;
       }
-      insertVersion(appId, 1, input.html, input.note, true); // v1 = the pinned factory version
+      // v1 = the pinned factory version. No contract source: a fresh install has no prior
+      // version, and its contract (if any) is written by the authoring turn that follows.
+      insertVersion(appId, 1, input.html, input.note, true, undefined);
       return getApp(appId) as AppRecord;
     },
 
-    saveAppVersion(appId, html, note) {
+    saveAppVersion(appId, html, note, contractSourceVersion) {
       assertOpen();
       const app = getApp(appId);
       if (app === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
       guardAddedBytes(html.length, `new version of "${appId}"`);
       const version = app.currentVersion + 1;
-      const meta = insertVersion(appId, version, html, note, false);
+      // COPY-FORWARD (ADR-0018 D2(i)): an ordinary edit inherits the current version's
+      // contract, so a cosmetic change never strands it and the P2 synthesis trigger stays
+      // scoped to apps that genuinely have none (fold F-B1). Revert/reset override the
+      // source with the version they are restoring.
+      const meta = insertVersion(
+        appId,
+        version,
+        html,
+        note,
+        false,
+        contractSourceVersion ?? app.currentVersion,
+      );
       run(`UPDATE ${USERDB_TABLES.apps} SET current_version = ?, updated_at = ? WHERE app_id = ?`, [
         version,
         now(),
@@ -1850,7 +2071,11 @@ function construct(
       if (html === undefined) {
         throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `app "${appId}" has no version ${toVersion}`);
       }
-      return this.saveAppVersion(appId, html, `revert to v${toVersion}`);
+      // The contract comes from the TARGET version, not the current one (ADR-0018 D2(ii)):
+      // reverted HTML must run under the contract that shipped with it. Reverting to a
+      // contract-less version therefore clears the contract, which is the same rule read
+      // in the other direction.
+      return this.saveAppVersion(appId, html, `revert to v${toVersion}`, toVersion);
     },
 
     resetToFactory(appId) {
@@ -1866,7 +2091,156 @@ function construct(
       if (html === undefined) {
         throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `factory version ${factory} of "${appId}" is missing`);
       }
-      return this.saveAppVersion(appId, html, `reset to factory (v${factory})`);
+      return this.saveAppVersion(appId, html, `reset to factory (v${factory})`, factory);
+    },
+
+    // ---------------------------------------------------------- runtime contracts
+
+    getRuntimeContract(appId, version) {
+      assertOpen();
+      const target = version ?? getApp(appId)?.currentVersion;
+      if (target === undefined) return undefined;
+      // `parseRuntimeContract` is the TOLERANT read: a corrupt or over-bound stored row
+      // reads as "no contract" so the app degrades to the lean generic layers rather than
+      // failing its turn (AC-F1-4).
+      return parseRuntimeContract(rawRuntimeContract(appId, target));
+    },
+
+    putRuntimeContract(appId, version, contract) {
+      assertOpen();
+      const app = getApp(appId);
+      if (app === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
+      // Validate BEFORE writing: this row is rendered into the system slot of every
+      // runtime turn, so the write boundary is the right place to fail an over-bound or
+      // malformed contract loudly (bounds-at-parse, D2).
+      const json = contract === undefined ? null : JSON.stringify(runtimeContractSchema.parse(contract));
+      if (json !== null) guardAddedBytes(json.length, `runtime contract of "${appId}"`);
+      run(`UPDATE ${USERDB_TABLES.appVersions} SET runtime_contract_json = ? WHERE app_id = ? AND version = ?`, [
+        json,
+        appId,
+        version,
+      ]);
+      markDirty();
+    },
+
+    // --------------------------------------------------------- scratch execution
+
+    async scratchRun(appId, statements) {
+      assertOpen();
+      if (getApp(appId) === undefined) {
+        // A typo must not silently query an empty database and answer "you have no
+        // expenses" — that reads as data, not as an error.
+        throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
+      }
+      const results: ScratchStatementResult[] = [];
+      if (statements.length === 0) return { statements: results };
+
+      // Export the app's materialized bytes and open them in an INDEPENDENT sql.js
+      // instance. This is the whole isolation story: hub tables and other apps' tables
+      // were never in these bytes (ADR-0010 materialization), and nothing writes this
+      // instance back — the driver's save path only ever runs on ITS own handles.
+      const snapshot = await driver.handle(appId, internalFrame({ op: 'export' }));
+      if (!snapshot.ok || snapshot.bytesBase64 === undefined) {
+        const detail = snapshot.ok ? 'no bytes' : snapshot.message;
+        throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, `cannot snapshot app runtime: ${detail}`);
+      }
+      const scratchBytes = base64ToBytes(snapshot.bytesBase64);
+      if (scratchBytes === undefined) {
+        throw new UserDbError(USERDB_ERROR_CODES.SCRATCH_UNAVAILABLE, 'app runtime snapshot was not valid base64');
+      }
+      const scratch = new SQL.Database(scratchBytes);
+      try {
+        for (const entry of statements) {
+          // The SAME guards as the real executor, from the same function (D7).
+          const forbidden = forbiddenStatementReason(entry.sql);
+          if (forbidden !== undefined) {
+            results.push({ error: `forbidden statement: ${forbidden}` });
+            break;
+          }
+          let statement;
+          try {
+            const iterator = scratch.iterateStatements(entry.sql);
+            const first = iterator.next();
+            if (first.done === true) {
+              results.push({ error: 'no SQL statement to execute' });
+              break;
+            }
+            statement = first.value;
+            if (!isSqlTailEmpty(iterator.getRemainingSQL())) {
+              results.push({
+                error:
+                  'exec accepts exactly one SQL statement — split multi-statement scripts into separate entries',
+              });
+              break;
+            }
+            const params = entry.params;
+            if (params !== undefined && params.length > 0) {
+              statement.bind(params.map((p) => (p === undefined ? null : p)) as BindParams);
+            }
+            const columns = statement.getColumnNames();
+            const rows: unknown[][] = [];
+            let totalRows = 0;
+            let truncated = false;
+            let bytes = 0;
+            while (statement.step()) {
+              totalRows += 1;
+              if (truncated) continue; // keep counting so `totalRows` is honest
+              const row = (statement.get() as unknown[]).map(normalizeCell);
+              // Byte cap checked BEFORE keeping the row: a single fat row must not push
+              // the payload past the cap it exists to enforce.
+              bytes += JSON.stringify(row).length;
+              if (rows.length >= MAX_QUERY_ROWS || bytes > MAX_QUERY_RESULT_BYTES) {
+                truncated = true;
+                continue;
+              }
+              rows.push(row);
+            }
+            /**
+             * `getRowsModified()` is `sqlite3_changes()` — the count for the LATEST
+             * completed statement, NOT a running total for the connection.
+             *
+             * This was implemented as a delta against a previous reading, which is right
+             * only for the first write and produces NEGATIVE counts afterwards (verified:
+             * DELETE 2 rows then UPDATE 1 row reported `[2, -1]`). The approval card
+             * rendered that number, and the TOCTOU drift check could not catch it because
+             * it re-ran the same arithmetic on both sides and got the same wrong answer.
+             * Found by the P4 whole-surface review; regression-tested in scratch-run.
+             *
+             * The count is attached to every MODIFYING statement, including one with a
+             * `RETURNING` clause. Keying it on `columns.length === 0` meant a
+             * `DELETE … RETURNING id` carried rows but no count, so the card said
+             * "0 row(s)" for a destructive statement and drift could never fire for it —
+             * and the statement text is the model's to choose.
+             *
+             * But `sqlite3_changes()` is also STICKY (R-M1, 2026-08-11): it keeps
+             * reporting the last modifying statement's count for every statement that
+             * follows. A `DELETE` then `SELECT` batch therefore previewed as `[3, 3]`,
+             * and the approval card told the user a SELECT would change 3 rows. Worse,
+             * that second number is not an independent measurement — it is a copy of the
+             * first — so the TOCTOU drift check could never derive a real signal from it.
+             *
+             * The discriminator is the statement's KIND, not a runtime counter: a DELETE
+             * matching nothing must still report 0 (the user needs to see it), while a
+             * SELECT must report nothing at all. `total_changes()` cannot tell those two
+             * apart — both leave it untouched — which is why this keys off the verb.
+             */
+            const modifies = isRowModifyingStatement(entry.sql);
+            results.push({
+              ...(columns.length > 0 ? { rows, columns } : {}),
+              ...(modifies ? { changes: scratch.getRowsModified() } : {}),
+              ...(truncated ? { truncated, totalRows } : {}),
+            });
+          } catch (err) {
+            results.push({ error: errorMessage(err) });
+            break;
+          } finally {
+            statement?.free();
+          }
+        }
+      } finally {
+        scratch.close(); // the copy — and every mutation made to it — is discarded here
+      }
+      return { statements: results };
     },
 
     // ------------------------------------------------------------- schema registry
@@ -2285,6 +2659,14 @@ function construct(
       };
     },
 
+    updateChatMessageMeta(id, meta) {
+      assertOpen();
+      const metaJson = meta === undefined ? null : JSON.stringify(meta);
+      guardAddedBytes(metaJson?.length ?? 0, 'chat message meta');
+      // An unknown id updates zero rows — a stale click handler must not throw.
+      run(`UPDATE ${USERDB_TABLES.chatMessages} SET meta = ? WHERE id = ?`, [metaJson, id]);
+    },
+
     pinChatMessage(id) {
       assertOpen();
       run(`UPDATE ${USERDB_TABLES.chatMessages} SET pinned = 1 WHERE id = ?`, [id]);
@@ -2413,7 +2795,7 @@ function construct(
       }
     },
 
-    async importUserDb(bytes) {
+    async importUserDb(bytes, options) {
       assertOpen();
       if (bytes.byteLength > maxBytes) {
         throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `import is ${bytes.byteLength} bytes — cap is ${maxBytes}`);
@@ -2462,8 +2844,39 @@ function construct(
           requirementVersion: Number(row[5]),
         });
       }
+      // Runtime contracts (ADR-0018 D2(iii)): snapshot the canonical bytes of every
+      // contract this hub already holds, then refuse every imported contract that is not
+      // among them. Same window as the connection pass — on the candidate, before it goes
+      // live — so a foreign contract never becomes readable by a turn.
+      const localContractBytes = new Set<string>();
+      for (const row of select(
+        `SELECT runtime_contract_json FROM ${USERDB_TABLES.appVersions} WHERE runtime_contract_json IS NOT NULL`,
+      )) {
+        const parsed = parseRuntimeContract(row[0] === null || row[0] === undefined ? null : String(row[0]));
+        if (parsed !== undefined) localContractBytes.add(canonicalRuntimeContract(parsed));
+      }
+      /**
+       * TRUSTED RESTORE (R-M2, 2026-08-11). Keying "known" off the open DB's contracts made
+       * an EMPTY hub mean "nothing is known", so every contract was nulled — and an empty
+       * hub is exactly what a legitimate restore looks like. Corruption recovery imports
+       * the user's own origin image into `openFresh()`, and a new device's first
+       * `pullMerge` does the same; both lost every contract permanently, since
+       * `needsSynthesizedContract` only fires on first build.
+       *
+       * The exemption is keyed on the CALLER, not on local state. "The hub is empty" cannot
+       * distinguish a restore from a hostile file — both arrive at an empty hub — so
+       * inferring trust from emptiness would trade AC-F1-7 away to fix a usability bug.
+       * What actually differs is provenance the caller knows and the bytes cannot forge:
+       * recovery and sync pull the image from the user's OWN configured sync origin, while
+       * a file the user picked off disk is an untrusted donor no matter how empty the hub.
+       * So `trustedOrigin` is passed in by those two call sites and defaults to false.
+       */
       const report: UserDbImportReport = {
         droppedConnections: reconcileImportedConnections(next, localApprovedConnections),
+        droppedRuntimeContracts:
+          options?.trustedOrigin === true
+            ? []
+            : reconcileImportedRuntimeContracts(next, localContractBytes),
       };
       // Close the inner driver FIRST: its cached app databases came from the old handle.
       // Its close-flush writes into the old handle, which is discarded right after.

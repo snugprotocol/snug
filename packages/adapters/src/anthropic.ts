@@ -105,8 +105,11 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
   const endpointSupportsCaching = supportsCaching(baseUrl);
 
   return {
-    async complete({ system, messages, tools, signal, onDelta, cache }): Promise<AdapterResult> {
+    async complete({ system, messages, tools, signal, onDelta, cache, maxOutputTokens }): Promise<AdapterResult> {
       const caching = cache === true && endpointSupportsCaching;
+      // The per-turn cap NARROWS the construction ceiling and can never widen it (D4).
+      const turnMaxTokens =
+        maxOutputTokens === undefined ? maxTokens : Math.min(maxOutputTokens, maxTokens);
       let response: Response;
       try {
         response = await fetchImpl(`${baseUrl}/v1/messages`, {
@@ -121,7 +124,7 @@ export function anthropicAdapter(options: AnthropicAdapterOptions): AgentAdapter
           },
           body: JSON.stringify({
             model,
-            max_tokens: maxTokens,
+            max_tokens: turnMaxTokens,
             // Render order is tools -> system -> messages, so ONE breakpoint on the last
             // system block caches tools+system together — the whole stable prefix. The
             // volatile tail (messages) deliberately carries none: a breakpoint there

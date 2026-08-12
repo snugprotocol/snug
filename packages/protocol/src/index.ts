@@ -190,6 +190,40 @@ export {
   type ConnectionTestRequest,
 } from './connection-requirement.js';
 
+// Lean runtime turns (TASK-20260811 P0, ADR-0018) — the compact artifact a runtime app
+// turn assembles FROM. Internal draft: host-assigned at both call sites, never app-claimed,
+// and OUT of the json-schemas SOURCES until a spec push is authorized.
+export {
+  RUNTIME_CONTRACT_MAX_BYTES,
+  RUNTIME_CONTRACT_MAX_SETTINGS,
+  RUNTIME_CONTRACT_OVERVIEW_MAX_CHARS,
+  RUNTIME_CONTRACT_PERSONA_MAX_CHARS,
+  RUNTIME_CONTRACT_RESPONSE_GUIDANCE_MAX_CHARS,
+  RUNTIME_CONTRACT_SETTING_KEY_RULE,
+  RUNTIME_CONTRACT_SETTING_VALUE_MAX_CHARS,
+  RUNTIME_CONTRACT_STATE_GUIDANCE_MAX_CHARS,
+  RUNTIME_MAX_OUTPUT_TOKENS_CEILING,
+  RUNTIME_MAX_OUTPUT_TOKENS_FLOOR,
+  canonicalRuntimeContract,
+  parseRuntimeContract,
+  runtimeContractSchema,
+  type RuntimeContract,
+} from './runtime-contract.js';
+
+// Intent-routed app chat (TASK-20260811 P0, ADR-0019) — the router's input contract.
+export {
+  CHAT_INTENTS,
+  CHAT_INTENT_CLARIFICATION_MAX_CHARS,
+  CHAT_INTENT_DATA_LANE,
+  CHAT_INTENT_FEATURE_LANE,
+  chatIntentSchema,
+  isDataIntent,
+  isFeatureIntent,
+  parseChatIntent,
+  type ChatIntent,
+  type ChatIntentClassification,
+} from './chat-intent.js';
+
 export {
   scanForCredentialValues,
   stripCredentialHeaders,

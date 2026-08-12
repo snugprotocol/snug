@@ -16,7 +16,7 @@ import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } f
 
 import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
-import { useBuilderChat } from '../agent/useBuilderChat.js';
+import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import { createNetHandlerFor } from '../state/net.js';
 import {
   isConnectionRepairableNetError,
@@ -33,6 +33,7 @@ import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
+import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -218,7 +219,14 @@ export default function RunView(): ReactElement {
   // onLlmEvent is stable (useCallback with [] deps), so threading it here does not
   // rebuild the transport on every render. This is what makes an APP's LLM turn —
   // e.g. a Chess move — visible in the LLM surface alongside the builder's turns.
-  const transport = useMemo(() => createAppTransport(mode, provider, onLlmEvent), [mode, provider, onLlmEvent]);
+  // `id` is threaded so the transport can read this app's runtime contract (ADR-0018).
+  // It is a memo dep for correctness on app-to-app navigation; the contract itself is
+  // read PER SEND inside the transport, so an edit or revert needs no rebuild here
+  // (fold F-M1 — there is no contentEpoch dependency and there does not need to be).
+  const transport = useMemo(
+    () => createAppTransport(mode, provider, onLlmEvent, id),
+    [mode, provider, onLlmEvent, id],
+  );
   // The envelope net capability (AL-03): a value-blind NetHandler the runner routes
   // net-request frames to. The executor (in state/net.ts) reads the app's frozen host
   // ceiling + credentials from the page user DB per use — the runner never sees a token.
@@ -324,7 +332,13 @@ export default function RunView(): ReactElement {
       // racing the copy against the route change would render an installed starter as
       // declaring nothing. It writes a requirement, never a credential, and never an
       // approval — see `installStarterConnections`.
-      await installStarterConnections(await getUserDb(), entry.id);
+      const installedDb = await getUserDb();
+      await installStarterConnections(installedDb, entry.id);
+      // The starter's authored runtime contract (ADR-0018), copied onto v1 for the same
+      // reason and on the same act: a starter is installed rather than built, so no
+      // authoring turn ever runs to write one. Failure is a no-op — the app simply runs
+      // on the lean generic layers.
+      await installStarterRuntimeContract(installedDb, entry.id);
       navigate(`/run/${entry.id}`, { replace: true });
     } catch (err) {
       setInstallError(err instanceof Error ? err.message : String(err));
@@ -522,6 +536,8 @@ export default function RunView(): ReactElement {
             onConnectionConnect={(connection) =>
               openConnectionWizard({ appId: connection.appId, slot: connection.slot, source: 'directive' })
             }
+            onApproveDataWrite={chat.approveDataWrite}
+            onDeclineDataWrite={chat.declineDataWrite}
           />
         </>
       )}
@@ -775,6 +791,9 @@ interface RailChatProps {
   onDirectiveConnect?: () => void;
   /** The v4 connect card's mount — the persisted (appId, slot) to open the wizard on. */
   onConnectionConnect?: (connection: { appId: string; slot: string }) => void;
+  /** The data-write approval card's actions (ADR-0019 D8). */
+  onApproveDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
+  onDeclineDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
@@ -787,6 +806,8 @@ function RailChat({
   onStop,
   onDirectiveConnect,
   onConnectionConnect,
+  onApproveDataWrite,
+  onDeclineDataWrite,
 }: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
   const submit = (): void => {
@@ -805,13 +826,19 @@ function RailChat({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minHeight: '100%' }}>
       {messages.length === 0 ? (
-        <EmptyState glyph="✎" title="keep talking" lesson="ask for tweaks — the agent can rebuild the app from here." />
+        <EmptyState
+          glyph="✎"
+          title="keep talking"
+          lesson="ask about your data (“what did I spend on food?”), change it (“add lunch on Tuesday”), or change the app itself."
+        />
       ) : (
         <ChatLog
           messages={messages}
           steps={steps}
           activity={activity}
           busy={busy}
+          {...(onApproveDataWrite !== undefined ? { onApproveDataWrite } : {})}
+          {...(onDeclineDataWrite !== undefined ? { onDeclineDataWrite } : {})}
           phase="edit"
           onDirectiveConnect={onDirectiveConnect}
           onConnectionConnect={onConnectionConnect}

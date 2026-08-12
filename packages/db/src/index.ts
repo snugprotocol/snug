@@ -5,6 +5,11 @@
 
 export {
   createDbDriver,
+  // The data lane's statement-class guards. Exported so the playground's write-proposal
+  // handler refuses out-of-class SQL with the SAME definition the executor uses — a second
+  // copy is a second thing to forget to update (R-B1).
+  nonDataStatementReason,
+  isRowModifyingStatement,
   type CreateDbDriverOptions,
   type DbDriverResult,
   type DbPersistence,
@@ -52,6 +57,13 @@ export {
   type UserDb,
   type UserDbErrorCode,
   type UserDbImportReport,
+  // TASK-20260811 (ADR-0019 D7): the scratch executor's shapes — the data lane's tools
+  // consume these, so they are part of the package's surface, not internal detail.
+  type ScratchRunResult,
+  type ScratchStatement,
+  type ScratchStatementResult,
+  MAX_QUERY_RESULT_BYTES,
+  MAX_QUERY_ROWS,
 } from './userdb/userdb.js';
 
 export {

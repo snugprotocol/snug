@@ -121,6 +121,35 @@ describe('chat threads + messages', () => {
     ]);
     await db.close();
   });
+
+  /**
+   * A staged data-write proposal persists on the assistant message's meta, and the user
+   * resolving it (approve/decline) has to persist too — otherwise a reload re-offers a
+   * change that already landed (R-M5).
+   */
+  it('updates a message’s meta in place, leaving content and pinning alone', async () => {
+    const db = await open(backend);
+    const row = db.appendChatMessage('app:m', 'assistant', 'awaiting approval', {
+      pinned: true,
+      meta: { dataWrite: { summary: 'add lunch' } },
+    });
+
+    db.updateChatMessageMeta(row.id, { dataWrite: { summary: 'add lunch', outcome: 'applied' } });
+
+    const [stored] = db.listChatMessages('app:m');
+    expect(stored?.meta).toEqual({ dataWrite: { summary: 'add lunch', outcome: 'applied' } });
+    expect(stored?.content, 'content is untouched').toBe('awaiting approval');
+    expect(stored?.pinned, 'pinning is untouched').toBe(true);
+    await db.close();
+  });
+
+  it('updating meta for an unknown message id is a silent no-op, never a throw', async () => {
+    // The caller is a UI click handler; a stale id (pruned thread, deleted app) must not
+    // take down the surface.
+    const db = await open(backend);
+    expect(() => db.updateChatMessageMeta(4242, { dataWrite: {} })).not.toThrow();
+    await db.close();
+  });
 });
 
 describe('settings / profile / secrets / sync config', () => {

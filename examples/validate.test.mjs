@@ -14,7 +14,7 @@
 //   5. parses as HTML (jsdom when available at the repo root; structural checks otherwise)
 //   6. under the 5 MB artifact limit
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
  * resolve (verified: with `packages/protocol/dist` deleted, `turbo run test
  * --filter=examples` rebuilds protocol BEFORE this file runs).
  */
-import { connectionRequirementSchema } from '@snugprotocol/protocol';
+import { connectionRequirementSchema, runtimeContractSchema } from '@snugprotocol/protocol';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -325,7 +325,39 @@ for (const app of APPS) {
       assert.match(authored, /responseSchema:/, 'agent-driven: a responseSchema travels with the request');
     }
   });
+
+  test(`${app}: runtime contract matches its LLM posture (ADR-0018)`, () => {
+    // An agent-driven starter is the reference implementation of a well-built Snug app,
+    // so it must ship the artifact the KB tells every builder to write. An LLM-free app
+    // must NOT ship one: a contract for an app that never calls the model is dead text
+    // that would still be copied forward on every version.
+    const contractPath = path.join(REPO_ROOT, 'examples', app, 'runtime-contract.json');
+    const present = existsSync(contractPath);
+    if (LLM_FREE_APPS.has(app)) {
+      assert.equal(present, false, 'LLM-free: ships no runtime-contract.json');
+      return;
+    }
+    assert.ok(present, 'agent-driven: ships runtime-contract.json');
+    // Parsed through the REAL schema — a starter contract that the host would reject at
+    // install time is worse than none, because the app looks contract-bearing on disk.
+    const parsed = runtimeContractSchema.safeParse(JSON.parse(readFileSync(contractPath, 'utf8')));
+    assert.ok(parsed.success, `runtime-contract.json must satisfy runtimeContractSchema: ${parsed.error?.message ?? ''}`);
+  });
 }
+
+// ── Lean runtime requests (ADR-0018) ───────────────────────────────────────────────
+test('chess sends its board state ONCE, not in both payload and state', () => {
+  // The measured over-send this task fixed: `fen` appeared in the payload AND in
+  // `state`, and `state.history` was unbounded while the payload copy was capped.
+  // Pinned as a regression because it is invisible in the UI and costs on every move.
+  const html = readFileSync(path.join(REPO_ROOT, 'examples', 'chess', 'app.html'), 'utf8');
+  const call = /sendMessage\('player_move',([\s\S]*?)responseSchema/.exec(html)?.[1] ?? '';
+  assert.ok(call.length > 0, 'found the player_move request');
+  const payload = call.slice(0, call.indexOf('state:'));
+  assert.doesNotMatch(payload, /\bfen\b/, 'fen belongs in state only');
+  assert.doesNotMatch(payload, /moveHistory/, 'history belongs in state only');
+  assert.match(call, /moveHistory: history\.slice\(-12\)/, 'the state copy of history is bounded');
+});
 
 // ── Behavior checks on money arithmetic (adversarial review of AL-08, fix 2) ────────
 // parseCents is extracted from the shipped source and executed — the one place in the

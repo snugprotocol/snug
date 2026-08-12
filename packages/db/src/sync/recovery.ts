@@ -7,7 +7,7 @@ import type { SyncProvider, SyncPullResult } from './provider.js';
 
 /** The subset of UserDb recovery needs — matches what openFresh() hands back. */
 export interface RestorableUserDb {
-  importUserDb(bytes: Uint8Array): Promise<unknown>;
+  importUserDb(bytes: Uint8Array, options?: { trustedOrigin?: boolean }): Promise<unknown>;
   flush(): Promise<void>;
   close(): Promise<void>;
 }
@@ -50,7 +50,8 @@ export async function restoreFromOrigin<T extends RestorableUserDb>(
     return { status: 'failed', message: `opening a fresh user DB failed: ${errorMessage(err)}` };
   }
   try {
-    await fresh.importUserDb(remote.bytes);
+    // The user's own origin image restored into a fresh hub — contracts survive (R-M2).
+    await fresh.importUserDb(remote.bytes, { trustedOrigin: true });
     await fresh.flush(); // make the restore durable immediately
     return { status: 'restored', userDb: fresh, revision: remote.revision };
   } catch (err) {

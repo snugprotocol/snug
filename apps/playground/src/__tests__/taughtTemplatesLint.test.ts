@@ -53,7 +53,7 @@ const TAUGHT_FIELD_KEYS = ['api_key', 'api_secret', 'passphrase', 'token'];
 
 function renderedKnowledgeBase(): string {
   const sections = getKnowledgeBase();
-  return sections.map((section) => `${section.heading}\n${section.text}`).join('\n\n');
+  return sections.map((section) => `${section.headingTree.join('\n')}\n${section.text}`).join('\n\n');
 }
 
 describe('P2 FOLD — every taught headerTemplate passes the real lint', () => {

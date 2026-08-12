@@ -34,7 +34,11 @@ describe('D9 — scanForRenderDirective (parse, never trust)', () => {
 
   it('extracts a bare (unfenced) directive object too', () => {
     const scan = scanForRenderDirective(`connect it: ${JSON.stringify(directive)}`);
-    expect(scan && 'directive' in scan ? scan.directive.proposal.providerName : null).toBe('Acme Weather');
+    expect(
+      scan && 'directive' in scan && scan.directive.kind === 'auth_wizard'
+        ? scan.directive.proposal.providerName
+        : null,
+    ).toBe('Acme Weather');
   });
 
   it('a MALFORMED directive (evidence smuggled in) is reported malformed — never partially rendered', () => {

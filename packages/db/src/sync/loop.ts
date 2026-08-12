@@ -23,7 +23,7 @@ import { loadSidecar, saveSidecar, sha256Hex, type SyncSidecarState } from './si
 export interface SyncableUserDb {
   exportUserDb(opts?: { includeSecrets?: boolean }): Promise<Uint8Array>;
   /** Result (the import report) is deliberately ignored by the loop. */
-  importUserDb(bytes: Uint8Array): Promise<unknown>;
+  importUserDb(bytes: Uint8Array, options?: { trustedOrigin?: boolean }): Promise<unknown>;
   listSecretKeys(): string[];
   getSecret(key: string): string | undefined;
   setSecret(key: string, value: string): void;
@@ -147,7 +147,8 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
   /** Pull is a merge, never a swap: local `snug_secrets` rows survive the import. */
   const pullMerge = async (remote: SyncPullResult): Promise<void> => {
     const kept = userDb.listSecretKeys().map((key) => [key, userDb.getSecret(key)] as const);
-    await userDb.importUserDb(remote.bytes);
+    // Pulled from the user's OWN configured sync origin, so contracts survive (R-M2).
+    await userDb.importUserDb(remote.bytes, { trustedOrigin: true });
     for (const [key, value] of kept) {
       if (value !== undefined) userDb.setSecret(key, value); // local wins over any pulled row
     }
