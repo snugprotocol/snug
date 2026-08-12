@@ -1,6 +1,6 @@
 # TASK-20260812-registry-authoritative-auth: registry-authoritative auth shapes + connect-error surfacing
 
-- **Status**: **APPROVED by owner 2026-08-12 (full plan, P0–P3) — implementation in progress, P0 first**
+- **Status**: **IMPLEMENTED P0–P3 (2026-08-12, tests-first throughout) — awaiting review/PR; branch unpushed**
 - **Owner**: Jeetu (commissioned 2026-08-12); planning session by Claude
 - **Risk tier**: **High** (auto-escalated: `packages/auth` is the credential broker; the change decides which credential FIELDS a user is asked for and which hosts a credential may be injected against — C1-adjacent by construction)
 - **Branch**: `feat/TASK-20260812-registry-authoritative-auth` (off `main` at `bac5562`)
@@ -501,3 +501,47 @@ every package.
 - Still owed from handoff item 3: reading the owner's REAL rows needs the owner's
   browser (OPFS) — queued as an owner-assist item at close; forward-only makes it
   non-blocking.
+
+### 2026-08-12 — Claude (implementation session, P0–P3 complete) — session
+
+- **P0 (auth):** `registry-self-containment.test.ts` RED-first (45 red / 7 structural
+  passes), then: required `kind` on the type + all 10 entries (AC1 table; **decision:
+  Apple Music pins `oauth2_auth_code`** — the one entry the plan's table did not name;
+  it is what the old hardcode emitted, its entry says "authors override", and no
+  truthful MusicKit kind exists in `CONNECTION_KINDS` — queued follow-up), optional
+  `aliases` seat (`Coinbase Pro` owner-named; `OpenWeatherMap` as the one obvious
+  synonym), derived `INFERRER_ALIASES` + `resolveInferrerAlias` (D3 — collision tests:
+  alias→existing key, no key shadowing, pre-normalized), `requirementFromRegistryEntry`
+  (D2, deep-copies, no cast needed — tsc-clean). `tsconfig.test.json` + tsc prefix added
+  to `packages/auth` (D1 correction).
+- **P1 (auth):** `connection-requirement-inferrer.test.ts` RED-first (10 red for the
+  right reasons), then rung 1 = exact key ?? alias, emitting via the ONE emitter. AC4
+  restated as call-recording + bypass mutation; AC5/AC6 pinned. AC10 (D6 split-brain)
+  pinned in the self-containment suite. auth 357 → 409, tsc-gated.
+- **P2 (playground):** RED-first both files. **AC11/F4**: the zero-row branch of
+  `openConnectionWizardForApp` now WRITES the explanation (why + route forward) and
+  `ConnectionWizardNote` is the note store's first-ever renderer (app-level mount beside
+  the sheet) — the store had NO subscriber, so even the pre-existing "wizard already
+  open" refusal was silent; one renderer fixes the class. **AC7/AC8/F1**: the
+  ConnectScreen retry's `void` became a catch into `connectionFlowStatusStore`, so the
+  three pre-status throws render their literal copy beside the existing retry button.
+  **Found in the red phase: the retry ALWAYS threw for client_id flows** — it passes
+  `{}` as client creds, so `generateAuthUrl` threw `Missing required client credential:
+  client_id` on every click and the void discarded it; that literal is now an AC7 test.
+  D4 note: the catch routes to the flow-status store rather than component-local state —
+  same altitude (the sheet's handler), and it reuses the exact error region + retry
+  ConnectScreen already renders. playground 740 → 750.
+- **P3:** whole-surface `coinbaseJourney.test.ts` — undeclared Coinbase build → recovery
+  (poison adapter) → persisted `api_key` row w/ 3 named fields, provenance `registry` →
+  the banner CTA's own call opens the wizard → `nextStep('credentials') === 'done'`,
+  never a Connect step. **Test-script audit (M4 closed): `runner` and `sdk` ALSO lacked
+  the tsc gate** — both gained `tsconfig.test.json` + the prefix; runner's gate
+  immediately caught a pre-existing type error in its test harness
+  (`snug-app-frame.test.tsx` spreading `Partial<>` over a discriminated-union props
+  type — fixed harness-side with a single post-composition assertion). Docs: lessons
+  entry (trace from the user's entry point; execute assumed chains; grep for the
+  subscriber), next-steps updated, code-map rows updated. **Threat-model decision: no
+  delta needed** — D3's alias map is an authoring-only short-circuit consulted by rung 1;
+  resolution and ban semantics are untouched, so the trust story is unchanged.
+- Evidence: root `pnpm test -- --force` run at close (result recorded in the commit
+  below). No test deleted or weakened; every RED observed before its GREEN.
