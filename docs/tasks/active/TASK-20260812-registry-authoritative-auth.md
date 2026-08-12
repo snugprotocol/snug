@@ -29,11 +29,13 @@ Coinbase via the real inferrer:  kind >>> oauth2_auth_code | fields >>> undefine
 guard fires (kind!==none && fields empty) >>> true
 ```
 
-**Therefore F1 and F2 are NOT the same bug, and the owner's symptom is entirely F2.**
-That leaves a genuine open question (§5 Q-A): the code path the owner walked should have
-RENDERED an error, but the owner reported none. Either the stored row differs from this
-model, or there is a third defect not yet found. **Not guessing — the first implementation
-step is to read the owner's actual row.**
+**Therefore F1 and F2 are NOT the same bug** — and, per §5, the owner's symptom turned out
+to be **neither**. The owner never reached the wizard at all: the app has no connection row,
+so the run view's `NET_NOT_APPROVED` banner CTA no-ops silently (**F4**). F1 remains a real
+but independent defensive fix on a path the owner has not walked.
+
+*(The paragraph above analyses a row shape that assumed a row EXISTS. For the owner's app
+none does — F2 still explains why persistence refused it, which §5 traces.)*
 
 **F2 — registry entries are not self-contained, and the inferrer ignores what they do
 carry.** `connection-requirement-inferrer.ts:130` hardcodes `kind: 'oauth2_auth_code'` for
@@ -46,12 +48,14 @@ the real inferrer:**
 | OpenWeather | `oauth2_auth_code` | 0 | `api_key` + 1 field |
 | Spotify | `oauth2_auth_code` | 0 | correct kind, but `client_id` field dropped |
 
-So an authored Coinbase app gets an OAuth requirement carrying NO fields — and the
-empty-fields guard then refuses it at the credentials screen (see F1). The user is asked to
-"connect" a provider whose three real credential fields the registry already holds and the
-emitter threw away. **This is the owner's actual bug, on its own.** Fixing F2 makes the
-Coinbase row an `api_key` requirement with three named fields, which routes
-`credentials → done` and never renders a Connect button at all (verified by probe).
+So an authored Coinbase app gets an OAuth requirement carrying NO fields — a shape whose
+three real credential fields the registry already holds and the emitter threw away.
+**F2 is the probable ROOT CAUSE of the owner's F4 symptom** (§5): the post-turn recovery
+would have received exactly this shape, and `persistConnectionRequirement` refusing it is
+the most likely reason no row exists. Fixing F2 makes the Coinbase requirement an `api_key`
+with three named fields — a shape that persists, routes `credentials → done`, and never
+renders a Connect button at all (verified by probe). **The chain is not yet proven end to
+end; P0 proves it.**
 
 **F3 — registered providers must never reach the model.** Rung 1 already short-circuits on
 a registry hit, so the ladder is right. The remaining gap is narrower than first described:
