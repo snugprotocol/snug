@@ -46,15 +46,20 @@ the real inferrer:**
 | OpenWeather | `oauth2_auth_code` | 0 | `api_key` + 1 field |
 | Spotify | `oauth2_auth_code` | 0 | correct kind, but `client_id` field dropped |
 
-So an authored Coinbase app gets an OAuth requirement, the wizard routes it to a `connect`
-step (`needsOAuthConnectStep` is `kind === 'oauth2_auth_code'` — verified), and the connect
-handler throws `this connection does not sign you in` — which F1 then swallows. **F1 and F2
-are the same bug seen from two ends**, which is why they ship together.
+So an authored Coinbase app gets an OAuth requirement carrying NO fields — and the
+empty-fields guard then refuses it at the credentials screen (see F1). The user is asked to
+"connect" a provider whose three real credential fields the registry already holds and the
+emitter threw away. **This is the owner's actual bug, on its own.** Fixing F2 makes the
+Coinbase row an `api_key` requirement with three named fields, which routes
+`credentials → done` and never renders a Connect button at all (verified by probe).
 
 **F3 — registered providers must never reach the model.** Rung 1 already short-circuits on
-a registry hit, so the ladder is right; the gap is that a near-miss name ("coinbase pro",
-"Google Calendar") misses the normalized key and falls through to inference even though a
-reviewed entry exists. Adds a human-authored alias list per entry.
+a registry hit, so the ladder is right. The remaining gap is narrower than first described:
+a near-miss name ("coinbase pro") misses the normalized key and falls through to inference.
+Note these names are **already handled correctly on the BAN path** — they resolve as
+brand-ADJACENT and their authored fields are refused — so this adds an authoring
+short-circuit only, via a separate inferrer-scoped alias map (D3), and deliberately does
+NOT grant them registry authority anywhere else.
 
 **Acceptance criteria** (each becomes at least one test):
 
