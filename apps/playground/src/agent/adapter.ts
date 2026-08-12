@@ -9,10 +9,12 @@ import {
   mockAdapter,
   openaiAdapter,
   type AgentAdapter,
+  type FetchLike,
   type MockTurn,
 } from '@snugprotocol/adapters';
 
 import type { ByokProvider, PlaygroundMode } from '../state/mode.js';
+import { getPlatform } from '../platform/platform.js';
 import { demoAuthChatScript, demoAuthVariant } from './demoAuth.js';
 import { demoRequirementChatScript, demoRequirementVariant } from './demoRequirement.js';
 import { DEMO_APP_HTML, DEMO_APP_REPLY, DEMO_APP_TITLE } from './demoApp.js';
@@ -35,6 +37,12 @@ export interface TurnAdapterConfig {
   key?: string;
   model?: string;
   localUrl?: string;
+  /**
+   * Test override ONLY. Production never passes this — the default is the platform
+   * fetch (TASK-20260812, P0 amendment 8), so desktop's native transport reaches every
+   * provider adapter through this ONE choke point with zero per-call-site edits.
+   */
+  fetch?: FetchLike;
 }
 
 /** The demo brain's chat script: consult the KB, write the artifact, sign off. */
@@ -75,6 +83,10 @@ function demoAppScript(): MockTurn[] {
  * local mode ignores provider/key; byok needs a key for anthropic/openai.
  */
 export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpose): AgentAdapter {
+  // The platform seam at the LLM choke point: desktop supplies its native fetch here,
+  // web supplies nothing and the adapters keep their own `globalThis.fetch` default.
+  const fetchImpl = config.fetch ?? getPlatform().fetchImpl;
+  const fetchDep = fetchImpl !== undefined ? { fetch: fetchImpl } : {};
   if (config.mode === 'webllm') {
     // The shared `model` setting holds byok/local wire ids (e.g. "llama3.2") — a
     // different namespace from web-llm prebuilt ids, so it is deliberately IGNORED:
@@ -85,13 +97,22 @@ export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpos
     return localAdapter({
       ...(config.localUrl !== undefined ? { baseUrl: config.localUrl } : {}),
       ...(config.model !== undefined ? { model: config.model } : {}),
+      ...fetchDep,
     });
   }
   if (config.provider === 'anthropic' && config.key !== undefined) {
-    return anthropicAdapter({ apiKey: config.key, ...(config.model !== undefined ? { model: config.model } : {}) });
+    return anthropicAdapter({
+      apiKey: config.key,
+      ...(config.model !== undefined ? { model: config.model } : {}),
+      ...fetchDep,
+    });
   }
   if (config.provider === 'openai' && config.key !== undefined) {
-    return openaiAdapter({ apiKey: config.key, ...(config.model !== undefined ? { model: config.model } : {}) });
+    return openaiAdapter({
+      apiKey: config.key,
+      ...(config.model !== undefined ? { model: config.model } : {}),
+      ...fetchDep,
+    });
   }
   return mockAdapter(purpose === 'chat' ? demoChatScript() : demoAppScript());
 }

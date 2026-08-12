@@ -22,6 +22,20 @@ import type { UserDb } from '@snugprotocol/db';
 
 import { getUserDb } from './userdb.js';
 import { createStore } from './store.js';
+import { getPlatform } from '../platform/platform.js';
+
+/**
+ * THE single platform fetch seam (TASK-20260812, P0 amendment 5): the default transport
+ * for BOTH connected-fetch call paths — the RunView net handler and the wizard's
+ * `executeConnectionTestRequest` probe — because both assemble their deps through
+ * `connectedFetchDepsFor` below. Desktop's native fetch rides in here and NOWHERE else;
+ * with no platform set this is byte-for-byte today's page fetch (AC10). Resolved per
+ * call, not at module load, so the seam can never capture a stale platform.
+ */
+function platformDefaultFetch(input: string, init?: RequestInit): Promise<Response> {
+  const fetchImpl = getPlatform().fetchImpl;
+  return fetchImpl !== undefined ? fetchImpl(input, init) : globalThis.fetch(input, init);
+}
 
 /** A confirm awaiting the user's decision (mutating net call). The dialog observes this. */
 export interface PendingNetConfirm {
@@ -68,8 +82,7 @@ export function invalidateNetGrants(appId: string): void {
  */
 export function connectedFetchDepsFor(
   db: UserDb,
-  fetchImpl: (input: string, init?: RequestInit) => Promise<Response> = (input, init) =>
-    globalThis.fetch(input, init),
+  fetchImpl: (input: string, init?: RequestInit) => Promise<Response> = platformDefaultFetch,
 ): ConnectedFetchDeps {
   return {
     credentialStore: new UserDbCredentialStore(db),
@@ -96,6 +109,10 @@ export function connectedFetchDepsFor(
     },
     fetchImpl,
     confirmGate,
+    // Decision 6 (TASK-20260812): the LAN rung keys on the platform capability — desktop
+    // widens `http://` to explicitly-approved private-range IP literals; the browser
+    // profile passes NO seat at all, so the executor's default (https-only) is untouched.
+    ...(getPlatform().capabilities.lanHttpPrivate ? { transportPolicy: { allowHttpForPrivateHosts: true } } : {}),
   };
 }
 
@@ -116,7 +133,9 @@ export interface CreateNetHandlerOptions {
  * the page user DB per use.
  */
 export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetHandler {
-  const fetchImpl = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
+  // Defaults to the SAME platform-sourced seam `connectedFetchDepsFor` uses — the two
+  // call paths must never disagree about which transport carries a connected request.
+  const fetchImpl = options.fetchImpl ?? platformDefaultFetch;
   return {
     async handle(netAppId: string, request: NetRequestFrame): Promise<NetHandlerResult> {
       const db = await getUserDb();

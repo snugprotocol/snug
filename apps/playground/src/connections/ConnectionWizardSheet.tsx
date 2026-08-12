@@ -42,18 +42,22 @@ import type { ReactElement } from 'react';
 
 import { CONNECTION_STATUS, type ConnectionField, type ConnectionRequirement } from '@snugprotocol/protocol';
 import type { ConnectionRow } from '@snugprotocol/db';
+import { lookupWellKnownProvider } from '@snugprotocol/auth';
 
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';
 import {
   advanceFromRegister,
   advanceFromReview,
+  cancelConnectionOAuthFlow,
   closeConnectionWizard,
   forceCloseWizard,
   connectionFlowStatusStore,
   connectionWizardRevisionStore,
   connectionWizardStepStore,
   connectionWizardStore,
+  desktopOAuthPostureFor,
+  desktopOAuthRefusalFor,
   findRevokedBefore,
   needsReapproval,
   openBlankConnectionOAuthPopup,
@@ -63,8 +67,10 @@ import {
   testConnection,
   type ConnectionTestOutcome,
   type ConnectionWizardSession,
+  type DesktopOAuthRefusal,
   type RevokedBefore,
 } from '../state/connectionWizard.js';
+import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
 import { Sheet } from '../ui/Sheet.js';
 
@@ -264,16 +270,44 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
    * computes this exact string for both the authorize call and the token exchange, so
    * asking the user to ASSEMBLE it from prose is asking them to hand-build a value that
    * must match byte-for-byte at the provider — the most common way a BYO registration
-   * fails. Derived from the same `window.location.origin` the service uses, so it cannot
-   * drift from what is actually sent.
+   * fails.
+   *
+   * ONE SOURCE with the service (TASK-20260812, Decision 3): on web it is the same
+   * `window.location.origin` literal the service derives, synchronously; on desktop it
+   * is the platform's `redirectUriFor` — the recorded-string provider the flow itself
+   * uses — resolved async into state. A second derivation on either platform is a
+   * second chance to differ from what is actually sent.
    *
    * It lives on the REGISTER screen because that is the provider-side step: this URL has
    * to be registered before the provider will issue the client id pasted on the NEXT
    * screen. OAuth kinds ONLY — a redirect URI means nothing for api_key/bearer/basic, and
    * showing one there would imply a registration step that does not exist.
    */
-  const redirectUri =
-    row.requirement.kind === 'oauth2_auth_code' ? `${window.location.origin}/oauth/callback` : undefined;
+  const isOAuth = row.requirement.kind === 'oauth2_auth_code';
+  const platformOauth = getPlatform().oauth;
+  const providerName = row.requirement.provider.name;
+  const posture = isOAuth ? desktopOAuthPostureFor(row.requirement) : undefined;
+  const loopbackPosture = posture === 'loopback' || posture === 'loopback-fixed-port' ? posture : undefined;
+  const [platformRedirectUri, setPlatformRedirectUri] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    // Unsupported postures never reach this screen (the refusal gate renders instead),
+    // so the guard here is only about not calling the platform for non-loopback rows.
+    if (platformOauth === undefined || loopbackPosture === undefined) return;
+    let alive = true;
+    void platformOauth.redirectUriFor({ provider: providerName, posture: loopbackPosture }).then((uri) => {
+      if (alive) setPlatformRedirectUri(uri);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [platformOauth, loopbackPosture, providerName]);
+
+  const redirectUri = !isOAuth
+    ? undefined
+    : platformOauth === undefined
+      ? `${window.location.origin}/oauth/callback`
+      : platformRedirectUri;
 
   return (
     <div className="field">
@@ -323,18 +357,34 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
             character for character, and a mismatch is refused before sign-in.
           </span>
           <Button onClick={() => void navigator.clipboard?.writeText?.(redirectUri)}>copy this address</Button>
-          {/*
-            Answers a question a careful user WILL have (owner, 2026-08-09): every app on
-            this hub shares one callback address, so does each app need its own
-            registration — and can apps capture each other's sign-ins? No on both counts.
-            Which app a callback belongs to travels in the HMAC-signed `state`, verified
-            before anything is read and bound to both appId and flowId, so the URL never
-            carries identity.
-          */}
-          <span className="hint">
-            every app on this hub uses this same address, so you only need to register once per provider —
-            sign-ins are matched to the right app by a signed token, not by the address.
-          </span>
+          {platformOauth === undefined ? (
+            /*
+              Answers a question a careful user WILL have (owner, 2026-08-09): every app on
+              this hub shares one callback address, so does each app need its own
+              registration — and can apps capture each other's sign-ins? No on both counts.
+              Which app a callback belongs to travels in the HMAC-signed `state`, verified
+              before anything is read and bound to both appId and flowId, so the URL never
+              carries identity.
+            */
+            <span className="hint">
+              every app on this hub uses this same address, so you only need to register once per provider —
+              sign-ins are matched to the right app by a signed token, not by the address.
+            </span>
+          ) : loopbackPosture === 'loopback-fixed-port' ? (
+            /*
+              The fixed-port walkthrough (Decision 2): ONE stable copy-paste address that
+              survives restarts, because this provider matches the registered URI exactly.
+            */
+            <span className="hint">
+              the desktop app always signs in on this exact address, so you only need to register it once per
+              provider — it stays the same every time you use the app.
+            </span>
+          ) : (
+            <span className="hint">
+              this address points at the desktop app on your own computer — it only answers during a sign-in you
+              started.
+            </span>
+          )}
         </div>
       ) : null}
 
@@ -412,6 +462,16 @@ function CredentialsScreen({
   const isOAuth = requirement.kind === 'oauth2_auth_code';
 
   /**
+   * The BYOK-CORS disclosure (2026-08-12 advisory; AC6's `browserCallable` half),
+   * BEFORE credentials are pasted. Tri-state on purpose: only a REVIEWED `false` in the
+   * registry earns the line — an absent seat is unknown and makes no claim either way,
+   * because "works in a browser" is exactly the promise an absent fact cannot back. On
+   * desktop the wall does not exist (native fetch), so nothing is claimed there either.
+   */
+  const disclosedBrowserWall =
+    getPlatform().kind === 'web' && lookupWellKnownProvider(requirement.provider.name)?.browserCallable === false;
+
+  /**
    * THE POPUP IS OPENED SYNCHRONOUSLY, INSIDE THE CLICK, BEFORE ANY AWAIT.
    *
    * This is the popup-blocker escape and the ordering is the entire fix: a blank
@@ -431,7 +491,10 @@ function CredentialsScreen({
       setError(`enter ${missing.map((field) => field.label).join(', ')} before saving`);
       return;
     }
-    const preOpened = isOAuth ? openBlankConnectionOAuthPopup() : null;
+    // Amendment 7: the blank pre-open is a POPUP-BLOCKER escape, and only the web popup
+    // path needs one — the desktop platform's OS opener is not gesture-gated, and a
+    // blank webview window would linger over a sign-in happening in the system browser.
+    const preOpened = isOAuth && getPlatform().oauth === undefined ? openBlankConnectionOAuthPopup() : null;
     const oauthValues = isOAuth ? { ...values } : {};
     void (async () => {
       const result = await saveConnectionCredentials(values);
@@ -461,6 +524,13 @@ function CredentialsScreen({
       <p className="hint" data-testid="credentials-custody">
         {CUSTODY_CLAUSE_5}.
       </p>
+
+      {disclosedBrowserWall ? (
+        <p className="hint" data-testid="browser-callable-disclosure">
+          one thing to know first: {requirement.provider.name} does not accept requests sent from a web browser, so
+          this connection may fail here even with the right credentials. It works in the Snug desktop app.
+        </p>
+      ) : null}
 
       {fields.map((field) => (
         <CredentialInput
@@ -514,9 +584,20 @@ function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => vo
       </p>
 
       {status.state === 'awaiting_callback' ? (
-        <span className="hint" data-testid="connect-status">
-          waiting for {provider} sign-in — approve the access in the window that opened, then come back here.
-        </span>
+        <>
+          <span className="hint" data-testid="connect-status">
+            waiting for {provider} sign-in — approve the access in the window that opened, then come back here.
+          </span>
+          {/*
+            The explicit abandonment affordance (P0 amendment 7). On desktop the sign-in
+            lives in the SYSTEM browser — there is no popup handle whose closing we could
+            observe — so without this button the only exits from the wait are delivery
+            and the flow TTL. Offered on web too: one abandonment story, both platforms.
+          */}
+          <Button onClick={() => cancelConnectionOAuthFlow()} data-testid="connect-cancel">
+            cancel this sign-in
+          </Button>
+        </>
       ) : status.state === 'exchanging' ? (
         <span className="hint" data-testid="connect-status">
           finishing your {provider} sign-in…
@@ -629,6 +710,49 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
       */}
       <Button variant="primary" onClick={onClose}>
         done
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The desktop posture refusal (TASK-20260812, AC6 / Decision 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The honest-refusal screen: this provider's sign-in cannot be received by the running
+ * shell build, and the user learns that BEFORE pasting anything — never mid-flow. It
+ * renders in place of every credential-half screen (register/credentials/connect):
+ * walking someone through a provider dashboard registration for a flow that will then
+ * refuse is the same broken promise, one screen earlier.
+ *
+ * Plain language, provider-named, and it STEERS: when the registry carries another way
+ * in (GitHub → personal access token), that route is named rather than implied. No
+ * credential input exists on this screen and no forward affordance leads to one.
+ */
+function DesktopOAuthRefusalScreen({
+  refusal,
+  onClose,
+}: {
+  refusal: DesktopOAuthRefusal;
+  onClose: () => void;
+}): ReactElement {
+  return (
+    <div className="field" data-testid="desktop-oauth-refusal">
+      <label>signing in to {refusal.providerName} isn&apos;t available in the desktop app yet</label>
+      <span className="hint">
+        {refusal.posture === 'unvouched'
+          ? `we haven't verified a safe way for the desktop app to receive ${refusal.providerName}'s sign-in, so this connection can't be set up here yet.`
+          : `${refusal.providerName} hands its sign-in back in a way the desktop app doesn't support yet, so this connection can't be set up here.`}
+      </span>
+      {refusal.alternativeLabels.length > 0 ? (
+        <span className="hint" data-testid="desktop-oauth-refusal-alternatives">
+          {refusal.providerName} offers another way in that works here: {refusal.alternativeLabels.join(', ')}. Open
+          the app&apos;s chat and ask it to use that instead.
+        </span>
+      ) : null}
+      <Button variant="primary" onClick={onClose}>
+        take me back
       </Button>
     </div>
   );
@@ -804,6 +928,16 @@ export function ConnectionWizardSheet(): ReactElement | null {
    */
   const showDiff = useMemo(() => needsReapproval(row) && step === 'review', [row, step]);
 
+  /**
+   * The AC6 refusal gate, derived from the ROW (this file's doctrine) and the platform.
+   * On web it is always undefined; on desktop it replaces every credential-half screen
+   * for postures the shell does not implement — the refusal must land BEFORE a
+   * credential is pasted, and before a dashboard registration is walked through for a
+   * flow that would then refuse. The review screen still renders: what the app is
+   * asking for remains readable even when connecting it here is not possible.
+   */
+  const desktopRefusal = useMemo(() => (row === undefined ? undefined : desktopOAuthRefusalFor(row.requirement)), [row]);
+
   if (session === null) return null;
 
   const title = row === undefined ? 'connect' : `connect ${row.requirement.provider.name}`;
@@ -860,6 +994,8 @@ export function ConnectionWizardSheet(): ReactElement | null {
         />
       ) : step === 'review' ? (
         <ReviewScreen row={row} onApprove={() => void advanceFromReview()} />
+      ) : desktopRefusal !== undefined && step !== 'done' ? (
+        <DesktopOAuthRefusalScreen refusal={desktopRefusal} onClose={requestClose} />
       ) : step === 'register' ? (
         <RegisterScreen row={row} onForward={() => void advanceFromRegister()} />
       ) : step === 'credentials' ? (
@@ -869,7 +1005,8 @@ export function ConnectionWizardSheet(): ReactElement | null {
           row={row}
           onStart={() => {
             // Synchronous pre-open inside the gesture — see the note on `save` above.
-            const preOpened = openBlankConnectionOAuthPopup();
+            // Skipped on desktop (amendment 7): the OS opener is not gesture-gated.
+            const preOpened = getPlatform().oauth === undefined ? openBlankConnectionOAuthPopup() : null;
             // CAUGHT, never `void`-discarded (AC8, TASK-20260812). Several paths throw
             // BEFORE any flow status is written — the B1 approval wall, the non-OAuth
             // kind guard, the mint's missing-client_id — and the old `void` form made

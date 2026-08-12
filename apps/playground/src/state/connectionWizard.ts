@@ -49,16 +49,23 @@ import {
   SnugAuthError,
   UserDbCredentialStore,
   executeConnectionTestRequest,
+  lookupWellKnownProvider,
   requirementToSpec,
+  resolveDesktopPosture,
+  type DesktopRedirectPosture,
+  type FetchLike,
   type OAuthCallbackInput,
   type OAuthCallbackResult,
   type OAuthStartInput,
   type OAuthStartResult,
+  type WellKnownAuthOption,
+  type WellKnownOauthProvider,
 } from '@snugprotocol/auth';
 
 import { createStore } from './store.js';
 import { getUserDb } from './userdb.js';
 import { connectedFetchDepsFor, invalidateNetGrants } from './net.js';
+import { getPlatform } from '../platform/platform.js';
 
 export type ConnectionWizardStep = 'review' | 'register' | 'credentials' | 'connect' | 'done';
 
@@ -91,7 +98,13 @@ export type ConnectionFlowStatus =
   | { state: 'awaiting_callback'; flowId: string }
   | { state: 'exchanging' }
   | { state: 'connected'; scopesGranted?: string[] }
-  | { state: 'error'; message: string; authorizeUrl?: string };
+  | { state: 'error'; message: string; authorizeUrl?: string }
+  /**
+   * Desktop-only (TASK-20260812, Decision 5): the registry's posture for this provider
+   * is one the running shell does not implement, so the flow REFUSED before any
+   * credential step. Typed — the sheet renders the refusal, never a generic error.
+   */
+  | { state: 'refused'; refusal: DesktopOAuthRefusal };
 
 export const connectionWizardStore = createStore<ConnectionWizardSession | null>(null);
 export const connectionWizardStepStore = createStore<ConnectionWizardStep>('review');
@@ -624,6 +637,92 @@ export async function testConnection(
 // logs, or renders one, and the only value a caller passes in is the client id it just
 // collected on the credentials screen.
 
+// ---------------------------------------------------------------------------
+// Desktop redirect posture (TASK-20260812 W2a; ADR-0021 Decisions 1/3/5)
+// ---------------------------------------------------------------------------
+//
+// The posture is REGISTRY DATA, resolved at connect/render time via
+// `lookupWellKnownProvider` + `resolveDesktopPosture` — never a requirement seat,
+// never persisted. On the web platform none of this applies (the popup path handles
+// every posture); on desktop the wizard either uses a loopback transport or refuses
+// HONESTLY before any credential is collected (AC6), steering to the provider's other
+// registry options where they exist.
+
+/** The postures the SHIPPED desktop transport implements (loopback listener only). */
+const IMPLEMENTED_DESKTOP_POSTURES = new Set<DesktopRedirectPosture>(['loopback', 'loopback-fixed-port']);
+
+export interface DesktopOAuthRefusal {
+  providerName: string;
+  /** The unsupported posture — or 'unvouched' when the registry names none at all. */
+  posture: DesktopRedirectPosture | 'unvouched';
+  /** Human labels of this provider's registry flows that DO work on this shell. */
+  alternativeLabels: string[];
+}
+
+/**
+ * Which registry flow is this requirement? Kind-keyed on the `option ?? entry` seat
+ * rule (ADR-0020): the entry itself is the DEFAULT flow; an option matches when the
+ * requirement carries ITS kind. Kind is the discriminator the choice card rebinds, so
+ * it is the honest handle here — fields may have been substituted since.
+ */
+function matchedRegistryOption(
+  entry: WellKnownOauthProvider,
+  requirement: ConnectionRequirement,
+): WellKnownAuthOption | undefined {
+  if (entry.kind === requirement.kind) return undefined;
+  return (entry.authOptions ?? []).find((option) => option.kind === requirement.kind);
+}
+
+/**
+ * The desktop redirect posture for this requirement's flow. An UNKNOWN provider (the
+ * user's own IdP, a self-hosted service) defaults to the ephemeral loopback posture —
+ * RFC 8252 §7.3's any-port listener, the transport a BYO registration can always
+ * honor. A KNOWN provider resolves through the registry, and a registry entry that
+ * names no posture resolves to 'unvouched': the wizard must refuse, never guess.
+ */
+export function desktopOAuthPostureFor(requirement: ConnectionRequirement): DesktopRedirectPosture | 'unvouched' {
+  const entry = lookupWellKnownProvider(requirement.provider.name);
+  if (entry === undefined) return 'loopback';
+  return resolveDesktopPosture(entry, matchedRegistryOption(entry, requirement)) ?? 'unvouched';
+}
+
+/** Labels of the provider's OTHER flows that work on this shell — the refusal's steer. */
+function alternativeFlowLabels(entry: WellKnownOauthProvider): string[] {
+  const flows: Array<{ kind: ConnectionRequirement['kind']; label?: string; option?: WellKnownAuthOption }> = [
+    { kind: entry.kind, ...(entry.optionLabel !== undefined ? { label: entry.optionLabel } : {}) },
+    ...(entry.authOptions ?? []).map((option) => ({ kind: option.kind, label: option.label, option })),
+  ];
+  const labels: string[] = [];
+  for (const flow of flows) {
+    if (flow.label === undefined) continue;
+    if (flow.kind === 'oauth2_auth_code') {
+      const posture = resolveDesktopPosture(entry, flow.option);
+      if (posture === undefined || !IMPLEMENTED_DESKTOP_POSTURES.has(posture)) continue;
+    }
+    labels.push(flow.label);
+  }
+  return labels;
+}
+
+/**
+ * Should the desktop wizard REFUSE this OAuth requirement before collecting anything?
+ * `undefined` on the web platform (always), for non-OAuth kinds (postures are a
+ * redirect-transport concern), and for postures the shell implements. The sheet calls
+ * this at the register/credentials gate; the flow calls it again as defence in depth.
+ */
+export function desktopOAuthRefusalFor(requirement: ConnectionRequirement): DesktopOAuthRefusal | undefined {
+  if (getPlatform().oauth === undefined) return undefined;
+  if (requirement.kind !== 'oauth2_auth_code') return undefined;
+  const posture = desktopOAuthPostureFor(requirement);
+  if (posture !== 'unvouched' && IMPLEMENTED_DESKTOP_POSTURES.has(posture)) return undefined;
+  const entry = lookupWellKnownProvider(requirement.provider.name);
+  return {
+    providerName: requirement.provider.name,
+    posture,
+    alternativeLabels: entry === undefined ? [] : alternativeFlowLabels(entry),
+  };
+}
+
 /** The BroadcastChannel surface, injectable so tests drive delivery without a real bus. */
 export interface ConnectionChannelLike {
   onmessage: ((event: { data: unknown }) => void) | null;
@@ -683,6 +782,33 @@ let activeFlow: ActiveFlow | null = null;
 let flowStateStore = new InMemoryFlowStateStore();
 let serviceSingleton: ConnectionOAuthServiceLike | null = null;
 
+/**
+ * The service's outbound fetch (token exchange/refresh), platform-sourced (P0
+ * amendment 6): test hooks win, then the desktop native fetch, then the service's own
+ * page-fetch default (web today). The B2 manual-redirect semantics are the injected
+ * transport's contract to honor — pinned in the desktop transport's own suite.
+ */
+function serviceFetchDep(): { fetch: FetchLike } | Record<string, never> {
+  if (hooks.fetchImpl !== undefined) return { fetch: hooks.fetchImpl };
+  const platformFetch = getPlatform().fetchImpl;
+  return platformFetch !== undefined ? { fetch: platformFetch } : {};
+}
+
+/**
+ * The redirect URI seam, ONE source for both service call sites AND the register
+ * screen's display (Decision 3): the platform's recorded-string provider on desktop,
+ * the origin literal on web. `undefined` when the desktop posture is not a loopback —
+ * callers must have refused already; this never invents a transport.
+ */
+function redirectUriSourceFor(requirement: ConnectionRequirement): (() => string | Promise<string>) | undefined {
+  const platformOauth = getPlatform().oauth;
+  if (platformOauth === undefined) return () => `${window.location.origin}/oauth/callback`;
+  const posture = desktopOAuthPostureFor(requirement);
+  if (posture === 'unvouched' || !IMPLEMENTED_DESKTOP_POSTURES.has(posture)) return undefined;
+  const providerName = requirement.provider.name;
+  return () => platformOauth.redirectUriFor({ provider: providerName, posture });
+}
+
 function connectionOAuthService(db: UserDb): ConnectionOAuthServiceLike {
   if (hooks.service !== undefined) return hooks.service;
   serviceSingleton ??= new OAuthService({
@@ -696,19 +822,23 @@ function connectionOAuthService(db: UserDb): ConnectionOAuthServiceLike {
       redirectUri: () => `${window.location.origin}/oauth/callback`,
     },
     flowStore: flowStateStore,
-    ...(hooks.fetchImpl !== undefined ? { fetch: hooks.fetchImpl } : {}),
+    ...serviceFetchDep(),
   });
   return serviceSingleton;
 }
 
 /** Per-flow service bound to ONE slot's credential slice. */
-function slotBoundService(db: UserDb, slot: string): ConnectionOAuthServiceLike {
+function slotBoundService(
+  db: UserDb,
+  slot: string,
+  redirectUri?: () => string | Promise<string>,
+): ConnectionOAuthServiceLike {
   if (hooks.service !== undefined) return hooks.service;
   return new OAuthService({
     store: new SlotScopedCredentialStore(new UserDbCredentialStore(db), slot),
-    redirectUriProvider: { redirectUri: () => `${window.location.origin}/oauth/callback` },
+    redirectUriProvider: { redirectUri: redirectUri ?? (() => `${window.location.origin}/oauth/callback`) },
     flowStore: flowStateStore,
-    ...(hooks.fetchImpl !== undefined ? { fetch: hooks.fetchImpl } : {}),
+    ...serviceFetchDep(),
   });
 }
 
@@ -721,7 +851,22 @@ function teardownFlow(): void {
   } catch {
     /* the popup is already gone — closing a closed window is not an error worth raising */
   }
+  // Desktop: the loopback listener dies with the flow. Fire-and-forget — the listener's
+  // absence is the observable outcome, and teardown must stay synchronous for callers.
+  const platformOauth = getPlatform().oauth;
+  if (platformOauth !== undefined) void platformOauth.cancel().catch(() => undefined);
   activeFlow = null;
+}
+
+/**
+ * The explicit abandonment affordance (P0 amendment 7). The desktop sign-in runs in
+ * the SYSTEM browser — a handle-less window nothing can poll — so the only exits from
+ * `awaiting_callback` are delivery, the flow TTL, and this cancel. Lands on `idle`
+ * (the "sign in" button returns), never on an error the user did not have.
+ */
+export function cancelConnectionOAuthFlow(): void {
+  teardownFlow();
+  connectionFlowStatusStore.set({ state: 'idle' });
 }
 
 function defaultChannelFactory(name: string): ConnectionChannelLike {
@@ -813,6 +958,8 @@ export async function startConnectionOAuthFlow(
     preOpened?.close?.();
   };
 
+  const platformOauth = getPlatform().oauth;
+
   let start: OAuthStartResult;
   let service: ConnectionOAuthServiceLike;
   let scope: ReturnType<typeof approvedOAuthScope>;
@@ -821,7 +968,20 @@ export async function startConnectionOAuthFlow(
     if (stale()) return bail();
     scope = approvedOAuthScope(db, session); // B1 — throws before any window opens
     if (stale()) return bail();
-    service = slotBoundService(db, scope.slot);
+    const row = db.getConnection(session.appId, session.slot);
+    if (row === undefined) throw new Error('this connection has no declared requirement');
+    // Decision 5 — the desktop refusal, ALSO here as defence in depth: the sheet gates
+    // the credential screens, but a direct caller must be refused before any mint, and
+    // the refusal is TYPED so the sheet renders it rather than a generic error.
+    const refusal = desktopOAuthRefusalFor(row.requirement);
+    if (refusal !== undefined) {
+      preOpened?.close?.();
+      connectionFlowStatusStore.set({ state: 'refused', refusal });
+      return;
+    }
+    // ONE redirect URI source for the authorize URL, the exchange, and the register
+    // screen (Decision 3): platform-provided on desktop, the origin literal on web.
+    service = slotBoundService(db, scope.slot, redirectUriSourceFor(row.requirement));
     start = await service.generateAuthUrl({ appId: scope.appId, spec: scope.spec, clientCreds });
   } catch (err) {
     preOpened?.close?.(); // the B1 gate or the mint failed — never orphan the blank window
@@ -830,46 +990,83 @@ export async function startConnectionOAuthFlow(
   if (stale()) return bail();
 
   // The initiating context knows the channel name because it HOLDS the flowId; the
-  // delivery payload can never teach it one.
-  const channel = (hooks.channelFactory ?? defaultChannelFactory)(`snug-oauth-${start.flowId}`);
+  // delivery payload can never teach it one. On desktop the channel is the platform's
+  // listener-event adapter, keyed by the same held flowId.
+  const channel =
+    hooks.channelFactory !== undefined
+      ? hooks.channelFactory(`snug-oauth-${start.flowId}`)
+      : platformOauth !== undefined
+        ? platformOauth.channelFor(start.flowId)
+        : defaultChannelFactory(`snug-oauth-${start.flowId}`);
   channel.onmessage = (event) => {
     void handleConnectionDelivery(event.data, session, scope, service, start);
   };
 
   let popup: ConnectionPopupLike | null;
-  if (preOpened != null && preOpened.navigate !== undefined) {
-    preOpened.navigate(start.authorizeUrl);
-    popup = preOpened;
-  } else {
-    preOpened?.close?.(); // a pre-opened popup that cannot navigate is unusable — don't leak it
-    popup = (hooks.openPopup ?? defaultOpenPopup)(start.authorizeUrl);
-  }
+  let poll: ReturnType<typeof setInterval> | null = null;
 
-  if (popup === null) {
+  if (platformOauth !== undefined) {
     /**
-     * BLOCKED. A visible error, never a parked `awaiting_callback` — nothing is coming, and
-     * a spinner that never resolves is the cruelest possible ending for a person who has
-     * already pasted their client id. No flow is installed (so closing needs no confirm),
-     * the channel is closed, and the minted authorize URL rides the status so the UI can
-     * offer a gesture-associated fallback link.
+     * DESKTOP (RFC 8252 §8.12, Decision 3): the SYSTEM browser carries the sign-in and
+     * the webview never navigates to a provider. Any pre-opened blank window is a web
+     * affordance that must not linger; the OS opener needs no gesture escape. The
+     * pseudo-popup below is handle-less — `closed` can never flip, so the popup-closed
+     * poll is BYPASSED: the flow TTL and the wizard's explicit cancel are the
+     * abandonment story (P0 amendment 7).
      */
-    channel.close();
-    connectionFlowStatusStore.set({
-      state: 'error',
-      message: 'the sign-in window was blocked — allow popups for this site and try again',
-      authorizeUrl: start.authorizeUrl,
-    });
-    return;
-  }
-
-  // The popup-closed backstop: BroadcastChannel delivery has NO failure signal, so a user
-  // who closes the window mid-sign-in would otherwise wait forever.
-  const poll = setInterval(() => {
-    if (popup.closed && connectionFlowStatusStore.get().state === 'awaiting_callback') {
-      connectionFlowStatusStore.set({ state: 'error', message: 'the sign-in window closed — try again' });
-      teardownFlow();
+    preOpened?.close?.();
+    try {
+      await platformOauth.openExternal(start.authorizeUrl);
+    } catch {
+      channel.close();
+      connectionFlowStatusStore.set({
+        state: 'error',
+        message: 'could not open your browser for the sign-in — try again',
+      });
+      return;
     }
-  }, POPUP_POLL_MS);
+    if (stale()) {
+      channel.close();
+      return;
+    }
+    popup = { closed: false };
+  } else {
+    if (preOpened != null && preOpened.navigate !== undefined) {
+      preOpened.navigate(start.authorizeUrl);
+      popup = preOpened;
+    } else {
+      preOpened?.close?.(); // a pre-opened popup that cannot navigate is unusable — don't leak it
+      popup = (hooks.openPopup ?? defaultOpenPopup)(start.authorizeUrl);
+    }
+
+    if (popup === null) {
+      /**
+       * BLOCKED. A visible error, never a parked `awaiting_callback` — nothing is coming, and
+       * a spinner that never resolves is the cruelest possible ending for a person who has
+       * already pasted their client id. No flow is installed (so closing needs no confirm),
+       * the channel is closed, and the minted authorize URL rides the status so the UI can
+       * offer a gesture-associated fallback link.
+       */
+      channel.close();
+      connectionFlowStatusStore.set({
+        state: 'error',
+        message: 'the sign-in window was blocked — allow popups for this site and try again',
+        authorizeUrl: start.authorizeUrl,
+      });
+      return;
+    }
+
+    // The popup-closed backstop: BroadcastChannel delivery has NO failure signal, so a user
+    // who closes the window mid-sign-in would otherwise wait forever. Web only — the
+    // desktop pseudo-popup has no window to observe.
+    const openedPopup = popup;
+    poll = setInterval(() => {
+      if (openedPopup.closed && connectionFlowStatusStore.get().state === 'awaiting_callback') {
+        connectionFlowStatusStore.set({ state: 'error', message: 'the sign-in window closed — try again' });
+        teardownFlow();
+      }
+    }, POPUP_POLL_MS);
+  }
 
   // Lifecycle guard 1 (assignment half): the awaits above may have raced another start
   // that installed a flow meanwhile, so ALWAYS tear down immediately before assigning —
