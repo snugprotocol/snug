@@ -330,7 +330,7 @@ describe('webllmAdapter through runAgentTurn — the inspector feed (AC4)', () =
       messages: [{ role: 'user', content: 'hi' }],
       onEvent: (event) => events.push(event),
     });
-    expect(result).toEqual({ ok: true, text: 'done' });
+    expect(result).toEqual({ ok: true, text: 'done', stopReason: 'end' });
     expect(events.map((event) => event.type)).toEqual(['round_trip_start', 'round_trip']);
     const trip = events[1];
     expect(trip?.type).toBe('round_trip');

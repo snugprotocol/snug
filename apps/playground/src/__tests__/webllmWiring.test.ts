@@ -188,7 +188,7 @@ describe('createAppTransport reads the brain (AC2/AC3 at the factory that decide
     setWebllmEngineLoaderForTests(loader);
     const transport = createAppTransport('byok', 'anthropic');
     const result = await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
-    expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY });
+    expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY, stopReason: 'end' });
     expect(loader).not.toHaveBeenCalled();
   });
 
@@ -198,7 +198,7 @@ describe('createAppTransport reads the brain (AC2/AC3 at the factory that decide
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('server must not be reached'));
     const transport = createAppTransport('subscription', 'mock');
     const result = await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
-    expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY });
+    expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY, stopReason: 'end' });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -230,7 +230,7 @@ describe('createAppTransport reads the brain (AC2/AC3 at the factory that decide
     setWebllmEngineLoaderForTests(loader);
     const transport = createAppTransport('byok', 'mock');
     const result = await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
-    expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY });
+    expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY, stopReason: 'end' });
     expect(loader).not.toHaveBeenCalled();
   });
 });

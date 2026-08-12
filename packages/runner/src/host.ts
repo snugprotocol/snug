@@ -321,6 +321,17 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
           return;
         }
         const reply = parseAgentReply(result.text);
+        if (!reply.ok && result.stopReason === 'max_tokens') {
+          // The output cap cut the reply off mid-JSON — the model complied and the HOST
+          // truncated, so this is not a parse failure and charges no strike (AC3). The
+          // copy names the real cause; PARSE_FAILED copy here produced an unwinnable
+          // retry loop presented as the model's fault (TASK-20260812).
+          failSafely(responder, ERROR_CODES.HOST_ERROR, 'agent reply was cut off by the output token limit before it finished', {
+            retryable: true,
+            rawExcerpt: reply.error.rawExcerpt,
+          });
+          return;
+        }
         if (!reply.ok) {
           const strikes = currentStrikes() + 1;
           budget.set(budgetKey, strikes); // strike = TERMINAL parse failure only (F8)

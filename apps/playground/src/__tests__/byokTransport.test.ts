@@ -27,7 +27,7 @@ describe('createDirectAppTransport', () => {
       signal: new AbortController().signal,
       onDelta: (delta) => deltas.push(delta),
     });
-    expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY });
+    expect(result).toEqual({ ok: true, text: DEMO_APP_REPLY, stopReason: 'end' });
     expect(deltas.join('')).toBe(DEMO_APP_REPLY);
     expect(fetchSpy).not.toHaveBeenCalled();
   });

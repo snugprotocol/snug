@@ -8,7 +8,7 @@
 
 import { createHttpTransport, runAgentTurn, type AgentTurnEvent } from '@snugprotocol/adapters';
 import { buildHostSystemPrompt, renderRuntimeContract, SYSTEM_BLOCK_SEPARATOR } from '@snugprotocol/knowledge';
-import { ERROR_CODES, type RuntimeContract } from '@snugprotocol/protocol';
+import { ERROR_CODES, parseAppRequest, type RuntimeContract } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
 import {
@@ -120,13 +120,21 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
       // ADR-0012's end-of-system rule.
       const contract = options.appId === undefined ? undefined : await readContract(options.appId);
       const system = contract === undefined ? baseSystem : `${baseSystem}${SYSTEM_BLOCK_SEPARATOR}${renderRuntimeContract(contract)}`;
+      // Owner rule (TASK-20260812 AC1): a request carrying a responseSchema is NEVER
+      // bound by the contract's maxOutputTokens — a structured reply cut off mid-JSON
+      // is unparseable, and the bridge would blame the model for the host's cap. The
+      // wire self-describes, so the seam that applies the cap decides here.
+      const parsedWire = parseAppRequest(wire);
+      const schemaBound = parsedWire.ok && parsedWire.envelope.responseSchema !== undefined;
       const result = await runAgentTurn({
         adapter,
         system,
         messages: [{ role: 'user', content: wire }],
         // Contract-driven output bound (D4). OPT-IN: absent leaves today's default
         // exactly, so a contract-less legacy app is never silently truncated.
-        ...(contract?.maxOutputTokens !== undefined ? { maxOutputTokens: contract.maxOutputTokens } : {}),
+        ...(!schemaBound && contract?.maxOutputTokens !== undefined
+          ? { maxOutputTokens: contract.maxOutputTokens }
+          : {}),
         signal,
         ...(onDelta !== undefined ? { onDelta } : {}),
         // The app-frame LLM feed. Every event is forwarded — an app turn offers no
@@ -136,7 +144,9 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
         ...(options.onLlmEvent !== undefined ? { onEvent: options.onLlmEvent } : {}),
       });
       return result.ok
-        ? { ok: true, text: result.text }
+        ? // stopReason rides along so the runner bridge can tell a cap-truncated reply
+          // from model non-compliance (TASK-20260812 AC3).
+          { ok: true, text: result.text, stopReason: result.stopReason }
         : { ok: false, code: result.code, message: result.message, retryable: result.retryable };
     },
   };

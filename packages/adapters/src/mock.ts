@@ -13,6 +13,8 @@ export interface MockTurn {
   text: string;
   /** Scripted failure — returned instead of a success result. */
   error?: { code: string; message: string; retryable: boolean };
+  /** Script a cap-truncated turn; ignored when the turn carries tool calls. */
+  stopReason?: 'max_tokens';
 }
 
 /**
@@ -46,7 +48,7 @@ export function mockAdapter(script: readonly MockTurn[]): AgentAdapter {
         ok: true,
         text: current.text,
         toolCalls,
-        stopReason: toolCalls.length > 0 ? 'tool_use' : 'end',
+        stopReason: toolCalls.length > 0 ? 'tool_use' : (current.stopReason ?? 'end'),
       };
     },
   };

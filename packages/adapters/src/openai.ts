@@ -169,7 +169,12 @@ export function openaiAdapter(options: OpenAiAdapterOptions): AgentAdapter {
         ok: true,
         text,
         toolCalls,
-        stopReason: finishReason === 'tool_calls' || toolCalls.length > 0 ? 'tool_use' : 'end',
+        stopReason:
+          finishReason === 'tool_calls' || toolCalls.length > 0
+            ? 'tool_use'
+            : finishReason === 'length'
+              ? 'max_tokens'
+              : 'end',
         ...(Object.keys(usage).length > 0 ? { usage } : {}),
         ...(wireModel !== undefined ? { model: wireModel } : {}),
       };

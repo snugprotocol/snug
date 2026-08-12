@@ -99,8 +99,21 @@ describe('POST /invoke — app path', () => {
     const events = await parseSsePayload(response.payload);
     const done = events.find((event) => event.event === 'done');
     expect(done).toBeDefined();
-    expect(JSON.parse(done!.data)).toEqual({ text: rawReply });
+    expect(JSON.parse(done!.data)).toEqual({ text: rawReply, stopReason: 'end' });
     const deltas = events.filter((e) => e.event === 'delta').map((e) => (JSON.parse(e.data) as { text: string }).text);
     expect(deltas.join('')).toBe(rawReply);
+  });
+
+  it('the done event carries the stop reason, so a cap-truncated reply is distinguishable client-side (TASK-20260812 AC3)', async () => {
+    // Subscription mode's only path to the runner bridge is this SSE wire — without the
+    // field, a truncated reply is indistinguishable from model non-compliance and the
+    // bridge charges a parse-failure strike the app can never win back.
+    const { adapter } = spyAdapter(mockAdapter([{ text: '{"rows":[', stopReason: 'max_tokens' }]));
+    app = await buildTestApp({ adapter });
+    const response = await app.inject({ method: 'POST', url: '/invoke', payload: invokeBody(WIRE) });
+    const events = await parseSsePayload(response.payload);
+    const done = events.find((event) => event.event === 'done');
+    expect(done).toBeDefined();
+    expect(JSON.parse(done!.data)).toEqual({ text: '{"rows":[', stopReason: 'max_tokens' });
   });
 });

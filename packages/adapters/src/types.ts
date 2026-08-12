@@ -99,7 +99,13 @@ export type AdapterResult =
       ok: true;
       text: string;
       toolCalls: ToolCall[];
-      stopReason: 'end' | 'tool_use';
+      /**
+       * Why generation stopped. `max_tokens` means the OUTPUT CAP cut the reply off —
+       * the text is incomplete through no fault of the model, so callers must never
+       * treat it as model non-compliance (TASK-20260812: a truncated JSON reply was
+       * indistinguishable from a non-JSON one and charged a parse-failure strike).
+       */
+      stopReason: 'end' | 'tool_use' | 'max_tokens';
       usage?: TokenUsage;
       /**
        * The model as reported ON THE WIRE by the provider — not the configured id, which

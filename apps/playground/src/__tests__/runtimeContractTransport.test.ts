@@ -18,7 +18,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { AgentRoundTrip, AgentTurnEvent } from '@snugprotocol/adapters';
-import { runtimeContractSchema } from '@snugprotocol/protocol';
+import { buildAppRequest, runtimeContractSchema } from '@snugprotocol/protocol';
 
 import { createDirectAppTransport } from '../agent/transport.js';
 import { getUserDb } from '../state/userdb.js';
@@ -128,6 +128,81 @@ describe('AC-F1-4 — a contract-less app is unchanged', () => {
     const trips = await send('no-such-app');
     expect(trips).not.toHaveLength(0);
     expect(trips[0]?.request.system ?? '').not.toContain(CONTRACT.overview);
+  });
+});
+
+describe('TASK-20260812 AC1 — a responseSchema request is never bound by the contract cap', () => {
+  // Owner rule, recorded verbatim in the task file: "Never let a contract's
+  // maxOutputTokens bind a request that carries a responseSchema — structured replies
+  // must be allowed to finish." A cap-cut structured reply is unparseable JSON the
+  // bridge then blames on the model; the schema-less case keeps the cap (D4).
+  const CAPPED_CONTRACT = runtimeContractSchema.parse({
+    overview: 'A tracker app.',
+    maxOutputTokens: 512,
+  });
+
+  const envelope = (responseSchema?: Record<string, unknown>): string =>
+    buildAppRequest({
+      appId: 'kept',
+      instanceId: 'i1',
+      requestId: 'r1',
+      action: 'data_question',
+      payload: { question: 'weekly counts?' },
+      ...(responseSchema !== undefined ? { responseSchema } : {}),
+    });
+
+  const sendWire = async (appId: string, wire: string): Promise<AgentRoundTrip[]> => {
+    const { trips, onLlmEvent } = tripCollector();
+    const transport = createDirectAppTransport({
+      mode: 'byok',
+      provider: 'mock',
+      needsConfirm: () => false,
+      appId,
+      onLlmEvent,
+    });
+    await transport.send(wire, { signal: new AbortController().signal });
+    return trips;
+  };
+
+  it('drops the cap when the envelope carries a responseSchema', async () => {
+    const db = await getUserDb();
+    const app = db.installApp({ displayName: 'Kept', html: '<html>v1</html>' });
+    db.putRuntimeContract(app.appId, app.currentVersion, CAPPED_CONTRACT);
+
+    const trips = await sendWire(app.appId, envelope({ type: 'object' }));
+
+    expect(trips[0]?.request).not.toHaveProperty('maxOutputTokens');
+    // The rest of the contract still rides the turn — only the cap is dropped.
+    expect(trips[0]?.request.system).toContain('A tracker app.');
+  });
+
+  it('a schema-less envelope still honors the cap (D4 unchanged)', async () => {
+    const db = await getUserDb();
+    const app = db.installApp({ displayName: 'Kept', html: '<html>v1</html>' });
+    db.putRuntimeContract(app.appId, app.currentVersion, CAPPED_CONTRACT);
+
+    const trips = await sendWire(app.appId, envelope());
+
+    expect(trips[0]?.request.maxOutputTokens).toBe(512);
+  });
+
+  it('the send result carries the turn’s stop reason for the bridge (AC3 threading)', async () => {
+    const db = await getUserDb();
+    const app = db.installApp({ displayName: 'Kept', html: '<html>v1</html>' });
+
+    const transport = createDirectAppTransport({
+      mode: 'byok',
+      provider: 'mock',
+      needsConfirm: () => false,
+      appId: app.appId,
+    });
+    const result = await transport.send(envelope(), { signal: new AbortController().signal });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The mock brain finishes normally; the point is the field SURVIVES the seam —
+    // a transport that drops it leaves the bridge unable to see max_tokens either.
+    expect(result.stopReason).toBe('end');
   });
 });
 

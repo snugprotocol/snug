@@ -21,7 +21,9 @@ import {
 import { parseSse, tryParseJsonRecord } from './sse.js';
 import type { AdapterError, FetchLike } from './types.js';
 
-export type HttpTransportResult = { ok: true; text: string } | AdapterError;
+export type HttpTransportResult =
+  | { ok: true; text: string; stopReason?: 'end' | 'max_tokens' }
+  | AdapterError;
 
 export interface HttpTransportSendOptions {
   signal: AbortSignal;
@@ -108,7 +110,16 @@ export function createHttpTransport(invokeUrl: string, options: HttpTransportOpt
           if (event.event === 'delta') {
             if (typeof data.text === 'string') onDelta?.(data.text);
           } else if (event.event === 'done') {
-            return { ok: true, text: typeof data.text === 'string' ? data.text : '' };
+            return {
+              ok: true,
+              text: typeof data.text === 'string' ? data.text : '',
+              // Forwarded so the runner bridge can tell a cap-truncated reply from model
+              // non-compliance (TASK-20260812 AC3). Absent from older servers — omitted,
+              // keeping today's shape exactly.
+              ...(data.stopReason === 'max_tokens' || data.stopReason === 'end'
+                ? { stopReason: data.stopReason }
+                : {}),
+            };
           } else if (event.event === 'error') {
             return {
               ok: false,

@@ -33,6 +33,21 @@ describe('createHttpTransport', () => {
     expect(result).toEqual({ ok: true, text: 'Hello' });
   });
 
+  it('carries the done event’s stopReason so the bridge can tell truncation from non-compliance (TASK-20260812 AC3)', async () => {
+    const body = block('done', '{"text":"{\\"rows\\":[","stopReason":"max_tokens"}');
+    const { fetchImpl } = fakeFetch(() => sseResponse(body));
+    const transport = createHttpTransport('http://x/invoke', { fetch: fetchImpl });
+    const result = await transport.send('[SNUG_APP_REQUEST]\n{}', { signal: new AbortController().signal });
+    expect(result).toEqual({ ok: true, text: '{"rows":[', stopReason: 'max_tokens' });
+  });
+
+  it('a done event without a stopReason (older server) keeps today’s shape exactly', async () => {
+    const { fetchImpl } = fakeFetch(() => sseResponse(block('done', '{"text":"ok"}')));
+    const transport = createHttpTransport('http://x/invoke', { fetch: fetchImpl });
+    const result = await transport.send('[SNUG_APP_REQUEST]\n{}', { signal: new AbortController().signal });
+    expect(result).toEqual({ ok: true, text: 'ok' });
+  });
+
   /**
    * R-B2 (2026-08-11): `getContract()` was awaited into a local and then never referenced,
    * so the POST body carried no `contract` field. F1 was silently inert for every

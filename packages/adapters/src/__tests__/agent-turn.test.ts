@@ -40,7 +40,7 @@ describe('runAgentTurn', () => {
       onDelta: (d) => deltas.push(d),
       onEvent: (e) => events.push(e),
     });
-    expect(result).toEqual({ ok: true, text: 'Calling. Done.' });
+    expect(result).toEqual({ ok: true, text: 'Calling. Done.', stopReason: 'end' });
     expect(deltas.join('')).toBe('Calling. Done.'); // done text === accumulated deltas
     // Tool events unchanged; `round_trip_start`/`round_trip` observations are interleaved
     // (see long-run.test.ts and observability.test.ts).
@@ -67,7 +67,7 @@ describe('runAgentTurn', () => {
   it('JSON-only mode: no tools option means the adapter receives tools: undefined', async () => {
     const { calls, adapter } = spyAdapter(mockAdapter([{ text: '{"ok":true}' }]));
     const result = await runAgentTurn({ adapter, system: 'sys', messages: [{ role: 'user', content: 'go' }] });
-    expect(result).toEqual({ ok: true, text: '{"ok":true}' });
+    expect(result).toEqual({ ok: true, text: '{"ok":true}', stopReason: 'end' });
     expect(calls[0]!.tools).toBeUndefined();
   });
 
@@ -112,7 +112,7 @@ describe('runAgentTurn', () => {
       messages: [{ role: 'user', content: 'go' }],
       tools: [throwing],
     });
-    expect(result).toEqual({ ok: true, text: 'recovered' });
+    expect(result).toEqual({ ok: true, text: 'recovered', stopReason: 'end' });
     const toolMessages = calls[1]!.messages.filter((m) => m.role === 'tool');
     expect(toolMessages).toEqual([
       { role: 'tool', toolCallId: 'call_1_1', content: 'Error: unknown tool "missing"' },
