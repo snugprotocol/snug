@@ -1,6 +1,0 @@
-cargo:rerun-if-changed=permissions
-cargo:PERMISSION_FILES_PATH=/Users/jeetu/SnugProtocol/snug/apps/desktop/src-tauri/target/debug/build/tauri-plugin-oauth-924eb16a9a2af4da/out/tauri-plugin-oauth-permission-files
-cargo:rerun-if-env-changed=REMOVE_UNUSED_COMMANDS
-cargo:rustc-check-cfg=cfg(mobile)
-cargo:rustc-check-cfg=cfg(desktop)
-cargo:rustc-cfg=desktop
