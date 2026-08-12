@@ -29,6 +29,7 @@ import type { PendingWriteProposal } from './dataTools.js';
 import { createAppTargetSink } from './artifactSink.js';
 import { needsSynthesizedContract } from './runtimeContractSynthesis.js';
 import { finalizeConnectionDeclaration } from './connectionPipeline.js';
+import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
 import {
   createDirectBuilder,
   createServerBuilder,
@@ -60,6 +61,14 @@ export interface ChatMessage {
    * the user REVIEWS is read from the row, so nothing on this message can influence it.
    */
   connection?: { appId: string; slot: string; providerName: string };
+  /**
+   * The provider offers MORE THAN ONE way in (TASK-20260812-auth-kind-choice). For a
+   * registry provider this is a pointer — the card reads the pinned options itself;
+   * for an unregistered one it carries the turn's validated inference alternatives,
+   * re-admitted again on every read. Rendering is gated on the LIVE row, so a card
+   * over a chosen/approved row shows nothing.
+   */
+  authChoice?: AuthChoiceSeed;
   /**
    * A STAGED data-write proposal awaiting the user's approval (ADR-0019 D8).
    *
@@ -152,6 +161,8 @@ interface PersistedMeta {
   directive?: RenderDirective;
   /** A staged/resolved data-write proposal, so the card survives a reload (R-M5). */
   dataWrite?: DataWriteCardState;
+  /** The auth-option choice seed — inference alternatives must survive a reload (AC7). */
+  authChoice?: AuthChoiceSeed;
 }
 
 /**
@@ -377,6 +388,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 // directive grew fields renders as no card at all.
                 const directive = metaToDirective(m.meta);
                 const dataWrite = metaToDataWrite(m.meta);
+                const authChoice = metaToAuthChoice(m.meta);
                 return {
                   id: ++messageSeq,
                   role: m.role === 'user' ? ('user' as const) : ('agent' as const),
@@ -384,6 +396,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   ...(artifact !== undefined ? { artifact } : {}),
                   ...(directive !== undefined && directive.kind === AUTH_WIZARD_DIRECTIVE_KIND ? { directive } : {}),
                   ...(dataWrite !== undefined ? { dataWrite } : {}),
+                  ...(authChoice !== undefined ? { authChoice } : {}),
                 };
               }),
       );
@@ -629,6 +642,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
            */
           let connectionNote: string | undefined;
           let connectionCard: { appId: string; slot: string; providerName: string } | undefined;
+          let authChoice: AuthChoiceSeed | undefined;
+          let recoveredAlternatives: AuthChoiceSeed['alternatives'];
           if (turn.artifact !== undefined && finalText !== '') {
             const appHtml = db.getAppHtml(turn.artifact.artifactId);
             if (appHtml !== undefined) {
@@ -656,6 +671,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   // model declined to guess, and a declined guess must fall through to the
                   // note rather than be dressed up as an answer.
                   if (!result.ok || result.requirement === null) return undefined;
+                  // Alternatives are candidates for the choice card, never rows — captured
+                  // here because the persist outcome deliberately does not carry them.
+                  if (result.alternatives !== undefined) recoveredAlternatives = result.alternatives;
                   return {
                     requirement: result.requirement,
                     provenance: result.provenance,
@@ -670,6 +688,14 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   slot: outcome.requirement.slot,
                   providerName: outcome.requirement.provider.name,
                 };
+                // Multi-option providers additionally surface the CHOICE card
+                // (TASK-20260812-auth-kind-choice AC3): registry providers as a bare
+                // pointer, unregistered ones with the turn's validated alternatives.
+                authChoice = authChoiceForPersistedRow({
+                  appId: turn.artifact.artifactId,
+                  requirement: outcome.requirement,
+                  ...(recoveredAlternatives !== undefined ? { alternatives: recoveredAlternatives } : {}),
+                });
               }
               if (outcome !== undefined && !outcome.ok) {
                 connectionNote =
@@ -728,6 +754,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             displayText: result.text !== '' ? result.text : m.displayText,
             ...(directive !== undefined ? { directive } : {}),
             ...(connectionCard !== undefined ? { connection: connectionCard } : {}),
+            ...(authChoice !== undefined ? { authChoice } : {}),
             ...(scan !== null && 'malformed' in scan
               ? { directiveNote: 'the agent proposed a connection card that failed validation — ignored' }
               : connectionNote !== undefined
@@ -738,7 +765,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             // F9: the turn that produced v1 is the bootstrap — pin both sides of it.
             if (turn.installedV1 && turn.userDbId !== undefined) db.pinChatMessage(turn.userDbId);
             const meta: PersistedMeta | undefined =
-              turn.artifact !== undefined || directive !== undefined || stagedProposal.current !== undefined
+              turn.artifact !== undefined ||
+              directive !== undefined ||
+              stagedProposal.current !== undefined ||
+              authChoice !== undefined
                 ? {
                     ...(turn.artifact !== undefined
                       ? {
@@ -755,6 +785,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                     // R-M5: the assistant's text says a change is awaiting approval, so the
                     // card it refers to has to outlive the React tree that rendered it.
                     ...(stagedProposal.current !== undefined ? { dataWrite: stagedProposal.current } : {}),
+                    // AC7: inference alternatives are not re-derivable after the turn, so
+                    // the choice must survive a reload; re-admitted on every read.
+                    ...(authChoice !== undefined ? { authChoice } : {}),
                   }
                 : undefined;
             const stored = db.appendChatMessage(threadId, 'assistant', finalText, {

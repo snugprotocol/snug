@@ -80,6 +80,9 @@ export {
 export {
   WELL_KNOWN_PROVIDERS_REGISTRY,
   lookupWellKnownProvider,
+  requirementFromRegistryEntry,
+  resolveInferrerAlias,
+  type WellKnownAuthOption,
   type WellKnownOauthProvider,
 } from './well-known-providers.js';
 
