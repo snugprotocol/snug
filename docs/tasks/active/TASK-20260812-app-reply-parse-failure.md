@@ -248,3 +248,26 @@ the interior whitespace padding — preserved byte-faithfully in the replay test
 - Next step: owner runs the settling capture (HAR/curl) if they want the culprit hop
   named; Gate-2 mini-interview on the retry policy option (c) and the AC4 array
   decision (first-row-wins hazard) — then Gate 5 full pass + PR.
+
+### 2026-08-12 — Claude (same session, close-out) — zero-rows confirmed from the owner's export
+
+- **Done:** inspected the owner's exported app DB (`~/Downloads/kept.sqlite`, provided
+  for this purpose): `habits` = 5 rows (`water` ×3 duplicates, `swim`, `vape`, all
+  created 2026-08-11, all default 💧 emoji); **`checks` = 0 rows.** The successful
+  retry's "found nothing" was the DATA TRUTH — with zero check-ins any correct streak
+  query returns empty. The model's SQL is exonerated for that turn; no new defect.
+- **App-level follow-ups surfaced (owner's call, NOT this task):** (a) "kept" could
+  teach its agent empty-table copy ("you haven't checked anything off yet") via
+  `responseGuidance`; (b) three duplicate `water` habits with default emoji — possibly
+  intentional test entries, possibly a non-deduplicating add flow worth a look.
+- **Gate-6 state:** branch `fix/TASK-20260812-app-reply-parse-failure`, commits
+  `975f713` (AC1+AC3) + the AC2-fixture commit + this close-out commit, UNPUSHED.
+  `packages/protocol` SOURCE untouched (tests only) → no spec-changelog entry, no
+  spec-sync, tier stays Medium. Lessons ×3 appended to `docs/lessons.md`; code-map
+  rows for adapters/runner/server updated with the new seams and counts.
+- **Single next step:** owner decides the retry policy — leading candidate: one
+  `stream:false` fallback retry after a parse failure (no delta framing to lose) —
+  and the AC4 array policy; then Gate 5 full pass, push, PR.
+- **Open questions:** which hop eats the deltas (HAR/curl capture would name it);
+  AC4 (first-row-wins hazard: wrap / refuse / KB-teach); whether older subscription
+  servers (no `stopReason` on `done`) need a deploy note.
