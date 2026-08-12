@@ -3,6 +3,9 @@ import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { parseBuildPrompt } from '../agent/chips.js';
+import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
+import { useDesktopFirstRun } from '../desktop/firstRun.js';
+import { getPlatform } from '../platform/platform.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary, type LibraryEntry } from '../state/library.js';
 import { listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
@@ -32,12 +35,23 @@ const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blu
   'spotify-party-dj': { emoji: '🎧', color: '#10b981', blurb: 'queue the party from your own Spotify — sign in, never share' },
   // Desktop-labeled (A6 deferred): the Hue bridge lives on your LAN, which a web page
   // cannot reach — the tile says so instead of offering a connect that cannot work.
-  'hue-lights-party': { emoji: '💡', color: '#e11d48', blurb: 'sync your lights to the party — needs the desktop app', desktopOnly: true },
+  'hue-lights-party': { emoji: '💡', color: '#e11d48', blurb: 'sync your lights to the party — the bridge lives on your home network', desktopOnly: true },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };
 
+/**
+ * The hub route. On a desktop first run (TASK-20260812 P3 item 1) the welcome takes the
+ * whole screen — one idea per screen — and the shelf waits until the person has chosen
+ * (or skipped). A wrapper component rather than an early return so the two branches
+ * keep their own hook lists.
+ */
 export function HubView(): ReactElement {
+  const firstRun = useDesktopFirstRun();
+  return firstRun ? <DesktopWelcome /> : <HubHome />;
+}
+
+function HubHome(): ReactElement {
   const navigate = useNavigate();
   const metaMap = useAppMetaMap();
   const prompt = useMemo(() => parseBuildPrompt(), []);
@@ -280,6 +294,10 @@ export function HubView(): ReactElement {
             const style = { '--tile-color': look.color } as CSSProperties;
             const source = starterInstallSource(starter.id);
             const installed = installedBySource.has(source);
+            // P3 item 5: a desktopOnly starter is LOCKED on web (its device lives on the
+            // user's LAN, unreachable from a page) and simply enabled on the desktop
+            // shell — where the badge would be a limitation that no longer exists.
+            const locked = look.desktopOnly === true && getPlatform().kind !== 'desktop';
             // AC18: installing is now an EXPLICIT act. The tile itself no longer
             // installs on click — an uninstalled starter offers "install", an installed
             // one offers "open" and routes to the user's OWN copy. Clicking a starter
@@ -304,9 +322,9 @@ export function HubView(): ReactElement {
                   that into a strict-mode violation (two elements). Found by the full
                   Playwright run on the parked branch, 2026-08-08.
                 */}
-                {look.desktopOnly === true ? (
-                  <span className="tile-desktop-badge" data-testid="desktop-only-badge" title="this starter needs the desktop app — its device lives on your home network, which a web page cannot reach">
-                    desktop only
+                {locked ? (
+                  <span className="tile-desktop-badge" data-testid="desktop-only-badge" title="this starter's device lives on your home network, which a web page cannot reach — the free Snug desktop app can">
+                    needs the desktop app — free download
                   </span>
                 ) : null}
                 {/*
@@ -326,15 +344,18 @@ export function HubView(): ReactElement {
                   type="button"
                   className="tile-link tile-card-button"
                   data-testid={installed ? 'starter-open' : 'starter-open-card'}
+                  disabled={locked}
                   onClick={() => openStarter(starter.id)}
                   // An explicit name: the card's own text is the blurb, which reads as
                   // a description rather than an action. "open chess" says what the
                   // control DOES, which is what a screen reader (and the E2E) needs.
                   aria-label={`open ${starter.name}`}
                   title={
-                    installed
-                      ? `open your copy of ${starter.name}`
-                      : `open ${starter.name} — it stays read-only until you install it`
+                    locked
+                      ? `${starter.name} needs the free desktop app — a web page cannot reach your home network`
+                      : installed
+                        ? `open your copy of ${starter.name}`
+                        : `open ${starter.name} — it stays read-only until you install it`
                   }
                 >
                   <span className="tile-emoji" aria-hidden="true">

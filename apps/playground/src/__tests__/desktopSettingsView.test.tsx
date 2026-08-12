@@ -179,6 +179,23 @@ describe('local mode — Ollama detection (W2b item 4, AC3)', () => {
     expect(container?.querySelector('select#model-select')).toBeNull();
   });
 
+  it('Ollama running with ZERO models: keep free text, add the pull hint (P3 item 3)', async () => {
+    const harness = await fresh(
+      desktopPlatform({ probeOllama: () => Promise.resolve({ running: true, models: [] }) }),
+    );
+    await harness.ollama.refreshOllama();
+    harness.mode.setMode('local');
+    await render(<harness.SettingsView />);
+
+    expect(container?.textContent).toContain('Ollama is installed but has no models yet');
+    expect(container?.textContent).toContain('ollama pull llama3.2');
+    // Free-text stays: no select to render, the input keeps working.
+    expect(container?.querySelector('select#model-select')).toBeNull();
+    expect(container?.querySelector('input#model-id')).toBeTruthy();
+    // The not-found copy must NOT show — Ollama IS installed.
+    expect(container?.textContent).not.toContain('Ollama not found');
+  });
+
   it('web: no probe ran, the free-text model input stays exactly as today (AC10)', async () => {
     const harness = await fresh();
     harness.mode.setMode('local');

@@ -50,6 +50,7 @@ import {
   UserDbCredentialStore,
   executeConnectionTestRequest,
   lookupWellKnownProvider,
+  requirementFromRegistryEntry,
   requirementToSpec,
   resolveDesktopPosture,
   type DesktopRedirectPosture,
@@ -122,6 +123,22 @@ export const connectionWizardRevisionStore = createStore<number>(0);
 
 function bumpRevision(): void {
   connectionWizardRevisionStore.set(connectionWizardRevisionStore.get() + 1);
+}
+
+/**
+ * External-writer hook (state/authKindChoice.ts, P3 item 4b): after a `user`-channel
+ * rebind of the OPEN session's own row, pull the wizard back to review and re-read.
+ * Reopening through openConnectionWizard would refuse — one wizard at a time — and a
+ * bare write would leave the sheet rendering the stale requirement (or, on desktop, a
+ * refusal for a flow the user just walked away from).
+ */
+export function refreshOpenConnectionWizard(appId: string, slot: string): boolean {
+  const session = connectionWizardStore.get();
+  if (session === null || session.appId !== appId || session.slot !== slot) return false;
+  connectionFlowStatusStore.set({ state: 'idle' });
+  connectionWizardStepStore.set('review');
+  bumpRevision();
+  return true;
 }
 
 /**
@@ -385,16 +402,23 @@ export async function advanceFromRegister(): Promise<ConnectionWizardResult> {
 
 /**
  * Promote a staged `pending_requirement_json` and re-freeze the ceiling (AC8). The ONLY
- * widening path, and it lands on `done` rather than walking the credential screens again:
- * the user's existing secrets are still valid — what changed is what the app may DO with
- * them, which is exactly what the diff they just read described.
+ * widening path. A same-kind change lands on `done` rather than walking the credential
+ * screens again: the user's existing secrets are still valid — what changed is what the
+ * app may DO with them, which is exactly what the diff they just read described. A KIND
+ * rebind (P3 item 4b: the desktop refusal steering to a different flow, e.g. OAuth →
+ * personal access token) changes what credential is even asked for, so it walks the
+ * register/credentials half — "done" would claim a connection no secret backs.
  */
 export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
   return withSession((db, session) => {
+    const before = db.getConnection(session.appId, session.slot);
+    const kindChanged =
+      before?.pendingRequirement !== undefined && before.pendingRequirement.kind !== before.requirement.kind;
     db.reapproveConnection(session.appId, session.slot);
     invalidateNetGrants(session.appId);
     bumpRevision();
-    connectionWizardStepStore.set('done');
+    const after = db.getConnection(session.appId, session.slot);
+    connectionWizardStepStore.set(kindChanged ? nextStep('review', after?.requirement) : 'done');
     return { ok: true };
   });
 }
@@ -651,12 +675,27 @@ export async function testConnection(
 /** The postures the SHIPPED desktop transport implements (loopback listener only). */
 const IMPLEMENTED_DESKTOP_POSTURES = new Set<DesktopRedirectPosture>(['loopback', 'loopback-fixed-port']);
 
+export interface DesktopOAuthAlternative {
+  /** The registry's human label for the flow — what the button says. */
+  label: string;
+  /**
+   * The flow's COMPLETE registry-built requirement, ready for the `user` channel
+   * (`chooseAuthOption`). Registry-pinned seats only — nothing model-proposed.
+   */
+  requirement: ConnectionRequirement;
+}
+
 export interface DesktopOAuthRefusal {
   providerName: string;
   /** The unsupported posture — or 'unvouched' when the registry names none at all. */
   posture: DesktopRedirectPosture | 'unvouched';
   /** Human labels of this provider's registry flows that DO work on this shell. */
   alternativeLabels: string[];
+  /**
+   * The same flows as ROUTES (P3 item 4b): a refusal that names a way in must offer
+   * a button that goes there, not advice to go ask the chat.
+   */
+  alternatives: DesktopOAuthAlternative[];
 }
 
 /**
@@ -686,22 +725,28 @@ export function desktopOAuthPostureFor(requirement: ConnectionRequirement): Desk
   return resolveDesktopPosture(entry, matchedRegistryOption(entry, requirement)) ?? 'unvouched';
 }
 
-/** Labels of the provider's OTHER flows that work on this shell — the refusal's steer. */
-function alternativeFlowLabels(entry: WellKnownOauthProvider): string[] {
+/**
+ * The provider's OTHER flows that work on this shell — the refusal's steer, each with
+ * the registry-built requirement the `user` channel can rebind to (P3 item 4b).
+ */
+function alternativeFlows(entry: WellKnownOauthProvider, requirement: ConnectionRequirement): DesktopOAuthAlternative[] {
   const flows: Array<{ kind: ConnectionRequirement['kind']; label?: string; option?: WellKnownAuthOption }> = [
     { kind: entry.kind, ...(entry.optionLabel !== undefined ? { label: entry.optionLabel } : {}) },
     ...(entry.authOptions ?? []).map((option) => ({ kind: option.kind, label: option.label, option })),
   ];
-  const labels: string[] = [];
+  const alternatives: DesktopOAuthAlternative[] = [];
   for (const flow of flows) {
     if (flow.label === undefined) continue;
     if (flow.kind === 'oauth2_auth_code') {
       const posture = resolveDesktopPosture(entry, flow.option);
       if (posture === undefined || !IMPLEMENTED_DESKTOP_POSTURES.has(posture)) continue;
     }
-    labels.push(flow.label);
+    alternatives.push({
+      label: flow.label,
+      requirement: requirementFromRegistryEntry(entry, requirement.provider.name, requirement.slot, flow.option),
+    });
   }
-  return labels;
+  return alternatives;
 }
 
 /**
@@ -716,10 +761,12 @@ export function desktopOAuthRefusalFor(requirement: ConnectionRequirement): Desk
   const posture = desktopOAuthPostureFor(requirement);
   if (posture !== 'unvouched' && IMPLEMENTED_DESKTOP_POSTURES.has(posture)) return undefined;
   const entry = lookupWellKnownProvider(requirement.provider.name);
+  const alternatives = entry === undefined ? [] : alternativeFlows(entry, requirement);
   return {
     providerName: requirement.provider.name,
     posture,
-    alternativeLabels: entry === undefined ? [] : alternativeFlowLabels(entry),
+    alternativeLabels: alternatives.map((alternative) => alternative.label),
+    alternatives,
   };
 }
 

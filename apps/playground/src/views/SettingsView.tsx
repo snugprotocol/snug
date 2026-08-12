@@ -182,6 +182,12 @@ export function SettingsView(): ReactElement {
             />
             {ollama !== 'unknown' && !ollama.running ? (
               <span className="hint">Ollama not found — install it from ollama.com or paste an endpoint.</span>
+            ) : ollama !== 'unknown' && ollama.running && ollama.models.length === 0 ? (
+              /* P3 item 3 (W2b): running-but-empty is its own state — the install
+                 succeeded, only a model is missing. Free text stays available. */
+              <span className="hint">
+                Ollama is installed but has no models yet — try: <code>ollama pull llama3.2</code>
+              </span>
             ) : (
               <span className="hint">
                 any OpenAI-compatible server. for Ollama, set OLLAMA_ORIGINS to allow this hub, and mind that an https

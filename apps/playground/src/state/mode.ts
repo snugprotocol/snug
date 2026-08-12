@@ -18,6 +18,7 @@ import { LOCAL_DEFAULT_BASE_URL } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
 
 import { getPlatform } from '../platform/platform.js';
+import { ollamaStore } from './ollama.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
 
@@ -34,6 +35,13 @@ const SETTING_LOCAL_URL = 'localUrl';
 const SETTING_NEEDS_CONFIRM = 'needsEndpointConfirm';
 
 export const modeStore = createStore<PlaygroundMode>('byok');
+/**
+ * True after hydration coerced a stored 'subscription' mode on a platform without the
+ * capability (TASK-20260812 P3 item 2). The ACTIVE mode moved; the STORED setting did
+ * not — a re-export carries the user's original choice. Session-local: dismissing the
+ * note never writes anything.
+ */
+export const modeCoercedStore = createStore<boolean>(false);
 export const providerStore = createStore<ByokProvider>('mock');
 export const modelStore = createStore<string | undefined>(undefined);
 export const localUrlStore = createStore<string>(LOCAL_DEFAULT_BASE_URL);
@@ -54,7 +62,20 @@ const isProvider = (v: unknown): v is ByokProvider => v === 'mock' || v === 'ant
 /** Load settings from an opened user DB into the stores (boot, and after import/pull). */
 export function hydrateSettings(db: UserDb): void {
   const mode = db.getSetting(SETTING_MODE);
-  if (isMode(mode)) modeStore.set(mode);
+  if (isMode(mode)) {
+    if (mode === 'subscription' && !getPlatform().capabilities.subscriptionMode) {
+      // W2b coercion: a file carrying the web's subscription mode must not dead-end
+      // here. The ACTIVE mode becomes the best this platform offers — local when the
+      // Ollama probe found a running install, byok otherwise — and the stored setting
+      // is deliberately NOT rewritten: modeStore.set, never setMode. The note store
+      // makes the divergence visible instead of silent.
+      const ollama = ollamaStore.get();
+      modeStore.set(ollama !== 'unknown' && ollama.running ? 'local' : 'byok');
+      modeCoercedStore.set(true);
+    } else {
+      modeStore.set(mode);
+    }
+  }
   const provider = db.getSetting(SETTING_PROVIDER);
   if (isProvider(provider)) providerStore.set(provider);
   const model = db.getSetting(SETTING_MODEL);
@@ -141,4 +162,13 @@ export function useLocalUrl(): string {
 
 export function useEndpointsNeedConfirm(): boolean {
   return useStore(endpointsNeedConfirmStore);
+}
+
+/** Session-local: the divergence remains in the file, so nothing is written. */
+export function dismissModeCoercionNote(): void {
+  modeCoercedStore.set(false);
+}
+
+export function useModeCoerced(): boolean {
+  return useStore(modeCoercedStore);
 }

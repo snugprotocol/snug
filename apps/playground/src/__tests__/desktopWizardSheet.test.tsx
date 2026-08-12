@@ -214,6 +214,99 @@ describe('(c) the register screen draws the redirect URI from the platform sourc
   });
 });
 
+describe('(P3 item 4a) the fixed-port register walkthrough — exact URI, working copy, honest warning', () => {
+  it('shows the paste-exactly sentence and copies the exact URI to the clipboard', async () => {
+    const desktop = fakeDesktop();
+    const { db, wizard, Sheet } = await fresh(desktop.platform);
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const spotify = lookupWellKnownProvider('Spotify')!;
+    const requirement = requirementFromRegistryEntry(spotify, 'Spotify', 'spotify');
+    declare(db, requirement as unknown as Record<string, unknown>);
+
+    wizard.openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await render(<Sheet />);
+    await click(/approve this connection/i);
+    await settle();
+
+    expect(container!.textContent).toMatch(/one character off and the sign-in can(’|')t come home/i);
+    await click(/copy this address/i);
+    expect(writeText).toHaveBeenCalledWith('http://127.0.0.1:41420/callback');
+  });
+});
+
+describe('(P3 item 4c) awaiting the system browser — the desktop wait copy and prominent cancel', () => {
+  it('says the browser was opened and we are listening; the cancel affordance is primary', async () => {
+    const desktop = fakeDesktop();
+    const { db, wizard, Sheet } = await fresh(desktop.platform);
+    declare(db, fakeIdpRequirement);
+
+    wizard.openConnectionWizard({ appId: APP, slot: 'fake-idp', source: 'settings' });
+    await render(<Sheet />);
+    await click(/approve this connection/i);
+    await type('client_id', 'cid-1');
+    await click(/connect my Fake IdP account/i);
+
+    expect(wizard.connectionFlowStatusStore.get().state).toBe('awaiting_callback');
+    expect(container!.textContent).toMatch(/we opened your browser — finish signing in there/i);
+    expect(container!.textContent).toMatch(/we(’|')re listening/i);
+    const cancel = button(/cancel this sign-in/i);
+    expect(cancel).toBeDefined();
+    expect(cancel!.className, 'the only exit from a handle-less wait must be prominent').toContain('btn-primary');
+  });
+
+  it('web keeps the popup-window wait copy (AC10)', async () => {
+    const { db, wizard, Sheet } = await fresh();
+    declare(db, fakeIdpRequirement);
+    // Web path: force the awaiting state directly — the popup plumbing is covered elsewhere.
+    wizard.openConnectionWizard({ appId: APP, slot: 'fake-idp', source: 'settings' });
+    wizard.connectionWizardStepStore.set('connect');
+    wizard.connectionFlowStatusStore.set({ state: 'awaiting_callback', flowId: 'flow-web-copy' });
+    await render(<Sheet />);
+
+    expect(container!.textContent).toMatch(/waiting for Fake IdP sign-in/i);
+    expect(container!.textContent).not.toMatch(/we opened your browser/i);
+    const cancel = button(/cancel this sign-in/i);
+    expect(cancel!.className).not.toContain('btn-primary');
+  });
+});
+
+describe('(P3 item 4b) the refusal steers with a PRIMARY route into the working option', () => {
+  it('GitHub: one click rebinds the row to the personal-access-token flow through the user channel', async () => {
+    const desktop = fakeDesktop();
+    const { db, wizard, Sheet } = await fresh(desktop.platform);
+    const github = lookupWellKnownProvider('GitHub')!;
+    const oauthOption = (github.authOptions ?? []).find((option) => option.kind === 'oauth2_auth_code')!;
+    const requirement = requirementFromRegistryEntry(github, 'GitHub', 'github', oauthOption);
+    declare(db, requirement as unknown as Record<string, unknown>);
+
+    wizard.openConnectionWizard({ appId: APP, slot: 'github', source: 'settings' });
+    await render(<Sheet />);
+    await click(/approve this connection/i);
+    expect(container!.querySelector('[data-testid="desktop-oauth-refusal"]')).not.toBeNull();
+
+    // The steer is a real route, not advice to go ask the chat.
+    const route = button(/personal access token/i);
+    expect(route, 'a button must route to the non-OAuth option').toBeDefined();
+    expect(route!.className, 'the working way in is the PRIMARY action').toContain('btn-primary');
+    await click(/personal access token/i);
+    await settle();
+
+    // The approved OAuth grant stays serving; the PAT flow stages for review (fold B2).
+    const row = db.getConnection(APP, 'github');
+    expect(row?.pendingRequirement?.kind).toBe('bearer_token');
+    expect(row?.requirement.kind, 'nothing is granted by the click itself').toBe('oauth2_auth_code');
+    expect(container!.querySelector('[data-testid="desktop-oauth-refusal"]'), 'the dead end is gone').toBeNull();
+
+    // The user approves the change and lands in the PAT walkthrough — no refusal.
+    await click(/approve these changes/i);
+    await settle();
+    expect(db.getConnection(APP, 'github')?.requirement.kind).toBe('bearer_token');
+    expect(container!.querySelector('[data-testid="desktop-oauth-refusal"]')).toBeNull();
+    expect(container!.textContent).toMatch(/personal access token/i);
+  });
+});
+
 describe('(d) unsupported postures get a refusal screen BEFORE credentials (AC6)', () => {
   it('a GitHub OAuth-app row on desktop refuses with the provider named and steers to the PAT option', async () => {
     const desktop = fakeDesktop();

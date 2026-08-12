@@ -35,7 +35,14 @@ export type UserDbStatus =
   | { state: 'opening' }
   | { state: 'ready' }
   | { state: 'corrupt'; quarantinedFile: string; message: string }
-  | { state: 'unsupported'; foundVersion: number; message: string };
+  | { state: 'unsupported'; foundVersion: number; message: string }
+  /**
+   * `openUserDb` REJECTED (TASK-20260812 P3 item 7) — the desktop file backend's
+   * `load` throws for magic-less/torn bytes, deliberately distinct from the
+   * quarantining status:'corrupt' path. The file on disk was NOT touched; the UI
+   * must say so plainly and offer a retry, never open a silent fresh DB.
+   */
+  | { state: 'load-failed'; message: string; path?: string };
 
 export const userDbStatusStore = createStore<UserDbStatus>({ state: 'opening' });
 
@@ -51,26 +58,50 @@ function ensureReadyPromise(): Promise<UserDb> {
   return readyPromise;
 }
 
+function attemptOpen(): void {
+  // Desktop installs its file backend through the platform seam (Decision 7); web
+  // passes nothing and keeps the package's OPFS detection byte-for-byte (AC10).
+  const backend = getPlatform().userdbBackend;
+  void openUserDb({ locateWasm, admissionGate, ...(backend !== undefined ? { backend } : {}) })
+    .then((result) => {
+      if (result.status === 'ok') {
+        userDbStatusStore.set({ state: 'ready' });
+        resolveReady?.(result.userDb);
+      } else if (result.status === 'corrupt') {
+        corruptResult = result;
+        userDbStatusStore.set({ state: 'corrupt', quarantinedFile: result.quarantinedFile, message: result.message });
+      } else {
+        userDbStatusStore.set({ state: 'unsupported', foundVersion: result.foundVersion, message: result.message });
+      }
+    })
+    .catch((err: unknown) => {
+      // A REJECTION (not a typed result): the file backend refused torn/magic-less
+      // bytes. Fail loud and honest — the file was not overwritten, and only an
+      // explicit retry attempts the open again.
+      const message = err instanceof Error ? err.message : String(err);
+      const path = /stored file "([^"]+)"/.exec(message)?.[1];
+      userDbStatusStore.set({ state: 'load-failed', message, ...(path !== undefined ? { path } : {}) });
+    });
+}
+
 /** Kick off the one-time open. Safe to call repeatedly; only the first call opens. */
 export function bootUserDb(): Promise<UserDb> {
   const ready = ensureReadyPromise();
   if (opened) return ready;
   opened = true;
-  // Desktop installs its file backend through the platform seam (Decision 7); web
-  // passes nothing and keeps the package's OPFS detection byte-for-byte (AC10).
-  const backend = getPlatform().userdbBackend;
-  void openUserDb({ locateWasm, admissionGate, ...(backend !== undefined ? { backend } : {}) }).then((result) => {
-    if (result.status === 'ok') {
-      userDbStatusStore.set({ state: 'ready' });
-      resolveReady?.(result.userDb);
-    } else if (result.status === 'corrupt') {
-      corruptResult = result;
-      userDbStatusStore.set({ state: 'corrupt', quarantinedFile: result.quarantinedFile, message: result.message });
-    } else {
-      userDbStatusStore.set({ state: 'unsupported', foundVersion: result.foundVersion, message: result.message });
-    }
-  });
+  attemptOpen();
   return ready;
+}
+
+/**
+ * Explicit user action from the load-failed screen ("try again"): re-attempt the SAME
+ * open — same backend, same guards. The pending `getUserDb()` promise is preserved so
+ * every waiter resolves the moment an attempt finally succeeds.
+ */
+export function retryUserDbBoot(): void {
+  if (userDbStatusStore.get().state !== 'load-failed') return;
+  userDbStatusStore.set({ state: 'opening' });
+  attemptOpen();
 }
 
 /** Resolves when the user DB is usable. Never resolves while status is corrupt/unsupported. */

@@ -67,9 +67,11 @@ import {
   testConnection,
   type ConnectionTestOutcome,
   type ConnectionWizardSession,
+  type DesktopOAuthAlternative,
   type DesktopOAuthRefusal,
   type RevokedBefore,
 } from '../state/connectionWizard.js';
+import { chooseAuthOption } from '../state/authKindChoice.js';
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
 import { Sheet } from '../ui/Sheet.js';
@@ -289,6 +291,7 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
   const posture = isOAuth ? desktopOAuthPostureFor(row.requirement) : undefined;
   const loopbackPosture = posture === 'loopback' || posture === 'loopback-fixed-port' ? posture : undefined;
   const [platformRedirectUri, setPlatformRedirectUri] = useState<string | undefined>(undefined);
+  const [redirectCopied, setRedirectCopied] = useState(false);
 
   useEffect(() => {
     // Unsupported postures never reach this screen (the refusal gate renders instead),
@@ -356,7 +359,15 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
             add this to your provider app&apos;s allowed redirect URIs, exactly as shown — providers match it
             character for character, and a mismatch is refused before sign-in.
           </span>
-          <Button onClick={() => void navigator.clipboard?.writeText?.(redirectUri)}>copy this address</Button>
+          <Button
+            onClick={() => {
+              void navigator.clipboard?.writeText?.(redirectUri);
+              setRedirectCopied(true);
+            }}
+          >
+            copy this address
+          </Button>
+          {redirectCopied ? <span className="hint">copied — paste it into the provider&apos;s form.</span> : null}
           {platformOauth === undefined ? (
             /*
               Answers a question a careful user WILL have (owner, 2026-08-09): every app on
@@ -377,7 +388,8 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
             */
             <span className="hint">
               the desktop app always signs in on this exact address, so you only need to register it once per
-              provider — it stays the same every time you use the app.
+              provider — it stays the same every time you use the app. Paste this exactly — one character off and
+              the sign-in can&apos;t come home.
             </span>
           ) : (
             <span className="hint">
@@ -575,6 +587,10 @@ function CredentialsScreen({
 function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => void }): ReactElement {
   const status = useStore(connectionFlowStatusStore);
   const provider = row.requirement.provider.name;
+  // P3 item 4c: on desktop the sign-in lives in the SYSTEM browser, not a popup this
+  // window owns — the wait copy must point the user THERE, and the cancel affordance
+  // is the only in-app control on the screen, so it reads as the primary action.
+  const desktopOpener = getPlatform().oauth !== undefined;
 
   return (
     <div className="field">
@@ -586,7 +602,11 @@ function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => vo
       {status.state === 'awaiting_callback' ? (
         <>
           <span className="hint" data-testid="connect-status">
-            waiting for {provider} sign-in — approve the access in the window that opened, then come back here.
+            {desktopOpener
+              ? // The provider is named by the screen's own label just above; this line's
+                // job is pointing at the right WINDOW.
+                "we opened your browser — finish signing in there. we're listening."
+              : `waiting for ${provider} sign-in — approve the access in the window that opened, then come back here.`}
           </span>
           {/*
             The explicit abandonment affordance (P0 amendment 7). On desktop the sign-in
@@ -594,7 +614,11 @@ function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => vo
             observe — so without this button the only exits from the wait are delivery
             and the flow TTL. Offered on web too: one abandonment story, both platforms.
           */}
-          <Button onClick={() => cancelConnectionOAuthFlow()} data-testid="connect-cancel">
+          <Button
+            variant={desktopOpener ? 'primary' : 'default'}
+            onClick={() => cancelConnectionOAuthFlow()}
+            data-testid="connect-cancel"
+          >
             cancel this sign-in
           </Button>
         </>
@@ -726,32 +750,59 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
  * walking someone through a provider dashboard registration for a flow that will then
  * refuse is the same broken promise, one screen earlier.
  *
- * Plain language, provider-named, and it STEERS: when the registry carries another way
- * in (GitHub → personal access token), that route is named rather than implied. No
- * credential input exists on this screen and no forward affordance leads to one.
+ * Plain language, provider-named, and it STEERS (P3 item 4b): when the registry carries
+ * another way in (GitHub → personal access token), a PRIMARY button routes straight to
+ * that option's flow — the rebind goes through `chooseAuthOption`, the ONE `user`
+ * channel writer, so the full gate chain and the review still run. No credential input
+ * exists on this screen and no forward affordance leads to one.
  */
 function DesktopOAuthRefusalScreen({
   refusal,
+  appId,
+  slot,
   onClose,
 }: {
   refusal: DesktopOAuthRefusal;
+  appId: string;
+  slot: string;
   onClose: () => void;
 }): ReactElement {
+  const [routeError, setRouteError] = useState<string | undefined>(undefined);
+
+  const routeTo = (alternative: DesktopOAuthAlternative): void => {
+    setRouteError(undefined);
+    void chooseAuthOption({ appId, slot, requirement: alternative.requirement }).then((outcome) => {
+      // A refused rebind must say so (F4) — never silently keep the dead end.
+      if (!outcome.ok) setRouteError(outcome.message);
+    });
+  };
+
   return (
     <div className="field" data-testid="desktop-oauth-refusal">
-      <label>signing in to {refusal.providerName} isn&apos;t available in the desktop app yet</label>
+      <label>{refusal.providerName} sign-in isn&apos;t available in the desktop app yet</label>
       <span className="hint">
         {refusal.posture === 'unvouched'
           ? `we haven't verified a safe way for the desktop app to receive ${refusal.providerName}'s sign-in, so this connection can't be set up here yet.`
           : `${refusal.providerName} hands its sign-in back in a way the desktop app doesn't support yet, so this connection can't be set up here.`}
       </span>
-      {refusal.alternativeLabels.length > 0 ? (
-        <span className="hint" data-testid="desktop-oauth-refusal-alternatives">
-          {refusal.providerName} offers another way in that works here: {refusal.alternativeLabels.join(', ')}. Open
-          the app&apos;s chat and ask it to use that instead.
-        </span>
+      {refusal.alternatives.length > 0 ? (
+        <>
+          <span className="hint" data-testid="desktop-oauth-refusal-alternatives">
+            good news: {refusal.providerName} has another way in that works on this computer.
+          </span>
+          {refusal.alternatives.map((alternative) => (
+            <Button key={alternative.label} variant="primary" onClick={() => routeTo(alternative)}>
+              connect with {alternative.label}
+            </Button>
+          ))}
+        </>
       ) : null}
-      <Button variant="primary" onClick={onClose}>
+      {routeError !== undefined ? (
+        <div className="error-note" role="alert">
+          {routeError}
+        </div>
+      ) : null}
+      <Button variant={refusal.alternatives.length > 0 ? 'default' : 'primary'} onClick={onClose}>
         take me back
       </Button>
     </div>
@@ -995,7 +1046,7 @@ export function ConnectionWizardSheet(): ReactElement | null {
       ) : step === 'review' ? (
         <ReviewScreen row={row} onApprove={() => void advanceFromReview()} />
       ) : desktopRefusal !== undefined && step !== 'done' ? (
-        <DesktopOAuthRefusalScreen refusal={desktopRefusal} onClose={requestClose} />
+        <DesktopOAuthRefusalScreen refusal={desktopRefusal} appId={session.appId} slot={session.slot} onClose={requestClose} />
       ) : step === 'register' ? (
         <RegisterScreen row={row} onForward={() => void advanceFromRegister()} />
       ) : step === 'credentials' ? (

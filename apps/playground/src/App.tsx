@@ -3,6 +3,8 @@ import type { ReactElement } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router-dom';
 
 import { openUserFileConfirmStore, registerPlatformOpenFile, resolveOpenUserFileConfirm } from './platform/openFile.js';
+import { initDesktopFirstRun } from './desktop/firstRun.js';
+import { ModeCoercionNote } from './desktop/ModeCoercionNote.js';
 import { refreshAppMeta } from './state/appMeta.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
@@ -11,7 +13,7 @@ import { useStore } from './state/store.js';
 import { initWebllm } from './state/webllm.js';
 import { initSync, signOut } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
-import { bootUserDb, recoverFresh, useUserDbStatus } from './state/userdb.js';
+import { bootUserDb, recoverFresh, retryUserDbBoot, useUserDbStatus } from './state/userdb.js';
 import { ConnectionWizardNote } from './connections/ConnectionWizardNote.js';
 import { ConnectionWizardSheet } from './connections/ConnectionWizardSheet.js';
 import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
@@ -34,16 +36,53 @@ export function App(): ReactElement {
   // resume the configured sync origin and probe the hub's optional auth surface.
   useEffect(() => {
     bootUserDb();
-    void initSettings();
+    // The Ollama probe answers BEFORE settings hydrate (P3 item 2): a hydrated
+    // 'subscription' mode coerces to the best available mode, and "is local
+    // available" is the probe's answer. On web the probe is a synchronous no-op,
+    // so this ordering changes nothing there (AC10). The first-run latch reads the
+    // same settings, so it follows hydration.
+    void refreshOllama()
+      .then(() => initSettings())
+      .then(() => initDesktopFirstRun());
     // AL-07: the experimental webllm flag + WebGPU probe (idempotent, flag-gated).
     void initWebllm();
-    // W2b: platform-only probes/seams — both are no-ops on web (no probe, no handler).
-    void refreshOllama();
+    // W2b: platform-only seam — a no-op on web (no open handler).
     registerPlatformOpenFile();
     void refreshAppMeta();
     void initSync();
     void refreshAuth();
   }, []);
+
+  if (dbStatus.state === 'load-failed') {
+    // P3 item 7 — the boot open REJECTED (torn/magic-less file refused by the file
+    // backend). A plain full-screen truth, not a banner over a broken shell: nothing
+    // was overwritten, here is the file, try again when it is back.
+    return (
+      <div className="shell">
+        <main className="shell-main">
+          <div className="error-note" role="alert" data-testid="userdb-load-failed">
+            <p>
+              <strong>Your Snug file couldn&apos;t be read.</strong> It has not been overwritten — it is still on your
+              disk exactly as it was.
+            </p>
+            {dbStatus.path !== undefined ? (
+              <p>
+                file: <code>{dbStatus.path}</code>
+              </p>
+            ) : null}
+            <p className="hint">{dbStatus.message}</p>
+            <p className="hint">
+              if you have a backup or a synced copy, put it back in place — then try again. Nothing happens until you
+              do.
+            </p>
+            <Button variant="primary" onClick={() => retryUserDbBoot()}>
+              try again
+            </Button>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="shell">
@@ -102,6 +141,8 @@ export function App(): ReactElement {
         </nav>
       </header>
       <WebllmBanner />
+      {/* P3 item 2: the honest trace of a hydrated-subscription coercion (desktop). */}
+      <ModeCoercionNote />
       <main className="shell-main">
         <Routes>
           <Route path="/" element={<HubView />} />
