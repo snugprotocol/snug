@@ -150,6 +150,13 @@ None. No `packages/protocol` schema change (posture is registry data; `.snug` is
 
 ## Session journal (append-only, newest last)
 
+### 2026-08-12 (later) — claude (autonomous) — P0–P2 landed
+- Done: P0 review (25 findings → 13 confirmed via refuters; folded into plan+ADR — notably the shell-IPC C2 gate blocker and loopback⇒PKCE rule). P1 via workflow (7 TDD agents; first launch had a pipeline-seed orchestration bug — `[null]` items = dropped — caught by the glue agent refusing to fabricate; re-run clean): registry postures w/ dashboard citations (Spotify loopback-fixed-port, Google-class loopback, GitHub-oauth device-flow BECAUSE pkce:false+loopback is structurally refused, Slack/AppleMusic https-bridge, Coinbase https-bridge on documented ambiguity) + `browserCallable` (coinbase:false, github/coingecko/openweather:true); desktop-transport core (22 tests); `'file'` backend (12 tests); LAN transportPolicy (17 tests, octet-boundary 172.15/16/31/32); platform glue; wizard+boot wiring. Suites: auth 555, db 306, playground 830, all tsc-gated green. P2: Rust shell (atomic user-file, single-use open allowlist, consent-scoped export dialog-in-Rust, capabilities main-window-only; 4 cargo tests), icons from brand mark, desktop package (16 vitest incl. RFC-4231 HMAC parity), web bundle builds; platform-desktop reconciled with the wizard's real call order (display-safe fixed-port URI; listener binds at openExternal). P5 CI authored (gate script pending P4).
+- Decisions ratified: E-agent's host-class-based LAN policy (https to approved private literal also allowed — safer, Hue v2 speaks https) — recorded as intended. W2b's `.snug`+`.sqlite` dual accept kept.
+- State: branch at 94d7bdc; P3 (UX) + P4 (in-shell gate harness) next, in parallel.
+- Next step: P3/P4 agents → first `tauri dev` boot probe (secure-context/sql.js/IPC facts) → gate run → P6 whole-surface review + docs.
+- Open questions: WKWebView verdict divergences (P4 will tell); Windows leg pends first CI run; hydrated-subscription-mode coercion on desktop (P3 scope).
+
 ### 2026-08-12 — claude (autonomous) — session start
 - Done: repo state verified (main clean at 158c78d, #40 merged); process docs + architecture + lessons read; 3 seam-recon Explore agents + 1 Tauri-facts web-research agent dispatched; spec drafted.
 - State: awaiting recon reports; plan section next.
