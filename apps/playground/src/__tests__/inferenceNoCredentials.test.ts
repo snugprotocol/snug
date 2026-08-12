@@ -163,7 +163,8 @@ describe('P3 fold — a PINNED provider resolves with no model configured at all
     });
 
     expect(outcome.blocked).toBeUndefined();
-    const result = outcome.result!;
+    if (outcome.blocked !== undefined) return;
+    const { result } = outcome;
     expect(result.ok, `a pinned provider must not need a model: ${JSON.stringify(result)}`).toBe(true);
     if (!result.ok) return;
     expect(result.provenance).toBe('registry');
@@ -179,7 +180,8 @@ describe('P3 fold — a PINNED provider resolves with no model configured at all
     });
 
     expect(outcome.blocked).toBeUndefined();
-    const result = outcome.result!;
+    if (outcome.blocked !== undefined) return;
+    const { result } = outcome;
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.code).toBe('completion_failed');

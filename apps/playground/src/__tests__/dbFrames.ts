@@ -6,14 +6,15 @@
  * couple two test suites through a path that neither package promises to keep.
  */
 
-import type { DbRequestFrame } from '@snugprotocol/protocol';
+import { FRAME_TYPES, PROTOCOL_VERSION, type DbRequestFrame } from '@snugprotocol/protocol';
 
 let seq = 0;
 
-const base = (): Pick<DbRequestFrame, 'v' | 'type' | 'id'> => ({
-  v: 1,
-  type: 'db-request',
-  id: `t-${++seq}`,
+const base = () => ({
+  v: PROTOCOL_VERSION,
+  type: FRAME_TYPES.dbRequest,
+  requestId: `t-${++seq}`,
+  instanceId: 'ins-test',
 });
 
 export const execFrame = (sql: string, params?: unknown[]): DbRequestFrame => ({
@@ -21,6 +22,6 @@ export const execFrame = (sql: string, params?: unknown[]): DbRequestFrame => ({
   op: 'exec',
   sql,
   ...(params !== undefined ? { params } : {}),
-} as DbRequestFrame);
+});
 
-export const exportFrame = (): DbRequestFrame => ({ ...base(), op: 'export' }) as DbRequestFrame;
+export const exportFrame = (): DbRequestFrame => ({ ...base(), op: 'export' });

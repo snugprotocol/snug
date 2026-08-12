@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "tsc -p tsconfig.test.json && vitest run"
   },
   "license": "MIT",
   "dependencies": {

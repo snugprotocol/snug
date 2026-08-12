@@ -45,7 +45,7 @@ describe('the few-shot outputs are a real contract', () => {
   it('ships examples covering every lane the router can dispatch', () => {
     const intents = exampleOutputs()
       .map((block) => parseChatIntent(block)?.intent)
-      .filter((intent): intent is string => intent !== undefined);
+      .filter((intent): intent is NonNullable<typeof intent> => intent !== undefined);
     // Every example is usable AND the set is broad: a classifier taught only the easy
     // lanes routes the hard ones by guesswork.
     expect(exampleOutputs().length).toBeGreaterThanOrEqual(6);

@@ -17,7 +17,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import type { AgentRoundTrip } from '@snugprotocol/adapters';
+import type { AgentRoundTrip, AgentTurnEvent } from '@snugprotocol/adapters';
 import { runtimeContractSchema } from '@snugprotocol/protocol';
 
 import { createDirectAppTransport } from '../agent/transport.js';
@@ -34,16 +34,16 @@ const REVERTED_CONTRACT = runtimeContractSchema.parse({
 });
 
 /** Collect the round trips a send produces, so `request.system` can be asserted. */
-function tripCollector(): { trips: AgentRoundTrip[]; onLlmEvent: (event: never) => void } {
+function tripCollector(): { trips: AgentRoundTrip[]; onLlmEvent: (event: AgentTurnEvent) => void } {
   const trips: AgentRoundTrip[] = [];
   return {
     trips,
-    onLlmEvent: ((event: { type: string }) => {
+    onLlmEvent: (event) => {
       if (event.type === 'round_trip') {
-        const { type: _type, ...trip } = event as never as AgentRoundTrip & { type: string };
-        trips.push(trip as AgentRoundTrip);
+        const { type: _type, ...trip } = event;
+        trips.push(trip);
       }
-    }) as never,
+    },
   };
 }
 

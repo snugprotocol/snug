@@ -17,7 +17,11 @@
 // hosts. An e2e that authored `stub.snug.test` would prove the wizard works on a host no
 // real app ever declares, which is the opposite of what these journeys are for.
 
-import { CONNECTION_REQUIREMENT_DIRECTIVE_KIND, PROTOCOL_VERSION } from '@snugprotocol/protocol';
+import {
+  CONNECTION_REQUIREMENT_DIRECTIVE_KIND,
+  PROTOCOL_VERSION,
+  type ConnectionRequirement,
+} from '@snugprotocol/protocol';
 import type { MockTurn } from '@snugprotocol/adapters';
 
 import { ARTIFACT_WRITE_TOOL_NAME } from './tools.js';
@@ -318,10 +322,7 @@ const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<strin
  * brain is precisely where someone would bake in a working key "to make the journey run
  * end to end"; the e2e types its secrets, the requirement never carries one.
  */
-export const DEMO_STARTER_REQUIREMENTS: Record<
-  DemoStarterVariant,
-  { slot: string; kind: string; declaredApiHosts: string[]; [key: string]: unknown }
-> = {
+export const DEMO_STARTER_REQUIREMENTS: Record<DemoStarterVariant, ConnectionRequirement> = {
   'starter-coingecko': {
     slot: 'coingecko',
     provider: { name: 'CoinGecko', docsUrl: 'https://docs.coingecko.com/reference/simple-price' },

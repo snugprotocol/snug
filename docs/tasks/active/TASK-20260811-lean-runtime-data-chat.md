@@ -781,3 +781,113 @@ materialized DB; every file:line citation in §0 checked accurate.
   branch merges (PROCESS: `done/` is for merged-and-finished work), then moves.
 - Open questions: none. Six follow-ups are queued in `docs/next-steps.md`, all
   non-blocking, each with the reason it was NOT closed here.
+
+### 2026-08-11 — Claude (pickup) — session
+
+- **Lost context recovered and recorded.** The Gate 6 entry above ends "11 commits …
+  none pushed", which was true when written and is now stale: the branch WAS pushed and
+  **PR #35 is OPEN** ("TASK-20260811: lean runtime turns + intent-routed app data chat
+  (ADR-0018/0019)", opened 2026-08-12T02:22Z). `origin/feat/TASK-20260811-lean-runtime-data-chat`
+  is at `8445371`, byte-identical to local HEAD; PR state `MERGEABLE`, no review decision,
+  no comments. The push/PR happened after the journal's last write and never got recorded
+  — journaling it here per "memory is git".
+- **Test status re-verified, not assumed**: `pnpm test -- --force` → **19/19 turbo tasks
+  green, uncached, 0 cached**; playground 726, matching the Gate 6 numbers exactly (2156
+  tests + 185 examples). No drift.
+- **Observation worth acting on:** PR #35 reports **no status checks at all**
+  (`statusCheckRollup` empty), so every green on this branch is a local claim. Noted for
+  the owner; not this session's scope to add CI.
+- Owner directed this session to (2) review PR #35 and (3) pick up the queued
+  `test`-script type-check follow-up.
+- Next step: PR review + the `tsc` prefix follow-up (both below).
+- Open questions: none.
+
+### 2026-08-11 — Claude (pickup, PR #35 review + type-check follow-up) — session
+
+**A. Fresh-context review of PR #35 (two lenses, read-only, refute-first).** Both reviewers
+attacked the branch diff against source. **One P0 and one high-severity BLOCKER, both
+REPRODUCED BY EXECUTION by me before reporting** — neither is a review hypothesis:
+
+- **R-B1 (P0, security lane, VERIFIED BY EXECUTION): destructive DDL passes the data-write
+  approval gate reading "0 row(s)", and lands on the real DB.** `forbiddenStatementReason`
+  blocks only ATTACH / `PRAGMA writable_schema` / `load_extension` — **DDL is not
+  restricted**, and the approval card's ONLY impact signal is `sqlite3_changes()`, which is
+  0 for every DDL statement. Ran through the real `buildDataTools` → `executeApprovedWrite`
+  path on a seeded ledger: `DROP TABLE expenses` with summary "Tidy up a stray label"
+  previewed as `1. DROP TABLE expenses — would affect 0 row(s)`, `previewed: [0]`, the
+  TOCTOU drift guard compared 0 to 0 and **passed**, the outcome was `{"ok":true,
+  "executed":[0]}`, and the table was gone (`no such table: expenses`). **This is the same
+  family as the P4 blocker but not the same instance**: P4 fixed the case where the count
+  was DROPPED; this is the case where the count is legitimately 0 while the statement is
+  destructive. The data lane has no versioning and no revert, so unlike the feature lane
+  there is no undo. The threat model's §4 asymmetry argument rests on this card being an
+  honest gate — for DDL it is showing information that is technically true and materially
+  misleading, and "0 rows" is exactly the signal that invites approving without reading.
+  Existing test `scratch-run.test.ts:122` asserts DROP TABLE leaves the real DB
+  byte-identical **through `scratchRun`** — true, and it reads as coverage for the
+  approval→execute path it does not touch.
+- **R-B2 (high, correctness, VERIFIED BY READING): subscription mode never sends the
+  contract — F1 is inert for every subscription user.** `createHttpTransport.send()` awaits
+  `options.getContract?.()` into a local `const contract` (http-transport.ts:62) and then
+  builds the POST body **without ever referencing it**. `grep -n contract` on that file
+  shows one non-comment occurrence: the dead assignment. The whole server half
+  (`invoke.ts` + 16 passing tests) is correct and dead-lettered. Note this is the P4
+  round's own claimed fix ("subscription mode now SENDS the contract") — the seat was added
+  but never wired into the body. No test crosses the `createHttpTransport` seam, which is
+  exactly why 16 server tests pass for a field the client never sends.
+- **Also reported, NOT yet independently verified by me** (correctness lens, plausible on
+  reading, each with a stated repro): R-M1 `scratchRun` attaches a STICKY
+  `getRowsModified()` to non-modifying statements, so a DELETE-then-SELECT batch previews
+  `[3, 3]` and the card tells the user a SELECT will change 3 rows (the existing test at
+  `scratch-run.test.ts:168` runs this exact batch but asserts only `statements[0].changes`
+  and `statements[1].rows`); R-M2 importing into a FRESH hub (corruption recovery via
+  `openFresh()`, or a new device's first `pullMerge`) nulls EVERY contract, because the
+  byte-identical guard treats an empty local set as "nothing is known" — the user's own
+  backup restore silently strips F1 from every app with no recovery path; R-M3 aborting
+  during classification persists a FABRICATED clarifying exchange (adapters collapse abort
+  into `ok:false`, which `routeChatMessage` maps to the clarify lane, which persists both
+  sides) that then contaminates later routing context; R-M4 multi-statement approved writes
+  have no transaction, so a mid-batch failure leaves data half-changed while the UI says
+  "nothing was changed"; R-M5 a staged proposal is React-only state, so reload leaves the
+  assistant's "waiting for your approval" text with no card (this one is already queued as
+  next-steps (g)).
+- **Claims that HELD under attack** (worth keeping): the physical namespace jail is real
+  (`sqlite_master` from a scratch instance lists only the app's own tables; `snug_secrets`/
+  `snug_connections`/other apps' tables all error as missing); scratch writes never reach
+  the real file; `VACUUM INTO` stays inside emscripten MEMFS; multi-statement smuggling
+  (`SELECT 1; ATTACH …`) is rejected before `step()`; settings keys are rejected not
+  silently stripped, including `__proto__`; `runtime_contract_write`/`artifact_edit` bind
+  appId from `sink.ensureTargetId()`, never from model input; the credential scan does
+  traverse the nested `contract` wrapper.
+- **NOTHING FROM THE REVIEW IS FIXED.** All findings are reported to the owner for
+  disposition — R-B1 and R-B2 should block the merge of PR #35.
+
+**B. Type-check follow-up (the queued repo-hygiene item) — DONE.**
+- It was **FOUR packages, not the three** next-steps named: `knowledge` also excludes
+  `src/__tests__` from its build tsconfig. Each of `db`, `protocol`, `knowledge`,
+  `playground` gained a `tsconfig.test.json` (the `adapters` pattern) and its `test` script
+  is now `tsc -p tsconfig.test.json && vitest run`.
+- Turning it on surfaced **40 pre-existing type errors across 11 files**, all fixed. Two
+  were real test defects, not cosmetics: (a) a dead `assembledBlockCount` helper in
+  `runtime-contract-render.test.ts` whose `.split()` bound to the wrong template literal —
+  the live separator-forging assertions use a correct sibling (`blocksFor`), so the
+  security regression test was never weakened, but the broken twin sat beside it looking
+  authoritative; (b) a `dataTools` drift assertion narrowing only on `ok`, so the `'failed'`
+  branch would have skipped the check and still passed — now `expect.unreachable`. The rest
+  were unnarrowed unions, `as never` casts that defeated checking entirely, and
+  `dbFrames.ts` having drifted from the real `DbRequestFrame` shape (`type: 'db-request'` +
+  `id` vs the schema's `'snug:db-request'` + `requestId`/`instanceId`) behind an `as` cast.
+- One product-file change: `DEMO_STARTER_REQUIREMENTS` was typed with an
+  `[key: string]: unknown` index signature that made `requirement.request` unknown; it is
+  now `Record<DemoStarterVariant, ConnectionRequirement>` — accurate, since the same test
+  already parses those fixtures with `connectionRequirementSchema`.
+- **Guard verified to bite**: injecting `const _x: number = 'str'` into a db test made
+  `pnpm --filter @snugprotocol/db test` fail at `tsc` before vitest ran; probe reverted.
+- State: **19/19 turbo tasks green, uncached, with typecheck now in the test path** —
+  playground still 726, no test deleted or weakened.
+- Next step: **owner disposition on R-B1/R-B2 (both should block PR #35)**; the type-check
+  work is complete and independently mergeable.
+- Open questions: whether R-B1's fix is a DML-only allowlist in `packages/db` beside
+  `forbiddenStatementReason` (my recommendation — the guard belongs where the real executor
+  and the scratch preview cannot disagree, and `schema_apply` already owns the reviewed DDL
+  path) or a card that states non-row-count impact; owner's call.

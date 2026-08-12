@@ -101,11 +101,7 @@ describe('renderRuntimeContract', () => {
      * The fix neutralizes any horizontal-rule LINE rather than one spelling of the
      * separator, which removes the primitive instead of one instance of it.
      */
-    const assembledBlockCount = (contract: Parameters<typeof renderRuntimeContract>[0]): number =>
-      `${buildHostSystemPrompt({ appBuilder: false, artifacts: false, appRuntime: true })}` +
-      `${SYSTEM_BLOCK_SEPARATOR}${renderRuntimeContract(contract)}`.split(SYSTEM_BLOCK_SEPARATOR).length;
-
-    const blocksFor = (contract: Parameters<typeof renderRuntimeContract>[0]): number => {
+    const blocksFor =(contract: Parameters<typeof renderRuntimeContract>[0]): number => {
       const system = `${buildHostSystemPrompt({ appBuilder: false, artifacts: false, appRuntime: true })}${SYSTEM_BLOCK_SEPARATOR}${renderRuntimeContract(contract)}`;
       return system.split(SYSTEM_BLOCK_SEPARATOR).length;
     };

@@ -12,7 +12,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createServerBuilder, type BuildStep } from '../agent/builder.js';
-import { useBuilderChat, type BuilderChat } from '../agent/useBuilderChat.js';
+import { useBuilderChat, type BuilderChat, type BuildStepView } from '../agent/useBuilderChat.js';
 import { modeStore } from '../state/mode.js';
 import { ChatLog } from '../views/ChatLog.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -219,7 +219,7 @@ describe('useBuilderChat step timeline', () => {
 // ---------------------------------------------------------- the component (AC9)
 
 describe('ChatLog step timeline rendering', () => {
-  const steps: BuildStep[] = [
+  const steps: BuildStepView[] = [
     { tool: 'snug_knowledge', label: 'consulting the knowledge base…', done: true },
     { tool: 'schema_apply', label: 'designing the app’s database…', done: true },
     { tool: 'artifact_write', label: 'writing the app file…', done: false },

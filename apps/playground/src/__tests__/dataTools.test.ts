@@ -53,7 +53,13 @@ const toolsFor = (
   appId: string,
   proposals: PendingWriteProposal[],
 ): ReturnType<typeof buildDataTools> =>
-  buildDataTools({ appId, getDb: () => Promise.resolve(db), onProposal: (p) => proposals.push(p) });
+  buildDataTools({
+    appId,
+    getDb: () => Promise.resolve(db),
+    onProposal: (p) => {
+      proposals.push(p);
+    },
+  });
 
 const runTool = async (
   tools: ReturnType<typeof buildDataTools>,
@@ -269,9 +275,10 @@ describe('executeApprovedWrite — the only path to the real database (AC-F2-4)'
     const outcome = await executeApprovedWrite(db, proposals[0]!);
 
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) {
-      expect(outcome.reason).toBe('drifted');
+    if (!outcome.ok && outcome.reason === 'drifted') {
       expect(outcome.current).toEqual([3]);
+    } else {
+      expect.unreachable('expected a drift outcome');
     }
     expect(await bytes(db, appId), 'nothing executes on drift').toBe(before);
   });
