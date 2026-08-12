@@ -870,7 +870,18 @@ export function ConnectionWizardSheet(): ReactElement | null {
           onStart={() => {
             // Synchronous pre-open inside the gesture — see the note on `save` above.
             const preOpened = openBlankConnectionOAuthPopup();
-            void startConnectionOAuthFlow({}, preOpened);
+            // CAUGHT, never `void`-discarded (AC8, TASK-20260812). Several paths throw
+            // BEFORE any flow status is written — the B1 approval wall, the non-OAuth
+            // kind guard, the mint's missing-client_id — and the old `void` form made
+            // this button silently do nothing for every one of them. The catch routes
+            // the thrown copy into the flow status store, which is exactly the error
+            // region ConnectScreen already renders with a retry (AC7).
+            startConnectionOAuthFlow({}, preOpened).catch((err) => {
+              connectionFlowStatusStore.set({
+                state: 'error',
+                message: err instanceof Error ? err.message : String(err),
+              });
+            });
           }}
         />
       ) : (

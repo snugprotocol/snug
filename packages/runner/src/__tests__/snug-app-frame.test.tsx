@@ -44,17 +44,21 @@ async function render(over: Partial<SnugAppFrameProps> = {}, wrap?: (el: JSX.Ele
   const controls: { current: RunnerHost | null } = { current: null };
 
   const build = (extra: Partial<SnugAppFrameProps>): JSX.Element => {
-    const el = (
-      <SnugAppFrame
-        html={APP_HTML}
-        transport={{ send: async () => jsonReply({ message: 'ok' }) }}
-        budgetKey="react-test"
-        onFrame={(direction, frame) => observed.push({ direction, type: frame.type })}
-        controlsRef={controls}
-        {...over}
-        {...extra}
-      />
-    );
+    // Spreading Partial<> over a DISCRIMINATED-UNION props type (db+dbNamespace travel
+    // together or not at all) defeats TS's narrowing, so the harness asserts the union
+    // once, after composition. Runtime behavior is identical; the component's own
+    // callers keep the full union check. (Surfaced when the package's test script
+    // gained its tsc gate — TASK-20260812 P3 audit.)
+    const props = {
+      html: APP_HTML,
+      transport: { send: async () => jsonReply({ message: 'ok' }) },
+      budgetKey: 'react-test',
+      onFrame: (direction: FrameDirection, frame: Frame) => observed.push({ direction, type: frame.type }),
+      controlsRef: controls,
+      ...over,
+      ...extra,
+    } as SnugAppFrameProps;
+    const el = <SnugAppFrame {...props} />;
     return wrap ? wrap(el) : el;
   };
 

@@ -163,7 +163,20 @@ export async function openConnectionWizardForApp(
 ): Promise<boolean> {
   const db = await getUserDb();
   const rows = db.listConnections(appId);
-  if (rows.length === 0) return false;
+  if (rows.length === 0) {
+    // F4 (TASK-20260812) — the zero-row refusal must never be silent. This is the state
+    // the owner's Coinbase app was in: no requirement row ever persisted, so the
+    // net-error banner's CTA called here, got `false`, and NOTHING visible happened.
+    // The explanation is written where the DECISION is made, so every caller — the
+    // banner CTA, the chat card, settings — inherits it rather than each translating
+    // `false` on its own. Rendered by `ConnectionWizardNote` (the store finally has a
+    // surface). Forward-only repair per owner decision Q4: the route out is asking the
+    // app's agent to declare the connection, not the host inventing a row here.
+    connectionWizardNoteStore.set(
+      'this app has no connection set up yet, so there is nothing to connect — open the app\'s chat and ask it to declare the connection it needs',
+    );
+    return false;
+  }
   const staged = rows.find((row) => needsReapproval(row));
   if (staged !== undefined) {
     return openConnectionWizard({ appId, slot: staged.slot, source, mode: 'reapprove' });

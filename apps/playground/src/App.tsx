@@ -9,6 +9,7 @@ import { initWebllm } from './state/webllm.js';
 import { initSync, signOut } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
 import { bootUserDb, recoverFresh, useUserDbStatus } from './state/userdb.js';
+import { ConnectionWizardNote } from './connections/ConnectionWizardNote.js';
 import { ConnectionWizardSheet } from './connections/ConnectionWizardSheet.js';
 import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
 import { Button } from './ui/Button.js';
@@ -123,6 +124,10 @@ export function App(): ReactElement {
           different views, and a per-view mount would strand the minutes-lived singleton
           (and any in-flight OAuth exchange) the moment the user navigated. */}
       <ConnectionWizardSheet />
+      {/* The wizard-refusal note shares the sheet's app-level mount for the same
+          reason: refusals happen from every entry point, and a per-view note would be
+          silent exactly where the refused click came from (F4, TASK-20260812). */}
+      <ConnectionWizardNote />
     </div>
   );
 }
