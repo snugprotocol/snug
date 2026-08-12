@@ -22,7 +22,7 @@ import {
 } from '@snugprotocol/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { authConnectionCredentialSecretKey, authConnectionStateSecretKey } from '@snugprotocol/db';
-import { createConnectedFetch, type ConnectedFetch, type NetConnectionRow } from '../connected-fetch.js';
+import { createConnectedFetch, executeConnectionTestRequest, type ConnectedFetch, type NetConnectionRow } from '../connected-fetch.js';
 import { UserDbCredentialStore } from '../credential-store.js';
 import { WELL_KNOWN_PROVIDERS_REGISTRY } from '../well-known-providers.js';
 
@@ -95,6 +95,8 @@ function harness(opts: {
   allowedHosts?: string[];
   respond?: (url: string, init: RequestInit) => Response;
   confirmResult?: boolean;
+  /** Decision 6 (desktop LAN policy) — absent everywhere else so every other test pins the browser profile. */
+  transportPolicy?: { allowHttpForPrivateHosts: boolean };
 } = {}): Harness {
   const quartet = memoryQuartet();
   // SLOT-KEYED (P1): `auth:<appId>:<slot>:<fieldKey>`.
@@ -117,6 +119,7 @@ function harness(opts: {
       return respond(url, init ?? {});
     },
     confirmGate: { confirm },
+    ...(opts.transportPolicy !== undefined ? { transportPolicy: opts.transportPolicy } : {}),
   });
   return { executor, calls, quartet, confirm, setRow: (appId, row) => (row === undefined ? void rows.delete(appId) : void rows.set(appId, row)) };
 }
@@ -270,6 +273,193 @@ describe('gate 5 — SSRF literal guard (honest browser edition)', () => {
       expect(await executor.execute(APP, { url, method: 'GET' })).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_SSRF_BLOCKED });
     }
     expect(calls).toHaveLength(0);
+  });
+});
+
+// --------------------------------- desktop transport policy (Decision 6, gates 4+5)
+
+/**
+ * TASK-20260812-desktop-hub-scaffold Decision 6 — the LAN/Hue-class scheme policy.
+ *
+ * The policy's ENTIRE behavioural delta: with `allowHttpForPrivateHosts: true`, an
+ * RFC-1918 private-range IPv4 LITERAL host may be reached (http admitted at gate 4,
+ * gate 5's private-range refusal stood down for exactly that class) — and ONLY when the
+ * frozen approved ceiling already contains it (gates 2+3 run unchanged). Everything
+ * else — public hosts, loopback, link-local, `localhost`, name suffixes, IPv6 in any
+ * form, every request with the policy absent — is byte-identical to the browser profile.
+ */
+describe('desktop transport policy — LAN http for private IPv4 literals (Decision 6)', () => {
+  const LAN_HOST = '192.168.1.5';
+  const POLICY_ON = { allowHttpForPrivateHosts: true } as const;
+
+  it('policy ABSENT: an http private-IP request is refused exactly as today (NET_SCHEME_BLOCKED, no fetch)', async () => {
+    const { executor, calls } = harness({ allowedHosts: [LAN_HOST] });
+    expect(await executor.execute(APP, { url: `http://${LAN_HOST}/api/lights`, method: 'GET' })).toMatchObject({
+      ok: false,
+      code: NET_ERROR_CODES.NET_SCHEME_BLOCKED,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('policy FALSE is the same as absent — no half-on state', async () => {
+    const { executor, calls } = harness({ allowedHosts: [LAN_HOST], transportPolicy: { allowHttpForPrivateHosts: false } });
+    expect(await executor.execute(APP, { url: `http://${LAN_HOST}/api/lights`, method: 'GET' })).toMatchObject({
+      ok: false,
+      code: NET_ERROR_CODES.NET_SCHEME_BLOCKED,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('policy ON: http to a PUBLIC hostname stays refused — the admission never reaches DNS names', async () => {
+    const { executor, calls } = harness({ transportPolicy: POLICY_ON });
+    expect(await executor.execute(APP, { url: 'http://api.example.com/x', method: 'GET' })).toMatchObject({
+      ok: false,
+      code: NET_ERROR_CODES.NET_SCHEME_BLOCKED,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('policy ON: http to a private literal IN the approved ceiling executes through fetchImpl, gates intact', async () => {
+    const { executor, calls } = harness({ allowedHosts: [LAN_HOST], transportPolicy: POLICY_ON });
+    const result = await executor.execute(APP, { url: `http://${LAN_HOST}/api/lights`, method: 'GET' });
+    expect(result).toMatchObject({ ok: true, status: 200 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`http://${LAN_HOST}/api/lights`);
+    // The request is still the full 10-gate path: injection ran (gate 8)…
+    expect(headerOf(calls[0]!, 'x-api-key')).toBe(API_KEY_VALUE);
+    // …and the redirect posture survived the scheme admission (gate 9).
+    expect(calls[0]!.init.redirect).toBe('manual');
+  });
+
+  it('policy ON: a private literal NOT in the ceiling is still refused — the frozen ceiling rules', async () => {
+    const { executor, calls } = harness({ allowedHosts: [LAN_HOST], transportPolicy: POLICY_ON });
+    expect(await executor.execute(APP, { url: 'http://192.168.1.6/api/lights', method: 'GET' })).toMatchObject({
+      ok: false,
+      code: NET_ERROR_CODES.NET_NOT_APPROVED,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('policy ON: loopback, link-local, localhost, and .local stay refused over http — never exempted', async () => {
+    // Every host is seeded INTO the ceiling so the refusal proven here is the scheme/SSRF
+    // gate's own, not the ceiling's.
+    const hosts = ['127.0.0.1', '169.254.1.1', 'localhost', 'foo.local'];
+    const { executor, calls } = harness({ allowedHosts: hosts, transportPolicy: POLICY_ON });
+    for (const host of hosts) {
+      expect(await executor.execute(APP, { url: `http://${host}/x`, method: 'GET' }), `http://${host} must be refused`).toMatchObject({
+        ok: false,
+        code: NET_ERROR_CODES.NET_SCHEME_BLOCKED,
+      });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('policy ON: loopback/link-local stay SSRF-refused over https too — the stand-down is only the RFC-1918 class', async () => {
+    const { executor, calls } = harness({ allowedHosts: ['127.0.0.1', '169.254.169.254'], transportPolicy: POLICY_ON });
+    for (const url of ['https://127.0.0.1/x', 'https://169.254.169.254/latest/meta-data']) {
+      expect(await executor.execute(APP, { url, method: 'GET' }), `${url} must be refused`).toMatchObject({
+        ok: false,
+        code: NET_ERROR_CODES.NET_SSRF_BLOCKED,
+      });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('policy ON: non-http(s) schemes stay refused even for the admitted host class', async () => {
+    const { executor, calls } = harness({ allowedHosts: [LAN_HOST], transportPolicy: POLICY_ON });
+    expect(await executor.execute(APP, { url: `ftp://${LAN_HOST}/x`, method: 'GET' })).toMatchObject({
+      ok: false,
+      code: NET_ERROR_CODES.NET_SCHEME_BLOCKED,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('policy ON: https to a public host is byte-identical to today', async () => {
+    const { executor, calls } = harness({ transportPolicy: POLICY_ON });
+    expect((await executor.execute(APP, GET())).ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(headerOf(calls[0]!, 'x-api-key')).toBe(API_KEY_VALUE);
+  });
+
+  it('policy ON: https to an approved private literal executes too (Hue v2 speaks https) — policy ABSENT it stays SSRF-refused', async () => {
+    const on = harness({ allowedHosts: [LAN_HOST], transportPolicy: POLICY_ON });
+    expect((await on.executor.execute(APP, { url: `https://${LAN_HOST}/clip/v2`, method: 'GET' })).ok).toBe(true);
+    expect(on.calls).toHaveLength(1);
+
+    const off = harness({ allowedHosts: [LAN_HOST] });
+    expect(await off.executor.execute(APP, { url: `https://${LAN_HOST}/clip/v2`, method: 'GET' })).toMatchObject({
+      ok: false,
+      code: NET_ERROR_CODES.NET_SSRF_BLOCKED,
+    });
+    expect(off.calls).toHaveLength(0);
+  });
+
+  it('octet-boundary correctness at the executor: 172.16/172.31 admitted, 172.15/172.32 refused', async () => {
+    for (const [host, admitted] of [
+      ['172.16.0.1', true],
+      ['172.31.255.254', true],
+      ['172.15.255.255', false],
+      ['172.32.0.1', false],
+    ] as const) {
+      const { executor, calls } = harness({ allowedHosts: [host], transportPolicy: POLICY_ON });
+      const result = await executor.execute(APP, { url: `http://${host}/x`, method: 'GET' });
+      if (admitted) {
+        expect(result.ok, `http://${host} must execute`).toBe(true);
+        expect(calls).toHaveLength(1);
+      } else {
+        expect(result, `http://${host} must be refused`).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_SCHEME_BLOCKED });
+        expect(calls).toHaveLength(0);
+      }
+    }
+  });
+
+  it('executeConnectionTestRequest carries the policy through — the probe reaches an approved LAN host only under policy', async () => {
+    // The probe shares deps with the executor (Q7's single-path guarantee), so the policy
+    // must ride along without a second wiring seat. The probe's URL is https-based; what
+    // the policy changes for it is gate 5's stand-down for the approved RFC-1918 literal.
+    const lanRequirement: ConnectionRequirement = {
+      slot: 'hue',
+      kind: 'api_key',
+      provider: { name: 'Hue Bridge' },
+      fields: [{ key: 'api_key', label: 'Application key', type: 'secret' }],
+      request: { headerTemplate: { 'hue-application-key': '{{api_key}}' } },
+      declaredApiHosts: [LAN_HOST],
+      testRequest: { method: 'GET', pathAndQuery: '/clip/v2/resource/bridge' },
+    };
+    const depsFor = (policy: { allowHttpForPrivateHosts: boolean } | undefined): {
+      deps: Parameters<typeof executeConnectionTestRequest>[0];
+      calls: FetchCall[];
+    } => {
+      const quartet = memoryQuartet();
+      quartet.setSecret(authConnectionCredentialSecretKey(APP, 'hue', 'api_key'), API_KEY_VALUE);
+      const calls: FetchCall[] = [];
+      return {
+        deps: {
+          credentialStore: new UserDbCredentialStore(quartet),
+          connectionReader: { listConnections: () => [rowFor(lanRequirement, 'approved', [LAN_HOST])] },
+          fetchImpl: async (url: string, init?: RequestInit) => {
+            calls.push({ url, init: init ?? {} });
+            return new Response('{"bridge":"ok"}', { status: 200 });
+          },
+          confirmGate: { confirm: async () => true },
+          ...(policy !== undefined ? { transportPolicy: policy } : {}),
+        },
+        calls,
+      };
+    };
+
+    const on = depsFor(POLICY_ON);
+    const okResult = await executeConnectionTestRequest(on.deps, APP, 'hue');
+    expect(okResult).toMatchObject({ ok: true, status: 200 });
+    expect(on.calls).toHaveLength(1);
+    expect(on.calls[0]!.url).toBe(`https://${LAN_HOST}/clip/v2/resource/bridge`);
+
+    const off = depsFor(undefined);
+    expect(await executeConnectionTestRequest(off.deps, APP, 'hue')).toMatchObject({
+      ok: false,
+      code: NET_ERROR_CODES.NET_SSRF_BLOCKED,
+    });
+    expect(off.calls).toHaveLength(0);
   });
 });
 

@@ -12,9 +12,13 @@
  *   2. binding — `appId` is HOST-assigned (R5); the input carries no identity field
  *   3. spec exists AND status === approved (AL-02 status contract; imported rows
  *      barred with the distinct NET_IMPORTED_UNAPPROVED)
- *   4. https-only scheme (A1 — no localhost exception) + punycode-normalized host ∈
- *      frozenAllowedHosts (B3, both sides normalized at check time)
- *   5. SSRF literal guard (net-guards.ts — honest browser edition)
+ *   4. https-only scheme (A1 — no localhost exception; the desktop transport policy's
+ *      one admission is http to an RFC-1918 IPv4 LITERAL, Decision 6 below) +
+ *      punycode-normalized host ∈ frozenAllowedHosts (B3, both sides normalized at
+ *      check time)
+ *   5. SSRF literal guard (net-guards.ts — honest browser edition; stood down ONLY for
+ *      the same policy-admitted RFC-1918 class, which this gate forbids for no other
+ *      reason)
  *   6. mutating methods pass the confirm gate BEFORE any credential is read
  *   7. app-supplied credential-shaped headers stripped (C1, belt to the schema's braces)
  *   8. injection per kind (template engine / OAuth service, ceiling-checked internally)
@@ -22,8 +26,12 @@
  *  10. response read under the 1 MiB cap (overflow → small terminal NET_SIZE_EXCEEDED,
  *      B1), scrubbed (body + whitelisted header values, R1), whitelist-filtered (A2)
  *
- * There is no relaxation parameter of any kind anywhere in this module (C1 / audit
- * bug 3 dies by construction — the AC lint walks this file like every other).
+ * There is no strictness knob anywhere in this module (C1 / audit bug 3 dies by
+ * construction — the AC lint walks this file like every other). The one deliberate
+ * transport-profile seat is `transportPolicy` (Decision 6, TASK-20260812): it widens
+ * ONLY which scheme gates 4+5 accept for RFC-1918 IPv4 literals already inside the
+ * frozen approved ceiling — no credential, confirm, injection, scrub, redirect, or
+ * size gate reads it, and absent/false is byte-identical to the browser profile.
  */
 
 import {
@@ -44,7 +52,7 @@ import { authConnectionCredentialSecretKey, authCredentialSecretKey } from '@snu
 import { isHostAllowed } from './app-host-freeze.js';
 import { utf8ToBase64 } from './base64url.js';
 import type { AuthConnectionState, CredentialStore } from './credential-store.js';
-import { isForbiddenNetHost } from './net-guards.js';
+import { isForbiddenNetHost, isPrivateRfc1918Ipv4Literal } from './net-guards.js';
 import { OAuthService, SnugAuthError, type FetchLike } from './oauth-service.js';
 import { scrubAuthValues } from './scrub.js';
 import { AuthTemplateError, renderAuthHeaderTemplate } from './template-engine.js';
@@ -118,6 +126,20 @@ interface ConnectedFetchBaseDeps {
   confirmGate: NetConfirmGate;
   /** Injectable time source (grant bookkeeping/telemetry); defaults to Date.now. */
   clock?: () => number;
+  /**
+   * Desktop transport profile (Decision 6, TASK-20260812 / ADR-0021 draft). When
+   * `allowHttpForPrivateHosts` is true, an RFC-1918 private-range IPv4 LITERAL host
+   * (10/8, 172.16/12, 192.168/16 — octet-parsed in net-guards.ts) that the user
+   * approved into the frozen host ceiling becomes reachable: gate 4 additionally
+   * admits `http:` for that class and gate 5's private-range refusal stands down for
+   * it. NEVER exempted, regardless of policy: loopback, link-local, `localhost`,
+   * `.local`/`.internal` names, DNS names of any kind, and IPv6 in every form (the
+   * policy covers IPv4 literals only — Hue-class devices are IPv4; IPv6 ULA stays
+   * refused for now). Absent or false = today's browser profile, byte-identical.
+   * This is a TRANSPORT-scheme choice over a reviewed host class, not a strictness
+   * flag: gates 1–3 and 6–10 never read it.
+   */
+  transportPolicy?: { allowHttpForPrivateHosts: boolean };
 }
 
 /**
@@ -680,10 +702,17 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       if (url.username !== '' || url.password !== '') {
         return failure(NET_ERROR_CODES.NET_INVALID_REQUEST, 'urls with embedded credentials are not allowed');
       }
-      if (url.protocol !== 'https:') {
+      const host = url.hostname;
+      // Decision 6 — the ONLY reads of the transport policy. `lanPrivateHost` names the
+      // one host class the desktop profile treats differently; computing it once keeps
+      // gates 4 and 5 exempting EXACTLY the same requests (a drift between the two would
+      // either strand the admission at gate 5 or stand the SSRF guard down for a class
+      // gate 4 never admitted).
+      const lanPrivateHost =
+        deps.transportPolicy?.allowHttpForPrivateHosts === true && isPrivateRfc1918Ipv4Literal(host);
+      if (url.protocol !== 'https:' && !(url.protocol === 'http:' && lanPrivateHost)) {
         return failure(NET_ERROR_CODES.NET_SCHEME_BLOCKED, 'only https requests are allowed — no exceptions');
       }
-      const host = url.hostname;
 
       // Gates 2+3 — host-assigned binding (R5); the grant must exist, be approved, and
       // (v4) be the UNIQUE approved grant claiming this host.
@@ -692,7 +721,11 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       const grant = resolved.grant;
 
       // Gate 5 — SSRF literal guard (defense in depth: runs even for ceiling members).
-      if (isForbiddenNetHost(host)) {
+      // The desktop policy stands this gate down for exactly the RFC-1918 IPv4-literal
+      // class computed above: such a host is forbidden for no reason BEYOND being
+      // private, and the frozen ceiling (gates 2+3) has already vouched for it.
+      // Loopback/link-local/names are outside that class and still refuse here.
+      if (!lanPrivateHost && isForbiddenNetHost(host)) {
         return failure(NET_ERROR_CODES.NET_SSRF_BLOCKED, `host '${host}' is a private/loopback target`);
       }
 

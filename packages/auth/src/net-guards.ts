@@ -100,3 +100,29 @@ export function isForbiddenNetHost(hostname: string): boolean {
   if (host.includes(':')) return isForbiddenIpv6(host);
   return false;
 }
+
+/**
+ * True when `hostname` is an RFC-1918 private-range IPv4 LITERAL — 10.0.0.0/8,
+ * 172.16.0.0/12, or 192.168.0.0/16, octets parsed numerically. This is the EXACT host
+ * class the desktop transport policy (TASK-20260812 Decision 6) may admit over http
+ * when the host also sits inside a connection's frozen approved ceiling.
+ *
+ * Deliberately narrower than "not forbidden": loopback (127/8), link-local
+ * (169.254/16), CGN, `localhost`, name suffixes, and DNS names of any kind are NEVER
+ * in this class — they keep their own refusals regardless of policy. IPv6 is excluded
+ * in every form (bracketed, bare, ULA fc00::/7, IPv4-mapped): Hue-class LAN devices
+ * are IPv4, so the policy covers IPv4 literals only — IPv6 ULA stays refused until it
+ * earns its own group-wise verification. Anything that is not well-formed
+ * dotted-decimal returns false, i.e. fails closed toward the https-only refusal.
+ */
+export function isPrivateRfc1918Ipv4Literal(hostname: string): boolean {
+  let host = hostname.trim().toLowerCase();
+  if (host.endsWith('.')) host = host.slice(0, -1); // same trailing-dot hygiene as the guard
+  if (!IPV4_SHAPE.test(host)) return false; // names, IPv6 (bracketed or bare), empty
+  const parts = host.split('.').map(Number);
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [a, b] = parts as [number, number, number, number];
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return a === 192 && b === 168;
+}
