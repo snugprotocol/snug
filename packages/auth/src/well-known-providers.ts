@@ -20,6 +20,28 @@
 
 import type { ConnectionKind, ConnectionRequirement } from '@snugprotocol/protocol';
 
+/**
+ * One ALTERNATE way in to a provider (TASK-20260812-auth-kind-choice, D1).
+ *
+ * An option is a COMPLETE credential flow: its own kind, fields, endpoints and
+ * walkthrough. It deliberately has NO identity seats — `displayName`, `apiHosts` and
+ * `aliases` belong to the ENTRY, because which hosts a credential may be injected
+ * against is a per-provider decision, never a per-flow one. The TOP-LEVEL entry is
+ * always the DEFAULT option; this type exists only for the alternates.
+ */
+export interface WellKnownAuthOption {
+  /** Stable id for the option (choice handler + tests); `[a-z0-9_]` only. */
+  id: string;
+  /** Human label the choice card renders — "Sign in with Coinbase", not a kind name. */
+  label: string;
+  kind: ConnectionKind;
+  fields?: WellKnownOauthProvider['fields'];
+  endpoints?: WellKnownOauthProvider['endpoints'];
+  registration?: WellKnownOauthProvider['registration'];
+  authorizeParams?: Record<string, string>;
+  pkce?: boolean;
+}
+
 export interface WellKnownOauthProvider {
   /** Display name used in the spec — falls back to the input when absent. */
   displayName?: string;
@@ -71,6 +93,21 @@ export interface WellKnownOauthProvider {
    * fields — the alias changes none of that.
    */
   aliases?: string[];
+  /**
+   * Human label for the DEFAULT option ("API key", "Personal access token").
+   * Required in practice the moment `authOptions` exists — the choice card must name
+   * every option including the default; pinned by test rather than by type so
+   * single-option entries stay untouched.
+   */
+  optionLabel?: string;
+  /**
+   * ALTERNATE auth options for providers that genuinely offer more than one way in
+   * (owner decision Q2, 2026-08-12: human-authored variants; Coinbase + GitHub first).
+   * The default stays at top level; the wizard/recovery use the default unless the
+   * USER chooses otherwise via the choice card (Q1/Q4 — choice persists on the `user`
+   * channel and R3 makes it durable).
+   */
+  authOptions?: WellKnownAuthOption[];
   /** Human-reviewed API hosts this provider's credential may be injected against. */
   apiHosts: string[];
   /**
@@ -196,12 +233,52 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // unions endpoint hosts regardless of kind, so removing them later would NARROW a
     // frozen ceiling and mass-demote existing approvals on the next sync (review m8).
     kind: 'bearer_token',
+    optionLabel: 'Personal access token (recommended)',
     endpoints: {
       authorizeUrl: 'https://github.com/login/oauth/authorize',
       tokenUrl: 'https://github.com/login/oauth/access_token',
     },
     pkce: false,
     apiHosts: ['api.github.com'],
+    // OAUTH APP — the alternate way in (TASK-20260812-auth-kind-choice). The endpoints
+    // above already exist for exactly this flow (D5); the option makes it CHOOSABLE
+    // instead of latent. GitHub OAuth apps do not support PKCE, so the token exchange
+    // needs the app's client secret — collected as a credential field and held by the
+    // hub's secret store like any other secret, never shipped in this registry (C1).
+    authOptions: [
+      {
+        id: 'oauth_app',
+        label: 'Sign in with GitHub (OAuth app)',
+        kind: 'oauth2_auth_code',
+        endpoints: {
+          authorizeUrl: 'https://github.com/login/oauth/authorize',
+          tokenUrl: 'https://github.com/login/oauth/access_token',
+        },
+        pkce: false,
+        fields: [
+          {
+            key: 'client_id',
+            label: 'Client ID',
+            type: 'text',
+            description: "From your OAuth app's settings page on GitHub.",
+          },
+          {
+            key: 'client_secret',
+            label: 'Client secret',
+            type: 'secret',
+            description: 'GitHub OAuth apps have no PKCE, so the token exchange needs the secret. Generate one on the same settings page.',
+          },
+        ],
+        registration: {
+          consoleUrl: 'https://github.com/settings/developers',
+          instructions: [
+            'Open GitHub → Settings → Developer settings → OAuth Apps and choose "New OAuth App".',
+            'Add the "redirect URI to register" shown below as the Authorization callback URL — copy it exactly.',
+            'Copy the Client ID, then generate and copy a client secret, and paste both below.',
+          ],
+        },
+      },
+    ],
     // KEY IS `token` — the field key `bearer_token` requirements are built around
     // everywhere else (demoRequirement.ts:221, the taught-template lint's TAUGHT_FIELD_KEYS).
     // The `my-repos` starter models a Personal Access Token as a bearer token rather than
@@ -259,7 +336,42 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   coinbase: {
     displayName: 'Coinbase',
     kind: 'api_key',
+    optionLabel: 'API key (recommended)',
     aliases: ['Coinbase Pro'],
+    // RETAIL OAUTH — the alternate way in (TASK-20260812-auth-kind-choice). Coinbase
+    // also offers a standard OAuth2 authorization-code flow for retail accounts via
+    // login.coinbase.com. It is NOT the default: the API-key surface is what the
+    // founding starter and the KB-taught template sign against, and OAuth requires
+    // the user to register an OAuth2 app first. The user may still choose it — the
+    // choice card offers both, and a choice persists on the `user` channel.
+    authOptions: [
+      {
+        id: 'oauth',
+        label: 'Sign in with Coinbase (OAuth)',
+        kind: 'oauth2_auth_code',
+        endpoints: {
+          authorizeUrl: 'https://login.coinbase.com/oauth2/auth',
+          tokenUrl: 'https://login.coinbase.com/oauth2/token',
+        },
+        pkce: true,
+        fields: [
+          {
+            key: 'client_id',
+            label: 'Client ID',
+            type: 'text',
+            description: 'From your OAuth2 app in the Coinbase Developer Platform. PKCE needs no client secret.',
+          },
+        ],
+        registration: {
+          consoleUrl: 'https://portal.cdp.coinbase.com/',
+          instructions: [
+            'Sign in to the Coinbase Developer Platform (link above) and create an OAuth2 application.',
+            'Add the "redirect URI to register" shown below to the app — copy it exactly as displayed.',
+            'Copy the Client ID into the field below. Leave the client secret alone — this hub signs in with PKCE and never needs one.',
+          ],
+        },
+      },
+    ],
     // The founding defect, fixed at the source: three DISTINCT secrets, each named and
     // described, so the user knows which value goes in which box before pasting. The
     // labels match Coinbase's own console wording — a label that renames the provider's
@@ -532,25 +644,34 @@ export function requirementFromRegistryEntry(
   entry: WellKnownOauthProvider,
   providerName: string,
   slot: string,
+  /**
+   * One of the entry's `authOptions` — the user's CHOSEN alternate flow
+   * (TASK-20260812-auth-kind-choice). Absent ⇒ the entry itself, i.e. the DEFAULT
+   * option, byte-identical to the pre-option behavior. The option supplies the
+   * credential-flow seats; identity seats (display name, hosts) are ALWAYS the
+   * entry's — a flow choice must never move which hosts receive the credential.
+   */
+  option?: WellKnownAuthOption,
 ): ConnectionRequirement {
+  const flow = option ?? entry;
   return {
     slot,
     provider: { name: entry.displayName ?? providerName },
-    kind: entry.kind,
-    ...(entry.fields !== undefined ? { fields: entry.fields.map((field) => ({ ...field })) } : {}),
-    ...(entry.endpoints !== undefined ? { endpoints: { ...entry.endpoints } } : {}),
-    ...(entry.registration !== undefined
+    kind: flow.kind,
+    ...(flow.fields !== undefined ? { fields: flow.fields.map((field) => ({ ...field })) } : {}),
+    ...(flow.endpoints !== undefined ? { endpoints: { ...flow.endpoints } } : {}),
+    ...(flow.registration !== undefined
       ? {
           registration: {
-            ...(entry.registration.consoleUrl !== undefined ? { consoleUrl: entry.registration.consoleUrl } : {}),
-            ...(entry.registration.instructions !== undefined
-              ? { instructions: [...entry.registration.instructions] }
+            ...(flow.registration.consoleUrl !== undefined ? { consoleUrl: flow.registration.consoleUrl } : {}),
+            ...(flow.registration.instructions !== undefined
+              ? { instructions: [...flow.registration.instructions] }
               : {}),
           },
         }
       : {}),
-    ...(entry.authorizeParams !== undefined ? { authorizeParams: { ...entry.authorizeParams } } : {}),
-    ...(entry.pkce !== undefined ? { pkce: entry.pkce } : {}),
+    ...(flow.authorizeParams !== undefined ? { authorizeParams: { ...flow.authorizeParams } } : {}),
+    ...(flow.pkce !== undefined ? { pkce: flow.pkce } : {}),
     declaredApiHosts: [...entry.apiHosts],
   };
 }

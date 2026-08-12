@@ -1,6 +1,6 @@
 # TASK-20260812-auth-kind-choice: multi-option auth-kind resolution — the user decides when a provider has more than one way in
 
-- **Status**: planned — **awaiting owner approval (Gate 2 stop; High tier ⇒ fresh-context plan review before implementation)**
+- **Status**: **APPROVED by owner 2026-08-12 (incl. the D3 widening — Guard 2b substitution becomes matched-option-aware) — implementation in progress, P0 first**
 - **Owner**: Jeetu (commissioned 2026-08-12, from a live repro of the wrong-flow symptom); planning session by Claude
 - **Risk tier**: **High** (auto-escalated: `packages/auth` — including a change to Guard 2b, a security guard, in `requirement-admission.ts`; decides which credential flow a user is walked into)
 - **Branch**: `feat/TASK-20260812-auth-kind-choice` — **CHAINED off `feat/TASK-20260812-registry-authoritative-auth`** (owner decision Q4: this task needs the `kind` seat + `requirementFromRegistryEntry` emitter that branch adds; PR'd after it in order, the P0→P5 chain precedent)
@@ -332,3 +332,9 @@ precedent exists as claimed; no C1 hole in variant field definitions.
 - State: replanned, NO implementation code (High-tier gate honored).
 - Next step: **owner approval (including the D3 widening) → P0 tests-first.**
 - Open questions: the D3 widening decision is the approval question.
+
+### 2026-08-12 — Claude (implementation session) — session
+
+- Done: **owner APPROVED the reviewed plan including the D3 widening.** Implementation
+  begins, P0 tests-first.
+- State: implementing.

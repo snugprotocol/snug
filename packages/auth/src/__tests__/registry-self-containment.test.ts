@@ -154,6 +154,100 @@ describe('AC9 — field definitions carry EXACTLY connectionFieldSchema seats (s
   }
 });
 
+/**
+ * TASK-20260812-auth-kind-choice P0 — MULTI-OPTION entries (AC1/AC2).
+ *
+ * Some providers genuinely offer more than one way in (owner repro 2026-08-12:
+ * Coinbase has an API-key surface AND retail OAuth). The TOP-LEVEL entry stays the
+ * DEFAULT option (D1 — every existing consumer keeps reading it unchanged);
+ * `authOptions` lists ALTERNATE options, each a COMPLETE credential flow. The card
+ * renders `optionLabel` for the default and each option's `label`, so both seats are
+ * required the moment an entry goes multi-option.
+ */
+const MULTI_OPTION_ENTRIES = {
+  coinbase: { defaultKind: 'api_key', optionKinds: ['oauth2_auth_code'] },
+  github: { defaultKind: 'bearer_token', optionKinds: ['oauth2_auth_code'] },
+} as const;
+
+describe('AC1 — multi-option entries: every option is a COMPLETE, parsing credential flow', () => {
+  it('exactly coinbase and github carry authOptions in this task (AC2: everyone else is single-option)', () => {
+    const multi = Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)
+      .filter(([, entry]) => (entry.authOptions ?? []).length > 0)
+      .map(([key]) => key)
+      .sort();
+    expect(multi).toEqual(Object.keys(MULTI_OPTION_ENTRIES).sort());
+  });
+
+  for (const [key, expected] of Object.entries(MULTI_OPTION_ENTRIES)) {
+    it(`${key}: default kind stays '${expected.defaultKind}' and options carry ${JSON.stringify(expected.optionKinds)}`, () => {
+      const entry = WELL_KNOWN_PROVIDERS_REGISTRY[key];
+      expect(entry?.kind).toBe(expected.defaultKind);
+      expect((entry?.authOptions ?? []).map((option) => option.kind)).toEqual([...expected.optionKinds]);
+    });
+
+    it(`${key}: the default and every option carry human labels for the card`, () => {
+      const entry = WELL_KNOWN_PROVIDERS_REGISTRY[key];
+      expect(entry?.optionLabel, `${key} needs a label for its DEFAULT option`).toBeTruthy();
+      for (const option of entry?.authOptions ?? []) {
+        expect(option.label.length, `${key}.${option.id} must be named for the user`).toBeGreaterThan(0);
+      }
+    });
+
+    it(`${key}: option ids are unique and pre-normalized`, () => {
+      const ids = (WELL_KNOWN_PROVIDERS_REGISTRY[key]?.authOptions ?? []).map((option) => option.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      for (const id of ids) expect(id).toMatch(/^[a-z0-9_]+$/);
+    });
+
+    it(`${key}: every OPTION composes through the emitter into a requirement that parses (AC1)`, () => {
+      const entry = WELL_KNOWN_PROVIDERS_REGISTRY[key]!;
+      for (const option of entry.authOptions ?? []) {
+        const built = requirementFromRegistryEntry(entry, key, key, option);
+        const parsed = connectionRequirementSchema.safeParse(built);
+        expect(parsed.success, `${key}.${option.id}: ${JSON.stringify(parsed.success ? [] : parsed.error.issues)}`).toBe(
+          true,
+        );
+        if (!parsed.success) continue;
+        // The option is COMPLETE: its credential-flow seats, the ENTRY's identity seats.
+        expect(parsed.data.kind).toBe(option.kind);
+        expect(parsed.data.provider.name).toBe(entry.displayName ?? key);
+        expect(parsed.data.declaredApiHosts).toEqual([...entry.apiHosts]);
+        if (option.fields !== undefined) expect(parsed.data.fields).toEqual(option.fields);
+        if (option.endpoints !== undefined) expect(parsed.data.endpoints).toEqual(option.endpoints);
+        if (option.registration !== undefined) expect(parsed.data.registration).toEqual(option.registration);
+      }
+    });
+
+    it(`${key}: option fields obey the shape rule (AC10/C1 — strict connectionFieldSchema, no values)`, () => {
+      for (const option of WELL_KNOWN_PROVIDERS_REGISTRY[key]?.authOptions ?? []) {
+        for (const field of option.fields ?? []) {
+          const parsed = connectionFieldSchema.safeParse(field);
+          expect(parsed.success, `${key}.${option.id}.${field.key}`).toBe(true);
+        }
+      }
+    });
+
+    it(`${key}: options never carry scopes (standing posture) or apiHosts (identity is the ENTRY's)`, () => {
+      for (const option of WELL_KNOWN_PROVIDERS_REGISTRY[key]?.authOptions ?? []) {
+        const raw = option as unknown as Record<string, unknown>;
+        expect(raw['scopes']).toBeUndefined();
+        expect(raw['apiHosts']).toBeUndefined();
+      }
+    });
+  }
+
+  it('AC2 — the emitter WITHOUT an option argument still emits the default, byte-identical', () => {
+    // The parent suites above already pin the default emission per entry; this pins
+    // that adding the option parameter changed nothing when it is absent.
+    const entry = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!;
+    expect(requirementFromRegistryEntry(entry, 'coinbase', 'coinbase')).toEqual(
+      requirementFromRegistryEntry(entry, 'coinbase', 'coinbase', undefined),
+    );
+    const parsed = connectionRequirementSchema.safeParse(requirementFromRegistryEntry(entry, 'coinbase', 'coinbase'));
+    expect(parsed.success && parsed.data.kind).toBe('api_key');
+  });
+});
+
 describe('D3 — the inferrer alias map: human-authored, collision-free, and NOT resolution', () => {
   it('every alias resolves to an EXISTING registry key', () => {
     for (const [alias, key] of Object.entries(INFERRER_ALIASES)) {
