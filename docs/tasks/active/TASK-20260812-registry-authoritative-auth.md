@@ -422,3 +422,48 @@ kinds (verified through the real `deriveConnectionAllowedHosts`).
 - Next step: **owner approval → P0 tests-first**, starting with the end-to-end reproduction
   of the chain above against a real userdb.
 - Open questions: none. Q-A is answered.
+
+### 2026-08-12 — Claude — HANDOFF (pick up with `/pickup TASK-20260812-registry-authoritative-auth`)
+
+**Where this stands:** Gates 1–2 complete, replanned TWICE, **no implementation code by
+design** (High tier stops for approval before code). Branch is clean and unpushed.
+
+**THE ONE THING BLOCKING PROGRESS: owner approval of the plan.** Everything else is ready.
+
+**What a fresh session must NOT re-derive** (all of it is already in this file, verified):
+- The four findings F1–F4 and which one is the owner's ACTUAL symptom (**F4** — the
+  `NET_NOT_APPROVED` banner CTA that silently no-ops at `connectionWizard.ts:166` when the
+  app has zero connection rows). F1 and F2 are real but the owner never walked those paths.
+- §6's fresh-context review record: 3 BLOCKERs + 4 MAJORs + 2 minors, ALL folded. Do not
+  re-run that review; do re-read §6 before touching D3 (aliases) or D6 (the kind
+  split-brain), because both encode a trust boundary that the obvious design violates.
+- 12 acceptance criteria, several deliberately RESTATED so they can actually fail
+  (AC4/AC7/AC9). Do not "simplify" them back — the original versions passed before any fix.
+
+**Probes already run (do not repeat, results are recorded above):**
+- Real inferrer emits `oauth2_auth_code` + 0 fields for ALL 10 registry providers.
+- Owner-shaped Coinbase row → `fields: undefined` → the empty-fields guard fires.
+- Coinbase recovery chain resolves: `usesConnectedFetch → true`, `api.coinbase.com` → slot
+  `coinbase`. So the break is at PERSISTENCE, not at host/slot derivation.
+- All 4 starters + all 4 demo requirements already agree with AC1's kind table (Risk 1 is
+  empirically zero). No host ceiling changes under the proposed kinds.
+
+**First actions on pickup, in order:**
+1. Confirm the plan is still approved/unchanged by the owner (it was awaiting approval at
+   handoff — check for a reply before writing code).
+2. **P0 step 1 is a REPRODUCTION, not a fix:** prove the chain F2 → recovery →
+   `persistConnectionRequirement` refuses → no row → F4, end to end against a real userdb.
+   If the chain does NOT hold, there is a fifth defect and the plan needs revisiting before
+   any code. This is the difference between fixing the cause and fixing three symptoms.
+3. Also read the owner's REAL row (`(await getUserDb()).listConnections('<appId>')`) to
+   confirm it is genuinely empty vs present-but-unapproved — same banner, different fix.
+4. Then P0 proper, tests-first per §2.
+
+**Known trap for the implementation session:** `packages/auth`'s `test` script is
+`vitest run` with NO `tsc`, so a package-level green is not a type-clean claim (this bit the
+previous task three times). P0 adds the prefix; until then use `pnpm build` at the root as
+the type check. My earlier "only four packages lack it" claim was INCOMPLETE — P3 audits
+every package.
+
+**Nothing about this task's state exists only in the chat.** Branch:
+`feat/TASK-20260812-registry-authoritative-auth`, 5 commits, unpushed, tree clean.
