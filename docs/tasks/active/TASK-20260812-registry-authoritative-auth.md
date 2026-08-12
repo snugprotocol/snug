@@ -1,6 +1,6 @@
 # TASK-20260812-registry-authoritative-auth: registry-authoritative auth shapes + connect-error surfacing
 
-- **Status**: **REPLANNED twice (fresh-context review: 3 BLOCKERs; then the owner's real symptom revealed F4, a third defect neither diagnosis had) — awaiting approval (Gate 2 stop)**
+- **Status**: **APPROVED by owner 2026-08-12 (full plan, P0–P3) — implementation in progress, P0 first**
 - **Owner**: Jeetu (commissioned 2026-08-12); planning session by Claude
 - **Risk tier**: **High** (auto-escalated: `packages/auth` is the credential broker; the change decides which credential FIELDS a user is asked for and which hosts a credential may be injected against — C1-adjacent by construction)
 - **Branch**: `feat/TASK-20260812-registry-authoritative-auth` (off `main` at `bac5562`)
@@ -467,3 +467,37 @@ every package.
 
 **Nothing about this task's state exists only in the chat.** Branch:
 `feat/TASK-20260812-registry-authoritative-auth`, 5 commits, unpushed, tree clean.
+
+### 2026-08-12 — Claude (implementation session) — session
+
+- Done: picked up via `/pickup`. Baselines re-verified green (auth 357, playground 740).
+  Diff vs main is doc-only, exactly as journaled. **Owner APPROVED the full plan (P0–P3)**
+  at pickup — Gate 2 cleared. Starting P0 with the end-to-end reproduction of the
+  F2 → persist-refusal → no-row → F4 chain before any fix.
+- State: implementation beginning, tests-first.
+- **P0 step 1 (the reproduction) REFUTES the assumed chain's middle link.** Executed end
+  to end against a real userdb with the production admission gate (probe file, since
+  deleted; output recorded here): the inferrer's rung 1 does emit F2's broken shape
+  (`oauth2_auth_code`, zero fields, poison adapter untouched) — but
+  `persistConnectionRequirement` does NOT refuse it. The borrow ban fires on the
+  `registry` channel, `applyRegistryValues` substitutes the pinned 3 Coinbase fields, and
+  a row IS created (`declared`, provenance `registry`, fields present, **kind still
+  `oauth2_auth_code`**). `openConnectionWizardForApp` then returns `true`.
+- **Consequences, examined before continuing (the "fifth defect" gate):**
+  - The live defect for a FRESH build is the WRONG-KIND row: an api_key provider routed
+    to the OAuth connect step, which cannot succeed (D6's split-brain is live in
+    persisted rows, not latent). AC1 remains exactly the right root fix; AC2/AC3 stand
+    (the inferrer must emit fields itself, not lean on admission's substitution
+    side-channel); AC11 stands (the zero-row CTA silence is real code, reachable for any
+    app whose row never persisted).
+  - The owner's row-less app is NOT explained by current-main behavior. Most plausible:
+    it was built before the P3 lazy-adapter fold, when a keyless configuration returned
+    `completion_failed` BEFORE rung 1 — recovery ran and persisted nothing. Forward-only
+    (owner decision Q4) covers it; after AC11 the CTA explains and routes forward.
+  - **No plan change beyond narrative**: every AC, design decision, and phase survives;
+    "F2 is the probable root cause of F4" is downgraded to "F2's kind half breaks fresh
+    builds; the owner's no-row state is historical". P3's whole-surface check gains one
+    pin: a recovered registry provider's PERSISTED row carries the registry's kind.
+- Still owed from handoff item 3: reading the owner's REAL rows needs the owner's
+  browser (OPFS) — queued as an owner-assist item at close; forward-only makes it
+  non-blocking.
