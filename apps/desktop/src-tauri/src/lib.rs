@@ -7,6 +7,10 @@
 //! ceilings, C2 sandbox) stays in the TS packages, unchanged.
 
 mod exportfile;
+/// In-shell hard-gate commands (P4). Debug builds only — a release binary
+/// carries neither the commands nor their strings (P0 amendment 4).
+#[cfg(debug_assertions)]
+mod gate;
 mod openfile;
 mod userfile;
 
@@ -46,7 +50,7 @@ fn argv_candidates(argv: &[String]) -> Vec<PathBuf> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Second instance on Windows/Linux forwards its argv (may carry a
             // .snug path); focus the existing window either way.
@@ -59,14 +63,29 @@ pub fn run() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(OpenedFiles::default())
-        .invoke_handler(tauri::generate_handler![
-            userfile::read_user_file,
-            userfile::write_user_file,
-            openfile::read_opened_file,
-            exportfile::export_user_bytes,
-            pending_opened_files,
-        ])
+        .manage(OpenedFiles::default());
+    // The gate commands exist in DEBUG builds only (P4/AC7). The handler list
+    // is duplicated under cfg rather than stubbed: a release binary must not
+    // contain the command names even as registered no-ops.
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        userfile::read_user_file,
+        userfile::write_user_file,
+        openfile::read_opened_file,
+        exportfile::export_user_bytes,
+        pending_opened_files,
+        gate::shell_gate_config,
+        gate::write_gate_results,
+    ]);
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        userfile::read_user_file,
+        userfile::write_user_file,
+        openfile::read_opened_file,
+        exportfile::export_user_bytes,
+        pending_opened_files,
+    ]);
+    builder
         .setup(|app| {
             // Cold-start argv (Windows/Linux file association).
             let args: Vec<String> = std::env::args().collect();

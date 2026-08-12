@@ -32,6 +32,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import type { SnugPlatform } from '@playground/platform/platform';
 
 import { createTauriFileFs } from './fs.js';
+import { remapUrl } from './net-remap.js';
 import { createTauriLoopbackListener, openInSystemBrowser } from './oauth.js';
 
 const OLLAMA_TAGS_URL = 'http://127.0.0.1:11434/api/tags';
@@ -73,7 +74,15 @@ export function createDesktopPlatform(): SnugPlatform {
 
   return {
     kind: 'desktop',
-    fetchImpl: (input, init) => tauriFetch(input, init),
+    // `remapUrl` is the debug-gate host remap (net-remap.ts) — identity in every
+    // production run (empty table unless the debug-only gate config armed it).
+    fetchImpl: (input, init) => tauriFetch(remapUrl(input), init),
+    // The directory is the Rust command's concern: read_user_file/write_user_file
+    // ALREADY scope every name into ~/Snug and REFUSE any name with a path
+    // separator (userfile.rs `valid_name`). So the backend's own `${dir}/${file}`
+    // prefixing must NOT reach Rust — `createTauriFileFs` reduces the path to its
+    // basename before the invoke. The dir label here is cosmetic ('Snug' matches
+    // where the bytes actually land) and never becomes part of the Rust name.
     userdbBackend: createFileBackend(createTauriFileFs(), 'Snug'),
     oauth: {
       async redirectUriFor(flow: { provider?: string; posture: DesktopRedirectPosture }) {

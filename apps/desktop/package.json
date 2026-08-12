@@ -13,7 +13,8 @@
     "dev": "tauri dev",
     "bundle": "tauri build",
     "test": "tsc -p tsconfig.test.json && vitest run",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "gate": "node gate/run-gate.mjs"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "0.2.84",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
+    "@types/sql.js": "^1.4.9",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@vitejs/plugin-react": "^4.3.0",

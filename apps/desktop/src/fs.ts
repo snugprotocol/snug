@@ -8,17 +8,29 @@
 import type { FileBackendFs } from '@snugprotocol/db';
 import { invoke } from '@tauri-apps/api/core';
 
+/**
+ * The Rust commands own the directory (~/Snug) and take a BARE filename — their
+ * `valid_name` check refuses any path separator. `createFileBackend` composes
+ * `${dir}/${file}` paths, so reduce to the basename here before the invoke: the
+ * TS-side directory label and the Rust-side scope are two views of the same
+ * place, joined at this seam rather than doubled into the name.
+ */
+function basename(path: string): string {
+  const cut = path.lastIndexOf('/');
+  return cut === -1 ? path : path.slice(cut + 1);
+}
+
 export function createTauriFileFs(): FileBackendFs {
   return {
     async readFile(path: string): Promise<Uint8Array | undefined> {
-      const raw = await invoke<ArrayBuffer>('read_user_file', { name: path });
+      const raw = await invoke<ArrayBuffer>('read_user_file', { name: basename(path) });
       const bytes = new Uint8Array(raw);
       if (bytes.length === 0) throw new Error('read_user_file returned no discriminant');
       if (bytes[0] === 0) return undefined;
       return bytes.slice(1);
     },
     async writeFileAtomic(path: string, bytes: Uint8Array): Promise<void> {
-      await invoke('write_user_file', bytes, { headers: { name: path } });
+      await invoke('write_user_file', bytes, { headers: { name: basename(path) } });
     },
   };
 }

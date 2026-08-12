@@ -11,7 +11,17 @@
 // a `set-cookie` header to prove A2 (never crosses the bridge).
 //
 // Zero external deps: the cert is minted with `node:crypto`'s X509 self-sign at boot.
+//
+// SNUG_NET_STUB_HTTP=1 (TASK-20260812 P4, additive + env-gated): plain-HTTP mode for the
+// desktop in-shell gate. The shell's native fetch (reqwest) cannot be told to accept a
+// self-signed cert — there is deliberately NO cert-trust knob in the production fetch
+// path — so the gate driver runs the stub over http on 127.0.0.1 and the debug-only host
+// remap points the journey's provider host at it. The default (absent/anything-else)
+// path is byte-for-byte the https behavior above. HTTP mode additionally records the
+// requests it saw at `/__gate/requests` so the gate can assert the HMAC-signed headers
+// ARRIVED without ever echoing a signature value (same `***` discipline as the body).
 
+import http from 'node:http';
 import https from 'node:https';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -20,7 +30,16 @@ import os from 'node:os';
 import path from 'node:path';
 
 const port = Number(process.env.SNUG_E2E_NET_STUB_PORT ?? 43120);
+const httpMode = process.env.SNUG_NET_STUB_HTTP === '1';
 const REQUIRED_KEY = 'e2e-secret-key-9999';
+
+/**
+ * Gate-mode request log (http mode only). Header VALUES are reduced to presence
+ * markers for the signature/timestamp pair and kept verbatim otherwise — the gate's
+ * C1 assertion needs to know whether a raw secret ever reached the wire, so
+ * non-derived header values must be inspectable.
+ */
+const gateLog = [];
 
 // Mint a self-signed cert for 127.0.0.1 via openssl (present on macOS/Linux CI images).
 function selfSignedCert() {
@@ -57,12 +76,28 @@ const CORS = {
     'x-api-key,authorization,content-type,cb-access-key,cb-access-sign,cb-access-timestamp,cb-access-passphrase',
 };
 
-const server = https.createServer(selfSignedCert(), (req, res) => {
+const handler = (req, res) => {
   const url = new URL(req.url ?? '/', 'https://127.0.0.1');
   if (url.pathname === '/healthz') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok');
     return;
+  }
+  // Gate-mode observability (http mode ONLY — absent in the https e2e path).
+  if (httpMode && url.pathname === '/__gate/requests') {
+    res.writeHead(200, { 'content-type': 'application/json', ...CORS });
+    res.end(JSON.stringify({ requests: gateLog }));
+    return;
+  }
+  if (httpMode && req.method !== 'OPTIONS') {
+    // Signature/timestamp are credential-DERIVED — log presence, never the value
+    // (the same `***` rule as the response body). Every other header stays
+    // verbatim so the gate can assert no RAW secret ever reached the wire.
+    const headers = { ...req.headers };
+    for (const name of ['cb-access-sign', 'cb-access-timestamp']) {
+      if (typeof headers[name] === 'string' && headers[name].length > 0) headers[name] = '***';
+    }
+    gateLog.push({ method: req.method ?? 'GET', path: url.pathname, headers });
   }
   const method = req.method ?? 'GET';
   // CORS preflight: the harness page is a different origin, so a POST with X-Api-Key
@@ -136,11 +171,14 @@ const server = https.createServer(selfSignedCert(), (req, res) => {
     'x-powered-by': 'net-stub',
   });
   res.end(JSON.stringify(echoed));
-});
+};
+
+const server = httpMode ? http.createServer(handler) : https.createServer(selfSignedCert(), handler);
 
 server.listen(port, '127.0.0.1', () => {
+  const scheme = httpMode ? 'http' : 'https';
   // eslint-disable-next-line no-console
-  console.log(`snug e2e net stub (https) on https://127.0.0.1:${port}`);
+  console.log(`snug e2e net stub (${scheme}) on ${scheme}://127.0.0.1:${port}`);
 });
 
 // keep the digest import used (silences no-unused for strict setups)
