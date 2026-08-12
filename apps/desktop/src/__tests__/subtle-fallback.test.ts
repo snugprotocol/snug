@@ -1,3 +1,6 @@
+// @vitest-environment node
+// (jsdom's SubtleCrypto rejects cross-realm buffers; parity needs the real one.)
+//
 // Byte-parity for the desktop crypto.subtle fallback (plan decision 12).
 // These run under Node, where REAL WebCrypto exists — the pure-JS
 // implementation must match it bit-for-bit, or the desktop HMAC state
@@ -9,15 +12,26 @@ import { hmacSha256Bytes, sha256Bytes } from '../subtle-fallback.js';
 
 const enc = new TextEncoder();
 
+/** Copy into a fresh ArrayBuffer — WebCrypto's BufferSource rejects ArrayBufferLike views. */
+function toAB(data: Uint8Array): ArrayBuffer {
+  const buf = new ArrayBuffer(data.byteLength);
+  new Uint8Array(buf).set(data);
+  return buf;
+}
+
 async function realSha256(data: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', toAB(data)));
 }
 
 async function realHmac(key: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
-  const k = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, [
-    'sign',
-  ]);
-  return new Uint8Array(await crypto.subtle.sign('HMAC', k, data));
+  const k = await crypto.subtle.importKey(
+    'raw',
+    toAB(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  return new Uint8Array(await crypto.subtle.sign('HMAC', k, toAB(data)));
 }
 
 describe('subtle-fallback parity with WebCrypto', () => {

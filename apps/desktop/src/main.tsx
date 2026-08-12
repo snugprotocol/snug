@@ -15,20 +15,24 @@ import { App } from '@playground/App';
 import '@playground/theme/tokens.css';
 import '@playground/theme/app.css';
 
-// WKWebView may not treat tauri:// as a secure context (verified open question,
-// plan decision 12) — WebCrypto backs the OAuth HMAC state signing, so probe
-// and patch before anything imports it.
-await installSubtleFallbackIfNeeded();
+async function boot(): Promise<void> {
+  // WKWebView may not treat tauri:// as a secure context (verified open
+  // question, plan decision 12) — WebCrypto backs the OAuth HMAC state
+  // signing, so probe and patch before the platform installs.
+  await installSubtleFallbackIfNeeded();
 
-setPlatform(createDesktopPlatform());
+  setPlatform(createDesktopPlatform());
 
-const container = document.getElementById('root');
-if (container === null) throw new Error('missing #root');
+  const container = document.getElementById('root');
+  if (container === null) throw new Error('missing #root');
 
-createRoot(container).render(
-  <StrictMode>
-    <HashRouter>
-      <App />
-    </HashRouter>
-  </StrictMode>,
-);
+  createRoot(container).render(
+    <StrictMode>
+      <HashRouter>
+        <App />
+      </HashRouter>
+    </StrictMode>,
+  );
+}
+
+void boot();
