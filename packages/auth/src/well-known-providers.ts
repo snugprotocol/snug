@@ -18,9 +18,22 @@
  * reviewed by a human.
  */
 
+import type { ConnectionKind, ConnectionRequirement } from '@snugprotocol/protocol';
+
 export interface WellKnownOauthProvider {
   /** Display name used in the spec — falls back to the input when absent. */
   displayName?: string;
+  /**
+   * The provider's credential KIND — REQUIRED, and required on purpose (D1,
+   * TASK-20260812). The inferrer's registry rung used to hardcode
+   * `'oauth2_auth_code'` for every hit, which routed API-key providers (Coinbase,
+   * OpenWeather, CoinGecko) into an OAuth connect step that cannot succeed. The entry
+   * is the authority on its own kind; an optional seat with a default would reintroduce
+   * exactly that bug for the next entry someone adds — a default is a hardcode with
+   * better manners. Enforced by the AC3 structural suite (and by tsc, now that the
+   * package's test script type-checks).
+   */
+  kind: ConnectionKind;
   /**
    * OAuth endpoints — OPTIONAL as of the Dynamic Auth v2 rewrite (fold T-M1).
    *
@@ -46,6 +59,18 @@ export interface WellKnownOauthProvider {
   scopes?: string[];
   /** PKCE recommended by the provider? Defaults to true at the transformer. */
   pkce?: boolean;
+  /**
+   * Human-authored near-miss names that should short-circuit INFERENCE to this entry —
+   * "Coinbase Pro" is Coinbase for authoring purposes (D3, TASK-20260812).
+   *
+   * AUTHORING SCOPE ONLY. These are consulted exclusively by the inferrer's rung 1 via
+   * `resolveInferrerAlias`; they are deliberately NOT part of `lookupWellKnownProvider`,
+   * whose comment prohibits exactly that (resolution would hand a brand-adjacent
+   * declaration this entry's pinned hosts and walkthrough as if it had asked for them).
+   * The BAN path already treats these names as brand-adjacent and refuses their authored
+   * fields — the alias changes none of that.
+   */
+  aliases?: string[];
   /** Human-reviewed API hosts this provider's credential may be injected against. */
   apiHosts: string[];
   /**
@@ -102,6 +127,7 @@ const GOOGLE_AUTHORIZE_PARAMS = { access_type: 'offline', prompt: 'consent' } as
 const REGISTRY: Record<string, WellKnownOauthProvider> = {
   spotify: {
     displayName: 'Spotify',
+    kind: 'oauth2_auth_code',
     endpoints: {
       authorizeUrl: 'https://accounts.spotify.com/authorize',
       tokenUrl: 'https://accounts.spotify.com/api/token',
@@ -137,6 +163,7 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   },
   google: {
     displayName: 'Google',
+    kind: 'oauth2_auth_code',
     endpoints: { ...GOOGLE_ENDPOINTS },
     pkce: true,
     apiHosts: ['www.googleapis.com'],
@@ -146,6 +173,7 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   // hint of "Gmail" or "Google Drive" still resolves cleanly, with per-API hosts.
   gmail: {
     displayName: 'Gmail',
+    kind: 'oauth2_auth_code',
     endpoints: { ...GOOGLE_ENDPOINTS },
     pkce: true,
     apiHosts: ['gmail.googleapis.com'],
@@ -153,6 +181,7 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   },
   googledrive: {
     displayName: 'Google Drive',
+    kind: 'oauth2_auth_code',
     endpoints: { ...GOOGLE_ENDPOINTS },
     pkce: true,
     apiHosts: ['www.googleapis.com'],
@@ -160,6 +189,13 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   },
   github: {
     displayName: 'GitHub',
+    // `bearer_token`, WITH OAuth endpoints kept — the ONE entry where kind and
+    // endpoints disagree BY DESIGN (D5, owner decision Q1). The field comment below
+    // already argues a PAT is a bearer token; the endpoints stay for requirements that
+    // DO run the app flow, and they are CEILING-LOAD-BEARING: `deriveConnectionAllowedHosts`
+    // unions endpoint hosts regardless of kind, so removing them later would NARROW a
+    // frozen ceiling and mass-demote existing approvals on the next sync (review m8).
+    kind: 'bearer_token',
     endpoints: {
       authorizeUrl: 'https://github.com/login/oauth/authorize',
       tokenUrl: 'https://github.com/login/oauth/access_token',
@@ -194,6 +230,7 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   },
   slack: {
     displayName: 'Slack',
+    kind: 'oauth2_auth_code',
     endpoints: {
       authorizeUrl: 'https://slack.com/oauth/v2/authorize',
       tokenUrl: 'https://slack.com/api/oauth.v2.access',
@@ -221,6 +258,8 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   // registry posture — default scopes are silent privilege widening.
   coinbase: {
     displayName: 'Coinbase',
+    kind: 'api_key',
+    aliases: ['Coinbase Pro'],
     // The founding defect, fixed at the source: three DISTINCT secrets, each named and
     // described, so the user knows which value goes in which box before pasting. The
     // labels match Coinbase's own console wording — a label that renames the provider's
@@ -269,6 +308,8 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   },
   openweather: {
     displayName: 'OpenWeather',
+    kind: 'api_key',
+    aliases: ['OpenWeatherMap'],
     apiHosts: ['api.openweathermap.org'],
     // OpenWeather transports its key as `?appid=` — a QUERY-STRING credential. That
     // placement is host-side (the template engine), never authored into app code: the
@@ -293,6 +334,7 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   },
   coingecko: {
     displayName: 'CoinGecko',
+    kind: 'api_key',
     apiHosts: ['api.coingecko.com'],
     fields: [
       {
@@ -313,8 +355,15 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   },
   // Apple Music's developer-token + music-user-token dance doesn't fit
   // oauth2_auth_code cleanly; listed so lookup returns SOME entry. Authors override.
+  //
+  // KIND PINS THE STATUS QUO (TASK-20260812 decision): `oauth2_auth_code` is what the
+  // inferrer's old hardcode emitted for this entry, so declaring it changes nothing for
+  // Apple Music while making the seat required everywhere. A truthful MusicKit kind
+  // does not exist in CONNECTION_KINDS; choosing one is a follow-up with its own
+  // walkthrough, not a side effect of this task.
   applemusic: {
     displayName: 'Apple Music',
+    kind: 'oauth2_auth_code',
     endpoints: {
       authorizeUrl: 'https://music.apple.com/login',
       tokenUrl: 'https://api.music.apple.com/v1/me/storefront',
@@ -421,3 +470,87 @@ export function findBrandAdjacentRegistryKeys(name: string): string[] {
 
 /** Exposed for tests. */
 export const WELL_KNOWN_PROVIDERS_REGISTRY = REGISTRY;
+
+// --------------------------------------------------------------------- TASK-20260812
+// The INFERRER-scoped alias map and the ONE registry→requirement emitter. Both exist so
+// the inferrer's rung 1 can be honest about what the registry holds; neither touches
+// the resolution or ban semantics above.
+
+/**
+ * Alias (normalized) → registry key, derived from the entries' own `aliases` seats.
+ *
+ * CONSULTED ONLY BY THE INFERRER'S RUNG 1 (D3). `lookupWellKnownProvider` stays
+ * exact-key: it is the RESOLUTION path, and two other callers
+ * (`params-to-auth-spec.ts`) depend on a near-miss name NOT resolving — aliasing there
+ * would grant "Coinbase Pro" the real Coinbase's pinned hosts and registration
+ * walkthrough with wizard-grade legitimacy, which is the reviewed BLOCKER 1 this
+ * boundary encodes.
+ *
+ * Built at module load and structurally collision-checked by test: no alias may shadow
+ * a registry key (a shadow would silently re-route an exact hit), and every alias must
+ * point at an entry that exists.
+ */
+export const INFERRER_ALIASES: Readonly<Record<string, string>> = (() => {
+  const map: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(REGISTRY)) {
+    for (const alias of entry.aliases ?? []) {
+      map[normalizeProviderKey(alias)] = key;
+    }
+  }
+  return map;
+})();
+
+/**
+ * Resolve a provider name through the inferrer alias map — EXACT after normalization,
+ * never fuzzy (AC6 pins that `Cooinbase`/`Sp0tify` miss and fall through to inference,
+ * which is ADR-0017's accepted lookalike posture).
+ */
+export function resolveInferrerAlias(name: string): { key: string; entry: WellKnownOauthProvider } | undefined {
+  const key = INFERRER_ALIASES[normalizeProviderKey(name)];
+  if (key === undefined) return undefined;
+  const entry = REGISTRY[key];
+  return entry === undefined ? undefined : { key, entry };
+}
+
+/**
+ * The ONE emitter from a registry entry to a connection requirement (D2). The
+ * inferrer's rung 1 used to build this literal inline — hardcoding
+ * `kind: 'oauth2_auth_code'` and discarding the entry's `fields` — which is the defect
+ * this task exists to close. Everything the entry holds is copied; nothing is invented.
+ *
+ * DEEP-COPIED per seat: the registry is a module singleton the borrow ban consults on
+ * every admission, so handing out live references would let one downstream caller's
+ * edit repoint the pinned truth for every later substitution (same rule as
+ * `applyRegistryValues`).
+ *
+ * Output is COMPOSED, not parsed — the callers own their `connectionRequirementSchema`
+ * parse so a failure surfaces on their channel (the AC3 structural suite proves every
+ * shipped entry parses, which is what makes a new entry missing a required piece fail
+ * in this package rather than in front of a user).
+ */
+export function requirementFromRegistryEntry(
+  entry: WellKnownOauthProvider,
+  providerName: string,
+  slot: string,
+): ConnectionRequirement {
+  return {
+    slot,
+    provider: { name: entry.displayName ?? providerName },
+    kind: entry.kind,
+    ...(entry.fields !== undefined ? { fields: entry.fields.map((field) => ({ ...field })) } : {}),
+    ...(entry.endpoints !== undefined ? { endpoints: { ...entry.endpoints } } : {}),
+    ...(entry.registration !== undefined
+      ? {
+          registration: {
+            ...(entry.registration.consoleUrl !== undefined ? { consoleUrl: entry.registration.consoleUrl } : {}),
+            ...(entry.registration.instructions !== undefined
+              ? { instructions: [...entry.registration.instructions] }
+              : {}),
+          },
+        }
+      : {}),
+    ...(entry.authorizeParams !== undefined ? { authorizeParams: { ...entry.authorizeParams } } : {}),
+    ...(entry.pkce !== undefined ? { pkce: entry.pkce } : {}),
+    declaredApiHosts: [...entry.apiHosts],
+  };
+}
