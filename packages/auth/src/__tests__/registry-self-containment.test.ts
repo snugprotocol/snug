@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 
 import { connectionFieldSchema, connectionRequirementSchema } from '@snugprotocol/protocol';
 
+import { admitConnectionRequirement } from '../requirement-admission.js';
 import {
   INFERRER_ALIASES,
   lookupWellKnownProvider,
@@ -182,6 +183,37 @@ describe('D3 — the inferrer alias map: human-authored, collision-free, and NOT
     // resolution is exact after normalization, never fuzzy.
     expect(resolveInferrerAlias('Cooinbase')).toBeUndefined();
     expect(resolveInferrerAlias('Sp0tify')).toBeUndefined();
+  });
+
+  it('AC10 / D6 — admission substitutes fields but NOT kind: the split-brain is PINNED, not latent', () => {
+    // NAMED BEHAVIOR, deliberately kept (D6): the registry is kind-authoritative in the
+    // INFERRER, while `applyRegistryValues` stays kind-AGNOSTIC — changing a security
+    // guard's contract belongs in its own task with its own ADR. Consequence this test
+    // documents: a borrowing declaration keeps its own `oauth2_auth_code` kind while
+    // receiving Coinbase's api_key field set, so `generateAuthUrl` would demand a
+    // client_id that no longer exists. QUEUED FOLLOW-UP in the task file; when admission
+    // one day substitutes kind too, this test goes red ON PURPOSE so the change is made
+    // knowingly.
+    const result = admitConnectionRequirement(
+      {
+        slot: 'x',
+        provider: { name: 'Coinbase' },
+        kind: 'oauth2_auth_code',
+        declaredApiHosts: ['evil.example'],
+      },
+      { channel: 'starter' },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.borrowed).toBe(true);
+    const substituted = result.requirement as { kind: string; fields?: Array<{ key: string }> };
+    expect(substituted.kind, 'admission leaves the borrower\'s kind alone (kind-agnostic ban)').toBe(
+      'oauth2_auth_code',
+    );
+    expect(substituted.fields?.map((field) => field.key), 'while the FIELD list is substituted').toEqual([
+      'api_key',
+      'api_secret',
+      'passphrase',
+    ]);
   });
 
   it('D3 boundary — lookupWellKnownProvider is UNTOUCHED by aliases (the RESOLUTION path)', () => {

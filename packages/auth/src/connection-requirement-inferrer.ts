@@ -51,7 +51,12 @@ import {
 } from '@snugprotocol/protocol';
 import { admitConnectionRequirement } from './requirement-admission.js';
 import { lintAuthHeaderTemplate } from './template-lint.js';
-import { lookupWellKnownProvider, type WellKnownOauthProvider } from './well-known-providers.js';
+import {
+  lookupWellKnownProvider,
+  requirementFromRegistryEntry,
+  resolveInferrerAlias,
+  type WellKnownOauthProvider,
+} from './well-known-providers.js';
 
 /** The minimal completion seam — one prompt string in, one reply string out. */
 export type RequirementInferrerComplete = (prompt: string, opts: { signal?: AbortSignal }) => Promise<string>;
@@ -121,19 +126,23 @@ export function createConnectionRequirementInferrer(
   return {
     async infer(input: InferConnectionRequirementInput): Promise<InferConnectionRequirementResult> {
       // Rung 1 — the pinned registry, checked FIRST so a famous provider never reaches
-      // the seam at all and pasted docs can never displace a registry entry.
-      const wellKnown = lookup(input.providerName);
+      // the seam at all and pasted docs can never displace a registry entry. The exact
+      // key is consulted first, then the INFERRER-scoped alias map ("Coinbase Pro" is
+      // Coinbase for AUTHORING) — both inside this rung, before any seam reference,
+      // which AC4's call-recording test names explicitly. Aliases deliberately do NOT
+      // touch `lookupWellKnownProvider` (D3): resolution and the borrow ban keep their
+      // own semantics, and this short-circuit grants registry authority nowhere else.
+      //
+      // THE ENTRY IS THE AUTHORITY on kind and fields (AC1/AC2). This literal used to
+      // hardcode `kind: 'oauth2_auth_code'` and discard the entry's `fields`, which
+      // routed API-key providers into an OAuth connect step that cannot succeed —
+      // the owner's Coinbase defect. `requirementFromRegistryEntry` copies every seat
+      // the entry holds and invents none.
+      const wellKnown = lookup(input.providerName) ?? resolveInferrerAlias(input.providerName)?.entry;
       if (wellKnown !== undefined) {
-        const built = connectionRequirementSchema.safeParse({
-          slot: input.slot,
-          provider: { name: wellKnown.displayName ?? input.providerName },
-          kind: 'oauth2_auth_code',
-          ...(wellKnown.endpoints !== undefined ? { endpoints: { ...wellKnown.endpoints } } : {}),
-          ...(wellKnown.registration !== undefined ? { registration: { ...wellKnown.registration } } : {}),
-          ...(wellKnown.authorizeParams !== undefined ? { authorizeParams: { ...wellKnown.authorizeParams } } : {}),
-          ...(wellKnown.pkce !== undefined ? { pkce: wellKnown.pkce } : {}),
-          declaredApiHosts: [...wellKnown.apiHosts],
-        });
+        const built = connectionRequirementSchema.safeParse(
+          requirementFromRegistryEntry(wellKnown, input.providerName, input.slot),
+        );
         return {
           ok: true,
           provenance: 'registry',
