@@ -1,0 +1,67 @@
+# Snug CI — first workflow in the repo (TASK-20260812-desktop-hub-scaffold, P5).
+#
+# Three legs:
+#   linux    — the whole workspace build + tsc-gated test fan-out (uncached).
+#   macos    — Rust unit tests + desktop web build; the in-shell hard gate
+#              (AC7/AC8) runs via the shell-gate harness.
+#   windows  — the same, proving the WebView2 leg of the hard gate. Desktop is
+#              not "first-class" until this leg is green (roadmap A6 vs L6).
+#
+# High-tier surface (CI config): changes here need the full process gates.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # --force: the turbo cache must never vouch for this gate (lessons 2026-08-10).
+      - run: pnpm exec turbo run build --force
+      - run: pnpm exec turbo run test --force
+
+  desktop-shell:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: pnpm install --frozen-lockfile
+      - name: Rust unit tests
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Desktop package tests (tsc-gated)
+        run: pnpm --filter desktop test
+      - name: Build workspace deps + desktop web bundle
+        run: pnpm exec turbo run build --filter=desktop --force
+      - name: In-shell hard gate (C2 CSP+IPC checks + wizard journey)
+        run: pnpm --filter desktop gate
