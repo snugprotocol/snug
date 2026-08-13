@@ -32,12 +32,14 @@ import { useMode, useProvider } from '../state/mode.js';
 import { useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
+import { toggleRailShown, useRailShown } from '../state/railLayout.js';
 import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
+import { RailDivider } from '../ui/RailDivider.js';
 import { Sheet } from '../ui/Sheet.js';
 import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
@@ -142,6 +144,9 @@ export default function RunView(): ReactElement {
   // mode with the webllm brain override applied, never the raw mode (review F3).
   const turnMode = useTurnMode();
   const theme = useTheme();
+  // Whether the "watch it think" rail is shown (AC6). Global, like the theme — it is a
+  // workspace preference, not a property of any one app.
+  const railShown = useRailShown();
   useAppMetaMap(); // re-render tiles/header when meta lands
 
   const [htmlState, setHtmlState] = useState<HtmlState>({ phase: 'loading' });
@@ -656,7 +661,22 @@ export default function RunView(): ReactElement {
               <Button variant="ghost" onClick={() => setSheetOpen(true)} aria-label="open inspector">
                 inspect
               </Button>
-            ) : null}
+            ) : (
+              /* AC6: hide/show "watch it think". On by default — the panel is the
+                 feature — but it competes with the app for width, so it has to be
+                 dismissible. `aria-pressed` makes it a toggle to a screen reader
+                 rather than a button that appears to do nothing. */
+              <Button
+                variant="ghost"
+                onClick={toggleRailShown}
+                aria-pressed={railShown}
+                data-testid="rail-toggle"
+                aria-label={`${railShown ? 'hide' : 'show'} watch it think`}
+                title={`${railShown ? 'hide' : 'show'} the watch it think panel`}
+              >
+                {railShown ? '◨ hide' : '◫ think'}
+              </Button>
+            )}
           </div>
         </header>
         {/*
@@ -763,9 +783,14 @@ export default function RunView(): ReactElement {
         <Sheet title="watch it think" open={sheetOpen} onClose={() => setSheetOpen(false)}>
           {railContent}
         </Sheet>
-      ) : (
-        <Rail title="watch it think">{railContent}</Rail>
-      )}
+      ) : railShown ? (
+        // The divider is a SIBLING of the rail, not a child: it has to sit between the
+        // stage and the rail in the same flex row to be draggable at the seam (AC4).
+        <>
+          <RailDivider />
+          <Rail title="watch it think">{railContent}</Rail>
+        </>
+      ) : null}
     </div>
   );
 }

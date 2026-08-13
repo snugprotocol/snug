@@ -282,13 +282,67 @@
 /* ---------------------------------------------------------------- rail + sheet */
 
 .rail {
-  width: 340px;
+  /* User-resizable since TASK-20260813 (AC4). The fallback keeps the old fixed width
+     for any context where state/railLayout.ts has not set the property (a test that
+     mounts the rail alone, or storage being unavailable). */
+  width: var(--rail-width, 340px);
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--surface);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* The drag handle between the app stage and the rail (AC4). Visually a hairline; the
+   hit area is deliberately wider than it looks, because a 1px target is a bad joke. */
+.rail-divider {
+  flex: none;
+  width: 6px;
+  margin: 0 -2px; /* overlap the neighbours so the seam still reads as a hairline */
+  cursor: col-resize;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6; /* above .frame-wrap, or the iframe swallows the drag */
+  transition: background var(--dur-1) var(--ease-out);
+  touch-action: none; /* the handle owns the gesture; never scroll the page mid-drag */
+}
+
+.rail-divider:hover,
+.rail-divider:focus-visible {
+  background: var(--ember-glow);
+}
+
+.rail-divider:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: -2px;
+}
+
+/* The grip: three-quarters height so it reads as a handle rather than a border. */
+.rail-divider-grip {
+  width: 2px;
+  height: 2.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.rail-divider:hover .rail-divider-grip,
+.rail-divider:focus-visible .rail-divider-grip {
+  background: var(--ember);
+}
+
+/* While dragging, the app iframe must not capture the pointer or start selecting text
+   — both make the divider feel broken the moment the cursor crosses the stage. */
+.run-layout.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.run-layout.is-resizing .frame-wrap {
+  pointer-events: none;
 }
 
 .rail-header {
@@ -311,6 +365,9 @@
   flex: 1;
   overflow-y: auto;
   padding: var(--space-3);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 .sheet-backdrop {
@@ -867,6 +924,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 .think-section-head {
@@ -901,6 +961,9 @@
   flex-direction: column;
   gap: var(--space-2);
   font-size: var(--text-xs);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 .llm-totals {
@@ -913,6 +976,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 .llm-entry {
@@ -999,6 +1065,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 /* Byte size beside a section heading — payloads are whole now, so size is worth showing. */
@@ -1037,7 +1106,13 @@
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  /* `break-word`, NOT `anywhere` (TASK-20260813 AC5). Both break long unbreakable
+     tokens, but `anywhere` also counts those break points when computing MIN-CONTENT
+     width — so inside the flex chain below, the block's intrinsic width collapsed
+     toward a single character and payloads rendered one glyph per line. `break-word`
+     wraps identically at render time without volunteering a 1ch minimum. */
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
 /* ---------------------------------------------------------------- settings */
