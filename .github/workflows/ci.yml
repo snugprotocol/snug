@@ -25,9 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # No `version:` — pnpm/action-setup reads `packageManager` in package.json
+      # (pnpm@9.0.0) and ERRORS on a second source of truth. Pin the version there.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -45,9 +45,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # No `version:` — pnpm/action-setup reads `packageManager` in package.json
+      # (pnpm@9.0.0) and ERRORS on a second source of truth. Pin the version there.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
