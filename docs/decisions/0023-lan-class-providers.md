@@ -32,21 +32,49 @@ literal hosts the user explicitly approved into a connection's frozen ceiling �
    desktop app" (the `disclosedBrowserWall` pattern) and the executor's existing gates
    keep refusing; nothing platform-conditional persists (consistent with ADR-0021's
    "posture is never a requirement seat").
+   **P0 amendment (binding — lan-schema-2):** this is a **protocol schema change**, not
+   just a registry-type change: `declaredApiHostsSchema` is `.min(1)` and required, so a
+   pre-collection LAN requirement cannot parse. `connectionRequirementSchema` gains an
+   optional `lanHost` seat with declaredApiHosts required-XOR-lanHost (superRefine);
+   `requirementFromRegistryEntry`, admission, and the borrow-ban host trigger fork with
+   it; SPEC_SYNC staged draft + spec-changelog updated; the schema fork joins the task's
+   AC9 fence list.
 2. **Pairing is a wizard-run, host-side credential exchange** described by a registry
    `pairing` seat (Hue: the link-button POST above; response field → secret). The minted
    key writes **directly to `snug_secrets`**; the exchange response never enters app-,
    LLM-, or export-visible state (C1). The model never proposes bridge IPs (the inferrer's
    extract-never-invent rule stands); it may only identify a provider as LAN-class.
+   **P0 amendments (binding — pairing-transport-unspecified):** wizard ordering is
+   collect IP → approve row → ceiling frozen → THEN pair (pairing always runs against an
+   already-frozen ceiling). The pairing POST rides the SAME Rust command in an explicit
+   `mode:'pair'` whose rustls verifier **accepts-and-captures** the certificate
+   (fingerprint + CN) — reqwest never exposes the peer cert to callers, so capture must
+   live inside the verifier — for RFC-1918-IPv4-literal hosts only, validated in Rust,
+   returning the pin alongside the response so the wizard writes pin + key in one step.
+   Pair mode carries its own enumerated guards (Rust host-class check, response size cap,
+   no redirect follow) and is negative-tested unreachable for public hosts and from
+   iframes (C2 IPC scope).
 3. **Scoped TLS trust, desktop only:** at pairing time the bridge certificate
-   (fingerprint + CN) is **TOFU-pinned onto the connection row**. Subsequent requests to
-   RFC-1918-literal ceiling hosts route through a dedicated Rust `lan_fetch` command
-   whose custom verifier enforces the pin — code we execute and test, never a transport
-   accept-invalid-certs flag (lessons 2026-08-12: a guard expressed as a flag is only as
-   real as the transport's willingness to read it). The pinned-trust path is structurally
-   unreachable for public hosts (negative-tested both ways); public-host behavior stays
-   byte-identical. The pairing-time MITM window is a **documented residual** (LAN-local
-   attacker present at first pairing), mitigated later by Signify-CA pinning when the
-   gated CA material is obtained — queued, not v1.
+   (fingerprint + CN) is **TOFU-pinned to the connection** — stored in the connection's
+   dynamic-state KV in `snug_secrets` (`auth:<appId>:<slot>:_connection`, ADR-0014
+   custody; NOT a new db column). Subsequent requests to RFC-1918-literal ceiling hosts
+   route through the same Rust command in `mode:'pinned'`, whose custom verifier enforces
+   the pin — code we execute and test, never a transport accept-invalid-certs flag
+   (lesson 2026-08-12: a guard expressed as a flag is only as real as the transport's
+   willingness to read it). **P0 amendments (binding — lan-pin-plumbing):** the pin
+   travels executor→transport via a NEW optional desktop-only dep
+   `lanFetch?(url, init, pin)` beside `fetchImpl` in ConnectedFetchDeps (`FetchLike`
+   untouched for web); routing is decided IN THE EXECUTOR at gates 4/5, where
+   `lanPrivateHost` is already computed — so "pinned path only for RFC-1918 literals
+   inside the ceiling" is enforced where the ceiling is known. Rust builds a FRESH
+   reqwest client per call (pin baked into the verifier — no client cache or pool reuse
+   across pins), installs `Policy::none()` unconditionally, and enforces the 1 MiB cap
+   in Rust before bytes cross IPC; both semantics are re-proven by tests (redirecting
+   simulated bridge → NET_REDIRECT_BLOCKED, oversized body → NET_SIZE_EXCEEDED). The
+   pinned-trust path is structurally unreachable for public hosts (negative-tested both
+   ways); public-host behavior stays byte-identical. The pairing-time MITM window is a
+   **documented residual** (LAN-local attacker present at first pairing), mitigated later
+   by Signify-CA pinning when the gated CA material is obtained — queued, not v1.
 4. **Discovery**: a desktop-only "find my bridge" wizard button queries
    `discovery.meethue.com` via native fetch; manual IP entry is the primary path; mDNS
    deferred.

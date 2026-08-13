@@ -5,7 +5,7 @@
 - **Risk tier**: **high** — `packages/auth` (registry, executor, admission), `packages/protocol` (request-template seats → spec-sync), `packages/knowledge` (LLM-bound prompts), C1-adjacent (new signing paths, LAN TLS trust); auth/protocol auto-escalate
 - **Branch**: `fix/TASK-20260812-desktop-auth-awareness` (off `main`)
 - **Packages touched**: `protocol` (request template seats: queryTemplate + jwt function grammar), `auth` (registry seats + Coinbase/Hue entries, executor signing + LAN TLS policy, admission substitution), `knowledge` (KB copy + platform layer + inferrer prompt), `playground` (assembly wiring, wizard, net observer, starters glue), `desktop` (opener capability, pinned-TLS LAN fetch), `examples` (weather-planner, crypto-portfolio, hue-lights-party), docs
-- **Spec impact**: **yes (internal staged draft only)** — `connectionRequestSchema` gains `queryTemplate`; template grammar gains a JWT signing function. Follow SPEC_SYNC into `docs/spec-drafts/` v0.3 staging + spec-changelog entry; **nothing pushed to `snugprotocol/spec`** (AL-12 held).
+- **Spec impact**: **yes (internal staged draft only)** — `connectionRequestSchema` gains `queryTemplate`; template grammar gains a JWT signing function; **and (P0 finding lan-schema-2) `connectionRequirementSchema` gains an optional `lanHost` seat with `declaredApiHosts` becoming required-XOR-`lanHost`** (superRefine; emitter/admission/host-trigger updated). Follow SPEC_SYNC into `docs/spec-drafts/` v0.3 staging + spec-changelog entry; **nothing pushed to `snugprotocol/spec`** (AL-12 held).
 - **Related**: ADR-0017/0020/0021; TASK-20260812-desktop-hub-scaffold (PR #41); TASK-20260810-dynamic-auth-rewrite; next-steps 2026-08-12 (BYOK CORS advisory; desktop follow-up 7 "Hue/LAN starter"); new ADR-0022 (registry request/testRequest seats + signing functions + auth-shaped failure surfacing) and ADR-0023 (LAN-class providers: user-supplied bridge host, pairing, TLS trust) — drafted in this task
 
 ## Spec (what & why)
@@ -309,6 +309,87 @@ trust** (drafted at P0, finalized P5):
   ADRs finalized; docs (architecture, code-map counts, next-steps incl. out-of-scope flags
   — Apple Music endpoints hazard, google-family wizard gaps); spec-changelog; journal; PR.
 
+### P0 plan-review amendments (2026-08-12 — wiring + feasibility lenses: 9 CONFIRMED after adversarial refutation, 3 BLOCKERs; all binding on P1–P6. Security lens re-run appended below when it lands.)
+
+1. **[BLOCKER admission-idempotence-1] Substituted request/testRequest must survive the
+   SECOND admission pass.** `occupiedPromptSeats` exempts only `fields` via
+   `matchAuthOption` (`requirement-admission.ts:292-313`); admission runs TWICE on the
+   production path (pipeline + db admissionGate), so pinned request/testRequest written
+   on pass 1 would be refused on pass 2 — the exact P5-blocker shape, probe-reproduced
+   against built dist. **Also: a request carrying ONLY `queryTemplate` sails past Guard
+   2b today** (occupiedPromptSeats never counts it) — a real hole the new seat would
+   widen. Binding: (a) `request` counts as occupied when it carries headerTemplate OR
+   queryTemplate; (b) request/testRequest values byte-matching the MATCHED option's
+   pinned values are exempt, derived from the SAME `matchAuthOption` handle as fields —
+   one resolution, all three seats; (c) idempotence tests per seat: bare starter manifest
+   survives double admission; `stagePendingRequirement` of the registry-shaped CDP
+   requirement on a `'starter'`/`'inference'`-provenance row is admitted — asserted on
+   the PERSISTED shape.
+2. **[BLOCKER lan-schema-2] The LAN shape is a protocol schema change, now named.**
+   `declaredApiHostsSchema.min(1)` + required seat make a pre-collection LAN row
+   unrepresentable (probe: hue-like entry fails safeParse). `connectionRequirementSchema`
+   gains optional `lanHost {class, label}` with declaredApiHosts required-XOR-lanHost;
+   emitter, admission, borrow-ban host trigger, and CONNECTION_HOST_RULE notes updated;
+   SPEC_SYNC staged-draft + AC9 fence list gain the fork. Spec-impact header updated.
+3. **[BLOCKER seat-migration-gap] Existing approved rows never see new registry seats.**
+   Rows are admitted once; the executor reads only the persisted spec — so P4 alone
+   cannot fix the owner's existing weather-planner/crypto-portfolio installs, and
+   field-set-drift migration can't fire when the field set is unchanged. Binding: wizard
+   open (incl. the AC5 banner CTA route) detects **registry-SEAT drift** — when
+   `lookupWellKnownProvider` pins request/testRequest absent from the row's spec, re-run
+   registry substitution and re-persist WITHOUT re-crediting (stored secrets stay valid);
+   route to re-credential only when the field set also drifted. AC6 gains a sub-test
+   starting from a pre-existing approved row minted with the old registry.
+4. **[MAJOR cdp-key-import] SEC1→PKCS#8 wrapping is required.** CDP EC keys download as
+   SEC1 `BEGIN EC PRIVATE KEY`; WebCrypto importKey takes pkcs8 only (probe: DataError on
+   SEC1, 64-byte raw r||s sign output confirmed JWS-ready). Binding: DER-wrap SEC1 →
+   PKCS#8 (id-ecPublicKey + prime256v1) accepting both PEM headers, fixture test with a
+   real-format key; honest wizard/probe errors for Ed25519 PEM and undecodable PEM;
+   `cdp_jwt` requires NATIVE WebCrypto ECDSA — the desktop subtle-fallback does not
+   implement it, so absence surfaces an honest error, never a silent failure.
+5. **[MAJOR pairing-transport-unspecified] The pairing POST gets a named transport.**
+   Binding wizard ordering: bridge IP collected → row approved → ceiling frozen → THEN
+   pairing. Pairing rides the SAME Rust command in an explicit `mode:'pair'` whose rustls
+   verifier accepts-and-CAPTURES the cert (fingerprint+CN) — reqwest never exposes the
+   peer cert to callers, so capture must live INSIDE the verifier — for RFC-1918-IPv4-
+   literal hosts only (validated in Rust), returning the pin alongside the response so
+   the wizard writes pin+key in one step. Normal mode requires a pin and refuses without
+   one. Pair mode carries its own enumerated guards (Rust host-class check, response size
+   cap, no redirects) and negative tests: unreachable for public hosts and from iframes
+   (C2 IPC scope).
+6. **[MAJOR lan-pin-plumbing] The pin's channel to the transport is pinned.** The
+   executor resolves the pin from the grant's row and routes via a NEW optional
+   desktop-only dep `lanFetch?(url, init, pin)` beside `fetchImpl` in ConnectedFetchDeps
+   (`FetchLike` untouched for web); routing decided IN THE EXECUTOR at gate 4/5 where
+   `lanPrivateHost` is already computed. Pin storage: the connection's dynamic-state KV
+   in `snug_secrets` (`auth:<appId>:<slot>:_connection`, ADR-0014 custody — NOT a new db
+   column). Rust: fresh reqwest client per call (pin baked into the verifier, no client
+   cache), `Policy::none()` unconditionally, 1 MiB cap enforced in Rust before bytes
+   cross IPC. Semantics re-proven per the flag lesson: redirecting simulated bridge →
+   NET_REDIRECT_BLOCKED; oversized body → NET_SIZE_EXCEEDED.
+7. **[MAJOR ac9-helper-enum-7] AC9's fence list gains the template-helper pins**:
+   `AUTH_TEMPLATE_HELPERS`/`HELPER_ARITY` (typed Record — a 5th helper cannot compile
+   without moving it), test-side `PINNED_HELPERS`, and the both-directions engine↔lint
+   set-equality assertions — moved in the same commit as the `cdp_jwt` grammar change.
+8. **[MINOR observer-retry-8] Observer semantics pinned**: fires only on the FINAL
+   delivered result of `execute()` (post-OAuth-refresh-retry; negative test: 401 cured by
+   refresh fires nothing); `executeConnectionTestRequest` SUPPRESSES the observer (probe
+   outcomes render in the wizard only), tested.
+9. **[MINOR windows-leg-unverified] Desktop claims scoped to macOS**: AC3/AC7 in-shell
+   steps run on the macOS gate leg; Windows stays pending per the desktop scaffold task;
+   P6 journals that `cdp_jwt` (native ECDSA) and `lan_fetch` are Windows-unverified with
+   honest-error paths if the APIs are absent.
+
+Refuted findings (5) recorded in the workflow journal (`wf_d15a9134-75c`); notable
+refutations worth keeping: the pairing-order concern died because approval precedes
+pairing by design (now explicit in amendment 5); the TOFU pin needs NO db schema change
+(the `_connection` KV already exists for exactly this class of state); `https://*` in a
+tauri glob scope DOES cross path separators (single-star match verified against
+glob::Pattern defaults); the template engine is **async-first end-to-end**
+(`renderAuthHeaderTemplate` returns a Promise, awaited at `connected-fetch.ts:563`), so
+an awaiting WebCrypto helper forces no seam change; and the demoreq/manifest mirrors do
+not leak registry seats (bare manifests stay bare — substitution happens at admission).
+
 ### Pinned shared literals (lesson 2026-08-03 — before any fan-out)
 
 ```
@@ -319,9 +400,12 @@ Coinbase testRequest:     GET https://api.coinbase.com/api/v3/brokerage/accounts
 OpenWeather queryTemplate: { appid: '{{api_key}}' }
 CoinGecko queryTemplate:  { x_cg_demo_api_key: '{{api_key}}' }
 Hue registry key:         'hue' · kind 'api_key' · fields ['application_key'] (secret) · header { 'hue-application-key': '{{application_key}}' }
-Hue lanHost seat:         { class: 'rfc1918-ipv4-literal', label: 'Bridge IP address' }
+Hue lanHost seat:         { class: 'rfc1918-ipv4-literal', label: 'Bridge IP address' }   (protocol: connectionRequirementSchema.lanHost, declaredApiHosts required-XOR-lanHost)
 Hue pairing:              POST https://{lanHost}/api  body {"devicetype":"snug#hub","generateclientkey":true} → success[0].username → application_key; clientkey stored, unused v1
-Auth-shaped observer:     onAuthShapedFailure(appId, slot, status)                        (host-only; app result untouched)
+LAN transport dep:        lanFetch?(url, init, pin)   (optional ConnectedFetchDeps seat beside fetchImpl; executor routes at gate 4/5; FetchLike untouched)
+Rust command modes:       lan_fetch { mode: 'pair' | 'pinned', ... }                      (pair: capture cert fingerprint+CN, RFC-1918 literals only; pinned: refuse without pin match)
+TOFU pin storage:         snug_secrets KV `auth:<appId>:<slot>:_connection`               (ADR-0014 custody; NOT a db column)
+Auth-shaped observer:     onAuthShapedFailure(appId, slot, status)                        (host-only; app result untouched; fires on FINAL post-retry result; suppressed for wizard probes)
 Opener capability:        { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://*" }] }
 KB layer id:              95-platform-capabilities (web/desktop variants)
 ```

@@ -39,6 +39,15 @@ exist. Consequences found 2026-08-12 (owner repro + recon):
    the **same matched-option resolution that drives Guard 2b's refusal** — one resolution,
    both halves (lesson 2026-08-12). Borrowing channels are still refused when they author
    these seats; the registry now substitutes real values instead of nothing.
+   **P0 amendments (binding):** (a) `occupiedPromptSeats` counts `request` when it
+   carries `headerTemplate` OR `queryTemplate` (today a queryTemplate-only request is not
+   counted at all — a hole this ADR would otherwise widen); (b) substituted
+   request/testRequest values that byte-match the MATCHED option's pinned values are
+   exempt from the occupied-seat refusal, derived from the SAME `matchAuthOption` handle
+   as the fields exemption — admission runs twice on the production path and the
+   substituted shape must survive the second pass (probe-verified P5-blocker shape);
+   (c) per-seat idempotence tests assert on the PERSISTED shape through double admission
+   and `stagePendingRequirement` on non-registry-provenance rows.
 2. **Template grammar gains `{{cdp_jwt(api_key, private_key)}}`** — a host-side signing
    function, provider-scheme-named like `hmac_sha256_b64`, minting a fresh CDP JWT per
    request from live request context: claims `iss:'cdp'`, `sub:<api_key>`,
@@ -46,6 +55,14 @@ exist. Consequences found 2026-08-12 (owner repro + recon):
    random `nonce`. **ES256 only at v1** (WebCrypto P-256; CDP EC keys are the universally
    safe type). An Ed25519 key yields an honest wizard/probe error naming the fix
    ("generate an EC (ES256) key in the CDP portal"), never a silent failure.
+   **P0 amendments (binding):** CDP keys download as SEC1 `BEGIN EC PRIVATE KEY` PEM and
+   WebCrypto imports pkcs8 only — the helper DER-wraps SEC1 → PKCS#8 (id-ecPublicKey +
+   prime256v1), accepts both PEM headers, and errors honestly on undecodable PEM. The
+   helper requires NATIVE WebCrypto ECDSA (the desktop subtle-fallback implements HMAC
+   only) — absence is an honest error. The template engine is async-first end-to-end
+   (`renderAuthHeaderTemplate` awaited at `connected-fetch.ts:563`), so the awaiting
+   signer needs no seam change. WebCrypto's raw `r||s` ECDSA output is exactly JWS ES256
+   format — no DER conversion.
 3. **`connectionRequestSchema` gains `queryTemplate`** (same lint family as
    `headerTemplate`; template tokens must resolve against declared field keys, and both
    lints derive from ONE resolution). Query credentials are rendered into the URL **after**
@@ -56,7 +73,10 @@ exist. Consequences found 2026-08-12 (owner repro + recon):
    response is 401/403, the app-visible result is unchanged (`ok:true`, status as-is) and
    a host-only callback (`onAuthShapedFailure(appId, slot, status)`) fires; RunView renders
    the repair banner with a "check this connection" CTA into the wizard. No credentials or
-   response bodies ride the callback.
+   response bodies ride the callback. **P0 amendments (binding):** the observer fires only
+   on the FINAL delivered result of `execute()` — a 401 cured by the OAuth refresh retry
+   fires nothing (negative-tested) — and `executeConnectionTestRequest` suppresses it
+   (probe outcomes render in the wizard only).
 5. **Coinbase entry rewritten to CDP**: fields `['api_key' (key name), 'private_key'
    (EC PEM, secret)]`; pinned request template using `cdp_jwt`; pinned
    `testRequest: GET https://api.coinbase.com/api/v3/brokerage/accounts`; OAuth option
@@ -82,7 +102,13 @@ exist. Consequences found 2026-08-12 (owner repro + recon):
   "pinned provider can never be signed" hole class; the parity/structural test set grows
   and must move with every data edit (by design).
 - Existing Coinbase rows carry the old field set; the wizard gains a field-set-drift
-  re-credential path (owner re-enters the CDP key once).
+  re-credential path (owner re-enters the CDP key once). **P0 amendment (binding):**
+  rows are admitted once and never re-read the registry, so the wizard-open path also
+  detects **registry-seat drift** — a row whose provider now pins request/testRequest
+  seats absent from the persisted spec is re-run through registry substitution and
+  re-persisted WITHOUT re-crediting when the field set is unchanged (stored secrets stay
+  valid). Without this, existing weather-planner/crypto-portfolio installs would stay
+  broken forever (P0 BLOCKER seat-migration-gap).
 - The staged v0.3 spec draft gains `request.queryTemplate` and the signing-function
   grammar (SPEC_SYNC; internal only, AL-12 held).
 - Query-string credentials are a C1-sensitive surface with an enumerated scrub list;
