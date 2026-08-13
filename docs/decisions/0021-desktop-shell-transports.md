@@ -1,6 +1,6 @@
 # 0021 — Desktop shell transports: loopback OAuth, registry redirect postures, native fetch, file-backed userdb
 
-- **Status:** DRAFT (task in flight — finalized at TASK close)
+- **Status:** accepted
 - **Date:** 2026-08-12
 - **Task:** TASK-20260812-desktop-hub-scaffold
 
