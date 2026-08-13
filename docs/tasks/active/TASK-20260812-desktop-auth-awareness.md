@@ -816,3 +816,95 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   auth 620 (dist consumer, untouched). Left for P4: openweather/coingecko registry
   queryTemplate data + starters; the migration seam is live for them the moment their
   registry entries gain seats.
+
+### 2026-08-13 — claude (P4 starters lane) — openweather/coingecko query data + starter journey + dead code (AC6, P4 items 1–4)
+
+- Producer verification first: all P3 lane commits present (a53b788 · 2c13ee0/49ddf82 ·
+  b28b919/8cd4ecf/e6480ce · d801c64/48664cc · 024dded); `packages/auth` green at 620
+  before any P4 work. No orchestration defect.
+- **Registry data (8b386fd)**, red-first (new `registry-query-credentials.test.ts` 14 red /
+  10 green — the greens are pure negatives that must ALSO survive: Guard 2b still refusing
+  authored query templates on every borrow channel, ceiling checks, and the
+  coingecko-has-no-testRequest pin). openweather gains
+  `request.queryTemplate = { appid: '{{api_key}}' }` (PINNED literal) and its comment now
+  NAMES where the placement is pinned instead of promising it; coingecko gains
+  `{ x_cg_demo_api_key: '{{api_key}}' }` (PINNED literal).
+- **Two brief claims REFUTED by live probes + primary docs (2026-08-13), recorded in the
+  entry comments so neither is re-litigated:**
+  1. *"CoinGecko's custom header is not in its CORS preflight allow-list."* FALSE — a live
+     OPTIONS probe shows CoinGecko REFLECTS `x-cg-demo-api-key` back in
+     `access-control-allow-headers`; both forms work from a browser today. The query form
+     is still the right pin, but for preflight-INDEPENDENCE (a query param is a simple
+     request and never asks for a preflight), not for a CORS wall that does not exist.
+  2. *The suggested coingecko testRequest.* `api.coingecko.com` is a documented "Keyless
+     Public API" — every endpoint answers 200 with NO key, so any probe would report
+     CONNECTED for a typo'd key; `/api/v3/key` is Pro-plan-only on `pro-api.coingecko.com`
+     (live probe on the demo host: 401 error_code 10005) and would fail for every CORRECT
+     demo key, off-ceiling besides. **Deliberate omission journaled: coingecko carries NO
+     testRequest.** No button beats a meaningless one. openweather DOES get one —
+     `GET /data/2.5/weather?q=London`, verified live to 401 without a valid appid, so it
+     exercises the credential rather than merely reaching the host.
+- **Starter journey (83cee14)**: new `starterQueryCredentialJourney.test.ts` (11 tests) at
+  playground altitude, because the seam spans packages and no per-package test can reach
+  it. Requirement read from the SHIPPED MANIFEST ON DISK; persisted through the real
+  pipeline + production db gate (both admission passes); deps from the exported production
+  `connectedFetchDepsFor` — never a hand-rolled deps object. Asserts the PERSISTED row's
+  queryTemplate, the credential on the wire as a query param with `X-Api-Key` absent and
+  the app's own params intact, C1 over the WHOLE serialized result (driven with a response
+  echoing the credentialed URL in body AND etag), the thrown-URL redaction
+  (amendment 14's NET_FETCH_FAILED site), off-ceiling refusal, and a cross-contamination
+  negative (both starters share the `api_key` kind AND field key — a slot-routing defect
+  would be invisible in any single-app test). Red-first in two layers: 5 red / 6 green on
+  the shipped tree, then mutation-verified on green — swapping openweather's queryTemplate
+  for a headerTemplate reds exactly its 3 assertions.
+- **Starter apps: VERIFIED, NO CHANGE NEEDED.** weather-planner's `FORECAST_URL` and
+  crypto-portfolio's `PRICES_URL` already call bare endpoints with only the app's own
+  parameters — a fresh scan of both files for key/token/authorization strings returns only
+  `appId` (host-assigned identity). Both already say "C1 by construction". The test's app
+  URLs are taken from the shipped app source rather than invented.
+- **Mirrors: VERIFIED UNCHANGED, no edit.** `DEMO_STARTER_REQUIREMENTS` still mirrors the
+  four bare manifests byte-for-byte and `connection-manifests.test.mjs`'s lists are
+  correct — bare manifests stay bare, so the P0 refutation holds after the data landed.
+- **Dead code + comment truth (8a802fc).** `HubView.installStarter` DELETED — zero callers
+  (grepped apps/packages/examples/docs; only its own definition and three done/ task files
+  calling it dead), tiles route through `openStarter`. It was a loaded gun: it saved HTML
+  and navigated, FULL STOP — no `installStarterConnections`, no
+  `installStarterRuntimeContract` — so rewiring a tile to it would ship a connected starter
+  with no connection row and no runtime contract. Orphaned `installing`/`installError`
+  state, the banner and the `loadStarterHtml` import went with it; a comment at
+  `openStarter` records why the hub has no install path. `starterDeclaration.ts`'s claim
+  that "the Settings surface renders this" is FALSE (no renderer of `mismatch` exists
+  anywhere in the UI; a `console.warn` is the only signal) — comment corrected, real
+  surface queued in next-steps, NOT built. Two test names/comments repeating the claim
+  trued up with ASSERTIONS UNTOUCHED.
+- **The root run earned its keep again (f0c74ad).** Runs 1–3 green, run 4 RED: P3's
+  `registryDriftMigration` coinbase probe was still flaking (measured 3/12 = 25% on the
+  committed tree). **P3's diagnosis was wrong and its fix could never have worked**: it
+  raised `vi.waitFor` to 10s inside a test whose OWN vitest timeout is the 5000ms default,
+  so the raise was unreachable and every failure was an anonymous "Test timed out in
+  5000ms" at 5004ms. The mint was never slow — 200 consecutive SEC1→PKCS#8 imports + ES256
+  signs take 83ms, and the failures are BIMODAL (with a 30s budget: ~158ms or a full hang).
+  **ROOT CAUSE: `vi.waitFor` was called INSIDE `act()`** — React's `act` owns the scheduler
+  while its callback is pending, so the component could never re-render with the resolved
+  outcome; the condition was structurally unable to become true from inside the call
+  waiting for it. (Every diagnostic `console.log` I added made it pass, by shifting the
+  render ahead of the wait — a Heisenbug in both directions.) Fixed by moving `waitFor`
+  outside `act` with `settle()` awaited inside each poll; CONDITION untouched. Also made
+  the inner budget strictly smaller than an explicit outer one (8s wait, 15s testTimeout)
+  so a real hang is named by the assertion rather than by an anonymous timeout.
+  Mutation-verified: hanging `cdp_jwt` still reds both probe tests through the rebuilt
+  dist. 0 failures in 20 file runs and 8 full-suite runs.
+- **Fences (AC9), classified:** MIGRATED registry-self-containment "the emitter hands out
+  COPIES" — the whole-registry copy fence only unwrapped `headerTemplate` and silently
+  stopped covering the whole registry the moment queryTemplate-only entries arrived; now
+  checks BOTH seats, mutation-verified. UNCHANGED and verified green with zero edits:
+  static-kind-registry exact field lists (fields untouched), registry-template-parity
+  (already iterates both seats and auto-lints the new templates), desktop-posture
+  posture/browserCallable tables, well-known-providers structural rules,
+  test-request-single-path, registry-substitution, matched-option, demoRequirementStarters,
+  connection-manifests. **Nothing OBSOLETE, nothing LOST, no test weakened or deleted.**
+- Green, tsc-gated: auth 620→646 (33 files), playground 912→923 (96 files), examples 185,
+  protocol/knowledge/db/server/sdk/adapters/runner/desktop untouched. Root
+  `turbo run test --force` run FOUR times consecutively: `Tasks: 21 successful, 21 total` ·
+  `Cached: 0 cached, 21 total` every time.
+- Next step: P5 (Hue LAN connector, ADR-0023).
