@@ -1514,3 +1514,65 @@ spec-changelog P3/P5 entries verified present, coherent, and marked INTERNAL DRA
 
 - Next step: owner runs the three manual verifications at the top of this file. On green →
   PR. The nine queued follow-ups are in `docs/next-steps.md` under 2026-08-13.
+
+### 2026-08-13 (close-session) — claude — Gate 6: PR opened, CI ran, two CI-only defects found
+
+- **PR #42 opened and pushed** (116 files at open; 44 commits on the branch). Then CI ran
+  for the first time and found **two defects no local run could have found**, both now
+  fixed or recorded:
+
+  1. **The gate driver's expected-ID list had gone stale** (macOS leg, first failure).
+     P5 added `ipc-lan-fetch-refused` to the harness; the driver kept a hand-typed twin of
+     `IPC_CHECK_IDS`, so the run failed as `unexpected check id` with **39/39 checks
+     green**. The fail-loud contract worked exactly as designed — a driver that silently
+     accepted an unknown id would also silently accept a MISSING one. Root fix rather than
+     a fifth string: the driver (plain `.mjs`, cannot import TS) now PARSES `IPC_CHECK_IDS`
+     out of the source, so a renamed export is a loud parse failure. **Nothing local
+     executes `run-gate.mjs`**, which is why no suite saw it; `gateDriverExpectations.test.ts`
+     now pins the derivation in the fast local suite, mutation-verified.
+     → macOS leg **green** on the re-run (40/40).
+
+  2. **`desktopWizardSheet` had three async-start races** (workspace leg). Green 8/8 in
+     isolation and 6/6 under full local parallel load; red on the runner with
+     `expected 'idle' to be 'error'`. **Two mutation attempts stayed GREEN, and that was
+     the evidence**: starving both microtask drains changed nothing, which proved the chain
+     awaits a real timer (db open + PKCE mint) rather than a tick budget. Injecting a 60 ms
+     delay into the start chain reproduced CI's exact message on the first run — and then
+     surfaced **two more assertions with the identical defect that CI had not yet reached**.
+     All three now await the CONDITION via the `settleUntil` helper the file already had.
+     No production code changed. → workspace leg **green** on the re-run.
+
+- **The Windows leg failed, and it is a genuine structural finding — not a flaky check.**
+  Running for the first time ever, it failed 3/40: `window.__TAURI_INTERNALS__` (which
+  carries the invoke key) is present INSIDE a `sandbox="allow-scripts"` srcdoc iframe on
+  WebView2. Root-caused to the pinned crate sources and **re-verified by hand by the
+  orchestrator** before anything was written down: tauri asks for main-frame-only injection
+  of the key-bearing `ipc-protocol.js` (`manager/webview.rs:159-164,182`), the key is a
+  PLAINTEXT LITERAL in that script (`scripts/ipc-protocol.js:12`), and wry's WebView2
+  backend **discards `for_main_frame_only`** (`webview2/mod.rs:492-494`; documented at
+  `lib.rs:2494-2496`) while macOS honors it (`wkwebview/mod.rs:643-644`). No off-switch at
+  the wry, tauri, or WebView2 SDK layer — **exactly ADR-0021 D8's stated Electron-fallback
+  condition**. `ipc-invoke-refused` PASSING is not reassurance: it posts a KEYLESS body, so
+  it proves the lock works, not that the attacker lacks the key.
+  **The gate is left RED on Windows deliberately** — softening `keyReachable` would make it
+  lie on the one platform where transport-vs-key has collapsed.
+
+- **State (verified, not remembered):** tree clean; branch synced with origin at `036a550`;
+  root `turbo run test --force` **21/21, 0 cached**; CI **workspace PASS · macOS PASS ·
+  Windows FAIL (the three known IPC checks only, nothing new)**. PR #42 open, unmerged,
+  carrying a comment with the full Windows analysis.
+
+- **Single next step: the owner decides ADR-0021 D8** — (a) Electron fallback through the
+  same seams (pre-committed; the platform seams are shell-agnostic by construction, so it
+  swaps the shell folder, not the architecture), (b) ship macOS-only and mark Windows
+  unsupported, or (c) upstream a `for_main_frame_only` fix to wry/WebView2 and wait. The
+  three manual verifications at the top of this file remain the closing gate for AC3/AC4/AC7
+  independently of that decision.
+
+- **Open questions:** (1) one link in the Windows analysis is unverifiable from macOS —
+  whether `args.Source()` reports the parent URL for an opaque-origin srcdoc frame, which is
+  the difference between "demonstrated exploitable" and "structurally reachable"; D8 triggers
+  on reachability, so the verdict does not depend on it, but the posture must not rest on it.
+  (2) Whether the confirmatory Windows probe (booleans only — `metadata` present in
+  `__TAURI_INTERNALS__`, or a real KEYED invoke against the existing sentinel) is worth
+  building before the D8 decision, or after it.
