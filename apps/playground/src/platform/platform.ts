@@ -31,8 +31,14 @@ export interface SnugPlatform {
     openExternal(url: string): Promise<void>;
     /** Listener-event adapter feeding the wizard's channel seam. */
     channelFor(flowId: string): PlatformConnectionChannel;
-    /** Teardown of the active listener. */
-    cancel(): Promise<void>;
+    /**
+     * Teardown. FLOW-SCOPED when `flowId` is given — it evicts only that flow's channel
+     * and, if that flow owns the live listener, stops it; a flow the caller is not
+     * tearing down survives untouched. Without `flowId` it is the global teardown, which
+     * also clears any listener/URI bound before a flow existed (`redirectUriFor` runs at
+     * register-screen render, well before the wizard has an active flow).
+     */
+    cancel(flowId?: string): Promise<void>;
   };
   /** Save bytes with a native dialog. Web: undefined → downloadBlob anchor. */
   saveFile?(bytes: Uint8Array, suggestedName: string): Promise<void>;

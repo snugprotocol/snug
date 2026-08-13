@@ -289,7 +289,10 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
   const platformOauth = getPlatform().oauth;
   const providerName = row.requirement.provider.name;
   const posture = isOAuth ? desktopOAuthPostureFor(row.requirement) : undefined;
-  const loopbackPosture = posture === 'loopback' || posture === 'loopback-fixed-port' ? posture : undefined;
+  // `pkce === false` excluded (finding C): the refusal screen renders instead of this one,
+  // and asking the platform for a URI would bind a listener for a flow that must not run.
+  const loopbackPosture =
+    (posture === 'loopback' || posture === 'loopback-fixed-port') && row.requirement.pkce !== false ? posture : undefined;
   const [platformRedirectUri, setPlatformRedirectUri] = useState<string | undefined>(undefined);
   const [redirectCopied, setRedirectCopied] = useState(false);
 
@@ -584,9 +587,15 @@ function CredentialsScreen({
  * them nothing they can act on. The blocked-popup state is the one that matters most — it
  * carries the authorize URL so the user has a route through even with a blocker on.
  */
-function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => void }): ReactElement {
+function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => Promise<void> }): ReactElement {
   const status = useStore(connectionFlowStatusStore);
   const provider = row.requirement.provider.name;
+  const [starting, setStarting] = useState(false);
+  const handleStart = (): void => {
+    if (starting) return;
+    setStarting(true);
+    void onStart().finally(() => setStarting(false));
+  };
   // P3 item 4c: on desktop the sign-in lives in the SYSTEM browser, not a popup this
   // window owns — the wait copy must point the user THERE, and the cancel affordance
   // is the only in-app control on the screen, so it reads as the primary action.
@@ -656,8 +665,20 @@ function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => vo
       )}
 
       {status.state !== 'awaiting_callback' && status.state !== 'exchanging' && status.state !== 'connected' ? (
-        <Button variant="primary" onClick={onStart}>
-          {status.state === 'error' ? `try signing in to ${provider} again` : `sign in to ${provider}`}
+        /*
+          LATCHED while a start is in flight (whole-surface review finding B, UI half).
+          The status stays `idle` across the db open, the mint and the OS opener, so this
+          button used to stay clickable through the whole window — and a second click
+          produced two overlapping starts that killed each other's channel and listener.
+          The store refuses the duplicate too (its own latch); this is the half that makes
+          the refusal visible rather than a click that silently does nothing.
+        */
+        <Button variant="primary" onClick={handleStart} disabled={starting} data-testid="connect-start">
+          {starting
+            ? `opening ${provider} sign-in…`
+            : status.state === 'error'
+              ? `try signing in to ${provider} again`
+              : `sign in to ${provider}`}
         </Button>
       ) : null}
     </div>
@@ -779,11 +800,21 @@ function DesktopOAuthRefusalScreen({
 
   return (
     <div className="field" data-testid="desktop-oauth-refusal">
-      <label>{refusal.providerName} sign-in isn&apos;t available in the desktop app yet</label>
-      <span className="hint">
-        {refusal.posture === 'unvouched'
-          ? `we haven't verified a safe way for the desktop app to receive ${refusal.providerName}'s sign-in, so this connection can't be set up here yet.`
-          : `${refusal.providerName} hands its sign-in back in a way the desktop app doesn't support yet, so this connection can't be set up here.`}
+      <label>
+        {refusal.reason === 'pkce-required'
+          ? `this ${refusal.providerName} sign-in skips a security step`
+          : `${refusal.providerName} sign-in isn't available in the desktop app yet`}
+      </label>
+      <span className="hint" data-testid="desktop-oauth-refusal-reason">
+        {refusal.reason === 'pkce-required'
+          ? // Plain language, no acronym-only sentence: the user is being told that a
+            // protection the desktop sign-in depends on was asked to be turned off, and
+            // that we would rather stop than sign them in without it. Never coerced
+            // silently — that would change what they approved.
+            `this connection asks to skip a security step (called PKCE) that the desktop sign-in needs to stay safe, so we won't set it up here. without it, another program on this computer could step into the middle of the sign-in.`
+          : refusal.posture === 'unvouched'
+            ? `we haven't verified a safe way for the desktop app to receive ${refusal.providerName}'s sign-in, so this connection can't be set up here yet.`
+            : `${refusal.providerName} hands its sign-in back in a way the desktop app doesn't support yet, so this connection can't be set up here.`}
       </span>
       {refusal.alternatives.length > 0 ? (
         <>
@@ -1064,7 +1095,7 @@ export function ConnectionWizardSheet(): ReactElement | null {
             // this button silently do nothing for every one of them. The catch routes
             // the thrown copy into the flow status store, which is exactly the error
             // region ConnectScreen already renders with a retry (AC7).
-            startConnectionOAuthFlow({}, preOpened).catch((err) => {
+            return startConnectionOAuthFlow({}, preOpened).catch((err) => {
               connectionFlowStatusStore.set({
                 state: 'error',
                 message: err instanceof Error ? err.message : String(err),

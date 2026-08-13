@@ -287,16 +287,57 @@ describe('P3 fold — lifecycle: a restart tears the previous flow down FIRST', 
     // The double-click race: both starts in flight before either installs its flow.
     await Promise.all([startConnectionOAuthFlow({ client_id: 'cid-1' }), startConnectionOAuthFlow({ client_id: 'cid-1' })]);
 
-    expect(channels).toHaveLength(2);
-    expect(channels[0]!.closeCalls).toBeGreaterThan(0); // the stale flow was torn down…
-    expect(channels[1]!.closeCalls).toBe(0); // …and the live one was not
+    /**
+     * STRENGTHENED by the whole-surface review's finding B: the in-flight latch refuses
+     * the duplicate start outright, so exactly ONE flow is ever built. That is a superset
+     * of what this test originally pinned (build two, tear the first down): there is now
+     * no second channel to leak, no second popup on the user's screen, and — on desktop —
+     * no second listener contending for the fixed port. The guarantee this test exists to
+     * hold is unchanged and asserted below: a double-click must never end with a DEAD
+     * flow.
+     */
+    expect(channels, 'the duplicate start is refused, so only one flow is built').toHaveLength(1);
+    expect(popups, 'and only one sign-in window opens').toHaveLength(1);
+    expect(channels[0]!.closeCalls, 'the one live flow must not have been torn down').toBe(0);
+    expect(connectionFlowStatusStore.get().state).toBe('awaiting_callback');
 
-    // A leaked poll from the stale flow would fire on the stale popup closing and kill the
+    // A leaked poll from a stale flow would fire on a stale popup closing and kill the
     // LIVE flow — the v3 defect this guard was written for, ported rather than re-earned.
+    // With one flow there is no stale popup, so the live one closing is the real signal.
     popups[0]!.closed = true;
     vi.advanceTimersByTime(1200);
+    expect(connectionFlowStatusStore.get().state).toBe('error');
+  });
+
+  it('the in-flight latch refuses a duplicate start rather than racing it (finding B)', async () => {
+    await seedApproved();
+    const channels: FakeChannel[] = [];
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    __setConnectionOAuthHooksForTests({
+      channelFactory: fakeChannelFactory(channels),
+      openPopup: () => ({ closed: false }),
+      // Hold the FIRST start inside the token-exchange-adjacent await window so the second
+      // click lands while it is genuinely in flight.
+      fetchImpl: async (...args) => {
+        await gate;
+        return tokenFetch(...(args as Parameters<typeof tokenFetch>));
+      },
+    });
+    openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+
+    const first = startConnectionOAuthFlow({ client_id: 'cid-1' });
+    await Promise.resolve();
+    // The second click while the first is mid-start: refused, and it must NOT throw —
+    // a thrown duplicate would surface as an error the user did not cause.
+    await expect(startConnectionOAuthFlow({ client_id: 'cid-1' })).resolves.toBeUndefined();
+    release();
+    await first;
+
+    expect(channels, 'exactly one flow survives a double-click').toHaveLength(1);
     expect(connectionFlowStatusStore.get().state).toBe('awaiting_callback');
-    expect(channels[1]!.closeCalls).toBe(0);
   });
 
   it('a wizard closed mid-mint never resurrects: no navigate, no channel, status idle', async () => {

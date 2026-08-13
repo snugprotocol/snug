@@ -685,8 +685,21 @@ export interface DesktopOAuthAlternative {
   requirement: ConnectionRequirement;
 }
 
+/**
+ * WHY the desktop wizard refused. The two reasons need different words, because they are
+ * different facts about the world:
+ *   'posture-unsupported' — the provider hands its sign-in back through a transport this
+ *     build does not implement (or the registry vouches for none). Nothing is wrong with
+ *     the request; the shell simply cannot receive it.
+ *   'pkce-required' — the connection asks to SKIP PKCE, and a loopback listener without
+ *     provider-side challenge binding is exactly the auth-code-injection shape ADR-0021 §2
+ *     calls undefendable (any local process can race the redirect with its own code).
+ */
+export type DesktopOAuthRefusalReason = 'posture-unsupported' | 'pkce-required';
+
 export interface DesktopOAuthRefusal {
   providerName: string;
+  reason: DesktopOAuthRefusalReason;
   /** The unsupported posture — or 'unvouched' when the registry names none at all. */
   posture: DesktopRedirectPosture | 'unvouched';
   /** Human labels of this provider's registry flows that DO work on this shell. */
@@ -759,11 +772,31 @@ export function desktopOAuthRefusalFor(requirement: ConnectionRequirement): Desk
   if (getPlatform().oauth === undefined) return undefined;
   if (requirement.kind !== 'oauth2_auth_code') return undefined;
   const posture = desktopOAuthPostureFor(requirement);
-  if (posture !== 'unvouched' && IMPLEMENTED_DESKTOP_POSTURES.has(posture)) return undefined;
+  const postureSupported = posture !== 'unvouched' && IMPLEMENTED_DESKTOP_POSTURES.has(posture);
+
+  /**
+   * LOOPBACK ⇒ PKCE, enforced HERE and not only in the registry (whole-surface review
+   * finding C). The registry's structural test binds registry entries; `pkce` is an
+   * app-declarable seat on `ConnectionRequirement` that `requirementToSpec` copies
+   * straight through, and an UNKNOWN provider defaults to the 'loopback' posture — so a
+   * requirement no registry row ever vouched for could run a loopback flow with
+   * `usePkce === false` (oauth-service.ts: `layer.pkce !== false`). That is the
+   * auth-code-injection attack ADR-0021 §2 names as defeated ONLY by provider-side
+   * challenge binding, and the threat delta already concedes the authorize URL + state
+   * are ps/argv-visible to any local process.
+   *
+   * The refusal is deliberate rather than a silent `pkce: true` coercion: the user
+   * approved a requirement, and quietly sending different parameters than the ones on the
+   * approval screen is the thing the approval screen exists to prevent.
+   */
+  const pkceRefused = postureSupported && requirement.pkce === false;
+  if (postureSupported && !pkceRefused) return undefined;
+
   const entry = lookupWellKnownProvider(requirement.provider.name);
   const alternatives = entry === undefined ? [] : alternativeFlows(entry, requirement);
   return {
     providerName: requirement.provider.name,
+    reason: pkceRefused ? 'pkce-required' : 'posture-unsupported',
     posture,
     alternativeLabels: alternatives.map((alternative) => alternative.label),
     alternatives,
@@ -852,6 +885,10 @@ function redirectUriSourceFor(requirement: ConnectionRequirement): (() => string
   if (platformOauth === undefined) return () => `${window.location.origin}/oauth/callback`;
   const posture = desktopOAuthPostureFor(requirement);
   if (posture === 'unvouched' || !IMPLEMENTED_DESKTOP_POSTURES.has(posture)) return undefined;
+  // Defence in depth for the loopback⇒PKCE rule (finding C): the refusal gate above this
+  // already stops the flow, but no path may hand out a loopback URI for a flow that would
+  // run without a PKCE challenge — a URI is the thing a listener binds to.
+  if (requirement.pkce === false) return undefined;
   const providerName = requirement.provider.name;
   return () => platformOauth.redirectUriFor({ provider: providerName, posture });
 }
@@ -889,8 +926,29 @@ function slotBoundService(
   });
 }
 
-function teardownFlow(): void {
+/**
+ * Tear the flow down.
+ *
+ * The platform cancel is UNCONDITIONAL and sits ABOVE the activeFlow guard (whole-surface
+ * review finding A). On desktop the platform binds a listener and records a redirect URI
+ * in `redirectUriFor` — which the register screen calls at RENDER time and `generateAuthUrl`
+ * calls during the mint, both strictly BEFORE any `activeFlow` exists. Guarding the cancel
+ * on `activeFlow` therefore left every exit in that window (a dismissal, a stale bail, a
+ * failed opener) with a bound listener and a recorded URI that the NEXT session inherited:
+ * a fixed-port provider would be shown the previous session's EPHEMERAL URI as the
+ * "register this exactly" value, and the listener it needs would never bind.
+ *
+ * `flowId` scopes the cancel to ONE flow where the caller knows which flow it is tearing
+ * down (finding B); omitted, it is the global "nothing is in flight" teardown.
+ */
+function teardownFlow(flowId?: string): void {
+  // Desktop: the loopback listener dies with the flow. Fire-and-forget — the listener's
+  // absence is the observable outcome, and teardown must stay synchronous for callers.
+  const platformOauth = getPlatform().oauth;
+  if (platformOauth !== undefined) void platformOauth.cancel(flowId).catch(() => undefined);
   if (activeFlow === null) return;
+  // A flow-scoped teardown must not evict a DIFFERENT flow's channel/poll/popup.
+  if (flowId !== undefined && activeFlow.start.flowId !== flowId) return;
   if (activeFlow.poll !== null) clearInterval(activeFlow.poll);
   activeFlow.channel.close();
   try {
@@ -898,10 +956,6 @@ function teardownFlow(): void {
   } catch {
     /* the popup is already gone — closing a closed window is not an error worth raising */
   }
-  // Desktop: the loopback listener dies with the flow. Fire-and-forget — the listener's
-  // absence is the observable outcome, and teardown must stay synchronous for callers.
-  const platformOauth = getPlatform().oauth;
-  if (platformOauth !== undefined) void platformOauth.cancel().catch(() => undefined);
   activeFlow = null;
 }
 
@@ -991,11 +1045,49 @@ export async function startConnectionOAuthFlow(
     preOpened?.close?.();
     throw new Error('no wizard session');
   }
+
+  /**
+   * Lifecycle guard 0 — the in-flight latch (whole-surface review finding B).
+   *
+   * A start is not atomic: it awaits the db open, the mint, and the OS opener, and the
+   * "sign in" button stays live across that whole window. Two overlapping calls both saw
+   * `activeFlow === null` at entry and both reached the assignment, where the loser's
+   * teardown wiped the winner (on desktop that teardown is a GLOBAL platform cancel:
+   * channel map cleared, listener stopped — both flows dead, wizard parked on
+   * `awaiting_callback` forever).
+   *
+   * A latch is chosen over refereeing two half-built flows because two concurrent starts
+   * are never a thing a user wants: the second click means "I don't think the first one
+   * worked", and on a fixed-port posture the second listener could not bind anyway (the
+   * first holds 41420). Refusing the duplicate keeps ONE flow, ONE listener, ONE browser
+   * window — and the UI half latches the button too, so the refusal is rarely reached.
+   */
+  if (startInFlight) return;
+  startInFlight = true;
+  try {
+    await runConnectionOAuthStart(session, clientCreds, preOpened);
+  } finally {
+    startInFlight = false;
+  }
+}
+
+let startInFlight = false;
+
+async function runConnectionOAuthStart(
+  session: ConnectionWizardSession,
+  clientCreds: Record<string, string>,
+  preOpened?: ConnectionPopupLike | null,
+): Promise<void> {
   // Lifecycle guard 1 (entry half): a deliberate restart tears the previous flow down
   // FIRST, so its channel, poll and popup never outlive a second start. Pre-fix, a
   // double-click leaked flow 1's poll, which then killed EVERY later flow within 500ms of
   // `awaiting_callback` the moment its stale popup reported closed.
-  if (activeFlow !== null) teardownFlow();
+  //
+  // UNSCOPED on purpose: the latch above guarantees no other start is mid-flight, so this
+  // is the deliberate-restart reset — and it must also clear a platform listener bound
+  // before any flow existed (the register screen's `redirectUriFor`), which a
+  // flow-scoped cancel by definition cannot see.
+  teardownFlow();
 
   // Lifecycle guard 2 (staleness): bail after EVERY await if the session closed or was
   // replaced. `openConnectionWizard`/`closeConnectionWizard` replace the session OBJECT,
@@ -1065,7 +1157,11 @@ export async function startConnectionOAuthFlow(
     try {
       await platformOauth.openExternal(start.authorizeUrl);
     } catch {
+      // The listener bound inside redirectUriFor/openExternal and no browser is coming —
+      // cancel THIS flow (finding A: without it the listener and the recorded URI
+      // outlived the session and poisoned the next one).
       channel.close();
+      teardownFlow(start.flowId);
       connectionFlowStatusStore.set({
         state: 'error',
         message: 'could not open your browser for the sign-in — try again',
@@ -1074,6 +1170,7 @@ export async function startConnectionOAuthFlow(
     }
     if (stale()) {
       channel.close();
+      teardownFlow(start.flowId); // same reason: a bound listener must not survive the session
       return;
     }
     popup = { closed: false };
@@ -1116,9 +1213,13 @@ export async function startConnectionOAuthFlow(
   }
 
   // Lifecycle guard 1 (assignment half): the awaits above may have raced another start
-  // that installed a flow meanwhile, so ALWAYS tear down immediately before assigning —
-  // an overwrite must never leak the prior channel or interval.
-  teardownFlow();
+  // that installed a flow meanwhile, so tear that flow down immediately before assigning —
+  // an overwrite must never leak the prior channel or interval. SCOPED to the flow being
+  // replaced (finding B): an unscoped teardown here fires a GLOBAL platform cancel, which
+  // on desktop clears the channel map and stops the live listener — killing the flow this
+  // very call is about to install. The in-flight latch above already makes a true overlap
+  // unreachable; this stays as the belt to that braces.
+  if (activeFlow !== null) teardownFlow(activeFlow.start.flowId);
   activeFlow = { start, channel, popup, poll };
   connectionFlowStatusStore.set({ state: 'awaiting_callback', flowId: start.flowId });
 }

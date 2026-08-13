@@ -330,6 +330,47 @@ describe('(d) unsupported postures get a refusal screen BEFORE credentials (AC6)
     expect(button(/got my credentials/i)).toBeUndefined();
   });
 
+  /**
+   * Whole-surface review finding C, UI half. `pkce` is an APP-DECLARABLE seat, and an
+   * unknown provider defaults to the loopback posture — so a requirement no registry row
+   * ever vouched for could reach a loopback listener with PKCE off, which ADR-0021 §2
+   * calls undefendable. The refusal must land here, in plain words, with no credential
+   * input and no listener bound.
+   */
+  it('a loopback row that declares pkce:false refuses in plain words, before any credential or listener', async () => {
+    const desktop = fakeDesktop();
+    const { db, wizard, Sheet } = await fresh(desktop.platform);
+    declare(db, { ...fakeIdpRequirement, pkce: false });
+
+    wizard.openConnectionWizard({ appId: APP, slot: 'fake-idp', source: 'settings' });
+    await render(<Sheet />);
+    await click(/approve this connection/i);
+
+    const refusal = container!.querySelector('[data-testid="desktop-oauth-refusal"]');
+    expect(refusal, 'pkce:false + loopback must refuse, not proceed').not.toBeNull();
+    // Honest about WHAT was refused and WHY, without an acronym-only sentence.
+    expect(refusal!.textContent).toMatch(/skips a security step/i);
+    expect(refusal!.textContent).toMatch(/pkce/i);
+    expect(refusal!.textContent).toMatch(/another program on this computer/i);
+    // Before credentials means literally: nothing to type, nowhere forward.
+    expect(container!.querySelector('input[data-field-key]')).toBeNull();
+    expect(button(/got my credentials/i)).toBeUndefined();
+    // And nothing may have asked the platform for a URI — a URI is what a listener binds to.
+    expect(desktop.redirectUriFor, 'no listener may bind for a refused flow').not.toHaveBeenCalled();
+    expect(desktop.opened).toHaveLength(0);
+  });
+
+  it('the same pkce:false row on WEB is untouched — the popup path never needed this rule', async () => {
+    const { db, wizard, Sheet } = await fresh();
+    declare(db, { ...fakeIdpRequirement, pkce: false });
+
+    wizard.openConnectionWizard({ appId: APP, slot: 'fake-idp', source: 'settings' });
+    await render(<Sheet />);
+    await click(/approve this connection/i);
+
+    expect(container!.querySelector('[data-testid="desktop-oauth-refusal"]')).toBeNull();
+  });
+
   it('the SAME row on web renders the normal register walk-through — no refusal', async () => {
     const { db, wizard, Sheet } = await fresh();
     const github = lookupWellKnownProvider('GitHub')!;

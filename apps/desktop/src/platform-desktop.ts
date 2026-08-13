@@ -76,7 +76,28 @@ export function createDesktopPlatform(): SnugPlatform {
     kind: 'desktop',
     // `remapUrl` is the debug-gate host remap (net-remap.ts) — identity in every
     // production run (empty table unless the debug-only gate config armed it).
-    fetchImpl: (input, init) => tauriFetch(remapUrl(input), init),
+    //
+    // `maxRedirections: 0` is how `redirect: 'manual'` is SPELLED on this
+    // transport, and it is load-bearing, not belt-and-braces. The plugin's JS
+    // shim (@tauri-apps/plugin-http 2.5.9, dist-js/index.js) reads exactly four
+    // fields off `init` — maxRedirections, connectTimeout, proxy, danger — and
+    // NEVER reads `init.redirect`; the value is then dropped by
+    // `new Request(input, init)` before anything crosses to Rust. Rust installs
+    // `Policy::none()` only when maxRedirections == Some(0); otherwise reqwest's
+    // default `Policy::limited(10)` follows up to ten hops, and reqwest strips
+    // only Authorization/Cookie/Proxy-Authorization across hosts — so INJECTED
+    // headers (X-API-Key, HMAC signature seats) would ride to the redirect
+    // target. That would void connected-fetch gate 9 and oauth-service postForm's
+    // B2 guard ("a credential POST never follows a redirect") silently: the
+    // executor sees only the final 200. Hence the explicit field.
+    //
+    // The merge is additive and non-mutating: `init.redirect` is preserved as the
+    // portable statement of intent, the caller's object is never written to, and
+    // a caller that deliberately passes its own maxRedirections cannot raise it
+    // (this spread comes last). A plugin upgrade that starts honouring
+    // `init.redirect` must RE-PROVE it in src/__tests__/netTransport.test.ts
+    // before this field is dropped.
+    fetchImpl: (input, init) => tauriFetch(remapUrl(input), { ...init, maxRedirections: 0 }),
     // The directory is the Rust command's concern: read_user_file/write_user_file
     // ALREADY scope every name into ~/Snug and REFUSE any name with a path
     // separator (userfile.rs `valid_name`). So the backend's own `${dir}/${file}`
