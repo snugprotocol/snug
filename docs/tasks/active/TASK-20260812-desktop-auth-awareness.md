@@ -458,6 +458,21 @@ glob::Pattern defaults); the template engine is **async-first end-to-end**
 an awaiting WebCrypto helper forces no seam change; and the demoreq/manifest mirrors do
 not leak registry seats (bare manifests stay bare — substitution happens at admission).
 
+### P3 orchestrator verification (2026-08-13)
+
+All four lanes reported green; the orchestrator's own forced root run
+(`turbo run test --force`) found **playground RED** — `registryDriftMigration.test.tsx`'s
+two Coinbase probe waits fail ~1 run in 3 at suite scale (95 files sharing the box)
+while passing every time in isolation, because a REAL SEC1→PKCS#8 import + ES256 sign
+occasionally exceeds `vi.waitFor`'s 1000 ms default. The host lane had seen this once
+("a single run exited 1 with no failing test captured") and honestly journaled it as an
+unreproduced flake — it was real. Fixed by raising that wait to 10 s/25 ms with the
+reason written at the seam; the CONDITION is untouched. **Mutation-verified**: hanging
+`cdp_jwt` in the engine still reds both probe tests through the rebuilt dist, so the
+raise bought patience, not blindness. Root now **21/21 tasks, 0 cached**.
+Lesson shape for Gate 6: *a lane's own green is a sample, not a proof — the
+integrating run at full parallelism is a different test than any lane can run.*
+
 ### Pinned shared literals (lesson 2026-08-03 — before any fan-out)
 
 ```
