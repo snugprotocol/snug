@@ -738,3 +738,66 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   (untouched). Left for the playground lane: wizard probe render for Coinbase +
   done-screen truth, RunView banner, seat-drift wizard-open migration wiring,
   registry seat data for openweather/coingecko (P4 starters realignment).
+
+### 2026-08-13 — claude (P3 host lane) — AC5 banner + wizard-open drift migration + coinbase probe pin (ADR-0022 §4, amendment 3)
+- Tests first, red proven both times: authShapedFailureSurface 13 red (suite unloadable
+  on the missing store/component, then 12/13 at assertions); registryDriftMigration
+  10 red (9 at the missing `migrateConnectionRegistryDrift` / un-migrated persisted
+  shapes; the item-2 probe test's BUTTON already rendered — the probeable gate lit the
+  moment the registry lane pinned testRequest, so that test is a component-surface
+  FENCE on predecessor work, red only at its outcome wait).
+- AC5 banner (d801c64): `connectedFetchDepsFor` gains an optional observer param
+  threaded ONLY by `createNetHandlerFor`, which adds the appId it already holds — the
+  pinned literal `onAuthShapedFailure(appId, slot, status)` is this playground
+  altitude, completing the executor lane's journaled (slot, status) adaptation. New
+  `authShapedFailureStore` (one failure at a time, appId/slot/status and nothing else);
+  `AuthRepairBanner` in RunView renders provider-named copy ("<provider> rejected this
+  app's credentials (401)…") with a "check this connection" CTA. **Journaled seam
+  choice:** the CTA calls `openConnectionWizard({appId, slot, source:'error_cta'})` on
+  the EXACT failing slot — the brief's `openConnectionWizardForApp` takes (appId,
+  source) and re-picks a slot; the observer knows the slot, and AC5's own text says
+  "opening the wizard on the failing (appId, slot)". Dismisses only on a real boolean
+  open (Promise-truthiness lesson re-pinned). Negatives at the shipped seam: 200,
+  kind-none 401, refresh-cured OAuth 401 (full production fixture), wizard probe
+  (deps never thread the seat AND executor strips it — both halves driven),
+  foreign-app banner, refused-open keeps the banner; ok:true + status passthrough
+  pinned unchanged.
+- Drift migration (48664cc): `migrateConnectionRegistryDrift(appId, slot)`, run by the
+  SHEET before first render — every open route (Settings, chat card, net-error CTA,
+  AC5 banner CTA) lands there, so amendment 3's "wizard open AND banner CTA route" is
+  one seam. SEAT drift (fields unchanged, pinned request/testRequest absent): the
+  row's own requirement re-runs registry substitution through `stagePendingRequirement`
+  (the ONE admission resolution — amendment 1's byte-match exemption is what opens the
+  path) and a HOST-IDENTICAL result is promoted via `reapproveConnection`: **approval
+  status survives** (never leaves `approved`), secrets untouched, version bumps, net
+  grants invalidated (R3). **Journaled honest behavior:** `approved_at` is refreshed by
+  the promotion accessor — the amendment binds the STATUS, and no user re-approval is
+  forced; a ceiling that would move at all is left STAGED for the ordinary diff
+  instead. FIELD-SET drift (owner's old coinbase triple — Guard 2b refuses the row's
+  own persisted shape, which IS the detection): the registry's current kind-matched
+  shape is staged, the diff disclosed, and `reapproveFromDiff` now walks the
+  credential half on a field-set change too (same rule as the kind rebind — "existing
+  secrets still valid" is false when the boxes changed). **Journaled:** the route is
+  register → credentials (the machine's derived path; the registry pins a CDP-portal
+  walkthrough the user needs to mint the new key, one screen before the brief's
+  "credentials step"), and old secrets for dropped fields (api_secret, passphrase)
+  stay in storage untouched but unused — wiped only by revoke/delete as ever. Never
+  touched: unapproved rows, app-staged pending edits (never clobbered), non-registry
+  providers, revoked tombstones, secrets. Migration failure → sheet renders the row as
+  stored (pre-migration behavior, never a blocked wizard).
+- AC6 sub-test fixture honesty: pre-existing approved old-shape rows are minted
+  through a db opened with the PERMISSIVE default admission gate ("an older hub
+  admitted this under the old registry"), then reopened under the production gate —
+  current admission refuses the old shapes, which is the drift itself; the persisted
+  shape is what is asserted, and the probe is proven to aim the pinned
+  `/api/v3/brokerage/accounts` with a real 3-segment `cdp_jwt` Bearer minted from the
+  stored EC test key (generated per-run, never checked in).
+- No Guard 2b provenance collision surfaced: the stage path admits on the row's stored
+  channel exactly as amendment 1(c) proved open; registry-provenance rows ride the
+  same branch (Guard 2b exempt, substitution identical). Nothing improvised.
+- Green, tsc-gated: playground 889→912 (95 files; wizard/settings/desktop/coinbase
+  suites green with zero edits to existing tests — the reapproveFromDiff routing
+  change broke none, since every existing reapprove fixture stages same-field shapes);
+  auth 620 (dist consumer, untouched). Left for P4: openweather/coingecko registry
+  queryTemplate data + starters; the migration seam is live for them the moment their
+  registry entries gain seats.
