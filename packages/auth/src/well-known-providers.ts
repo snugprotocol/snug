@@ -871,9 +871,28 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       method: 'POST',
       pathAndQuery: '/api',
       body: { devicetype: 'snug#hub', generateclientkey: true },
-      // success[0].username IS the application key — the bridge's legacy field name for
-      // it, kept because that is what the wire actually returns.
-      secretPath: ['success', 0, 'username'],
+      /*
+        THE WALK, CORRECTED AGAINST THE WIRE (TASK-20260812 P5-flow; supersedes the
+        pinned literal's spelling, journaled in the task file).
+
+        The task file pins this as `success[0].username`, and P5-shape encoded that
+        prose reading literally as `['success', 0, 'username']`. The prose is
+        ambiguous and the encoding inverted it: a CLIP v1 pairing response is an
+        ARRAY OF RESULT OBJECTS, outermost —
+
+            [{"success":{"username":"…","clientkey":"…"}}]
+
+        — so the index comes FIRST. Probed both ways against a real-shaped body
+        before changing anything: `['success', 0, 'username']` resolves to
+        `undefined` on every real response, which would have made pairing fail
+        forever with "the device did not hand back a key" while the bridge was
+        answering perfectly. The registry's own comment above already described the
+        array-outermost shape, and the desktop lane's fixtures already used it — the
+        PATH was the only thing that disagreed with the wire, and it disagreed
+        invisibly because the one test pinning it asserted the array verbatim rather
+        than walking a response with it (lesson 2026-08-04: assert the outcome).
+      */
+      secretPath: [0, 'success', 'username'],
       secretField: 'application_key',
       preconditionInstruction:
         'Press the link button — the big round button on top of your Hue bridge — now, then continue within 30 seconds. The bridge only hands out a key during that window.',
@@ -1030,6 +1049,48 @@ export function resolveInferrerAlias(name: string): { key: string; entry: WellKn
   if (key === undefined) return undefined;
   const entry = REGISTRY[key];
   return entry === undefined ? undefined : { key, entry };
+}
+
+/**
+ * WHICH REGISTRY ENTRY DOES THIS PROVIDER NAME REACH? — the NAME half of the
+ * borrow resolution, exported so there is exactly one of it.
+ *
+ * WHY IT LEFT `requirement-admission.ts` (TASK-20260812 P5-flow). Admission
+ * resolves `'Philips Hue'` to the `hue` entry through the brand-adjacent
+ * fallback and substitutes its pinned seats onto the row; the wizard then needs
+ * the SAME entry to read its `pairing` exchange. Re-deriving that inside the
+ * wizard would be a second resolution of the same question — and the 2026-08-12
+ * lesson is precise about the failure mode: when a rule is evaluated twice, the
+ * two copies eventually disagree, and here disagreement means the wizard pairing
+ * with a device using one entry's exchange while the row carries another
+ * entry's template. So the rule moved here, admission calls it, and the wizard
+ * calls it.
+ *
+ * TWO RUNGS, in this order and no other:
+ *  1. EXACT after normalization — the resolution path. `lookupWellKnownProvider`
+ *     answers "which provider's pinned values should this use", so a legitimate
+ *     `Google Drive` resolves to `googledrive` and never to `google`.
+ *  2. BRAND-ADJACENT — the ban path's boundary-aware segment match, which is
+ *     what catches `Spotify Inc`, `CoinbaseInc` and the human spellings of a
+ *     LAN device (`Philips Hue`, `Hue Bridge` → `hue`). Sorted, first taken, so
+ *     the answer is stable rather than dependent on registry insertion order.
+ *
+ * The HOST rung stays in admission: it reads a requirement's declared hosts,
+ * which is a requirement-shaped question this module has no business knowing.
+ */
+export function resolveRegistryEntryByName(
+  name: string,
+): { key: string; entry: WellKnownOauthProvider } | undefined {
+  const entry = lookupWellKnownProvider(name);
+  if (entry !== undefined) {
+    const key = Object.entries(REGISTRY).find(([, value]) => value === entry)?.[0];
+    if (key !== undefined) return { key, entry };
+  }
+  for (const key of findBrandAdjacentRegistryKeys(name).sort()) {
+    const adjacent = REGISTRY[key];
+    if (adjacent !== undefined) return { key, entry: adjacent };
+  }
+  return undefined;
 }
 
 /**

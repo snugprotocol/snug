@@ -130,13 +130,51 @@ describe('P5/AC7 — the `hue` registry entry (the 11th, and the first LAN-class
     expect(pairing?.method).toBe('POST');
     expect(pairing?.pathAndQuery).toBe('/api');
     expect(pairing?.body).toEqual({ devicetype: 'snug#hub', generateclientkey: true });
-    // The response path to the minted key — data, not code, so a future LAN device
-    // describes its own exchange without a new branch in the wizard.
-    expect(pairing?.secretPath).toEqual(['success', 0, 'username']);
     expect(pairing?.secretField).toBe('application_key');
     // The precondition copy is what the wizard renders BEFORE it fires the request.
     expect(pairing?.preconditionInstruction.toLowerCase()).toContain('link button');
     expect(pairing?.preconditionInstruction).toMatch(/30|thirty/);
+  });
+
+  /**
+   * THE SECRET PATH, ASSERTED BY WALKING IT (MIGRATED from a value pin — lesson
+   * 2026-08-04, and the reason the migration was needed rather than a preference).
+   *
+   * The old form was `expect(pairing?.secretPath).toEqual(['success', 0, 'username'])`:
+   * a value pin that compared the registry's array to a retyped copy of itself. It
+   * was GREEN against a path that resolves to `undefined` on every real bridge
+   * response, because it never walked one. A CLIP v1 pairing answer is an ARRAY of
+   * result objects, outermost, so the index comes first — the P5-flow lane found
+   * this when the wizard's pairing step, driven end to end, produced no key against
+   * a response shaped exactly like the desktop lane's own fixture.
+   *
+   * The claim the old test MEANT to make survives verbatim ("the seat names where
+   * the minted key lives"); it is now made against a real response body, so a path
+   * that cannot find the key fails here instead of in front of a user standing at
+   * their bridge with the button pressed.
+   */
+  it('the pairing secretPath actually FINDS the key in a real CLIP v1 response', () => {
+    const pairing = WELL_KNOWN_PROVIDERS_REGISTRY['hue']!.pairing!;
+    // The bridge's real answer shape (developers.meethue.com getting-started).
+    const response: unknown = [{ success: { username: 'MINTED-KEY-VALUE', clientkey: 'ENTERTAINMENT' } }];
+    let cursor: unknown = response;
+    for (const step of pairing.secretPath) {
+      if (typeof step === 'number') {
+        expect(Array.isArray(cursor), `step ${String(step)} indexes something that is not an array`).toBe(true);
+        cursor = (cursor as unknown[])[step];
+        continue;
+      }
+      expect(typeof cursor === 'object' && cursor !== null && !Array.isArray(cursor)).toBe(true);
+      cursor = (cursor as Record<string, unknown>)[step];
+    }
+    expect(cursor).toBe('MINTED-KEY-VALUE');
+  });
+
+  it('the pairing secretPath does NOT find the Entertainment clientkey (unused at v1)', () => {
+    // A path that landed one level up would hand the wizard the whole `success`
+    // object and, through it, a second secret the design deliberately does not keep.
+    const pairing = WELL_KNOWN_PROVIDERS_REGISTRY['hue']!.pairing!;
+    expect(pairing.secretPath[pairing.secretPath.length - 1]).toBe('username');
   });
 
   it('the pairing seat names a field the entry actually declares (no dangling secret slot)', () => {

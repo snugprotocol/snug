@@ -16,6 +16,16 @@
  * handle keeps the variant's shape intact, P1), re-parse, lint — and lands as a
  * `declared` row with `user` provenance. It still faces the strong review; choosing is
  * a rebind, never an approval.
+ *
+ * WHY A SECOND FUNCTION LIVES HERE (ADR-0023 D1, TASK-20260812 P5-flow). The
+ * wizard's LAN address step is the same act under a different name: the user typing a
+ * fact about a device they own, onto a row an inference channel declared. It is a
+ * `user`-channel write by definition, so it belongs in the one module that may name
+ * that channel — putting it in the wizard would either fork the AC13 allowlist (two
+ * writers to audit instead of one) or tempt a local `putDeclaredConnection` that
+ * bypasses admission, which is exactly where the LAN host CLASS is re-validated
+ * (amendment 10c). The functions share the channel and nothing else; each states its
+ * own act.
  */
 import { getUserDb } from './userdb.js';
 import { openConnectionWizard, refreshOpenConnectionWizard } from './connectionWizard.js';
@@ -53,4 +63,37 @@ export async function chooseAuthOption(input: ChooseAuthOptionInput): Promise<Co
     }
   }
   return outcome;
+}
+
+export interface RecordLanHostChoiceInput {
+  appId: string;
+  slot: string;
+  /** The row's OWN requirement with the collected address in `declaredApiHosts`. */
+  requirement: unknown;
+}
+
+/**
+ * Record the bridge address the user typed (ADR-0023 D1's collection step).
+ *
+ * IT OPENS NO WIZARD, and that asymmetry with `chooseAuthOption` is the point:
+ * this is called from INSIDE a live wizard session that is about to advance to
+ * its own review screen. Re-opening — or even refreshing — would reset the step
+ * machine the caller is mid-way through, and `openConnectionWizard` would refuse
+ * anyway (one wizard at a time). The caller bumps its own revision so the sheet
+ * re-reads the row.
+ *
+ * Everything else is identical, deliberately: the same seam, the same gate chain,
+ * the same channel. Admission is where the collected address meets
+ * `lanHostsAcceptable` — the authoritative class check — and where the registry's
+ * pinned fields and header template are substituted onto the row for the first
+ * time. A local write here would skip both.
+ */
+export async function recordLanHostChoice(input: RecordLanHostChoiceInput): Promise<ConnectionPersistOutcome> {
+  const db = await getUserDb();
+  return persistConnectionRequirement(db, {
+    appId: input.appId,
+    requirement: input.requirement,
+    // THE literal — see the module doc before touching this line (AC13 scans for it).
+    channel: 'user',
+  });
 }

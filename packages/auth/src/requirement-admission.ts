@@ -72,8 +72,7 @@ import type { ConnectionLanHostClass } from '@snugprotocol/protocol';
 import { isPrivateRfc1918Ipv4Literal } from './net-guards.js';
 import {
   WELL_KNOWN_PROVIDERS_REGISTRY,
-  findBrandAdjacentRegistryKeys,
-  lookupWellKnownProvider,
+  resolveRegistryEntryByName,
   type WellKnownAuthOption,
   type WellKnownOauthProvider,
 } from './well-known-providers.js';
@@ -253,17 +252,14 @@ function findBorrowedEntry(
 ): { key: string; entry: WellKnownOauthProvider } | undefined {
   const name = readProviderName(requirement);
   if (name !== undefined) {
-    const entry = lookupWellKnownProvider(name);
-    if (entry !== undefined) {
-      const key = Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY).find(([, value]) => value === entry)?.[0];
-      if (key !== undefined) return { key, entry };
-    }
-    // Brand-adjacent fallback — an EXACT hit above always wins, so a legitimate
-    // "Google Drive" still resolves to `googledrive` rather than to `google`.
-    for (const key of findBrandAdjacentRegistryKeys(name).sort()) {
-      const adjacent = WELL_KNOWN_PROVIDERS_REGISTRY[key];
-      if (adjacent !== undefined) return { key, entry: adjacent };
-    }
+    // ONE resolution, shared with the wizard (P5-flow): the exact rung then the
+    // brand-adjacent fallback, both now living in the registry module so a
+    // second caller cannot grow a second copy of the rule. The behavior is
+    // byte-identical to the inline form this replaced — including that an EXACT
+    // hit always wins, so a legitimate "Google Drive" resolves to `googledrive`
+    // rather than to `google`.
+    const byName = resolveRegistryEntryByName(name);
+    if (byName !== undefined) return byName;
   }
 
   const index = registryHostIndex();

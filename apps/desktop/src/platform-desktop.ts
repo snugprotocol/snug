@@ -32,7 +32,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import type { SnugPlatform } from '@playground/platform/platform';
 
 import { createTauriFileFs } from './fs.js';
-import { lanFetch } from './lan-fetch.js';
+import { lanFetch, lanPair } from './lan-fetch.js';
 import { remapUrl } from './net-remap.js';
 import { createTauriLoopbackListener, openInSystemBrowser } from './oauth.js';
 
@@ -133,6 +133,12 @@ export function createDesktopPlatform(): SnugPlatform {
     // Passing a URL through a remap that can only produce a refusal would
     // manufacture a failure mode that does not exist in production.
     lanFetch,
+    // PAIR MODE, on its OWN seat (ADR-0023 D2). It sits beside `lanFetch` on
+    // the platform because the WIZARD needs it, and nowhere near the executor's
+    // deps because a request path that can accept-and-capture is a request path
+    // that trusts anything answering at the address. `connectedFetchDepsFor`
+    // threads `lanFetch` alone; that asymmetry is pinned by test on both sides.
+    lanPair,
     // The directory is the Rust command's concern: read_user_file/write_user_file
     // ALREADY scope every name into ~/Snug and REFUSE any name with a path
     // separator (userfile.rs `valid_name`). So the backend's own `${dir}/${file}`

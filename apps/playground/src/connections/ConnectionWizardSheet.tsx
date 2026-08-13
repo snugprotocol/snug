@@ -41,7 +41,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { CONNECTION_STATUS, type ConnectionField, type ConnectionRequirement } from '@snugprotocol/protocol';
-import type { ConnectionRow } from '@snugprotocol/db';
+import { authConnectionCredentialSecretKey, type ConnectionRow } from '@snugprotocol/db';
 import { lookupWellKnownProvider } from '@snugprotocol/auth';
 
 import { getUserDb } from '../state/userdb.js';
@@ -50,8 +50,17 @@ import {
   advanceFromRegister,
   advanceFromReview,
   cancelConnectionOAuthFlow,
+  canPairLanDevice,
   closeConnectionWizard,
+  discoverLanHosts,
   forceCloseWizard,
+  isCollectableLanHost,
+  isLanRequirement,
+  lanHostCollected,
+  lanPairingExchangeFor,
+  recordLanHost,
+  runLanPairing,
+  LAN_HOST_REFUSAL,
   connectionFlowStatusStore,
   connectionWizardRevisionStore,
   connectionWizardStepStore,
@@ -175,6 +184,300 @@ function HostList({ hosts, testId }: { hosts: readonly string[]; testId: string 
   );
 }
 
+/**
+ * IS THIS HOST A DEVICE ON THE USER'S OWN NETWORK? (P0 security amendment 15.)
+ *
+ * Deliberately BROADER than the LAN-class collection check: that one decides what
+ * a Hue bridge address may be, this one decides when to WARN, and the threat it
+ * warns about — a prompt-injected `api_key` row aimed at a router, a NAS, a
+ * printer — is not limited to RFC-1918. Loopback and link-local are private in
+ * exactly the sense that matters here (a host on this machine or this segment,
+ * which the user cannot audit from the outside), so they raise the band too.
+ *
+ * String-shaped on purpose: `192-168-1-1.attacker.example` is a PUBLIC name and
+ * must not raise the band, or the band stops meaning anything.
+ */
+function isPrivateNetworkHost(host: string): boolean {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host.trim());
+  if (match === null) return false;
+  const octets = match.slice(1).map(Number);
+  if (octets.some((octet) => Number.isNaN(octet) || octet > 255)) return false;
+  const [a, b] = octets as [number, number, number, number];
+  if (a === 10 || a === 127) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// LAN-class screens (ADR-0023 D1/D2/D4)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE WEB DISCLOSURE, and it lands before the user does any work.
+ *
+ * ADR-0023 D1's portability rule in its user-facing form: a LAN row opened on
+ * the web is DISCLOSED, never refused and never destroyed. A user who paired a
+ * bridge on the desktop app and then opens their file in a browser must find
+ * the connection exactly as they left it — the browser simply cannot reach the
+ * device, and says so.
+ *
+ * It renders INSTEAD of the address box rather than beside it: collecting an
+ * address on a platform that could never pair with it is asking for work that
+ * cannot pay off, which is the same broken promise the desktop OAuth refusal
+ * screen exists to prevent, one platform over.
+ */
+function LanDesktopWallScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void }): ReactElement {
+  const provider = row.requirement.provider.name;
+  const paired = row.allowedHosts.length > 0;
+  return (
+    <div className="field" data-testid="lan-desktop-wall">
+      <label>{provider} lives on your home network</label>
+      <span className="hint">
+        {paired
+          ? `this connection is set up and stays exactly as you left it — but a web browser can't reach a device on your own network, so ${provider} only works in the Snug desktop app.`
+          : `${provider} is a device on your own network, and a web browser can't reach one — that's a browser security boundary, not a missing feature. Set this connection up in the Snug desktop app.`}
+      </span>
+      {paired ? (
+        <div className="field">
+          <label>where this app may send them</label>
+          <HostList hosts={row.allowedHosts} testId="lan-wall-hosts" />
+        </div>
+      ) : null}
+      <Button variant="primary" onClick={onClose}>
+        take me back
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * THE ADDRESS STEP. It owns the screen, and the review's approve button is not
+ * on it — that ordering is the binding one (ADR-0023 D1, amendment 5):
+ *
+ *     collect → approve (the ceiling FREEZES around this address) → pair
+ *
+ * Approving a pre-collection LAN row would freeze an EMPTY ceiling, which
+ * refuses every request forever with nothing on any screen to explain why. So
+ * the address is collected first, and the review then shows it as the host it
+ * is about to freeze.
+ *
+ * MANUAL ENTRY IS THE PRIMARY PATH and discovery is an optional convenience
+ * beside it (D4). The model never proposes an address — the extract-never-invent
+ * rule, which for a user-specific device address is not a policy choice but a
+ * structural one: there is nothing to extract.
+ */
+function LanHostScreen({
+  row,
+  onCollected,
+}: {
+  row: ConnectionRow;
+  onCollected: () => void;
+}): ReactElement {
+  const [value, setValue] = useState('');
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [saving, setSaving] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [discovered, setDiscovered] = useState<string[] | undefined>(undefined);
+  const [discoveryNote, setDiscoveryNote] = useState<string | undefined>(undefined);
+  const label = row.requirement.lanHost?.label ?? 'Device address';
+  const provider = row.requirement.provider.name;
+  // Discovery rides the platform fetch, which a browser does not have for this
+  // origin (the broker CORS-locks to its own). Desktop-only in fact, not policy.
+  const canDiscover = getPlatform().fetchImpl !== undefined;
+
+  const submit = (): void => {
+    setError(undefined);
+    // The client-side check first, so a typo answers instantly in plain words
+    // rather than after a round trip through the persist gates.
+    if (!isCollectableLanHost(value)) {
+      setError(LAN_HOST_REFUSAL);
+      return;
+    }
+    setSaving(true);
+    void recordLanHost(value)
+      .then((result) => {
+        if (!result.ok) {
+          setError(result.message);
+          return;
+        }
+        onCollected();
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const findBridge = (): void => {
+    setDiscovering(true);
+    setDiscoveryNote(undefined);
+    void discoverLanHosts()
+      .then((addresses) => {
+        setDiscovered(addresses);
+        if (addresses.length === 0) {
+          // HONEST empty state: the broker only knows bridges that phoned home
+          // from this network, and plenty never do.
+          setDiscoveryNote(
+            "we didn't find a bridge from here — that's common, and typing the address yourself works just as well.",
+          );
+        }
+      })
+      .catch(() => {
+        setDiscovered([]);
+        setDiscoveryNote("we couldn't check for bridges just now — type the address yourself below.");
+      })
+      .finally(() => setDiscovering(false));
+  };
+
+  return (
+    <div className="field" data-testid="lan-host-step">
+      <label htmlFor="lan-host-input">{label}</label>
+      <span className="hint">
+        {provider} is a device on your own network, so only you can say where it is. The address looks like{' '}
+        <code>192.168.1.50</code> — your {provider} app shows it under its own settings.
+      </span>
+
+      <StepList steps={row.requirement.registration?.instructions ?? []} testId="lan-host-steps" />
+
+      <input
+        id="lan-host-input"
+        data-testid="lan-host-input"
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="192.168.1.50"
+        value={value}
+        onInput={(event) => setValue((event.target as HTMLInputElement).value)}
+        onKeyDown={(event) => {
+          // Enter submits. There is no <form> here — C2's sandbox blocks form
+          // submission before the event fires (lesson 2026-08-06), and this
+          // sheet renders inside the host page rather than the app frame, but
+          // the repo keeps one idiom so a copied pattern cannot land in a
+          // sandbox and die silently.
+          if (event.key === 'Enter') submit();
+        }}
+      />
+
+      {error !== undefined ? (
+        <div className="error-note" role="alert" data-testid="lan-host-error">
+          {error}
+        </div>
+      ) : null}
+
+      <Button variant="primary" onClick={submit} disabled={saving}>
+        {saving ? 'saving…' : 'use this address'}
+      </Button>
+
+      {canDiscover ? (
+        <div className="field">
+          <Button onClick={findBridge} disabled={discovering}>
+            {discovering ? 'looking…' : 'find my bridge'}
+          </Button>
+          {discovered !== undefined && discovered.length > 0 ? (
+            <>
+              <span className="hint">we found {discovered.length === 1 ? 'this' : 'these'} — pick one to fill it in:</span>
+              {discovered.map((address, index) => (
+                <Button
+                  key={address}
+                  data-testid={`lan-discovery-choice-${index}`}
+                  onClick={() => {
+                    // FILLS the box, never submits. The address is the whole
+                    // decision, and a broker answer is a suggestion — the user
+                    // still says yes to it.
+                    setValue(address);
+                    setError(undefined);
+                  }}
+                >
+                  use {address}
+                </Button>
+              ))}
+            </>
+          ) : null}
+          {discoveryNote !== undefined ? (
+            <span className="hint" data-testid="lan-discovery-note">
+              {discoveryNote}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * THE PAIRING STEP — the only screen in this wizard where a credential is
+ * CREATED rather than pasted.
+ *
+ * The precondition copy is the registry's own, rendered verbatim immediately
+ * before the exchange fires, because the device only hands out a key inside its
+ * own consent window: this copy is the difference between a working pairing and
+ * an unexplained failure. It is registry text (human-reviewed in a PR), so it is
+ * shown as-is; an LLM-authored string in this position would be a phishing
+ * instruction inside the platform's own credential surface.
+ *
+ * NOTHING FIRES UNTIL THE USER SAYS THEY PRESSED IT. An automatic attempt on
+ * arrival would burn the window before the user had read the sentence telling
+ * them what to do, and the second attempt would look like the first one failing.
+ *
+ * C1 — this component never sees the minted key. `runLanPairing` writes it to
+ * `snug_secrets` and returns only ok/message; there is no value here to render,
+ * log or leak, and the failure copy is written by the store from a fixed set of
+ * sentences rather than assembled from the device's own answer.
+ */
+function LanPairScreen({ row, onPaired }: { row: ConnectionRow; onPaired: () => void }): ReactElement {
+  const [pairing, setPairing] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const exchange = lanPairingExchangeFor(row.requirement);
+  const provider = row.requirement.provider.name;
+  const host = row.allowedHosts[0];
+
+  const pair = (): void => {
+    setError(undefined);
+    setPairing(true);
+    void runLanPairing()
+      .then((result) => {
+        if (!result.ok) {
+          setError(result.message);
+          return;
+        }
+        onPaired();
+      })
+      .finally(() => setPairing(false));
+  };
+
+  return (
+    <div className="field" data-testid="lan-pair-step">
+      <label>let {provider} know it&apos;s you</label>
+      <span className="hint">
+        {host !== undefined ? (
+          <>
+            we&apos;ll ask the device at <code>{host}</code> for a key of its own. Nothing to look up and nothing to
+            paste — it creates the key and we keep it for you.
+          </>
+        ) : (
+          'we’ll ask the device for a key of its own.'
+        )}
+      </span>
+
+      {exchange !== undefined ? (
+        <p className="hint" data-testid="lan-pair-precondition">
+          {exchange.preconditionInstruction}
+        </p>
+      ) : null}
+
+      {error !== undefined ? (
+        <div className="error-note" role="alert" data-testid="lan-pair-error">
+          {error}
+        </div>
+      ) : null}
+
+      <Button variant="primary" onClick={pair} disabled={pairing}>
+        {pairing ? 'talking to the device…' : "I pressed the button — connect"}
+      </Button>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Review
 // ---------------------------------------------------------------------------
@@ -184,6 +487,8 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
   const fields = requirement.fields ?? [];
   const registration = requirement.registration;
   const headerTemplate = requirement.request?.headerTemplate;
+  const reviewedHosts = row.allowedHosts.length > 0 ? row.allowedHosts : (requirement.declaredApiHosts ?? []);
+  const privateHosts = reviewedHosts.filter(isPrivateNetworkHost);
 
   return (
     <div className="field">
@@ -242,7 +547,44 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
 
       <div className="field">
         <label>where this app may send them</label>
-        <HostList hosts={row.allowedHosts} testId="review-hosts" />
+        {/*
+          THE CEILING THE REVIEW SHOWS is the one that will freeze. On a
+          `declared` row `allowedHosts` is still empty — it is written by
+          `approveConnection` — so the display derives from the requirement's
+          own declaration, which is what the user is being asked about. (Before
+          ADR-0023 every reviewed row happened to be re-reviewed post-approval
+          too, which is how an empty list here went unnoticed; a LAN row makes
+          it visible because the address is the WHOLE decision.)
+        */}
+        <HostList hosts={reviewedHosts} testId="review-hosts" />
+        {privateHosts.length > 0 ? (
+          /*
+            THE PRIVATE-ADDRESS CONSENT BAND (P0 security amendment 15).
+
+            A private address is the one class of host the frozen-ceiling promise
+            protects the user LEAST from, because the danger is not where the
+            request goes — it is that the user cannot tell what lives there. A
+            prompt-injected `api_key` row naming `192.168.1.1` passes every gate:
+            the schema accepts a digit-label host, admission has no registry to
+            contradict, and the executor's ADR-0021 rung deliberately allows
+            explicitly-approved private literals. This band is the only thing
+            between that row and a credential typed into a router.
+
+            It WARNS rather than refuses: self-hosted services on a home network
+            are a legitimate and growing use, and refusing them outright would
+            trade a real capability for a threat the user is better placed to
+            judge than we are. The host is NAMED so the judgement is possible.
+          */
+          <div className="hint" role="note" data-testid="review-private-host-warning">
+            {privateHosts.map((host) => (
+              <code key={host}>{host}</code>
+            ))}{' '}
+            {privateHosts.length === 1 ? 'is an address' : 'are addresses'} on your own network — a device in your home
+            rather than a company&apos;s server. Make sure you recognize{' '}
+            {privateHosts.length === 1 ? 'this address' : 'these addresses'} before pasting a credential: nobody outside
+            your network can check it for you.
+          </div>
+        ) : null}
         <span className="hint">
           this list freezes at approval — the app can never reach anywhere else, and widening it needs your approval
           again.
@@ -962,6 +1304,12 @@ export function ConnectionWizardSheet(): ReactElement | null {
   const [row, setRow] = useState<ConnectionRow | undefined>(undefined);
   const [revoked, setRevoked] = useState<RevokedBefore | undefined>(undefined);
   const [loaded, setLoaded] = useState(false);
+  /**
+   * Has the LAN pairing already landed a key? A BOOLEAN, never the value — this
+   * component must not hold a credential it has no reason to render (C1), and
+   * the only question it needs answered is "is the pairing step still owed?".
+   */
+  const [lanKeyPresent, setLanKeyPresent] = useState(false);
   /** Set only when the store REFUSES a close because a sign-in is mid-flight (M9). */
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
@@ -973,6 +1321,7 @@ export function ConnectionWizardSheet(): ReactElement | null {
       setRow(undefined);
       setRevoked(undefined);
       setLoaded(false);
+      setLanKeyPresent(false);
       return;
     }
     let alive = true;
@@ -989,6 +1338,14 @@ export function ConnectionWizardSheet(): ReactElement | null {
       const found = db.getConnection(appId, slot);
       setRow(found);
       setRevoked(found === undefined ? undefined : findRevokedBefore(db, appId, found.requirement, slot));
+      // A KEY-PRESENCE probe, not a read: `listSecretKeys` never returns values,
+      // so the pairing gate can be answered without this component ever being in
+      // a position to leak one.
+      const exchange = found === undefined ? undefined : lanPairingExchangeFor(found.requirement);
+      setLanKeyPresent(
+        exchange !== undefined &&
+          db.listSecretKeys().includes(authConnectionCredentialSecretKey(appId, slot, exchange.secretField)),
+      );
       setLoaded(true);
     });
     return () => {
@@ -1031,6 +1388,37 @@ export function ConnectionWizardSheet(): ReactElement | null {
    * asking for remains readable even when connecting it here is not possible.
    */
   const desktopRefusal = useMemo(() => (row === undefined ? undefined : desktopOAuthRefusalFor(row.requirement)), [row]);
+
+  /**
+   * The three LAN gates, derived from the ROW and the platform (this file's
+   * doctrine) rather than from the step machine.
+   *
+   * WHY NOT NEW STEPS. `nextStep` derives the machine from the requirement so a
+   * requirement edited between two screens cannot strand the user on a route
+   * that no longer matches — adding LAN steps to that enum would mean the
+   * machine could sit on `lan-host` for a row whose address is already
+   * collected. These are conditions on the current row instead, so they stop
+   * being true the moment the fact they describe stops being true, which is the
+   * same reason `showDiff` is derived rather than stored.
+   */
+  const isLanRow = row !== undefined && isLanRequirement(row.requirement);
+  /** Web: disclose and stop. `canPairLanDevice` is the honest capability test. */
+  const lanWall = isLanRow && !canPairLanDevice();
+  /** Pre-collection: no address on the row yet, so nothing to review or freeze. */
+  const lanNeedsHost = isLanRow && !lanWall && !lanHostCollected(row.requirement);
+  /**
+   * Post-approval, pre-key: the ceiling is frozen and the minted key has not
+   * landed. Keyed on the SECRET's absence rather than on a step, because a
+   * wizard reopened after a half-finished pairing must land back on the pairing
+   * step rather than on a done screen claiming a connection no key backs.
+   */
+  const lanNeedsPairing =
+    isLanRow &&
+    !lanWall &&
+    !lanNeedsHost &&
+    step !== 'review' &&
+    row.status === CONNECTION_STATUS.approved &&
+    !lanKeyPresent;
 
   if (session === null) return null;
 
@@ -1080,14 +1468,42 @@ export function ConnectionWizardSheet(): ReactElement | null {
         <span className="hint">loading this connection…</span>
       ) : row === undefined ? (
         <MissingRowScreen session={session} onClose={requestClose} />
+      ) : lanWall ? (
+        /*
+          THE LAN WEB WALL, ahead of every other screen including the diff.
+
+          A browser cannot pair with a device on the user's network, so every
+          screen behind this one would ask for work that cannot pay off. It is
+          a DISCLOSURE and nothing else: the row is untouched, and a
+          desktop-minted connection opened here is shown as the working
+          connection it still is (ADR-0023 D1's portability rule).
+        */
+        <LanDesktopWallScreen row={row} onClose={requestClose} />
       ) : showDiff ? (
         <ReapprovalDiffScreen
           row={row}
           onReapprove={() => void reapproveFromDiff()}
           onDismiss={requestClose}
         />
+      ) : lanNeedsHost ? (
+        /*
+          THE BINDING ORDER, expressed as a screen that comes BEFORE the review:
+          a pre-collection LAN row has no host to freeze, so approving it would
+          freeze an empty ceiling that refuses everything with nothing on any
+          screen to explain it.
+        */
+        <LanHostScreen row={row} onCollected={() => undefined} />
       ) : step === 'review' ? (
         <ReviewScreen row={row} onApprove={() => void advanceFromReview()} />
+      ) : lanNeedsPairing ? (
+        /*
+          PAIRING REPLACES THE CREDENTIALS SCREEN for a LAN row, because the
+          credential is minted rather than typed: the field exists so the secret
+          has a named slot, and there is nothing for the user to paste into it.
+          Rendering the ordinary credentials screen here would show a box no Hue
+          surface can fill.
+        */
+        <LanPairScreen row={row} onPaired={() => undefined} />
       ) : desktopRefusal !== undefined && step !== 'done' ? (
         <DesktopOAuthRefusalScreen refusal={desktopRefusal} appId={session.appId} slot={session.slot} onClose={requestClose} />
       ) : step === 'register' ? (
