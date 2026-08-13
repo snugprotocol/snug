@@ -19,11 +19,13 @@ import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import { createNetHandlerFor } from '../state/net.js';
 import {
+  connectionWizardRevisionStore,
   isConnectionRepairableNetError,
   openConnectionWizard,
   openConnectionWizardForApp,
   openConnectionWizardForNetError,
 } from '../state/connectionWizard.js';
+import { useStore } from '../state/store.js';
 import { NetConfirmDialog } from './NetConfirmDialog.js';
 import { AuthRepairBanner } from './AuthRepairBanner.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
@@ -324,6 +326,31 @@ export default function RunView(): ReactElement {
       cancelled = true;
     };
   }, [id]);
+  /**
+   * How many connection slots THIS app has (AC9) — the gate for the header's
+   * "connections" control.
+   *
+   * Counts rows regardless of status: an app that is already connected is exactly the
+   * case the owner reported as unreachable ("there is no manage-connection button once
+   * the connection is established"), and a declared-but-unconnected app needs the same
+   * door. Only zero rows means no control.
+   *
+   * Re-read on `connectionWizardRevisionStore`, which the wizard bumps on every
+   * approve/revoke: without that, connecting an app for the first time would leave the
+   * header showing nothing until a reload.
+   */
+  const wizardRevision = useStore(connectionWizardRevisionStore);
+  const [connectionSlots, setConnectionSlots] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    void getUserDb().then((db) => {
+      if (!cancelled) setConnectionSlots(db.listConnections(id).length);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, wizardRevision]);
+
   const installLatch = useRef(false);
   const installThisStarter = useCallback(async (): Promise<void> => {
     if (installLatch.current || !isStarterId(id)) return;
@@ -565,10 +592,23 @@ export default function RunView(): ReactElement {
       */}
       <AuthRepairBanner appId={id} />
       {netAuthError !== null ? (
-        <div className="error-note" role="alert" data-testid="net-auth-cta">
-          this app tried to use the network but its connection is not ready ({netAuthError.code}).
-          <div className="field-row">
+        // AC10: "this app wants to connect" is ORDINARY, not a failure — it was
+        // arriving in the same alarm red as a rejected credential. Calm surface, ember
+        // rule, one clear action. Re-approval after an import is the same shape.
+        <div className="connection-note" role="alert" data-testid="net-auth-cta">
+          <p className="connection-note-title">
+            {netAuthError.code === NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED
+              ? 'this connection came with the app — approve it to use it'
+              : 'this app needs a connection to go further'}
+          </p>
+          <p className="connection-note-body">
+            {netAuthError.code === NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED
+              ? 'It arrived already set up, which is exactly why it needs your review before anything is sent. You approve it field by field.'
+              : 'It just tried to reach the network and has nothing approved to reach it with. You review what it wants before any credential is stored.'}
+          </p>
+          <div className="connection-note-actions">
             <Button
+              variant="primary"
               onClick={() => {
                 // `openConnectionWizardForNetError` is async (it reads the app's
                 // connection rows to pick a slot). Dismiss the banner ONLY on a real
@@ -647,6 +687,22 @@ export default function RunView(): ReactElement {
                 title="add this starter to your snug file so you can edit it"
               >
                 {installing ? 'installing…' : 'install'}
+              </Button>
+            ) : null}
+            {/*
+              AC9 — the connections door, in the ONE place the owner asked for it: the
+              app's own header, beside export and theme. Shown whenever this app has
+              connection rows, connected or not; Settings keeps the cross-app list.
+              Starters are excluded because their declaration is a bundled manifest with
+              no persisted rows yet — a control here would open an empty wizard.
+            */}
+            {connectionSlots > 0 && !isStarterId(id) ? (
+              <Button
+                onClick={() => void openConnectionWizardForApp(id, 'settings')}
+                data-testid="manage-connections"
+                title="review, reconnect, or disconnect what this app connects to"
+              >
+                🔌 connections
               </Button>
             ) : null}
             {sawDbOp ? (

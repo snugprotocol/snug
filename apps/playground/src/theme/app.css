@@ -792,6 +792,70 @@
   font-size: var(--text-s);
 }
 
+/* ---- connection surfaces (TASK-20260813 AC10) ----
+   A connection that needs setting up is NOT a failure, but every connection surface
+   used `.error-note` — so "this app would like to connect" arrived in the same alarm
+   red as "the provider rejected your key". Red is a strong claim; spending it on the
+   ordinary case leaves nothing louder for the real one and makes routine setup feel
+   like something broke.
+
+   `.connection-note` is the calm form: the app's own surface colour, an ember rule down
+   the leading edge to mark it as wanting attention, and generous type. `.error-note`
+   stays exactly as it was and is now reserved for genuine rejection/failure. */
+.connection-note {
+  border: 1px solid var(--border);
+  /* The ember rule is the whole signal: a coloured edge reads as "attend to me" without
+     the full-bleed alarm wash of --danger-glow. */
+  border-left: 3px solid var(--ember);
+  background: var(--surface);
+  color: var(--fg);
+  border-radius: var(--radius-m);
+  padding: var(--space-4);
+  font-size: var(--text-s);
+  box-shadow: var(--inner-glow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  animation: reveal-in var(--dur-2) var(--ease-out);
+}
+
+/* The lead line carries the WHAT; the rest is detail. */
+.connection-note .connection-note-title {
+  font-family: var(--font-display);
+  font-size: var(--text-m);
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.connection-note .connection-note-body {
+  margin: 0;
+  color: var(--fg-muted);
+  line-height: 1.5;
+  max-width: 62ch; /* a measure that stays readable when the banner spans a wide window */
+}
+
+/* Actions sit on one row, primary first, with the quiet dismiss last. */
+.connection-note .connection-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* The failure variant of the same layout: identical structure, danger accent. Sharing
+   the structure is deliberate — the two states should differ in TEMPERATURE, not in
+   shape, so the surface stays recognisable as it changes. */
+.connection-note.is-error {
+  border-color: var(--danger);
+  border-left-color: var(--danger);
+  background: var(--danger-glow);
+}
+
+.connection-note.is-error .connection-note-title {
+  color: var(--danger);
+}
+
 /* ---------------------------------------------------------------- run view */
 
 .run-layout {

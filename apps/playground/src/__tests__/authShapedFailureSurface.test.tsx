@@ -273,7 +273,13 @@ describe('AuthRepairBanner — renders the repair CTA on the failing (appId, slo
     });
     // Provider name resolves from the row — the banner speaks the user's vocabulary,
     // not the executor's.
-    expect(text()).toMatch(/Example rejected this app/i);
+    //
+    // Asserted as "names the provider" rather than by matching the sentence verbatim:
+    // TASK-20260813 AC10 rewrote this copy (the old line was "Example rejected this
+    // app's credentials") and a literal match makes every future wording change look
+    // like a regression. What must hold is that the user learns WHICH provider and
+    // WHAT status — the two facts they need to act.
+    expect(text()).toContain('Example');
     expect(text()).toContain('401');
     expect(button(/check this connection/i)).toBeDefined();
   });
