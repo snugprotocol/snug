@@ -84,9 +84,25 @@ let container: HTMLDivElement | undefined;
 let root: Root | undefined;
 
 async function settle(): Promise<void> {
-  await act(async () => {
-    await Promise.resolve();
-  });
+  // ONE microtask tick is not enough: the connect handler awaits a chain
+  // (save credentials → mint the authorize URL → openExternal), and a single
+  // flush lands mid-chain on a loaded machine. That is precisely how this
+  // suite went red on a CI runner while passing locally every time. Drain
+  // generously instead of guessing a tick count.
+  for (let i = 0; i < 25; i++) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
+
+/** Await a CONDITION rather than a tick count — for assertions that follow an async chain. */
+async function settleUntil(done: () => boolean): Promise<void> {
+  for (let i = 0; i < 50 && !done(); i++) {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+    });
+  }
 }
 
 async function render(node: React.ReactElement): Promise<void> {
@@ -159,6 +175,7 @@ describe('(b) desktop skips the blank pre-open — the OS opener needs no gestur
     await click(/connect my Fake IdP account/i);
 
     expect(windowOpen, 'no blank about:blank window on desktop — both pre-open sites must skip').not.toHaveBeenCalled();
+    await settleUntil(() => desktop.opened.length > 0);
     expect(desktop.opened, 'the system browser carries the sign-in').toHaveLength(1);
     expect(wizard.connectionFlowStatusStore.get().state).toBe('awaiting_callback');
 
