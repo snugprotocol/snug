@@ -565,3 +565,29 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   sign-in — owner: please re-test Spotify connect in the desktop app after the next
   build.**
 - Next step: P2 (platform truth in prompts + inference).
+
+### 2026-08-13 — claude (P2 worktree agent) — P2 complete (platform truth, prompts + inference)
+- Tests first, red proven both ways: knowledge `platform-truth.test.ts` 12/19 red at
+  assertions + tsc-gate red on the missing `platform` seat; playground
+  `platformPromptWiring.test.ts` 7/9 red. Mutation check: a web-assembly-gains-layer
+  mutant killed by the negative guard (exactly 1 test bit).
+- KB corrections: 90-auth's "FUTURE rung that does not exist yet" → the shipped ADR-0021
+  truth (native fetch, RFC-1918 LAN from the desktop app only, browser hub keeps
+  refusing private ranges) + the amendment-15 user-typed-LAN sentence; 20-html-template's
+  copy-exactly comment "blocks private ranges" → approved-hosts-only framing, moved in
+  LOCKSTEP with sdk/embedded/snug-hooks.js and all 14 example app.html copies (the
+  three-way byte-compare demanded one commit) + sdk types.ts doc comment;
+  70-defensive-coding verified clean (never repeated the claim — no edit).
+- Platform seat: `HostSystemPromptOptions.platform?: 'web'|'desktop'` (PINNED); layer id
+  `95-platform-desktop` (PINNED by the P2 brief — NOTE: supersedes this file's earlier
+  pinned literal `95-platform-capabilities (web/desktop variants)`; web needs no variant
+  because absent/'web' is byte-identical by construction). Desktop appends the layer LAST
+  on both branches through the shared separator. Inferrer user slot gains the pinned
+  `Platform facts (desktop):` block on desktop only; system slot static (D2).
+- Call sites: builder.ts (both branches, ADR-0012 cache note), transport.ts (appRuntime),
+  connectionInferrerAdapter.ts pass `getPlatform().kind`; invoke.ts UNCHANGED with
+  web-only comments (desktop never calls the hub path).
+- Green, tsc-gated: knowledge 164→183, playground 876→885, server 126, sdk 41,
+  examples 185; root `turbo run test --force` 21/21, 0 cached. Commit 0ae904c on the
+  worktree branch; orchestrator merges.
+- Next step: P3 (registry request seats + Coinbase CDP + silent-401, ADR-0022).
