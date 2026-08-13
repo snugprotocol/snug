@@ -56,7 +56,12 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
-      - run: pnpm install --frozen-lockfile
+      # `apps/server` pulls better-sqlite3, a native module that needs a Visual
+      # Studio toolchain the windows runner image does not ship — node-gyp fails
+      # the whole install. The desktop shell never loads it (it is BYOK/local and
+      # uses sql.js/WASM), so filter the install to the desktop graph instead of
+      # installing a dependency this job cannot build and does not use.
+      - run: pnpm install --frozen-lockfile --filter desktop...
       - name: Rust unit tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
       # Build BEFORE the tsc-gated tests: the desktop app resolves its workspace
