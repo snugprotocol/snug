@@ -1144,3 +1144,152 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   exported from `apps/desktop/src/lan-fetch.ts` and returns the captured pin beside the
   response, so pin + minted key are written in one step) + discovery button; the starter
   rewrite + e2e; amendment 15's private-IP consent copy on the review screen.
+
+### 2026-08-13 — claude (P5 flow lane) — the LAN wizard + consent copy + the hue starter's LAN declaration (ADR-0023 D1/D2/D4, amendments 5/15; AC8)
+
+- Producer verification first: P5-shape's commits (a5029e9 · 77747fe + journal bd07e10)
+  and P5-transport's (e5950b7 · 1ab60d1 + journal e620c8e) all present; desktop green at
+  83 and auth at 712→714 BEFORE any P5-flow work. No orchestration defect.
+- **The binding order is now enforced on the surface the user touches**: a pre-collection
+  LAN row renders an ADDRESS STEP instead of the review, because approving one would
+  freeze an empty ceiling that refuses everything with nothing on any screen to explain
+  it. Collect → approve → pair, with the pairing step gated on `approved` and on a
+  single RFC-1918 ceiling host, and the exchange URL built from the FROZEN ceiling plus
+  the registry's pinned path (the pairing seat deliberately cannot express a host).
+- **A NEW PLATFORM SEAT, `lanPair?(url, init)`, deliberately NOT beside the executor's
+  deps.** P5-transport exported `lanPair` for the wizard but left it unreachable from the
+  playground; a seat on `SnugPlatform` is the honest channel, and its asymmetry with
+  `lanFetch` is the guard: `connectedFetchDepsFor` threads `lanFetch` alone, so a
+  request-time path to accept-and-capture does not exist. Pinned by test on both sides.
+- **TWO DATA DEFECTS FOUND BY DRIVING THE FLOW END TO END**, both journaled rather than
+  quietly fixed:
+  1. **`hue.pairing.secretPath` was inverted** — `['success', 0, 'username']`, a literal
+     reading of the pinned literal's ambiguous prose `success[0].username`. A CLIP v1
+     pairing answer is an ARRAY of result objects, OUTERMOST, so the index comes first.
+     Probed both encodings against a real-shaped body before touching anything: the
+     shipped path resolves to `undefined` on EVERY real bridge response, so pairing would
+     have failed forever ("the device did not hand back a key") while the bridge answered
+     perfectly. Corrected to `[0, 'success', 'username']`. **This SUPERSEDES the pinned
+     literal's spelling** — recorded here under the adapt-and-journal rule, and reported
+     in openItems. The registry's own prose comment already described the array-outermost
+     shape and the desktop lane's fixtures already used it; only the path disagreed.
+  2. **The fence that pinned it could not have caught it.** It compared the registry's
+     array to a retyped copy of itself and was green against a path that finds nothing.
+     MIGRATED to a test that WALKS the path through a real response body (lesson
+     2026-08-04), plus a negative that the walk cannot land on the Entertainment
+     clientkey. The old test's CLAIM survives verbatim; only its altitude moved.
+- **ONE RESOLUTION, EXTRACTED RATHER THAN COPIED.** `lookupWellKnownProvider('Philips
+  Hue')` correctly returns UNDEFINED (exact-key by contract — P5-shape's design note),
+  so the wizard needed the brand-adjacent rung admission uses to reach `hue`. Rather than
+  re-derive it, `resolveRegistryEntryByName` moved OUT of `requirement-admission.ts` into
+  the registry module and both call it. Two copies would eventually pair using an
+  exchange from an entry the row never borrowed from (lesson 2026-08-12).
+- **MUTATION-TESTED ALL SEVEN NEW GUARDS at rule AND call site. TWO SURVIVED and were
+  fixed rather than shipped** — the third and fourth instances of this task's recurring
+  shape:
+  - **The pairing STATUS guard survived its own deletion.** The "unreachable before
+    approval" test could not kill it: a pre-collection row has no HOST either, so the
+    host guard beside it refuses first and masks the deletion. The discriminating input
+    is a row with a COLLECTED address that is not yet approved — the exact state a user
+    occupies between typing and approving. *Lesson shape: two guards in one function mask
+    each other exactly the way a guard and a null-safe accessor did at P5-shape; whichever
+    runs first makes the other look load-bearing.*
+  - **`lanPair,` deleted from the desktop platform object left all 83 desktop tests
+    green** — P5-transport's `lanFetch` seam mutant, one seat and one lane later, in a
+    codebase that had already learned this lesson twice. The desktop tests drive the
+    module function directly; the playground's wizard suite supplies its own fake
+    platform. **The seam between two packages is what neither package's suite watches.**
+- **A guard proven UNREACHABLE and recorded as such rather than given a test that cannot
+  fail.** The pairing seat's host check: a probe over every channel × three off-class
+  ceilings (public, two-private, private+public) showed admission refuses them all, so no
+  production state reaches it. It stays as belt to admission's braces, and the test now
+  pins the braces at the altitude where the decision is made (lesson 2026-08-05).
+- **A FIXTURE FIXED, NOT A GUARD, twice** (lesson 2026-08-06): the consent-band fixture
+  first borrowed `api.github.com` and Guard 2b refused it for authoring `fields` under
+  GitHub's brand; and a slot named after a dotted address was refused by the slot charset.
+  Both were the fixture being wrong, and both refusals were the rules working.
+- **Amendment 15's consent band keys on the HOST, never on `lanHost`** — the load-bearing
+  choice, since the threat is a prompt-injected `api_key` row aimed at a router, which
+  carries no LAN seat and borrows no brand. Tested with a non-hue, non-lanHost
+  requirement across /8, /12, /16, loopback and link-local, and negatively against a
+  public host that merely LOOKS private (`192-168-1-1.attacker.example`). It WARNS and
+  names the address; it never refuses, because self-hosted services are legitimate.
+- **AC8 — A BRIEF-vs-CODE CONTRADICTION, stopped and reported rather than improvised.**
+  The brief asks the starter to call the bridge through `useConnectedFetch` against CLIP
+  v2 endpoints. **It cannot, and the limit is the runtime's rather than the app's.** The
+  executor takes a LITERAL url (`new URL(input.url)`) and checks its host against the
+  frozen ceiling; there is **no frame through which the host tells an app which hosts it
+  may reach** (grepped `packages/protocol/src/frames.ts`, `runtime-contract.ts` and the
+  SDK hooks — nothing). A placeholder host does not parse; a hardcoded one is right for
+  exactly one user. Handing sandboxed app code the user's home-network address would be a
+  NEW disclosure needing its own protocol decision, not something a starter may take. So
+  the app **declares** the connection, **holds** the governed seam, and keeps its apply
+  control greyed with copy naming the REAL reason — replacing the old reason ("the
+  desktop app does not exist"), which stopped being true this task. **Queued, not
+  silent:** an approved-host disclosure frame is the missing piece, and it is a protocol
+  decision for its own task.
+- **The manifest is BARE and that is load-bearing.** A starter manifest borrows the `hue`
+  brand, and Guard 2b refuses a borrowing channel that authors `fields`/`request` — a
+  "helpful" fields array would make it UNADMITTABLE and install an app whose connection
+  could never be created. Pinned by a suite that drives the **real shipped bytes** through
+  schema → admission → substitution (every other suite either injects a fixture or stops
+  at the schema, so none could see it) and asserts the refusal for exactly that edit.
+- **Fences (AC9), classified, moved in the same commits as the data:** MIGRATED
+  `connection-manifests` five declarers → six + the "hue ships NO manifest" negative → two
+  positives (LAN shape, bare manifest) · MIGRATED `validate.test.mjs` `readDeclaredHosts`
+  forked with required-XOR-lanHost (old rule verbatim in branch (a); the LAN branch is
+  STRICTER and returns `[]` so no URL literal is allowlisted by it) · MIGRATED
+  `lan-class-registry` secretPath value-pin → walk-pin · MIGRATED both e2e hue pins.
+  **OBSOLETE:** "hue declares nothing" and the demoRequirement comment resting on it (the
+  hue demo variant stays absent for a NEW stated reason: those variants drive a 127.0.0.1
+  stub, and both the address step and the Rust host-class check refuse loopback by
+  design). **Nothing LOST, no test weakened or deleted.**
+- **An e2e pin that could never have passed, found by re-deriving rather than trusting.**
+  `starters-connect.spec.ts` opened hue by clicking `open hue lights party` — a button P3
+  made `disabled` when it marked the tile `desktopOnly`. Both hue specs sit behind
+  `SNUG_E2E_HAS_APP`, so the suite could not tell. Re-pinned at the TILE, where the
+  honesty actually renders; the install spec's OUTCOME (no row from browsing the web hub)
+  is preserved with its reason now asserted rather than assumed — `starter-install` lives
+  in the run view, unreachable behind a locked tile, so the old assertion measured a proxy.
+- **REAL HARDWARE IS NOT REQUIRED BY ANY TEST THIS LANE WROTE, and CI does not depend on
+  one.** Every wizard test drives a faked `lanPair` platform seat; the transport itself is
+  proven at the Rust boundary (P5-transport, amendment 13). The owner's manual
+  verification is AC7's closing step and is spelled out in the handoff below.
+- Green, tsc-gated: auth 693→714, desktop 83→85, playground 929→971, examples 185→189;
+  protocol 280, db 306, knowledge 183, server 126, sdk 41, adapters 120, runner 110 all
+  untouched and green. Root `turbo run test --force` run THREE times consecutively:
+  `Tasks: 21 successful, 21 total` · `Cached: 0 cached, 21 total` every time. Failure
+  rates measured, not assumed: playground **0/5**, desktop **0/5**, auth **0/3**, and the
+  three new suites alone **0/6**.
+- Left for P6: the owner's real-bridge verification (steps below), the Windows leg
+  (amendment 9, still unverified), and the approved-host disclosure frame the starter's
+  apply path is waiting on.
+
+**OWNER MANUAL VERIFICATION (AC7's closing step) — no test depends on this.**
+1. Build and run the desktop app on macOS, on the same network as the Hue bridge.
+2. Install *hue lights party* from the shelf, open Settings → Connections → `hue`.
+3. **Address step.** Expect a box labelled *Bridge IP address*, the registration
+   walkthrough, and a *find my bridge* button. Press it: good = one or more addresses
+   offered as buttons; honest failure = "we didn't find a bridge from here" with manual
+   entry still working (common — the broker only knows bridges that phoned home).
+4. Type the bridge address (e.g. `192.168.1.50`) and press *use this address*. Good = the
+   review screen appears listing that address, **with the private-network warning band
+   naming it**. Bad = an error under the box (check the address shape: `192.168.x.x`,
+   `10.x.x.x` or `172.16–31.x.x`, no port, no `https://`).
+5. Press *approve this connection*. Good = the pairing screen, showing the link-button
+   instruction. **Nothing has been sent to the bridge yet** — verify by not pressing the
+   button and confirming no key exists.
+6. **Press the round button on top of the bridge**, then within 30 seconds press
+   *I pressed the button — connect*. Good = the done screen. Bad, and each is DISTINCT:
+   *"press the round button on your bridge, then try again"* = the window closed (repeat
+   this step); *"we couldn't reach the device at …"* = wrong address or a different
+   network; *"we couldn't record this device's security certificate"* = pairing worked but
+   the pin was not captured — **nothing was saved**, retry, and report if it repeats.
+7. **The C1 check, worth doing once by hand:** the minted key must appear NOWHERE on
+   screen at any point. It is not in the done screen, not in any error, and not in the
+   app. If you ever see a long random-looking string in this flow, that is a defect —
+   capture it and report it.
+8. Open the app. The apply control stays greyed with copy about the address never
+   reaching the app — **that is expected at this stage**, not a pairing failure (see the
+   contradiction recorded above). The connection is real regardless: Settings shows it
+   approved, and re-opening the wizard shows the done screen rather than the address step.
