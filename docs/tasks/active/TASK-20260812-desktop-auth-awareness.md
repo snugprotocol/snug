@@ -413,6 +413,39 @@ trust** (drafted at P0, finalized P5):
     "simulated-bridge integration test in CI" means the Rust-boundary test; the gate
     step is best-effort.
 
+**Security lens (ran third, prose-mode after two mechanical failures; verdict: "safe to
+implement as amended, conditional on folding Findings 1–2." Clean bills issued on:
+cdp_jwt custody, observer-as-oracle, TOFU pin vs import/sync — a pulled image cannot
+overwrite the pin because local secrets win in the merge, and an imported row demotes to
+`declared`+`imported=1` so a re-pointed pin cannot serve traffic without re-approval —
+pairing custody, opener https reach. Both findings' citations re-derived by the
+orchestrator before folding.):**
+
+14. **[MAJOR querytemplate-scrub-enumeration] The scrub promise becomes an ENUMERATED
+    site list + a widened candidate set.** `scrubAuthValues(text, authHeaders)` iterates
+    header VALUES only, and `NET_FETCH_FAILED` returns `request failed: ${err.message}`
+    completely unscrubbed (`connected-fetch.ts:781` — verified) while fetch errors
+    routinely embed the full URL, query string included; that message reaches the app
+    (`net.ts:163`). Binding: rendered query values join the scrubber's candidate set;
+    the `NET_FETCH_FAILED` message is scrubbed (or the URL's query stripped) before it
+    can appear anywhere; enumerated sites = fetch-error message · response body/header
+    scrub · LLM inspector · RunView surfaces. C1 negative test: a query-credential
+    request whose fetch throws with the URL in `err.message` → credential redacted.
+    (Verified clean already: NetConfirm shows host+method only; the confirm store
+    captures the URL BEFORE query injection; frame inspector is structural.)
+15. **[MINOR lan-apikey-review-copy] Private-IP consent copy for the NON-Hue case.** A
+    prompt-injected authored `api_key` row can target a victim LAN IP and ride the
+    ADR-0021 rung with no pairing gate; the only barrier is the review screen's bare
+    host list. Binding: the review screen detects a private-range/IP-literal declared
+    host and renders a distinct warning ("this is a device on your own network — make
+    sure you recognize this address before pasting a credential"); the AC2 platform
+    copy states LAN hosts in authored requirements are USER-entered, never
+    model-proposed (the extract-never-invent rule, restated for static kinds).
+16. **[Recommendation, adopted] AC7 gains a per-command IPC sub-test**: the gate (or a
+    Rust-boundary test) proves `lan_fetch` SPECIFICALLY is unreachable from a sandboxed
+    subframe and refuses public hosts in Rust — per-command, not just command-family
+    (the "mutate the call site" discipline).
+
 Refuted findings (5 in round 1 + 11 in round 2) recorded in the workflow journal
 (`wf_d15a9134-75c`) — round 2's refutations were mostly duplicates of already-folded
 round-1 amendments, confirming the folds hold. Notable

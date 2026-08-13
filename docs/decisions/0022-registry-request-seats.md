@@ -72,9 +72,14 @@ exist. Consequences found 2026-08-12 (owner repro + recon):
    `CONNECTION_QUERY_NAME_RULE = /^[A-Za-z0-9_.\[\]-]{1,64}$/` (query parameter names
    carry underscores — the header rule's alnum+dash would reject `x_cg_demo_api_key`).
    Query credentials are rendered into the URL **after**
-   ceiling checks and are scrubbed from every host-visible echo: error strings, logs, the
-   LLM inspector, and the net-result URL returned to the app (the app sees only the URL it
-   asked for).
+   ceiling checks and are scrubbed from every host-visible echo — an ENUMERATED list, not
+   a vibe (P0 security amendment 14): (a) the `NET_FETCH_FAILED` error message (today
+   `request failed: ${err.message}` ships unscrubbed and fetch errors embed full URLs);
+   (b) the response body/header scrub (rendered query VALUES join `scrubAuthValues`'s
+   candidate set, which today sees only header values); (c) the LLM inspector; (d)
+   RunView surfaces; and the net-result URL returned to the app is the URL the app asked
+   for, never the credentialed one. C1 negative test: a fetch that throws with the
+   credentialed URL in `err.message` returns a redacted message.
 4. **Auth-shaped failure observer**: when the executor injected credentials and the
    response is 401/403, the app-visible result is unchanged (`ok:true`, status as-is) and
    a host-only callback (`onAuthShapedFailure(appId, slot, status)`) fires; RunView renders
