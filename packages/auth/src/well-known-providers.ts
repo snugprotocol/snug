@@ -18,7 +18,12 @@
  * reviewed by a human.
  */
 
-import type { ConnectionKind, ConnectionRequirement } from '@snugprotocol/protocol';
+import type {
+  ConnectionKind,
+  ConnectionRequest,
+  ConnectionRequirement,
+  ConnectionTestRequest,
+} from '@snugprotocol/protocol';
 
 /**
  * How a provider's OAuth flow can receive its redirect on the DESKTOP shell
@@ -79,6 +84,10 @@ export interface WellKnownAuthOption {
   fields?: WellKnownOauthProvider['fields'];
   endpoints?: WellKnownOauthProvider['endpoints'];
   registration?: WellKnownOauthProvider['registration'];
+  /** Where THIS option's credential is sent — same seat rules as the entry's. */
+  request?: WellKnownOauthProvider['request'];
+  /** How THIS option's connection is verified — same seat rules as the entry's. */
+  testRequest?: WellKnownOauthProvider['testRequest'];
   authorizeParams?: Record<string, string>;
   pkce?: boolean;
   /**
@@ -201,6 +210,33 @@ export interface WellKnownOauthProvider {
     placeholder?: string;
     required?: boolean;
   }>;
+  /**
+   * WHERE the typed credential is sent — the pinned request templates (ADR-0022 §1,
+   * TASK-20260812-desktop-auth-awareness P3). Same shapes as the requirement schema's
+   * `connectionRequestSchema` by construction (the types ARE the protocol's), pinned by
+   * the AC3 structural suite composing every entry through `requirementFromRegistryEntry`
+   * and parsing it.
+   *
+   * THE DEFECT THIS CLOSES. Guard 2b refuses a borrowing channel that AUTHORS `request`
+   * (where a typed secret goes is exactly what a prompt-injected requirement must not
+   * choose) — but the registry had nothing to substitute, so a PINNED provider could
+   * never carry a signing template at all: the executor fell to the kind default
+   * (`X-Api-Key` for `api_key`) and Coinbase's saved credential was read by no code
+   * path. These seats are the missing pinned value: human-authored, docs-cited, in a
+   * reviewed PR — the one channel Guard 2b exempts — and substituted on every channel's
+   * borrow hit by `applyRegistryValues` (amendment 1c).
+   *
+   * Template VALUES are `{{…}}` references linted against the entry's OWN field keys
+   * (registry-template-parity.test.ts) — never literal credentials (C1).
+   */
+  request?: ConnectionRequest;
+  /**
+   * HOW a connection is verified — the wizard's "test this connection" probe (ADR-0022
+   * §1). GET + path-only by the protocol schema's construction: a probe that could
+   * choose its method or host would be a write primitive and a second host channel.
+   * The host comes from the frozen ceiling, i.e. from `apiHosts` above.
+   */
+  testRequest?: ConnectionTestRequest;
   /** Extra authorize-URL query params this provider needs (e.g. Google offline access). */
   authorizeParams?: Record<string, string>;
   /**
@@ -800,6 +836,19 @@ export function requirementFromRegistryEntry(
       : {}),
     ...(flow.authorizeParams !== undefined ? { authorizeParams: { ...flow.authorizeParams } } : {}),
     ...(flow.pkce !== undefined ? { pkce: flow.pkce } : {}),
+    // The NEW seats (ADR-0022 §1) ride the same flow rule as every credential-flow
+    // seat: the option's own when an option is chosen, the entry's otherwise — and an
+    // option WITHOUT them emits none, because a different flow must never inherit a
+    // signing template whose field keys it does not declare.
+    ...(flow.request !== undefined
+      ? {
+          request: {
+            ...(flow.request.headerTemplate !== undefined ? { headerTemplate: { ...flow.request.headerTemplate } } : {}),
+            ...(flow.request.queryTemplate !== undefined ? { queryTemplate: { ...flow.request.queryTemplate } } : {}),
+          },
+        }
+      : {}),
+    ...(flow.testRequest !== undefined ? { testRequest: { ...flow.testRequest } } : {}),
     declaredApiHosts: [...entry.apiHosts],
   };
 }

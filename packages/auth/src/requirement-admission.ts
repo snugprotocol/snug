@@ -298,7 +298,14 @@ function occupiedPromptSeats(
     const value = requirement[seat];
     if (value === undefined || value === null) continue;
     if (seat === 'request') {
-      if (asRecord(value)?.['headerTemplate'] !== undefined) occupied.push('request.headerTemplate');
+      // BOTH template seats count (P0 amendment 1a, TASK-20260812-desktop-auth-awareness).
+      // Before the amendment only `headerTemplate` was read, so a queryTemplate-only
+      // request SAILED PAST this guard — an authored query placement is credentials in
+      // a URL aimed wherever the borrower chose, the same harm one seat over. An empty
+      // `request` object still says nothing about where a secret goes and stays exempt.
+      const request = asRecord(value);
+      if (request?.['headerTemplate'] !== undefined) occupied.push('request.headerTemplate');
+      if (request?.['queryTemplate'] !== undefined) occupied.push('request.queryTemplate');
       continue;
     }
     if (seat === 'fields' && Array.isArray(value) && value.length === 0) continue;
