@@ -473,6 +473,40 @@ raise bought patience, not blindness. Root now **21/21 tasks, 0 cached**.
 Lesson shape for Gate 6: *a lane's own green is a sample, not a proof — the
 integrating run at full parallelism is a different test than any lane can run.*
 
+### P4 orchestrator verification (2026-08-13) — and a correction to my own P3 fix
+
+P4's root run caught the probe test STILL flaking (measured 3/12 = 25%) and root-caused
+what my P3 "fix" got wrong, in two layers:
+
+1. **The P3 fix was structurally unreachable.** I raised `vi.waitFor`'s budget to 10 s
+   inside a test whose vitest timeout is the **5000 ms default** — the test dies at
+   5004 ms with an anonymous "Test timed out in 5000ms" while `waitFor` is still
+   patiently waiting. The raise could never take effect.
+2. **The real mechanism was a deadlock, not slowness.** `vi.waitFor` was called INSIDE
+   `act()`; React's `act` owns the scheduler while pending, so the component could never
+   re-render with the resolved outcome. Measured: 200 consecutive ES256 imports+signs
+   take 83 ms total — the mint was never slow, and failures were bimodal (~158 ms or a
+   full hang), which is a deadlock signature, not a latency one. Fixed by moving
+   `waitFor` outside `act` with `settle()` in each poll, inner budget (8 s) strictly
+   below an explicit outer timeout (15 s) so a real hang reports with a MESSAGE.
+   Orchestrator-verified: **0 failures in 10 consecutive full-suite runs** against a 25 %
+   baseline, and mutation-verified (hanging `cdp_jwt` still reds both probe tests).
+
+**Two lessons for Gate 6, both about my own reasoning:** (a) *a timing fix is not
+verified by "it passed a few times" — it needs the failure RATE measured before and
+after, because P3's fix passed 6 consecutive runs while being structurally inert*;
+(b) *when a symptom is intermittent and every added `console.log` makes it pass, that is
+a scheduler/ordering bug (a Heisenbug), not a slow operation — and "raise the timeout"
+is the fix you reach for when you have not found the mechanism yet.* Also worth keeping:
+**"budget" fixes must check the enclosing budget** — an inner timeout above an outer one
+is dead code that looks like diligence.
+
+P4's other refutations (both probe-backed, brief claims corrected): CoinGecko DOES
+reflect `x-cg-demo-api-key` in its CORS allow-headers, so the query form was chosen for
+preflight-independence, not necessity; and CoinGecko gets NO `testRequest` because
+`api.coingecko.com` answers every endpoint keylessly — a probe would report CONNECTED
+for a typo'd key. No button beats a meaningless one.
+
 ### Pinned shared literals (lesson 2026-08-03 — before any fan-out)
 
 ```
