@@ -197,4 +197,36 @@ describe('the desktop platform actually exposes the transport (wiring, not just 
     expect(platform.capabilities.lanHttpPrivate).toBe(true);
     expect(platform.lanFetch).toBeTypeOf('function');
   });
+
+  /**
+   * THE SAME MUTANT, ONE SEAT OVER (P5-flow, and the third time this shape has
+   * appeared in this task — worth naming as a pattern rather than an incident).
+   *
+   * Deleting `lanPair,` from the desktop platform object left ALL 83 desktop
+   * tests green, exactly as deleting `lanFetch,` once did: the tests above drive
+   * the module function directly, and the playground's wizard suite supplies its
+   * OWN fake platform rather than building the real one. Between those two
+   * complete-looking suites sits the single fact that makes the pairing step
+   * reachable in production, asserted by neither.
+   *
+   * `toBe` and not `toBeTypeOf`: a locally-defined wrapper, or an accidental
+   * rebinding to `lanFetch`, satisfies a typeof check while pairing against a
+   * pin that does not exist yet.
+   */
+  it('createDesktopPlatform() carries lanPair, and it is THE module function', async () => {
+    const { createDesktopPlatform } = await import('../platform-desktop.js');
+    const platform = createDesktopPlatform();
+    expect(platform.lanPair).toBe(lanPair);
+  });
+
+  it('lanPair and lanFetch are DIFFERENT seats — pair mode is never a request path', async () => {
+    // The one-line collapse this guards against: `lanPair: lanFetch` would type-
+    // check under neither signature, but `lanPair` aliased to a wrapper around
+    // the pinned path would compile and would make pairing impossible; the
+    // reverse aliasing would make every REQUEST an accept-and-capture.
+    const { createDesktopPlatform } = await import('../platform-desktop.js');
+    const platform = createDesktopPlatform();
+    expect(platform.lanPair).not.toBe(platform.lanFetch);
+    expect(platform.lanPair).not.toBe(platform.fetchImpl);
+  });
 });

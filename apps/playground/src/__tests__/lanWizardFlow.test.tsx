@@ -466,6 +466,78 @@ describe('the pairing step', () => {
     expect(outcome.ok).toBe(false);
     expect(desktop.pairCalls).toEqual([]);
   });
+
+  /**
+   * THE STATUS GUARD, DRIVEN DIRECTLY — added because deleting it left the whole
+   * file green (the lane's own recurring lesson, third instance).
+   *
+   * The test above CANNOT kill that mutant: a pre-collection row has no host
+   * either, so the host guard beside the status guard refuses it first and the
+   * status guard's deletion is masked. The discriminating input is a row with a
+   * COLLECTED address that is not yet approved — the exact state a user is in
+   * between typing the address and pressing approve, and the one state in which
+   * a stray pairing call would run against an UNFROZEN ceiling.
+   *
+   * (P5-shape journaled this shape as "when you add a guard AND a null-safe
+   * accessor in the same edit, mutate them SEPARATELY". Here it is two guards
+   * rather than a guard and an accessor, and the masking is identical: whichever
+   * one runs first makes the other look load-bearing.)
+   */
+  it('a COLLECTED-but-unapproved row is refused by the STATUS guard specifically', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+
+    // Collect the address, then STOP — do not approve.
+    await type(testId('lan-host-input') as HTMLInputElement, BRIDGE);
+    await click(button(/^use this address$/i));
+    const row = harness.db.getConnection(APP, SLOT);
+    expect(row?.requirement.declaredApiHosts, 'the host guard must now be SATISFIED').toEqual([BRIDGE]);
+    expect(row?.status).toBe('declared');
+
+    const outcome = await harness.wizard.runLanPairing();
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.message).toMatch(/approve this connection/i);
+    // The OUTCOME, not the message: no exchange ran against an unfrozen ceiling.
+    expect(desktop.pairCalls).toEqual([]);
+    expect(harness.db.getSecret(`auth:${APP}:${SLOT}:application_key`)).toBeUndefined();
+  });
+
+  /**
+   * THE HOST GUARD IS DEFENCE IN DEPTH, AND THIS TEST SAYS SO RATHER THAN
+   * PRETENDING OTHERWISE — recorded because the honest version of this finding is
+   * worth more than a test that cannot fail.
+   *
+   * The first draft asserted the pairing seat's own host check by approving a
+   * LAN row around a public host. Admission REFUSED the fixture — correctly
+   * (amendment 10c), and a probe over every channel × three off-class ceilings
+   * (public host, two private hosts, private+public) confirmed there is NO
+   * production path to an approved LAN row whose ceiling is not exactly one
+   * RFC-1918 literal. So the guard inside `runLanPairing` cannot be reached from
+   * any state the system can produce, and a mutation test for it would have to
+   * forge a row the db itself will not write.
+   *
+   * That makes it belt to admission's braces, kept deliberately (the pairing
+   * seat states its own precondition rather than trusting an earlier gate), and
+   * what this test pins is the BRACES — the guard that is actually load-bearing,
+   * asserted at the altitude where the decision is made (lesson 2026-08-05).
+   */
+  it('admission — not the pairing seat — is what stops an off-class LAN ceiling existing at all', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    for (const hosts of [['api.example.com'], [BRIDGE, '192.168.1.51'], [BRIDGE, 'api.example.com']]) {
+      expect(() =>
+        harness.db.putDeclaredConnection(
+          APP,
+          'hue-offclass',
+          { ...bareHue, slot: 'hue-offclass', declaredApiHosts: hosts },
+          'user',
+        ),
+      ).toThrow(/LAN-class provider/);
+    }
+    expect(harness.db.getConnection(APP, 'hue-offclass')).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
