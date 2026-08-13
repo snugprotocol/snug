@@ -27,8 +27,11 @@ import { fileURLToPath } from 'node:url';
 const desktopDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const tauriDir = path.join(desktopDir, 'src-tauri');
 const manifest = path.join(tauriDir, 'Cargo.toml');
-const debugBinary = path.join(tauriDir, 'target', 'debug', 'snug-desktop');
-const releaseBinary = path.join(tauriDir, 'target', 'release', 'snug-desktop');
+// Cargo appends .exe on Windows (see run-gate.mjs — the same hardcoded Unix
+// name failed the CI windows leg with the binary built and present).
+const exe = process.platform === 'win32' ? 'snug-desktop.exe' : 'snug-desktop';
+const debugBinary = path.join(tauriDir, 'target', 'debug', exe);
+const releaseBinary = path.join(tauriDir, 'target', 'release', exe);
 
 /**
  * The gate surface that must not exist in a shipped binary: the two original

@@ -36,7 +36,15 @@ const desktopDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.resolve(desktopDir, '..', '..');
 const distDir = path.join(desktopDir, 'dist');
 const tauriDir = path.join(desktopDir, 'src-tauri');
-const binaryPath = path.join(tauriDir, 'target', 'debug', 'snug-desktop');
+// Cargo appends .exe on Windows; the Unix name is not a fallback there, it
+// simply does not exist (the CI windows leg failed here with the shell built
+// and sitting one filename away).
+const binaryPath = path.join(
+  tauriDir,
+  'target',
+  'debug',
+  process.platform === 'win32' ? 'snug-desktop.exe' : 'snug-desktop',
+);
 const stubScript = path.join(repoRoot, 'apps', 'playground', 'e2e', 'fixtures', 'net-stub.mjs');
 
 const STUB_PORT = Number(process.env.SNUG_GATE_STUB_PORT ?? 43120);
@@ -314,7 +322,18 @@ async function main() {
   // 5. Await the verdict file (missing = FAIL by timeout; dead app = FAIL now).
   const deadline = Date.now() + RESULTS_TIMEOUT_MS;
   while (!fs.existsSync(resultsPath)) {
-    if (appExited) fail('shell process exited before writing results');
+    if (appExited) {
+      // An instant silent exit is almost always the single-instance plugin:
+      // a leftover shell from an interrupted run owns the lock, so this process
+      // forwards its argv to that one and exits 0 — indistinguishable from a
+      // crash unless we say so. CI starts clean; developers do not.
+      fail(
+        'shell process exited before writing results\n' +
+          '       If it exited instantly: another snug-desktop may hold the single-instance\n' +
+          '       lock (leftover from an interrupted run). Check with:\n' +
+          '         ps aux | grep "[s]nug-desktop" — then kill the stale PID and re-run.',
+      );
+    }
     if (Date.now() > deadline) fail(`no results file within ${RESULTS_TIMEOUT_MS / 1000}s`);
     await new Promise((r) => setTimeout(r, 2000));
   }

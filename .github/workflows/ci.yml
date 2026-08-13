@@ -68,6 +68,11 @@ jobs:
       - name: Desktop package tests (tsc-gated)
         run: pnpm --filter desktop test
       - name: In-shell hard gate (C2 CSP+IPC checks + wizard journey)
+        # Always rebuild the bundle in CI: the driver otherwise reuses whatever
+        # dist/ is present, which is a false-green trap when the gate is meant
+        # to grade THIS commit's UI.
+        env:
+          SNUG_GATE_REBUILD_WEB: '1'
         run: pnpm --filter desktop gate
       # P0 amendment 4's release-inertness claim, PROVEN rather than journaled:
       # the gate commands + SNUG_SHELL_GATE must be present in the debug binary
