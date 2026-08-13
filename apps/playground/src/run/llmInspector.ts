@@ -58,6 +58,13 @@ export interface LlmInspectorEntry {
   model?: string;
   /** Wall-clock for the round trip. Absent while the call is still in flight (AC8). */
   durationMs?: number;
+  /**
+   * When the round trip STARTED, on the same clock the live timer reads
+   * (`performance.now()`), so the ticker measures the CALL rather than its own mount
+   * (TASK-20260813 AC7). Without this, switching rail tabs away and back — or any
+   * remount — restarted a long call's displayed elapsed time at 0.
+   */
+  startedAt: number;
   /** True between `round_trip_start` and `round_trip` — drives the live timer (AC8). */
   pending: boolean;
   isError: boolean;
@@ -282,9 +289,16 @@ function toPendingEntry(start: AgentRoundTripStart): LlmInspectorEntry {
     text: '',
     toolCalls: [],
     tools: [],
+    // Same clock LiveTimer reads, so the ticker survives a remount (AC7).
+    startedAt: nowMs(),
     pending: true,
     isError: false,
   };
+}
+
+/** Monotonic where available, matching `packages/adapters`' own timing seam. */
+function nowMs(): number {
+  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
 }
 
 /** Fold the completed outcome into a (usually pending) entry, preserving nested tools. */
