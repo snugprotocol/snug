@@ -507,6 +507,50 @@ preflight-independence, not necessity; and CoinGecko gets NO `testRequest` becau
 `api.coingecko.com` answers every endpoint keylessly — a probe would report CONNECTED
 for a typo'd key. No button beats a meaningless one.
 
+### P5 orchestrator verification (2026-08-13)
+
+Independently re-derived rather than accepted: tree clean; 10 P5 commits present; root
+`turbo run test --force` **21/21 tasks, 0 cached**; **cargo 48 passed** (my first check
+printed "0 tests" — the trailing doc-test section, not a missing suite: the empty-result
+lesson working as intended, one tool-call later); the pinned-TLS guards are real
+(`a_single_flipped_byte_in_the_pin_refuses`,
+`pinned_mode_REFUSES_a_different_certificate_on_the_same_address`,
+`refuses_loopback_link_local_public_names_and_ipv6`,
+`refuses_plain_http_even_to_a_private_literal`, size cap enforced in Rust before IPC);
+and the cross-package seam identities are asserted (`platform.lanFetch toBe lanFetch`,
+`platform.lanPair toBe lanPair`). The corrected `secretPath: [0, 'success', 'username']`
+is on disk.
+
+**The three findings worth carrying to Gate 6 (all are the same shape — a green suite
+that proves less than it appears to):**
+1. **A data defect that would have failed forever against a working bridge.** The pinned
+   literal `success[0].username` is ambiguous prose; P5-shape encoded it as
+   `['success', 0, 'username']`, but a CLIP v1 pairing response is an ARRAY of result
+   objects OUTERMOST. The shipped path resolved to `undefined` on every real answer —
+   and the fence pinning it compared the registry array to a retyped copy of ITSELF, so
+   it was green against the broken value. Only driving a real-shaped body through the
+   walk found it. *Rule: a fence that restates the data cannot test the data; it must
+   exercise it.*
+2. **The cross-package seam is what neither package's suite watches.** Deleting
+   `lanFetch` (and later `lanPair`) from the desktop platform object left ALL desktop
+   tests green — desktop tests drive the module function directly, and the playground's
+   suite supplies its own fake platform. Each side complete, jointly blind. It recurred
+   one lane after being journaled, which makes it a pattern, not an incident.
+3. **Co-located guards mask each other.** Deleting `runLanPairing`'s approved-status
+   check killed nothing because the host guard beside it refuses the same inputs first —
+   the same shape as P5-shape's guard-beside-null-safe-accessor mutant. *Rule: each
+   refusal needs an input that satisfies every OTHER refusal.*
+
+**Scope decisions recorded (not silent):** hue carries no `testRequest` (pairing IS the
+verification) and no `desktopRedirectPosture` (a LAN device runs no OAuth); the Hue
+starter's apply control stays honestly greyed because **no protocol frame tells an app
+which hosts it may reach** — the executor takes a literal URL, so a LAN app cannot know
+its own bridge address without a new approved-host disclosure frame (queued for its own
+task, its own protocol decision); the web Hue tile remains fully locked (over-strict, an
+owner UX call); an env-gated e2e pin (`starters-connect.spec.ts`) had silently rotted
+behind `SNUG_E2E_HAS_APP` since P3 and was re-pinned at the tile — worth a Gate 6 sweep
+for other rotted env-gated specs. Windows remains unverified for `lan_fetch` (amendment 9).
+
 ### Pinned shared literals (lesson 2026-08-03 — before any fan-out)
 
 ```
