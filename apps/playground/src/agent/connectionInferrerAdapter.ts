@@ -42,6 +42,7 @@ import {
   type RequirementInferrerComplete,
 } from '@snugprotocol/auth';
 
+import { getPlatform } from '../platform/platform.js';
 import { completeWithAdapter, liveInferenceAdapter } from './inferrerAdapter.js';
 
 // ---------------------------------------------------------------------------
@@ -173,6 +174,10 @@ async function runInference(
 ): Promise<InferConnectionRequirementResult> {
   const { system, user } = buildConnectionRequirementInferrerPrompt({
     providerName: input.providerName,
+    // TASK-20260812 P2 (AC2): platform facts ride the USER slot on desktop only (the
+    // system slot stays static per D2). This adapter is the only caller that can read
+    // the platform seam — packages/auth's pinned dep surface cannot.
+    platform: getPlatform().kind,
     ...(input.kindHint !== undefined ? { kindHint: input.kindHint } : {}),
     ...(input.docsText !== undefined ? { docsText: input.docsText } : {}),
   });

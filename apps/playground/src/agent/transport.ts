@@ -11,6 +11,7 @@ import { buildHostSystemPrompt, renderRuntimeContract, SYSTEM_BLOCK_SEPARATOR } 
 import { ERROR_CODES, parseAppRequest, type RuntimeContract } from '@snugprotocol/protocol';
 import type { AgentTransport } from '@snugprotocol/runner';
 
+import { getPlatform } from '../platform/platform.js';
 import {
   endpointsNeedConfirmStore,
   getByokKey,
@@ -88,7 +89,15 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
   // The RUNTIME assembly (ADR-0018 D1) — identity + runtime doctrine + response format.
   // The app-builder layers and the inlined KB summary used to ride every app turn here;
   // a move cannot act on authoring instructions, so they are gone (~1.26 KB/turn).
-  const baseSystem = buildHostSystemPrompt({ appBuilder: false, artifacts: false, appRuntime: true });
+  // TASK-20260812 P2 (AC1): on desktop the 95-platform-desktop layer is appended after
+  // the runtime layers (still BEFORE the volatile contract suffix, so ADR-0012's
+  // end-of-system rule holds); with no platform set the bytes are unchanged.
+  const baseSystem = buildHostSystemPrompt({
+    appBuilder: false,
+    artifacts: false,
+    appRuntime: true,
+    platform: getPlatform().kind,
+  });
   return {
     async send(wire, { signal, onDelta }) {
       if (needsConfirm()) {

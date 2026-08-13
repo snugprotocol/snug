@@ -41,6 +41,8 @@ export {
   SYSTEM_BLOCK_SEPARATOR,
   type AuthSpecInferrerPrompt,
   type AuthSpecInferrerPromptInput,
+  type ConnectionRequirementInferrerPromptInput,
+  type HostPlatform,
   type HostSystemPromptOptions,
   type SkillBuilderContext,
 } from './assemble.js';

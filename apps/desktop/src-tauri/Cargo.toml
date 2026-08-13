@@ -23,6 +23,28 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.8"
+# ---- `lan_fetch` (ADR-0023 D3) ------------------------------------------
+# Every one of these ALREADY rides in via tauri-plugin-http's default
+# `rustls-tls` feature (verified with `cargo tree`: reqwest 0.12.28,
+# rustls 0.23.43, rustls-pki-types 1.15.1, sha2 0.10.9). They are named here
+# because this crate now uses them DIRECTLY — a transitive dependency is not an
+# API contract, and a plugin upgrade that dropped one would otherwise break the
+# build with a mystifying error rather than a resolution failure.
+#
+# `default-features = false` on reqwest keeps native-tls out: the custom
+# verifier is a rustls type, and a build that quietly linked the OS trust store
+# instead would ignore it.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.10"
+url = "2"
+futures-util = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+# Certificate fixtures for the pin verifier's Rust-boundary test (amendment 13):
+# the host-class check refuses loopback, so a 127.0.0.1 stub server cannot reach
+# this path — the verifier is fed a real DER certificate directly instead.
+rcgen = "0.13"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+http = "1"

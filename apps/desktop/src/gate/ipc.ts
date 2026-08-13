@@ -59,7 +59,41 @@ export const IPC_CHECK_IDS = [
   'ipc-tauri-global-absent',
   'ipc-chrome-webview-absent',
   'ipc-invoke-refused',
+  'ipc-lan-fetch-refused',
 ] as const;
+
+/**
+ * PER-COMMAND, not command-family (P0 amendment 16, the "mutate the call site"
+ * discipline). `ipc-invoke-refused` proves the BRIDGE is key-gated by driving
+ * `write_user_file`; a reader could reasonably conclude that settles every
+ * command, and they would be wrong for the reason that discipline exists —
+ * registration is per-command and a command added to the wrong handler list is
+ * exactly the drift a family-level check cannot see.
+ *
+ * `lan_fetch` is the command that most needs its own row: it is the shell's
+ * only outbound-network capability with a relaxed trust decision inside it, so
+ * an app iframe that could reach it would get a transport that trusts a
+ * certificate on the user's own network.
+ *
+ * THE SENSOR PROBLEM, and the honest answer. `write_user_file`'s effect is a
+ * file the main frame can ask Rust about. `lan_fetch`'s effect is a REQUEST to
+ * a private IP — and the Rust host-class check refuses everything a CI runner
+ * can bind (loopback is not RFC-1918), so there is no address at which a
+ * "did it fire?" listener could sit. Rather than fake an effect, this check
+ * uses the property that IS observable and IS the one that matters: the
+ * sandboxed subframe posts a real keyless `lan_fetch` through every reachable
+ * raw transport, and the verdict requires that no callback resolved into the
+ * subframe for it. A keyed invoke resolves its callback; a key-refused one is
+ * dropped before dispatch (tauri 2.11.5 webview/mod.rs `on_message`). So a
+ * fired callback is proof of REACH, and its absence — combined with
+ * `ipc-tauri-internals-absent` proving the key never arrived — is the refusal.
+ *
+ * This is a WEAKER instrument than the sentinel and says so: it can prove
+ * breakage, and it vouches for refusal only alongside the key-absence checks.
+ * That is stated rather than hidden, per lessons.md 2026-07-31 — an
+ * unanswerable sensor that reports "pass" is the defect.
+ */
+export const LAN_FETCH_COMMAND = 'lan_fetch';
 
 /**
  * The sentinel filename the subframe's keyless write targets. Must match
@@ -135,6 +169,13 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
   var CB = 987654321;
   window['_' + CB] = function () { callbackFired = true; };
 
+  // PER-COMMAND (amendment 16): lan_fetch gets its own callback slot, so a
+  // reach proven for one command is never credited to the other.
+  var lanCallbackFired = false;
+  var LAN_CB = 987654331;
+  window['_' + LAN_CB] = function () { lanCallbackFired = true; };
+  window['_' + (LAN_CB + 1)] = function () { lanCallbackFired = true; };
+
   function keylessInvokeBody() {
     // The main-frame invoke shape (scripts/core.js) MINUS a valid
     // Tauri-Invoke-Key. A WRITE command with a sentinel name, so that an invoke
@@ -148,8 +189,27 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     });
   }
 
+  function keylessLanFetchBody() {
+    // A REAL, well-formed lan_fetch call: a private literal in pair mode, the
+    // shape the wizard itself sends. It must be well-formed precisely so that a
+    // refusal cannot be attributed to a bad payload — if this command were
+    // reachable, this call would be dispatched. The address is RFC-1918 and
+    // will simply fail to connect on a runner; reaching the DISPATCHER is the
+    // breakage, not reaching a bridge.
+    //
+    // BOTH callback and error slots are watched: a dispatched command that
+    // errors resolves the ERROR callback, which is reach just the same.
+    return JSON.stringify({
+      cmd: '${LAN_FETCH_COMMAND}',
+      callback: LAN_CB,
+      error: LAN_CB + 1,
+      payload: { url: 'https://192.168.255.253/api', method: 'GET', mode: 'pair' }
+    });
+  }
+
   for (var k = 0; k < transports.length; k++) {
     try { transports[k].handler.postMessage(keylessInvokeBody()); } catch (e3) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessLanFetchBody()); } catch (e4) { /* transport rejected the shape */ }
   }
 
   function finishInvoke() {
@@ -160,7 +220,8 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
       checks: out,
       probe: {
         transports: reachableNames,
-        callbackFired: callbackFired
+        callbackFired: callbackFired,
+        lanCallbackFired: lanCallbackFired
       }
     }, '*');
   }
@@ -172,6 +233,8 @@ ${scEnd}</body></html>`;
 interface ProbeReport {
   transports: string[];
   callbackFired: boolean;
+  /** Per-command (amendment 16): did a keyless `lan_fetch` resolve into the subframe? */
+  lanCallbackFired: boolean;
 }
 
 /**
@@ -218,6 +281,48 @@ export function decideInvokeRefused(
   };
 }
 
+/**
+ * THE PER-COMMAND VERDICT for `lan_fetch` (amendment 16). See
+ * `LAN_FETCH_COMMAND` for why this sensor is a callback rather than an effect,
+ * and why it is honest about being the weaker of the two.
+ *
+ * `keyReachable` is the conjunction of the three key-absence checks. It is a
+ * REQUIRED input, not a courtesy: the callback signal alone cannot distinguish
+ * "the command refused" from "the command ran and its response went somewhere
+ * this frame cannot see" — which is exactly the unanswerable-sensor defect that
+ * forced `ipc-invoke-refused`'s rework. Pairing it with "the invoke key never
+ * reached this frame" is what makes the pass mean something.
+ */
+export function decideLanFetchRefused(
+  report: ProbeReport | undefined,
+  keyReachable: boolean,
+): CheckResult {
+  const id = 'ipc-lan-fetch-refused';
+  if (report === undefined) {
+    return { id, pass: false, detail: `the sandboxed probe never reported — no ${LAN_FETCH_COMMAND} invoke was attempted` };
+  }
+  const where = report.transports.length > 0 ? report.transports.join(', ') : 'no raw transport reachable';
+  if (report.lanCallbackFired) {
+    return {
+      id,
+      pass: false,
+      detail: `${LAN_FETCH_COMMAND} resolved a callback into a sandboxed subframe via ${where} — the shell's pinned-TLS LAN transport is reachable from app code. STRUCTURAL BREAKAGE (Electron-fallback trigger)`,
+    };
+  }
+  if (keyReachable) {
+    return {
+      id,
+      pass: false,
+      detail: `the invoke key is reachable from the sandboxed subframe, so a silent ${LAN_FETCH_COMMAND} cannot be ruled out — this check cannot vouch for refusal`,
+    };
+  }
+  return {
+    id,
+    pass: true,
+    detail: `keyless ${LAN_FETCH_COMMAND} through ${where} resolved no callback, and the invoke key never reached the subframe (see ipc-tauri-internals-absent) — key-gated per command`,
+  };
+}
+
 export async function runIpcChecks(): Promise<CheckResult[]> {
   const { byId, report } = await new Promise<{ byId: Map<string, CheckResult>; report?: ProbeReport }>((resolve) => {
     const iframe = document.createElement('iframe');
@@ -245,6 +350,7 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
               report: {
                 transports: Array.isArray(p.transports) ? p.transports.map(String) : [],
                 callbackFired: p.callbackFired === true,
+                lanCallbackFired: (p as { lanCallbackFired?: unknown }).lanCallbackFired === true,
               },
             }
           : {}),
@@ -266,6 +372,14 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     sentinel = { error: String(err) };
   }
   byId.set('ipc-invoke-refused', decideInvokeRefused(report, sentinel));
+
+  // The per-command lan_fetch verdict (amendment 16) reads the three key-absence
+  // checks the subframe already reported. A MISSING one counts as reachable —
+  // a check that never ran cannot vouch for absence.
+  const keyReachable = (['ipc-tauri-internals-absent', 'ipc-tauri-global-absent', 'ipc-chrome-webview-absent'] as const).some(
+    (id) => byId.get(id)?.pass !== true,
+  );
+  byId.set('ipc-lan-fetch-refused', decideLanFetchRefused(report, keyReachable));
 
   // EVERY id must be present — a missing verdict is a FAIL (AC7).
   return IPC_CHECK_IDS.map((id) => byId.get(id) ?? { id, pass: false, detail: 'no-verdict' });

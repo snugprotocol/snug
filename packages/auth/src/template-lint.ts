@@ -32,7 +32,8 @@
  */
 
 /**
- * The pinned helper enum — FOUR names (parent plan §Pinned decisions, fold F-m3).
+ * The pinned helper enum — FIVE names (four per parent plan §Pinned decisions, fold
+ * F-m3; `cdp_jwt` added by TASK-20260812-desktop-auth-awareness P3, ADR-0022 §2).
  *
  * `hmac_sha256_b64` is the added encoding-capable variant. It exists because
  * Coinbase-Exchange's `base64(HMAC-SHA256(base64decode(secret), prehash))` was
@@ -43,11 +44,18 @@
  * transforms are FUSED into one fixed-arity helper rather than exposed as a general
  * `base64decode()` primitive a template could aim at arbitrary text.
  *
+ * `cdp_jwt` is the second signing-capable family: a host-side, provider-scheme-named
+ * signing function minting a per-request ES256 CDP JWT (Coinbase CDP keys). Like
+ * `hmac_sha256_b64` it is a FUSED fixed shape, not a general JWT primitive — the claim
+ * set, algorithm, and expiry are pinned in the engine, so a template can aim it only at
+ * "sign this request as CDP", never at arbitrary token minting. Its arguments carry a
+ * STRICTER form rule than the generic one: see `lintExpression`.
+ *
  * `unix_ms`, `hmac_sha512` and `sha256` are deliberately ABSENT: they shipped in the
  * engine's map with no requirement behind them, and every unused helper is signing
- * surface a hostile template can reach. Net helper count drops six -> four.
+ * surface a hostile template can reach.
  */
-export const AUTH_TEMPLATE_HELPERS = ['timestamp', 'hmac_sha256', 'hmac_sha256_b64', 'base64'] as const;
+export const AUTH_TEMPLATE_HELPERS = ['timestamp', 'hmac_sha256', 'hmac_sha256_b64', 'base64', 'cdp_jwt'] as const;
 
 export type AuthTemplateHelper = (typeof AUTH_TEMPLATE_HELPERS)[number];
 
@@ -98,6 +106,8 @@ const HELPER_ARITY: Record<AuthTemplateHelper, { min: number; max: number }> = {
    * of tokens the lint has already individually approved.
    */
   hmac_sha256_b64: { min: 2, max: 6 },
+  /** (api_key_field, private_key_field) — exactly two, both DECLARED field keys (see below). */
+  cdp_jwt: { min: 2, max: 2 },
 };
 
 /** Mirrors the engine's `PLACEHOLDER_RE`/`HELPER_RE` exactly — divergence here is a hole. */
@@ -212,6 +222,22 @@ function lintExpression(expression: string, fieldKeys: ReadonlySet<string>): str
     if (args.length < arity.min || args.length > arity.max) {
       const expected = arity.min === arity.max ? `${arity.min}` : `${arity.min}-${arity.max}`;
       return `helper '${name}' takes ${expected} argument(s) but got ${args.length}`;
+    }
+    if (name === 'cdp_jwt') {
+      // PER-ARGUMENT-FORM RULE, stricter than the generic loop below (P0 amendment 7 /
+      // ADR-0022 §2): both arguments are CREDENTIAL IDENTITIES — the key name that rides
+      // kid/sub and the signing PEM — so the literal and request-token forms the other
+      // helpers accept are never right here. A quoted key name would mint a structurally
+      // valid JWT for a key the user never declared; a request token in the PEM seat
+      // would "sign" with request text. Both are valid-looking-but-wrong outcomes, and
+      // the engine cannot re-check this (it receives resolved VALUES), so the render
+      // gate's lint is the enforcement seat.
+      for (const arg of args) {
+        if (arg.quoted || !fieldKeys.has(arg.text)) {
+          return `helper 'cdp_jwt' argument '${arg.text}' must be a declared field key — cdp_jwt takes (api_key_field, private_key_field), never quoted literals or request tokens`;
+        }
+      }
+      return null;
     }
     for (const arg of args) {
       // A QUOTED argument is a literal by authorial intent, so the lint permits it

@@ -65,7 +65,10 @@ function harness(
       slot: req.slot,
       requirement: req,
       status: CONNECTION_STATUS.approved,
-      allowedHosts: opts.allowedHosts ?? [...req.declaredApiHosts],
+      // `?? []` since ADR-0023 made `declaredApiHosts` required-XOR-`lanHost`. Every
+      // requirement THIS suite builds declares hosts, so the fallback is unreachable
+      // here — it exists to satisfy the widened type, not to admit a hostless fixture.
+      allowedHosts: opts.allowedHosts ?? [...(req.declaredApiHosts ?? [])],
     },
   ];
   const calls: FetchCall[] = [];

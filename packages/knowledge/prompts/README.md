@@ -14,7 +14,9 @@ prompts/
 │   ├── 10-host-identity.md          ← always on
 │   ├── 20-capability-file-creation.md  ← iff artifacts capability
 │   ├── 30-app-builder-summary.md    ← iff app-builder capability (KB summary appended below it)
-│   └── 40-app-response-format.md    ← iff app-builder capability
+│   ├── 40-app-response-format.md    ← iff app-builder capability
+│   ├── 45-app-runtime.md            ← runtime branch only (ADR-0018 D1) — replaces 30 on an installed app's turn
+│   └── 95-platform-desktop.md       ← iff platform 'desktop' (TASK-20260812 P2) — appended LAST on both branches
 ├── knowledge-base/
 │   └── app-authoring/               ← the app-builder KB, section-searchable
 │       ├── 00-summary.md            ← ~600-char blurb injected into the system prompt; NOT part
@@ -66,7 +68,11 @@ prompts/
    served ONLY here: it is excluded from `getKnowledgeBase()` and the `searchKnowledge`
    corpus because it duplicates KB content and would pollute retrieval.
 4. `system/40-app-response-format.md` — iff app-builder enabled.
-5. Tenant blocks rendered from `templates/` (e.g. user identity) — runtime, optional.
+5. `system/95-platform-desktop.md` — iff the caller passes `platform: 'desktop'`
+   (TASK-20260812 P2). Appended LAST so a web assembly is a strict prefix of its desktop
+   sibling; absent or `'web'` assembles byte-identically to the pre-seat shape (ADR-0012:
+   a client's platform never changes mid-session, so the cached prefix stays stable).
+6. Tenant blocks rendered from `templates/` (e.g. user identity) — runtime, optional.
 
 Golden snapshots cover the 4-combination gating matrix; any edit to these files shows up in
 the golden diff — that diff IS the blast radius review.

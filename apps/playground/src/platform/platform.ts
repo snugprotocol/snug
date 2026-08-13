@@ -21,6 +21,46 @@ export interface SnugPlatform {
   kind: 'web' | 'desktop';
   /** Outbound fetch for connected-fetch, adapters, OAuth exchange. Web: undefined → globalThis.fetch. */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  /**
+   * The PINNED-TLS LAN transport (ADR-0023 Decision 3; P0 amendment 6) — the
+   * shell's `lan_fetch` command. Reaches a device on the user's own network
+   * whose certificate is signed by a private CA, verifying it against a TOFU
+   * fingerprint recorded at pairing.
+   *
+   * Web: ABSENT, and absence is the entire web story — a browser cannot pin a
+   * certificate, so a LAN row on web is DISCLOSED as desktop-only rather than
+   * attempted. The executor treats absence as a named refusal and never as a
+   * reason to fall back to `fetchImpl`, so this seat cannot silently become a
+   * way to dial a private address from a page.
+   *
+   * Note this is NOT a variant of `fetchImpl`: the pin is a required third
+   * argument, because a pinless call to this transport is a different (pair
+   * mode) trust decision that only the wizard's pairing step may make.
+   */
+  lanFetch?: (url: string, init: RequestInit, pin: string) => Promise<Response>;
+  /**
+   * PAIR MODE — the shell's `lan_fetch` in `mode:'pair'` (ADR-0023 D2; P0
+   * amendment 5). The ONE call that accepts a LAN device's certificate without
+   * a pin, because there is no pin yet: the rustls verifier accepts and
+   * CAPTURES the leaf (fingerprint + CN) and hands it back beside the response,
+   * so the wizard writes pin + minted key in a single step.
+   *
+   * A SEPARATE SEAT FROM `lanFetch`, NEVER A MODE ARGUMENT ON IT, and that
+   * separation is the guard. `lanFetch` is threaded into the connected-fetch
+   * deps; this is not, and must never be — a request-time path to
+   * accept-and-capture would trust whatever answers at the address, which is
+   * the accept-invalid-certs decision this whole design exists to avoid. The
+   * ONLY legitimate caller is the wizard's pairing step, which runs after the
+   * user has approved the row and pressed a physical button on the device.
+   *
+   * The `pin` in the answer is OPTIONAL on purpose: when the verifier never
+   * ran, its absence is the truth and the wizard must refuse to record rather
+   * than store a fingerprint that would fail every later request.
+   */
+  lanPair?: (
+    url: string,
+    init: { method: string; body?: string; headers?: Record<string, string> },
+  ) => Promise<{ status: number; body: string; pin?: { fingerprint: string; cn: string } }>;
   /** Userdb + sync-sidecar backend. Web: undefined → detectPersistenceBackend(USERDB_OPFS_DIR). */
   userdbBackend?: PersistenceBackend;
   /** OAuth transport. Web: undefined → popup + BroadcastChannel + `${origin}/oauth/callback`. */

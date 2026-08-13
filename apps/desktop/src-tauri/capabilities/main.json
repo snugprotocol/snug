@@ -9,7 +9,12 @@
     "core:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://*" }
+      ]
+    },
     "oauth:allow-start",
     "oauth:allow-cancel",
     {

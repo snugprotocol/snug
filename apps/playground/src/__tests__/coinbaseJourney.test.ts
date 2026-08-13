@@ -81,10 +81,21 @@ describe('P3 — the owner journey: undeclared Coinbase build → reviewable api
     expect(row.provenance).toBe('registry');
     expect(row.requirement.kind, 'the registry\'s OWN kind — the founding fix').toBe('api_key');
     expect(row.requirement.provider.name).toBe('Coinbase');
+    // MIGRATED 2026-08-13 (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §5): the
+    // named CDP pair — the old key/secret/passphrase trio described retail HMAC keys
+    // Coinbase expired 2025-02-05. The founding defect was UNNAMED boxes, not a count.
     expect(
       row.requirement.fields?.map((field) => field.key),
-      'all three named secrets reach the row (the founding defect)',
-    ).toEqual(['api_key', 'api_secret', 'passphrase']);
+      'the named CDP secrets reach the row (the founding defect was unnamed boxes)',
+    ).toEqual(['api_key', 'private_key']);
+    expect(
+      row.requirement.request?.headerTemplate,
+      'the pinned signing template must PERSIST — a row without it falls to the X-Api-Key kind default',
+    ).toEqual({ Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' });
+    expect(row.requirement.testRequest, 'the pinned probe must persist for the wizard').toEqual({
+      method: 'GET',
+      pathAndQuery: '/api/v3/brokerage/accounts',
+    });
     expect(row.allowedHosts).toEqual(['api.coinbase.com']);
 
     // 3. THE CTA: the same call the net-error banner makes now finds the row.

@@ -45,11 +45,50 @@ describe('registry entries', () => {
     }
   });
 
-  it('EVERY entry carries a human-reviewed, non-empty apiHosts list (plan D2 — the branch points at data that exists)', () => {
+  // MIGRATED 2026-08-13 (TASK-20260812-desktop-auth-awareness P5, ADR-0023 Decision 1).
+  //
+  // WAS: "EVERY entry carries a human-reviewed, non-empty apiHosts list (plan D2 — the
+  // branch points at data that exists)". That rule was correct for ten entries and
+  // COLLIDES structurally with the eleventh: a Philips Hue bridge sits at an address the
+  // USER's router assigned, so no human review could pin it and no honest value exists to
+  // put in `apiHosts`. ADR-0023 replaces the rule with the fork below rather than
+  // weakening it — every entry still declares exactly one host SOURCE, and an entry that
+  // declares neither (or both) is still a failure. The old rule's real content — "a
+  // pinned host list is non-empty and bare-hostname-shaped" — survives verbatim inside
+  // branch (a), so nothing is LOST.
+  it('EVERY entry declares exactly ONE host source: pinned apiHosts XOR lanHost (ADR-0023 Decision 1)', () => {
     for (const [key, entry] of Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)) {
-      expect(entry.apiHosts.length, key).toBeGreaterThan(0);
-      for (const host of entry.apiHosts) {
-        expect(host, key).toMatch(/^[a-z0-9.-]+$/); // bare lowercase hostnames, never URLs
+      const pinned = entry.apiHosts !== undefined;
+      const lan = entry.lanHost !== undefined;
+      expect(
+        pinned !== lan,
+        `${key}: an entry must pin apiHosts OR declare a lanHost — never neither (no ceiling) and never both (two host sources)`,
+      ).toBe(true);
+      if (pinned) {
+        // Branch (a) — the original rule, unchanged for the ten pinned-host entries.
+        expect(entry.apiHosts!.length, key).toBeGreaterThan(0);
+        for (const host of entry.apiHosts!) {
+          expect(host, key).toMatch(/^[a-z0-9.-]+$/); // bare lowercase hostnames, never URLs
+        }
+      } else {
+        // Branch (b) — a LAN entry declares the CLASS of address it will collect and the
+        // label the wizard renders above the input, and it carries NO address: an entry
+        // that pinned one would be pinning a value only the user can know.
+        expect(entry.lanHost!.class, key).toBe('rfc1918-ipv4-literal');
+        expect(entry.lanHost!.label.length, key).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('lanHost is an ENTRY-level seat — no authOption may declare one (hosts are identity, never flow)', () => {
+    // Same rule ADR-0020 states for `apiHosts`, restated for the seat that replaces it:
+    // which hosts may receive a credential is a per-PROVIDER decision, and a flow choice
+    // must never move it. Pinned structurally because the type alone cannot say it.
+    for (const [key, entry] of Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)) {
+      for (const option of entry.authOptions ?? []) {
+        const raw = option as unknown as Record<string, unknown>;
+        expect(raw['lanHost'], `${key}.${option.id}`).toBeUndefined();
+        expect(raw['pairing'], `${key}.${option.id}: a pairing exchange belongs to the DEVICE`).toBeUndefined();
       }
     }
   });

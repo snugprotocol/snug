@@ -1,0 +1,12 @@
+{
+  "slot": "hue",
+  "provider": {
+    "name": "Philips Hue",
+    "docsUrl": "https://developers.meethue.com/develop/hue-api-v2/getting-started/"
+  },
+  "kind": "api_key",
+  "lanHost": {
+    "class": "rfc1918-ipv4-literal",
+    "label": "Bridge IP address"
+  }
+}

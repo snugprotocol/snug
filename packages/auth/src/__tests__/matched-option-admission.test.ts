@@ -58,7 +58,9 @@ describe("AC5 — the 'user' channel rebind: a chosen variant's list is blessed 
     expect(admitted.fields?.map((field) => field.key)).toEqual(['client_id']);
     expect(admitted.endpoints?.authorizeUrl).toBe('https://login.coinbase.com/oauth2/auth');
     // Identity invariants hold on the variant path exactly as on the default path.
-    expect(admitted.declaredApiHosts).toEqual([...coinbase.apiHosts]);
+    // `!` since P5 widened the seat (apiHosts XOR lanHost, ADR-0023). Coinbase is a
+    // pinned-host entry — a LAN entry reaching this assertion would be the bug.
+    expect(admitted.declaredApiHosts).toEqual([...coinbase.apiHosts!]);
     expect(admitted.provider.name).toBe('Coinbase');
   });
 
@@ -91,10 +93,10 @@ describe("AC5 — the 'user' channel rebind: a chosen variant's list is blessed 
       { channel: 'starter' },
     );
     expect(result.ok).toBe(true);
+    // MIGRATED 2026-08-13 (P3 Coinbase CDP rewrite): the default list is the CDP pair.
     expect((result.requirement as AdmittedShape).fields?.map((field) => field.key)).toEqual([
       'api_key',
-      'api_secret',
-      'passphrase',
+      'private_key',
     ]);
   });
 
@@ -136,8 +138,12 @@ describe("AC5 — the 'user' channel rebind: a chosen variant's list is blessed 
       expect(result.ok).toBe(true);
       const admitted = result.requirement as AdmittedShape;
       expect(admitted.fields).toEqual(option.fields);
-      // Hosts are STILL replaced on the variant path — evil.example is gone.
-      expect(admitted.declaredApiHosts).toEqual([...entry.apiHosts]);
+      // Hosts are STILL replaced on the variant path — evil.example is gone. `!` since
+      // P5 widened the seat (apiHosts XOR lanHost, ADR-0023): only multi-OPTION entries
+      // reach here, and a LAN entry may declare no options at all (pinned by
+      // well-known-providers.test.ts), so this loop is pinned-host by construction.
+      expect(entry.apiHosts, 'an entry with authOptions pins hosts').toBeDefined();
+      expect(admitted.declaredApiHosts).toEqual([...entry.apiHosts!]);
       expect(admitted.declaredApiHosts).not.toContain('evil.example');
     }
   });

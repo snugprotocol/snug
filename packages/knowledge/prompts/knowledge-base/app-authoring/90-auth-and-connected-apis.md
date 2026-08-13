@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served section-by-section through {{appBuilderToolName}} retrieval; the summary layer's trigger clause sends every external-API build here BEFORE code is written (AL-05 AC5/AC10)
 blast-radius: whether builder-authored apps reach external APIs through the host at all, whether the builder ever tries to place a credential in app code (C1), and whether a declared connection is COMPLETE — a requirement missing a field the provider needs produces an app that cannot authenticate and a user who cannot fix it. Headings are retrieval-load-bearing (AL-05 AC10, ADR-0004): a retrieval test pins that build-time auth queries return the emission teaching in searchKnowledge's top results — renaming or de-keywording headings can silently unserve this file.
-source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb); rewritten for Dynamic Auth v2 (TASK-20260810-p2-pipeline, parent §5 R1/R3 — the full-requirement channel, the skip-rules, the completeness bar). Anthropic prompt-engineering best practices re-read 2026-08-10.
+source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb); rewritten for Dynamic Auth v2 (TASK-20260810-p2-pipeline, parent §5 R1/R3 — the full-requirement channel, the skip-rules, the completeness bar); platform-reach copy corrected for the shipped desktop shell + user-typed-LAN rule added (TASK-20260812-desktop-auth-awareness P2, ADR-0021, P0 security amendment 15); pinned-provider copy trued up for the registry's request/testRequest seats + the cdp_jwt helper (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §1). Anthropic prompt-engineering best practices re-read 2026-08-13.
 -->
 
 ## Connected APIs: calling an external API with auth, login, and credentials
@@ -58,8 +58,15 @@ you are sure of. An honestly incomplete declaration the user can correct is bett
 confident wrong one: a wrong hostname freezes a ceiling that refuses every real request,
 and the user sees it as an authentication bug with no way to diagnose it. There is no
 live-fetch rung — the host never fetches a documentation URL for you (fetching arbitrary
-URLs would be an unfrozen network surface beside the frozen host allowlist), and
-desktop-native fetch is a FUTURE rung that does not exist yet.
+URLs would be an unfrozen network surface beside the frozen host allowlist).
+
+What the host can reach differs by platform, and only by platform — the rules above hold
+everywhere. In the Snug desktop app the host's own fetch is native, so providers that
+refuse cross-origin browser calls still work there once their hosts are approved; and a
+device on the user's own network — a private RFC-1918 IPv4 address the user approves —
+is reachable from the desktop app only. The browser version of Snug refuses private
+ranges. A LAN address is always typed by the user in the connect flow: never propose,
+guess, or invent a private address in a requirement.
 
 ### Declare the connection: emit the {{connectionRequirementDirectiveKind}} directive as you build
 
@@ -158,7 +165,10 @@ You may reference:
 - any `key` you declared in `fields`;
 - `request.timestamp`, `request.method`, `request.url`, `request.pathAndQuery`,
   `request.body` — facts about the outgoing request;
-- four helpers: `timestamp`, `base64`, `hmac_sha256`, `hmac_sha256_b64`.
+- five helpers: `timestamp`, `base64`, `hmac_sha256`, `hmac_sha256_b64`, and
+  `cdp_jwt(api_key_field, private_key_field)` — a provider-specific signer that mints a
+  Coinbase-CDP-style ES256 JWT; use it only for a provider whose docs describe exactly
+  that scheme, and remember Coinbase itself is pinned (declare no template for it).
 
 A reference to anything else is rejected, and the directive with it — the host will not
 guess what you meant, because a typo'd field name in a signature silently signs the wrong
@@ -196,16 +206,18 @@ about whether your edit touched the auth surface, it did not; skip.
 ### Providers the host already knows: declare the SHAPE, never the brand's copy
 
 Some providers are pinned in the host's own registry — Spotify, GitHub, Google, Gmail,
-Coinbase, OpenWeather, CoinGecko and friends. For those, the host already holds a
-human-reviewed field list, registration walkthrough and host list, and it substitutes them
+Coinbase, OpenWeather, CoinGecko and friends. For those, the host already holds the
+human-reviewed truth end to end: the field list, the registration walkthrough, the host
+list, WHERE the credential is sent (the request templates, including signed schemes like
+Coinbase's per-request JWT) and HOW the connection is tested. It substitutes all of it
 over anything you write.
 
 So when the provider is one the host knows, declare only what you legitimately know — the
-`slot`, the `kind`, and `declaredApiHosts` — and **omit `fields`, `request.headerTemplate`
-and `testRequest`**. Omit them and you receive the pinned, reviewed versions. Author them
-next to a known brand and the whole requirement is **refused**, because credential-prompt
-copy sitting beside a trusted brand is exactly how a user is talked into pasting the wrong
-secret.
+`slot`, the `kind`, and `declaredApiHosts` — and **omit `fields`, `request` (header and
+query templates) and `testRequest`**. Omit them and you receive the pinned, reviewed
+versions. Author them next to a known brand and the whole requirement is **refused**,
+because credential-prompt copy sitting beside a trusted brand is exactly how a user is
+talked into pasting the wrong secret — or having it sent somewhere the app chose.
 
 This is matched on the brand, not on an exact spelling: "Spotify", "Spotify Inc",
 "Spotify Connect" and "SpotifyPremium" are all treated as naming Spotify. **Do not reach

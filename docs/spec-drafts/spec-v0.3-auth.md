@@ -25,6 +25,18 @@
 > draft. What v0.3 adds is a storage layer, a validation contract, and a set of host
 > obligations. In particular there is still **no frame through which a running app can
 > ask for a credential** (§2).
+>
+> **Version note (TASK-20260812-desktop-auth-awareness P3, 2026-08-13 — internal-staged,
+> not pushed):** `request` gains an optional `queryTemplate` seat (§4.4.2) with its own
+> query-parameter-name charset; header-template rules are unchanged. Staged here per
+> SPEC_SYNC; AL-12 remains HELD and nothing is pushed to `snugprotocol/spec`.
+>
+> **Version note (TASK-20260812-desktop-auth-awareness P5, 2026-08-13 — internal-staged,
+> not pushed):** the requirement gains an optional `lanHost` seat and `declaredApiHosts`
+> becomes **required-XOR-`lanHost`** (§4.8), so a provider whose API lives on a device on
+> the user's own network is declarable at all. Non-LAN requirements are byte-identical to
+> v0.3-as-of-P3. Staged here per SPEC_SYNC; AL-12 remains HELD and nothing is pushed to
+> `snugprotocol/spec`.
 
 ## 1. What a connection is
 
@@ -235,10 +247,18 @@ connectionRequirement = {
   endpoints?,              // authorize/token/refresh/revoke, https, ≤300
   scopes?,                 // ≤64 × ≤200
   pkce?, authorizeParams?,
-  request?: { headerTemplate? },               // ≤8 entries, name ^[A-Za-z0-9-]{1,64}$,
+  request?: { headerTemplate?,                 // ≤8 entries, name ^[A-Za-z0-9-]{1,64}$,
                                                // value ≤300 (§4.4)
+              queryTemplate? },                // ≤8 entries, name ^[A-Za-z0-9_.\[\]-]{1,64}$,
+                                               // value ≤300 (§4.4.2)
   userLayer?,              // registry-synthesized ONLY (§4.5)
-  declaredApiHosts,        // REQUIRED, 1..32 × ≤253, bare hostnames, normalized
+  lanHost?: { class,       // 'rfc1918-ipv4-literal' (single-member union; additive)
+              label },     // ≤80, rendered above the wizard's address input (§4.8)
+  declaredApiHosts?,       // 1..32 × ≤253, bare hostnames, normalized.
+                           // REQUIRED-XOR-lanHost: required and non-empty when lanHost
+                           // is ABSENT; when lanHost is present it is either absent
+                           // (pre-collection) or EXACTLY ONE host of the declared
+                           // class (post-collection) — §4.8
   testRequest?             // { method: 'GET', pathAndQuery ≤200, leading '/' }
 }
 ```
@@ -359,6 +379,43 @@ CB-ACCESS-TIMESTAMP: {{request.timestamp}}
 CB-ACCESS-SIGN:      {{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}
 ```
 
+#### 4.4.2 Query-parameter templates
+
+`request.queryTemplate` places credentials into the **query string** of outbound
+requests — the placement some providers require and header templates cannot express
+(OpenWeather's `?appid=`, CoinGecko's demo key).
+
+Query-parameter **names** get their own charset, `^[A-Za-z0-9_.\[\]-]{1,64}$`, rather
+than reusing the header rule: real query parameters carry underscores
+(`x_cg_demo_api_key` — a name the header rule's alnum+dash would reject), dots, and
+bracketed forms (`filter[key]`), while header names must stay proxy-safe. Both charsets
+still exclude every character that could smuggle URL structure or template
+metacharacters past the review code box: `=`, `&`, `%`, `?`, `#`, space, quotes and
+braces.
+
+Query-template **values** follow §4.4 in full and verbatim: the same ≤300-char bound,
+the same reference vocabulary (declared field keys, pinned request tokens, pinned
+helpers, quoted literals), the same flat grammar, and the same lint obligations. A
+conforming host MUST derive the header-template and query-template value lints from
+**one** resolution of the declared field keys — two lints that can disagree about
+"declared" is a known defect shape, not a style preference.
+
+The `none` coherence rule of §4.1 closes over this seat: a `none` requirement carrying a
+request template of either placement is rejected at parse.
+
+Rendered query values are **credentials inside a URL**, which makes the URL itself
+secret-bearing — unlike a header template, where the URL stays inert. Two host
+obligations follow:
+
+- **Placement after the ceiling.** A conforming host MUST render query credentials into
+  the URL only **after** the frozen-ceiling host checks have passed, so the ceiling
+  decision is always made against the app-supplied URL.
+- **Scrubbing is enumerated, not aspirational.** The credentialed URL MUST NOT appear in
+  any surface the app, the model, or the user's logs can read: fetch-error messages
+  (network errors routinely embed the full URL), response echo surfaces, LLM-visible
+  inspectors, and host UI surfaces. The request URL returned to the app is the URL the
+  app asked for, **never** the credentialed one.
+
 ### 4.5 `userLayer` is registry-synthesized only
 
 The embedded org→user second layer keeps two-layer providers expressible. It is
@@ -391,6 +448,53 @@ directive: `{ v, kind: 'connection_requirement', requirement, confidence?, prove
 `confidence` and `provenance` on the wire are **display-only**. The host computes
 provenance from the channel it actually received the directive on and recomputes
 confidence from the ladder rung it resolved; no gating decision reads the claimed values.
+
+### 4.8 LAN-class providers: `lanHost` and the host XOR
+
+*(TASK-20260812-desktop-auth-awareness P5, ADR-0023 Decision 1 — internal-staged.)*
+
+A provider whose API lives on a device on the **user's own network** — a Philips Hue
+bridge is the first — has no host any registry or author can pin: the address belongs to
+the user's router. Before this seat such a requirement was **unrepresentable**, because
+`declaredApiHosts` was both required and `.min(1)`.
+
+`lanHost` is a DECLARATION THAT A HOST WILL BE COLLECTED, never a host:
+
+```
+lanHost = { class: 'rfc1918-ipv4-literal', label: 'Bridge IP address' }
+```
+
+`class` is a single-member union today. Future device classes are **additive** — a new
+literal plus its own validator and its own admission rule, never a widening of this one.
+
+**The host XOR (normative).** Exactly one host source, and the rule follows from what
+consumes the seat: `deriveConnectionAllowedHosts` unions `declaredApiHosts` into the
+frozen ceiling at approval, and that ceiling is the runtime injection wall. So the
+collected address must be able to live in `declaredApiHosts` — there is no second path by
+which a ceiling could freeze around the user's device.
+
+| `lanHost` | `declaredApiHosts` | verdict |
+| --- | --- | --- |
+| absent | 1..32 hosts | **accepted** — every pre-P5 requirement, unchanged |
+| absent | absent or `[]` | **refused** (`declaredApiHosts` required) |
+| present | absent | **accepted** — the pre-collection shape a LAN registry entry emits |
+| present | exactly one host **of the declared class** | **accepted** — the post-collection shape the wizard writes |
+| present | a host outside the class (public, loopback, link-local, DNS name, IPv6) | **refused** |
+| present | two or more hosts | **refused** |
+| present | `[]` | **refused** |
+
+A public host beside a `lanHost` would freeze a public host into a ceiling the review
+screen presents as "a device on your own network" — a credential aimed anywhere, wearing
+LAN clothes. A second private literal is a second device the user never paired.
+
+**Host obligations.** (a) `deriveConnectionAllowedHosts` returns `[]` for a pre-collection
+LAN row: an empty ceiling refuses every host, which is the correct answer before an
+address exists. The binding wizard order is therefore **collect the address → approve the
+row → freeze the ceiling → pair**. (b) The schema is the FIRST of two seats that refuse an
+off-class host; the registry-borrow ban re-validates the class independently, because a
+requirement can reach admission without passing through this schema (§4.6, and the
+envelope-boundary rule in §6). (c) Nothing platform-conditional is persisted: a LAN row
+opened on the web hub is **disclosed** as desktop-only, never refused or rewritten.
 
 ## 5. Credential custody (unchanged in substance)
 

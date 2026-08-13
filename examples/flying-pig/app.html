@@ -535,9 +535,9 @@ function useAppDB() {
 
 // ============================================================
 // 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
-// The sandboxed app has NO network of its own. This reaches your app's APPROVED hosts
-// THROUGH the host, which injects your saved credentials, blocks private ranges, caps
-// sizes, asks you before any write, and scrubs the response. You never see a token.
+// The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+// hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+// before any write, and scrubs the response. You never see a token.
 // ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
 // ============================================================
 function useConnectedFetch() {

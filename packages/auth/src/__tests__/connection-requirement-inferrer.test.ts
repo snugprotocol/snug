@@ -71,14 +71,17 @@ describe('AC1 — the inferrer emits the ENTRY\'s kind, never a hardcoded one', 
 });
 
 describe('AC2 — a registry hit emits the entry\'s pinned fields VERBATIM', () => {
-  it('Coinbase: three named, typed fields arrive — not zero, not one generic box', async () => {
+  it('Coinbase: the named, typed CDP fields arrive — not zero, not one generic box', async () => {
+    // MIGRATED 2026-08-13 (P3 CDP rewrite): two named fields (key name + EC private
+    // key), not the old expired-HMAC three. The count was never the point — the NAMED,
+    // exact set is.
     const { complete } = recordingComplete();
     const inferrer = createConnectionRequirementInferrer({ complete });
     const result = await inferrer.infer({ providerName: 'Coinbase', slot: 'coinbase', prompt: PROMPT });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.requirement?.fields).toEqual(WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.fields);
-    expect(result.requirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'api_secret', 'passphrase']);
+    expect(result.requirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
   });
 
   it('an entry with NO fields emits none — no invented input (google)', async () => {
@@ -285,7 +288,7 @@ describe('AC6 — aliases are human-authored ONLY; lookalikes fall through', () 
     expect(result.provenance).toBe('registry');
     expect(result.requirement?.kind).toBe('api_key');
     expect(result.requirement?.provider.name, 'the PINNED display name, never the near-miss').toBe('Coinbase');
-    expect(result.requirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'api_secret', 'passphrase']);
+    expect(result.requirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
   });
 
   it("'Cooinbase' and 'Sp0tify' do NOT match — ADR-0017's lookalike posture is pinned, not reopened", async () => {

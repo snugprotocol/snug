@@ -297,7 +297,13 @@ describe('T2f — normalized comparison, and a mismatch REPORTS its reason', () 
     expect(await starterDeclarationFor(db, appId)).toBeNull();
   });
 
-  it('a semantic edit does not resolve, and the mismatch is reported for the Settings surface', async () => {
+  // NOTE (P4, TASK-20260812-desktop-auth-awareness): these two cases used to name a
+  // "Settings surface" as the consumer of `mismatch`. NO SUCH SURFACE EXISTS — a
+  // `console.warn` at the detection site is the only signal a user could see. The
+  // ASSERTIONS are unchanged and still binding (the seat must be set, and must NOT be set
+  // for an app that simply never declared); only the false claim about who renders it is
+  // corrected. Building the surface is queued in docs/next-steps.md.
+  it('a semantic edit does not resolve, and the mismatch is REPORTED rather than silent', async () => {
     const appId = installDemo(BUNDLED_HTML.replace('const app = 1;', 'const app = 999;'));
     const outcome = await resolveDeclaredIntent(db, appId);
 
@@ -314,7 +320,7 @@ describe('T2f — normalized comparison, and a mismatch REPORTS its reason', () 
   });
 
   it('an app with no manifest reports no mismatch either — it simply never declared', async () => {
-    // The distinction the Settings surface depends on: "this app’s code no longer matches
+    // The distinction a future surface will depend on: "this app’s code no longer matches
     // its starter" is a WARNING, while "this app has no connection" is the normal case.
     // Collapsing them would put a scary banner on every app in the library.
     const appId = db.installApp({ displayName: 'chess', html: '<html>chess</html>', installSource: 'starter:chess' })

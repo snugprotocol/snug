@@ -22,6 +22,13 @@ const SEPARATOR = '\n\n---\n\n';
  */
 export const SYSTEM_BLOCK_SEPARATOR = SEPARATOR;
 
+/**
+ * The shell a prompt assembly serves (TASK-20260812-desktop-auth-awareness P2). PINNED
+ * name and members: callers derive it from `getPlatform().kind`, which carries exactly
+ * this union.
+ */
+export type HostPlatform = 'web' | 'desktop';
+
 export interface HostSystemPromptOptions {
   /** Include the app-builder layers (30-summary + 40-response-format). */
   appBuilder: boolean;
@@ -40,6 +47,18 @@ export interface HostSystemPromptOptions {
    * design (ADR-0012).
    */
   appRuntime?: boolean;
+  /**
+   * The shell this assembly serves (TASK-20260812-desktop-auth-awareness P2, AC1).
+   * Absent or 'web' assembles BYTE-IDENTICALLY to before the seat existed — AC10's
+   * no-regression rests on that default. 'desktop' appends the 95-platform-desktop
+   * layer LAST, through the same separator as every other layer, on BOTH branches
+   * (builder and appRuntime).
+   *
+   * ADR-0012 note: the system prefix now differs per platform, but a client's platform
+   * never changes mid-session (setPlatform is set-once, before boot), so within any one
+   * client the prefix stays byte-stable and the cached-prefix discipline holds.
+   */
+  platform?: HostPlatform;
 }
 
 /**
@@ -53,9 +72,9 @@ export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
   // The runtime branch is checked FIRST and returns: an app's own turn must never carry
   // authoring layers, whatever else the caller asked for (ADR-0018 D1).
   if (opts.appRuntime === true) {
-    return [getSystemLayer('host-identity'), getSystemLayer('app-runtime'), getSystemLayer('app-response-format')].join(
-      SEPARATOR,
-    );
+    const layers = [getSystemLayer('host-identity'), getSystemLayer('app-runtime'), getSystemLayer('app-response-format')];
+    if (opts.platform === 'desktop') layers.push(getSystemLayer('platform-desktop'));
+    return layers.join(SEPARATOR);
   }
   const layers: string[] = [getSystemLayer('host-identity')];
   if (opts.artifacts) layers.push(getSystemLayer('capability-file-creation'));
@@ -65,6 +84,10 @@ export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
       getSystemLayer('app-response-format'),
     );
   }
+  // Desktop truth rides LAST on every branch (TASK-20260812 P2): after the byte-stable
+  // web layers so a web assembly is a strict PREFIX of its desktop sibling, and through
+  // the same separator so the forging guards cover it like any other layer.
+  if (opts.platform === 'desktop') layers.push(getSystemLayer('platform-desktop'));
   return layers.join(SEPARATOR);
 }
 
@@ -268,6 +291,36 @@ export function buildAuthSpecInferrerPrompt(input: AuthSpecInferrerPromptInput):
   return buildInferrerPromptFor('auth-spec-inferrer', input);
 }
 
+/** Input of the FULL-requirement inferrer prompt: the v3 input plus the platform seat. */
+export interface ConnectionRequirementInferrerPromptInput extends AuthSpecInferrerPromptInput {
+  /**
+   * TASK-20260812-desktop-auth-awareness P2 (AC2): on 'desktop' ONLY, the USER slot
+   * gains the `Platform facts (desktop):` block below. The SYSTEM slot stays static on
+   * every platform (D2 placement pin); absent or 'web' leaves the user slot
+   * byte-identical to before the seat existed.
+   */
+  platform?: HostPlatform;
+}
+
+/**
+ * The desktop platform facts, USER-slot copy (AC2). Host-supplied trusted fact, so it
+ * sits ABOVE the <provider_docs> delimiter with the provider identity — never inside
+ * the untrusted block. The first line is a PINNED literal (task file P2); the
+ * user-typed-LAN bullet is P0 security amendment 15 restated for inference: a private
+ * address reaches a requirement only through the wizard's collect step, never as a
+ * model proposal.
+ *
+ * Lives here rather than in prompts/tools/ because it is user-slot scaffolding of ONE
+ * builder, exactly like the delimiters and the no-docs fallback copy above it — still
+ * inside the prompt-store package (ADR-0004's centralization boundary).
+ */
+const DESKTOP_INFERRER_PLATFORM_FACTS = [
+  'Platform facts (desktop):',
+  "- This host is the Snug desktop app: a private RFC-1918 IPv4 address literal is a legal declaredApiHosts entry here once the user approves it. The browser version of Snug refuses private ranges.",
+  '- A LAN address is always typed by the user in the connect flow. Never propose, guess, or invent one — extract, never invent applies to LAN hosts too.',
+  '- Desktop loopback OAuth exists: provider sign-in opens the system browser and returns through a loopback redirect on this machine.',
+].join('\n');
+
 /**
  * Dynamic Auth v2 (TASK-20260810-p2-pipeline, R2): the same two-slot placement, aimed at
  * the FULL-requirement prompt. The v3 builder above keeps shipping under the B1 cutover
@@ -278,14 +331,19 @@ export function buildAuthSpecInferrerPrompt(input: AuthSpecInferrerPromptInput):
  * in either — inference runs at BUILD time, before any credential exists (C1).
  */
 export function buildConnectionRequirementInferrerPrompt(
-  input: AuthSpecInferrerPromptInput,
+  input: ConnectionRequirementInferrerPromptInput,
 ): AuthSpecInferrerPrompt {
-  return buildInferrerPromptFor('connection-requirement-inferrer', input);
+  return buildInferrerPromptFor(
+    'connection-requirement-inferrer',
+    input,
+    input.platform === 'desktop' ? DESKTOP_INFERRER_PLATFORM_FACTS : undefined,
+  );
 }
 
 function buildInferrerPromptFor(
   tool: 'auth-spec-inferrer' | 'connection-requirement-inferrer',
   input: AuthSpecInferrerPromptInput,
+  platformFacts?: string,
 ): AuthSpecInferrerPrompt {
   const system = getToolPrompt(tool);
   const docs =
@@ -295,6 +353,9 @@ function buildInferrerPromptFor(
   const user = [
     `Provider name: ${input.providerName}`,
     `Kind hint: ${input.kindHint ?? '(none given — infer the kind)'}`,
+    // Host-supplied platform facts (desktop only) — above the delimiter, outside the
+    // untrusted block; absent, the user slot is byte-identical to the pre-seat shape.
+    ...(platformFacts !== undefined ? ['', platformFacts] : []),
     '',
     '<provider_docs>',
     docs,

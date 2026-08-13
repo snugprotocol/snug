@@ -27,6 +27,28 @@ export interface AuthConnectionState {
   expiresIn?: number;
   scopesGranted?: string[];
   lastError?: string;
+  /**
+   * THE TOFU CERTIFICATE PIN for a LAN-class connection (ADR-0023 Decision 3;
+   * P0 amendment 6). Recorded once, at pairing, by the desktop shell's
+   * `lan_fetch` in `mode:'pair'` — whose rustls verifier is the only place the
+   * peer certificate is ever visible — and read per request thereafter to drive
+   * the same command in `mode:'pinned'`.
+   *
+   * IT LIVES HERE, in the connection's dynamic-state KV, and NOT as a column of
+   * `snug_connections`, because that is precisely what this KV is for
+   * (ADR-0014 custody): per-connection state that changes without the
+   * REQUIREMENT changing. A column would dirty the synced spec surface on a
+   * re-pair and would travel in exports that deliberately strip secrets. The
+   * P0 refutation record notes this needs no db schema change for exactly this
+   * reason.
+   *
+   * `fingerprint` is the lowercase-hex SHA-256 of the leaf certificate's DER —
+   * the definition is pinned on the Rust side (`fingerprint_der`) and its shape
+   * is re-validated here before any request rides it. `cn` is DIAGNOSTIC only
+   * (a Hue bridge puts its bridgeId there); it is shown to the user and
+   * journaled, and is never a trust input.
+   */
+  lanPin?: { fingerprint: string; cn?: string };
 }
 
 /** The secrets quartet — the structural slice of UserDb the store consumes. */

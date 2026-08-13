@@ -86,9 +86,9 @@ export type ConnectedFetchResult =
 
 /**
  * Host-brokered network surface (useConnectedFetch, AL-03). The sandboxed app has zero
- * network of its own (C2); this reaches the app's APPROVED hosts through the host, which
- * validates the ceiling, injects credentials, blocks private ranges, caps sizes, gates
- * mutating calls behind user confirmation, and scrubs the response. ALWAYS resolves.
+ * network of its own (C2); this reaches ONLY the app's APPROVED hosts through the host,
+ * which validates the ceiling, injects credentials, caps sizes, gates mutating calls
+ * behind user confirmation, and scrubs the response. ALWAYS resolves.
  */
 export interface ConnectedFetch {
   fetch(url: string, opts?: ConnectedFetchOptions): Promise<ConnectedFetchResult>;

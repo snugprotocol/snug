@@ -39,8 +39,23 @@ import {
 
 /**
  * The starter variants P4 adds, each named for the folder whose manifest it mirrors.
- * `hue` is absent by design — Hue declares nothing (AL-09 D10), so there is no
- * requirement for a demo brain to emit and a variant would be a fiction.
+ *
+ * `hue` is STILL absent, and the REASON CHANGED with this task (AC8) — recorded here
+ * rather than left as a comment that has quietly become false. It used to be "Hue
+ * declares nothing, so a variant would be a fiction"; hue now ships a real `lanHost`
+ * manifest, so that reason is gone.
+ *
+ * The reason it is still absent is that these variants exist to drive the
+ * connection-wizard E2E against an https stub the Playwright project resolves to
+ * 127.0.0.1. A LAN requirement cannot be driven that way BY CONSTRUCTION: the wizard's
+ * address step refuses loopback, and the Rust `lan_fetch` host-class check refuses
+ * every address a CI runner can bind (P0 amendment 13, which is exactly why AC7's
+ * fixture is a Rust-boundary test rather than a stub). A hue variant would therefore
+ * be a journey no e2e could complete — a fiction for a different reason.
+ *
+ * The LAN journey is covered where it CAN be: `lanWizardFlow.test.tsx` drives collect →
+ * approve → pair end to end against a faked platform seam, and the Rust half owns the
+ * transport. Pinned below so the absence stays deliberate rather than becoming a gap.
  */
 const STARTER_VARIANTS = ['starter-coingecko', 'starter-openweather', 'starter-github', 'starter-spotify'] as const;
 
@@ -153,7 +168,13 @@ describe('P4-AC10 — every starter variant survives the FULL production path', 
       expect(closing, 'the directive must not be a hole where the requirement should be').not.toContain(
         '"requirement":null',
       );
-      expect(closing).toContain(DEMO_STARTER_REQUIREMENTS[variant].declaredApiHosts[0]);
+      // PREMISE stated, not optional-chained past (ADR-0023 made `declaredApiHosts`
+      // required-XOR-`lanHost`, so the type is now nullable). Every SHIPPED starter is
+      // host-pinned; a LAN-class starter would have to change this assertion
+      // deliberately rather than let it go vacuously green on an undefined host.
+      const declaredHosts = DEMO_STARTER_REQUIREMENTS[variant].declaredApiHosts;
+      expect(declaredHosts, `${variant}: shipped starters declare pinned hosts`).toBeDefined();
+      expect(closing).toContain(declaredHosts![0]);
       expect(closing).toContain(DEMO_STARTER_REQUIREMENTS[variant].slot);
     });
   }
@@ -190,7 +211,10 @@ describe('P4-AC10 — the starter variants MIRROR the shipped manifests', () => 
     // stub-host pattern exists to prevent. Read off disk, so a manifest host edit moves
     // the expectation with it rather than silently disagreeing.
     for (const { variant, folder } of VARIANT_FOLDERS) {
-      for (const host of DEMO_STARTER_REQUIREMENTS[variant].declaredApiHosts) {
+      // Same stated premise as above — a nullable seat asserted, never chained past.
+      const mirrored = DEMO_STARTER_REQUIREMENTS[variant].declaredApiHosts;
+      expect(mirrored, `${variant}: shipped starters declare pinned hosts`).toBeDefined();
+      for (const host of mirrored ?? []) {
         expect(readShippedManifest(folder).declaredApiHosts, `${variant}: ${host} is in no shipped manifest`).toContain(
           host,
         );

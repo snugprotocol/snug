@@ -76,7 +76,9 @@ export function renderedStore(): RenderedStoreEntry[] {
     ['host-identity', 'system/10-host-identity.md'],
     ['capability-file-creation', 'system/20-capability-file-creation.md'],
     ['app-builder-summary', 'system/30-app-builder-summary.md'],
+    ['app-runtime', 'system/45-app-runtime.md'],
     ['app-response-format', 'system/40-app-response-format.md'],
+    ['platform-desktop', 'system/95-platform-desktop.md'],
   ];
   const toolNames: ToolPromptName[] = ['app-builder', 'artifact-write', 'auth-spec-inferrer'];
 

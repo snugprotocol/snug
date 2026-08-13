@@ -83,15 +83,24 @@ export {
   requirementFromRegistryEntry,
   resolveDesktopPosture,
   resolveInferrerAlias,
+  // The NAME half of the borrow resolution, shared by admission and the wizard
+  // (P5-flow) so there is exactly one rule rather than two that can disagree.
+  resolveRegistryEntryByName,
   type DesktopRedirectPosture,
   type WellKnownAuthOption,
   type WellKnownOauthProvider,
+  // The pairing seat's TYPE (ADR-0023 D2): the wizard reads it to build the
+  // exchange, and a locally re-declared shape here would be a second definition
+  // of a contract the registry owns.
+  type WellKnownPairingExchange,
 } from './well-known-providers.js';
 
 export {
   AUTH_ENGINE_HELPER_NAMES,
   AuthTemplateError,
   renderAuthHeaderTemplate,
+  renderAuthRequestTemplates,
+  type AuthRequestTemplates,
   type AuthTemplateContext,
   type AuthTemplateRequest,
 } from './template-engine.js';

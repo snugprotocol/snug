@@ -53,12 +53,28 @@ const STUB_PORT = Number(process.env.SNUG_GATE_STUB_PORT ?? 43120);
 const JOURNEY_HOST = 'api.meridian-exchange.example';
 const RESULTS_TIMEOUT_MS = 10 * 60 * 1000;
 
-const EXPECTED_IPC_IDS = [
-  'ipc-tauri-internals-absent',
-  'ipc-tauri-global-absent',
-  'ipc-chrome-webview-absent',
-  'ipc-invoke-refused',
-];
+/**
+ * DERIVED, never retyped (lesson 2026-07-31: when one contract lives in two
+ * artifacts, lock the copies — here we delete the second copy instead).
+ *
+ * This list used to be a hand-maintained twin of `IPC_CHECK_IDS` in
+ * `src/gate/ipc.ts`, and the twin went stale the moment P5 added
+ * `ipc-lan-fetch-refused`: the harness ran the new check and PASSED it, the
+ * driver did not know the id, and the run failed as "unexpected check id" with
+ * 39/39 checks green. The driver is plain .mjs and cannot import the TS source,
+ * so it reads the source and extracts the ids — a missing/renamed export is a
+ * loud parse failure here rather than a silent divergence in CI.
+ */
+const EXPECTED_IPC_IDS = (() => {
+  const source = fs.readFileSync(new URL('../src/gate/ipc.ts', import.meta.url), 'utf8');
+  const block = /export const IPC_CHECK_IDS = \[([\s\S]*?)\] as const;/.exec(source);
+  if (block === null) {
+    throw new Error('gate driver: could not find IPC_CHECK_IDS in src/gate/ipc.ts — the harness contract moved');
+  }
+  const ids = [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  if (ids.length === 0) throw new Error('gate driver: IPC_CHECK_IDS parsed empty — refusing to expect nothing');
+  return ids;
+})();
 const EXPECTED_HARNESS_IDS_STATIC = [
   'env-sqljs-loads',
   'env-crypto-usable',

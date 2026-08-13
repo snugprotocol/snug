@@ -44,6 +44,7 @@ import {
   isWhitelistedNetResponseHeader,
   type AuthSpec,
   type AuthSpecStatus,
+  type ConnectionRequest,
   type ConnectionRequirement,
   type ConnectionStatus,
   type NetMethod,
@@ -55,7 +56,7 @@ import type { AuthConnectionState, CredentialStore } from './credential-store.js
 import { isForbiddenNetHost, isPrivateRfc1918Ipv4Literal } from './net-guards.js';
 import { OAuthService, SnugAuthError, type FetchLike } from './oauth-service.js';
 import { scrubAuthValues } from './scrub.js';
-import { AuthTemplateError, renderAuthHeaderTemplate } from './template-engine.js';
+import { AuthTemplateError, renderAuthRequestTemplates } from './template-engine.js';
 import { AuthTemplateLintError, assertLintedTemplate } from './template-lint.js';
 import type { NetConfirmRequest } from './session-confirm.js';
 
@@ -120,9 +121,37 @@ export type ConnectedFetchResult =
  * and the failure would surface as a runtime `undefined.getAuthSpec` at the first request
  * instead of at the wiring site.
  */
+/**
+ * The LAN pinned-TLS transport (ADR-0023 Decision 3; P0 amendment 6) — the
+ * desktop shell's `lan_fetch` command, seen from this side of the IPC boundary.
+ *
+ * A SEPARATE TYPE FROM `FetchLike`, deliberately. `FetchLike` is the web
+ * contract and stays byte-untouched: widening it with an optional third
+ * parameter would put "pin" in the vocabulary of every fetch seat in this
+ * package, including the ones a browser wires, and a browser has no business
+ * knowing what a certificate pin is. The pin is a REQUIRED parameter here
+ * because a pinless call to this transport is not a weaker request — it is a
+ * different (pair-mode) trust decision that only the wizard may make.
+ */
+export type LanFetchLike = (url: string, init: RequestInit, pin: string) => Promise<Response>;
+
 interface ConnectedFetchBaseDeps {
   credentialStore: CredentialStore;
   fetchImpl: FetchLike;
+  /**
+   * DESKTOP-ONLY, and absent on web (AC10: absence is byte-identical to today).
+   * Supplied by the shell's platform seam; routed to by the executor — and ONLY
+   * by the executor — for an RFC-1918 IPv4 literal that is already inside the
+   * frozen ceiling, carrying that connection's recorded TOFU pin.
+   *
+   * IT IS NEVER A FALLBACK FOR `fetchImpl`, IN EITHER DIRECTION. A LAN host with
+   * no `lanFetch` fails honestly rather than silently riding the public-root
+   * transport (which would fail with an opaque TLS error at best, and at worst
+   * succeed against something that is not the user's bridge); and a public host
+   * never reaches `lanFetch`, because pinned trust is a property of the HOST
+   * CLASS, not of a pin happening to exist.
+   */
+  lanFetch?: LanFetchLike;
   confirmGate: NetConfirmGate;
   /** Injectable time source (grant bookkeeping/telemetry); defaults to Date.now. */
   clock?: () => number;
@@ -140,6 +169,25 @@ interface ConnectedFetchBaseDeps {
    * flag: gates 1–3 and 6–10 never read it.
    */
   transportPolicy?: { allowHttpForPrivateHosts: boolean };
+  /**
+   * AUTH-SHAPED FAILURE OBSERVER (ADR-0022 §4, P0 amendment 8) — host-only. Fires when
+   * the FINAL delivered result of `execute()` is a 401/403 AND this executor injected
+   * credentials into that request (header or query). The app-visible result is
+   * untouched — `ok:true`, status as-is; apps legitimately read 401 bodies — so this
+   * seat is how the host learns "the provider rejected the stored credential" without
+   * breaking the app contract.
+   *
+   * Carries `(slot, status)` and NOTHING else: no credentials, no response bytes, no
+   * URL. The `appId` is the caller's own execute() argument, so the playground layer
+   * adds it when it forwards to the RunView banner (the task file's pinned literal
+   * `onAuthShapedFailure(appId, slot, status)` describes THAT layer; the deps-level
+   * adaptation is journaled).
+   *
+   * NOT a retry hook: a 401 cured by the transparent OAuth refresh retry fires nothing
+   * (only the delivered result counts), and `executeConnectionTestRequest` suppresses
+   * the seat entirely — probe outcomes render in the wizard, not as a banner.
+   */
+  onAuthShapedFailure?: (slot: string, status: number) => void;
 }
 
 /**
@@ -232,6 +280,21 @@ const failure = (code: string, message: string, retryable = false): ConnectedFet
   message,
   retryable,
 });
+
+/**
+ * The TOFU pin's shape: 64 lowercase hex characters — a SHA-256 over the leaf
+ * certificate's DER, as `lan_fetch`'s `fingerprint_der` produces it.
+ *
+ * A DELIBERATE RESTATEMENT of the Rust `valid_fingerprint`, for the same reason
+ * `isPrivateRfc1918Ipv4Literal` restates protocol's rule: this is the other side
+ * of an IPC boundary and the two cannot share code. Checking it HERE as well as
+ * there is not redundancy — it is the difference between a named refusal at the
+ * seam that knows what the value is for, and an unexplained handshake failure
+ * two layers down that reads like a broken device.
+ */
+function isLanPinShape(fingerprint: string): boolean {
+  return /^[0-9a-f]{64}$/.test(fingerprint);
+}
 
 /**
  * Read the body while enforcing the byte cap (B1): overflow discards every byte read so
@@ -389,7 +452,13 @@ export function requirementToSpec(requirement: ConnectionRequirement): AuthSpec 
   const fields = requirement.fields ?? [];
   // The frozen ceiling is enforced from `row.allowedHosts`; the spec copy exists only
   // because the shipped schemas require the seat.
-  const declaredApiHosts = [...requirement.declaredApiHosts];
+  //
+  // `?? []` since ADR-0023: a LAN-class requirement whose bridge address has not been
+  // collected yet carries NO `declaredApiHosts` (the required-XOR-`lanHost` rule). An
+  // empty list here is honest and inert — the v3 spec dialect's seat is filled with the
+  // empty set, and every host decision downstream reads `row.allowedHosts`, which for
+  // such a row is also empty and therefore refuses.
+  const declaredApiHosts = [...(requirement.declaredApiHosts ?? [])];
   switch (requirement.kind) {
     case 'oauth2_auth_code':
       return {
@@ -469,7 +538,10 @@ function resolveSlot(rows: readonly NetConnectionRow[], host: string): SlotResol
  * request: it is used solely to choose CTA copy, on a path that has already refused.
  */
 function deriveRowHosts(row: NetConnectionRow): readonly string[] {
-  return row.allowedHosts.length > 0 ? row.allowedHosts : row.requirement.declaredApiHosts;
+  // `?? []` since ADR-0023: a pre-collection LAN row has neither a frozen ceiling nor a
+  // declared host, so the CTA falls back to naming no host — which is the truth about
+  // that row. This value still never gates a request.
+  return row.allowedHosts.length > 0 ? row.allowedHosts : (row.requirement.declaredApiHosts ?? []);
 }
 
 // --------------------------------------------------------------------- factory
@@ -505,33 +577,110 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
   interface ResolvedGrant {
     /** null for kind 'none' — nothing to inject (Q6). */
     spec: AuthSpec | null;
+    /** The matched row's slot — the observer's identity seat (ADR-0022 §4). */
+    slot: string;
+    /**
+     * The APPROVED requirement's `request` block, read for the template seats
+     * (headerTemplate + queryTemplate). Sourced from the requirement rather than the
+     * spec projection because the v3 `AuthRequest` dialect predates `queryTemplate` —
+     * same bytes, honestly typed. Absent for kind 'none' (schema coherence forbids it).
+     */
+    requestSeat?: ConnectionRequest;
     allowedHosts: readonly string[];
     store: CredentialStore;
     oauth: OAuthService;
   }
 
-  async function resolveInjectedHeaders(
+  /**
+   * GATE 9a — resolve the LAN pinned transport for a request the earlier gates
+   * have already established is bound for an RFC-1918 IPv4 literal inside this
+   * connection's frozen ceiling (ADR-0023 D3; P0 amendment 6).
+   *
+   * BOTH REFUSALS HERE ARE THE POINT, and neither is a fallback:
+   *
+   *   1. NO `lanFetch` DEP. This is the web profile (or a desktop build that
+   *      failed to wire the seam). The tidy-looking `deps.lanFetch ??
+   *      deps.fetchImpl` would send the request through a transport that
+   *      verifies against the PUBLIC root store — which for a bridge means an
+   *      opaque TLS failure the user cannot act on, and for anything else on
+   *      that address means succeeding against a device that is not theirs. A
+   *      named refusal is the honest answer, and it names the platform so the
+   *      wizard's disclosure copy and this message agree.
+   *
+   *   2. NO RECORDED PIN (or a malformed one). Pair mode — accept-and-capture —
+   *      is a WIZARD STEP the user consents to by pressing a physical button on
+   *      the device. Falling back to it at request time would turn every
+   *      unpaired request into a silent trust-anything call, which is the
+   *      accept-invalid-certs flag this whole design exists to avoid. The pin's
+   *      SHAPE is re-validated here rather than trusted from storage: a
+   *      corrupted KV must fail loudly at this seam, not as a mystifying
+   *      handshake error two layers down.
+   *
+   * The pin comes from the grant's own slot-scoped `_connection` KV (ADR-0014
+   * custody), so it is per-connection by construction — there is no path by
+   * which one connection's pin could serve another's request.
+   */
+  async function resolveLanTransport(
+    lanFetch: LanFetchLike | undefined,
+    grant: ResolvedGrant,
+    appId: string,
+  ): Promise<
+    | { ok: true; send: (url: string, init: RequestInit) => Promise<Response> }
+    | { ok: false; failure: ConnectedFetchResult }
+  > {
+    if (lanFetch === undefined) {
+      return {
+        ok: false,
+        failure: failure(
+          NET_ERROR_CODES.NET_AUTH_FAILED,
+          'this connection is a device on your local network, which only the desktop app can reach',
+        ),
+      };
+    }
+    const state = await grant.store.getConnectionState(appId);
+    const fingerprint = state?.lanPin?.fingerprint;
+    if (fingerprint === undefined || !isLanPinShape(fingerprint)) {
+      return {
+        ok: false,
+        failure: failure(
+          NET_ERROR_CODES.NET_AUTH_FAILED,
+          'this device has not been paired yet — open the connection and pair with it before apps can reach it',
+        ),
+      };
+    }
+    return { ok: true, send: (url, init) => lanFetch(url, init, fingerprint) };
+  }
+
+  /** What gate 8 injects: headers ride the fetch init; query params join the OUTBOUND URL only. */
+  interface InjectedCredentials {
+    headers: Record<string, string>;
+    query: Record<string, string>;
+  }
+
+  const NOTHING_INJECTED: InjectedCredentials = { headers: {}, query: {} };
+
+  async function resolveInjectedCredentials(
     appId: string,
     grant: ResolvedGrant,
     request: { method: string; url: string; body?: string },
     forceRefresh: boolean,
-  ): Promise<Record<string, string>> {
+  ): Promise<InjectedCredentials> {
     const spec = grant.spec;
     // Q6 — kind 'none': the keyless provider. Injects NOTHING. Approval and the frozen
     // host ceiling still gated this request upstream; "no credential" never means "no
     // gate", which is why `none` is a connection row at all rather than the absence of one.
-    if (spec === null) return {};
+    if (spec === null) return NOTHING_INJECTED;
     if (spec.kind === 'oauth2_auth_code') {
       const scope = { appId, spec, allowedHosts: grant.allowedHosts };
       const token = forceRefresh ? await grant.oauth.refresh(scope) : await grant.oauth.getAccessToken(scope);
-      return { Authorization: `Bearer ${token}` };
+      return { headers: { Authorization: `Bearer ${token}` }, query: {} };
     }
     if (spec.kind === 'oauth2_client_creds') {
       const scope = { appId, spec, allowedHosts: grant.allowedHosts };
       const token = forceRefresh
         ? await grant.oauth.refreshClientCreds(scope)
         : await grant.oauth.getClientCredsAccessToken(scope);
-      return { Authorization: `Bearer ${token}` };
+      return { headers: { Authorization: `Bearer ${token}` }, query: {} };
     }
     // Static kinds — values read from the store PER USE (AL-02 D4, no cache anywhere).
     const fields: Record<string, string> = {};
@@ -545,8 +694,8 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       }
       fields[field.key] = value;
     }
-    const template = spec.request?.headerTemplate;
-    if (template !== undefined) {
+    const requestSeat = grant.requestSeat;
+    if (requestSeat?.headerTemplate !== undefined || requestSeat?.queryTemplate !== undefined) {
       // Lint against the spec's DECLARED field keys, not the keys actually loaded above.
       // The two differ whenever an optional field has no stored value: `fields` would be
       // missing that key. Linting the declaration here is both stricter in the case that
@@ -557,26 +706,36 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // whole fix for the shipped optional-field defect: this lint and the engine's own
       // lint used to consult different lists, so a template naming a blank `required:
       // false` field passed here and was rejected there, and the connection reported
-      // CONNECTED while every request failed closed. One key source, checked twice.
+      // CONNECTED while every request failed closed. One key source, checked twice —
+      // and since ADR-0022 §3 the ONE list drives BOTH template seats (header + query),
+      // which the render seat re-lints and renders through a single shared RenderState.
       const declaredFieldKeys = spec.fields.map((field) => field.key);
-      assertLintedTemplate(template, { fieldKeys: declaredFieldKeys });
-      return renderAuthHeaderTemplate(template, {
+      if (requestSeat.headerTemplate !== undefined) {
+        assertLintedTemplate(requestSeat.headerTemplate, { fieldKeys: declaredFieldKeys });
+      }
+      if (requestSeat.queryTemplate !== undefined) {
+        assertLintedTemplate(requestSeat.queryTemplate, { fieldKeys: declaredFieldKeys });
+      }
+      return renderAuthRequestTemplates(requestSeat, {
         fields,
         declaredFieldKeys,
         request: { method: request.method, url: request.url, ...(request.body !== undefined ? { body: request.body } : {}) },
       });
     }
     // Kind defaults, ported from the source system (browser-safe base64 for Basic).
+    // A request seat carrying EITHER template suppresses these entirely: a provider that
+    // places its credential in the query must not ALSO receive the generic header
+    // (AC6 — "in the query, not as X-Api-Key").
     switch (spec.kind) {
       case 'bearer_token':
-        return { Authorization: `Bearer ${fields[spec.fields[0]!.key] ?? ''}` };
+        return { headers: { Authorization: `Bearer ${fields[spec.fields[0]!.key] ?? ''}` }, query: {} };
       case 'basic_auth': {
         const user = fields[spec.fields[0]!.key] ?? '';
         const pass = fields[spec.fields[1]!.key] ?? '';
-        return { Authorization: `Basic ${utf8ToBase64(`${user}:${pass}`)}` };
+        return { headers: { Authorization: `Basic ${utf8ToBase64(`${user}:${pass}`)}` }, query: {} };
       }
       case 'api_key':
-        return { 'X-Api-Key': fields[spec.fields[0]!.key] ?? '' };
+        return { headers: { 'X-Api-Key': fields[spec.fields[0]!.key] ?? '' }, query: {} };
     }
   }
 
@@ -648,6 +807,12 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       ok: true,
       grant: {
         spec: requirementToSpec(row.requirement),
+        slot: row.slot,
+        // Kind 'none' cannot carry a request block (schema coherence); reading it off the
+        // APPROVED requirement keeps the same no-pending-read discipline as the spec.
+        ...(row.requirement.kind !== 'none' && row.requirement.request !== undefined
+          ? { requestSeat: row.requirement.request }
+          : {}),
         allowedHosts: row.allowedHosts,
         store,
         oauth: oauthFor(store),
@@ -740,11 +905,16 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // Gate 7 — app-supplied credential-shaped headers are ALWAYS stripped (C1).
       const appHeaders = stripCredentialShapedHeaders(input.headers ?? {});
 
+      // Whether the DELIVERED result rode injected credentials — the observer's gate.
+      // Written by every performFetch pass; the retry pass injects the same way, so the
+      // last write always describes the delivered result.
+      let credentialsInjected = false;
+
       const performFetch = async (forceRefresh: boolean): Promise<ConnectedFetchResult> => {
         // Gate 8 — injection (per kind; OAuth paths are ceiling-checked internally, N2b).
-        let injected: Record<string, string>;
+        let injected: InjectedCredentials;
         try {
-          injected = await resolveInjectedHeaders(appId, grant, { method, url: url.href, ...(body !== undefined ? { body } : {}) }, forceRefresh);
+          injected = await resolveInjectedCredentials(appId, grant, { method, url: url.href, ...(body !== undefined ? { body } : {}) }, forceRefresh);
         } catch (err) {
           if (err instanceof SnugAuthError) {
             // The typed CAUSE rides along with the prose. All of these collapse to one wire
@@ -765,20 +935,88 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           throw err;
         }
 
+        credentialsInjected = Object.keys(injected.headers).length > 0 || Object.keys(injected.query).length > 0;
+
+        // THE SCRUB CANDIDATE SET (ADR-0022 §3, P0 amendment 14) — every value this pass
+        // injected, header AND query. Rendered query values are credentials in a URL, so
+        // every site below that scrubs header values scrubs them too. The `query:` key
+        // prefix only prevents a header/query NAME collision from dropping a candidate;
+        // the scrubber reads values, never keys.
+        const scrubCandidates: Record<string, string> = { ...injected.headers };
+        for (const [key, value] of Object.entries(injected.query)) {
+          scrubCandidates[`query:${key}`] = value;
+          // BOTH FORMS, derived from the serializer that actually writes the URL (P6
+          // whole-surface finding F1). `searchParams.set` percent-encodes, and
+          // `scrubAuthValues` is exact-substring — so a raw-only candidate misses the
+          // encoded spelling that is what an error message or an echoed body actually
+          // contains. A credential with `+`, `/`, `=` or a space (i.e. any base64 key)
+          // leaked verbatim. The encoded candidate is built with URLSearchParams itself
+          // rather than encodeURIComponent because the two disagree on space (`+` vs
+          // `%20`), and a hand-rolled encoder is how this drifts back apart.
+          const encoded = new URLSearchParams({ [key]: value }).toString().slice(key.length + 1);
+          if (encoded !== value) scrubCandidates[`query:${key}:encoded`] = encoded;
+        }
+
+        // QUERY INJECTION — into the OUTBOUND URL only, and only HERE, after every gate:
+        // the ceiling/host/SSRF gates matched on the app's own URL, the confirm gate
+        // captured `url.href` BEFORE this line (the user confirms the request the app
+        // asked for, never a URL carrying their credential), and no result field ever
+        // echoes `outboundHref`.
+        let outboundHref = url.href;
+        if (Object.keys(injected.query).length > 0) {
+          const outbound = new URL(url.href);
+          for (const [key, value] of Object.entries(injected.query)) outbound.searchParams.set(key, value);
+          outboundHref = outbound.href;
+        }
+
         // Gate 9 — the fetch itself: injected headers win over app headers; redirects
         // are returned, never followed.
+        const init: RequestInit = {
+          method,
+          headers: { ...appHeaders, ...injected.headers },
+          ...(body !== undefined ? { body } : {}),
+          redirect: 'manual',
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        };
+
+        // GATE 9a — TRANSPORT SELECTION (ADR-0023 D3; P0 amendment 6). The
+        // decision is made HERE, not in the platform, because it is a statement
+        // about the frozen ceiling and the ceiling is only knowable at this
+        // altitude: `lanPrivateHost` above already established that this host is
+        // an RFC-1918 IPv4 literal under a desktop policy, and gates 2+3 already
+        // established that it is inside the approved ceiling. A platform-level
+        // router would have to re-derive both and could drift from them.
+        //
+        // WHY THE SCHEME IS PART OF THE CONDITION, and not an afterthought.
+        // ADR-0021 Decision 4 opened this rung for `http(s)` to private literals,
+        // and ADR-0023's alternatives section keeps it: "ADR-0021's
+        // http-for-private-literals rung remains for other LAN device classes."
+        // A plain-http device has NO certificate, so it can never have a pin —
+        // routing it here would refuse it forever, silently retiring a shipped
+        // rung. The pinned transport is what an HTTPS LAN host needs and the
+        // only thing it can use; `http` keeps today's path byte-identically.
+        // (The Rust command refuses non-https independently, so this is the
+        // near side of a guard that exists on both.)
+        //
+        // Note what this DOESN'T do: there is no `deps.lanFetch ?? deps.fetchImpl`
+        // and no `pin ?? pair-mode`. Each absence is a refusal (see
+        // `resolveLanTransport`), because both fallbacks silently substitute a
+        // different trust decision for the one the user consented to.
         let response: Response;
         try {
-          response = await deps.fetchImpl(url.href, {
-            method,
-            headers: { ...appHeaders, ...injected },
-            ...(body !== undefined ? { body } : {}),
-            redirect: 'manual',
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-          });
+          if (lanPrivateHost && url.protocol === 'https:') {
+            const lan = await resolveLanTransport(deps.lanFetch, grant, appId);
+            if (!lan.ok) return lan.failure;
+            response = await lan.send(outboundHref, init);
+          } else {
+            response = await deps.fetchImpl(outboundHref, init);
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          return failure(NET_ERROR_CODES.NET_FETCH_FAILED, `request failed: ${message}`, true);
+          // Scrubbed with the FULL candidate set (amendment 14): fetch errors routinely
+          // embed the request URL — query string included — and this message reaches
+          // the app.
+          return failure(NET_ERROR_CODES.NET_FETCH_FAILED, `request failed: ${scrubAuthValues(message, scrubCandidates)}`, true);
         }
         if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
           return failure(NET_ERROR_CODES.NET_REDIRECT_BLOCKED, 'the server answered with a redirect — never followed');
@@ -795,10 +1033,24 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         const headers: Record<string, string> = {};
         response.headers.forEach((value, name) => {
           if (isWhitelistedNetResponseHeader(name)) {
-            headers[name.toLowerCase()] = scrubAuthValues(value, injected);
+            headers[name.toLowerCase()] = scrubAuthValues(value, scrubCandidates);
           }
         });
-        return { ok: true, status: response.status, headers, body: scrubAuthValues(read.body, injected) };
+        return { ok: true, status: response.status, headers, body: scrubAuthValues(read.body, scrubCandidates) };
+      };
+
+      /**
+       * THE ONE DELIVERY SEAT (ADR-0022 §4, amendment 8). Every result leaves execute()
+       * through here, so "fires only on the FINAL delivered result" is true by
+       * construction: a 401 cured by the refresh retry never reaches this function as
+       * the delivered value, and an uncured one reaches it exactly once. The result is
+       * returned UNTOUCHED — the observer is a side channel, never a remap.
+       */
+      const deliver = (result: ConnectedFetchResult): ConnectedFetchResult => {
+        if (result.ok && (result.status === 401 || result.status === 403) && credentialsInjected) {
+          deps.onAuthShapedFailure?.(grant.slot, result.status);
+        }
+        return result;
       };
 
       const first = await performFetch(false);
@@ -808,12 +1060,12 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       if (first.ok && first.status === 401 && isOauthKind) {
         try {
           const second = await performFetch(true);
-          return second.ok ? second : first;
+          return deliver(second.ok ? second : first);
         } catch {
-          return first;
+          return deliver(first);
         }
       }
-      return first;
+      return deliver(first);
     },
   };
 }
@@ -867,7 +1119,10 @@ export async function executeConnectionTestRequest(
 
   // The base host is the FIRST frozen host — the probe's origin is drawn from the approved
   // ceiling, never from the requirement's (re-editable) declared list.
-  const baseHost = row.allowedHosts[0] ?? row.requirement.declaredApiHosts[0];
+  // `?.[0]` since ADR-0023: a pre-collection LAN row has no declared host either, so
+  // this resolves to undefined and the probe refuses below with NET_NOT_APPROVED —
+  // the honest answer for a connection whose device address has not been collected.
+  const baseHost = row.allowedHosts[0] ?? row.requirement.declaredApiHosts?.[0];
   if (baseHost === undefined) {
     return failure(NET_ERROR_CODES.NET_NOT_APPROVED, `connection '${slot}' has no approved host to probe`);
   }
@@ -878,5 +1133,9 @@ export async function executeConnectionTestRequest(
     return failure(NET_ERROR_CODES.NET_INVALID_REQUEST, 'the stored test request does not form a valid url');
   }
 
-  return createConnectedFetch(deps).execute(appId, { url: probeUrl, method: testRequest.method });
+  // OBSERVER SUPPRESSED (ADR-0022 §4, amendment 8): a probe's whole outcome renders in
+  // the wizard the user is already looking at — routing it through the banner seat too
+  // would double-report every failed probe and let the wizard trigger RunView chrome.
+  const { onAuthShapedFailure: _suppressedForProbe, ...probeDeps } = deps;
+  return createConnectedFetch(probeDeps).execute(appId, { url: probeUrl, method: testRequest.method });
 }

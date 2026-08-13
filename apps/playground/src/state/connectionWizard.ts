@@ -39,6 +39,7 @@
 import {
   CONNECTION_STATUS,
   NET_ERROR_CODES,
+  deriveConnectionAllowedHosts,
   type ConnectionRequirement,
 } from '@snugprotocol/protocol';
 import { authConnectionCredentialSecretKey, type ConnectionRow, type UserDb } from '@snugprotocol/db';
@@ -48,11 +49,14 @@ import {
   SlotScopedCredentialStore,
   SnugAuthError,
   UserDbCredentialStore,
+  admitConnectionRequirement,
   executeConnectionTestRequest,
   lookupWellKnownProvider,
   requirementFromRegistryEntry,
   requirementToSpec,
   resolveDesktopPosture,
+  resolveRegistryEntryByName,
+  type AdmissionChannel,
   type DesktopRedirectPosture,
   type FetchLike,
   type OAuthCallbackInput,
@@ -61,11 +65,13 @@ import {
   type OAuthStartResult,
   type WellKnownAuthOption,
   type WellKnownOauthProvider,
+  type WellKnownPairingExchange,
 } from '@snugprotocol/auth';
 
 import { createStore } from './store.js';
 import { getUserDb } from './userdb.js';
 import { connectedFetchDepsFor, invalidateNetGrants } from './net.js';
+import { recordLanHostChoice } from './authKindChoice.js';
 import { getPlatform } from '../platform/platform.js';
 
 export type ConnectionWizardStep = 'review' | 'register' | 'credentials' | 'connect' | 'done';
@@ -408,17 +414,28 @@ export async function advanceFromRegister(): Promise<ConnectionWizardResult> {
  * rebind (P3 item 4b: the desktop refusal steering to a different flow, e.g. OAuth →
  * personal access token) changes what credential is even asked for, so it walks the
  * register/credentials half — "done" would claim a connection no secret backs.
+ *
+ * A FIELD-SET change walks the credential half for the same reason as a kind rebind
+ * (TASK-20260812-desktop-auth-awareness amendment 3): "existing secrets are still
+ * valid" is only true while the promoted requirement asks for the SAME boxes. The
+ * field-set-drift migration below stages exactly such an edit (the owner's old
+ * Coinbase triple → the CDP pair), and landing it on 'done' would claim a connection
+ * whose new fields no stored secret backs.
  */
 export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
   return withSession((db, session) => {
     const before = db.getConnection(session.appId, session.slot);
+    const fieldKeys = (requirement: ConnectionRequirement | undefined): string =>
+      JSON.stringify((requirement?.fields ?? []).map((field) => field.key));
     const kindChanged =
       before?.pendingRequirement !== undefined && before.pendingRequirement.kind !== before.requirement.kind;
+    const fieldSetChanged =
+      before?.pendingRequirement !== undefined && fieldKeys(before.pendingRequirement) !== fieldKeys(before.requirement);
     db.reapproveConnection(session.appId, session.slot);
     invalidateNetGrants(session.appId);
     bumpRevision();
     const after = db.getConnection(session.appId, session.slot);
-    connectionWizardStepStore.set(kindChanged ? nextStep('review', after?.requirement) : 'done');
+    connectionWizardStepStore.set(kindChanged || fieldSetChanged ? nextStep('review', after?.requirement) : 'done');
     return { ok: true };
   });
 }
@@ -493,6 +510,357 @@ export async function saveConnectionCredentials(values: Record<string, string>):
 }
 
 // ---------------------------------------------------------------------------
+// LAN-class connections (ADR-0023 D1/D2/D4; TASK-20260812 P5-flow)
+// ---------------------------------------------------------------------------
+//
+// THE ORDER IS STRUCTURAL, NOT ADVISORY, and it is the reason this section
+// exists as three separate exported acts rather than one "set up the bridge"
+// call:
+//
+//     collect the address → approve the row (ceiling FREEZES) → pair
+//
+// A pre-collection LAN requirement derives an EMPTY ceiling from
+// `deriveConnectionAllowedHosts`, which refuses every host. So a pairing
+// exchange fired before approval would have nothing to run against — the order
+// is enforced by the shape of the data, and the guards below state it out loud
+// so a future caller cannot reorder them by accident.
+//
+// WHAT THE HOST COLLECTION IS, in provenance terms: the user typing the address
+// of a device they own. That is a `user`-channel write by definition — which is
+// why it goes through `recordLanHostChoice` in state/authKindChoice.ts, the ONE
+// module allowed to name that channel (AC13). The alternative — a local
+// `putDeclaredConnection` here — would bypass admission, and admission is
+// precisely what re-validates the RFC-1918 class so a borrower cannot smuggle a
+// public host under a LAN brand (amendment 10c).
+
+/** Does this requirement collect its host from the user rather than pin it? */
+export function isLanRequirement(requirement: ConnectionRequirement | undefined): boolean {
+  return requirement?.lanHost !== undefined;
+}
+
+/** Has the address been collected yet? A LAN row with no host is pre-collection. */
+export function lanHostCollected(requirement: ConnectionRequirement | undefined): boolean {
+  return isLanRequirement(requirement) && (requirement?.declaredApiHosts ?? []).length > 0;
+}
+
+/**
+ * THE CLIENT-SIDE CLASS CHECK, and it is deliberately a DUPLICATE of the one
+ * admission runs — not a replacement for it.
+ *
+ * This one exists to give the user an answer in their own words the instant
+ * they finish typing, instead of a schema issue string after a round trip. The
+ * authoritative refusal still happens at admission (`lanHostsAcceptable`), and
+ * the two are pinned equivalent by a cross-check test: if they ever disagree,
+ * the honest failure is a wizard that refuses something admission would accept
+ * (annoying), never one that accepts something admission would refuse (a lie
+ * about what was collected).
+ *
+ * RFC-1918 ONLY. Loopback would point the bridge request at the hub itself,
+ * link-local and CGNAT are not home networks, a DNS name cannot be pinned to a
+ * certificate the way an address can, and anything carrying a scheme or a port
+ * is not an address at all.
+ */
+const RFC1918_IPV4_LITERAL = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+
+export function isCollectableLanHost(value: string): boolean {
+  const match = RFC1918_IPV4_LITERAL.exec(value.trim());
+  if (match === null) return false;
+  const octets = match.slice(1).map((part) => Number(part));
+  // A leading zero is an octal spelling in some resolvers and a decimal one in
+  // others — an address that means two things is an address we refuse.
+  if (match.slice(1).some((part) => part.length > 1 && part.startsWith('0'))) return false;
+  if (octets.some((octet) => Number.isNaN(octet) || octet > 255)) return false;
+  const [a, b] = octets as [number, number, number, number];
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+/**
+ * The honest refusal, in the words of someone who has never heard of RFC 1918.
+ * ONE sentence, and it names the SHAPE of the right answer rather than the rule
+ * that rejected the wrong one — "must be RFC-1918" tells a user nothing they
+ * can act on.
+ */
+export const LAN_HOST_REFUSAL =
+  "that doesn't look like a device address on your home network — it usually starts with 192.168, 10. or 172.16 and looks like 192.168.1.50";
+
+/**
+ * Can this platform pair with a LAN device at all? Pairing needs the shell's
+ * `lan_fetch` in pair mode, and a browser has no way to accept a private-CA
+ * certificate. `false` on web is a DISCLOSURE, never a refusal to render: the
+ * row stays intact and readable (ADR-0023 D1's portability rule).
+ */
+export function canPairLanDevice(): boolean {
+  return getPlatform().lanPair !== undefined;
+}
+
+/**
+ * Discovery (ADR-0023 D4) — the cloud broker, desktop only, entirely optional.
+ *
+ * It rides the PLATFORM fetch rather than the connected-fetch executor because
+ * it is not a connected request: there is no connection yet, no ceiling to
+ * check against, and no credential to inject. `discovery.meethue.com` CORS-locks
+ * to its own origin, so this is desktop-only in fact as well as in policy.
+ *
+ * Returns addresses that pass the SAME class check the manual box applies — the
+ * broker is a convenience, not an authority, and an address it returns gets no
+ * more trust than one the user typed.
+ */
+export async function discoverLanHosts(): Promise<string[]> {
+  const platformFetch = getPlatform().fetchImpl;
+  if (platformFetch === undefined) return [];
+  const response = await platformFetch('https://discovery.meethue.com', { method: 'GET' });
+  if (!response.ok) return [];
+  const parsed: unknown = JSON.parse(await response.text());
+  if (!Array.isArray(parsed)) return [];
+  const found: string[] = [];
+  for (const item of parsed) {
+    if (typeof item !== 'object' || item === null) continue;
+    const address = (item as Record<string, unknown>)['internalipaddress'];
+    if (typeof address === 'string' && isCollectableLanHost(address) && !found.includes(address)) {
+      found.push(address);
+    }
+  }
+  return found;
+}
+
+/**
+ * Record the user's bridge address on the OPEN session's row (ADR-0023 D1).
+ *
+ * The write goes through the `user` channel's one writer, so the full gate
+ * chain runs: schema, admission (which substitutes the registry's pinned fields
+ * and request template, and re-validates the host CLASS), re-parse, lint. The
+ * row stays `declared` — collecting an address is not approving a connection,
+ * and the ceiling freezes at the review screen exactly as it does for every
+ * other kind.
+ */
+export async function recordLanHost(address: string): Promise<ConnectionWizardResult> {
+  const session = connectionWizardStore.get();
+  if (session === null) return { ok: false, message: 'no wizard session' };
+  const trimmed = address.trim();
+  if (!isCollectableLanHost(trimmed)) return { ok: false, message: LAN_HOST_REFUSAL };
+  const db = await getUserDb();
+  if (connectionWizardStore.get() !== session) return { ok: false, message: 'the wizard session changed' };
+  const row = db.getConnection(session.appId, session.slot);
+  if (row === undefined) return { ok: false, message: 'this connection has no declared requirement' };
+  if (!isLanRequirement(row.requirement)) {
+    return { ok: false, message: 'this connection does not collect a device address' };
+  }
+  if (row.status !== CONNECTION_STATUS.declared) {
+    // An APPROVED row's ceiling is already frozen around an address. Moving it
+    // is a re-approval with a diff, never a silent edit — the same rule every
+    // other host change obeys.
+    return { ok: false, message: 'this connection is already set up — disconnect it first to point it somewhere else' };
+  }
+  const outcome = await recordLanHostChoice({
+    appId: session.appId,
+    slot: session.slot,
+    requirement: { ...row.requirement, declaredApiHosts: [trimmed] },
+  });
+  if (!outcome.ok) return { ok: false, message: outcome.message };
+  bumpRevision();
+  return { ok: true };
+}
+
+/** What a pairing attempt produced. Never carries the minted value or the body. */
+export type LanPairingOutcome = { ok: true } | { ok: false; message: string };
+
+/**
+ * Walk a literal `secretPath` (object keys and array indices only — never an
+ * expression). The response comes from a device on the user's network: it is
+ * READ, never evaluated.
+ */
+function readSecretPath(value: unknown, path: ReadonlyArray<string | number>): string | undefined {
+  let cursor: unknown = value;
+  for (const step of path) {
+    if (typeof step === 'number') {
+      if (!Array.isArray(cursor) || cursor.length <= step) return undefined;
+      cursor = cursor[step];
+      continue;
+    }
+    if (typeof cursor !== 'object' || cursor === null || Array.isArray(cursor)) return undefined;
+    cursor = (cursor as Record<string, unknown>)[step];
+  }
+  return typeof cursor === 'string' && cursor.length > 0 ? cursor : undefined;
+}
+
+/**
+ * Hue's own refusal vocabulary, translated ONCE (ADR-0023 D2).
+ *
+ * THE P1 LESSON, APPLIED: three causes get three sentences. A single "pairing
+ * failed" would leave the user with no idea whether to press a button, check a
+ * cable, or type a different address — and the one thing this exchange fails
+ * for most often is the one thing they can fix in two seconds.
+ *
+ * The device's own description string is deliberately NOT surfaced. It is
+ * attacker-influenceable text from a device we have just met, rendered inside
+ * the platform's own credential wizard, and (C1) a bridge that echoes the key
+ * it just minted into an error body would put it on screen.
+ */
+const HUE_LINK_BUTTON_ERROR_TYPE = 101;
+
+function pairingErrorMessage(body: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return 'the device answered with something we could not read — check that this address is your bridge, then try again';
+  }
+  if (!Array.isArray(parsed)) return undefined;
+  for (const item of parsed) {
+    if (typeof item !== 'object' || item === null) continue;
+    const error = (item as Record<string, unknown>)['error'];
+    if (typeof error !== 'object' || error === null) continue;
+    const type = (error as Record<string, unknown>)['type'];
+    if (type === HUE_LINK_BUTTON_ERROR_TYPE) {
+      return 'press the round button on your bridge, then try again — it only hands out a key for about 30 seconds after you press it';
+    }
+    // A refusal we do not have a translation for. Say that it refused and that
+    // the user can retry; never quote the device back at them.
+    return 'the device refused to pair — press the round button on your bridge and try again';
+  }
+  return undefined;
+}
+
+/**
+ * RUN THE PAIRING EXCHANGE (ADR-0023 D2) — the one act that mints a credential
+ * rather than collecting one.
+ *
+ * WHAT MAKES IT SAFE, in order:
+ *  1. It runs only against an APPROVED row, so the ceiling is frozen.
+ *  2. The URL is built from that FROZEN ceiling host plus the registry's pinned
+ *     path — never from anything present at pairing time. The pairing seat
+ *     deliberately cannot express a host for exactly this reason.
+ *  3. It rides `lanPair`, whose Rust half validates the host class again before
+ *     a socket opens, refuses redirects, and caps the response.
+ *  4. C1: the minted value goes STRAIGHT to `snug_secrets`. It is never
+ *     returned from this function, never stored in a store, never rendered.
+ *
+ * THE PIN AND THE KEY ARE WRITTEN TOGETHER OR NOT AT ALL. A key with no pin is
+ * a connection whose every later request fails at the handshake with an error
+ * pointing nowhere near here; a pin with no key is a paired device nothing can
+ * talk to. When the verifier captured nothing, that absence is the truth and
+ * this refuses rather than inventing a fingerprint.
+ */
+export async function runLanPairing(): Promise<LanPairingOutcome> {
+  const session = connectionWizardStore.get();
+  if (session === null) return { ok: false, message: 'no wizard session' };
+  const pair = getPlatform().lanPair;
+  if (pair === undefined) {
+    return {
+      ok: false,
+      message: 'this device lives on your home network, which only the desktop app can reach',
+    };
+  }
+  const db = await getUserDb();
+  if (connectionWizardStore.get() !== session) return { ok: false, message: 'the wizard session changed' };
+  const row = db.getConnection(session.appId, session.slot);
+  if (row === undefined) return { ok: false, message: 'this connection has no declared requirement' };
+  // GUARD 1 — the frozen ceiling. `declared` means nothing is frozen yet, so
+  // there is no approved address for the exchange to run against.
+  if (row.status !== CONNECTION_STATUS.approved) {
+    return { ok: false, message: 'approve this connection before pairing with the device' };
+  }
+  const exchange = lanPairingExchangeFor(row.requirement);
+  if (exchange === undefined) return { ok: false, message: 'this connection has no pairing step' };
+  // GUARD 2 — the host comes from the FROZEN ceiling, and there must be exactly
+  // one. A ceiling with two hosts is not a device we can address unambiguously.
+  const host = row.allowedHosts.length === 1 ? row.allowedHosts[0]! : undefined;
+  if (host === undefined || !isCollectableLanHost(host)) {
+    return { ok: false, message: 'this connection has no approved device address' };
+  }
+
+  let status: number;
+  let body: string;
+  let pin: { fingerprint: string; cn: string } | undefined;
+  try {
+    const answer = await pair(`https://${host}${exchange.pathAndQuery}`, {
+      method: exchange.method,
+      body: JSON.stringify(exchange.body),
+      headers: { 'content-type': 'application/json' },
+    });
+    status = answer.status;
+    body = answer.body;
+    pin = answer.pin;
+  } catch {
+    // The transport never got an answer. The device's own message is not
+    // surfaced (it is a Rust refusal string, not user copy) — what the user can
+    // act on is the address and the network.
+    return {
+      ok: false,
+      message: `we couldn't reach the device at ${host} — check it is powered on and this computer is on the same network, then try again`,
+    };
+  }
+
+  if (status < 200 || status >= 300) {
+    return { ok: false, message: `the device answered ${status} — check this is the right address, then try again` };
+  }
+
+  const refusal = pairingErrorMessage(body);
+  if (refusal !== undefined) return { ok: false, message: refusal };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { ok: false, message: 'the device answered with something we could not read — try again' };
+  }
+  const minted = readSecretPath(parsed, exchange.secretPath);
+  if (minted === undefined) {
+    return { ok: false, message: 'the device did not hand back a key — press the round button and try again' };
+  }
+  // THE PIN IS REQUIRED. Absence means the verifier never captured a
+  // certificate, and recording a key against no pin would fail every later
+  // request in a way nothing on this screen could explain.
+  if (pin === undefined || !/^[0-9a-f]{64}$/.test(pin.fingerprint)) {
+    return {
+      ok: false,
+      message: "we couldn't record this device's security certificate, so we haven't saved anything — try pairing again",
+    };
+  }
+
+  // BOTH WRITES, HERE, TOGETHER. Nothing between them can fail.
+  const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), session.slot);
+  db.setSecret(authConnectionCredentialSecretKey(session.appId, session.slot, exchange.secretField), minted);
+  const previous = await store.getConnectionState(session.appId);
+  await store.setConnectionState(session.appId, {
+    ...(previous ?? {}),
+    status: 'connected',
+    lanPin: { fingerprint: pin.fingerprint, cn: pin.cn },
+  });
+  invalidateNetGrants(session.appId);
+  bumpRevision();
+  connectionWizardStepStore.set('done');
+  return { ok: true };
+}
+
+/**
+ * The registry's pairing exchange for this requirement, resolved at pairing
+ * time and NEVER persisted on the row.
+ *
+ * It stays registry data on purpose (ADR-0023 D2): a requirement seat carrying
+ * a method, a path and a body would be a channel through which a prompt-injected
+ * declaration could aim an uncredentialed POST at a device on the user's
+ * network and choose what it said. The registry is the one channel Guard 2b
+ * reserves for values a human reviewed in a PR.
+ */
+export function lanPairingExchangeFor(
+  requirement: ConnectionRequirement | undefined,
+): WellKnownPairingExchange | undefined {
+  if (!isLanRequirement(requirement)) return undefined;
+  // `resolveRegistryEntryByName`, NOT `lookupWellKnownProvider` — and the
+  // difference is load-bearing rather than stylistic. Exact-key resolution is
+  // by contract (P5-shape journaled it): the registry key is `hue`, so the
+  // human spelling `Philips Hue` correctly MISSES it there. Admission reaches
+  // the entry through the brand-adjacent rung, which is how the row got its
+  // pinned template — so the wizard must ask the same question the same way, or
+  // it would pair using an exchange from an entry the row did not borrow from.
+  return resolveRegistryEntryByName(requirement!.provider.name)?.entry.pairing;
+}
+
+// ---------------------------------------------------------------------------
 // Post-revoke disclosure (AC9)
 // ---------------------------------------------------------------------------
 
@@ -525,12 +893,14 @@ export function findRevokedBefore(
   currentSlot: string,
 ): RevokedBefore | undefined {
   const providerKey = requirement.provider.name.trim().toLowerCase();
-  const hosts = new Set(requirement.declaredApiHosts);
+  // `?? []` since ADR-0023: a pre-collection LAN requirement shares no host with
+  // anything, so the revoked-before check falls back to the provider-name match alone.
+  const hosts = new Set(requirement.declaredApiHosts ?? []);
   for (const row of db.listConnections(appId)) {
     if (row.slot === currentSlot) continue;
     if (row.status !== CONNECTION_STATUS.revoked) continue;
     const sameProvider = row.requirement.provider.name.trim().toLowerCase() === providerKey;
-    const sharesHost = row.requirement.declaredApiHosts.some((host) => hosts.has(host));
+    const sharesHost = (row.requirement.declaredApiHosts ?? []).some((host) => hosts.has(host));
     if (!sameProvider && !sharesHost) continue;
     return {
       slot: row.slot,
@@ -549,6 +919,132 @@ export function findRevokedBefore(
  */
 export function needsReapproval(row: Pick<ConnectionRow, 'status' | 'pendingRequirement'> | undefined): boolean {
   return row !== undefined && row.status === CONNECTION_STATUS.approved && row.pendingRequirement !== undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Registry drift migration on wizard open (TASK-20260812-desktop-auth-awareness,
+// P0 amendment 3 — BLOCKER seat-migration-gap; ADR-0022 consequences)
+// ---------------------------------------------------------------------------
+
+/** What a wizard open found: nothing to do, a silent seat refresh, or a staged edit. */
+export type RegistryDriftOutcome = 'none' | 'repersisted' | 'staged';
+
+/**
+ * Reconcile an APPROVED row with the registry it borrows from, on wizard open.
+ *
+ * WHY THIS SEAM EXISTS. Rows are admitted once and the executor reads only the
+ * persisted spec — so when the registry starts pinning `request`/`testRequest` seats
+ * (ADR-0022 §1), every row minted before the pin keeps serving the old spec forever:
+ * the owner's existing installs stay exactly as broken as they were, no matter how
+ * correct the registry becomes. The wizard open (Settings, the chat card, the AC5
+ * banner CTA — every route lands in the sheet, which calls this before first render)
+ * is the one moment a human is already looking at the connection, so it is where the
+ * row catches up.
+ *
+ * TWO DRIFT CLASSES, two very different ceremonies:
+ *
+ * 1. REGISTRY-SEAT drift — the field set is UNCHANGED and the registry now pins
+ *    request/testRequest seats the row lacks. The stored secrets are still exactly the
+ *    right ones; only WHERE they are sent (reviewed registry data, exactly what Guard 2b
+ *    reserves for the registry) was missing. The requirement re-runs registry
+ *    substitution via `stagePendingRequirement` (the admission gate is the substituting
+ *    seam — one resolution, never a local re-derivation) and, when the re-derived host
+ *    ceiling is IDENTICAL to the frozen one, is promoted immediately: approval survives
+ *    (`status` never leaves `approved`), secrets are untouched, and no re-approval is
+ *    forced for a grant whose hosts did not move. (`approved_at` is refreshed by the
+ *    promotion accessor — journaled; the STATUS is what the amendment binds.) If the
+ *    ceiling would move at all, nothing is promoted — the staged edit renders as the
+ *    ordinary diff and the user decides.
+ *
+ * 2. FIELD-SET drift — the row's own persisted shape no longer matches any of the
+ *    provider's pinned options (the owner's old api_key/api_secret/passphrase Coinbase
+ *    triple: those credentials expired provider-side; the registry now names a
+ *    different pair). The registry's CURRENT shape for the row's kind is STAGED, never
+ *    promoted here: the user sees the field diff, and approving it routes into the
+ *    credential half for re-entry (`reapproveFromDiff`'s fieldSetChanged rule). Old
+ *    secrets for dropped fields are left in storage untouched — unused by the new
+ *    template, wiped only by the acts that already wipe (revoke, delete).
+ *
+ * WHAT IT NEVER TOUCHES: unapproved rows (admission owns declarations), rows with an
+ * app-staged pending edit already waiting (never clobbered — the existing diff flow
+ * owns them), non-registry providers, revoked tombstones, and every stored secret.
+ */
+export async function migrateConnectionRegistryDrift(appId: string, slot: string): Promise<RegistryDriftOutcome> {
+  const db = await getUserDb();
+  const row = db.getConnection(appId, slot);
+  if (row === undefined || row.status !== CONNECTION_STATUS.approved) return 'none';
+  if (row.pendingRequirement !== undefined) return 'none';
+  // `resolveRegistryEntryByName`, NOT `lookupWellKnownProvider` — the same choice
+  // `lanPairingExchangeFor` documents above, for the same reason (P6 whole-surface
+  // finding). Rows persist the entry's DISPLAY name, and exact-key resolution is by
+  // contract: 'Philips Hue' normalizes to 'philipshue', which is not the key 'hue', so
+  // the exact-key lookup returned undefined and this function bailed at its first branch
+  // for EVERY hue row — leaving the one provider this task introduced permanently
+  // exposed to the seat-drift gap the migration exists to close. Admission reaches the
+  // entry through the brand-adjacent rung, so the migration must ask the same question
+  // the same way, or it repairs rows against an entry they never borrowed from.
+  const entry = resolveRegistryEntryByName(row.requirement.provider.name)?.entry;
+  if (entry === undefined) return 'none';
+
+  // The ONE admission resolution, re-run over the row's own persisted shape on its own
+  // stored channel — never a local re-implementation of matching/substitution (lesson
+  // 2026-08-12: a guard that refuses AND rewrites must drive both from one resolution;
+  // the same rule binds a MIGRATION that re-derives what admission would write today).
+  const admitted = admitConnectionRequirement(row.requirement, {
+    channel: row.provenance as AdmissionChannel,
+  });
+
+  const fieldKeys = (requirement: Pick<ConnectionRequirement, 'fields'>): string =>
+    JSON.stringify((requirement.fields ?? []).map((field) => field.key));
+  const hostsEqual = (left: readonly string[], right: readonly string[]): boolean =>
+    [...left].sort().join('\n') === [...right].sort().join('\n');
+
+  if (admitted.ok) {
+    const substituted = admitted.requirement;
+    const fieldSetChanged = fieldKeys(row.requirement) !== fieldKeys(substituted);
+    const gainsSeats =
+      (row.requirement.request === undefined && substituted.request !== undefined) ||
+      (row.requirement.testRequest === undefined && substituted.testRequest !== undefined);
+    if (!fieldSetChanged && !gainsSeats) return 'none';
+
+    // Stage the row's OWN requirement: the gate's substitution writes the current
+    // registry values into the pending column (amendment 1 opened exactly this path —
+    // the byte-match exemption is what lets the substituted shape survive the second
+    // admission pass).
+    const staged = db.stagePendingRequirement(appId, slot, row.requirement);
+    const pending = staged.pendingRequirement;
+    if (
+      !fieldSetChanged &&
+      pending !== undefined &&
+      hostsEqual(deriveConnectionAllowedHosts(pending), row.allowedHosts)
+    ) {
+      // Host-identical seat refresh: promote without ceremony. Every approval
+      // transition drops remembered net grants (the R3 rule `advanceFromReview`
+      // states), and the served spec just changed, so this one does too.
+      db.reapproveConnection(appId, slot);
+      invalidateNetGrants(appId);
+      bumpRevision();
+      return 'repersisted';
+    }
+    // The ceiling would move, or the substituted shape changed the boxes (a
+    // registry-provenance row whose fields the registry renamed): the user decides,
+    // through the diff screen the staged column already renders.
+    bumpRevision();
+    return 'staged';
+  }
+
+  // Admission REFUSED the row's own persisted shape — the registry moved out from
+  // under it (Guard 2b: its authored-looking field list matches no current option).
+  // Stage the registry's current shape for the row's kind; the diff screen discloses
+  // the field change and approval routes to re-credential.
+  const option =
+    entry.kind === row.requirement.kind
+      ? undefined
+      : (entry.authOptions ?? []).find((candidate) => candidate.kind === row.requirement.kind);
+  const shaped = requirementFromRegistryEntry(entry, row.requirement.provider.name, slot, option);
+  db.stagePendingRequirement(appId, slot, shaped);
+  bumpRevision();
+  return 'staged';
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,16 +1652,24 @@ async function runConnectionOAuthStart(
     preOpened?.close?.();
     try {
       await platformOauth.openExternal(start.authorizeUrl);
-    } catch {
+    } catch (err) {
       // The listener bound inside redirectUriFor/openExternal and no browser is coming —
       // cancel THIS flow (finding A: without it the listener and the recorded URI
       // outlived the session and poisoned the next one).
       channel.close();
       teardownFlow(start.flowId);
-      connectionFlowStatusStore.set({
-        state: 'error',
-        message: 'could not open your browser for the sign-in — try again',
-      });
+      // Three distinct causes funnel through this one await, and the field defect
+      // (TASK-20260812-desktop-auth-awareness) was this catch flattening all of them
+      // into browser-blame: a port-41420 bind collision (the transport's message is
+      // already user-actionable — surface it verbatim), an opener-permission denial
+      // (a Snug packaging bug, NOT the user's browser), and a genuine OS failure.
+      const detail = err instanceof Error ? err.message : String(err);
+      const message = detail.includes('sign-in listener')
+        ? detail
+        : detail.includes('Not allowed to open url')
+          ? 'Snug was blocked from opening your browser (a missing opener permission in this build) — please report this bug'
+          : `could not open your browser for the sign-in — try again (${detail})`;
+      connectionFlowStatusStore.set({ state: 'error', message });
       return;
     }
     if (stale()) {

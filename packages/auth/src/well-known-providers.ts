@@ -18,7 +18,59 @@
  * reviewed by a human.
  */
 
-import type { ConnectionKind, ConnectionRequirement } from '@snugprotocol/protocol';
+import type {
+  ConnectionKind,
+  ConnectionLanHost,
+  ConnectionRequest,
+  ConnectionRequirement,
+  ConnectionTestRequest,
+} from '@snugprotocol/protocol';
+
+/**
+ * A PAIRING EXCHANGE — how a provider MINTS a credential that the user cannot type
+ * (ADR-0023 Decision 2, TASK-20260812-desktop-auth-awareness P5).
+ *
+ * DESIGNED PROVIDER-AGNOSTICALLY, used by exactly one provider today. A Hue bridge's
+ * application key is not published on any screen: you press the physical link button and
+ * POST to the bridge, which mints and returns one. The wizard therefore needs the
+ * exchange described as DATA — method, path, body, where the minted value lives in the
+ * response, and which declared field it fills — so the next LAN device (a printer, a
+ * hub, a thermostat) is a registry row rather than a new branch in the wizard.
+ *
+ * WHAT THIS SEAT DELIBERATELY CANNOT EXPRESS:
+ *  - A HOST. The exchange always runs against the connection's own frozen ceiling host
+ *    (ADR-0023's binding order: collect address → approve → freeze → pair), so a
+ *    registry-authored host here would be a second host channel around the ceiling.
+ *  - A HEADER TEMPLATE. The pairing request is UNCREDENTIALED by definition — it is the
+ *    request that creates the credential — so there is nothing to inject and no seat to
+ *    inject it through.
+ *  - ARBITRARY RESPONSE HANDLING. `secretPath` is a literal walk (object keys and array
+ *    indices), never an expression: the response comes from a device on the user's
+ *    network and must be READ, never evaluated.
+ *
+ * CUSTODY (C1): the minted value goes straight into `snug_secrets` under the connection's
+ * `secretField` key. The exchange response never enters app-, LLM-, or export-visible
+ * state — the wizard is the only reader, and it reads exactly `secretPath`.
+ */
+export interface WellKnownPairingExchange {
+  /** POST only at v1 — a pairing exchange CREATES a credential, so it is never a read. */
+  method: 'POST';
+  /** Path on the connection's own ceiling host. Leading '/' — never a URL. */
+  pathAndQuery: string;
+  /** The literal JSON body. Pinned registry data — no substitution, no user input. */
+  body: Record<string, string | number | boolean>;
+  /** Literal walk to the minted secret in the response (keys and array indices). */
+  secretPath: ReadonlyArray<string | number>;
+  /** Which of the entry's OWN declared `fields` the minted value fills. */
+  secretField: string;
+  /**
+   * What the user must do BEFORE the exchange will succeed, rendered verbatim by the
+   * wizard immediately before it fires the request. This copy is the whole difference
+   * between a working pairing and an unexplained failure: the exchange only succeeds
+   * inside the device's own consent window.
+   */
+  preconditionInstruction: string;
+}
 
 /**
  * How a provider's OAuth flow can receive its redirect on the DESKTOP shell
@@ -79,6 +131,10 @@ export interface WellKnownAuthOption {
   fields?: WellKnownOauthProvider['fields'];
   endpoints?: WellKnownOauthProvider['endpoints'];
   registration?: WellKnownOauthProvider['registration'];
+  /** Where THIS option's credential is sent — same seat rules as the entry's. */
+  request?: WellKnownOauthProvider['request'];
+  /** How THIS option's connection is verified — same seat rules as the entry's. */
+  testRequest?: WellKnownOauthProvider['testRequest'];
   authorizeParams?: Record<string, string>;
   pkce?: boolean;
   /**
@@ -171,8 +227,36 @@ export interface WellKnownOauthProvider {
    * channel and R3 makes it durable).
    */
   authOptions?: WellKnownAuthOption[];
-  /** Human-reviewed API hosts this provider's credential may be injected against. */
-  apiHosts: string[];
+  /**
+   * Human-reviewed API hosts this provider's credential may be injected against.
+   *
+   * OPTIONAL since ADR-0023, and ONLY because of the `lanHost` fork below: the structural
+   * rule is now "pinned `apiHosts` XOR `lanHost`", set-equality-pinned by
+   * `well-known-providers.test.ts`. Every non-LAN entry still MUST carry a non-empty
+   * list, and the same test refuses an entry that carries neither seat or both.
+   */
+  apiHosts?: string[];
+  /**
+   * LAN-CLASS HOST SOURCING — the entry declares that its host is COLLECTED FROM THE
+   * USER rather than pinned (ADR-0023 Decision 1). A Philips Hue bridge's address is
+   * assigned by the user's own router, so no human review could ever pin it.
+   *
+   * The seat rides through `requirementFromRegistryEntry` into the requirement's own
+   * `lanHost` seat (protocol), which is what makes the pre-collection row representable
+   * and what tells the wizard to render an address step. It carries NO address and never
+   * will: the collected value lands in `declaredApiHosts`, the one seat
+   * `deriveConnectionAllowedHosts` unions into the frozen ceiling.
+   *
+   * ENTRY-LEVEL ONLY, like `apiHosts` — for exactly the same reason ADR-0020 gives:
+   * which hosts may receive a credential is a per-PROVIDER decision, never a per-flow
+   * one. An `authOptions` entry may not declare a `lanHost`.
+   */
+  lanHost?: ConnectionLanHost;
+  /**
+   * How this provider's credential is MINTED when the user cannot type it (ADR-0023
+   * Decision 2). Entry-level: the exchange belongs to the device, not to a flow.
+   */
+  pairing?: WellKnownPairingExchange;
   /**
    * The provider's credential FIELD LIST — the seat the static-kind entries needed
    * (TASK-20260810 P4, fold T-M1).
@@ -201,6 +285,33 @@ export interface WellKnownOauthProvider {
     placeholder?: string;
     required?: boolean;
   }>;
+  /**
+   * WHERE the typed credential is sent — the pinned request templates (ADR-0022 §1,
+   * TASK-20260812-desktop-auth-awareness P3). Same shapes as the requirement schema's
+   * `connectionRequestSchema` by construction (the types ARE the protocol's), pinned by
+   * the AC3 structural suite composing every entry through `requirementFromRegistryEntry`
+   * and parsing it.
+   *
+   * THE DEFECT THIS CLOSES. Guard 2b refuses a borrowing channel that AUTHORS `request`
+   * (where a typed secret goes is exactly what a prompt-injected requirement must not
+   * choose) — but the registry had nothing to substitute, so a PINNED provider could
+   * never carry a signing template at all: the executor fell to the kind default
+   * (`X-Api-Key` for `api_key`) and Coinbase's saved credential was read by no code
+   * path. These seats are the missing pinned value: human-authored, docs-cited, in a
+   * reviewed PR — the one channel Guard 2b exempts — and substituted on every channel's
+   * borrow hit by `applyRegistryValues` (amendment 1c).
+   *
+   * Template VALUES are `{{…}}` references linted against the entry's OWN field keys
+   * (registry-template-parity.test.ts) — never literal credentials (C1).
+   */
+  request?: ConnectionRequest;
+  /**
+   * HOW a connection is verified — the wizard's "test this connection" probe (ADR-0022
+   * §1). GET + path-only by the protocol schema's construction: a probe that could
+   * choose its method or host would be a write primitive and a second host channel.
+   * The host comes from the frozen ceiling, i.e. from `apiHosts` above.
+   */
+  testRequest?: ConnectionTestRequest;
   /** Extra authorize-URL query params this provider needs (e.g. Google offline access). */
   authorizeParams?: Record<string, string>;
   /**
@@ -440,9 +551,11 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // RETAIL OAUTH — the alternate way in (TASK-20260812-auth-kind-choice). Coinbase
     // also offers a standard OAuth2 authorization-code flow for retail accounts via
     // login.coinbase.com. It is NOT the default: the API-key surface is what the
-    // founding starter and the KB-taught template sign against, and OAuth requires
-    // the user to register an OAuth2 app first. The user may still choose it — the
-    // choice card offers both, and a choice persists on the `user` channel.
+    // founding starter targets (now via the pinned CDP signing template below), and
+    // OAuth requires the user to register an OAuth2 app first. The user may still
+    // choose it — the choice card offers both, and a choice persists on the `user`
+    // channel. The option pins NO request/testRequest of its own: a sign-in flow
+    // injects a token the OAuth service manages, never the api_key flow's JWT template.
     authOptions: [
       {
         id: 'oauth',
@@ -479,54 +592,66 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         },
       },
     ],
-    // The founding defect, fixed at the source: three DISTINCT secrets, each named and
-    // described, so the user knows which value goes in which box before pasting. The
-    // labels match Coinbase's own console wording — a label that renames the provider's
-    // artifact is how a user pastes the wrong secret.
     apiHosts: ['api.coinbase.com'],
     // VERIFIED 2026-08-12: api.coinbase.com does not answer browser CORS preflights —
     // the motivating case of the 2026-08-12 BYOK CORS advisory (docs/next-steps.md):
     // a browser hub gets an opaque "Failed to fetch"; desktop's native fetch is the
     // advisory's rung 2. The wizard discloses this BEFORE credentials are pasted.
     browserCallable: false,
+    // THE CDP CREDENTIAL PAIR (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §5).
+    //
+    // VERIFIED 2026-08-12 against Coinbase's own docs + live probes (task recon):
+    // retail/Advanced Trade authentication is a CDP key — the key NAME
+    // (`organizations/{org}/apiKeys/{key}`, non-secret, rides the JWT's kid/sub) plus
+    // an EC private key that signs a fresh ES256 JWT per request, sent as
+    // `Authorization: Bearer`. The legacy retail HMAC keys EXPIRED provider-side on
+    // 2025-02-05, so the previous `api_key`/`api_secret`/`passphrase` seats described
+    // credentials Coinbase no longer issues — the entry was never connectable.
+    // HMAC+passphrase survives only on the institutional `api.exchange.coinbase.com`
+    // surface, which is dropped, not carried (out of product scope; recorded in
+    // ADR-0022, deliberately NOT an authOption).
+    // Ed25519 keys are NOT accepted on the Coinbase App surface; EC (ES256) is the
+    // universally safe algorithm, and the wizard/probe errors honestly on an Ed25519
+    // PEM (es256-key.ts).
+    // https://docs.cdp.coinbase.com/coinbase-app/docs/api-key-authentication
+    // https://docs.cdp.coinbase.com/api-reference/v2/authentication (JWT authentication)
     fields: [
       {
         key: 'api_key',
-        label: 'API key name',
+        label: 'API key name (organizations/…/apiKeys/…)',
         type: 'text',
-        description: 'The key identifier shown when you created the key.',
+        description: 'The full key name shown when you created the key — the organizations/…/apiKeys/… path, not a display label.',
       },
       {
-        key: 'api_secret',
-        label: 'API secret',
+        key: 'private_key',
+        label: 'EC private key (PEM)',
         type: 'secret',
-        description: 'Shown ONCE at creation time. Coinbase cannot show it again.',
-      },
-      {
-        // KEY IS `passphrase`, NOT `api_passphrase` — and the difference is not cosmetic.
-        // The KB-taught Coinbase template signs with `CB-ACCESS-PASSPHRASE: {{passphrase}}`,
-        // and the template engine resolves a token against the FIELD KEY. An
-        // `api_passphrase` field would leave `{{passphrase}}` unresolved, sending the header
-        // present-but-empty and producing a generic Coinbase 401 with nothing in the UI to
-        // explain it. Seven other declaration sites (template-parity, template-lint,
-        // template-engine, taughtTemplatesLint, demoRequirement, the protocol contract test)
-        // all use `passphrase`; the registry was the one that forked. Pinned against the
-        // taught template by `registry-template-parity.test.ts` so it cannot fork again —
-        // the repo's own 2026-08-03 shared-literal lesson.
-        key: 'passphrase',
-        label: 'Passphrase',
-        type: 'secret',
-        description: 'The passphrase you chose when creating the key.',
-        required: false,
+        description: 'From the key file you downloaded at creation — paste the whole PEM, BEGIN/END lines included.',
       },
     ],
+    // WHERE the credential goes — the pinned CDP signing template (ADR-0022 §1/§5).
+    // `cdp_jwt` mints the ES256 JWT host-side per request (template-engine.ts); both
+    // arguments are declared field keys by the helper's own lint rule. This seat is
+    // exactly what Guard 2b refuses borrowers for authoring: with it pinned here, the
+    // executor stops falling to the generic `X-Api-Key` kind default that made the
+    // saved credential dead weight.
+    request: {
+      headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' },
+    },
+    // HOW the connection is verified — the wizard's "test this connection" probe:
+    // GET https://api.coinbase.com/api/v3/brokerage/accounts (host from apiHosts; a
+    // credentialed read that 401s on bad credentials instead of silently "connecting").
+    testRequest: { method: 'GET', pathAndQuery: '/api/v3/brokerage/accounts' },
     registration: {
-      consoleUrl: 'https://www.coinbase.com/settings/api',
+      // The CDP portal — the same console the OAuth option cites; retail Settings→API
+      // no longer issues keys for this surface (VERIFIED 2026-08-12, sources above).
+      consoleUrl: 'https://portal.cdp.coinbase.com/',
       instructions: [
-        'Sign in to Coinbase and open Settings → API.',
-        'Create a new API key and choose READ-ONLY permissions — this app never needs to trade.',
-        'Copy the key name and secret now: the secret is shown only once.',
-        'Paste the key name, secret, and passphrase into the fields below.',
+        'Sign in to the Coinbase Developer Platform (link above) with your Coinbase account and open (or create) a project.',
+        'Open API keys and create a new Secret API key with VIEW (read-only) permission — this app never needs to trade.',
+        'Choose the EC (ECDSA / ES256) key type if asked — Ed25519 keys will not work here.',
+        'Download the key file when it is offered: Coinbase shows the private key only once.',
+        'Paste the key name (the organizations/…/apiKeys/… path) and the private key PEM from that file into the fields below.',
       ],
     },
   },
@@ -542,6 +667,16 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // OpenWeather transports its key as `?appid=` — a QUERY-STRING credential. That
     // placement is host-side (the template engine), never authored into app code: the
     // AL-09 AC3 lint in examples/ fails any starter that writes `?appid=` itself.
+    //
+    // WHERE THAT PLACEMENT IS PINNED (TASK-20260812-desktop-auth-awareness P4, ADR-0022 §3):
+    // the `request.queryTemplate` seat below. Until P4 this comment described a mechanism
+    // with no data behind it — the executor fell to the `api_key` kind default and sent a
+    // meaningless `X-Api-Key` header while OpenWeather read a query parameter that was
+    // never there, so weather-planner was broken at credential injection (spec item 5).
+    // The executor renders this AFTER every ceiling check and scrubs the rendered value
+    // from error strings, logs, inspector payloads and net-result echoes (C1).
+    // VERIFIED 2026-08-13 (live + primary docs): `appid` is the documented query parameter
+    // (https://openweathermap.org/current — "appid required: Your unique API key").
     fields: [
       {
         key: 'api_key',
@@ -550,6 +685,19 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         description: 'Your OpenWeather API key. New keys can take a couple of hours to activate.',
       },
     ],
+    request: {
+      queryTemplate: { appid: '{{api_key}}' },
+    },
+    // HOW the connection is verified — the wizard's "test this connection" probe.
+    // Current conditions for one city: the cheapest free-tier read OpenWeather offers,
+    // and it EXERCISES the credential rather than merely reaching the host. VERIFIED
+    // live 2026-08-13: without a valid `appid` it answers 401 with
+    // `{"cod":401,"message":"Invalid API key…"}` (https://openweathermap.org/faq#error401),
+    // so a typo'd or not-yet-active key fails the probe instead of reporting connected.
+    // (OpenWeather marks `q=` city lookups deprecated-but-functional in favour of
+    // lat/lon geocoding; kept here because the probe needs no geocoding round trip and
+    // the starter itself uses the same call.)
+    testRequest: { method: 'GET', pathAndQuery: '/data/2.5/weather?q=London' },
     registration: {
       consoleUrl: 'https://home.openweathermap.org/api_keys',
       instructions: [
@@ -576,6 +724,43 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         description: 'From the CoinGecko developer dashboard. The free Demo plan is enough for this app.',
       },
     ],
+    // WHERE the credential goes (TASK-20260812-desktop-auth-awareness P4, ADR-0022 §3).
+    //
+    // VERIFIED 2026-08-13 against the primary docs
+    // (https://docs.coingecko.com/reference/authentication) AND a live probe: the DEMO
+    // tier lives on `api.coingecko.com` and accepts its key EITHER as the query parameter
+    // `x_cg_demo_api_key` OR as the header `x-cg-demo-api-key`. (The paid tier is a
+    // different host and a different key name — `pro-api.coingecko.com` /
+    // `x_cg_pro_api_key` — deliberately not carried here; the free Demo plan is what this
+    // entry and its starter are for.)
+    //
+    // The QUERY form is chosen deliberately, for ONE platform-independence reason that
+    // survived verification:
+    //   * A query parameter is a SIMPLE request — it triggers no CORS preflight at all,
+    //     on any host, ever. It cannot break on a provider's preflight policy because it
+    //     never asks for one.
+    // REFUTED, and recorded so it is not re-litigated: this task's plan asserted the
+    // header form was unusable because `x-cg-demo-api-key` is absent from CoinGecko's
+    // preflight allow-list. A live OPTIONS probe on 2026-08-13 disproved it — CoinGecko
+    // reflects the requested header back in `access-control-allow-headers`, so BOTH forms
+    // work from a browser today. The query form is still the right pin (it depends on no
+    // reflective-CORS behaviour that CoinGecko could tighten without notice), but the
+    // reason is preflight-independence, not a CORS wall that does not exist.
+    //
+    // NO `testRequest` — a DELIBERATE omission, not an oversight. `api.coingecko.com` is a
+    // documented "Keyless Public API" (https://docs.coingecko.com/docs/keyless-public-api):
+    // /ping, /simple/price and the rest answer 200 with NO key, and a demo key only raises
+    // the rate-limit ceiling. Every candidate probe on this host therefore reports
+    // CONNECTED for a typo'd key — worse than no probe, because it launders a broken
+    // connection into a green checkmark. The one key-requiring endpoint, `/api/v3/key`, is
+    // Pro-plan-only on the OTHER host (live probe on the demo host: 401 error_code 10005,
+    // "limited to PRO API subscribers") — it would fail for every CORRECT demo key and sits
+    // off this entry's ceiling besides. The wizard shows no "test this connection" button
+    // for CoinGecko rather than one whose result means nothing. Revisit if CoinGecko ever
+    // key-gates the demo host.
+    request: {
+      queryTemplate: { x_cg_demo_api_key: '{{api_key}}' },
+    },
     registration: {
       consoleUrl: 'https://www.coingecko.com/en/developers/dashboard',
       instructions: [
@@ -610,6 +795,120 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // https://developer.apple.com/documentation/applemusicapi/user-authentication-for-musickit
     desktopRedirectPosture: 'https-bridge',
     apiHosts: ['api.music.apple.com'],
+  },
+  // ─────────────────────────────────────────── the first LAN-CLASS entry (ADR-0023, P5)
+  //
+  // Philips Hue is the entry that forced the host fork. Every other entry pins hosts a
+  // human reviewed; a Hue bridge sits at an address the USER's router assigned, so there
+  // is nothing to pin and never will be. Hence `lanHost` INSTEAD of `apiHosts` — the
+  // registry declares that a host will be collected, the wizard collects and validates
+  // it (RFC-1918 IPv4 literal only), and the collected address freezes into the ceiling
+  // exactly like a pinned one.
+  //
+  // THE THREE ADMISSION CONSEQUENCES, each probe-verified as blocking before this entry
+  // could exist (P0 amendment 10; see `lan-class-registry.test.ts` for the probe output):
+  // `registryHostIndex` must SKIP an apiHosts-less entry (otherwise this row makes every
+  // admission of every requirement throw), `applyRegistryValues` must PRESERVE the
+  // declaration's hosts for a LAN entry (otherwise it deletes the address the user just
+  // typed), and admission must RE-VALIDATE the host class (otherwise a borrower smuggles
+  // a public host under this brand).
+  //
+  // PROVIDER FACTS (task recon, 2026-08-12, primary docs + live probes):
+  //  - CLIP v2 is HTTPS-ONLY on the bridge. The cert's CN is the bridgeId, signed by
+  //    Signify's private CA on current firmware and self-signed on older ones, so native
+  //    fetch refuses it — hence ADR-0023's TOFU pin captured at pairing and the desktop
+  //    `lan_fetch` command. That transport is the DESKTOP lane's; this entry is the
+  //    declaration it serves.
+  //  - The credential is MINTED, not issued: press the bridge's physical link button,
+  //    then POST /api {"devicetype":…,"generateclientkey":true} within ~30 seconds and
+  //    the bridge returns success[0].username — the value the `hue-application-key`
+  //    header carries. (`clientkey` comes back too; it is the Entertainment-API stream
+  //    key, unused at v1 and deliberately not stored.)
+  //  - https://developers.meethue.com/develop/hue-api-v2/getting-started/
+  hue: {
+    displayName: 'Philips Hue',
+    kind: 'api_key',
+    // The names a person actually writes for this device. Both are brand-adjacent by
+    // `findBrandAdjacentRegistryKeys` anyway (they contain the `hue` segment), so the
+    // BAN already reaches them; the aliases are what let the INFERRER's rung 1 resolve
+    // them to this entry instead of guessing a requirement.
+    aliases: ['Philips Hue', 'Hue Bridge'],
+    // NO `apiHosts` — the XOR. See `lanHost` below.
+    lanHost: { class: 'rfc1918-ipv4-literal', label: 'Bridge IP address' },
+    // VERIFIED: the bridge serves a private-CA/self-signed certificate on a private IP.
+    // A browser page cannot reach it — no CORS headers, and the cert fails the browser's
+    // own chain check with no per-host trust escape. This is a DESKTOP-only provider and
+    // the wizard discloses that before anything is collected (the disclosedBrowserWall
+    // pattern; ADR-0023 Decision 1 keeps the ROW portable — web discloses, never breaks).
+    browserCallable: false,
+    // ONE field, and the user never types into it. It exists so the secret has a named
+    // slot in `snug_secrets` and the header template has a key to reference; the PAIRING
+    // exchange below fills it. The copy says so plainly — telling the user to "paste
+    // your application key" would send them hunting for a value no Hue surface displays.
+    fields: [
+      {
+        key: 'application_key',
+        label: 'Bridge application key',
+        type: 'secret',
+        description:
+          'Created for you when you press the link button — Snug asks the bridge for it during setup. There is nothing to look up.',
+      },
+    ],
+    // WHERE the minted key goes: CLIP v2's own header. Never a query parameter, never a
+    // bearer token — the bridge reads exactly this name.
+    request: {
+      headerTemplate: { 'hue-application-key': '{{application_key}}' },
+    },
+    // NO `testRequest`, deliberately (same discipline as coingecko's omission at P4):
+    // every CLIP v2 read requires the key the pairing step mints, so a probe before
+    // pairing can only fail and a probe after it merely repeats what pairing proved. No
+    // button beats a meaningless one — pairing IS the verification.
+    //
+    // THE PAIRING EXCHANGE (ADR-0023 Decision 2). Runs against the connection's own
+    // frozen ceiling host, after approval, over the desktop pinned-TLS command in
+    // `mode:'pair'`. The minted value goes straight to `snug_secrets`.
+    pairing: {
+      method: 'POST',
+      pathAndQuery: '/api',
+      body: { devicetype: 'snug#hub', generateclientkey: true },
+      /*
+        THE WALK, CORRECTED AGAINST THE WIRE (TASK-20260812 P5-flow; supersedes the
+        pinned literal's spelling, journaled in the task file).
+
+        The task file pins this as `success[0].username`, and P5-shape encoded that
+        prose reading literally as `['success', 0, 'username']`. The prose is
+        ambiguous and the encoding inverted it: a CLIP v1 pairing response is an
+        ARRAY OF RESULT OBJECTS, outermost —
+
+            [{"success":{"username":"…","clientkey":"…"}}]
+
+        — so the index comes FIRST. Probed both ways against a real-shaped body
+        before changing anything: `['success', 0, 'username']` resolves to
+        `undefined` on every real response, which would have made pairing fail
+        forever with "the device did not hand back a key" while the bridge was
+        answering perfectly. The registry's own comment above already described the
+        array-outermost shape, and the desktop lane's fixtures already used it — the
+        PATH was the only thing that disagreed with the wire, and it disagreed
+        invisibly because the one test pinning it asserted the array verbatim rather
+        than walking a response with it (lesson 2026-08-04: assert the outcome).
+      */
+      secretPath: [0, 'success', 'username'],
+      secretField: 'application_key',
+      preconditionInstruction:
+        'Press the link button — the big round button on top of your Hue bridge — now, then continue within 30 seconds. The bridge only hands out a key during that window.',
+    },
+    registration: {
+      // No console, no account, no developer portal: the "registration" for a Hue bridge
+      // is finding it on your own network and pressing its button. Written for someone
+      // who has never opened a router page.
+      instructions: [
+        'Make sure this computer and the Hue bridge are on the same home network — the bridge is the round white box plugged into your router.',
+        'Find the bridge IP address: open the Philips Hue app, go to Settings → My Hue System → tap your bridge, and read the "IP address" line (it looks like 192.168.1.50). "Find my bridge" below can also look it up for you.',
+        'Type that address into the field below and continue.',
+        'When Snug asks, press the link button — the big round button on top of the bridge — because that is how the bridge knows it is really you standing next to it.',
+        'Continue within 30 seconds of pressing it. The bridge creates the key itself; there is nothing for you to copy or paste.',
+      ],
+    },
   },
 };
 
@@ -753,6 +1052,48 @@ export function resolveInferrerAlias(name: string): { key: string; entry: WellKn
 }
 
 /**
+ * WHICH REGISTRY ENTRY DOES THIS PROVIDER NAME REACH? — the NAME half of the
+ * borrow resolution, exported so there is exactly one of it.
+ *
+ * WHY IT LEFT `requirement-admission.ts` (TASK-20260812 P5-flow). Admission
+ * resolves `'Philips Hue'` to the `hue` entry through the brand-adjacent
+ * fallback and substitutes its pinned seats onto the row; the wizard then needs
+ * the SAME entry to read its `pairing` exchange. Re-deriving that inside the
+ * wizard would be a second resolution of the same question — and the 2026-08-12
+ * lesson is precise about the failure mode: when a rule is evaluated twice, the
+ * two copies eventually disagree, and here disagreement means the wizard pairing
+ * with a device using one entry's exchange while the row carries another
+ * entry's template. So the rule moved here, admission calls it, and the wizard
+ * calls it.
+ *
+ * TWO RUNGS, in this order and no other:
+ *  1. EXACT after normalization — the resolution path. `lookupWellKnownProvider`
+ *     answers "which provider's pinned values should this use", so a legitimate
+ *     `Google Drive` resolves to `googledrive` and never to `google`.
+ *  2. BRAND-ADJACENT — the ban path's boundary-aware segment match, which is
+ *     what catches `Spotify Inc`, `CoinbaseInc` and the human spellings of a
+ *     LAN device (`Philips Hue`, `Hue Bridge` → `hue`). Sorted, first taken, so
+ *     the answer is stable rather than dependent on registry insertion order.
+ *
+ * The HOST rung stays in admission: it reads a requirement's declared hosts,
+ * which is a requirement-shaped question this module has no business knowing.
+ */
+export function resolveRegistryEntryByName(
+  name: string,
+): { key: string; entry: WellKnownOauthProvider } | undefined {
+  const entry = lookupWellKnownProvider(name);
+  if (entry !== undefined) {
+    const key = Object.entries(REGISTRY).find(([, value]) => value === entry)?.[0];
+    if (key !== undefined) return { key, entry };
+  }
+  for (const key of findBrandAdjacentRegistryKeys(name).sort()) {
+    const adjacent = REGISTRY[key];
+    if (adjacent !== undefined) return { key, entry: adjacent };
+  }
+  return undefined;
+}
+
+/**
  * The ONE emitter from a registry entry to a connection requirement (D2). The
  * inferrer's rung 1 used to build this literal inline — hardcoding
  * `kind: 'oauth2_auth_code'` and discarding the entry's `fields` — which is the defect
@@ -800,6 +1141,31 @@ export function requirementFromRegistryEntry(
       : {}),
     ...(flow.authorizeParams !== undefined ? { authorizeParams: { ...flow.authorizeParams } } : {}),
     ...(flow.pkce !== undefined ? { pkce: flow.pkce } : {}),
-    declaredApiHosts: [...entry.apiHosts],
+    // The NEW seats (ADR-0022 §1) ride the same flow rule as every credential-flow
+    // seat: the option's own when an option is chosen, the entry's otherwise — and an
+    // option WITHOUT them emits none, because a different flow must never inherit a
+    // signing template whose field keys it does not declare.
+    ...(flow.request !== undefined
+      ? {
+          request: {
+            ...(flow.request.headerTemplate !== undefined ? { headerTemplate: { ...flow.request.headerTemplate } } : {}),
+            ...(flow.request.queryTemplate !== undefined ? { queryTemplate: { ...flow.request.queryTemplate } } : {}),
+          },
+        }
+      : {}),
+    ...(flow.testRequest !== undefined ? { testRequest: { ...flow.testRequest } } : {}),
+    // THE HOST FORK (ADR-0023 Decision 1) — pinned hosts XOR a lanHost declaration, and
+    // the emitter honors whichever the ENTRY carries (never an option's: hosts are an
+    // identity seat, and a LAN seat is a host seat).
+    //
+    // A LAN entry emits NO `declaredApiHosts` at all. That is the PRE-COLLECTION shape:
+    // the requirement is honest that it has no host yet, `deriveConnectionAllowedHosts`
+    // returns an empty ceiling that refuses everything, and the wizard's address step is
+    // what fills the seat. Emitting a placeholder would be the same lie the endpoints
+    // comment above refuses — a nonexistent host unioned into a frozen ceiling.
+    //
+    // Deep-copied like every other seat: the registry is a module singleton.
+    ...(entry.lanHost !== undefined ? { lanHost: { ...entry.lanHost } } : {}),
+    ...(entry.apiHosts !== undefined ? { declaredApiHosts: [...entry.apiHosts] } : {}),
   };
 }

@@ -4,6 +4,71 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-13 — INTERNAL DRAFT, not staged for any push — TASK-20260812-desktop-auth-awareness (P5, protocol lane)
+**Excluded from every spec push** (AL-12 HELD; auth surface publishes no earlier than
+Beta exit). One additive change to the internal v0.3 auth draft, no wire-surface impact —
+`schemas/*.json` byte-unchanged for the same publication-line reason as the P3 entry
+below.
+
+**`connectionRequirementSchema` gains an optional `lanHost` seat and `declaredApiHosts`
+becomes required-XOR-`lanHost`** (ADR-0023 Decision 1; P0 amendment 2 "lan-schema-2").
+The defect, reproduced by execution: `declaredApiHosts` was required AND `.min(1)`, so a
+provider whose API lives on a device on the user's own network — its address assigned by
+their router, pinnable by nobody — was **unrepresentable**, and the whole LAN provider
+class could not be declared at all.
+
+`lanHost = { class, label }` is a declaration that a host will be COLLECTED, never a
+host. `class` is validated against the new exported `CONNECTION_LAN_HOST_CLASSES`, a
+single-member union (`'rfc1918-ipv4-literal'`) that future device classes extend
+additively rather than widen; `label` reuses the field-label ceiling (≤80) because it
+renders exactly like one. A new exported `isRfc1918Ipv4Literal` decides the class
+arithmetically; it deliberately RESTATES rather than imports packages/auth's
+`isPrivateRfc1918Ipv4Literal` (auth depends on protocol — a reuse would be a dependency
+cycle) and the two are pinned equivalent by a cross-package test.
+
+The XOR is a `superRefine`, and the rule follows from what consumes the seat:
+`deriveConnectionAllowedHosts` unions `declaredApiHosts` into the frozen ceiling at
+approval, so the collected address must be able to live there. No `lanHost` ⇒ hosts
+required and non-empty, byte-identical to every pre-P5 requirement (pinned by test).
+`lanHost` present ⇒ hosts either ABSENT (pre-collection) or EXACTLY ONE host of the
+declared class (post-collection). A public host, an off-class literal, a second host, or
+an empty array beside a `lanHost` is refused — otherwise a public host would freeze into
+a ceiling the review screen presents as "a device on your own network". A pre-collection
+LAN row derives an EMPTY ceiling, which refuses every host; hence the binding wizard
+order collect → approve → freeze → pair.
+
+Staged prose: `docs/spec-drafts/spec-v0.3-auth.md` — requirement shape block + new §4.8
+(the seat, the XOR verdict table, and the three host obligations: empty pre-collection
+ceiling, independent re-validation at admission, and no platform-conditional
+persistence). Nothing pushed to `snugprotocol/spec` (needs an explicit ask).
+
+## 2026-08-13 — INTERNAL DRAFT, not staged for any push — TASK-20260812-desktop-auth-awareness (P3, protocol lane)
+**Excluded from every spec push** (AL-12 HELD; auth surface publishes no earlier than
+Beta exit). One additive change to the internal v0.3 auth draft, no wire-surface impact:
+`schemas/*.json` is byte-unchanged because `connection-requirement.ts` sits behind the
+same publication line as `auth-schema.ts` and `render-directive.ts` — deliberately OUT
+of `json-schemas.ts` SOURCES, its shape locked by in-package tests instead.
+
+**`connectionRequestSchema` gains an optional `queryTemplate` seat** (ADR-0022 §3):
+query-param credential placement for providers a header template cannot serve
+(OpenWeather `?appid=`, CoinGecko's demo key). Keys are validated by the NEW
+`CONNECTION_QUERY_NAME_RULE = ^[A-Za-z0-9_.\[\]-]{1,64}$` — its own charset because real
+query names carry underscores/dots/brackets the header rule's alnum+dash rejects
+(P0 amendment 11: `x_cg_demo_api_key` is the motivating case), while both charsets still
+exclude URL-structure and template metacharacters. Values reuse the headerTemplate value
+bounds verbatim (≤300 chars, ≤8 entries via the new
+`CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES`); the "same lint family" claim is about VALUE
+rules — the declared-field-keys lint in packages/auth derives both templates' lints from
+one resolution. The `none` coherence rule closes over the new seat (a query-only request
+template on a keyless kind is rejected at parse), and `CONNECTION_HEADER_NAME_RULE`
+stays untouched, pinned by test in both rule and behavior.
+
+Staged prose: `docs/spec-drafts/spec-v0.3-auth.md` — requirement shape block + new
+§4.4.2 (own key charset, one-resolution value lint, placement-after-ceiling and
+enumerated-scrub host obligations). The `cdp_jwt` signing-helper grammar of ADR-0022 §2
+is NOT part of this entry — helper grammar lives in packages/auth and stages with the
+executor lane. Nothing pushed to `snugprotocol/spec` (needs an explicit ask).
+
 ## 2026-08-11 — INTERNAL DRAFT, not staged for any push — TASK-20260811-lean-runtime-data-chat (P0)
 **Excluded from every spec push** (AL-12 HELD). Three internal-draft additions, none of
 which touches the published v1 wire surface: `schemas/*.json` is byte-unchanged, and the

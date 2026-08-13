@@ -39,7 +39,8 @@ export type SystemLayerName =
   | 'capability-file-creation'
   | 'app-builder-summary'
   | 'app-runtime'
-  | 'app-response-format';
+  | 'app-response-format'
+  | 'platform-desktop';
 
 const SYSTEM_LAYER_FILES: Readonly<Record<SystemLayerName, string>> = {
   'host-identity': 'system/10-host-identity.md',
@@ -49,6 +50,9 @@ const SYSTEM_LAYER_FILES: Readonly<Record<SystemLayerName, string>> = {
   // is mutually exclusive with 30: a turn is either authoring an app or running one.
   'app-runtime': 'system/45-app-runtime.md',
   'app-response-format': 'system/40-app-response-format.md',
+  // 95 is appended LAST, only when the assembly is told it serves the desktop shell
+  // (TASK-20260812-desktop-auth-awareness P2). Web assemblies never include it.
+  'platform-desktop': 'system/95-platform-desktop.md',
 };
 
 export function getSystemLayer(name: SystemLayerName): string {

@@ -141,6 +141,16 @@ export const CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES = 8;
 /** Max chars per header-template value. */
 export const CONNECTION_REQUIREMENT_HEADER_VALUE_MAX_CHARS = 300;
 
+/**
+ * Max query-template entries — the queryTemplate mirror of
+ * `CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES`, same number for the same reason: the
+ * template is rendered host-side into a real outbound URL with real credentials, and
+ * every entry is shown verbatim in the strong review, so the bound is as much about a
+ * reviewable code box as about bytes. A separate constant (not a reuse) because the two
+ * seats can legitimately diverge and a shared name would hide which one a change moved.
+ */
+export const CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES = 8;
+
 /** Max chars for a URL seat (console/docs/homepage) — rendered as a link in the review. */
 export const CONNECTION_REQUIREMENT_URL_MAX_CHARS = 300;
 
@@ -172,11 +182,80 @@ export const CONNECTION_FIELD_KEY_RULE = /^[a-z0-9_]{1,40}$/;
 export const CONNECTION_HEADER_NAME_RULE = /^[A-Za-z0-9-]{1,64}$/;
 
 /**
+ * Query-parameter-name charset (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §3;
+ * P0 amendment 11). Query names get their OWN rule rather than reusing the header one
+ * because the two vocabularies genuinely differ: real query parameters carry
+ * underscores (CoinGecko's `x_cg_demo_api_key` — the motivating case the header rule's
+ * alnum+dash would reject), dots, and PHP/Rails-style brackets (`filter[key]`), while
+ * header names must stay proxy-safe alnum+dash. What both rules still exclude is every
+ * character that could smuggle URL structure past the review code box: `=`, `&`, `%`,
+ * `?`, `#`, space, and the template metacharacters. "Same lint family as
+ * headerTemplate" (AC6) refers to the VALUE rules — the shared value bounds here and
+ * the declared-field-keys lint in packages/auth — never to this key charset.
+ */
+export const CONNECTION_QUERY_NAME_RULE = /^[A-Za-z0-9_.\[\]-]{1,64}$/;
+
+/**
  * Hostname charset — LDH labels, dot-separated, no scheme/port/path/credentials. The
  * length ceiling (`AUTH_HINT_HOST_MAX_CHARS`, RFC 1035's 253) is applied separately so
  * an over-long-but-well-formed host fails on LENGTH, which is the honest diagnostic.
+ *
+ * NOTE (ADR-0023, TASK-20260812-desktop-auth-awareness P5): digit-only labels pass this
+ * rule, so a dotted-decimal IPv4 LITERAL like `192.168.1.50` is — and always was — a
+ * legal `declaredApiHosts` entry. That is deliberate and predates the `lanHost` seat
+ * (ADR-0021 Decision 4's private-literal transport rung), which is why the LAN fork adds
+ * an EXTRA rule for lanHost requirements rather than loosening this one: see the
+ * `lanHost` superRefine below for what a LAN declaration may and may not freeze into its
+ * ceiling.
  */
 export const CONNECTION_HOST_RULE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
+
+/**
+ * The LAN host CLASSES a `lanHost` seat may declare (ADR-0023 Decision 1).
+ *
+ * A single-member union today, and additive by construction: a future device class (a
+ * hostname-on-the-local-network class, an IPv6 ULA class) is a NEW literal here plus its
+ * own validator and its own admission rule — never a widening of this one. Pinned as an
+ * exported tuple so the registry, the wizard and the admission fork all name the same
+ * class rather than each spelling the string.
+ */
+export const CONNECTION_LAN_HOST_CLASSES = ['rfc1918-ipv4-literal'] as const;
+
+export type ConnectionLanHostClass = (typeof CONNECTION_LAN_HOST_CLASSES)[number];
+
+/** Dotted-decimal shape gate for `isRfc1918Ipv4Literal` — four 1–3 digit octets, nothing else. */
+const IPV4_LITERAL_SHAPE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/**
+ * True when `host` is an RFC-1918 private-range IPv4 LITERAL — 10.0.0.0/8,
+ * 172.16.0.0/12, or 192.168.0.0/16 — the `rfc1918-ipv4-literal` class, decided
+ * arithmetically rather than by prefix string.
+ *
+ * WHY THIS LIVES IN PROTOCOL AND NOT IN packages/auth. `packages/auth` already carries
+ * `isPrivateRfc1918Ipv4Literal` (net-guards.ts) and the two are semantically identical —
+ * but `packages/auth` DEPENDS ON this package, so importing it here would be a
+ * dependency cycle. The class is a dozen lines of arithmetic over no shared state; a
+ * cycle to save them is the worse trade. The two are pinned EQUIVALENT by a
+ * cross-package test in packages/auth, so a drift fails loudly instead of becoming two
+ * guards quietly disagreeing about what "private" means (lesson 2026-08-10: two lints
+ * disagreeing about the same word is the founding-defect shape).
+ *
+ * Deliberately NARROWER than "not publicly routable": loopback (127/8), link-local
+ * (169.254/16), CGN (100.64/10), every DNS name, and IPv6 in every form (bare,
+ * bracketed, ULA, IPv4-mapped) are NOT in this class. Anything not well-formed
+ * dotted-decimal returns false — fails closed toward refusal.
+ */
+export function isRfc1918Ipv4Literal(host: string): boolean {
+  let candidate = host.trim().toLowerCase();
+  if (candidate.endsWith('.')) candidate = candidate.slice(0, -1); // trailing-dot hygiene
+  if (!IPV4_LITERAL_SHAPE.test(candidate)) return false;
+  const octets = candidate.split('.').map(Number);
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
+  const [a, b] = octets as [number, number, number, number];
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return a === 192 && b === 168;
+}
 
 /**
  * Printable ASCII, space through tilde (U+0020–U+007E). The confusable guard's alphabet
@@ -262,12 +341,20 @@ export const connectionRegistrationSchema = z.strictObject({
 export type ConnectionRegistration = z.infer<typeof connectionRegistrationSchema>;
 
 /**
- * Header placement for static kinds. Values may reference declared field keys, the
- * pinned helper enum, and the pinned request tokens — but THAT rule is not expressible
- * in Zod (it needs the sibling `fields` list), so it is the TEMPLATE LINT's job
- * (packages/auth, AC6). What the schema pins here is the envelope: entry count, header
- * name charset, and value length. Fold S-M2: the lint and the engine's HELPERS map are
- * reconciled so the enum is enforced rather than aspirational.
+ * Credential placement for static kinds — header entries and, since ADR-0022 §3, query
+ * parameters (OpenWeather's `?appid=` and CoinGecko's demo query form were structurally
+ * unservable without a query seat). Values in BOTH templates may reference declared
+ * field keys, the pinned helper enum, and the pinned request tokens — but THAT rule is
+ * not expressible in Zod (it needs the sibling `fields` list), so it is the TEMPLATE
+ * LINT's job (packages/auth, AC6), and the two templates' value lints are derived from
+ * ONE resolution (lesson 2026-08-10: two lints disagreeing about "declared" is the
+ * founding-defect shape). What the schema pins here is the envelope: entry counts, the
+ * per-seat name charsets, and value lengths. Fold S-M2: the lint and the engine's
+ * HELPERS map are reconciled so the enum is enforced rather than aspirational.
+ *
+ * Rendered query VALUES are credentials in a URL — ADR-0022 §3 binds the executor to
+ * inject them only AFTER ceiling checks and to scrub them from every host-visible echo
+ * (an enumerated site list, packages/auth). The schema's job is only the bounded shape.
  */
 export const connectionRequestSchema = z.strictObject({
   headerTemplate: z
@@ -278,6 +365,17 @@ export const connectionRequestSchema = z.strictObject({
     .refine(
       (template) => Object.keys(template).length <= CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES,
       `headerTemplate accepts at most ${CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES} entries`,
+    )
+    .optional(),
+  queryTemplate: z
+    .record(
+      z.string().regex(CONNECTION_QUERY_NAME_RULE),
+      // The headerTemplate VALUE bounds, verbatim — same family by construction.
+      z.string().min(1).max(CONNECTION_REQUIREMENT_HEADER_VALUE_MAX_CHARS),
+    )
+    .refine(
+      (template) => Object.keys(template).length <= CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES,
+      `queryTemplate accepts at most ${CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES} entries`,
     )
     .optional(),
 });
@@ -308,6 +406,34 @@ const declaredApiHostsSchema = z
   )
   .min(1)
   .max(AUTH_HINT_HOSTS_MAX_ITEMS);
+
+/**
+ * The LAN-CLASS HOST SEAT (ADR-0023 Decision 1; P0 amendment 2 "lan-schema-2").
+ *
+ * A provider whose API lives on a device on the USER'S OWN NETWORK — a Philips Hue
+ * bridge is the first — cannot have its host pinned by anyone but the user: the address
+ * is theirs, assigned by their own router. Before this seat such a requirement was
+ * literally unrepresentable, because `declaredApiHosts` is required AND `.min(1)`
+ * (probe-confirmed 2026-08-13: safeParse fails with "expected array, received
+ * undefined"), so the registry had nowhere to say "this provider's host is collected,
+ * not pinned".
+ *
+ * `label` is the copy the wizard renders above the address input ("Bridge IP address").
+ * It reuses the field-label ceiling because it IS a field label in every way that
+ * matters to the review screen, and a seat that renders like a label with a different
+ * bound would drift from the thing it looks like.
+ *
+ * NOTE WHAT THIS SEAT IS NOT: it is a DECLARATION that a host will be collected, never a
+ * host. The collected address lands in `declaredApiHosts` (see the XOR rule below),
+ * because that is the seat `deriveConnectionAllowedHosts` unions into the frozen
+ * ceiling — one host object, not two (the REQUIREMENT ≠ GRANT split at the top of this
+ * file stays exactly as it was).
+ */
+export const connectionLanHostSchema = z.strictObject({
+  class: z.enum(CONNECTION_LAN_HOST_CLASSES),
+  label: z.string().min(1).max(CONNECTION_FIELD_LABEL_MAX_CHARS),
+});
+export type ConnectionLanHost = z.infer<typeof connectionLanHostSchema>;
 
 /**
  * The optional "test this connection" probe (Q7), run through the REAL connected-fetch
@@ -354,7 +480,14 @@ const connectionRequirementShape = {
    * named gate beats four partially-omitted ones.
    */
   userLayer: oauth2AuthCodeSchema.optional(),
-  declaredApiHosts: declaredApiHostsSchema,
+  /**
+   * REQUIRED-XOR-`lanHost` (ADR-0023 Decision 1). Optional at the FIELD level and made
+   * conditionally-required by the superRefine below, because Zod cannot express "required
+   * unless a sibling is present" any other way. Every non-LAN requirement is byte-identical
+   * to its pre-P5 self: absent or empty is still a rejection, with the same path.
+   */
+  declaredApiHosts: declaredApiHostsSchema.optional(),
+  lanHost: connectionLanHostSchema.optional(),
   testRequest: connectionTestRequestSchema.optional(),
 } as const;
 
@@ -367,6 +500,53 @@ const connectionRequirementShape = {
 export const connectionRequirementSchema = z
   .strictObject(connectionRequirementShape)
   .superRefine((requirement, ctx) => {
+    // ---------------------------------------------------------------- THE HOST XOR
+    //
+    // EXACTLY ONE host source, and the rule is decided by what CONSUMES this seat.
+    // `deriveConnectionAllowedHosts` (below) unions `declaredApiHosts` into
+    // `snug_connections.allowed_hosts` at approval, and that frozen ceiling is the
+    // runtime injection wall. So a LAN row must be ABLE to carry the collected bridge
+    // address in `declaredApiHosts` — there is no second path by which a ceiling could
+    // freeze around the user's device, and inventing one would mean two host objects
+    // where this file has always insisted on one.
+    //
+    //   (a) NO `lanHost`  ⇒ `declaredApiHosts` REQUIRED, non-empty. Today's rule,
+    //       unchanged for every shipped requirement, same issue path as before.
+    //   (b) `lanHost` present ⇒ `declaredApiHosts` is EITHER ABSENT (pre-collection —
+    //       what a LAN registry entry emits) OR EXACTLY ONE entry, and that entry must
+    //       be a literal of the DECLARED CLASS (today: RFC-1918 IPv4).
+    //
+    // WHY "exactly one, of the class" rather than "contains one". A public host beside a
+    // `lanHost` would freeze a public host into a ceiling the review screen presents as
+    // "a device on your own network" — a credential aimed anywhere, wearing LAN clothes.
+    // A SECOND private literal is a second device the user never paired. The schema is
+    // the first of two seats that refuse this; admission re-validates the class on the
+    // borrow path (packages/auth, amendment 10c) because a requirement can reach
+    // admission without passing through here (C5: admission reads defensively at the
+    // envelope boundary).
+    const declaredHosts = requirement.declaredApiHosts;
+    if (requirement.lanHost === undefined) {
+      if (declaredHosts === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['declaredApiHosts'],
+          message: 'declaredApiHosts is required unless the requirement declares a lanHost seat',
+        });
+      }
+    } else if (declaredHosts !== undefined) {
+      const classOf: Record<ConnectionLanHostClass, (host: string) => boolean> = {
+        'rfc1918-ipv4-literal': isRfc1918Ipv4Literal,
+      };
+      const inClass = classOf[requirement.lanHost.class];
+      if (declaredHosts.length !== 1 || !inClass(declaredHosts[0]!)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['declaredApiHosts'],
+          message: `a lanHost requirement declares EXACTLY ONE host and it must be of class '${requirement.lanHost.class}' — the address the user collected, and nothing else`,
+        });
+      }
+    }
+
     // `none` COHERENCE (Q6). A keyless kind that declares credential seats is not a
     // loose shape, it is an incoherent one: there is nothing for the wizard to collect
     // and nothing for the executor to inject, so a half-formed row would reach the
@@ -412,6 +592,15 @@ const hostOfUrl = (url: string | undefined): string | undefined => {
  *
  * Frozen at approval into `snug_connections.allowed_hosts`, displayed in full to the
  * user first, and thereafter the runtime injection ceiling.
+ *
+ * LAN ROWS (ADR-0023): a `lanHost` requirement that has not yet collected its address
+ * has NO `declaredApiHosts`, so this returns `[]` — an EMPTY ceiling, which refuses
+ * every host. That is the correct pre-collection answer and it is why the wizard's
+ * binding order is collect the address → approve the row → freeze the ceiling → pair
+ * (P0 amendment 5): pairing always runs against a ceiling that already contains the
+ * bridge. `lanHost` itself contributes NO host — it is a declaration that one will be
+ * collected, never an address — so there is exactly one seat feeding the ceiling, as
+ * there has always been.
  *
  * OUTPUT STABILITY IS LOAD-BEARING, not cosmetic (P0 cutover trap 1). `importUserDb`'s
  * reconciliation branch 1 keeps an approval only when the STORED `allowed_hosts` JSON
