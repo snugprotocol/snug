@@ -83,6 +83,13 @@ type FetchCall = { url: string; init: RequestInit };
 interface Harness {
   executor: ConnectedFetch;
   calls: FetchCall[];
+  /**
+   * Calls that took the PINNED LAN transport (ADR-0023 D3). Empty everywhere
+   * except the LAN describe block — every other test in this file asserts on
+   * `calls`, and a request that quietly moved to this seat would show up as an
+   * empty `calls` array rather than as a passing test.
+   */
+  lanCalls: FetchCall[];
   quartet: ReturnType<typeof memoryQuartet>;
   confirm: ReturnType<typeof vi.fn>;
   setRow(appId: string, row: NetConnectionRow | undefined): void;
@@ -96,13 +103,27 @@ function harness(opts: {
   confirmResult?: boolean;
   /** Decision 6 (desktop LAN policy) — absent everywhere else so every other test pins the browser profile. */
   transportPolicy?: { allowHttpForPrivateHosts: boolean };
+  /**
+   * Record a TOFU pin in the connection's `_connection` KV (ADR-0023 D3), so an
+   * https LAN request can take the pinned transport. Absent by default: a
+   * pinless LAN row is the honest pre-pairing state and every test outside the
+   * LAN block should never come near this path.
+   */
+  withLanPin?: boolean;
 } = {}): Harness {
   const quartet = memoryQuartet();
   // SLOT-KEYED (P1): `auth:<appId>:<slot>:<fieldKey>`.
   quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'), API_KEY_VALUE);
+  if (opts.withLanPin === true) {
+    quartet.setSecret(
+      authConnectionStateSecretKey(APP, SLOT),
+      JSON.stringify({ status: 'connected', lanPin: { fingerprint: 'a'.repeat(64), cn: 'ECB5FAFFFE123456' } }),
+    );
+  }
   const rows = new Map<string, NetConnectionRow>();
   rows.set(APP, rowFor(opts.spec ?? apiKeySpec, opts.status ?? 'approved', opts.allowedHosts ?? ['api.example.com']));
   const calls: FetchCall[] = [];
+  const lanCalls: FetchCall[] = [];
   const respond = opts.respond ?? (() => new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }));
   const confirm = vi.fn(async () => opts.confirmResult ?? true);
   const executor = createConnectedFetch({
@@ -117,10 +138,25 @@ function harness(opts: {
       calls.push({ url, init: init ?? {} });
       return respond(url, init ?? {});
     },
+    // The pinned LAN transport is wired UNCONDITIONALLY here (a desktop shell
+    // always supplies it) and records into its own array. Sharing `calls` would
+    // make a request that silently switched transports invisible — the exact
+    // drift the migrated test above exists to catch.
+    lanFetch: async (url: string, init: RequestInit) => {
+      lanCalls.push({ url, init });
+      return respond(url, init);
+    },
     confirmGate: { confirm },
     ...(opts.transportPolicy !== undefined ? { transportPolicy: opts.transportPolicy } : {}),
   });
-  return { executor, calls, quartet, confirm, setRow: (appId, row) => (row === undefined ? void rows.delete(appId) : void rows.set(appId, row)) };
+  return {
+    executor,
+    calls,
+    lanCalls,
+    quartet,
+    confirm,
+    setRow: (appId, row) => (row === undefined ? void rows.delete(appId) : void rows.set(appId, row)),
+  };
 }
 
 const GET = (url = 'https://api.example.com/v1/data'): { url: string; method: 'GET' } => ({ url, method: 'GET' });
@@ -380,10 +416,30 @@ describe('desktop transport policy — LAN http for private IPv4 literals (Decis
     expect(headerOf(calls[0]!, 'x-api-key')).toBe(API_KEY_VALUE);
   });
 
-  it('policy ON: https to an approved private literal executes too (Hue v2 speaks https) — policy ABSENT it stays SSRF-refused', async () => {
-    const on = harness({ allowedHosts: [LAN_HOST], transportPolicy: POLICY_ON });
+  /**
+   * MIGRATED at P5 (ADR-0023 D3) — the gate semantics are UNCHANGED and still
+   * asserted here; what moved is which transport an admitted https LAN request
+   * lands on.
+   *
+   * When this test was written, `fetchImpl` was the only transport that existed,
+   * so "gate 5 stood down and the request went out" and "it went out through
+   * fetchImpl" were the same observation. ADR-0023 separates them: an https LAN
+   * host is a device serving a private-CA certificate, which the public-root
+   * transport cannot verify, so it now rides the pinned `lanFetch` seat. The
+   * http rung this describe block is named for is untouched (see the test above
+   * it, which still asserts `calls`).
+   *
+   * Both halves of the original claim survive verbatim: policy ON admits the
+   * request, policy ABSENT still refuses it with NET_SSRF_BLOCKED and sends
+   * nothing anywhere. The `lan-pinned-transport.test.ts` suite owns the routing
+   * detail; this one keeps owning the GATE.
+   */
+  it('policy ON: https to an approved private literal is admitted by the gates (Hue v2 speaks https) — policy ABSENT it stays SSRF-refused', async () => {
+    const on = harness({ allowedHosts: [LAN_HOST], transportPolicy: POLICY_ON, withLanPin: true });
     expect((await on.executor.execute(APP, { url: `https://${LAN_HOST}/clip/v2`, method: 'GET' })).ok).toBe(true);
-    expect(on.calls).toHaveLength(1);
+    // Admitted — and carried by the PINNED transport, never the public-root one.
+    expect(on.lanCalls).toHaveLength(1);
+    expect(on.calls, 'an https LAN host must not ride the public-root transport').toHaveLength(0);
 
     const off = harness({ allowedHosts: [LAN_HOST] });
     expect(await off.executor.execute(APP, { url: `https://${LAN_HOST}/clip/v2`, method: 'GET' })).toMatchObject({
@@ -391,6 +447,7 @@ describe('desktop transport policy — LAN http for private IPv4 literals (Decis
       code: NET_ERROR_CODES.NET_SSRF_BLOCKED,
     });
     expect(off.calls).toHaveLength(0);
+    expect(off.lanCalls).toHaveLength(0);
   });
 
   it('octet-boundary correctness at the executor: 172.16/172.31 admitted, 172.15/172.32 refused', async () => {
@@ -412,10 +469,18 @@ describe('desktop transport policy — LAN http for private IPv4 literals (Decis
     }
   });
 
+  /**
+   * MIGRATED at P5 (ADR-0023 D3), same shape as the https test above: the CLAIM
+   * — "the probe shares the executor's deps, so the LAN policy rides along with
+   * no second wiring seat" — is unchanged and still the thing under test. What
+   * moved is that the probe's https LAN request now lands on the pinned
+   * transport, so the deps carry a `lanFetch` and a recorded pin, and the
+   * assertion follows the request to where it actually goes.
+   *
+   * The negative half is untouched: with the policy ABSENT the probe is still
+   * refused and still sends nothing, on either transport.
+   */
   it('executeConnectionTestRequest carries the policy through — the probe reaches an approved LAN host only under policy', async () => {
-    // The probe shares deps with the executor (Q7's single-path guarantee), so the policy
-    // must ride along without a second wiring seat. The probe's URL is https-based; what
-    // the policy changes for it is gate 5's stand-down for the approved RFC-1918 literal.
     const lanRequirement: ConnectionRequirement = {
       slot: 'hue',
       kind: 'api_key',
@@ -431,6 +496,15 @@ describe('desktop transport policy — LAN http for private IPv4 literals (Decis
     } => {
       const quartet = memoryQuartet();
       quartet.setSecret(authConnectionCredentialSecretKey(APP, 'hue', 'api_key'), API_KEY_VALUE);
+      quartet.setSecret(
+        authConnectionStateSecretKey(APP, 'hue'),
+        JSON.stringify({ status: 'connected', lanPin: { fingerprint: 'a'.repeat(64), cn: 'bridge' } }),
+      );
+      // ONE array for BOTH transports here, deliberately: this test's claim is
+      // about the POLICY reaching the probe at all, not about which seat carries
+      // it (the migrated test above owns that, and lan-pinned-transport.test.ts
+      // owns the routing in full). Merging them keeps the original assertion —
+      // "exactly one request went out, to this URL" — literally intact.
       const calls: FetchCall[] = [];
       return {
         deps: {
@@ -438,6 +512,10 @@ describe('desktop transport policy — LAN http for private IPv4 literals (Decis
           connectionReader: { listConnections: () => [rowFor(lanRequirement, 'approved', [LAN_HOST])] },
           fetchImpl: async (url: string, init?: RequestInit) => {
             calls.push({ url, init: init ?? {} });
+            return new Response('{"bridge":"ok"}', { status: 200 });
+          },
+          lanFetch: async (url: string, init: RequestInit) => {
+            calls.push({ url, init });
             return new Response('{"bridge":"ok"}', { status: 200 });
           },
           confirmGate: { confirm: async () => true },
@@ -841,7 +919,13 @@ describe('optional credential fields — declared but not stored', () => {
       },
       confirmGate: { confirm: async () => true },
     });
-    return { executor, calls, quartet, confirm: vi.fn(), setRow: () => {} };
+    // NO `lanFetch` is wired and `lanCalls` is permanently empty, and both are
+    // STATED rather than optional-chained past: this fixture's host is
+    // `api.example.com`, so the LAN path is unreachable by construction. If a
+    // future edit points it at a private literal, the request will fail with the
+    // named "only the desktop app can reach it" refusal rather than quietly
+    // taking a transport this harness never configured.
+    return { executor, calls, lanCalls: [], quartet, confirm: vi.fn(), setRow: () => {} };
   }
 
   it('SENDS the request with the optional header empty when the field was left blank', async () => {

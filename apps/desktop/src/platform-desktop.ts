@@ -32,6 +32,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import type { SnugPlatform } from '@playground/platform/platform';
 
 import { createTauriFileFs } from './fs.js';
+import { lanFetch } from './lan-fetch.js';
 import { remapUrl } from './net-remap.js';
 import { createTauriLoopbackListener, openInSystemBrowser } from './oauth.js';
 
@@ -117,6 +118,21 @@ export function createDesktopPlatform(): SnugPlatform {
     // `init.redirect` must RE-PROVE it in src/__tests__/netTransport.test.ts
     // before this field is dropped.
     fetchImpl: (input, init) => tauriFetch(remapUrl(input), { ...init, maxRedirections: 0 }),
+    // THE PINNED-TLS LAN TRANSPORT (ADR-0023 D3). A DIFFERENT transport from
+    // the one above, not a variant of it: `tauriFetch` verifies against the
+    // public root store, which is exactly what a bridge's private-CA
+    // certificate cannot satisfy. This one carries the TOFU pin into a rustls
+    // verifier the shell owns, and every guard the plugin path gets from its
+    // capability scope (host class) or its init fields (redirects, size) this
+    // path enforces in Rust instead — see src-tauri/src/lanfetch.rs.
+    //
+    // No `remapUrl` here, and that is deliberate rather than an omission: the
+    // debug gate's remap points at a loopback stub, and the Rust host-class
+    // check refuses loopback outright (P0 amendment 13 — which is precisely why
+    // the LAN fixture is a Rust-boundary test rather than a 127.0.0.1 stub).
+    // Passing a URL through a remap that can only produce a refusal would
+    // manufacture a failure mode that does not exist in production.
+    lanFetch,
     // The directory is the Rust command's concern: read_user_file/write_user_file
     // ALREADY scope every name into ~/Snug and REFUSE any name with a path
     // separator (userfile.rs `valid_name`). So the backend's own `${dir}/${file}`

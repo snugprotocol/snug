@@ -241,6 +241,12 @@ describe('P1-AC6 — SOURCE PROOF: packages/auth has exactly one seat that calls
     // second path Q7 forbids, and is invisible to (1) because a bypass can keep the
     // delegation line dead-but-present.
     expect(probeBody).not.toContain('deps.fetchImpl(');
+    // EXTENDED at P5 (ADR-0023 D3): the LAN pinned transport is a SECOND
+    // injected network seat, so the probe must not grow its own copy of that
+    // one either. Without this line, a probe rewritten to call
+    // `deps.lanFetch(...)` directly would satisfy every assertion above — the
+    // exact bypass shape the P1 review found, one transport later.
+    expect(probeBody).not.toContain('deps.lanFetch(');
   });
 
   it('exactly TWO modules hold a network seat, both of them named — a third is a test failure', () => {
@@ -257,5 +263,44 @@ describe('P1-AC6 — SOURCE PROOF: packages/auth has exactly one seat that calls
     // the Q7 obligation. A `toHaveLength(2)` would have let a third replace a second
     // silently.
     expect(callers).toEqual(['connected-fetch.ts', 'oauth-service.ts']);
+  });
+
+  /**
+   * THE SAME FENCE, MOVED for the new transport (AC9; ADR-0023 D3).
+   *
+   * `lanFetch` is a second injected network seat and the allowlist above cannot
+   * see it — it matches on `fetchImpl(`. A LAN seat added to a third module
+   * would therefore be exactly the un-gated second path this file exists to
+   * forbid, and every assertion above would stay green.
+   *
+   * ONE module may hold it, and it is the executor: routing to the pinned
+   * transport is a decision about the frozen ceiling (ADR-0023 D3 / P0
+   * amendment 6 put it "IN THE EXECUTOR at gates 4/5" for that reason), so any
+   * other caller would be routing without the ceiling in hand.
+   */
+  it('exactly ONE module holds the LAN pinned seat — the executor, where the ceiling is known', () => {
+    const lanCallers = walkSources()
+      .filter(({ text }) => /lanFetch\s*\(/.test(text))
+      .map(({ name }) => name)
+      .sort();
+    expect(lanCallers).toEqual(['connected-fetch.ts']);
+  });
+
+  it('the LAN seat is never a fallback for fetchImpl, in either direction', () => {
+    // The two one-line edits that would quietly undo the whole design:
+    //   `deps.lanFetch ?? deps.fetchImpl` — sends a bridge request through the
+    //     public-root transport, which fails opaquely or succeeds against the
+    //     wrong device;
+    //   `deps.fetchImpl ?? deps.lanFetch` — sends a PUBLIC request through the
+    //     pinned transport, handing relaxed certificate verification to a host
+    //     that never earned it.
+    // Both read as defensive coding, and neither is.
+    const text = readFileSync(join(srcDir, 'connected-fetch.ts'), 'utf8');
+    const source = text
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('*') && !line.trimStart().startsWith('//'))
+      .join('\n');
+    expect(source).not.toMatch(/lanFetch\s*\?\?\s*deps?\.?fetchImpl/);
+    expect(source).not.toMatch(/fetchImpl\s*\?\?\s*deps?\.?lanFetch/);
   });
 });

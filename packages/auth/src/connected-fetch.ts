@@ -121,9 +121,37 @@ export type ConnectedFetchResult =
  * and the failure would surface as a runtime `undefined.getAuthSpec` at the first request
  * instead of at the wiring site.
  */
+/**
+ * The LAN pinned-TLS transport (ADR-0023 Decision 3; P0 amendment 6) — the
+ * desktop shell's `lan_fetch` command, seen from this side of the IPC boundary.
+ *
+ * A SEPARATE TYPE FROM `FetchLike`, deliberately. `FetchLike` is the web
+ * contract and stays byte-untouched: widening it with an optional third
+ * parameter would put "pin" in the vocabulary of every fetch seat in this
+ * package, including the ones a browser wires, and a browser has no business
+ * knowing what a certificate pin is. The pin is a REQUIRED parameter here
+ * because a pinless call to this transport is not a weaker request — it is a
+ * different (pair-mode) trust decision that only the wizard may make.
+ */
+export type LanFetchLike = (url: string, init: RequestInit, pin: string) => Promise<Response>;
+
 interface ConnectedFetchBaseDeps {
   credentialStore: CredentialStore;
   fetchImpl: FetchLike;
+  /**
+   * DESKTOP-ONLY, and absent on web (AC10: absence is byte-identical to today).
+   * Supplied by the shell's platform seam; routed to by the executor — and ONLY
+   * by the executor — for an RFC-1918 IPv4 literal that is already inside the
+   * frozen ceiling, carrying that connection's recorded TOFU pin.
+   *
+   * IT IS NEVER A FALLBACK FOR `fetchImpl`, IN EITHER DIRECTION. A LAN host with
+   * no `lanFetch` fails honestly rather than silently riding the public-root
+   * transport (which would fail with an opaque TLS error at best, and at worst
+   * succeed against something that is not the user's bridge); and a public host
+   * never reaches `lanFetch`, because pinned trust is a property of the HOST
+   * CLASS, not of a pin happening to exist.
+   */
+  lanFetch?: LanFetchLike;
   confirmGate: NetConfirmGate;
   /** Injectable time source (grant bookkeeping/telemetry); defaults to Date.now. */
   clock?: () => number;
@@ -252,6 +280,21 @@ const failure = (code: string, message: string, retryable = false): ConnectedFet
   message,
   retryable,
 });
+
+/**
+ * The TOFU pin's shape: 64 lowercase hex characters — a SHA-256 over the leaf
+ * certificate's DER, as `lan_fetch`'s `fingerprint_der` produces it.
+ *
+ * A DELIBERATE RESTATEMENT of the Rust `valid_fingerprint`, for the same reason
+ * `isPrivateRfc1918Ipv4Literal` restates protocol's rule: this is the other side
+ * of an IPC boundary and the two cannot share code. Checking it HERE as well as
+ * there is not redundancy — it is the difference between a named refusal at the
+ * seam that knows what the value is for, and an unexplained handshake failure
+ * two layers down that reads like a broken device.
+ */
+function isLanPinShape(fingerprint: string): boolean {
+  return /^[0-9a-f]{64}$/.test(fingerprint);
+}
 
 /**
  * Read the body while enforcing the byte cap (B1): overflow discards every byte read so
@@ -546,6 +589,66 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
     allowedHosts: readonly string[];
     store: CredentialStore;
     oauth: OAuthService;
+  }
+
+  /**
+   * GATE 9a — resolve the LAN pinned transport for a request the earlier gates
+   * have already established is bound for an RFC-1918 IPv4 literal inside this
+   * connection's frozen ceiling (ADR-0023 D3; P0 amendment 6).
+   *
+   * BOTH REFUSALS HERE ARE THE POINT, and neither is a fallback:
+   *
+   *   1. NO `lanFetch` DEP. This is the web profile (or a desktop build that
+   *      failed to wire the seam). The tidy-looking `deps.lanFetch ??
+   *      deps.fetchImpl` would send the request through a transport that
+   *      verifies against the PUBLIC root store — which for a bridge means an
+   *      opaque TLS failure the user cannot act on, and for anything else on
+   *      that address means succeeding against a device that is not theirs. A
+   *      named refusal is the honest answer, and it names the platform so the
+   *      wizard's disclosure copy and this message agree.
+   *
+   *   2. NO RECORDED PIN (or a malformed one). Pair mode — accept-and-capture —
+   *      is a WIZARD STEP the user consents to by pressing a physical button on
+   *      the device. Falling back to it at request time would turn every
+   *      unpaired request into a silent trust-anything call, which is the
+   *      accept-invalid-certs flag this whole design exists to avoid. The pin's
+   *      SHAPE is re-validated here rather than trusted from storage: a
+   *      corrupted KV must fail loudly at this seam, not as a mystifying
+   *      handshake error two layers down.
+   *
+   * The pin comes from the grant's own slot-scoped `_connection` KV (ADR-0014
+   * custody), so it is per-connection by construction — there is no path by
+   * which one connection's pin could serve another's request.
+   */
+  async function resolveLanTransport(
+    lanFetch: LanFetchLike | undefined,
+    grant: ResolvedGrant,
+    appId: string,
+  ): Promise<
+    | { ok: true; send: (url: string, init: RequestInit) => Promise<Response> }
+    | { ok: false; failure: ConnectedFetchResult }
+  > {
+    if (lanFetch === undefined) {
+      return {
+        ok: false,
+        failure: failure(
+          NET_ERROR_CODES.NET_AUTH_FAILED,
+          'this connection is a device on your local network, which only the desktop app can reach',
+        ),
+      };
+    }
+    const state = await grant.store.getConnectionState(appId);
+    const fingerprint = state?.lanPin?.fingerprint;
+    if (fingerprint === undefined || !isLanPinShape(fingerprint)) {
+      return {
+        ok: false,
+        failure: failure(
+          NET_ERROR_CODES.NET_AUTH_FAILED,
+          'this device has not been paired yet — open the connection and pair with it before apps can reach it',
+        ),
+      };
+    }
+    return { ok: true, send: (url, init) => lanFetch(url, init, fingerprint) };
   }
 
   /** What gate 8 injects: headers ride the fetch init; query params join the OUTBOUND URL only. */
@@ -856,15 +959,46 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
 
         // Gate 9 — the fetch itself: injected headers win over app headers; redirects
         // are returned, never followed.
+        const init: RequestInit = {
+          method,
+          headers: { ...appHeaders, ...injected.headers },
+          ...(body !== undefined ? { body } : {}),
+          redirect: 'manual',
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        };
+
+        // GATE 9a — TRANSPORT SELECTION (ADR-0023 D3; P0 amendment 6). The
+        // decision is made HERE, not in the platform, because it is a statement
+        // about the frozen ceiling and the ceiling is only knowable at this
+        // altitude: `lanPrivateHost` above already established that this host is
+        // an RFC-1918 IPv4 literal under a desktop policy, and gates 2+3 already
+        // established that it is inside the approved ceiling. A platform-level
+        // router would have to re-derive both and could drift from them.
+        //
+        // WHY THE SCHEME IS PART OF THE CONDITION, and not an afterthought.
+        // ADR-0021 Decision 4 opened this rung for `http(s)` to private literals,
+        // and ADR-0023's alternatives section keeps it: "ADR-0021's
+        // http-for-private-literals rung remains for other LAN device classes."
+        // A plain-http device has NO certificate, so it can never have a pin —
+        // routing it here would refuse it forever, silently retiring a shipped
+        // rung. The pinned transport is what an HTTPS LAN host needs and the
+        // only thing it can use; `http` keeps today's path byte-identically.
+        // (The Rust command refuses non-https independently, so this is the
+        // near side of a guard that exists on both.)
+        //
+        // Note what this DOESN'T do: there is no `deps.lanFetch ?? deps.fetchImpl`
+        // and no `pin ?? pair-mode`. Each absence is a refusal (see
+        // `resolveLanTransport`), because both fallbacks silently substitute a
+        // different trust decision for the one the user consented to.
         let response: Response;
         try {
-          response = await deps.fetchImpl(outboundHref, {
-            method,
-            headers: { ...appHeaders, ...injected.headers },
-            ...(body !== undefined ? { body } : {}),
-            redirect: 'manual',
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-          });
+          if (lanPrivateHost && url.protocol === 'https:') {
+            const lan = await resolveLanTransport(deps.lanFetch, grant, appId);
+            if (!lan.ok) return lan.failure;
+            response = await lan.send(outboundHref, init);
+          } else {
+            response = await deps.fetchImpl(outboundHref, init);
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           // Scrubbed with the FULL candidate set (amendment 14): fetch errors routinely

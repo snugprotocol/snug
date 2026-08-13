@@ -149,6 +149,25 @@ export function connectedFetchDepsFor(
     // widens `http://` to explicitly-approved private-range IP literals; the browser
     // profile passes NO seat at all, so the executor's default (https-only) is untouched.
     ...(getPlatform().capabilities.lanHttpPrivate ? { transportPolicy: { allowHttpForPrivateHosts: true } } : {}),
+    /**
+     * The PINNED-TLS LAN transport (ADR-0023 D3; P0 amendment 6), threaded from
+     * the platform exactly where `fetchImpl` and `transportPolicy` are, and for
+     * the same reason: this is the ONE deps assembly both connected-fetch call
+     * paths share, so the app runtime and the wizard probe can never end up
+     * with different transports for the same connection.
+     *
+     * SPREAD, so a web platform contributes no `lanFetch` KEY at all rather than
+     * an explicit `undefined`. The distinction is real: it keeps the web deps
+     * object byte-identical to today (AC10), and it means an audit of the
+     * assembly sees a browser that has never heard of certificate pinning
+     * rather than one that declined it.
+     *
+     * Not defaulted, and deliberately not paired with a fallback: the executor
+     * treats absence as a named refusal (`only the desktop app can reach it`),
+     * because sending a bridge request through the public-root transport fails
+     * opaquely at best and succeeds against the wrong device at worst.
+     */
+    ...(getPlatform().lanFetch !== undefined ? { lanFetch: getPlatform().lanFetch } : {}),
     ...(onAuthShapedFailure !== undefined ? { onAuthShapedFailure } : {}),
   };
 }
