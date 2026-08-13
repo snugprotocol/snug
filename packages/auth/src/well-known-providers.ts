@@ -592,6 +592,16 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // OpenWeather transports its key as `?appid=` — a QUERY-STRING credential. That
     // placement is host-side (the template engine), never authored into app code: the
     // AL-09 AC3 lint in examples/ fails any starter that writes `?appid=` itself.
+    //
+    // WHERE THAT PLACEMENT IS PINNED (TASK-20260812-desktop-auth-awareness P4, ADR-0022 §3):
+    // the `request.queryTemplate` seat below. Until P4 this comment described a mechanism
+    // with no data behind it — the executor fell to the `api_key` kind default and sent a
+    // meaningless `X-Api-Key` header while OpenWeather read a query parameter that was
+    // never there, so weather-planner was broken at credential injection (spec item 5).
+    // The executor renders this AFTER every ceiling check and scrubs the rendered value
+    // from error strings, logs, inspector payloads and net-result echoes (C1).
+    // VERIFIED 2026-08-13 (live + primary docs): `appid` is the documented query parameter
+    // (https://openweathermap.org/current — "appid required: Your unique API key").
     fields: [
       {
         key: 'api_key',
@@ -600,6 +610,19 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         description: 'Your OpenWeather API key. New keys can take a couple of hours to activate.',
       },
     ],
+    request: {
+      queryTemplate: { appid: '{{api_key}}' },
+    },
+    // HOW the connection is verified — the wizard's "test this connection" probe.
+    // Current conditions for one city: the cheapest free-tier read OpenWeather offers,
+    // and it EXERCISES the credential rather than merely reaching the host. VERIFIED
+    // live 2026-08-13: without a valid `appid` it answers 401 with
+    // `{"cod":401,"message":"Invalid API key…"}` (https://openweathermap.org/faq#error401),
+    // so a typo'd or not-yet-active key fails the probe instead of reporting connected.
+    // (OpenWeather marks `q=` city lookups deprecated-but-functional in favour of
+    // lat/lon geocoding; kept here because the probe needs no geocoding round trip and
+    // the starter itself uses the same call.)
+    testRequest: { method: 'GET', pathAndQuery: '/data/2.5/weather?q=London' },
     registration: {
       consoleUrl: 'https://home.openweathermap.org/api_keys',
       instructions: [
@@ -626,6 +649,43 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         description: 'From the CoinGecko developer dashboard. The free Demo plan is enough for this app.',
       },
     ],
+    // WHERE the credential goes (TASK-20260812-desktop-auth-awareness P4, ADR-0022 §3).
+    //
+    // VERIFIED 2026-08-13 against the primary docs
+    // (https://docs.coingecko.com/reference/authentication) AND a live probe: the DEMO
+    // tier lives on `api.coingecko.com` and accepts its key EITHER as the query parameter
+    // `x_cg_demo_api_key` OR as the header `x-cg-demo-api-key`. (The paid tier is a
+    // different host and a different key name — `pro-api.coingecko.com` /
+    // `x_cg_pro_api_key` — deliberately not carried here; the free Demo plan is what this
+    // entry and its starter are for.)
+    //
+    // The QUERY form is chosen deliberately, for ONE platform-independence reason that
+    // survived verification:
+    //   * A query parameter is a SIMPLE request — it triggers no CORS preflight at all,
+    //     on any host, ever. It cannot break on a provider's preflight policy because it
+    //     never asks for one.
+    // REFUTED, and recorded so it is not re-litigated: this task's plan asserted the
+    // header form was unusable because `x-cg-demo-api-key` is absent from CoinGecko's
+    // preflight allow-list. A live OPTIONS probe on 2026-08-13 disproved it — CoinGecko
+    // reflects the requested header back in `access-control-allow-headers`, so BOTH forms
+    // work from a browser today. The query form is still the right pin (it depends on no
+    // reflective-CORS behaviour that CoinGecko could tighten without notice), but the
+    // reason is preflight-independence, not a CORS wall that does not exist.
+    //
+    // NO `testRequest` — a DELIBERATE omission, not an oversight. `api.coingecko.com` is a
+    // documented "Keyless Public API" (https://docs.coingecko.com/docs/keyless-public-api):
+    // /ping, /simple/price and the rest answer 200 with NO key, and a demo key only raises
+    // the rate-limit ceiling. Every candidate probe on this host therefore reports
+    // CONNECTED for a typo'd key — worse than no probe, because it launders a broken
+    // connection into a green checkmark. The one key-requiring endpoint, `/api/v3/key`, is
+    // Pro-plan-only on the OTHER host (live probe on the demo host: 401 error_code 10005,
+    // "limited to PRO API subscribers") — it would fail for every CORRECT demo key and sits
+    // off this entry's ceiling besides. The wizard shows no "test this connection" button
+    // for CoinGecko rather than one whose result means nothing. Revisit if CoinGecko ever
+    // key-gates the demo host.
+    request: {
+      queryTemplate: { x_cg_demo_api_key: '{{api_key}}' },
+    },
     registration: {
       consoleUrl: 'https://www.coingecko.com/en/developers/dashboard',
       instructions: [

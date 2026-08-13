@@ -147,9 +147,20 @@ describe('AC3 — every entry composes through the ONE emitter into a parsing re
       if (entry.registration !== undefined) expect(built['registration']).not.toBe(entry.registration);
       if (entry.request !== undefined) {
         expect(built['request']).not.toBe(entry.request);
+        // BOTH template seats, not just the header one. P4 (2026-08-13): openweather and
+        // coingecko are the first entries whose `request` carries ONLY a queryTemplate,
+        // and this assertion previously skipped them entirely — a whole-registry copy
+        // fence that stopped covering the whole registry the moment the data arrived.
+        // A live query-template reference is the same defect as a live header one: the
+        // caller repoints where a credential is sent, for every future admission.
         if (entry.request.headerTemplate !== undefined) {
           expect((built['request'] as { headerTemplate?: unknown }).headerTemplate).not.toBe(
             entry.request.headerTemplate,
+          );
+        }
+        if (entry.request.queryTemplate !== undefined) {
+          expect((built['request'] as { queryTemplate?: unknown }).queryTemplate).not.toBe(
+            entry.request.queryTemplate,
           );
         }
       }
