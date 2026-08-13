@@ -1045,3 +1045,102 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   pinned-TLS command + `lanFetch?` executor dep, the starter rewrite + e2e, the Rust-
   boundary simulated-bridge test (amendment 13), and the amendment-15 private-IP consent
   copy on the review screen.
+
+### 2026-08-13 — claude (P5 transport lane) — Rust `lan_fetch` pinned-TLS command + the `lanFetch` executor seam (ADR-0023 D3, amendments 5/6/13/16)
+
+- Producer verification first: P5-shape's commits present (a5029e9 · 77747fe + journal
+  bd07e10); `packages/auth` green at 693, desktop at 55, playground at 923, cargo at 26
+  BEFORE any P5-transport work. No orchestration defect.
+- **The brief contradicted the code once, and the code was right** — the single finding
+  worth carrying to Gate 6. Routing EVERY `lanPrivateHost` request to `lanFetch` (the
+  literal reading of amendment 6) reddened four pre-existing Decision-6 tests. They were
+  correct: ADR-0021's http-to-private-literal rung is a DIFFERENT transport, for LAN
+  devices that serve no TLS at all, and ADR-0023's own alternatives section keeps it
+  explicitly — *"ADR-0021's http-for-private-literals rung remains for other LAN device
+  classes."* A plain-http device can never have a certificate, hence never a pin, so
+  routing it to the pinned path would have refused it **forever**, silently retiring a
+  shipped rung with a green suite. Condition is `lanPrivateHost && url.protocol ===
+  'https:'`, reasoned from the ADR rather than from the four red tests. *Lesson shape: a
+  guard that is "the same class" in one dimension can be two classes in another — the
+  host class was right and the SCHEME was the axis the amendment did not name.*
+- **Rust (`src-tauri/src/lanfetch.rs`, 22 tests, cargo 26→48).** Two explicit modes on a
+  `rustls::ServerCertVerifier` this crate owns: `pair` accepts-and-CAPTURES the leaf's
+  SHA-256 fingerprint + CN (reqwest never exposes the peer cert to callers, so the capture
+  lives INSIDE the verifier and rides back beside the response — amendment 5), `pinned`
+  requires a 64-hex pin and refuses any other leaf. An unknown mode is an ERROR, never
+  defaulted to the "safer" one: defaulting either grants pair-mode trust to a typo or
+  produces a pinned refusal the caller cannot explain. Host class (RFC-1918 IPv4 literals
+  only — loopback, link-local, CGNAT, public literals, DNS names, IPv6 both spellings, and
+  leading-zero octal forms all refused), `Policy::none()` unconditionally, the 1 MiB cap on
+  the STREAM before bytes cross IPC, and a FRESH client per call are all enforced in Rust
+  before a socket opens. The fresh-client rule is not hygiene: the verifier only runs at
+  handshake, so a pooled connection established under one pin would serve a later call
+  carrying another with no check at all.
+- **AC7's CI fixture is the Rust-boundary test (amendment 13), and the reason is
+  structural**: the host-class check refuses loopback, so no 127.0.0.1 stub can reach this
+  path. The verifier is fed real `rcgen` DER certificates directly. Deps named rather than
+  borrowed transitively (reqwest/rustls/sha2 all already ride in via tauri-plugin-http's
+  default `rustls-tls`) — a transitive dependency is not an API contract. `cargo check
+  --release` run explicitly: the `#[cfg(not(debug_assertions))]` handler list carrying
+  `lan_fetch` is compiled, not just source-scanned.
+- **Amendment 16, per-command not command-family**: `ipc-lan-fetch-refused` joins
+  `IPC_CHECK_IDS` with its OWN callback slot in the sandboxed probe, so a refusal proven
+  for `write_user_file` can never be credited to `lan_fetch` (pinned by a test that drives
+  exactly that borrowed-evidence case). Its sensor is honestly weaker than the sentinel and
+  says so in its own detail string — `lan_fetch`'s effect is a request to a private IP, and
+  the Rust host-class check refuses every address a CI runner can bind, so there is nowhere
+  for a "did it fire?" listener to sit. It vouches only alongside the three key-absence
+  checks, and every "cannot tell" input FAILS (the 2026-07-31 unanswerable-sensor rule).
+- **Executor seam (`connected-fetch.ts` gate 9a).** Routing decided where `lanPrivateHost`
+  is already computed and the ceiling is already known — a platform-level router would have
+  to re-derive both. **Neither absence is a fallback, and both refusals are the design**:
+  no `lanFetch` dep → named refusal (`deps.lanFetch ?? deps.fetchImpl` would send a bridge
+  request through the public-root transport: opaque TLS failure at best, success against
+  the wrong device at worst); no recorded pin → named refusal (pair mode is a wizard step
+  the user consents to by pressing a physical button; a request-time fallback would be the
+  accept-invalid-certs call this whole design exists to avoid). The pin's SHAPE is
+  re-validated at this seam rather than trusted from storage, so a corrupted KV fails
+  loudly here instead of as a mystifying handshake error two layers down.
+- **Pin custody**: `AuthConnectionState.lanPin` in `auth:<appId>:<slot>:_connection`
+  (ADR-0014) — NOT a db column, exactly as the P0 refutation predicted. Per-connection by
+  construction, since the grant's store is already slot-scoped (pinned by a test that
+  writes a second slot's pin and proves it is invisible).
+- **GUARD RE-PROOF, driven THROUGH the LAN path** (the 2026-08-12 lesson, whose founding
+  precedent is this very transport family): redirecting simulated bridge →
+  NET_REDIRECT_BLOCKED; oversized body → NET_SIZE_EXCEEDED; denied confirm → nothing sent
+  on either transport; credentialed 401 → the auth-shaped observer still fires. None of
+  these were assumed from the shared `init` object.
+- **A MUTANT SURVIVED and was fixed rather than shipped** (the P5-shape lane's lesson, one
+  lane later): deleting `lanFetch,` from the desktop platform object left all 80 desktop
+  tests green — every test drove the module function directly, and the playground wiring
+  suite stubs the platform rather than building the real one. *The one fact that makes this
+  entire lane reachable in production was unasserted.* Three wiring tests added; the mutant
+  now dies, as does aliasing `lanFetch` to `fetchImpl`. Lesson shape: **when a lane spans
+  two packages, the seam BETWEEN them is the thing neither package's suite is watching.**
+- **A FIXTURE FIXED, NOT A GUARD** (lesson 2026-08-06): the playground fixture authored
+  `fields` + `request.headerTemplate` while borrowing the hue brand, and Guard 2b refused
+  it. Making the fixture BARE was the fix — and it upgraded the test, which now exercises
+  registry substitution + admission + executor routing end to end instead of a hand-built
+  row.
+- **Fences (AC9), classified, moved in the same commits as the data:** MIGRATED ×2 in
+  `connected-fetch.test.ts` (two Decision-6 tests written when `fetchImpl` was the only
+  transport, so "the gates admitted it" and "it went out through fetchImpl" were one
+  observation; both CLAIMS survive verbatim and the assertions now follow the request to
+  where it actually goes — the harness gained a separate `lanCalls` so a transport switch
+  can never hide as an empty `calls`) · MIGRATED `test-request-single-path` (its "exactly
+  two network seats" allowlist matches on `fetchImpl(` and is structurally blind to a LAN
+  seat — now also pins exactly ONE module holding `lanFetch(`, no `deps.lanFetch(` in the
+  probe body, and neither `??` fallback direction in source). **Nothing OBSOLETE, nothing
+  LOST, no test weakened or deleted.**
+- **Pinned literals: every one honored exactly.** `lanFetch?(url, init, pin)` beside
+  `fetchImpl` with `FetchLike` byte-untouched; `lan_fetch { mode: 'pair' | 'pinned' }`;
+  TOFU pin at `snug_secrets` KV `auth:<appId>:<slot>:_connection`. No supersessions.
+- Green, tsc-gated: auth 693→712, desktop 55→83, playground 923→929, cargo 26→48;
+  protocol 280, db 306, knowledge 183, server 126, sdk 41, adapters 120, runner 110,
+  examples 185 all untouched and green. Root `turbo run test --force` run THREE times
+  consecutively: `Tasks: 21 successful, 21 total` · `Cached: 0 cached, 21 total` every
+  time. Failure rates measured, not assumed: desktop **0/6**, auth **0/5**, cargo **0/5**.
+- Left for P5's sibling lanes: the wizard bridge-IP step + pairing flow (`lanPair` is
+  exported from `apps/desktop/src/lan-fetch.ts` and returns the captured pin beside the
+  response, so pin + minted key are written in one step) + discovery button; the starter
+  rewrite + e2e; amendment 15's private-IP consent copy on the review screen.
