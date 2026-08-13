@@ -476,7 +476,7 @@ Rust command modes:       lan_fetch { mode: 'pair' | 'pinned', ... }            
 TOFU pin storage:         snug_secrets KV `auth:<appId>:<slot>:_connection`               (ADR-0014 custody; NOT a db column)
 Auth-shaped observer:     onAuthShapedFailure(appId, slot, status)                        (host-only; app result untouched; fires on FINAL post-retry result; suppressed for wizard probes)
 Opener capability:        { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://*" }] }
-KB layer id:              95-platform-capabilities (web/desktop variants)
+KB layer id:              95-platform-desktop (desktop-only append; web = byte-identical assembly, no variant needed — pin superseded at P2, confirmed by orchestrator)
 ```
 
 ### Test plan (tests FIRST, per TDD.md)
