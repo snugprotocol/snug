@@ -39,6 +39,18 @@ literal hosts the user explicitly approved into a connection's frozen ceiling �
    `requirementFromRegistryEntry`, admission, and the borrow-ban host trigger fork with
    it; SPEC_SYNC staged draft + spec-changelog updated; the schema fork joins the task's
    AC9 fence list.
+   **P0 round-2 amendment (binding — lan-admission-clobber; probe-verified):** the
+   admission fork's SEMANTICS: (a) `registryHostIndex` skips lanHost entries — without
+   this, one apiHosts-less entry makes every admission of any requirement throw
+   TypeError on the fail-closed path; (b) `applyRegistryValues` PRESERVES the
+   declaration's declaredApiHosts for lanHost entries instead of substituting (today it
+   unconditionally rewrites hosts on every borrow hit, which would wipe the user's
+   bridge IP), and admission re-validates the RFC-1918-IPv4-literal class so a borrower
+   cannot smuggle a public host under the hue brand; (c) this is a deliberate carve-out
+   of ADR-0020 Decision 4's "hosts are ALWAYS the entry's on every option path"
+   invariant, scoped to lanHost entries only, recorded here (decisions are append-only —
+   ADR-0020 itself is not edited). Negative tests: hue borrow keeps the IP; hue + public
+   declared host refused; non-hue admission unaffected by the hue entry's presence.
 2. **Pairing is a wizard-run, host-side credential exchange** described by a registry
    `pairing` seat (Hue: the link-button POST above; response field → secret). The minted
    key writes **directly to `snug_secrets`**; the exchange response never enters app-,

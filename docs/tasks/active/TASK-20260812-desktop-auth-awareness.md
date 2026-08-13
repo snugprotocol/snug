@@ -380,7 +380,42 @@ trust** (drafted at P0, finalized P5):
    P6 journals that `cdp_jwt` (native ECDSA) and `lan_fetch` are Windows-unverified with
    honest-error paths if the APIs are absent.
 
-Refuted findings (5) recorded in the workflow journal (`wf_d15a9134-75c`); notable
+**Round 2 (lenses re-ran against the amended plan; 4 more CONFIRMED, 1 BLOCKER):**
+
+10. **[BLOCKER lan-admission-clobber] The borrow ban must fork for lanHost entries with
+    NAMED semantics** (probe: one apiHosts-less entry makes EVERY admission of ANY
+    requirement throw TypeError from `registryHostIndex`; and a borrow hit on an existing
+    entry silently replaces a declared `192.168.1.50` with the pinned hosts — the exact
+    AC7 chain). Binding: (a) `registryHostIndex` skips lanHost entries; (b)
+    `applyRegistryValues` PRESERVES the declaration's declaredApiHosts for lanHost
+    entries and admission re-validates the RFC-1918-IPv4-literal class — a borrower
+    cannot smuggle a public host under the hue brand; (c) ADR-0020's "hosts are ALWAYS
+    the entry's" invariant gains the lanHost carve-out, recorded in ADR-0023. Negative
+    tests: hue borrow keeps the IP; hue + public declared host refused; non-hue
+    admission unaffected by the hue entry's presence.
+11. **[MAJOR querytemplate-key-charset] queryTemplate gets its OWN key charset.**
+    `CONNECTION_HEADER_NAME_RULE` is alnum+dash (no underscore) and would reject the
+    plan's own `x_cg_demo_api_key`. Binding: new
+    `CONNECTION_QUERY_NAME_RULE = /^[A-Za-z0-9_.\[\]-]{1,64}$/`; "same lint family"
+    means the VALUE lint (declared-field-keys, one resolution with headerTemplate), not
+    the key charset.
+12. **[MINOR adr22-wording] ADR-0022 wording corrected**: the template grammar has FOUR
+    helpers today (timestamp, hmac_sha256, hmac_sha256_b64, base64) — `cdp_jwt` is the
+    FIFTH and second signing-capable one; and substitution runs on EVERY channel's
+    borrow hit via `applyRegistryValues` (the registry channel is merely exempt from
+    Guard 2b's refusal) — implementers target `applyRegistryValues`, not a
+    registry-channel-only branch.
+13. **[MINOR ci-simulated-bridge] AC7's CI fixture named**: lan_fetch's host-class check
+    refuses loopback, so the standard 127.0.0.1 stub cannot exercise it. The pin
+    verifier is tested at the Rust unit boundary (rustls verifier fed the bridge cert
+    directly), plus one macOS gate journey step against a private-IP stub bound to the
+    runner's real RFC-1918 interface when one exists (honest skip otherwise) — AC7's
+    "simulated-bridge integration test in CI" means the Rust-boundary test; the gate
+    step is best-effort.
+
+Refuted findings (5 in round 1 + 11 in round 2) recorded in the workflow journal
+(`wf_d15a9134-75c`) — round 2's refutations were mostly duplicates of already-folded
+round-1 amendments, confirming the folds hold. Notable
 refutations worth keeping: the pairing-order concern died because approval precedes
 pairing by design (now explicit in amendment 5); the TOFU pin needs NO db schema change
 (the `_connection` KV already exists for exactly this class of state); `https://*` in a
@@ -403,6 +438,7 @@ Hue registry key:         'hue' · kind 'api_key' · fields ['application_key'] 
 Hue lanHost seat:         { class: 'rfc1918-ipv4-literal', label: 'Bridge IP address' }   (protocol: connectionRequirementSchema.lanHost, declaredApiHosts required-XOR-lanHost)
 Hue pairing:              POST https://{lanHost}/api  body {"devicetype":"snug#hub","generateclientkey":true} → success[0].username → application_key; clientkey stored, unused v1
 LAN transport dep:        lanFetch?(url, init, pin)   (optional ConnectedFetchDeps seat beside fetchImpl; executor routes at gate 4/5; FetchLike untouched)
+Query key charset:        CONNECTION_QUERY_NAME_RULE = /^[A-Za-z0-9_.\[\]-]{1,64}$/       (queryTemplate keys; header rule stays alnum+dash)
 Rust command modes:       lan_fetch { mode: 'pair' | 'pinned', ... }                      (pair: capture cert fingerprint+CN, RFC-1918 literals only; pinned: refuse without pin match)
 TOFU pin storage:         snug_secrets KV `auth:<appId>:<slot>:_connection`               (ADR-0014 custody; NOT a db column)
 Auth-shaped observer:     onAuthShapedFailure(appId, slot, status)                        (host-only; app result untouched; fires on FINAL post-retry result; suppressed for wizard probes)

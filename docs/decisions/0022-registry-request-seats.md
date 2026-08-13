@@ -28,17 +28,20 @@ exist. Consequences found 2026-08-12 (owner repro + recon):
   the registry's own comment promising one.
 - Provider reality moved: retail Coinbase HMAC keys expired 2025-02-05; current CDP keys
   are a key name + EC private key signing a per-request ES256 JWT. A signing scheme is
-  code, not a header string — the template grammar has one function today
-  (`hmac_sha256_b64`) and needs a second.
+  code, not a header string — the template grammar has four helpers today (`timestamp`,
+  `hmac_sha256`, `hmac_sha256_b64`, `base64`); `cdp_jwt` is the fifth, and the second
+  signing-capable family.
 
 ## Decision
 
 1. **`request` and `testRequest` become registry seats** on `WellKnownOauthProvider` and
    `WellKnownAuthOption` (option overrides entry, per ADR-0020's flow-seat rules). They
-   are human-authored, dashboard/docs-cited, and substituted on the registry channel by
-   the **same matched-option resolution that drives Guard 2b's refusal** — one resolution,
-   both halves (lesson 2026-08-12). Borrowing channels are still refused when they author
-   these seats; the registry now substitutes real values instead of nothing.
+   are human-authored, dashboard/docs-cited, and substituted **on every channel's borrow
+   hit by `applyRegistryValues`** (the channel-agnostic path that serves bare starter and
+   inference rows; the registry channel is merely exempt from Guard 2b's refusal) — with
+   refusal and substitution driven by the **same matched-option resolution** — one
+   resolution, both halves (lesson 2026-08-12). Borrowing channels are still refused when
+   they AUTHOR these seats; substitution now supplies real values instead of nothing.
    **P0 amendments (binding):** (a) `occupiedPromptSeats` counts `request` when it
    carries `headerTemplate` OR `queryTemplate` (today a queryTemplate-only request is not
    counted at all — a hole this ADR would otherwise widen); (b) substituted
@@ -63,9 +66,12 @@ exist. Consequences found 2026-08-12 (owner repro + recon):
    (`renderAuthHeaderTemplate` awaited at `connected-fetch.ts:563`), so the awaiting
    signer needs no seam change. WebCrypto's raw `r||s` ECDSA output is exactly JWS ES256
    format — no DER conversion.
-3. **`connectionRequestSchema` gains `queryTemplate`** (same lint family as
-   `headerTemplate`; template tokens must resolve against declared field keys, and both
-   lints derive from ONE resolution). Query credentials are rendered into the URL **after**
+3. **`connectionRequestSchema` gains `queryTemplate`** — same VALUE lint family as
+   `headerTemplate` (template tokens must resolve against declared field keys, both lints
+   derived from ONE resolution) but its OWN key charset:
+   `CONNECTION_QUERY_NAME_RULE = /^[A-Za-z0-9_.\[\]-]{1,64}$/` (query parameter names
+   carry underscores — the header rule's alnum+dash would reject `x_cg_demo_api_key`).
+   Query credentials are rendered into the URL **after**
    ceiling checks and are scrubbed from every host-visible echo: error strings, logs, the
    LLM inspector, and the net-result URL returned to the app (the app sees only the URL it
    asked for).
