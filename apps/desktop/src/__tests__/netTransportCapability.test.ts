@@ -93,3 +93,35 @@ describe('tauri http capability belt', () => {
     expect(httpAllow).toContain('https://**');
   });
 });
+
+// Opener capability belt (TASK-20260812-desktop-auth-awareness AC3, P1).
+//
+// The Spotify field defect: `opener:allow-open-url` was granted as a BARE string,
+// which per the plugin's permission set enables the open_url command with an
+// EMPTY url scope — tauri-plugin-opener's `is_url_allowed` is `any()` over an
+// empty vec, so EVERY openUrl invoke (including the https authorize URL) was
+// rejected with ForbiddenUrl, deterministically, on every desktop sign-in. The
+// vitest suites stayed green because platform-oauth.test.ts mocks ../oauth.js
+// wholesale. This belt pins the scope the way the http belt pins its ranges.
+describe('tauri opener capability belt', () => {
+  const openerPerms = capability.permissions.filter(
+    (p) => p === 'opener:allow-open-url' || (typeof p === 'object' && p.identifier === 'opener:allow-open-url'),
+  );
+
+  it('grants open_url exactly once, as a SCOPED object — never a bare string (bare = empty scope = every open refused)', () => {
+    expect(openerPerms).toHaveLength(1);
+    expect(typeof openerPerms[0], 'a bare string grant carries no url scope').toBe('object');
+  });
+
+  it('the scope admits https URLs and nothing else (matches oauth.ts openInSystemBrowser https-only guard)', () => {
+    const allow = (openerPerms[0] as HttpPermission).allow.map((a) => a.url);
+    expect(allow).toEqual(['https://*']);
+  });
+
+  it('no broader opener permission sneaks in (opener:default would add reveal-in-dir + mailto/tel)', () => {
+    const broad = capability.permissions.filter(
+      (p) => p === 'opener:default' || p === 'opener:allow-default-urls',
+    );
+    expect(broad).toHaveLength(0);
+  });
+});

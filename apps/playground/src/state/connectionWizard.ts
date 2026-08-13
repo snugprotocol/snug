@@ -1156,16 +1156,24 @@ async function runConnectionOAuthStart(
     preOpened?.close?.();
     try {
       await platformOauth.openExternal(start.authorizeUrl);
-    } catch {
+    } catch (err) {
       // The listener bound inside redirectUriFor/openExternal and no browser is coming —
       // cancel THIS flow (finding A: without it the listener and the recorded URI
       // outlived the session and poisoned the next one).
       channel.close();
       teardownFlow(start.flowId);
-      connectionFlowStatusStore.set({
-        state: 'error',
-        message: 'could not open your browser for the sign-in — try again',
-      });
+      // Three distinct causes funnel through this one await, and the field defect
+      // (TASK-20260812-desktop-auth-awareness) was this catch flattening all of them
+      // into browser-blame: a port-41420 bind collision (the transport's message is
+      // already user-actionable — surface it verbatim), an opener-permission denial
+      // (a Snug packaging bug, NOT the user's browser), and a genuine OS failure.
+      const detail = err instanceof Error ? err.message : String(err);
+      const message = detail.includes('sign-in listener')
+        ? detail
+        : detail.includes('Not allowed to open url')
+          ? 'Snug was blocked from opening your browser (a missing opener permission in this build) — please report this bug'
+          : `could not open your browser for the sign-in — try again (${detail})`;
+      connectionFlowStatusStore.set({ state: 'error', message });
       return;
     }
     if (stale()) {

@@ -247,6 +247,56 @@ describe('desktop OAuth — unsupported postures refuse BEFORE any credential st
   });
 });
 
+describe('desktop OAuth — openExternal failures render DIFFERENTIATED copy (TASK-20260812-desktop-auth-awareness AC3)', () => {
+  // The Spotify field defect: EVERY desktop sign-in died in openExternal (bare opener
+  // capability → plugin ForbiddenUrl) and the wizard's bare `catch {}` rebranded the
+  // cause as a browser failure. Three distinct failures now render three distinct
+  // messages, and the flow always tears down (listener must not outlive the error).
+  async function failingOpen(message: string): Promise<{ wizard: Harness['wizard']; desktop: FakeDesktop }> {
+    const desktop = fakeDesktop();
+    desktop.platform.oauth!.openExternal = async () => {
+      throw new Error(message);
+    };
+    const { db, wizard } = await fresh(desktop.platform);
+    seedApproved(db);
+    wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await wizard.startConnectionOAuthFlow({ client_id: 'cid-1' });
+    return { wizard, desktop };
+  }
+
+  it('a port-collision rejection surfaces the transport message VERBATIM (it is user-actionable)', async () => {
+    const collision =
+      'could not open the sign-in listener on port 41420 — another program may be using it (EADDRINUSE)';
+    const { wizard, desktop } = await failingOpen(collision);
+    const status = wizard.connectionFlowStatusStore.get();
+    expect(status.state).toBe('error');
+    expect((status as { message: string }).message).toBe(collision);
+    expect(desktop.cancel, 'the flow must tear down on an open failure').toHaveBeenCalled();
+  });
+
+  it('an opener-permission denial names Snug as the culprit, not the browser', async () => {
+    const { wizard } = await failingOpen(
+      'Not allowed to open url https://accounts.spotify.com/authorize?client_id=cid-1',
+    );
+    const status = wizard.connectionFlowStatusStore.get();
+    expect(status.state).toBe('error');
+    const message = (status as { message: string }).message;
+    expect(message).toContain('Snug was blocked from opening your browser');
+    expect(message, 'the misleading browser copy must be gone for this cause').not.toContain(
+      'could not open your browser',
+    );
+  });
+
+  it('a genuine browser failure keeps the browser copy and appends the underlying cause', async () => {
+    const { wizard } = await failingOpen('xdg-open exited with status 4');
+    const status = wizard.connectionFlowStatusStore.get();
+    expect(status.state).toBe('error');
+    const message = (status as { message: string }).message;
+    expect(message).toContain('could not open your browser for the sign-in — try again');
+    expect(message, 'the cause must no longer be swallowed').toContain('xdg-open exited with status 4');
+  });
+});
+
 describe('desktop OAuth — the test hooks still win over the platform (test seam precedence)', () => {
   it('hooks.fetchImpl carries the exchange even when the platform has a fetch', async () => {
     const desktop = fakeDesktop();
