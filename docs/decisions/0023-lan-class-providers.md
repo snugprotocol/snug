@@ -1,6 +1,6 @@
 # 0023 — LAN-class providers: user-supplied bridge hosts, pairing exchanges, scoped TLS trust
 
-- **Status:** proposed (P0 draft of TASK-20260812-desktop-auth-awareness; finalize at P5)
+- **Status:** accepted (2026-08-13, at the close of TASK-20260812-desktop-auth-awareness). The P0 and P6 amendments are folded in-file above — this document is the shipped decision, not the draft.
 - **Date:** 2026-08-12
 - **Task:** TASK-20260812-desktop-auth-awareness
 
@@ -116,3 +116,19 @@ literal hosts the user explicitly approved into a connection's frozen ceiling �
   a pairing step machine — both designed provider-agnostically for future LAN devices.
 - Web behavior for LAN rows is disclosure, never breakage — a desktop-minted user file
   opened on web keeps every row intact.
+- **P5 correction (folded, shipped):** `hue.pairing.secretPath` is `[0, 'success',
+  'username']` — a CLIP v1 pairing answer is an ARRAY of result objects OUTERMOST, so the
+  index comes first. This SUPERSEDES the task file's pinned literal spelling
+  (`success[0].username`, ambiguous prose); the shipped path would otherwise have resolved
+  to `undefined` on every real bridge response.
+- **P6 amendment (folded, shipped):** `migrateConnectionRegistryDrift` resolves the registry
+  through `resolveRegistryEntryByName`, not exact-key `lookupWellKnownProvider` — rows
+  persist the entry's `displayName`, and `'Philips Hue'` normalizes to `philipshue`, not the
+  key `hue`, so seat-drift migration bailed at its first branch for EVERY hue row.
+- **Accepted residuals** (pairing-window MITM, untrusted-import pin/secret overwrite —
+  pre-existing and generalizing beyond LAN, Windows unverified) are stated in
+  [`docs/security/threat-model-delta-desktop-auth.md`](../security/threat-model-delta-desktop-auth.md).
+- The Hue starter's apply control stays honestly greyed: **no protocol frame tells an app
+  which hosts it may reach**, so a LAN app cannot know its own bridge address. An
+  approved-host disclosure frame is the missing piece and is a protocol decision for its own
+  task (queued in next-steps), not something a starter may take.

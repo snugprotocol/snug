@@ -113,6 +113,57 @@ journey, run by the shell-gate harness (`pnpm --filter desktop gate`): macOS GRE
 2026-08-12, Windows pends first CI run (first workflow: `.github/workflows/ci.yml`).
 Threat surface: `docs/security/threat-model-delta-desktop-shell.md`.
 
+### Desktop-aware dynamic auth (TASK-20260812-desktop-auth-awareness, ADR-0022 + ADR-0023)
+
+The shell shipped those transports; the auth intelligence layer did not know it. Four
+additions close that, and all four are additive to C1 — the registry stays the only
+reviewed authority for where a credential goes, and the frozen per-connection ceiling
+stays the wall.
+
+**Platform truth reaches the model.** `HostSystemPromptOptions` gained a `platform`
+(`'web' | 'desktop'`) seat; on desktop the assembly appends KB layer `95-platform-desktop`
+LAST, and the recovery inferrer's **user** slot (system slot stays static by design)
+carries platform facts. Web assemblies are byte-identical without it, so there is no web
+variant to keep in sync. Admission and persistence stay platform-BLIND — user files roam
+between web and desktop, so platform-conditional behavior lives only in prompts, wizard
+and executor; a desktop-minted LAN row opened on web is *disclosed* as desktop-only,
+never refused.
+
+**The registry pins where credentials go.** Entries (and auth options) carry optional
+`request` (`headerTemplate` + the new `queryTemplate`) and `testRequest` seats, emitted by
+the one `requirementFromRegistryEntry` emitter and substituted on every channel's borrow
+hit by `applyRegistryValues` — with refusal and substitution driven by the SAME
+matched-option handle. The template grammar gained a fifth helper and second signing
+family, `{{cdp_jwt(api_key, private_key)}}`: a host-side ES256 mint (`es256-key.ts`
+DER-wraps CDP's SEC1 PEM into the PKCS#8 WebCrypto requires) whose `uri` claim binds the
+signature to the live outbound request, `exp` at +120 s. `queryTemplate` renders into the
+URL **after** every gate, suppresses the kind default so a query credential is never also
+a header, and joins an enumerated scrub site list. Rows are admitted once and never re-read
+the registry, so the wizard's open path runs `migrateConnectionRegistryDrift` — seat drift
+re-substitutes and re-persists without re-crediting; field-set drift routes to
+re-credential.
+
+**Silent auth failures surface.** A credentialed 401/403 still reaches the app unchanged
+(`ok:true`, status as-is — the app contract is not broken to gain visibility), and a
+host-only `onAuthShapedFailure` observer fires on the FINAL delivered result, rendering
+`AuthRepairBanner` in RunView with a CTA into the wizard on the exact failing (appId, slot).
+
+**LAN-class providers.** `connectionRequirementSchema` gained an optional `lanHost` seat
+with `declaredApiHosts` **required-XOR-`lanHost`**: a device whose address the user's
+router assigns is pinnable by nobody, so the wizard COLLECTS it (RFC-1918 IPv4 literal
+only) and it freezes into the ceiling like any other host. The binding order is collect →
+approve → freeze → pair, because a pre-collection row derives an EMPTY ceiling that refuses
+everything. Pairing and pinned traffic ride ONE Rust command, `lan_fetch`
+(`src-tauri/src/lanfetch.rs`), in two explicit modes: `pair` captures the leaf certificate's
+fingerprint+CN **inside** a rustls verifier (reqwest never exposes the peer cert to
+callers) and `pinned` refuses any other leaf. Host class, `Policy::none()`, the 1 MiB cap
+and a fresh client per call are all enforced in Rust before a socket opens. The pin lives
+in the connection's `auth:<appId>:<slot>:_connection` KV (ADR-0014 custody, not a db
+column). The platform seam gained TWO seats, and their asymmetry is the guard:
+`connectedFetchDepsFor` threads `lanFetch` alone, so a request-time path to
+accept-and-capture does not exist. Threat surface:
+`docs/security/threat-model-delta-desktop-auth.md`.
+
 ## Dependency graph (who depends on whom → whose tests also run)
 
 - `protocol` ← `runner`, `sdk`, `server`, `adapters`, `db`, `playground` (change protocol → run everything)

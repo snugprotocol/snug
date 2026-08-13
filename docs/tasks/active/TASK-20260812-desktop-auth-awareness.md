@@ -1,12 +1,112 @@
 # TASK-20260812-desktop-auth-awareness: Desktop-aware dynamic auth — platform truth in prompts/inference, registry request seats, Coinbase CDP repair, Spotify opener fix, Hue LAN connector
 
-- **Status**: in-progress — P0 (plan approved by owner 2026-08-12)
+- **Status**: **BUILT — P0–P6 complete, in-branch, unpushed. Awaiting the OWNER MANUAL VERIFICATION below** (2026-08-13)
 - **Owner**: jeetu
 - **Risk tier**: **high** — `packages/auth` (registry, executor, admission), `packages/protocol` (request-template seats → spec-sync), `packages/knowledge` (LLM-bound prompts), C1-adjacent (new signing paths, LAN TLS trust); auth/protocol auto-escalate
 - **Branch**: `fix/TASK-20260812-desktop-auth-awareness` (off `main`)
 - **Packages touched**: `protocol` (request template seats: queryTemplate + jwt function grammar), `auth` (registry seats + Coinbase/Hue entries, executor signing + LAN TLS policy, admission substitution), `knowledge` (KB copy + platform layer + inferrer prompt), `playground` (assembly wiring, wizard, net observer, starters glue), `desktop` (opener capability, pinned-TLS LAN fetch), `examples` (weather-planner, crypto-portfolio, hue-lights-party), docs
 - **Spec impact**: **yes (internal staged draft only)** — `connectionRequestSchema` gains `queryTemplate`; template grammar gains a JWT signing function; **and (P0 finding lan-schema-2) `connectionRequirementSchema` gains an optional `lanHost` seat with `declaredApiHosts` becoming required-XOR-`lanHost`** (superRefine; emitter/admission/host-trigger updated). Follow SPEC_SYNC into `docs/spec-drafts/` v0.3 staging + spec-changelog entry; **nothing pushed to `snugprotocol/spec`** (AL-12 held).
 - **Related**: ADR-0017/0020/0021; TASK-20260812-desktop-hub-scaffold (PR #41); TASK-20260810-dynamic-auth-rewrite; next-steps 2026-08-12 (BYOK CORS advisory; desktop follow-up 7 "Hue/LAN starter"); new ADR-0022 (registry request/testRequest seats + signing functions + auth-shaped failure surfacing) and ADR-0023 (LAN-class providers: user-supplied bridge host, pairing, TLS trust) — drafted in this task
+
+---
+
+## ⚠️ OWNER MANUAL VERIFICATION — the closing gate (read this first)
+
+**Nothing here is covered by any test, and no test depends on any of it.** All three
+symptoms the owner reported were repro'd only in the desktop shell; the automated suites
+prove the mechanisms, and these three checks prove the product. Build and run the desktop
+app on macOS, then work down the list. Report anything marked **Bad** with what you saw.
+
+### 1. Spotify desktop sign-in (AC3 — the P1 fix)
+
+The failure was deterministic and one line: `capabilities/main.json` granted
+`opener:allow-open-url` as a BARE string, which is an **empty URL scope**, so
+tauri-plugin-opener refused *every* `openUrl` — including the Spotify authorize URL — and
+the wizard's bare `catch {}` reported "could not open your browser for the sign-in".
+
+- Install a Spotify starter (or reach any Spotify connection), open the wizard and press
+  the sign-in button.
+- **Good:** your system browser opens on Spotify's real authorize page, you approve, and
+  the wizard advances to the done screen.
+- **Bad, and now each is DISTINCT copy rather than one generic message:** a port-41420
+  collision surfaces the transport's message verbatim (something else is bound to the
+  loopback port); an opener denial names Snug; a genuine browser failure appends the cause.
+  Whichever you get, the words themselves are the diagnosis — send them.
+- **Why no automated positive control:** a real positive test necessarily opens a browser
+  on CI, and a "refuses http" negative cannot fail for the regression it claims to guard
+  (the bare grant refused http too). The build schema-validates the capability file, a belt
+  test pins its content, and the wizard tests hold the pre-open seam — this manual check is
+  the live proof.
+
+### 2. Coinbase CDP re-credential + portfolio (AC4/AC5 — the P3 work)
+
+The old entry was **never connectable**: the registry had no `request` seat, so the executor
+injected the generic `X-Api-Key` default and your saved `api_secret` was read by **no code
+path at all** — and the HMAC+passphrase scheme it encoded had expired provider-side on
+2025-02-05 regardless. The entry now targets CDP: a key **name** plus an **EC private key**
+that signs a fresh ES256 JWT per request.
+
+- Open your existing Coinbase connection in Settings → Connections. Your row carries the OLD
+  field set, so the wizard should detect **field-set drift** and route you to
+  re-credential — via the register step first, because you need to mint a new key.
+- Mint a CDP key at `https://portal.cdp.coinbase.com/`. **It must be an EC (ES256) key** —
+  an Ed25519 key gets an honest error naming exactly that fix, not a silent failure.
+- Paste the key **name** (`organizations/…/apiKeys/…`) and the **EC private key PEM**. The
+  downloaded PEM is usually SEC1 (`BEGIN EC PRIVATE KEY`); both that and `BEGIN PRIVATE KEY`
+  are accepted.
+- Press **test this connection**. **Good:** it reports connected, having actually called
+  `GET /api/v3/brokerage/accounts` with a real signed JWT. **Bad:** "the provider rejected
+  these credentials" means the key is wrong or not yet active; any other message is a defect.
+- Open the authored Coinbase portfolio app. **Good:** the portfolio loads. **Bad:** if a
+  request is rejected, you should now see a **repair banner** naming the provider with a
+  "check this connection" CTA — previously a 401 was silent at every layer, which is the
+  defect AC5 closes. A banner appearing is the feature working; the portfolio staying blank
+  with NO banner is a defect.
+- **C1 check worth doing once:** the private key must appear nowhere on screen, in no error,
+  and never inside the app.
+
+### 3. Hue bridge pairing — the 8-step procedure (AC7's closing step)
+
+Written by the P5-flow lane and hoisted here verbatim. Run it on macOS, on the same network
+as the bridge.
+
+1. Build and run the desktop app on macOS, on the same network as the Hue bridge.
+2. Install *hue lights party* from the shelf, open Settings → Connections → `hue`.
+3. **Address step.** Expect a box labelled *Bridge IP address*, the registration
+   walkthrough, and a *find my bridge* button. Press it: good = one or more addresses
+   offered as buttons; honest failure = "we didn't find a bridge from here" with manual
+   entry still working (common — the broker only knows bridges that phoned home).
+4. Type the bridge address (e.g. `192.168.1.50`) and press *use this address*. Good = the
+   review screen appears listing that address, **with the private-network warning band
+   naming it**. Bad = an error under the box (check the address shape: `192.168.x.x`,
+   `10.x.x.x` or `172.16–31.x.x`, no port, no `https://`).
+5. Press *approve this connection*. Good = the pairing screen, showing the link-button
+   instruction. **Nothing has been sent to the bridge yet** — verify by not pressing the
+   button and confirming no key exists.
+6. **Press the round button on top of the bridge**, then within 30 seconds press
+   *I pressed the button — connect*. Good = the done screen. Bad, and each is DISTINCT:
+   *"press the round button on your bridge, then try again"* = the window closed (repeat
+   this step); *"we couldn't reach the device at …"* = wrong address or a different
+   network; *"we couldn't record this device's security certificate"* = pairing worked but
+   the pin was not captured — **nothing was saved**, retry, and report if it repeats.
+7. **The C1 check, worth doing once by hand:** the minted key must appear NOWHERE on
+   screen at any point. It is not in the done screen, not in any error, and not in the
+   app. If you ever see a long random-looking string in this flow, that is a defect —
+   capture it and report it.
+8. Open the app. The apply control stays greyed with copy about the address never
+   reaching the app — **that is expected at this stage**, not a pairing failure (see the
+   contradiction recorded in the P5-flow journal). The connection is real regardless:
+   Settings shows it approved, and re-opening the wizard shows the done screen rather than
+   the address step.
+
+**Why step 8 is expected rather than broken:** the executor takes a literal URL and checks
+it against the frozen ceiling, and **no protocol frame tells an app which hosts it may
+reach**. A LAN app therefore cannot know its own bridge address without a new
+approved-host disclosure frame — a protocol decision queued as its own task. The starter
+declares the connection and holds the governed seam; only the final "drive the bridge from
+app code" step waits on that frame.
+
+---
 
 ## Spec (what & why)
 
@@ -1310,6 +1410,9 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   apply path is waiting on.
 
 **OWNER MANUAL VERIFICATION (AC7's closing step) — no test depends on this.**
+*(Hoisted to the top of this file at Gate 6, beside the Spotify and Coinbase checks, so it
+is not buried at the end of a 1300-line journal. Kept here verbatim as the P5-flow lane
+wrote it.)*
 1. Build and run the desktop app on macOS, on the same network as the Hue bridge.
 2. Install *hue lights party* from the shelf, open Settings → Connections → `hue`.
 3. **Address step.** Expect a box labelled *Bridge IP address*, the registration
@@ -1337,3 +1440,77 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
    reaching the app — **that is expected at this stage**, not a pairing failure (see the
    contradiction recorded above). The connection is real regardless: Settings shows it
    approved, and re-opening the wizard shows the done screen rather than the address step.
+
+### 2026-08-13 — claude — P6 whole-surface review + Gate 6 close-out
+
+**The review, and why it was budgeted** (lesson 2026-08-10): per-phase reviews find defects
+WITHIN a boundary and are blind to defects AT one, by construction. P6 traced one CDP private
+key wizard → JWT → wire and one Hue application key pairing → row → header → bridge, asking at
+every handoff what the receiver trusts that the sender never guaranteed. **Three defects, all
+at handoffs no single phase owned, all under green phase suites** (commit `3a4b31a`):
+
+1. **T3-1 (BLOCKER) — a capability seat that skipped the human review.** The wizard review
+   screen rendered `request.headerTemplate` but never `request.queryTemplate`. P3 wired the
+   query seat through schema, Guard 2b, lint, injection and scrubbing — everything except the
+   verbatim review ADR-0017 names as the PRICE of admitting credential-prompt seats. Both
+   shipped P4 entries (openweather, coingecko) were therefore approved by a human who was
+   never shown the placement at all, and **a secret in a web address is a different risk story
+   from one in a header**. Query credentials now get their own box. Shape: *a new placement
+   seat must ride every surface the old seat rides, and the consent surface is the one nothing
+   fails without.*
+2. **F1 (MAJOR, C1) — a scrub that could not match what it was scrubbing.** The candidate set
+   carried the RAW rendered value while the outbound URL carried the **percent-encoded** one,
+   and `scrubAuthValues` is exact substring — so any credential containing `+`, `/`, `=` or a
+   space (i.e. any base64 key) leaked verbatim into the app-visible `NET_FETCH_FAILED` message
+   and into echoed bodies. **The four C1 tests passed only because the fixture key was URL-safe
+   hex**, so percent-encoding was a no-op and they could not exercise the encoding they claimed
+   to guard. Fixture is now deliberately encode-forcing; candidates carry both forms, derived
+   from `URLSearchParams` itself so they cannot drift apart. Shape: *the same
+   fence-restates-rather-than-exercises defect as P5's `secretPath`, one week and one lane
+   apart.*
+3. **HUE-DISPLAYNAME-MIGRATION-BLIND (MAJOR) — a resolver mismatch across a persistence
+   boundary.** `migrateConnectionRegistryDrift` resolved the registry with exact-key
+   `lookupWellKnownProvider`, but rows persist the entry's **displayName** — `'Philips Hue'`
+   normalizes to `philipshue`, not the key `hue` — so migration bailed at its first branch for
+   EVERY hue row, re-opening the seat-migration gap (amendment 3) for the one provider this
+   task added. Now uses `resolveRegistryEntryByName`, the resolver `lanPairingExchangeFor` in
+   the same file already documents. Mutation-verified: restoring the old resolver reds the
+   repair test.
+
+**Definition of Done — stated honestly.**
+- **AC1–AC10: met in code and tests.** Root `npx turbo run test --force`
+  `Tasks: 21 successful, 21 total` · `Cached: 0 cached, 21 total`; cargo 48.
+- **AC7 is NOT fully closed**, and this is the one gap that matters: its closing step is the
+  owner's verification against a real bridge, hoisted to the top of this file. Every wizard
+  test drives a faked `lanPair` seat and the transport is proven at the Rust boundary
+  (amendment 13) — **no test requires hardware, and none can substitute for that step.**
+- **AC3's live positive proof is likewise the owner's manual Spotify sign-in** (P1 gate note,
+  deliberate: a positive control necessarily opens a real browser on CI).
+- **AC8 is met as amended, not as briefed.** The Hue starter declares the connection and holds
+  the governed seam, but its apply control stays honestly greyed: no protocol frame tells an
+  app which hosts it may reach, so a LAN app cannot know its own bridge address. The brief's
+  "call the bridge through `useConnectedFetch`" is unreachable without a new approved-host
+  disclosure frame — stopped and reported rather than improvised, queued as its own protocol
+  decision.
+- **Windows remains unverified** for `lan_fetch` and `cdp_jwt` (amendment 9), with honest-error
+  paths where the APIs may be absent. Stated as a gap, never as coverage.
+- No test weakened or deleted anywhere in P0–P6; every deleted case classified
+  MIGRATED/OBSOLETE/LOST in its own commit.
+
+**Gate 6 documentation, all in-branch:** new
+`docs/security/threat-model-delta-desktop-auth.md` (cdp_jwt custody · query-credentials in
+URLs with the enumerated scrub sites and the encoding hazard · the TOFU pin, Rust host-class
+check, per-call fresh client and the deferred Signify-CA pinning · the `lan_fetch` IPC surface
+and its per-command check · the prompt-injection-to-LAN chain and the four barriers in it ·
+five accepted residuals, two of them PRE-EXISTING and restated rather than sold as new);
+**ADR-0022 and ADR-0023 flipped `proposed` → `accepted`** with their P0/P6 amendments folded
+in-file; six lessons appended to `docs/lessons.md`; a dated `next-steps.md` entry with nine
+queued items, each traceable to where it was found; `architecture.md` and `code-map.md`
+updated for genuine drift only (`es256-key.ts`, `lanfetch.rs`, `lan-fetch.ts`,
+`AuthRepairBanner.tsx`, the `95-platform-desktop` layer, the new registry seats, the platform
+seam's two new members, and the counts `pnpm run update-code-map` could not resolve);
+spec-changelog P3/P5 entries verified present, coherent, and marked INTERNAL DRAFT.
+**Nothing pushed anywhere. AL-12 still held — `snugprotocol/spec` untouched.**
+
+- Next step: owner runs the three manual verifications at the top of this file. On green →
+  PR. The nine queued follow-ups are in `docs/next-steps.md` under 2026-08-13.

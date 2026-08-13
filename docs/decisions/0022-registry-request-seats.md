@@ -1,6 +1,6 @@
 # 0022 — Registry request seats, host-side signing functions, and auth-shaped failure surfacing
 
-- **Status:** proposed (P0 draft of TASK-20260812-desktop-auth-awareness; finalize at P3)
+- **Status:** accepted (2026-08-13, at the close of TASK-20260812-desktop-auth-awareness). The P0 and P6 amendments are folded in-file above — this document is the shipped decision, not the draft.
 - **Date:** 2026-08-12
 - **Task:** TASK-20260812-desktop-auth-awareness
 
@@ -124,3 +124,13 @@ exist. Consequences found 2026-08-12 (owner repro + recon):
   grammar (SPEC_SYNC; internal only, AL-12 held).
 - Query-string credentials are a C1-sensitive surface with an enumerated scrub list;
   every new host-visible echo of a request URL must join the negative-test set.
+- **P6 amendments (folded, shipped):** (a) the wizard **review screen** renders
+  `queryTemplate` in its own box — a placement seat must ride the human review that is the
+  PRICE of admitting these seats, and P3 wired the seat through schema/Guard 2b/lint/
+  injection/scrubbing but not through review, so both shipped P4 entries were approved with
+  no placement disclosure at all; (b) the scrub candidate set carries the rendered query
+  value in BOTH raw and percent-encoded form, derived from `URLSearchParams` itself so the
+  two cannot drift — `scrubAuthValues` is exact substring, and the outbound URL carries the
+  encoded form, so any credential containing `+ / =` or a space leaked verbatim into the
+  app-visible `NET_FETCH_FAILED` message and echoed bodies. Threat surface:
+  [`docs/security/threat-model-delta-desktop-auth.md`](../security/threat-model-delta-desktop-auth.md).
