@@ -105,15 +105,33 @@ that the general question — *what does an import channel get to say about cred
 deserves its own task and its own decision rather than a per-credential-type answer.
 **Queued as its own task; not introduced here.**
 
-### R-5 — Windows is unverified for `lan_fetch` and `cdp_jwt`
+### R-5 — Windows is STRUCTURALLY BROKEN for the whole IPC boundary (upgraded 2026-08-13)
 
-Amendment 9, carried and still true at close. The macOS gate leg is green; the Windows/WebView2
-leg pends its first CI run (inherited from the desktop-shell task). `cdp_jwt` requires **native**
-WebCrypto ECDSA — the desktop subtle-fallback implements HMAC only — so on a runtime that lacks
-it, the failure is an honest loud error rather than a downlevel signature. `lan_fetch`'s Rust
-guards are platform-independent by construction (host-class parsing, verifier logic, size cap),
-but "by construction" is an argument, not a gate run. **Accepted as a stated gap**, not a claim
-of coverage.
+**This was "unverified" until the Windows gate leg ran for the first time. It ran, and it
+failed — so this is no longer a stated gap, it is a known defect and Windows desktop is
+BLOCKED.** Full root-cause with citations:
+[`docs/solutions/2026-08-13-webview2-subframe-ipc-injection.md`](../solutions/2026-08-13-webview2-subframe-ipc-injection.md).
+
+Tauri asks for main-frame-only injection of the key-bearing `ipc-protocol.js`
+(`tauri-2.11.5/src/manager/webview.rs:159-164,182`), and the invoke key is a **plaintext
+literal inside that script** (`scripts/ipc-protocol.js:12`). wry's WebView2 backend
+**discards `for_main_frame_only`** (`wry-0.55.1/src/webview2/mod.rs:492-494`; documented at
+`src/lib.rs:2494-2496`), while the macOS path honors it
+(`src/wkwebview/mod.rs:643-644`). So on Windows the invoke key executes **inside
+`sandbox="allow-scripts"` app iframes** — reachable by any app a user runs. No off-switch
+exists at the wry, tauri, or WebView2 SDK layer.
+
+This meets **ADR-0021 Decision 8's Electron-fallback trigger on its stated terms** ("a
+platform that injects IPC into subframes with no off-switch is structural breakage"). The
+gate's failure is correct and must NOT be softened: the `keyReachable` conjunction is the
+only check that reasoned about key reachability rather than transport presence, and on
+WebView2 that distinction has collapsed. `ipc-invoke-refused` passing proves only that the
+key GATE works against a keyless post — it says nothing about a frame that can read the key.
+
+**Disposition:** macOS unaffected (40/40 green, WKWebView honors the flag). No Windows build
+has ever been distributed and none may ship in this configuration. `cdp_jwt`'s native-ECDSA
+requirement remains separately unverified there. ADR-0021 D8 is now a **live owner decision**
+— Electron fallback, macOS-only, or upstream a `for_main_frame_only` fix.
 
 ---
 
@@ -177,7 +195,7 @@ Everything in the Dynamic Auth v2 delta §5 still holds. Two additions:
 | **R-2** | Credentials in URLs reach server logs, proxies and history — outside our control; and a provider re-encoding a value still defeats the exact-substring scrubber | enumerated scrub sites (ours) · frozen host ceiling | **Accept.** The re-encoding half is the v2 delta's R-2 **restated**, not new. |
 | **R-3** | Pairing-window MITM — a LAN-local attacker present at first pairing is pinned instead of the bridge | attacker must be present at that moment · user-typed address · later MITM fails closed | **Accept.** Signify-CA pinning deferred (gated CA material; old bridges self-signed). Queued. |
 | **R-4** | An untrusted import can carry attacker pin + secret under an approved row | local secrets win the merge · imported rows demote to `declared`+`imported=1` → re-approval required | **Accept; PRE-EXISTING and generalizes** beyond LAN to OAuth tokens/API secrets. Queued as its own task. |
-| **R-5** | Windows unverified for `lan_fetch` and `cdp_jwt` | honest-error paths when native ECDSA is absent · platform-independent Rust guards | **Stated gap**, not coverage. Windows gate leg queued. |
+| **R-5** | **Windows: the invoke key is injected into sandboxed app iframes (WebView2 ignores `for_main_frame_only`)** | none available — no off-switch at wry, tauri, or SDK layer | **KNOWN DEFECT, Windows desktop BLOCKED.** ADR-0021 D8 trigger met; macOS unaffected. See `solutions/2026-08-13-webview2-subframe-ipc-injection.md`. |
 
 ---
 
