@@ -48,10 +48,9 @@ own task — but note the stuck timer you reported will still occur on a thrown/
 5. **AC5 — inspector content fits.** Round-trip payload blocks wrap on whitespace and never
    degrade to one-character-per-line, and the rail body produces no horizontal scrollbar at the
    default width.
-   **Outcome (2026-08-13): partially evidenced.** No horizontal scrollbar — verified. The
-   one-character collapse could not be reproduced in any constructed context (see the journal),
-   so the CSS shipped here is hardening rather than a locked fix, and AC4's user-controlled width
-   is what actually makes large payloads readable. Reopen with a repro if it recurs.
+   **Outcome (2026-08-13): MET, after the owner supplied a repro.** My first pass declared this
+   unreproducible — I had probed the wrong element. The collapse is in the round-trip **summary
+   line**, not the `<pre>` payload block. See the journal entry below.
 6. **AC6 — inspector toggle.** An icon button toggles the "watch it think" rail off and back on;
    default is **on**; the state persists across reloads.
 7. **AC7 — live timer stops.** When a round trip settles, its elapsed figure freezes at the
@@ -313,3 +312,36 @@ the frames view is deleted while its reducer is retained**. Draft as ADR-0024 at
 - Open questions: (1) can the owner reproduce the one-char-per-line collapse, and where? (2) the
   desktop icon needs eyeballing on a real dock/taskbar — `pnpm --filter desktop bundle` is
   unbuilt here.
+
+### 2026-08-13 — Jeetu — session (owner screenshots; two of my findings were wrong)
+Owner returned with a dock screenshot and two inspector screenshots. Both reports were correct
+and both had been mis-diagnosed by me.
+
+- **AC5 — the collapse is REAL and I probed the wrong element** (`dfd6751`). It is not the `<pre>`
+  payload block; it is the round-trip **summary line**. `.llm-summary` (`flex: 1`) shares a flex
+  row with `.llm-meta` (`flex-shrink: 0`), and the meta text — "1.9s · 2,393 in · 66 out · 0%
+  cached" — measures ~260px. In a 340px rail the meta claims the row and refuses to yield, so the
+  summary is squeezed to min-content, which `overflow-wrap: anywhere` permits to be **one glyph**.
+  Measured before: **7px wide × 342px tall**. After: **235 × 18**.
+  Fixed three ways together: the head now WRAPS (meta drops to its own line rather than starving
+  the summary), the summary gets a real `flex-basis`, and `break-word` replaces `anywhere` so
+  min-content can never fall to one character again.
+  **Process lesson (promote at Gate 6):** my earlier "unreproducible" verdict came from asserting
+  CSS *text* and from probing an element I assumed was at fault, in a harness that never rendered
+  the failing one. jsdom returns 0×0 for every rect, so no unit test could have caught this. The
+  new `e2e/inspector-layout.spec.ts` measures the rendered box at 280/340/520px rails and is
+  mutation-checked — reverting the CSS fails with "the summary collapsed to ~1 characters per
+  line". **A layout bug needs a layout test; a property assertion is not evidence.**
+- **AC3 — "centred" was not what was asked for** (`dfd6751`). My first pass put the mark on a dark
+  plate at 61% of the tile, copying `apple-touch-icon.svg` — where the plate is load-bearing
+  because iOS squares off transparency. On a desktop dock that reads as a small logo adrift in a
+  dark square. The mark is *already* a tile (a rounded square spanning units 2..30 of a 32
+  viewBox), so it now scales to fill the canvas edge to edge, with the niche painted in the dark
+  ground behind it rather than punched through to the wallpaper.
+  **Test lesson:** the old centring assertion passed on BOTH compositions — symmetry is satisfied
+  by any concentric mark — so it never measured the owner's actual requirement. Replaced with an
+  edge-reach + ≥95% width-coverage assertion, mutation-checked against the plate version.
+- Live re-verification at the owner's exact 340px rail: summary renders **32 chars/line, 18px
+  tall**; icon fills the tile.
+- State: suites green — 21/21 root tasks, desktop 105, playground 1011.
+- Next step: owner re-check of the dock icon on real hardware, then Gate 6.
