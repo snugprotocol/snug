@@ -65,3 +65,9 @@ jobs:
         run: pnpm exec turbo run build --filter=desktop --force
       - name: In-shell hard gate (C2 CSP+IPC checks + wizard journey)
         run: pnpm --filter desktop gate
+      # P0 amendment 4's release-inertness claim, PROVEN rather than journaled:
+      # the gate commands + SNUG_SHELL_GATE must be present in the debug binary
+      # (positive control — without it a broken scan passes) and absent from the
+      # release binary. Separate from `gate` because a release build is slow.
+      - name: Release inertness (gate surface absent from the shipped binary)
+        run: pnpm --filter desktop gate:release

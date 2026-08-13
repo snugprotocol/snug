@@ -2,7 +2,13 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router-dom';
 
-import { openUserFileConfirmStore, registerPlatformOpenFile, resolveOpenUserFileConfirm } from './platform/openFile.js';
+import {
+  clearOpenUserFileError,
+  openUserFileConfirmStore,
+  openUserFileErrorStore,
+  registerPlatformOpenFile,
+  resolveOpenUserFileConfirm,
+} from './platform/openFile.js';
 import { initDesktopFirstRun } from './desktop/firstRun.js';
 import { ModeCoercionNote } from './desktop/ModeCoercionNote.js';
 import { refreshAppMeta } from './state/appMeta.js';
@@ -80,6 +86,9 @@ export function App(): ReactElement {
             </Button>
           </div>
         </main>
+        {/* Finding 5: THE state where a user double-clicks their backup. Without
+            the dialog here the open event parks invisibly behind this screen. */}
+        <OpenUserFileConfirmDialog />
       </div>
     );
   }
@@ -189,24 +198,70 @@ export function App(): ReactElement {
  */
 export function OpenUserFileConfirmDialog(): ReactElement | null {
   const pending = useStore(openUserFileConfirmStore);
-  if (pending === null) return null;
-  return (
-    <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="replace your snug data">
-      <div className="net-confirm-card">
-        <h2 className="net-confirm-title">open this snug file?</h2>
-        <p className="net-confirm-body">
-          Replace your Snug data with the file <strong>{pending.path}</strong>? Your current data will be overwritten.
-        </p>
-        <div className="field-row net-confirm-actions">
-          <Button variant="ghost" onClick={() => resolveOpenUserFileConfirm(false)}>
-            keep my current data
-          </Button>
-          <Button variant="primary" onClick={() => resolveOpenUserFileConfirm(true)}>
-            replace
-          </Button>
+  const error = useStore(openUserFileErrorStore);
+
+  // The failure banner (review finding 5): BAD_IMPORT / TOO_LARGE / a restore that
+  // still would not open used to reject into nothing at all, so a double-click
+  // silently did nothing. It renders whether or not a confirm is parked.
+  const banner =
+    error === null ? null : (
+      <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="that snug file could not be opened">
+        <div className="net-confirm-card">
+          <h2 className="net-confirm-title">that file couldn&apos;t be opened</h2>
+          <p className="net-confirm-body">
+            Nothing was changed — your data is exactly as it was. {error}
+          </p>
+          <div className="field-row net-confirm-actions">
+            <Button variant="primary" onClick={() => clearOpenUserFileError()}>
+              ok
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+    );
+
+  if (pending === null) return banner;
+
+  // When the database could not be opened at all, this file is a RESCUE, not a
+  // replacement — there is nothing of the user's to overwrite, and saying
+  // "your current data will be overwritten" would be a lie that scares a user
+  // away from the one action that fixes their problem.
+  const restore = pending.needsRestore;
+  return (
+    <>
+      {banner}
+      <div
+        className="net-confirm-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label={restore ? 'restore from this snug file' : 'replace your snug data'}
+      >
+        <div className="net-confirm-card">
+          <h2 className="net-confirm-title">{restore ? 'restore from this file?' : 'open this snug file?'}</h2>
+          <p className="net-confirm-body">
+            {restore ? (
+              <>
+                Snug couldn&apos;t read your data, so there is nothing to lose. Use <strong>{pending.path}</strong> to
+                start again from this backup?
+              </>
+            ) : (
+              <>
+                Replace your Snug data with the file <strong>{pending.path}</strong>? Your current data will be
+                overwritten.
+              </>
+            )}
+          </p>
+          <div className="field-row net-confirm-actions">
+            <Button variant="ghost" onClick={() => resolveOpenUserFileConfirm(false)}>
+              {restore ? 'not now' : 'keep my current data'}
+            </Button>
+            <Button variant="primary" onClick={() => resolveOpenUserFileConfirm(true)}>
+              {restore ? 'restore from this file' : 'replace'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 

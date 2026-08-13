@@ -34,6 +34,39 @@ const httpMode = process.env.SNUG_NET_STUB_HTTP === '1';
 const REQUIRED_KEY = 'e2e-secret-key-9999';
 
 /**
+ * The journey's canary credentials, duplicated verbatim from
+ * `e2e/connection-wizard.spec.ts:55-66` and `apps/desktop/src/gate/journey.tsx`
+ * (this file is a dependency-free standalone .mjs by design, so it cannot import
+ * them). They exist here for ONE purpose — see `reduceHeaderValue`.
+ */
+const CANARY_SECRETS = [
+  'e2e-cb-key-1111',
+  'ZTJlLWNiLXNlY3JldC0yMjIyLW5vdC1hLXJlYWwtc2VjcmV0',
+  'e2e-cb-passphrase-3333',
+  REQUIRED_KEY,
+];
+
+/**
+ * REDUCTION WITH A LEAK DETECTOR (whole-surface review finding 1, MAJOR).
+ *
+ * The signature/timestamp values are credential-DERIVED, so the log reduces them to
+ * a presence marker rather than echoing them. But a blind reduction made the gate's
+ * wire-level C1 assertion SELF-DECEIVING: a template regression where
+ * `hmac_sha256_b64` returned its raw key instead of a digest would put the RAW
+ * SECRET on the wire, this stub would mask it to '***', and the journey's
+ * `assertNoSecretsIn` would then run over already-scrubbed text and vouch for C1.
+ *
+ * So the comparison happens BEFORE the reduction: a value that CONTAINS a canary
+ * secret is recorded as 'RAW-SECRET', which is a marker the journey asserts against
+ * (it requires exactly '***'). The secret itself is still never logged — the
+ * detector reports the fact of the leak, not its content.
+ */
+function reduceHeaderValue(value) {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  return CANARY_SECRETS.some((secret) => value.includes(secret)) ? 'RAW-SECRET' : '***';
+}
+
+/**
  * Gate-mode request log (http mode only). Header VALUES are reduced to presence
  * markers for the signature/timestamp pair and kept verbatim otherwise — the gate's
  * C1 assertion needs to know whether a raw secret ever reached the wire, so
@@ -91,11 +124,14 @@ const handler = (req, res) => {
   }
   if (httpMode && req.method !== 'OPTIONS') {
     // Signature/timestamp are credential-DERIVED — log presence, never the value
-    // (the same `***` rule as the response body). Every other header stays
+    // (the same `***` rule as the response body), EXCEPT when the value is a raw
+    // canary, which records 'RAW-SECRET' so the masking cannot hide a leak from
+    // the gate's C1 assertion (see reduceHeaderValue). Every other header stays
     // verbatim so the gate can assert no RAW secret ever reached the wire.
     const headers = { ...req.headers };
     for (const name of ['cb-access-sign', 'cb-access-timestamp']) {
-      if (typeof headers[name] === 'string' && headers[name].length > 0) headers[name] = '***';
+      const reduced = reduceHeaderValue(headers[name]);
+      if (reduced !== headers[name]) headers[name] = reduced;
     }
     gateLog.push({ method: req.method ?? 'GET', path: url.pathname, headers });
   }

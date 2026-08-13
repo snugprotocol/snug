@@ -58,6 +58,8 @@ const EXPECTED_HARNESS_IDS_STATIC = [
   'remap-inert-without-config',
   'csp-check-count',
 ];
+/** The close-flush proof (review finding 4) — see runPersistLegs. */
+const EXPECTED_PERSIST_IDS = ['persist-write-staged', 'persist-survives-window-close'];
 const EXPECTED_JOURNEY_STEPS = [
   'boot-app',
   'build-app',
@@ -151,6 +153,92 @@ function checkRemapAbsentFromBundle() {
   };
 }
 
+/**
+ * THE CLOSE-FLUSH PROOF (ADR-0021 §5, whole-surface review finding 4).
+ *
+ * Two shell processes over ONE `~/Snug/user.sqlite` in a fresh throwaway home:
+ *
+ *   persist-write   mutates the db and leaves the write in the 250ms debounce
+ *                   (never calls flush), then closes the window — which fires
+ *                   CloseRequested and the flush handshake. The driver waits for
+ *                   the PROCESS TO EXIT, so a window that refuses to close is a
+ *                   failure here rather than a hang.
+ *   persist-verify  reopens the same file and asserts the row survived.
+ *
+ * Delete the Rust CloseRequested handler (or the webview half) and persist-verify
+ * goes red — which is exactly what makes this a proof and not a restatement.
+ */
+async function runPersistLegs(workDir, children) {
+  const home = path.join(workDir, 'persist-home');
+  fs.mkdirSync(home, { recursive: true });
+  const checks = [];
+
+  for (const phase of ['persist-write', 'persist-verify']) {
+    const out = path.join(workDir, `${phase}.json`);
+    log(`persist leg: ${phase}…`);
+    const proc = spawn(binaryPath, [], {
+      env: {
+        ...process.env,
+        HOME: home,
+        SNUG_SHELL_GATE: '1',
+        SNUG_SHELL_GATE_OUT: out,
+        SNUG_SHELL_GATE_PHASE: phase,
+      },
+      stdio: 'inherit',
+    });
+    children.push(proc);
+
+    // persist-write must EXIT on its own (that is the close working). For
+    // persist-verify the results file is enough; it is killed after.
+    const exited = new Promise((resolve) => proc.on('exit', resolve));
+    const legDeadline = Date.now() + 120_000;
+    let timedOut = false;
+    while (!fs.existsSync(out)) {
+      if (proc.exitCode !== null) break;
+      if (Date.now() > legDeadline) {
+        timedOut = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (timedOut) {
+      checks.push({
+        id: phase === 'persist-write' ? 'persist-write-staged' : 'persist-survives-window-close',
+        pass: false,
+        detail: `${phase} produced no results within 120s`,
+      });
+      proc.kill('SIGKILL');
+      continue;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+
+    if (phase === 'persist-write') {
+      // Let the close handshake run to completion before killing the process.
+      // Deliberately NOT asserted here: on macOS an app outlives its last
+      // window by design, so "did the process exit?" would test platform
+      // convention rather than the flush. The claim is proven on DISK by
+      // `persist-survives-window-close` — the canary row only gets there if
+      // CloseRequested → flush → close_flush_done actually ran, and the Rust
+      // deadline guarantees the window goes away even if the webview wedges.
+      await Promise.race([exited, new Promise((r) => setTimeout(r, 8_000))]);
+      proc.kill('SIGTERM');
+    } else {
+      proc.kill('SIGTERM');
+    }
+
+    try {
+      const parsed = JSON.parse(fs.readFileSync(out, 'utf8'));
+      if (typeof parsed.fatal === 'string') {
+        checks.push({ id: `${phase}-fatal`, pass: false, detail: parsed.fatal });
+      }
+      for (const c of parsed.checks ?? []) checks.push(c);
+    } catch (err) {
+      checks.push({ id: `${phase}-results`, pass: false, detail: `unreadable results: ${err}` });
+    }
+  }
+  return checks;
+}
+
 async function waitForStub() {
   const deadline = Date.now() + 15_000;
   for (;;) {
@@ -236,6 +324,10 @@ async function main() {
   app.kill('SIGTERM');
   stub.kill('SIGTERM');
 
+  // 5b. THE CLOSE-FLUSH PROOF (review finding 4), two more processes over ONE
+  // user file in a FRESH home — see runPersistLegs.
+  const persistChecks = await runPersistLegs(workDir, children);
+
   let results;
   try {
     results = JSON.parse(raw);
@@ -244,15 +336,22 @@ async function main() {
   }
   results.timestamp = new Date().toISOString();
 
-  // 6. Driver-side bundle check joins the table.
+  // 6. Driver-side bundle check + the persist legs join the table.
   const checks = Array.isArray(results.checks) ? results.checks : [];
   checks.push(checkRemapAbsentFromBundle());
+  checks.push(...persistChecks);
 
   // 7. Verdict: every expected id present exactly once, every one passing.
   const failures = [];
   if (typeof results.fatal === 'string') failures.push(`harness fatal: ${results.fatal}`);
 
-  const expectedIds = [...EXPECTED_HARNESS_IDS_STATIC, ...cspIds, ...EXPECTED_IPC_IDS, 'remap-absent-from-release-bundle'];
+  const expectedIds = [
+    ...EXPECTED_HARNESS_IDS_STATIC,
+    ...cspIds,
+    ...EXPECTED_IPC_IDS,
+    'remap-absent-from-release-bundle',
+    ...EXPECTED_PERSIST_IDS,
+  ];
   const byId = new Map();
   for (const check of checks) {
     if (byId.has(check.id)) failures.push(`duplicate check id: ${check.id}`);

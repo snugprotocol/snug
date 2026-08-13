@@ -14,6 +14,11 @@
 //!                                the webview remap table is populated ONLY
 //!                                from this config — the TS bundle carries no
 //!                                host literals of its own)
+//!   SNUG_SHELL_GATE_PHASE=<leg>  optional: "full" (default), "persist-write",
+//!                                or "persist-verify" — the two-process
+//!                                close-flush proof (review finding 4). An
+//!                                unknown value leaves the gate OFF rather than
+//!                                silently running the wrong leg.
 //!
 //! `write_gate_results` REFUSES when gate mode is off: the results file is the
 //! driver's only success signal, and a write outside gate mode could only be a
@@ -27,6 +32,11 @@ use std::sync::OnceLock;
 pub struct GateConfig {
     pub out_path: String,
     pub remap: HashMap<String, String>,
+    /// Which leg of the run this process is. `"full"` (default) is the whole
+    /// harness. The close-flush proof (finding 4) needs TWO processes over one
+    /// user file: `"persist-write"` mutates the db and closes the window;
+    /// `"persist-verify"` reopens and asserts the row survived.
+    pub phase: String,
 }
 
 /// Pure env → config translation, unit-tested below without process-global env.
@@ -34,6 +44,7 @@ fn parse_config(
     gate: Option<String>,
     out: Option<String>,
     remap: Option<String>,
+    phase: Option<String>,
 ) -> Option<GateConfig> {
     if gate.as_deref() != Some("1") {
         return None;
@@ -41,6 +52,14 @@ fn parse_config(
     let Some(out_path) = out else {
         eprintln!("[shell-gate] SNUG_SHELL_GATE=1 but SNUG_SHELL_GATE_OUT is unset — gate stays OFF");
         return None;
+    };
+    let phase = match phase.as_deref() {
+        None | Some("full") => "full".to_string(),
+        Some(p @ ("persist-write" | "persist-verify")) => p.to_string(),
+        Some(other) => {
+            eprintln!("[shell-gate] unknown SNUG_SHELL_GATE_PHASE {other:?} — gate stays OFF");
+            return None;
+        }
     };
     let remap: HashMap<String, String> = match remap {
         None => HashMap::new(),
@@ -54,7 +73,11 @@ fn parse_config(
             }
         },
     };
-    Some(GateConfig { out_path, remap })
+    Some(GateConfig {
+        out_path,
+        remap,
+        phase,
+    })
 }
 
 fn config() -> &'static Option<GateConfig> {
@@ -64,6 +87,7 @@ fn config() -> &'static Option<GateConfig> {
             std::env::var("SNUG_SHELL_GATE").ok(),
             std::env::var("SNUG_SHELL_GATE_OUT").ok(),
             std::env::var("SNUG_SHELL_GATE_REMAP").ok(),
+            std::env::var("SNUG_SHELL_GATE_PHASE").ok(),
         )
     })
 }
@@ -86,6 +110,54 @@ pub fn write_gate_results(json: String) -> Result<(), String> {
     std::fs::write(&cfg.out_path, json).map_err(|e| format!("write {}: {e}", cfg.out_path))
 }
 
+// ---------------------------------------------------------------------------
+// IPC sentinel probe (whole-surface review finding 2).
+//
+// The `ipc-invoke-refused` check asks: did a keyless invoke posted from a
+// sandboxed subframe actually EXECUTE a command? The original sensor was a
+// callback installed in the subframe — a frame Tauri's response path can never
+// reach, so it could not fire whether or not the command ran, and the check
+// passed unconditionally.
+//
+// The sensor now lives where an effect IS observable. The subframe posts a
+// keyless `write_user_file` for a sentinel FILENAME; if the invoke executed,
+// that file exists in `~/Snug`. This command — called from the MAIN frame,
+// which Tauri does answer — reports its existence. Absence of effect is the
+// pass condition, matching the CSP suite's enforcement-signal discipline.
+//
+// Read-only and debug-only: it never creates, writes, or deletes anything, and
+// `userfile.rs` (another owner) is untouched. It resolves the same `~/Snug`
+// directory that `write_user_file` targets, and is name-restricted to the
+// sentinel so it cannot be used as a general file-existence oracle.
+
+/// The one filename this probe will answer for. A keyless invoke that executed
+/// would land here; nothing in the product ever writes this name.
+pub const IPC_SENTINEL_NAME: &str = "ipc-probe-canary.sqlite";
+
+/// Pure: which path (if any) this probe is willing to stat. `None` = refused.
+fn sentinel_path(home: Option<std::path::PathBuf>, name: &str) -> Option<std::path::PathBuf> {
+    if name != IPC_SENTINEL_NAME {
+        return None;
+    }
+    Some(home?.join("Snug").join(name))
+}
+
+/// Does the IPC sentinel file exist? `Ok(true)` = a keyless invoke EXECUTED a
+/// write command from a sandboxed subframe = structural breakage.
+#[tauri::command]
+pub fn gate_ipc_sentinel_exists(name: String) -> Result<bool, String> {
+    if config().is_none() {
+        return Err("shell gate mode is off — refusing the sentinel probe".into());
+    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from);
+    let Some(path) = sentinel_path(home, &name) else {
+        return Err(format!("gate sentinel probe refuses the name {name:?}"));
+    };
+    Ok(path.exists())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,20 +168,20 @@ mod tests {
 
     #[test]
     fn off_unless_exactly_one() {
-        assert!(parse_config(None, s("/tmp/x"), None).is_none());
-        assert!(parse_config(s("0"), s("/tmp/x"), None).is_none());
-        assert!(parse_config(s("true"), s("/tmp/x"), None).is_none());
+        assert!(parse_config(None, s("/tmp/x"), None, None).is_none());
+        assert!(parse_config(s("0"), s("/tmp/x"), None, None).is_none());
+        assert!(parse_config(s("true"), s("/tmp/x"), None, None).is_none());
     }
 
     #[test]
     fn off_without_out_path() {
-        assert!(parse_config(s("1"), None, None).is_none());
+        assert!(parse_config(s("1"), None, None, None).is_none());
     }
 
     #[test]
     fn off_on_malformed_remap() {
-        assert!(parse_config(s("1"), s("/tmp/x"), s("not-json")).is_none());
-        assert!(parse_config(s("1"), s("/tmp/x"), s("[1,2]")).is_none());
+        assert!(parse_config(s("1"), s("/tmp/x"), s("not-json"), None).is_none());
+        assert!(parse_config(s("1"), s("/tmp/x"), s("[1,2]"), None).is_none());
     }
 
     #[test]
@@ -118,6 +190,7 @@ mod tests {
             s("1"),
             s("/tmp/results.json"),
             s(r#"{"api.provider.example":"http://127.0.0.1:43120"}"#),
+            None,
         )
         .expect("gate must arm");
         assert_eq!(cfg.out_path, "/tmp/results.json");
@@ -129,7 +202,47 @@ mod tests {
 
     #[test]
     fn remap_optional() {
-        let cfg = parse_config(s("1"), s("/tmp/r.json"), None).expect("gate must arm");
+        let cfg = parse_config(s("1"), s("/tmp/r.json"), None, None).expect("gate must arm");
         assert!(cfg.remap.is_empty());
+    }
+
+    #[test]
+    fn sentinel_probe_answers_only_for_the_sentinel_name() {
+        let home = Some(std::path::PathBuf::from("/home/x"));
+        assert_eq!(
+            sentinel_path(home.clone(), IPC_SENTINEL_NAME),
+            Some(std::path::PathBuf::from("/home/x/Snug/ipc-probe-canary.sqlite"))
+        );
+        // The real user file, traversal, and anything else are all refused —
+        // the probe is not a general file-existence oracle.
+        for bad in ["user.sqlite", "../../etc/passwd", "", "ipc-probe-canary.sqlite.bak"] {
+            assert!(
+                sentinel_path(home.clone(), bad).is_none(),
+                "{bad:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn sentinel_probe_needs_a_home() {
+        assert!(sentinel_path(None, IPC_SENTINEL_NAME).is_none());
+    }
+
+    #[test]
+    fn phase_defaults_to_full_and_accepts_the_two_persist_legs() {
+        let full = parse_config(s("1"), s("/tmp/r.json"), None, None).expect("gate must arm");
+        assert_eq!(full.phase, "full");
+        for leg in ["full", "persist-write", "persist-verify"] {
+            let cfg = parse_config(s("1"), s("/tmp/r.json"), None, s(leg)).expect("gate must arm");
+            assert_eq!(cfg.phase, leg);
+        }
+    }
+
+    #[test]
+    fn an_unknown_phase_leaves_the_gate_off() {
+        // Never silently run the wrong leg: a typo'd phase must not fall back to
+        // "full" and report a green persist proof that never ran.
+        assert!(parse_config(s("1"), s("/tmp/r.json"), None, s("persist-writ")).is_none());
+        assert!(parse_config(s("1"), s("/tmp/r.json"), None, s("")).is_none());
     }
 }

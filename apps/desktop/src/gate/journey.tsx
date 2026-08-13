@@ -276,17 +276,41 @@ export async function runJourney(config: ShellGateConfig): Promise<JourneyResult
     for (;;) {
       const res = await tauriFetch(`${stubOrigin}/__gate/requests`);
       const body = (await res.json()) as { requests: StubRequest[] };
+      const wantedPath = new URL(capturedNetUrl).pathname;
+      // A RAW-SECRET marker is a wire-level C1 VIOLATION and must fail the gate
+      // IMMEDIATELY — never wait for the deadline. See the leak-detector note
+      // below: the stub reduces the signature/timestamp seats to '***' EXCEPT
+      // when the value contained a canary secret, in which case it records
+      // 'RAW-SECRET'. Without this branch the reduction would mask exactly the
+      // regression the check exists to catch (a template whose `hmac_sha256_b64`
+      // returned its raw key), and `assertNoSecretsIn` would then run over
+      // already-scrubbed text and vouch for C1 regardless.
+      const leaked = body.requests.find((r) =>
+        ['cb-access-sign', 'cb-access-timestamp'].some((h) => r.headers[h] === 'RAW-SECRET'),
+      );
+      if (leaked !== undefined) {
+        const seats = ['cb-access-sign', 'cb-access-timestamp'].filter(
+          (h) => leaked.headers[h] === 'RAW-SECRET',
+        );
+        throw new Error(
+          `C1 VIOLATION ON THE WIRE: the stub received RAW canary secret material in ${seats.join(
+            '+',
+          )} on ${leaked.method} ${leaked.path} — a signing-template regression put an unhashed credential on the network`,
+        );
+      }
       const signed = body.requests.find(
-        (r) => r.path === new URL(capturedNetUrl).pathname && r.headers['cb-access-sign'] === '***',
+        (r) => r.path === wantedPath && r.headers['cb-access-sign'] === '***',
       );
       if (signed !== undefined) {
         if (signed.headers['cb-access-timestamp'] !== '***') {
           throw new Error('stub saw a signature without its timestamp seat');
         }
-        // C1 on the wire: raw secrets must never appear in ANY recorded header
-        // (the signature/timestamp markers are presence-only by stub contract).
+        // C1 on the wire: raw secrets must never appear in ANY recorded header.
+        // The signature/timestamp markers are presence-only by stub contract —
+        // and the RAW-SECRET branch above is what makes that contract auditable
+        // rather than self-certifying.
         assertNoSecretsIn(JSON.stringify(body.requests), "the stub's recorded request headers");
-        return `stub recorded ${signed.method} ${signed.path} with HMAC-signed headers present`;
+        return `stub recorded ${signed.method} ${signed.path} with HMAC-signed headers present (both seats exactly '***', no RAW-SECRET marker)`;
       }
       if (Date.now() > deadline) {
         throw new Error(`stub never recorded a signed request for ${capturedNetUrl} (saw ${body.requests.length} requests)`);

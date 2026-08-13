@@ -77,6 +77,52 @@ function remapChecks(config: ShellGateConfig): CheckResult[] {
   return results;
 }
 
+/**
+ * The close-flush persistence legs (review finding 4). Each is a whole process:
+ * it reports its own single check and then ends, so the driver can close the
+ * window (phase 1) and reopen the same file (phase 2). Neither runs the CSP/IPC/
+ * journey work — they exist only to observe a write across a process boundary.
+ */
+async function runPersistPhase(
+  config: ShellGateConfig,
+  phase: 'persist-write' | 'persist-verify',
+  env: GateEnvReport,
+): Promise<void> {
+  const { runPersistWrite, runPersistVerify } = await import('./persist.js');
+  let results: GateResults;
+  let mutate: (() => void) | undefined;
+  try {
+    if (phase === 'persist-write') {
+      const plan = await runPersistWrite();
+      mutate = plan.mutate;
+      results = { env, checks: plan.checks, journey: { steps: [], pass: true } };
+    } else {
+      results = { env, checks: await runPersistVerify(), journey: { steps: [], pass: true } };
+    }
+  } catch (err) {
+    results = {
+      env,
+      checks: [],
+      journey: { steps: [], pass: false },
+      fatal: `${phase} phase died: ${String(err)}`,
+    };
+  }
+  await invoke('write_gate_results', { json: JSON.stringify(results, null, 2) });
+
+  if (phase === 'persist-write') {
+    // ORDER IS THE PROOF. The mutation happens HERE — after the results file is
+    // written and with nothing awaited before the close — so the 250ms write-back
+    // debounce cannot elapse on its own. Mutating earlier let the debounce fire
+    // during the results write, and the check then passed even with the Rust
+    // close handler deleted (found by mutation testing). The only remaining route
+    // to disk is CloseRequested → flush → close_flush_done.
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const window = getCurrentWindow();
+    mutate?.();
+    await window.close();
+  }
+}
+
 export async function runShellGate(config: ShellGateConfig): Promise<void> {
   const checks: CheckResult[] = [];
   // Env facts FIRST — nativeCryptoSubtle must be read before the fallback runs.
@@ -86,6 +132,13 @@ export async function runShellGate(config: ShellGateConfig): Promise<void> {
     nativeCryptoSubtle: globalThis.crypto?.subtle !== undefined,
     userAgent: navigator.userAgent,
   };
+
+  // The persist legs are separate processes with their own single-check reports.
+  if (config.phase === 'persist-write' || config.phase === 'persist-verify') {
+    await runPersistPhase(config, config.phase, env);
+    return;
+  }
+
   let results: GateResults;
   try {
     checks.push(await probeSqlJs());

@@ -16,7 +16,37 @@ mod userfile;
 
 use openfile::OpenedFiles;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
+
+// --------------------------------------------------------------- close flush
+//
+// ADR-0021 §5. Desktop persistence rides a 250ms write-back debounce, so the
+// LAST mutation before a window close could not survive it: the webview is torn
+// down with the pending write still queued. `pagehide` (the web path's backstop)
+// is not a reliable close signal in a native shell.
+//
+// The handshake: CloseRequested -> prevent_close + emit `snug:close-flush` ->
+// the webview awaits `userDb.flush()` -> `close_flush_done` -> close for real.
+// It is TIME-BOXED: a hung or crashed webview must never trap the user in an
+// unclosable window, so the close proceeds anyway after the deadline. Losing the
+// last debounced write is bad; an app that cannot be quit is worse.
+
+/// How long the shell waits for the webview's flush before closing regardless.
+const CLOSE_FLUSH_DEADLINE_MS: u64 = 3_000;
+
+/// Set once the flush handshake is underway (or has been abandoned): the second
+/// close request must pass straight through rather than re-arming the wait.
+static CLOSING: AtomicBool = AtomicBool::new(false);
+
+/// The webview reports its flush finished (or failed — either way it is done and
+/// the window may close). Idempotent: a late call after the deadline is a no-op
+/// because the window is already gone.
+#[tauri::command]
+fn close_flush_done(window: tauri::Window) {
+    CLOSING.store(true, Ordering::SeqCst);
+    let _ = window.destroy();
+}
 
 /// Announce admitted open-event files to the webview. The payload carries only
 /// paths; bytes flow later through the single-use `read_opened_file` command.
@@ -74,8 +104,10 @@ pub fn run() {
         openfile::read_opened_file,
         exportfile::export_user_bytes,
         pending_opened_files,
+        close_flush_done,
         gate::shell_gate_config,
         gate::write_gate_results,
+        gate::gate_ipc_sentinel_exists,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -84,12 +116,38 @@ pub fn run() {
         openfile::read_opened_file,
         exportfile::export_user_bytes,
         pending_opened_files,
+        close_flush_done,
     ]);
     builder
         .setup(|app| {
             // Cold-start argv (Windows/Linux file association).
             let args: Vec<String> = std::env::args().collect();
             announce_opened(app.handle(), argv_candidates(&args));
+
+            // ADR-0021 §5 close-requested flush (see the module header).
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = window.clone();
+                window.on_window_event(move |event| {
+                    let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+                        return;
+                    };
+                    // Second request (or a post-deadline close): let it through.
+                    if CLOSING.swap(true, Ordering::SeqCst) {
+                        return;
+                    }
+                    api.prevent_close();
+                    let _ = handle.emit("snug:close-flush", ());
+                    // The deadline: a webview that never answers must not trap
+                    // the user. `destroy()` is idempotent against the command.
+                    let deadline_handle = handle.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            CLOSE_FLUSH_DEADLINE_MS,
+                        ));
+                        let _ = deadline_handle.destroy();
+                    });
+                });
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

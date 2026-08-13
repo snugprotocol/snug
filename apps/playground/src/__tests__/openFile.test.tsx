@@ -105,7 +105,7 @@ describe('handleOpenedUserFile — untrusted input is inert (amendment 12)', () 
 
     await harness.openFile.handleOpenedUserFile(bytes, '/Users/g/backup.snug', confirm);
 
-    expect(confirm).toHaveBeenCalledWith({ path: '/Users/g/backup.snug' });
+    expect(confirm).toHaveBeenCalledWith({ path: '/Users/g/backup.snug', needsRestore: false });
     expect(target.listApps()).toHaveLength(0);
     expect(harness.mode.endpointsNeedConfirmStore.get()).toBe(false);
   });
@@ -213,7 +213,7 @@ describe('OpenUserFileConfirmDialog — the plain-language replace prompt', () =
     const resolve = vi.fn();
     await mountDialog(harness);
     act(() => {
-      harness.openFile.openUserFileConfirmStore.set({ path: '/Users/g/backup.snug', resolve });
+      harness.openFile.openUserFileConfirmStore.set({ path: '/Users/g/backup.snug', needsRestore: false, resolve });
     });
 
     const text = container?.textContent ?? '';
@@ -230,7 +230,7 @@ describe('OpenUserFileConfirmDialog — the plain-language replace prompt', () =
     const resolve = vi.fn();
     await mountDialog(harness);
     act(() => {
-      harness.openFile.openUserFileConfirmStore.set({ path: '/Users/g/backup.snug', resolve });
+      harness.openFile.openUserFileConfirmStore.set({ path: '/Users/g/backup.snug', needsRestore: false, resolve });
     });
 
     clickButton(/keep/i);

@@ -11,6 +11,12 @@ export interface ShellGateConfig {
   outPath: string;
   /** Journey host → replacement origin (e.g. "http://127.0.0.1:43120"). */
   remap: Record<string, string>;
+  /**
+   * Which leg this process runs. `'full'` is the whole harness; the two
+   * `persist-*` legs are the close-flush proof (review finding 4), which needs
+   * two processes over ONE user file. Absent (older Rust) reads as `'full'`.
+   */
+  phase?: 'full' | 'persist-write' | 'persist-verify';
 }
 
 let read = false;

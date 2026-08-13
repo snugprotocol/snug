@@ -10,6 +10,7 @@ import {
   type UserDb,
 } from '@snugprotocol/db';
 import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol/auth';
+import { USERDB_FILE } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { locateWasm } from '../run/wasm.js';
 import { createStore, useStore } from './store.js';
@@ -102,6 +103,60 @@ export function retryUserDbBoot(): void {
   if (userDbStatusStore.get().state !== 'load-failed') return;
   userDbStatusStore.set({ state: 'opening' });
   attemptOpen();
+}
+
+/**
+ * Is the database in a state where the normal import path CANNOT run?
+ *
+ * `importUserFile` starts by awaiting `getUserDb()`, and that promise deliberately
+ * never resolves while the status is corrupt/unsupported/load-failed (F6: corruption
+ * never fails open). That is correct for ordinary imports — and catastrophic at the
+ * one moment a user needs a backup most, because a `.snug` double-click after a torn
+ * file would park forever with no UI at all. `restoreUserDbFromBytes` is the way out.
+ */
+export function userDbNeedsRestore(): boolean {
+  const state = userDbStatusStore.get().state;
+  return state === 'corrupt' || state === 'unsupported' || state === 'load-failed';
+}
+
+/**
+ * RESTORE FROM A BACKUP WHEN THE DATABASE WILL NOT OPEN (whole-surface review
+ * finding 5) — the grandma-with-a-torn-file-and-a-backup path.
+ *
+ * The ordinary import route is unavailable here by construction (see
+ * `userDbNeedsRestore`), so this writes the backup bytes straight to the persistence
+ * backend and re-runs the SAME boot open over them. Nothing is bypassed: the open
+ * applies every magic/version/quarantine guard, so a bad backup lands back in a
+ * failure state rather than being trusted.
+ *
+ * Throws (rather than silently doing nothing) when the db is healthy — a healthy db
+ * must import through `importUserFile`, which arms the F15 endpoint re-confirmation.
+ */
+export async function restoreUserDbFromBytes(bytes: Uint8Array): Promise<void> {
+  if (!userDbNeedsRestore()) {
+    throw new Error('restoreUserDbFromBytes: the database is not in a failed state — use importUserFile');
+  }
+  const backend = getPlatform().userdbBackend;
+  if (backend === undefined) {
+    // Web/OPFS: no direct-write seam is wired here. Say so plainly rather than hang.
+    throw new Error(
+      'this copy of Snug cannot restore a backup while the database is unreadable — open the app on a working file first',
+    );
+  }
+  // Overwrite the stored file, then re-run the real open over the new bytes.
+  await backend.save(USERDB_FILE, bytes);
+  corruptResult = undefined;
+  userDbStatusStore.set({ state: 'opening' });
+  await new Promise<void>((resolve, reject) => {
+    const stop = userDbStatusStore.subscribe(() => {
+      const status = userDbStatusStore.get();
+      if (status.state === 'opening') return;
+      stop();
+      if (status.state === 'ready') resolve();
+      else reject(new Error(`the restored file still could not be opened (${status.state})`));
+    });
+    attemptOpen();
+  });
 }
 
 /** Resolves when the user DB is usable. Never resolves while status is corrupt/unsupported. */
