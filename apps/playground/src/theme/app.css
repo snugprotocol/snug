@@ -891,53 +891,11 @@
   color: var(--fg-muted);
 }
 
-.inspector-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
+/* The app↔host frame timeline's styles lived here until TASK-20260813 (AC11) removed
+   that view. Its reducer (run/inspector.ts) is still live and still feeds the frame-wrap
+   "thinking" pulse and the export-button gate — only the rendering is gone. */
 
-.inspector-entry {
-  display: flex;
-  gap: var(--space-2);
-  align-items: baseline;
-  padding: var(--space-2) var(--space-2);
-  border-radius: var(--radius-s);
-  animation: reveal-in var(--dur-1) var(--ease-out);
-}
-
-.inspector-entry:nth-child(odd) {
-  background: var(--surface-2);
-}
-
-.inspector-entry .dir {
-  flex-shrink: 0;
-  width: 1.2em;
-  text-align: center;
-  color: var(--ember);
-}
-
-.inspector-entry .dir.inbound {
-  color: var(--ok);
-}
-
-.inspector-entry .frame-label {
-  font-weight: 700;
-}
-
-.inspector-entry .frame-detail {
-  color: var(--fg-muted);
-  overflow-wrap: anywhere;
-}
-
-.inspector-entry.is-error .frame-label {
-  color: var(--danger);
-}
-
-/* LLM round-trip inspector — the SIBLING of the frame inspector above, not a variant
-   of it. That one is structural-only by design; this one renders prompt bodies. */
+/* LLM round-trip inspector — the whole of the think surface now. */
 .llm-inspector {
   display: flex;
   flex-direction: column;

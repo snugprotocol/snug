@@ -177,28 +177,49 @@ describe('merged think surface (AC10)', () => {
     frame: { v: 1, type: 'host.ready' } as never,
   });
 
-  it('renders the LLM section ABOVE the frame section, both labelled, in one container', () => {
-    const el = mount(<ThinkPanel llm={llmState} frames={frameState.entries} mode="byok" />);
+  // SUPERSEDED BY TASK-20260813 AC11. This block asserted a TWO-section think surface —
+  // LLM round trips above an app↔host frame timeline. The frame section was removed as
+  // owner-reported noise: it rendered frame types with no values (deliberately, as the
+  // privacy guarantee below still requires), which made it useless for debugging and
+  // meaningless as narrative.
+  //
+  // What survives unchanged is the part AC11 actually existed to protect: the two
+  // reducers stay separate modules, inspector.ts stays byte-locked and value-blind, and
+  // neither imports the other (the three tests above this block). Deleting the VIEW does
+  // not merge the FEEDS, which is what the original guard was defending against.
+  it('renders the LLM round-trip section, labelled, in one scroll container', () => {
+    const el = mount(<ThinkPanel llm={llmState} mode="byok" />);
     const sections = [...el.querySelectorAll('[data-testid="think-section"]')];
-    expect(sections).toHaveLength(2);
+    expect(sections).toHaveLength(1);
     expect(sections[0]?.getAttribute('data-section')).toBe('llm');
-    expect(sections[1]?.getAttribute('data-section')).toBe('frames');
-    // Each section is clearly labelled (a heading, not just a class name).
-    const headings = [...el.querySelectorAll('[data-testid="think-section"] h3')].map((h) => h.textContent?.trim());
-    expect(headings[0]).toBeTruthy();
-    expect(headings[1]).toBeTruthy();
-    expect(headings[0]).not.toBe(headings[1]);
-    // One scroll container holding both.
+    const heading = el.querySelector('[data-testid="think-section"] h3')?.textContent?.trim();
+    expect(heading).toBeTruthy();
     const scroller = el.querySelector('.think-panel');
     expect(scroller).not.toBeNull();
     expect(scroller!.contains(sections[0]!)).toBe(true);
-    expect(scroller!.contains(sections[1]!)).toBe(true);
   });
 
-  it('shows real round-trip data and real frame data at the same time', () => {
-    const el = mount(<ThinkPanel llm={llmState} frames={frameState.entries} mode="byok" />);
+  it('AC11 — the app↔host frame timeline is gone from the think surface', () => {
+    // The removal, asserted directly rather than via a section count that a future
+    // third section could satisfy by accident.
+    const el = mount(<ThinkPanel llm={llmState} mode="byok" />);
+    expect(el.querySelector('[data-section="frames"]')).toBeNull();
+    expect(el.querySelectorAll('.inspector-entry')).toHaveLength(0);
+    expect(el.textContent).not.toContain('app ↔ host frames');
+    // …while the round trips it replaced are still there.
     expect(el.querySelectorAll('[data-testid="llm-round-trip"]').length).toBe(1);
-    expect(el.querySelectorAll('.inspector-entry').length).toBe(1);
+  });
+
+  it('AC11 — the frame FEED survives the view removal (it gates other UI)', () => {
+    // The reducer must NOT be deleted along with its panel: RunView reads `inFlight`
+    // for the app-frame thinking pulse and `sawDbOp` to gate the export button. This
+    // asserts the feed still folds frames, so a future cleanup that removes it fails
+    // here rather than silently killing two unrelated features.
+    expect(frameState.entries.length).toBe(1);
+    expect(inspectorReduce(initialInspectorState as InspectorState, {
+      direction: 'inbound',
+      frame: { v: 1, type: 'agent.request', requestId: 'r-9', prompt: 'x' } as never,
+    }).entries.length).toBe(1);
   });
 
   it('the rail no longer offers a separate llm tab', async () => {
@@ -208,7 +229,7 @@ describe('merged think surface (AC10)', () => {
     expect(names).not.toContain('llm');
   });
 
-  it('the inspector tab renders both sections in the live rail', async () => {
+  it('the inspector tab renders the round-trip section in the live rail', async () => {
     const el = mountRun('starter--chess');
     await settle();
     const inspectorTab = tabButtons(el).find((b) => accessibleName(b) === 'inspector');
@@ -217,7 +238,7 @@ describe('merged think surface (AC10)', () => {
       inspectorTab!.click();
     });
     const sections = [...el.querySelectorAll('[data-testid="think-section"]')].map((s) => s.getAttribute('data-section'));
-    expect(sections).toEqual(['llm', 'frames']);
+    expect(sections).toEqual(['llm']);
   });
 });
 

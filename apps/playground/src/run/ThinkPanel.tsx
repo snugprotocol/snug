@@ -1,24 +1,28 @@
-// ThinkPanel — the merged "watch it think" surface (AC10). One tab, one scroll
-// container: the LLM round trip on TOP (what we asked the model, what came back),
-// the bridge/frame timeline BELOW (what the app said to the host).
+// ThinkPanel — the "watch it think" surface: the LLM round trips (what we asked the
+// model, what came back).
 //
-// PRESENTATION ONLY. The two feeds keep their own reducers, with deliberately
-// OPPOSITE rules — llmInspector.ts renders bodies on purpose, inspector.ts is
-// value-blind as a privacy guarantee (task D2). This component composes the two
-// panels; it must never reach past them into either reducer. AC11 locks the
-// structural module byte-for-byte so the visual merge cannot creep into a real one.
+// It used to carry a SECOND section below this one, the app↔host frame timeline. That
+// was removed in TASK-20260813 (AC11) as owner-reported noise: it listed frame types
+// with no values — deliberately, as a privacy guarantee — which made it unreadable as
+// a debugging aid and meaningless as a narrative. The round trips are what "watch it
+// think" actually means.
+//
+// The FEED behind that section (run/inspector.ts) is deliberately still alive and
+// still byte-locked: RunView reads its `inFlight` count to drive the app-frame
+// "thinking" pulse and its `sawDbOp` flag to gate the export button. Only the view is
+// gone. Do not delete the reducer while chasing this comment.
+//
+// PRESENTATION ONLY — this component must never reach past LlmInspectorPanel into the
+// reducer.
 
 import type { ReactElement, ReactNode } from 'react';
 
 import type { TurnMode } from '../state/webllm.js';
-import type { InspectorEntry } from './inspector.js';
-import { InspectorPanel } from './InspectorPanel.js';
 import { LlmInspectorPanel } from './LlmInspectorPanel.js';
 import type { LlmInspectorState } from './llmInspector.js';
 
 export interface ThinkPanelProps {
   llm: LlmInspectorState;
-  frames: InspectorEntry[];
   /** Drives the honest empty copy in the LLM section — the EFFECTIVE turn mode (AC15). */
   mode: TurnMode;
 }
@@ -35,14 +39,11 @@ function Section({ id, title, hint, children }: { id: string; title: string; hin
   );
 }
 
-export function ThinkPanel({ llm, frames, mode }: ThinkPanelProps): ReactElement {
+export function ThinkPanel({ llm, mode }: ThinkPanelProps): ReactElement {
   return (
     <div className="think-panel">
       <Section id="llm" title="model round trips" hint="prompt in, reply out">
         <LlmInspectorPanel state={llm} mode={mode} />
-      </Section>
-      <Section id="frames" title="app ↔ host frames" hint="structure only, never values">
-        <InspectorPanel entries={frames} />
       </Section>
     </div>
   );

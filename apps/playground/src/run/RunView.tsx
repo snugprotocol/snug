@@ -53,10 +53,13 @@ import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
 
-// 'inspector' is now ONE surface (AC10): the LLM round-trip section above the
-// bridge/frame timeline, composed by ThinkPanel. The two FEEDS remain separate modules
-// with opposite rules — llmInspector.ts renders bodies, inspector.ts is value-blind
-// (AC11 locks it byte-for-byte). Only the presentation merged.
+// 'inspector' is the LLM round-trip surface, composed by ThinkPanel. It briefly also
+// showed an app↔host frame timeline; TASK-20260813 AC11 removed that view as noise
+// (structure-only rows with no values read as neither debugging nor narrative).
+//
+// The frame FEED (inspector.ts, value-blind and byte-locked) is still wired below and
+// must stay: `inspector.inFlight` drives the app-frame "thinking" pulse and
+// `inspector.sawDbOp` gates the export button. Only its rendering was dropped.
 type RailTab = 'chat' | 'inspector' | 'docs' | 'versions';
 
 /**
@@ -472,7 +475,7 @@ export default function RunView(): ReactElement {
         ) : null}
       </div>
       {railTab === 'inspector' ? (
-        <ThinkPanel llm={llmInspector} frames={inspector.entries} mode={turnMode} />
+        <ThinkPanel llm={llmInspector} mode={turnMode} />
       ) : railTab === 'docs' ? (
         <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} mode={turnMode} />
       ) : railTab === 'versions' ? (
