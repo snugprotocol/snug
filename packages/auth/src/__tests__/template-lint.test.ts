@@ -18,12 +18,15 @@ import { join } from 'node:path';
 const srcDir = join(__dirname, '..');
 
 /**
- * The pinned helper enum. FOUR names, per the P0 encoding decision (fold F-m3):
- * `hmac_sha256_b64` is the added encoding-capable variant that makes Coinbase-Exchange's
- * base64(HMAC(base64decode(secret), msg)) expressible — verified inexpressible today
- * because `hmacHex:49-54` returns hex unconditionally and the grammar has no nesting.
+ * The pinned helper enum. FIVE names: four per the P0 encoding decision (fold F-m3) —
+ * `hmac_sha256_b64` is the encoding-capable variant that makes Coinbase-Exchange's
+ * base64(HMAC(base64decode(secret), msg)) expressible — plus `cdp_jwt`
+ * (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §2): the second signing-capable
+ * family, minting a per-request ES256 CDP JWT host-side. This table moves IN THE SAME
+ * COMMIT as the engine/lint grammar change (P0 amendment 7); the enum-equality tests
+ * below are the fence.
  */
-const PINNED_HELPERS = ['timestamp', 'hmac_sha256', 'hmac_sha256_b64', 'base64'] as const;
+const PINNED_HELPERS = ['timestamp', 'hmac_sha256', 'hmac_sha256_b64', 'base64', 'cdp_jwt'] as const;
 
 /**
  * The pinned request tokens — this IS `readRequestField`'s switch, not an inference.
@@ -69,7 +72,7 @@ function walkSources(): Array<{ name: string; text: string }> {
 describe('AC7 — HELPERS map equals the pinned enum exactly (fold S-M2a)', () => {
   // Asserting the map's key set (not just "the extras are gone") is what keeps the trim
   // honest in both directions — a future helper added without an enum amendment fails here.
-  it('the pinned enum lists exactly the four agreed names', async () => {
+  it('the pinned enum lists exactly the five agreed names', async () => {
     // Test-side literal vs the exported enum. This half only pins the ENUM's contents; on
     // its own it says nothing about the engine — see the next test for that.
     const { AUTH_TEMPLATE_HELPERS } = await loadLint();
@@ -107,7 +110,7 @@ describe('AC7 — HELPERS map equals the pinned enum exactly (fold S-M2a)', () =
     }
   });
 
-  it('the four pinned helpers all still render (the trim did not overshoot)', async () => {
+  it('the four ORIGINAL helpers all still render (the trim did not overshoot; cdp_jwt renders in cdp-jwt.test.ts)', async () => {
     const { renderAuthTemplateString } = await import('../template-engine.js');
     const ctx = {
       fields: { api_secret: 'MTIzNA==' },
@@ -188,6 +191,79 @@ describe('AC6(a) — helper name must be in the pinned enum (negative)', () => {
       { fieldKeys: [...DECLARED_FIELDS] },
     );
     expect(badRequestToken.ok, 'lint accepted request.headers, which is not a pinned token').toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3 (ADR-0022 §2) — cdp_jwt per-argument-form rules: DECLARED FIELD KEYS ONLY
+// ---------------------------------------------------------------------------
+
+describe('cdp_jwt lint — both arguments must be DECLARED field keys (never literals or request tokens)', () => {
+  // WHY STRICTER THAN THE GENERIC RULE. The other helpers accept quoted literals and
+  // pinned request tokens in argument position because they transform whatever text they
+  // are handed. `cdp_jwt`'s two arguments are CREDENTIAL IDENTITIES — the key NAME that
+  // rides kid/sub and the PEM that signs — so a literal there is never right: a quoted
+  // key name would mint a structurally valid JWT for a key the user never declared, and
+  // a request token as the PEM argument would "sign" with request text. Both are
+  // valid-looking-but-wrong outcomes, worse than a review-time rejection.
+  const CDP_FIELDS = ['api_key', 'private_key'] as const;
+
+  it('accepts {{cdp_jwt(api_key, private_key)}} against the declared CDP fields', async () => {
+    const { lintAuthHeaderTemplate } = await loadLint();
+    const result = lintAuthHeaderTemplate(
+      { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' },
+      { fieldKeys: [...CDP_FIELDS] },
+    );
+    expect(result.ok, `lint rejected the pinned CDP template: ${JSON.stringify(result)}`).toBe(true);
+  });
+
+  it('rejects wrong arity — one argument and three arguments', async () => {
+    const { lintAuthHeaderTemplate } = await loadLint();
+    for (const bad of ['{{cdp_jwt(api_key)}}', '{{cdp_jwt(api_key, private_key, request.body)}}']) {
+      const result = lintAuthHeaderTemplate({ Authorization: bad }, { fieldKeys: [...CDP_FIELDS] });
+      expect(result.ok, `lint accepted wrong arity: ${bad}`).toBe(false);
+    }
+  });
+
+  it('rejects a QUOTED literal in either seat', async () => {
+    const { lintAuthHeaderTemplate } = await loadLint();
+    for (const bad of ["{{cdp_jwt('api_key', private_key)}}", '{{cdp_jwt(api_key, "private_key")}}']) {
+      const result = lintAuthHeaderTemplate({ Authorization: bad }, { fieldKeys: [...CDP_FIELDS] });
+      expect(result.ok, `lint accepted a quoted cdp_jwt argument: ${bad}`).toBe(false);
+    }
+  });
+
+  it('rejects a pinned REQUEST TOKEN in either seat', async () => {
+    const { lintAuthHeaderTemplate } = await loadLint();
+    for (const bad of ['{{cdp_jwt(request.body, private_key)}}', '{{cdp_jwt(api_key, request.timestamp)}}']) {
+      const result = lintAuthHeaderTemplate({ Authorization: bad }, { fieldKeys: [...CDP_FIELDS] });
+      expect(result.ok, `lint accepted a request token as a cdp_jwt argument: ${bad}`).toBe(false);
+    }
+  });
+
+  it('rejects an UNDECLARED field key (the typo shape)', async () => {
+    const { lintAuthHeaderTemplate } = await loadLint();
+    const result = lintAuthHeaderTemplate(
+      { Authorization: 'Bearer {{cdp_jwt(api_key, private_kye)}}' },
+      { fieldKeys: [...CDP_FIELDS] },
+    );
+    expect(result.ok, 'lint accepted a typo\'d cdp_jwt field key').toBe(false);
+    expect(JSON.stringify(result)).toContain('private_kye');
+  });
+
+  it('the RENDER GATE enforces the same rule — a quoted argument is rejected at the seat (parity)', async () => {
+    const { renderAuthHeaderTemplate } = await import('../template-engine.js');
+    const { AuthTemplateLintError } = await loadLint();
+    await expect(
+      renderAuthHeaderTemplate(
+        { Authorization: "Bearer {{cdp_jwt('api_key', private_key)}}" },
+        {
+          fields: { api_key: 'k', private_key: 'p' },
+          declaredFieldKeys: [...CDP_FIELDS],
+          request: { method: 'GET', url: 'https://api.coinbase.com/api/v3/brokerage/accounts' },
+        },
+      ),
+    ).rejects.toThrow(AuthTemplateLintError);
   });
 });
 

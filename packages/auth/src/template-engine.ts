@@ -15,7 +15,8 @@
  * during signing than to send malformed auth headers.
  */
 
-import { base64ToBytes, bytesToBase64, bytesToHex, utf8ToBase64 } from './base64url.js';
+import { base64ToBytes, bytesToBase64, bytesToBase64Url, bytesToHex, utf8ToBase64, utf8ToBase64Url } from './base64url.js';
+import { CdpKeyImportError, importEs256PrivateKey } from './es256-key.js';
 import { assertLintedTemplate } from './template-lint.js';
 
 export class AuthTemplateError extends Error {
@@ -100,11 +101,12 @@ const renderTimestamp = (state: RenderState): string =>
 type HelperFn = (args: string[], ctx: AuthTemplateContext, state: RenderState) => Promise<string> | string;
 
 /**
- * The pinned helper enum, FOUR entries — asserted key-for-key against
+ * The pinned helper enum, FIVE entries — asserted key-for-key against
  * `AUTH_TEMPLATE_HELPERS` (template-lint.ts) by AC7, so the enum is an enforced
  * invariant and not a comment. `unix_ms`, `hmac_sha512` and `sha256` were trimmed here:
  * they shipped with no requirement behind them, and an unused helper is reachable
- * signing surface.
+ * signing surface. `cdp_jwt` is the fifth name and the second signing-capable family
+ * (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §2).
  */
 const HELPERS: Record<string, HelperFn> = {
   timestamp: (_args, _ctx, state) => renderTimestamp(state),
@@ -148,6 +150,80 @@ const HELPERS: Record<string, HelperFn> = {
       throw new AuthTemplateError('hmac_sha256_b64 secret must be standard base64');
     }
     return bytesToBase64(await hmacBytes(key, messageParts.join('')));
+  },
+  /**
+   * `cdp_jwt(api_key, private_key)` — mint a fresh Coinbase-CDP ES256 JWT per render
+   * (ADR-0022 §2). Both arguments are DECLARED FIELD KEYS by the lint's per-argument
+   * rule for this helper (never literals, never request tokens): the first resolves to
+   * the CDP key NAME (`organizations/…/apiKeys/…`, non-secret, rides kid/sub) and the
+   * second to the EC private-key PEM (secret, never leaves this function).
+   *
+   * CLAIM SHAPE, pinned by cdp-jwt.test.ts: header { alg:'ES256', kid, typ:'JWT',
+   * nonce:<16 random bytes hex> }; payload { iss:'cdp', sub:<key name>,
+   * uri:'<METHOD> <host><path>' — NO scheme, NO query — nbf:now, exp:now+120 }.
+   * The nbf second is read through `renderTimestamp`, so a template that also sends a
+   * timestamp header cannot disagree with the JWT about when "now" was (the same
+   * memoization the HMAC family relies on).
+   *
+   * ES256 ONLY at v1: WebCrypto's raw r||s ECDSA output is exactly the JWS ES256
+   * signature format (probe-verified at P0 — no DER conversion). Key import lives in
+   * es256-key.ts (SEC1→PKCS#8 wrap, both PEM headers, honest typed errors); its
+   * CdpKeyImportError is re-thrown as AuthTemplateError so callers see ONE error type
+   * from the template surface.
+   */
+  cdp_jwt: async (args, ctx, state) => {
+    const [apiKeyName, privateKeyPem] = args;
+    if (args.length !== 2 || apiKeyName === undefined || privateKeyPem === undefined || apiKeyName === '' || privateKeyPem === '') {
+      // Covers the blank declared-optional case too: an empty key name or PEM must fail
+      // loudly here, never mint a JWT "signed" with nothing. Names no values (C5).
+      throw new AuthTemplateError('cdp_jwt requires (api_key, private_key) — both declared fields must have values');
+    }
+    const req = ctx.request;
+    if (req === undefined) {
+      throw new AuthTemplateError('cdp_jwt requires request context (method and url) to mint the uri claim');
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(req.url);
+    } catch {
+      throw new AuthTemplateError('cdp_jwt could not parse the request url for the uri claim');
+    }
+
+    let signingKey: CryptoKey;
+    try {
+      signingKey = await importEs256PrivateKey(privateKeyPem);
+    } catch (err) {
+      if (err instanceof CdpKeyImportError) throw new AuthTemplateError(err.message);
+      throw err;
+    }
+
+    const nonceBytes = new Uint8Array(16);
+    crypto.getRandomValues(nonceBytes);
+    const nowSec = Number(renderTimestamp(state));
+
+    // `parsed.host` (not hostname) keeps a non-default port in the claim — the uri must
+    // describe the request actually sent. Scheme and query are dropped by construction.
+    const header = { alg: 'ES256', kid: apiKeyName, typ: 'JWT', nonce: bytesToHex(nonceBytes) };
+    const payload = {
+      iss: 'cdp',
+      sub: apiKeyName,
+      uri: `${req.method} ${parsed.host}${parsed.pathname}`,
+      nbf: nowSec,
+      exp: nowSec + 120,
+    };
+    const signingInput = `${utf8ToBase64Url(JSON.stringify(header))}.${utf8ToBase64Url(JSON.stringify(payload))}`;
+
+    let signature: Uint8Array;
+    try {
+      signature = new Uint8Array(
+        await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, signingKey, encoder.encode(signingInput)),
+      );
+    } catch {
+      throw new AuthTemplateError(
+        'this runtime does not implement WebCrypto ECDSA (ES256) — cdp_jwt cannot mint a CDP JWT here',
+      );
+    }
+    return `${signingInput}.${bytesToBase64Url(signature)}`;
   },
 };
 
