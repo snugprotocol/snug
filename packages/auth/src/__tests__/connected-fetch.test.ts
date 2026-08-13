@@ -24,7 +24,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { authConnectionCredentialSecretKey, authConnectionStateSecretKey } from '@snugprotocol/db';
 import { createConnectedFetch, executeConnectionTestRequest, type ConnectedFetch, type NetConnectionRow } from '../connected-fetch.js';
 import { UserDbCredentialStore } from '../credential-store.js';
-import { WELL_KNOWN_PROVIDERS_REGISTRY } from '../well-known-providers.js';
 
 // ---------------------------------------------------------------------- fixtures
 
@@ -782,30 +781,34 @@ describe('gate 10 — response size cap (B1) and the scrubber (D4/R1/A2)', () =>
  * (`spec.fields.map(f => f.key)`); `renderAuthHeaderTemplate` then re-linted only the
  * keys whose values were actually LOADED. A declared-but-blank OPTIONAL field is absent
  * from the loaded set by design (the loader `continue`s past it), so every template
- * mentioning that field passed the outer lint and was rejected by the inner one.
+ * mentioning that field passed the outer lint and was rejected by the inner one. The
+ * wizard reported CONNECTED and every later request failed closed with NET_AUTH_FAILED
+ * and zero fetches — precisely the "shows connected, fails later" outcome the
+ * credential-save path claims to have closed.
  *
- * This landed on the rewrite's own founding example: the shipped Coinbase registry entry
- * pins `passphrase` as `required: false`, the wizard permits leaving it blank
- * (`field.required !== false`), and the KB-taught Coinbase template signs with
- * `{{passphrase}}`. The wizard reported CONNECTED and every later request failed closed
- * with NET_AUTH_FAILED and zero fetches — precisely the "shows connected, fails later"
- * outcome the credential-save path claims to have closed.
- *
- * These tests are deliberately at EXECUTOR altitude and use the REAL shipped registry
- * entry rather than a local fixture, because the bug lived in the disagreement between
- * two layers and a fixture that declared its own fields would not have reproduced it.
+ * MIGRATED 2026-08-13 (TASK-20260812-desktop-auth-awareness P3): these tests originally
+ * rode the SHIPPED Coinbase entry, whose `passphrase` was the founding `required: false`
+ * example. The CDP rewrite (ADR-0022 §5) removed that seat — the HMAC+passphrase scheme
+ * described keys Coinbase expired 2025-02-05 — and no shipped entry currently declares
+ * an optional field. The MECHANISM these pin is executor-altitude and unchanged (the
+ * declared-vs-loaded lint disagreement lives in connected-fetch + template-engine, not
+ * in registry data), so the spec moved to a fixture that declares the exact founding
+ * shape: three fields, third one optional, a template that references it. Every
+ * assertion is carried over verbatim; only the data source moved. If a shipped entry
+ * ever declares an optional field again, add a companion premise test against it.
  */
 describe('optional credential fields — declared but not stored', () => {
-  const coinbaseFields = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.fields;
-  if (coinbaseFields === undefined) {
-    throw new Error('the shipped registry lost its coinbase field list — these tests depend on it');
-  }
+  const optionalFieldSpecFields: NonNullable<ConnectionRequirement['fields']> = [
+    { key: 'api_key', label: 'API key', type: 'text' },
+    { key: 'api_secret', label: 'API secret', type: 'secret' },
+    { key: 'passphrase', label: 'Passphrase', type: 'secret', required: false },
+  ];
 
   const coinbaseSpec: ConnectionRequirement = {
     slot: SLOT,
     kind: 'api_key',
-    provider: { name: 'Coinbase' },
-    fields: coinbaseFields,
+    provider: { name: 'Meridian Exchange' },
+    fields: optionalFieldSpecFields,
     request: {
       headerTemplate: {
         'CB-ACCESS-KEY': '{{api_key}}',
@@ -818,9 +821,9 @@ describe('optional credential fields — declared but not stored', () => {
     declaredApiHosts: ['api.example.com'],
   };
 
-  /** The registry entry itself must keep `passphrase` optional, or these tests prove nothing. */
-  it('the shipped Coinbase entry really does pin passphrase as optional', () => {
-    expect(coinbaseFields.find((f) => f.key === 'passphrase')?.required).toBe(false);
+  /** The fixture must keep its optional seat, or these tests silently stop testing it. */
+  it('the fixture really does declare its third field as optional (premise pin)', () => {
+    expect(optionalFieldSpecFields.find((f) => f.key === 'passphrase')?.required).toBe(false);
   });
 
   function coinbaseHarness(stored: Record<string, string>): Harness {

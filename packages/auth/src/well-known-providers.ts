@@ -476,9 +476,11 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // RETAIL OAUTH — the alternate way in (TASK-20260812-auth-kind-choice). Coinbase
     // also offers a standard OAuth2 authorization-code flow for retail accounts via
     // login.coinbase.com. It is NOT the default: the API-key surface is what the
-    // founding starter and the KB-taught template sign against, and OAuth requires
-    // the user to register an OAuth2 app first. The user may still choose it — the
-    // choice card offers both, and a choice persists on the `user` channel.
+    // founding starter targets (now via the pinned CDP signing template below), and
+    // OAuth requires the user to register an OAuth2 app first. The user may still
+    // choose it — the choice card offers both, and a choice persists on the `user`
+    // channel. The option pins NO request/testRequest of its own: a sign-in flow
+    // injects a token the OAuth service manages, never the api_key flow's JWT template.
     authOptions: [
       {
         id: 'oauth',
@@ -515,54 +517,66 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         },
       },
     ],
-    // The founding defect, fixed at the source: three DISTINCT secrets, each named and
-    // described, so the user knows which value goes in which box before pasting. The
-    // labels match Coinbase's own console wording — a label that renames the provider's
-    // artifact is how a user pastes the wrong secret.
     apiHosts: ['api.coinbase.com'],
     // VERIFIED 2026-08-12: api.coinbase.com does not answer browser CORS preflights —
     // the motivating case of the 2026-08-12 BYOK CORS advisory (docs/next-steps.md):
     // a browser hub gets an opaque "Failed to fetch"; desktop's native fetch is the
     // advisory's rung 2. The wizard discloses this BEFORE credentials are pasted.
     browserCallable: false,
+    // THE CDP CREDENTIAL PAIR (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §5).
+    //
+    // VERIFIED 2026-08-12 against Coinbase's own docs + live probes (task recon):
+    // retail/Advanced Trade authentication is a CDP key — the key NAME
+    // (`organizations/{org}/apiKeys/{key}`, non-secret, rides the JWT's kid/sub) plus
+    // an EC private key that signs a fresh ES256 JWT per request, sent as
+    // `Authorization: Bearer`. The legacy retail HMAC keys EXPIRED provider-side on
+    // 2025-02-05, so the previous `api_key`/`api_secret`/`passphrase` seats described
+    // credentials Coinbase no longer issues — the entry was never connectable.
+    // HMAC+passphrase survives only on the institutional `api.exchange.coinbase.com`
+    // surface, which is dropped, not carried (out of product scope; recorded in
+    // ADR-0022, deliberately NOT an authOption).
+    // Ed25519 keys are NOT accepted on the Coinbase App surface; EC (ES256) is the
+    // universally safe algorithm, and the wizard/probe errors honestly on an Ed25519
+    // PEM (es256-key.ts).
+    // https://docs.cdp.coinbase.com/coinbase-app/docs/api-key-authentication
+    // https://docs.cdp.coinbase.com/api-reference/v2/authentication (JWT authentication)
     fields: [
       {
         key: 'api_key',
-        label: 'API key name',
+        label: 'API key name (organizations/…/apiKeys/…)',
         type: 'text',
-        description: 'The key identifier shown when you created the key.',
+        description: 'The full key name shown when you created the key — the organizations/…/apiKeys/… path, not a display label.',
       },
       {
-        key: 'api_secret',
-        label: 'API secret',
+        key: 'private_key',
+        label: 'EC private key (PEM)',
         type: 'secret',
-        description: 'Shown ONCE at creation time. Coinbase cannot show it again.',
-      },
-      {
-        // KEY IS `passphrase`, NOT `api_passphrase` — and the difference is not cosmetic.
-        // The KB-taught Coinbase template signs with `CB-ACCESS-PASSPHRASE: {{passphrase}}`,
-        // and the template engine resolves a token against the FIELD KEY. An
-        // `api_passphrase` field would leave `{{passphrase}}` unresolved, sending the header
-        // present-but-empty and producing a generic Coinbase 401 with nothing in the UI to
-        // explain it. Seven other declaration sites (template-parity, template-lint,
-        // template-engine, taughtTemplatesLint, demoRequirement, the protocol contract test)
-        // all use `passphrase`; the registry was the one that forked. Pinned against the
-        // taught template by `registry-template-parity.test.ts` so it cannot fork again —
-        // the repo's own 2026-08-03 shared-literal lesson.
-        key: 'passphrase',
-        label: 'Passphrase',
-        type: 'secret',
-        description: 'The passphrase you chose when creating the key.',
-        required: false,
+        description: 'From the key file you downloaded at creation — paste the whole PEM, BEGIN/END lines included.',
       },
     ],
+    // WHERE the credential goes — the pinned CDP signing template (ADR-0022 §1/§5).
+    // `cdp_jwt` mints the ES256 JWT host-side per request (template-engine.ts); both
+    // arguments are declared field keys by the helper's own lint rule. This seat is
+    // exactly what Guard 2b refuses borrowers for authoring: with it pinned here, the
+    // executor stops falling to the generic `X-Api-Key` kind default that made the
+    // saved credential dead weight.
+    request: {
+      headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' },
+    },
+    // HOW the connection is verified — the wizard's "test this connection" probe:
+    // GET https://api.coinbase.com/api/v3/brokerage/accounts (host from apiHosts; a
+    // credentialed read that 401s on bad credentials instead of silently "connecting").
+    testRequest: { method: 'GET', pathAndQuery: '/api/v3/brokerage/accounts' },
     registration: {
-      consoleUrl: 'https://www.coinbase.com/settings/api',
+      // The CDP portal — the same console the OAuth option cites; retail Settings→API
+      // no longer issues keys for this surface (VERIFIED 2026-08-12, sources above).
+      consoleUrl: 'https://portal.cdp.coinbase.com/',
       instructions: [
-        'Sign in to Coinbase and open Settings → API.',
-        'Create a new API key and choose READ-ONLY permissions — this app never needs to trade.',
-        'Copy the key name and secret now: the secret is shown only once.',
-        'Paste the key name, secret, and passphrase into the fields below.',
+        'Sign in to the Coinbase Developer Platform (link above) with your Coinbase account and open (or create) a project.',
+        'Open API keys and create a new Secret API key with VIEW (read-only) permission — this app never needs to trade.',
+        'Choose the EC (ECDSA / ES256) key type if asked — Ed25519 keys will not work here.',
+        'Download the key file when it is offered: Coinbase shows the private key only once.',
+        'Paste the key name (the organizations/…/apiKeys/… path) and the private key PEM from that file into the fields below.',
       ],
     },
   },

@@ -218,3 +218,166 @@ describe('amendment 1(a) — a queryTemplate-carrying request is an OCCUPIED pro
     expect(result.ok, `the registry channel was refused its own seat: ${JSON.stringify(result.issues)}`).toBe(true);
   });
 });
+// ---------------------------------------------------------------------------
+// §3 — amendments 1(b)/1(c) against the REAL Coinbase CDP entry (the first data
+// entry to pin the new seats; P3 item 3)
+// ---------------------------------------------------------------------------
+
+const CDP_REQUEST = { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' } } as const;
+const CDP_TEST_REQUEST = { method: 'GET', pathAndQuery: '/api/v3/brokerage/accounts' } as const;
+
+describe('P3 item 3 — the Coinbase entry pins the CDP request/testRequest seats', () => {
+  it('coinbase.request is EXACTLY the pinned cdp_jwt bearer template', () => {
+    expect(WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.request).toEqual(CDP_REQUEST);
+  });
+
+  it('coinbase.testRequest is EXACTLY GET /api/v3/brokerage/accounts', () => {
+    expect(WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.testRequest).toEqual(CDP_TEST_REQUEST);
+  });
+
+  it('the OAuth option carries NEITHER seat — a sign-in flow injects no api_key template', () => {
+    const option = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.authOptions?.find((candidate) => candidate.id === 'oauth');
+    expect(option).toBeDefined();
+    expect(option?.request).toBeUndefined();
+    expect(option?.testRequest).toBeUndefined();
+  });
+});
+
+describe('amendment 1(c) — substitution serves the pinned seats to every borrowing channel', () => {
+  const BARE_COINBASE = {
+    slot: 'coinbase',
+    provider: { name: 'Coinbase' },
+    kind: 'api_key',
+    declaredApiHosts: ['api.coinbase.com'],
+  } as const;
+
+  for (const channel of ['starter', 'inference', 'user'] as const) {
+    it(`a bare borrower on '${channel}' RECEIVES request + testRequest (channel-agnostic)`, () => {
+      const result = admitConnectionRequirement({ ...BARE_COINBASE }, { channel });
+      expect(result.ok).toBe(true);
+      expect(result.borrowedFrom).toBe('coinbase');
+      const requirement = result.requirement as {
+        request?: unknown;
+        testRequest?: unknown;
+        fields?: Array<{ key: string }>;
+      };
+      expect(requirement.request, 'the pinned signing template must arrive').toEqual(CDP_REQUEST);
+      expect(requirement.testRequest, 'the pinned probe must arrive').toEqual(CDP_TEST_REQUEST);
+      expect(requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+    });
+  }
+
+  it('substitution DEEP-COPIES the seats — a caller cannot repoint the pinned truth', () => {
+    const result = admitConnectionRequirement({ ...BARE_COINBASE }, { channel: 'starter' });
+    const requirement = result.requirement as unknown as { request: { headerTemplate: Record<string, string> } };
+    requirement.request.headerTemplate['Authorization'] = 'MUTATED BY CALLER';
+    expect(WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.request?.headerTemplate?.['Authorization']).toBe(
+      'Bearer {{cdp_jwt(api_key, private_key)}}',
+    );
+  });
+
+  it('the substituted requirement PARSES — the seats ride within schema bounds', () => {
+    const result = admitConnectionRequirement({ ...BARE_COINBASE }, { channel: 'starter' });
+    const parsed = connectionRequirementSchema.safeParse(result.requirement);
+    expect(parsed.success, JSON.stringify(parsed.success ? [] : parsed.error.issues)).toBe(true);
+  });
+});
+
+describe('amendment 1(b) — the byte-match exemption: ONE resolution, all three seats', () => {
+  const bareCoinbase = () => ({
+    slot: 'coinbase',
+    provider: { name: 'Coinbase' },
+    kind: 'api_key',
+    declaredApiHosts: ['api.coinbase.com'],
+  });
+
+  it('a bare starter-channel requirement SURVIVES DOUBLE admission with the seats intact', () => {
+    // THE P5-BLOCKER SHAPE, per seat (amendment 1's probe-reproduced finding):
+    // admission runs twice on the production path (pipeline + db admissionGate), so a
+    // request/testRequest written on pass 1 must not be refused on pass 2.
+    const first = admitConnectionRequirement(bareCoinbase(), { channel: 'starter' });
+    expect(first.ok, 'pass 1 must admit the bare starter shape').toBe(true);
+
+    const second = admitConnectionRequirement(first.requirement, { channel: 'starter' });
+    expect(
+      second.ok,
+      `pass 2 refused pass 1's own output — ${second.issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ')}`,
+    ).toBe(true);
+
+    // Idempotent in VALUE too: the persisted bytes must not depend on pass count.
+    expect(second.requirement).toEqual(first.requirement);
+    const requirement = second.requirement as { request?: unknown; testRequest?: unknown };
+    expect(requirement.request, 'the substituted request survived both passes').toEqual(CDP_REQUEST);
+    expect(requirement.testRequest, 'the substituted testRequest survived both passes').toEqual(CDP_TEST_REQUEST);
+  });
+
+  it('a request differing from the pinned value BY ONE BYTE is still an authoring act — refused', () => {
+    const result = admitConnectionRequirement(
+      {
+        ...bareCoinbase(),
+        fields: WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!.fields!.map((field) => ({ ...field })),
+        request: { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}} ' } }, // trailing space
+      },
+      { channel: 'starter' },
+    );
+    expect(result.ok, 'a near-miss template is authored, not pinned').toBe(false);
+    expect(result.issues.map((issue) => issue.path)).toContain('request.headerTemplate');
+  });
+
+  it('a testRequest differing from the pinned value is refused (per-seat, no free rider)', () => {
+    const result = admitConnectionRequirement(
+      {
+        ...bareCoinbase(),
+        fields: WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!.fields!.map((field) => ({ ...field })),
+        testRequest: { method: 'GET', pathAndQuery: '/api/v3/brokerage/portfolios' },
+      },
+      { channel: 'starter' },
+    );
+    expect(result.ok, 'a re-aimed probe path is authored, not pinned').toBe(false);
+    expect(result.issues.map((issue) => issue.path)).toContain('testRequest');
+  });
+
+  it('the exemption needs the MATCHED handle: pinned request beside NO matching fields is refused', () => {
+    // The one-resolution rule's negative: without a matched option (fields absent),
+    // there is no pinned flow to byte-match against, so a carried request is authored.
+    // This is exactly the fail-closed half — the exemption never outruns its handle.
+    const result = admitConnectionRequirement(
+      {
+        ...bareCoinbase(),
+        request: {
+          headerTemplate: { ...WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!.request!.headerTemplate! },
+        },
+      },
+      { channel: 'starter' },
+    );
+    expect(result.ok, 'no matched fields ⇒ no exemption, even for pinned-looking bytes').toBe(false);
+  });
+
+  it("the OAUTH option's matched fields do NOT bless the api_key flow's request (cross-option negative)", () => {
+    // Mixing option A's fields with option B's request is an authored composite; the
+    // single handle must refuse it rather than let each half bless the other.
+    const option = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!.authOptions![0]!;
+    const result = admitConnectionRequirement(
+      {
+        ...bareCoinbase(),
+        kind: 'oauth2_auth_code',
+        fields: option.fields!.map((field) => ({ ...field })),
+        request: { headerTemplate: { ...WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!.request!.headerTemplate! } },
+      },
+      { channel: 'user' },
+    );
+    expect(result.ok, "option fields + the DEFAULT's request is a mixed authored shape").toBe(false);
+  });
+
+  it('the registry-shaped FULL requirement (the emitter output) is admitted on borrow channels', () => {
+    // What the seat-drift migration and the choice card actually submit: the complete
+    // emitter output, seats and all. It must pass both admission passes.
+    const entry = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!;
+    const shaped = requirementFromRegistryEntry(entry, 'Coinbase', 'coinbase');
+    for (const channel of ['starter', 'inference'] as const) {
+      const result = admitConnectionRequirement(shaped, { channel });
+      expect(result.ok, `channel '${channel}' refused the registry's own shape`).toBe(true);
+      expect((result.requirement as { request?: unknown }).request).toEqual(CDP_REQUEST);
+    }
+  });
+});

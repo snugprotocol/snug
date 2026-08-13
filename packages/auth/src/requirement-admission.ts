@@ -52,8 +52,14 @@
  * step with ZERO input boxes and the wizard reported success having stored nothing. The
  * borrower does not get to name the boxes; it no longer needs to.
  *
- * `request.headerTemplate` and `testRequest` remain unsubstitutable and therefore
- * refusal-only: the registry pins WHAT to ask for, not where the typed value is sent.
+ * `request` and `testRequest` joined `fields` on the substitutable side (ADR-0022 §1,
+ * TASK-20260812-desktop-auth-awareness P3): the registry now pins WHERE a typed secret
+ * is sent and HOW a connection is verified, so a borrower that OMITS them receives the
+ * pinned values while a borrower that AUTHORS them is still refused — the same
+ * asymmetry as `fields`, driven by the same matched-option resolution (amendment 1b),
+ * with one exception: values byte-identical to the matched option's pinned ones are
+ * not an authoring act (admission runs twice on the production path and must not
+ * refuse its own substitution).
  *
  * WHAT THIS IS NOT. Admission is not authorization. A clean pass here means "these claims
  * may be SHOWN to the user", never "this app may have a credential". The frozen host
@@ -201,18 +207,20 @@ function findBorrowedEntry(
  * The seats that DRIVE A CREDENTIAL PROMPT: what the user is asked to type, where the
  * typed value is sent, and the first request it is sent on.
  *
- * These are refused rather than corrected on a borrow hit from an authoring channel. For
- * `request.headerTemplate` and `testRequest` the reason is unchanged: the registry has
- * nothing to substitute them WITH — it pins hosts, endpoints, registration copy and (since
- * P4) a field list, but never where a typed secret is sent.
+ * These are refused rather than corrected on a borrow hit from an authoring channel —
+ * and since ADR-0022 §1 ALL THREE are also substitutable: the registry pins a field
+ * list (P4), request templates and a test request (TASK-20260812-desktop-auth-awareness
+ * P3), so a bare borrower receives all of them. The old rationale for refusing
+ * `request`/`testRequest` — "the registry has nothing to substitute them WITH" — is
+ * gone; what remains is the reason that was always sufficient:
  *
- * `fields` stays on this list even though the registry CAN now substitute it, and that is
- * deliberate. Correcting an authored field list would silently discard copy the borrower
- * wrote and admit the requirement anyway, so an app that asked for the wrong secret would
- * simply be fixed up and shown as legitimate. Refusal is the honest outcome: a borrower
- * that authors prompt copy is telling us it disagrees with the pinned list, and that
- * disagreement is not ours to paper over. The bare borrower — the shape starters actually
- * ship — never reaches this list at all and receives the pinned fields.
+ * Correcting an AUTHORED seat would silently discard copy the borrower wrote and admit
+ * the requirement anyway, so an app that asked for the wrong secret — or aimed the
+ * typed secret's placement somewhere of its own choosing — would simply be fixed up
+ * and shown as legitimate. Refusal is the honest outcome: a borrower that authors
+ * prompt copy is telling us it disagrees with the pinned values, and that disagreement
+ * is not ours to paper over. The bare borrower — the shape starters actually ship —
+ * never occupies these seats and receives the pinned values.
  */
 const CREDENTIAL_PROMPT_SEATS = ['fields', 'request', 'testRequest'] as const;
 
@@ -289,23 +297,64 @@ function matchAuthOption(
   return undefined;
 }
 
+/**
+ * Structural equality for JSON-shaped values (objects key-order-insensitive, arrays
+ * ordered) — the byte-match the amendment-1b exemption runs on. Structural rather than
+ * reference or JSON.stringify equality for the same reason as `fieldsMatchPinnedList`:
+ * the value has been through JSON round-trips by the time the second admission sees
+ * it, so identity is gone and key order is an accident of serialization history.
+ */
+function structurallyEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((item, index) => structurallyEqual(item, right[index]));
+  }
+  const leftRecord = asRecord(left);
+  const rightRecord = asRecord(right);
+  if (leftRecord === undefined || rightRecord === undefined) return false;
+  const keys = new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)]);
+  return [...keys].every((key) => structurallyEqual(leftRecord[key], rightRecord[key]));
+}
+
 function occupiedPromptSeats(
   requirement: Record<string, unknown>,
   entry: WellKnownOauthProvider,
 ): string[] {
   const occupied: string[] = [];
+  // THE ONE RESOLUTION (D3 + P0 amendment 1b, TASK-20260812-desktop-auth-awareness):
+  // which human-authored option this requirement's field list is, resolved ONCE and
+  // consulted by all three seat exemptions below AND by `applyRegistryValues`. A
+  // per-seat resolution could bless one option's fields while byte-matching another
+  // option's request — the mixed authored composite the single handle exists to refuse.
+  // No matched fields ⇒ no exemption for ANY seat: the exemption never outruns its
+  // handle, so pinned-looking request bytes beside an absent or authored field list
+  // are still an authoring act.
+  const matched = matchAuthOption(requirement['fields'], entry);
   for (const seat of CREDENTIAL_PROMPT_SEATS) {
     const value = requirement[seat];
     if (value === undefined || value === null) continue;
     if (seat === 'request') {
-      // BOTH template seats count (P0 amendment 1a, TASK-20260812-desktop-auth-awareness).
-      // Before the amendment only `headerTemplate` was read, so a queryTemplate-only
-      // request SAILED PAST this guard — an authored query placement is credentials in
-      // a URL aimed wherever the borrower chose, the same harm one seat over. An empty
-      // `request` object still says nothing about where a secret goes and stays exempt.
+      // BOTH template seats count (P0 amendment 1a). Before the amendment only
+      // `headerTemplate` was read, so a queryTemplate-only request SAILED PAST this
+      // guard — an authored query placement is credentials in a URL aimed wherever the
+      // borrower chose, the same harm one seat over. An empty `request` object still
+      // says nothing about where a secret goes and stays exempt.
+      //
+      // Amendment 1b: a request byte-identical to the MATCHED option's pinned request
+      // is not an authoring act — it is what `applyRegistryValues` wrote on the
+      // previous admission pass (admission runs twice on the production path).
+      if (matched !== undefined && structurallyEqual(value, matched.request)) continue;
       const request = asRecord(value);
       if (request?.['headerTemplate'] !== undefined) occupied.push('request.headerTemplate');
       if (request?.['queryTemplate'] !== undefined) occupied.push('request.queryTemplate');
+      continue;
+    }
+    if (seat === 'testRequest') {
+      // Amendment 1b, same exemption, same handle — per seat, so a probe re-aimed one
+      // path over is refused even beside a byte-perfect request template.
+      if (matched !== undefined && structurallyEqual(value, matched.testRequest)) continue;
+      occupied.push(seat);
       continue;
     }
     if (seat === 'fields' && Array.isArray(value) && value.length === 0) continue;
@@ -313,7 +362,7 @@ function occupiedPromptSeats(
     // authoring act — see `matchAuthOption`. The DEFAULT-only form of this exemption
     // was the plan-review BLOCKER: it made a user's chosen variant refusable here and
     // corruptible below.
-    if (seat === 'fields' && matchAuthOption(value, entry) !== undefined) continue;
+    if (seat === 'fields' && matched !== undefined) continue;
     occupied.push(seat);
   }
   return occupied;
@@ -391,6 +440,23 @@ function applyRegistryValues(
   }
   if (flow.registration !== undefined) {
     substituted['registration'] = { ...flow.registration };
+  }
+  // THE REQUEST/TEST SEATS (ADR-0022 §1, amendment 1c) — substituted on every borrow
+  // hit, channel-agnostic, because this path is what serves bare starter and inference
+  // rows. Written from the SAME `matched ?? entry` flow as `fields`, so the blessed
+  // list and the substituted placement cannot disagree (the two-half-guard lesson,
+  // 2026-08-12). Condition is on the REGISTRY seat, not the declaration: a borrower
+  // authoring these seats was refused above (non-registry channels), and a flow that
+  // pins none must not inherit another flow's signing template. Deep-copied for the
+  // same singleton reason as `fields`.
+  if (flow.request !== undefined) {
+    substituted['request'] = {
+      ...(flow.request.headerTemplate !== undefined ? { headerTemplate: { ...flow.request.headerTemplate } } : {}),
+      ...(flow.request.queryTemplate !== undefined ? { queryTemplate: { ...flow.request.queryTemplate } } : {}),
+    };
+  }
+  if (flow.testRequest !== undefined) {
+    substituted['testRequest'] = { ...flow.testRequest };
   }
   if (flow.authorizeParams !== undefined) {
     substituted['authorizeParams'] = { ...flow.authorizeParams };

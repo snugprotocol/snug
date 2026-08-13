@@ -112,6 +112,18 @@ describe('AC3 — every entry composes through the ONE emitter into a parsing re
       } else {
         expect(requirement.authorizeParams).toBeUndefined();
       }
+      // The ADR-0022 §1 seats ride through like every other flow seat — present iff
+      // the entry pins them, never invented (TASK-20260812-desktop-auth-awareness P3).
+      if (entry.request !== undefined) {
+        expect(requirement.request, `${key}: the pinned request template must arrive verbatim`).toEqual(entry.request);
+      } else {
+        expect(requirement.request).toBeUndefined();
+      }
+      if (entry.testRequest !== undefined) {
+        expect(requirement.testRequest, `${key}: the pinned probe must arrive verbatim`).toEqual(entry.testRequest);
+      } else {
+        expect(requirement.testRequest).toBeUndefined();
+      }
       if (entry.pkce !== undefined) {
         expect(requirement.pkce).toBe(entry.pkce);
       } else {
@@ -133,6 +145,15 @@ describe('AC3 — every entry composes through the ONE emitter into a parsing re
       expect(built['declaredApiHosts']).not.toBe(entry.apiHosts);
       if (entry.endpoints !== undefined) expect(built['endpoints']).not.toBe(entry.endpoints);
       if (entry.registration !== undefined) expect(built['registration']).not.toBe(entry.registration);
+      if (entry.request !== undefined) {
+        expect(built['request']).not.toBe(entry.request);
+        if (entry.request.headerTemplate !== undefined) {
+          expect((built['request'] as { headerTemplate?: unknown }).headerTemplate).not.toBe(
+            entry.request.headerTemplate,
+          );
+        }
+      }
+      if (entry.testRequest !== undefined) expect(built['testRequest']).not.toBe(entry.testRequest);
     });
   }
 });
@@ -303,10 +324,11 @@ describe('D3 — the inferrer alias map: human-authored, collision-free, and NOT
     expect(substituted.kind, 'admission leaves the borrower\'s kind alone (kind-agnostic ban)').toBe(
       'oauth2_auth_code',
     );
+    // MIGRATED 2026-08-13 (P3 Coinbase CDP rewrite): the substituted list is the CDP
+    // pair — the old api_secret/passphrase seats described expired HMAC keys.
     expect(substituted.fields?.map((field) => field.key), 'while the FIELD list is substituted').toEqual([
       'api_key',
-      'api_secret',
-      'passphrase',
+      'private_key',
     ]);
   });
 

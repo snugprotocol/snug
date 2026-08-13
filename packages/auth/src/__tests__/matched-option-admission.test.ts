@@ -91,10 +91,10 @@ describe("AC5 — the 'user' channel rebind: a chosen variant's list is blessed 
       { channel: 'starter' },
     );
     expect(result.ok).toBe(true);
+    // MIGRATED 2026-08-13 (P3 Coinbase CDP rewrite): the default list is the CDP pair.
     expect((result.requirement as AdmittedShape).fields?.map((field) => field.key)).toEqual([
       'api_key',
-      'api_secret',
-      'passphrase',
+      'private_key',
     ]);
   });
 

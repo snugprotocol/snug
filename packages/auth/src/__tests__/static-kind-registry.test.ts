@@ -54,18 +54,19 @@ const STATIC_KIND_ENTRIES = [
     apiHost: 'api.coinbase.com',
     // EXACT, ORDERED field keys — never a count, and never `length > 0`.
     //
-    // A `>0` assertion cannot distinguish Coinbase's THREE secrets from one, which is the
-    // founding defect itself. Mutation-proven: deleting the `passphrase` field block from
-    // the registry passed the entire suite before this list existed. Coinbase is the entry
-    // that motivated the whole phase precisely because key + secret + passphrase collapsed
-    // to a single nameless box; pinning the exact set is the only assertion that notices
-    // when one of the three goes missing again.
+    // A `>0` assertion cannot distinguish the pinned credential set from a partial one,
+    // which is the founding defect itself. Mutation-proven on the original list:
+    // deleting a whole field block from the registry passed the entire suite before
+    // this exact-set pin existed.
     //
-    // `passphrase`, NOT `api_passphrase` — the key the KB-taught template signs with
-    // (`CB-ACCESS-PASSPHRASE: {{passphrase}}`) and the one seven other declaration sites
-    // use. See `registry-template-parity.test.ts` for the lint that keeps them from
-    // forking.
-    fieldKeys: ['api_key', 'api_secret', 'passphrase'],
+    // MIGRATED 2026-08-13 (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §5): the
+    // old `['api_key', 'api_secret', 'passphrase']` set described retail HMAC keys that
+    // Coinbase EXPIRED provider-side on 2025-02-05 — an entry that was never
+    // connectable. Current CDP credentials are a key NAME plus an EC private key
+    // signing a per-request ES256 JWT (`{{cdp_jwt(api_key, private_key)}}` — see
+    // `registry-request-seats.test.ts` for the pinned template and
+    // `registry-template-parity.test.ts` for the token↔field-key parity).
+    fieldKeys: ['api_key', 'private_key'],
   },
   { key: 'openweather', displayName: 'OpenWeather', apiHost: 'api.openweathermap.org', fieldKeys: ['api_key'] },
   { key: 'coingecko', displayName: 'CoinGecko', apiHost: 'api.coingecko.com', fieldKeys: ['api_key'] },
