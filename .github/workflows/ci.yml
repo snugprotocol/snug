@@ -59,10 +59,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Rust unit tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
-      - name: Desktop package tests (tsc-gated)
-        run: pnpm --filter desktop test
+      # Build BEFORE the tsc-gated tests: the desktop app resolves its workspace
+      # deps through their built `dist/` (`"main": "dist/index.js"`), so on a
+      # clean runner `tsc` cannot see @snugprotocol/* until this runs. Locally
+      # the dists already exist, which is exactly why this ordering looked fine.
       - name: Build workspace deps + desktop web bundle
         run: pnpm exec turbo run build --filter=desktop --force
+      - name: Desktop package tests (tsc-gated)
+        run: pnpm --filter desktop test
       - name: In-shell hard gate (C2 CSP+IPC checks + wizard journey)
         run: pnpm --filter desktop gate
       # P0 amendment 4's release-inertness claim, PROVEN rather than journaled:
