@@ -11,9 +11,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { decideInvokeRefused, SENTINEL_NAME } from '../gate/ipc.js';
+import { decideInvokeRefused, decideLanFetchRefused, IPC_CHECK_IDS, LAN_FETCH_COMMAND, SENTINEL_NAME } from '../gate/ipc.js';
 
-const reachable = { transports: ['webkit.messageHandlers.ipc'], callbackFired: false };
+const reachable = { transports: ['webkit.messageHandlers.ipc'], callbackFired: false, lanCallbackFired: false };
 
 describe('decideInvokeRefused — the sentinel is the sensor', () => {
   it('FAILS when the sentinel exists: the keyless invoke executed a write command', () => {
@@ -32,7 +32,7 @@ describe('decideInvokeRefused — the sentinel is the sensor', () => {
   });
 
   it('PASSES when no raw transport was reachable at all', () => {
-    const result = decideInvokeRefused({ transports: [], callbackFired: false }, { exists: false });
+    const result = decideInvokeRefused({ transports: [], callbackFired: false, lanCallbackFired: false }, { exists: false });
     expect(result.pass).toBe(true);
     expect(result.detail).toContain('no raw IPC transport reachable');
   });
@@ -59,5 +59,67 @@ describe('decideInvokeRefused — the sentinel is the sensor', () => {
     // A drift makes the Rust probe reject the name, which surfaces as the
     // "unavailable" FAIL above rather than a silent pass — but pin it anyway.
     expect(SENTINEL_NAME).toBe('ipc-probe-canary.sqlite');
+  });
+});
+
+// PER-COMMAND IPC unreachability for `lan_fetch` (P0 amendment 16).
+//
+// `ipc-invoke-refused` proves the BRIDGE is key-gated by driving one command.
+// Registration is per-command, though — a command added to the wrong handler
+// list is precisely the drift a family-level check cannot see — and `lan_fetch`
+// is the command that most needs its own row: it is the shell's only outbound
+// network capability carrying a relaxed trust decision, so an app iframe that
+// reached it would get a transport that trusts a certificate on the user's own
+// network.
+//
+// Same discipline as the sentinel rework: every "cannot tell" input FAILS.
+describe('decideLanFetchRefused — lan_fetch specifically, not the command family', () => {
+  it('FAILS when a keyless lan_fetch resolved a callback into the subframe', () => {
+    const result = decideLanFetchRefused({ ...reachable, lanCallbackFired: true }, false);
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain(LAN_FETCH_COMMAND);
+    expect(result.detail, 'the Electron-fallback trigger must be named').toContain('STRUCTURAL BREAKAGE');
+  });
+
+  it('FAILS when the invoke key is reachable, even with no callback — it cannot vouch', () => {
+    // The unanswerable-sensor rule: silence from a frame that HOLDS the key
+    // proves nothing about dispatch.
+    const result = decideLanFetchRefused(reachable, true);
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain('cannot vouch');
+  });
+
+  it('FAILS when the sandboxed probe never reported', () => {
+    const result = decideLanFetchRefused(undefined, false);
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain('never reported');
+  });
+
+  it('PASSES only when no lan_fetch callback fired AND the key never reached the subframe', () => {
+    const result = decideLanFetchRefused(reachable, false);
+    expect(result.pass).toBe(true);
+    expect(result.detail).toContain(LAN_FETCH_COMMAND);
+    expect(result.detail).toContain('key-gated per command');
+  });
+
+  it("a write_user_file refusal alone can never grant lan_fetch's verdict", () => {
+    // THE POINT OF THE WHOLE CHECK. A report that would PASS
+    // `decideInvokeRefused` (no sentinel, no write callback) must still FAIL
+    // here when lan_fetch itself resolved — the two verdicts read different
+    // callback slots and cannot borrow each other's evidence.
+    const writeRefusedButLanReached = { ...reachable, callbackFired: false, lanCallbackFired: true };
+    expect(decideInvokeRefused(writeRefusedButLanReached, { exists: false }).pass).toBe(true);
+    expect(decideLanFetchRefused(writeRefusedButLanReached, false).pass).toBe(false);
+  });
+
+  it('the lan_fetch verdict is one of the REQUIRED check ids (a missing verdict is a fail)', () => {
+    // runIpcChecks maps over IPC_CHECK_IDS and turns an absent verdict into a
+    // no-verdict FAIL; being in this list is what makes the check mandatory
+    // rather than advisory.
+    expect(IPC_CHECK_IDS).toContain('ipc-lan-fetch-refused');
+  });
+
+  it('the command name matches the one lib.rs registers', () => {
+    expect(LAN_FETCH_COMMAND).toBe('lan_fetch');
   });
 });

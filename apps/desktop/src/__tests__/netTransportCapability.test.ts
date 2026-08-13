@@ -125,3 +125,48 @@ describe('tauri opener capability belt', () => {
     expect(broad).toHaveLength(0);
   });
 });
+
+// `lan_fetch` command scope + registration (ADR-0023 D3; P0 amendments 6, 16).
+//
+// The pinned-TLS LAN transport is the shell's one outbound-network command that
+// carries a relaxed trust decision inside it, so WHERE it is reachable from is a
+// C2 question, not a convenience one. Tauri scopes app-defined commands to the
+// windows a capability names, and this capability names exactly `main` — the
+// sandboxed app iframes are subframes of that window and hold no invoke key
+// (proven per-command by gateIpc.test.ts's `ipc-lan-fetch-refused`).
+//
+// These tests pin the two things a capability file can state and a refactor can
+// silently break: the window scope, and the fact that `lan_fetch` is registered
+// in BOTH handler lists (debug and release). The gate commands are
+// debug-only-by-design; `lan_fetch` is not, and a copy-paste that put it under
+// `#[cfg(debug_assertions)]` would ship a release binary where every Hue
+// request fails with "command not found" — green tests, dead feature.
+describe('lan_fetch command surface', () => {
+  const libSrc = readFileSync(fileURLToPath(new URL('../../src-tauri/src/lib.rs', import.meta.url)), 'utf8');
+
+  it('the capability is scoped to the main window ONLY — app iframes never reach it', () => {
+    expect(capability.windows).toEqual(['main']);
+  });
+
+  it('is registered in BOTH the debug and release handler lists (a production capability, not a gate)', () => {
+    const lists = libSrc.split('invoke_handler(tauri::generate_handler![').slice(1);
+    expect(lists, 'lib.rs must carry the two cfg-split handler lists').toHaveLength(2);
+    for (const list of lists) {
+      const body = list.split('])')[0] ?? '';
+      expect(body).toContain('lanfetch::lan_fetch');
+    }
+  });
+
+  it('the gate commands stay debug-only — lan_fetch must not have dragged them into release', () => {
+    const releaseList = (libSrc.split('invoke_handler(tauri::generate_handler![')[2] ?? '').split('])')[0] ?? '';
+    expect(releaseList).not.toContain('gate::');
+  });
+
+  it('needs no http-capability entry — it does not ride tauri-plugin-http', () => {
+    // The pinned transport builds its OWN reqwest client (the plugin's client
+    // verifies against the public root store and would refuse the bridge). So
+    // the http allowlist above governs the plugin path only, and widening it for
+    // Hue would be a change with no effect that future readers would trust.
+    expect(httpAllow).not.toContain('https://192.168.*.*:*');
+  });
+});

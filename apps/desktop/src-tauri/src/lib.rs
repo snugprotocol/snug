@@ -11,6 +11,10 @@ mod exportfile;
 /// carries neither the commands nor their strings (P0 amendment 4).
 #[cfg(debug_assertions)]
 mod gate;
+/// The pinned-TLS LAN transport (ADR-0023 Decision 3). Ships in RELEASE too —
+/// unlike the gate, this is a production capability, and every guard it carries
+/// (host class, pin, redirect policy, size cap) is enforced here in Rust.
+mod lanfetch;
 mod openfile;
 mod userfile;
 
@@ -103,6 +107,7 @@ pub fn run() {
         userfile::write_user_file,
         openfile::read_opened_file,
         exportfile::export_user_bytes,
+        lanfetch::lan_fetch,
         pending_opened_files,
         close_flush_done,
         gate::shell_gate_config,
@@ -115,6 +120,10 @@ pub fn run() {
         userfile::write_user_file,
         openfile::read_opened_file,
         exportfile::export_user_bytes,
+        // `lan_fetch` ships in RELEASE — unlike the gate commands, it is a
+        // production capability (ADR-0023 D3). Its guards are Rust-side and
+        // unconditional; there is no strictness knob to leave off.
+        lanfetch::lan_fetch,
         pending_opened_files,
         close_flush_done,
     ]);
