@@ -65,6 +65,34 @@ export function resolveNetConfirm(decision: NetConfirmDecision): void {
   netConfirmStore.get()?.resolve(decision);
 }
 
+/**
+ * AUTH-SHAPED FAILURE (TASK-20260812-desktop-auth-awareness AC5; ADR-0022 §4). The
+ * executor's deps seat reports `(slot, status)` when the FINAL delivered result of a
+ * request it injected credentials into is a 401/403 — the app-visible result stays
+ * untouched (`ok:true`, status as-is). THIS layer adds the `appId` it already holds
+ * (the host-assigned netAppId, never anything the app claimed — the pinned literal
+ * `onAuthShapedFailure(appId, slot, status)` names this playground altitude) and the
+ * RunView banner renders the repair CTA from here.
+ *
+ * One failure at a time (v1), like the confirm store: the banner is a doorbell, not a
+ * ledger — a second failure overwrites the first, and repairing the connection is what
+ * stops the ringing. Carries appId/slot/status and NOTHING else (C1: no credential, no
+ * response bytes, no URL).
+ */
+export interface AuthShapedFailure {
+  appId: string;
+  slot: string;
+  status: number;
+}
+
+/** null when no credentialed 401/403 is waiting on the user. The RunView banner renders this. */
+export const authShapedFailureStore = createStore<AuthShapedFailure | null>(null);
+
+/** The banner's dismiss (and its successful-open) landing point. */
+export function dismissAuthShapedFailure(): void {
+  authShapedFailureStore.set(null);
+}
+
 /** Drop remembered session grants for an app — called on approve/reapprove/revoke (R3). */
 export function invalidateNetGrants(appId: string): void {
   confirmGate.invalidate(appId);
@@ -83,6 +111,14 @@ export function invalidateNetGrants(appId: string): void {
 export function connectedFetchDepsFor(
   db: UserDb,
   fetchImpl: (input: string, init?: RequestInit) => Promise<Response> = platformDefaultFetch,
+  /**
+   * The executor's auth-shaped failure seat (ADR-0022 §4), threaded ONLY by the app
+   * runtime path (`createNetHandlerFor`, which knows the appId to add). The wizard's
+   * probe path deliberately passes nothing here — probe outcomes render in the wizard
+   * and `executeConnectionTestRequest` strips the seat besides (belt and braces; the
+   * negative test drives both).
+   */
+  onAuthShapedFailure?: (slot: string, status: number) => void,
 ): ConnectedFetchDeps {
   return {
     credentialStore: new UserDbCredentialStore(db),
@@ -113,6 +149,7 @@ export function connectedFetchDepsFor(
     // widens `http://` to explicitly-approved private-range IP literals; the browser
     // profile passes NO seat at all, so the executor's default (https-only) is untouched.
     ...(getPlatform().capabilities.lanHttpPrivate ? { transportPolicy: { allowHttpForPrivateHosts: true } } : {}),
+    ...(onAuthShapedFailure !== undefined ? { onAuthShapedFailure } : {}),
   };
 }
 
@@ -142,7 +179,15 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
       // THE v4 READER (P3, fold B1's named exit) is assembled by `connectedFetchDepsFor`,
       // shared with the wizard's Q7 probe so both surfaces route through ONE configured
       // executor rather than two that could drift apart on gates.
-      const executor = createConnectedFetch(connectedFetchDepsFor(db, fetchImpl));
+      const executor = createConnectedFetch(
+        connectedFetchDepsFor(db, fetchImpl, (slot, status) =>
+          // The executor reports (slot, status); the appId is OUR argument — the
+          // host-assigned binding this handler was invoked with. Adding it here (not
+          // inside the executor) means a wiring bug can never report a foreign app's
+          // identity (the deps-level adaptation journaled in the task file).
+          authShapedFailureStore.set({ appId: netAppId, slot, status }),
+        ),
+      );
       // The runner already validated the frame shape (strict schema); pass the app-facing
       // request fields straight through — the executor re-validates and enforces D3.
       const result = await executor.execute(netAppId, {
@@ -168,6 +213,7 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
 /** TEST-ONLY: close any open confirm and reset remembered grants. */
 export function __resetNetStateForTests(): void {
   netConfirmStore.set(null);
+  authShapedFailureStore.set(null);
   // A fresh gate is not needed — invalidate-all isn't a public op; grants are per-app and
   // tests use distinct app ids. Clearing the open confirm is enough between tests.
 }

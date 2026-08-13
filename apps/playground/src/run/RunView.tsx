@@ -25,6 +25,7 @@ import {
   openConnectionWizardForNetError,
 } from '../state/connectionWizard.js';
 import { NetConfirmDialog } from './NetConfirmDialog.js';
+import { AuthRepairBanner } from './AuthRepairBanner.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
@@ -547,6 +548,14 @@ export default function RunView(): ReactElement {
   return (
     <div className="run-layout" style={stageStyle}>
       <NetConfirmDialog />
+      {/*
+        AC5 (ADR-0022 §4): a provider rejecting this app's stored credentials is now
+        VISIBLE — additive to the app result (which stays ok:true/401 per contract) and
+        distinct from the code-keyed net-ERROR banner below: this one fires on delivered
+        401/403s where the executor injected credentials, and its CTA opens the wizard on
+        the exact failing (appId, slot). The component filters on appId itself.
+      */}
+      <AuthRepairBanner appId={id} />
       {netAuthError !== null ? (
         <div className="error-note" role="alert" data-testid="net-auth-cta">
           this app tried to use the network but its connection is not ready ({netAuthError.code}).
