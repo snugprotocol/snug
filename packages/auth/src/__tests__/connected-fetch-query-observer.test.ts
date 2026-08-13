@@ -69,7 +69,16 @@ const noneSpec: ConnectionRequirement = {
   declaredApiHosts: ['api.public.example'],
 };
 
-const QUERY_KEY_VALUE = 'ow-live-7f3a21b4e05d68a1f2c3b4d5e6f70899aabbcc';
+// DELIBERATELY ENCODE-FORCING (P6 whole-surface finding F1). This fixture was
+// `ow-live-7f3a21b4…` — pure hex and dashes, so `URLSearchParams.set` encoded NOTHING
+// and the four C1 scrub assertions below passed against a mechanism that did not hold:
+// the scrub candidates carried the RAW rendered value while the outbound URL carried the
+// PERCENT-ENCODED one, so any credential containing `+`, `/`, `=` or a space leaked
+// verbatim into the app-visible NET_FETCH_FAILED message and into echoed bodies.
+// Real API keys are routinely base64. The value below contains one of each encode-forcing
+// character, so these tests now EXERCISE the scrub instead of restating it (the P5
+// journal's own rule: a fence that restates the data cannot test the data).
+const QUERY_KEY_VALUE = 'ow+live/7f3a21b4=05d68a1 f2c3b4d5e6f70899aabbcc';
 const HEADER_KEY_VALUE = 'ex-live-4417ZmNoPqRsTuVwXyZ01234567aBcDeF98';
 
 function memoryQuartet(): {

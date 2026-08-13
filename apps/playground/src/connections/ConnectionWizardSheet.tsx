@@ -486,7 +486,10 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
   const requirement = row.requirement;
   const fields = requirement.fields ?? [];
   const registration = requirement.registration;
+  // ONE resolution, both seats — the discipline P3 applied to the lint, applied here to
+  // the disclosure, so the review can never fall behind what the executor will send.
   const headerTemplate = requirement.request?.headerTemplate;
+  const queryTemplate = requirement.request?.queryTemplate;
   const reviewedHosts = row.allowedHosts.length > 0 ? row.allowedHosts : (requirement.declaredApiHosts ?? []);
   const privateHosts = reviewedHosts.filter(isPrivateNetworkHost);
 
@@ -540,6 +543,30 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
           <code data-testid="review-header-template" className="redirect-uri">
             {Object.entries(headerTemplate)
               .map(([header, value]) => `${header}: ${value}`)
+              .join('\n')}
+          </code>
+        </div>
+      ) : null}
+
+      {queryTemplate !== undefined ? (
+        <div className="field">
+          {/*
+            THE CO-EQUAL PLACEMENT SEAT (P6 whole-surface BLOCKER). `queryTemplate` was
+            wired through schema, Guard 2b, lint, injection and scrubbing — but not
+            through THIS screen, which ADR-0017 names as the price of admitting these
+            seats: the lint bounds WHAT a template may do, the review is where the user
+            sees WHERE their secret goes. A query-only requirement (both shipped entries,
+            openweather and coingecko) was approved with no placement disclosure at all.
+
+            Deliberately its own box rather than merged with the headers: a credential in
+            a web ADDRESS is a different risk story from one in a header — URLs land in
+            server logs, proxies and browser history — and a user's intuition about that
+            difference is the whole point of showing it.
+          */}
+          <label>added to the web address of every request</label>
+          <code data-testid="review-query-template" className="redirect-uri">
+            {Object.entries(queryTemplate)
+              .map(([param, value]) => `?${param}=${value}`)
               .join('\n')}
           </code>
         </div>

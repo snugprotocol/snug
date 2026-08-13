@@ -943,7 +943,19 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         // prefix only prevents a header/query NAME collision from dropping a candidate;
         // the scrubber reads values, never keys.
         const scrubCandidates: Record<string, string> = { ...injected.headers };
-        for (const [key, value] of Object.entries(injected.query)) scrubCandidates[`query:${key}`] = value;
+        for (const [key, value] of Object.entries(injected.query)) {
+          scrubCandidates[`query:${key}`] = value;
+          // BOTH FORMS, derived from the serializer that actually writes the URL (P6
+          // whole-surface finding F1). `searchParams.set` percent-encodes, and
+          // `scrubAuthValues` is exact-substring — so a raw-only candidate misses the
+          // encoded spelling that is what an error message or an echoed body actually
+          // contains. A credential with `+`, `/`, `=` or a space (i.e. any base64 key)
+          // leaked verbatim. The encoded candidate is built with URLSearchParams itself
+          // rather than encodeURIComponent because the two disagree on space (`+` vs
+          // `%20`), and a hand-rolled encoder is how this drifts back apart.
+          const encoded = new URLSearchParams({ [key]: value }).toString().slice(key.length + 1);
+          if (encoded !== value) scrubCandidates[`query:${key}:encoded`] = encoded;
+        }
 
         // QUERY INJECTION — into the OUTBOUND URL only, and only HERE, after every gate:
         // the ceiling/host/SSRF gates matched on the app's own URL, the confirm gate

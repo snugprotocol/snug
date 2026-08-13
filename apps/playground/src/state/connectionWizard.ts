@@ -974,7 +974,16 @@ export async function migrateConnectionRegistryDrift(appId: string, slot: string
   const row = db.getConnection(appId, slot);
   if (row === undefined || row.status !== CONNECTION_STATUS.approved) return 'none';
   if (row.pendingRequirement !== undefined) return 'none';
-  const entry = lookupWellKnownProvider(row.requirement.provider.name);
+  // `resolveRegistryEntryByName`, NOT `lookupWellKnownProvider` — the same choice
+  // `lanPairingExchangeFor` documents above, for the same reason (P6 whole-surface
+  // finding). Rows persist the entry's DISPLAY name, and exact-key resolution is by
+  // contract: 'Philips Hue' normalizes to 'philipshue', which is not the key 'hue', so
+  // the exact-key lookup returned undefined and this function bailed at its first branch
+  // for EVERY hue row — leaving the one provider this task introduced permanently
+  // exposed to the seat-drift gap the migration exists to close. Admission reaches the
+  // entry through the brand-adjacent rung, so the migration must ask the same question
+  // the same way, or it repairs rows against an entry they never borrowed from.
+  const entry = resolveRegistryEntryByName(row.requirement.provider.name)?.entry;
   if (entry === undefined) return 'none';
 
   // The ONE admission resolution, re-run over the row's own persisted shape on its own
