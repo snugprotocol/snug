@@ -942,3 +942,106 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   `turbo run test --force` run FOUR times consecutively: `Tasks: 21 successful, 21 total` ·
   `Cached: 0 cached, 21 total` every time.
 - Next step: P5 (Hue LAN connector, ADR-0023).
+
+### 2026-08-13 — claude (P5 shape lane) — lanHost protocol seat + hue entry + the three-part admission fork (ADR-0023 D1/D2, amendments 2 and 10)
+
+- Producer verification first: all P4 commits present (8b386fd · 83cee14 · 8a802fc ·
+  f0c74ad · 27ffb92 · 28a509b); `packages/auth` green at 646 and `packages/protocol` at
+  264 BEFORE any P5 work. No orchestration defect.
+- **Every claim in the brief re-executed as a probe before code moved**, against the built
+  dist with a hue-shaped entry injected at runtime. All confirmed:
+  1. **amendment 2 (lan-schema-2) CONFIRMED** — the pre-collection LAN row is
+     unrepresentable: `safeParse` fails "declaredApiHosts: Invalid input: expected array,
+     received undefined". Also confirmed and worth recording: a private IP literal
+     ALREADY parses as a `declaredApiHosts` entry today (`CONNECTION_HOST_RULE` accepts
+     digit labels), so the fork adds an EXTRA rule for LAN rows rather than loosening the
+     host charset.
+  2. **amendment 10(a) CONFIRMED** — `PROBE-A: THREW -> TypeError: entry.apiHosts is not
+     iterable` for a requirement naming "Some Obscure SaaS". One apiHosts-less entry
+     makes EVERY admission of EVERY requirement throw, from inside the guard whose whole
+     job is to fail closed.
+  3. **amendment 10(b) CONFIRMED** — with (a) patched in the probe: `PROBE-B: ok= true
+     hosts= []`. The user's declared `192.168.1.50` REPLACED by the entry's absent hosts,
+     silently, ok:true.
+- **THE XOR RULE, decided and journaled** (the brief asked me to decide by reading how
+  `deriveConnectionAllowedHosts` and the ceiling freeze consume `declaredApiHosts`):
+  the derivation unions `declaredApiHosts` into `snug_connections.allowed_hosts` at
+  approval and that frozen ceiling IS the runtime wall, so the collected bridge address
+  must be able to live in `declaredApiHosts` — there is no second path by which a ceiling
+  could freeze around the user's device, and inventing one would mean two host objects
+  where the schema has always insisted on one. Hence: **no lanHost ⇒ declaredApiHosts
+  required non-empty (byte-identical to today, pinned by test); lanHost present ⇒
+  declaredApiHosts either ABSENT (pre-collection) or EXACTLY ONE host of the declared
+  class (post-collection)**. A public host beside a lanHost would freeze a public host
+  into a ceiling the review screen presents as "a device on your own network"; a second
+  private literal is a second device the user never paired. Both refused, both ways
+  pinned. `deriveConnectionAllowedHosts` returns `[]` for a pre-collection row — an empty
+  ceiling that refuses everything, which is why the wizard order is binding: collect →
+  approve → freeze → pair.
+- **`isRfc1918Ipv4Literal` is a deliberate RESTATEMENT, not a reuse**: `packages/auth`
+  depends on protocol, so importing `isPrivateRfc1918Ipv4Literal` would be a dependency
+  CYCLE. The two are pinned equivalent by a 28-case cross-package test in packages/auth,
+  so a drift fails loudly instead of becoming two guards disagreeing about "private"
+  (lesson 2026-08-10). Journaled because the brief asked which way this went.
+- **Admission fork (all three parts)**, each mutation-verified with a killing test:
+  restoring the original crash → 22 red; reverting 10(b)'s host preservation → 6 red;
+  disabling 10(c)'s class check → 7 red. Guard 2c runs BEFORE Guard 2b and on EVERY
+  channel **including `registry`** — a host rule, not prompt copy, and registry is exactly
+  where the P3 seat-drift re-substitution lands. ADR-0020's "hosts are ALWAYS the entry's"
+  carve-out is scoped to lanHost entries ONLY, pinned by a test that a normal entry still
+  substitutes.
+- **One mutation initially SURVIVED and was fixed rather than shipped** (worth keeping for
+  Gate 6): deleting the `registryHostIndex` lanHost skip killed nothing, because the
+  null-safe `?? []` beside it already covers today's hostless entry. *A guard that
+  survives its own deletion is decoration* — added a test that drives the skip directly
+  (a LAN entry mutated to ALSO carry apiHosts must still contribute no host trigger), and
+  the skip now kills its mutant.
+- **Registry lookup behavior, journaled because a test of mine asserted it wrongly first:**
+  `lookupWellKnownProvider('Philips Hue')` correctly returns UNDEFINED — resolution is
+  exact-key by contract (the key is the pinned literal `hue`), and resolving a
+  brand-adjacent spelling there would hand it the entry's pinned values as if it had asked
+  for them. The human spellings reach the entry by the two paths that should: the BAN via
+  `findBrandAdjacentRegistryKeys` (segments `philips`+`hue` → run `hue`) and the INFERRER
+  via the new aliases. All three paths now pinned.
+- **Deliberate omissions, both journaled rather than silent:** hue carries NO
+  `testRequest` (every CLIP v2 read needs the key pairing mints — a probe before pairing
+  can only fail, one after merely repeats what pairing proved; pairing IS the
+  verification, same discipline as coingecko's P4 omission) and NO
+  `desktopRedirectPosture` (a LAN device runs no OAuth redirect; the posture-completeness
+  suite treats it as the static kind it is, +1 row, no new posture literal needed).
+- **Pinned literals: every one honored EXACTLY, no supersessions.** Registry key `hue`,
+  kind `api_key`, fields `['application_key']` (secret), header
+  `{'hue-application-key':'{{application_key}}'}`, lanHost
+  `{class:'rfc1918-ipv4-literal', label:'Bridge IP address'}`, pairing `POST /api` with
+  `{"devicetype":"snug#hub","generateclientkey":true}` → `success[0].username`.
+- **Fences (AC9), classified, moved in the same commits as the data:** MIGRATED KIND_TABLE
+  10→11 · well-known-providers "non-empty apiHosts" → "pinned apiHosts XOR lanHost" (the
+  old rule's content survives verbatim inside branch (a) — nothing LOST) · registry-self-
+  containment AC3 emitter + the whole-registry COPY fence (forked so it does not go
+  vacuous on LAN entries the way the queryTemplate copy fence silently did at P4) ·
+  desktop-posture browserCallable table + static-kind no-posture list · channel-admission
+  whole-registry idempotence + host-trigger loop. UNCHANGED and verified green with zero
+  edits: static-kind-registry exact field lists, registry-template-parity, matched-option,
+  test-request-single-path, registry-substitution, registry-request-seats. **Nothing
+  OBSOLETE, nothing LOST, no test weakened or deleted.**
+- **Eleven consumer sites the now-nullable `declaredApiHosts` surfaced were each fixed
+  honestly, never cast away**: `requirementToSpec`, `deriveRowHosts` and the probe
+  base-host in connected-fetch (a pre-collection LAN row genuinely has no host — the probe
+  refuses with NET_NOT_APPROVED, which is the truth); the wizard host diff, the RunView
+  starter teaser and the revoked-before check in playground; and the test-side fixtures,
+  whose pinned-host premise is now STATED rather than optional-chained past (lesson
+  2026-08-06).
+- SPEC_SYNC: `docs/spec-drafts/spec-v0.3-auth.md` gains the shape block + new §4.8 (the
+  seat, the XOR verdict table, three host obligations) and `docs/spec-changelog.md` an
+  entry marked INTERNAL DRAFT / not pushed. AL-12 held; nothing pushed to
+  `snugprotocol/spec`.
+- Green, tsc-gated: protocol 264→280, auth 646→693; db 306, knowledge 183, playground 923,
+  server 126, sdk 41, adapters 120, runner 110, desktop 55 — all untouched and green. Root
+  `turbo run test --force` run THREE times consecutively: `Tasks: 21 successful, 21 total`
+  · `Cached: 0 cached, 21 total` every time; auth suite alone 8 consecutive runs, failure
+  rate **0/8**.
+- Left for P5's sibling lanes: the wizard bridge-IP step + pairing flow + discovery button
+  (the `pairing` seat is data-complete and waiting), the desktop Rust `lan_fetch`
+  pinned-TLS command + `lanFetch?` executor dep, the starter rewrite + e2e, the Rust-
+  boundary simulated-bridge test (amendment 13), and the amendment-15 private-IP consent
+  copy on the review screen.
