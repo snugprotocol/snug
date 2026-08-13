@@ -152,12 +152,17 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building snug desktop")
-        .run(|app, event| {
-            if let tauri::RunEvent::Opened { urls } = event {
-                // macOS file association: file:// URLs via Apple Events.
+        .run(|_app, _event| {
+            // `RunEvent::Opened` is an APPLE-ONLY variant (macOS/iOS deliver
+            // opened files as Apple Events); it does not exist in `RunEvent` on
+            // Windows/Linux, where the compile fails rather than the match
+            // simply never firing. Those platforms deliver the path as argv,
+            // handled by the single-instance plugin + `setup` above.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
                 let candidates: Vec<PathBuf> =
                     urls.iter().filter_map(|u| u.to_file_path().ok()).collect();
-                announce_opened(app, candidates);
+                announce_opened(_app, candidates);
             }
         });
 }
