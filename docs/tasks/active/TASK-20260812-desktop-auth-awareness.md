@@ -591,3 +591,44 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   examples 185; root `turbo run test --force` 21/21, 0 cached. Commit 0ae904c on the
   worktree branch; orchestrator merges.
 - Next step: P3 (registry request seats + Coinbase CDP + silent-401, ADR-0022).
+
+### 2026-08-13 — claude (P3 protocol lane) — queryTemplate seat + CONNECTION_QUERY_NAME_RULE (ADR-0022 §3)
+- Tests first, red proven both ways: tsc gate red on the two missing exports
+  (`CONNECTION_QUERY_NAME_RULE`, `CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES`); vitest 7/10
+  new tests red at assertions (the 3 green ones are pure negatives — bad-charset,
+  strict-unknown-seat, `none` coherence — that must also SURVIVE the change; their
+  positive siblings prove the mechanism bites).
+- `connectionRequestSchema` gains optional `queryTemplate`: keys by the PINNED
+  `CONNECTION_QUERY_NAME_RULE = /^[A-Za-z0-9_.\[\]-]{1,64}$/` (exported; header rule
+  byte-untouched, pinned by test in rule AND behavior — underscore header key still
+  rejects); values reuse `CONNECTION_REQUIREMENT_HEADER_VALUE_MAX_CHARS` verbatim.
+  NEW ADDITIVE constant `CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES = 8` (mirror of the
+  header entry bound; deliberately its own name so the two seats can diverge visibly —
+  additive beside the pinned literals, no supersession). `none` coherence closes over
+  the new seat via the existing `request !== undefined` check (query-only request on a
+  keyless kind rejected at parse, tested); canonical-hash identity sees the seat
+  (requirement_version bumps, tested). strictObject discipline held (`bodyTemplate`
+  sibling refused, tested).
+- Schema-artifact sweep (the 2026-07-31 exported-JSON-Schema lesson): NOTHING to move —
+  `connection-requirement.ts` sits behind the json-schemas publication line (NOT in
+  SOURCES; `schemas/*.json` byte-unchanged, schemas-stable green), and no snapshot pins
+  the request seat's inner keys (render-directive snap pins v3 hints + directive
+  top-level keys only).
+- SPEC_SYNC: staged in `docs/spec-drafts/spec-v0.3-auth.md` (shape block + new §4.4.2:
+  own key charset, one-resolution value lint, placement-after-ceiling + enumerated-scrub
+  host obligations) + spec-changelog entry marked internal-staged/not-pushed. AL-12 held;
+  nothing pushed to `snugprotocol/spec`. `cdp_jwt` deliberately ABSENT from protocol and
+  from this staging — helper grammar is the auth lane's.
+- Executor-lane handoff notes: (a) NO protocol-level template-token validation exists
+  that would reject an unknown helper name — the schema pins envelope only; the
+  rejection lives in packages/auth's template lint (`AUTH_TEMPLATE_HELPERS`), which will
+  refuse `{{cdp_jwt(...)}}` until amendment 7 moves the helper pins — expected, not
+  pre-fixed here. (b) With the seat now parseable, amendment 1(a) (occupiedPromptSeats
+  counts a queryTemplate-carrying request) is LIVE-urgent: a queryTemplate-only request
+  still sails past Guard 2b until the auth lane lands it.
+- Green, tsc-gated: protocol 254→264; dependents all green via
+  `turbo run test --filter=...@snugprotocol/protocol` — 21/21 tasks (auth 555, db 306,
+  knowledge 183, playground 885, server 126, sdk 41, adapters 120, runner 110,
+  desktop 55; 2 cached = the protocol tasks run fresh moments earlier in the same tree).
+- Next step: P3 auth lane (registry seats + Coinbase CDP + executor JWT/query injection
+  + silent-401 observer).

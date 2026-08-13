@@ -141,6 +141,16 @@ export const CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES = 8;
 /** Max chars per header-template value. */
 export const CONNECTION_REQUIREMENT_HEADER_VALUE_MAX_CHARS = 300;
 
+/**
+ * Max query-template entries — the queryTemplate mirror of
+ * `CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES`, same number for the same reason: the
+ * template is rendered host-side into a real outbound URL with real credentials, and
+ * every entry is shown verbatim in the strong review, so the bound is as much about a
+ * reviewable code box as about bytes. A separate constant (not a reuse) because the two
+ * seats can legitimately diverge and a shared name would hide which one a change moved.
+ */
+export const CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES = 8;
+
 /** Max chars for a URL seat (console/docs/homepage) — rendered as a link in the review. */
 export const CONNECTION_REQUIREMENT_URL_MAX_CHARS = 300;
 
@@ -170,6 +180,20 @@ export const CONNECTION_FIELD_KEY_RULE = /^[a-z0-9_]{1,40}$/;
  * with a control seat in a code box. Real provider headers are alnum + dash.
  */
 export const CONNECTION_HEADER_NAME_RULE = /^[A-Za-z0-9-]{1,64}$/;
+
+/**
+ * Query-parameter-name charset (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §3;
+ * P0 amendment 11). Query names get their OWN rule rather than reusing the header one
+ * because the two vocabularies genuinely differ: real query parameters carry
+ * underscores (CoinGecko's `x_cg_demo_api_key` — the motivating case the header rule's
+ * alnum+dash would reject), dots, and PHP/Rails-style brackets (`filter[key]`), while
+ * header names must stay proxy-safe alnum+dash. What both rules still exclude is every
+ * character that could smuggle URL structure past the review code box: `=`, `&`, `%`,
+ * `?`, `#`, space, and the template metacharacters. "Same lint family as
+ * headerTemplate" (AC6) refers to the VALUE rules — the shared value bounds here and
+ * the declared-field-keys lint in packages/auth — never to this key charset.
+ */
+export const CONNECTION_QUERY_NAME_RULE = /^[A-Za-z0-9_.\[\]-]{1,64}$/;
 
 /**
  * Hostname charset — LDH labels, dot-separated, no scheme/port/path/credentials. The
@@ -262,12 +286,20 @@ export const connectionRegistrationSchema = z.strictObject({
 export type ConnectionRegistration = z.infer<typeof connectionRegistrationSchema>;
 
 /**
- * Header placement for static kinds. Values may reference declared field keys, the
- * pinned helper enum, and the pinned request tokens — but THAT rule is not expressible
- * in Zod (it needs the sibling `fields` list), so it is the TEMPLATE LINT's job
- * (packages/auth, AC6). What the schema pins here is the envelope: entry count, header
- * name charset, and value length. Fold S-M2: the lint and the engine's HELPERS map are
- * reconciled so the enum is enforced rather than aspirational.
+ * Credential placement for static kinds — header entries and, since ADR-0022 §3, query
+ * parameters (OpenWeather's `?appid=` and CoinGecko's demo query form were structurally
+ * unservable without a query seat). Values in BOTH templates may reference declared
+ * field keys, the pinned helper enum, and the pinned request tokens — but THAT rule is
+ * not expressible in Zod (it needs the sibling `fields` list), so it is the TEMPLATE
+ * LINT's job (packages/auth, AC6), and the two templates' value lints are derived from
+ * ONE resolution (lesson 2026-08-10: two lints disagreeing about "declared" is the
+ * founding-defect shape). What the schema pins here is the envelope: entry counts, the
+ * per-seat name charsets, and value lengths. Fold S-M2: the lint and the engine's
+ * HELPERS map are reconciled so the enum is enforced rather than aspirational.
+ *
+ * Rendered query VALUES are credentials in a URL — ADR-0022 §3 binds the executor to
+ * inject them only AFTER ceiling checks and to scrub them from every host-visible echo
+ * (an enumerated site list, packages/auth). The schema's job is only the bounded shape.
  */
 export const connectionRequestSchema = z.strictObject({
   headerTemplate: z
@@ -278,6 +310,17 @@ export const connectionRequestSchema = z.strictObject({
     .refine(
       (template) => Object.keys(template).length <= CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES,
       `headerTemplate accepts at most ${CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES} entries`,
+    )
+    .optional(),
+  queryTemplate: z
+    .record(
+      z.string().regex(CONNECTION_QUERY_NAME_RULE),
+      // The headerTemplate VALUE bounds, verbatim — same family by construction.
+      z.string().min(1).max(CONNECTION_REQUIREMENT_HEADER_VALUE_MAX_CHARS),
+    )
+    .refine(
+      (template) => Object.keys(template).length <= CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES,
+      `queryTemplate accepts at most ${CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES} entries`,
     )
     .optional(),
 });

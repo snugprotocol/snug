@@ -18,11 +18,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTH_MAX_SLOTS_PER_APP,
+  CONNECTION_HEADER_NAME_RULE,
   CONNECTION_KINDS,
   CONNECTION_PROVENANCES,
+  CONNECTION_QUERY_NAME_RULE,
+  CONNECTION_REQUIREMENT_HEADER_VALUE_MAX_CHARS,
   CONNECTION_REQUIREMENT_MAX_FIELDS,
   CONNECTION_REQUIREMENT_MAX_HEADER_ENTRIES,
   CONNECTION_REQUIREMENT_MAX_INSTRUCTIONS,
+  CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES,
   CONNECTION_SLOT_RULE,
   canonicalRequirementHash,
   connectionRequirementSchema,
@@ -376,6 +380,111 @@ describe('AC4 — the `none` kind is a first-class union member (Q6: take the ch
     for (const kind of ['apikey', 'bearer', 'oauth2', 'NONE', '', 'mtls']) {
       expect(parses({ ...minimalRequirement, kind }), `kind ${JSON.stringify(kind)}`).toBe(false);
     }
+  });
+});
+
+// ------------------------------------------------- request.queryTemplate (P3)
+
+// TASK-20260812-desktop-auth-awareness P3 / ADR-0022 §3 — query-param credential
+// placement. OpenWeather (`?appid=`) and CoinGecko's demo key are structurally
+// unservable without it: no query mechanism existed anywhere, and the header rule's
+// alnum+dash charset would reject CoinGecko's own `x_cg_demo_api_key` name. The seat
+// gets its OWN key charset (P0 amendment 11) and reuses the headerTemplate VALUE
+// bounds verbatim — "same lint family" means the value shape here and the
+// declared-field-keys lint in packages/auth, never the key charset.
+describe('P3/AC6 — request.queryTemplate: its own key charset, headerTemplate value bounds, strict envelope', () => {
+  const withQuery = (queryTemplate: Record<string, string>): Record<string, unknown> => ({
+    ...minimalRequirement,
+    request: { queryTemplate },
+  });
+
+  it('accepts underscore keys — the CoinGecko demo form the HEADER charset would reject', () => {
+    const parsed = connectionRequirementSchema.safeParse(withQuery({ x_cg_demo_api_key: '{{api_key}}' }));
+    expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [], null, 2)).toBe(true);
+    if (parsed.success) {
+      // Verbatim survival matters for the same reason as headerTemplate: the strong
+      // review renders these bytes, and the host renders them into a real URL.
+      expect(parsed.data.request?.queryTemplate).toEqual({ x_cg_demo_api_key: '{{api_key}}' });
+    }
+  });
+
+  it('accepts the OpenWeather pinned shape ({ appid: …}) and every charset member: dot, brackets, dash, 64-char key', () => {
+    expect(parses(withQuery({ appid: '{{api_key}}' }))).toBe(true);
+    expect(parses(withQuery({ 'a.b': '{{appid}}' }))).toBe(true);
+    expect(parses(withQuery({ 'filter[key]': '{{appid}}' }))).toBe(true);
+    expect(parses(withQuery({ 'x-api-key': '{{appid}}' }))).toBe(true);
+    expect(parses(withQuery({ ['k'.repeat(64)]: '{{appid}}' }))).toBe(true);
+  });
+
+  it('rejects keys outside the pinned charset — separators, spaces, percent, braces, non-ASCII, empty, 65 chars', () => {
+    for (const key of ['bad key', 'bad=key', 'bad&key', 'bad%20key', '{appid}', 'bäd', 'ключ', '', 'k'.repeat(65)]) {
+      expect(parses(withQuery({ [key]: '{{appid}}' })), `key ${JSON.stringify(key)} should reject`).toBe(false);
+    }
+  });
+
+  it('pins CONNECTION_QUERY_NAME_RULE as an exported constant, and the HEADER rule stays alnum+dash, untouched', () => {
+    expect(CONNECTION_QUERY_NAME_RULE.source).toBe(String.raw`^[A-Za-z0-9_.\[\]-]{1,64}$`);
+    // The header charset must NOT silently widen to match: header names with
+    // underscores are dropped or mangled by real proxies, and the narrowing was a
+    // deliberate review-surface decision. Rule AND behavior, both pinned.
+    expect(CONNECTION_HEADER_NAME_RULE.source).toBe('^[A-Za-z0-9-]{1,64}$');
+    expect(
+      parses({ ...minimalRequirement, request: { headerTemplate: { x_cg_demo_api_key: '{{appid}}' } } }),
+    ).toBe(false);
+  });
+
+  it('values ride the headerTemplate bounds verbatim: empty rejected, 300 accepted, 301 rejected', () => {
+    expect(parses(withQuery({ appid: '' }))).toBe(false);
+    expect(parses(withQuery({ appid: 'a'.repeat(CONNECTION_REQUIREMENT_HEADER_VALUE_MAX_CHARS) }))).toBe(true);
+    expect(parses(withQuery({ appid: 'a'.repeat(CONNECTION_REQUIREMENT_HEADER_VALUE_MAX_CHARS + 1) }))).toBe(false);
+  });
+
+  it('accepts exactly CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES entries, rejects one more', () => {
+    const template = (n: number): Record<string, string> =>
+      Object.fromEntries(Array.from({ length: n }, (_, i) => [`q_${i}`, '{{appid}}']));
+    expect(CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES).toBe(8);
+    expect(parses(withQuery(template(CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES)))).toBe(true);
+    expect(parses(withQuery(template(CONNECTION_REQUIREMENT_MAX_QUERY_ENTRIES + 1)))).toBe(false);
+  });
+
+  it('headerTemplate and queryTemplate coexist in one request seat', () => {
+    expect(
+      parses({
+        ...minimalRequirement,
+        request: {
+          headerTemplate: { 'X-Custom': '{{appid}}' },
+          queryTemplate: { appid: '{{appid}}' },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('the request seat stays strict — an unknown sibling (bodyTemplate) is a rejection, never a passthrough', () => {
+    expect(parses({ ...minimalRequirement, request: { bodyTemplate: { k: '{{appid}}' } } })).toBe(false);
+    expect(
+      parses({ ...minimalRequirement, request: { queryTemplate: { appid: '{{appid}}' }, sneaky: 1 } }),
+    ).toBe(false);
+  });
+
+  it("kind 'none' coherence closes over the NEW seat: a query-only request template is still incoherent", () => {
+    // Guard 2b's occupied-seat hole ("a queryTemplate-only request sails past") lives
+    // in packages/auth; the schema's own coherence rule must not have the same hole.
+    const keyless = {
+      slot: 'coingecko',
+      provider: { name: 'CoinGecko' },
+      kind: 'none',
+      declaredApiHosts: ['api.coingecko.com'],
+    };
+    expect(parses({ ...keyless, request: { queryTemplate: { appid: 'literal' } } })).toBe(false);
+  });
+
+  it('a changed queryTemplate is a DIFFERENT requirement — canonical identity sees the new seat', () => {
+    const base = connectionRequirementSchema.parse(withQuery({ appid: '{{api_key}}' }));
+    const changed = connectionRequirementSchema.parse(withQuery({ appid: '{{api_key}}', units: 'metric' }));
+    expect(canonicalRequirementHash(changed)).not.toBe(canonicalRequirementHash(base));
+    // And against the query-free base: adding the seat must bump requirement_version.
+    const bare = connectionRequirementSchema.parse(minimalRequirement);
+    expect(canonicalRequirementHash(base)).not.toBe(canonicalRequirementHash(bare));
   });
 });
 

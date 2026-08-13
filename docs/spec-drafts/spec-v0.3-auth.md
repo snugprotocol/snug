@@ -25,6 +25,11 @@
 > draft. What v0.3 adds is a storage layer, a validation contract, and a set of host
 > obligations. In particular there is still **no frame through which a running app can
 > ask for a credential** (§2).
+>
+> **Version note (TASK-20260812-desktop-auth-awareness P3, 2026-08-13 — internal-staged,
+> not pushed):** `request` gains an optional `queryTemplate` seat (§4.4.2) with its own
+> query-parameter-name charset; header-template rules are unchanged. Staged here per
+> SPEC_SYNC; AL-12 remains HELD and nothing is pushed to `snugprotocol/spec`.
 
 ## 1. What a connection is
 
@@ -235,8 +240,10 @@ connectionRequirement = {
   endpoints?,              // authorize/token/refresh/revoke, https, ≤300
   scopes?,                 // ≤64 × ≤200
   pkce?, authorizeParams?,
-  request?: { headerTemplate? },               // ≤8 entries, name ^[A-Za-z0-9-]{1,64}$,
+  request?: { headerTemplate?,                 // ≤8 entries, name ^[A-Za-z0-9-]{1,64}$,
                                                // value ≤300 (§4.4)
+              queryTemplate? },                // ≤8 entries, name ^[A-Za-z0-9_.\[\]-]{1,64}$,
+                                               // value ≤300 (§4.4.2)
   userLayer?,              // registry-synthesized ONLY (§4.5)
   declaredApiHosts,        // REQUIRED, 1..32 × ≤253, bare hostnames, normalized
   testRequest?             // { method: 'GET', pathAndQuery ≤200, leading '/' }
@@ -358,6 +365,43 @@ the host actually sent** equals the signature the host sent:
 CB-ACCESS-TIMESTAMP: {{request.timestamp}}
 CB-ACCESS-SIGN:      {{hmac_sha256_b64(api_secret, request.timestamp, request.method, request.pathAndQuery, request.body)}}
 ```
+
+#### 4.4.2 Query-parameter templates
+
+`request.queryTemplate` places credentials into the **query string** of outbound
+requests — the placement some providers require and header templates cannot express
+(OpenWeather's `?appid=`, CoinGecko's demo key).
+
+Query-parameter **names** get their own charset, `^[A-Za-z0-9_.\[\]-]{1,64}$`, rather
+than reusing the header rule: real query parameters carry underscores
+(`x_cg_demo_api_key` — a name the header rule's alnum+dash would reject), dots, and
+bracketed forms (`filter[key]`), while header names must stay proxy-safe. Both charsets
+still exclude every character that could smuggle URL structure or template
+metacharacters past the review code box: `=`, `&`, `%`, `?`, `#`, space, quotes and
+braces.
+
+Query-template **values** follow §4.4 in full and verbatim: the same ≤300-char bound,
+the same reference vocabulary (declared field keys, pinned request tokens, pinned
+helpers, quoted literals), the same flat grammar, and the same lint obligations. A
+conforming host MUST derive the header-template and query-template value lints from
+**one** resolution of the declared field keys — two lints that can disagree about
+"declared" is a known defect shape, not a style preference.
+
+The `none` coherence rule of §4.1 closes over this seat: a `none` requirement carrying a
+request template of either placement is rejected at parse.
+
+Rendered query values are **credentials inside a URL**, which makes the URL itself
+secret-bearing — unlike a header template, where the URL stays inert. Two host
+obligations follow:
+
+- **Placement after the ceiling.** A conforming host MUST render query credentials into
+  the URL only **after** the frozen-ceiling host checks have passed, so the ceiling
+  decision is always made against the app-supplied URL.
+- **Scrubbing is enumerated, not aspirational.** The credentialed URL MUST NOT appear in
+  any surface the app, the model, or the user's logs can read: fetch-error messages
+  (network errors routinely embed the full URL), response echo surfaces, LLM-visible
+  inspectors, and host UI surfaces. The request URL returned to the app is the URL the
+  app asked for, **never** the credentialed one.
 
 ### 4.5 `userLayer` is registry-synthesized only
 
