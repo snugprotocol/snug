@@ -30,6 +30,13 @@
 > not pushed):** `request` gains an optional `queryTemplate` seat (§4.4.2) with its own
 > query-parameter-name charset; header-template rules are unchanged. Staged here per
 > SPEC_SYNC; AL-12 remains HELD and nothing is pushed to `snugprotocol/spec`.
+>
+> **Version note (TASK-20260812-desktop-auth-awareness P5, 2026-08-13 — internal-staged,
+> not pushed):** the requirement gains an optional `lanHost` seat and `declaredApiHosts`
+> becomes **required-XOR-`lanHost`** (§4.8), so a provider whose API lives on a device on
+> the user's own network is declarable at all. Non-LAN requirements are byte-identical to
+> v0.3-as-of-P3. Staged here per SPEC_SYNC; AL-12 remains HELD and nothing is pushed to
+> `snugprotocol/spec`.
 
 ## 1. What a connection is
 
@@ -245,7 +252,13 @@ connectionRequirement = {
               queryTemplate? },                // ≤8 entries, name ^[A-Za-z0-9_.\[\]-]{1,64}$,
                                                // value ≤300 (§4.4.2)
   userLayer?,              // registry-synthesized ONLY (§4.5)
-  declaredApiHosts,        // REQUIRED, 1..32 × ≤253, bare hostnames, normalized
+  lanHost?: { class,       // 'rfc1918-ipv4-literal' (single-member union; additive)
+              label },     // ≤80, rendered above the wizard's address input (§4.8)
+  declaredApiHosts?,       // 1..32 × ≤253, bare hostnames, normalized.
+                           // REQUIRED-XOR-lanHost: required and non-empty when lanHost
+                           // is ABSENT; when lanHost is present it is either absent
+                           // (pre-collection) or EXACTLY ONE host of the declared
+                           // class (post-collection) — §4.8
   testRequest?             // { method: 'GET', pathAndQuery ≤200, leading '/' }
 }
 ```
@@ -435,6 +448,53 @@ directive: `{ v, kind: 'connection_requirement', requirement, confidence?, prove
 `confidence` and `provenance` on the wire are **display-only**. The host computes
 provenance from the channel it actually received the directive on and recomputes
 confidence from the ladder rung it resolved; no gating decision reads the claimed values.
+
+### 4.8 LAN-class providers: `lanHost` and the host XOR
+
+*(TASK-20260812-desktop-auth-awareness P5, ADR-0023 Decision 1 — internal-staged.)*
+
+A provider whose API lives on a device on the **user's own network** — a Philips Hue
+bridge is the first — has no host any registry or author can pin: the address belongs to
+the user's router. Before this seat such a requirement was **unrepresentable**, because
+`declaredApiHosts` was both required and `.min(1)`.
+
+`lanHost` is a DECLARATION THAT A HOST WILL BE COLLECTED, never a host:
+
+```
+lanHost = { class: 'rfc1918-ipv4-literal', label: 'Bridge IP address' }
+```
+
+`class` is a single-member union today. Future device classes are **additive** — a new
+literal plus its own validator and its own admission rule, never a widening of this one.
+
+**The host XOR (normative).** Exactly one host source, and the rule follows from what
+consumes the seat: `deriveConnectionAllowedHosts` unions `declaredApiHosts` into the
+frozen ceiling at approval, and that ceiling is the runtime injection wall. So the
+collected address must be able to live in `declaredApiHosts` — there is no second path by
+which a ceiling could freeze around the user's device.
+
+| `lanHost` | `declaredApiHosts` | verdict |
+| --- | --- | --- |
+| absent | 1..32 hosts | **accepted** — every pre-P5 requirement, unchanged |
+| absent | absent or `[]` | **refused** (`declaredApiHosts` required) |
+| present | absent | **accepted** — the pre-collection shape a LAN registry entry emits |
+| present | exactly one host **of the declared class** | **accepted** — the post-collection shape the wizard writes |
+| present | a host outside the class (public, loopback, link-local, DNS name, IPv6) | **refused** |
+| present | two or more hosts | **refused** |
+| present | `[]` | **refused** |
+
+A public host beside a `lanHost` would freeze a public host into a ceiling the review
+screen presents as "a device on your own network" — a credential aimed anywhere, wearing
+LAN clothes. A second private literal is a second device the user never paired.
+
+**Host obligations.** (a) `deriveConnectionAllowedHosts` returns `[]` for a pre-collection
+LAN row: an empty ceiling refuses every host, which is the correct answer before an
+address exists. The binding wizard order is therefore **collect the address → approve the
+row → freeze the ceiling → pair**. (b) The schema is the FIRST of two seats that refuse an
+off-class host; the registry-borrow ban re-validates the class independently, because a
+requirement can reach admission without passing through this schema (§4.6, and the
+envelope-boundary rule in §6). (c) Nothing platform-conditional is persisted: a LAN row
+opened on the web hub is **disclosed** as desktop-only, never refused or rewritten.
 
 ## 5. Credential custody (unchanged in substance)
 

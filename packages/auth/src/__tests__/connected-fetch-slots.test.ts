@@ -94,7 +94,9 @@ function row(
     slot: requirement.slot,
     requirement,
     status: opts.status ?? CONNECTION_STATUS.approved,
-    allowedHosts: opts.allowedHosts ?? [...requirement.declaredApiHosts],
+    // `?? []` since ADR-0023 made `declaredApiHosts` required-XOR-`lanHost`. Every
+    // requirement in this suite declares hosts, so the fallback never fires here.
+    allowedHosts: opts.allowedHosts ?? [...(requirement.declaredApiHosts ?? [])],
     ...(opts.pendingRequirement !== undefined ? { pendingRequirement: opts.pendingRequirement } : {}),
   };
 }

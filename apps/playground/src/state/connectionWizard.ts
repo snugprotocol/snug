@@ -539,12 +539,14 @@ export function findRevokedBefore(
   currentSlot: string,
 ): RevokedBefore | undefined {
   const providerKey = requirement.provider.name.trim().toLowerCase();
-  const hosts = new Set(requirement.declaredApiHosts);
+  // `?? []` since ADR-0023: a pre-collection LAN requirement shares no host with
+  // anything, so the revoked-before check falls back to the provider-name match alone.
+  const hosts = new Set(requirement.declaredApiHosts ?? []);
   for (const row of db.listConnections(appId)) {
     if (row.slot === currentSlot) continue;
     if (row.status !== CONNECTION_STATUS.revoked) continue;
     const sameProvider = row.requirement.provider.name.trim().toLowerCase() === providerKey;
-    const sharesHost = row.requirement.declaredApiHosts.some((host) => hosts.has(host));
+    const sharesHost = (row.requirement.declaredApiHosts ?? []).some((host) => hosts.has(host));
     if (!sameProvider && !sharesHost) continue;
     return {
       slot: row.slot,

@@ -681,8 +681,10 @@ export default function RunView(): ReactElement {
               review happens after approval is sought, in the wizard, with provenance copy.
             */}
             🔌 this starter ships a declared connection to <strong>{starterDeclaration.provider.name}</strong>
-            {starterDeclaration.declaredApiHosts.length > 0
-              ? ` (${starterDeclaration.declaredApiHosts.join(', ')})`
+            {/* `?? []` since ADR-0023: a LAN-class starter declares no host until the
+                user collects its device address, so the teaser names the provider alone. */}
+            {(starterDeclaration.declaredApiHosts ?? []).length > 0
+              ? ` (${(starterDeclaration.declaredApiHosts ?? []).join(', ')})`
               : ''}
             . installing only copies the app — nothing is connected until you review and approve it yourself.
           </div>

@@ -409,7 +409,13 @@ export function requirementToSpec(requirement: ConnectionRequirement): AuthSpec 
   const fields = requirement.fields ?? [];
   // The frozen ceiling is enforced from `row.allowedHosts`; the spec copy exists only
   // because the shipped schemas require the seat.
-  const declaredApiHosts = [...requirement.declaredApiHosts];
+  //
+  // `?? []` since ADR-0023: a LAN-class requirement whose bridge address has not been
+  // collected yet carries NO `declaredApiHosts` (the required-XOR-`lanHost` rule). An
+  // empty list here is honest and inert — the v3 spec dialect's seat is filled with the
+  // empty set, and every host decision downstream reads `row.allowedHosts`, which for
+  // such a row is also empty and therefore refuses.
+  const declaredApiHosts = [...(requirement.declaredApiHosts ?? [])];
   switch (requirement.kind) {
     case 'oauth2_auth_code':
       return {
@@ -489,7 +495,10 @@ function resolveSlot(rows: readonly NetConnectionRow[], host: string): SlotResol
  * request: it is used solely to choose CTA copy, on a path that has already refused.
  */
 function deriveRowHosts(row: NetConnectionRow): readonly string[] {
-  return row.allowedHosts.length > 0 ? row.allowedHosts : row.requirement.declaredApiHosts;
+  // `?? []` since ADR-0023: a pre-collection LAN row has neither a frozen ceiling nor a
+  // declared host, so the CTA falls back to naming no host — which is the truth about
+  // that row. This value still never gates a request.
+  return row.allowedHosts.length > 0 ? row.allowedHosts : (row.requirement.declaredApiHosts ?? []);
 }
 
 // --------------------------------------------------------------------- factory
@@ -964,7 +973,10 @@ export async function executeConnectionTestRequest(
 
   // The base host is the FIRST frozen host — the probe's origin is drawn from the approved
   // ceiling, never from the requirement's (re-editable) declared list.
-  const baseHost = row.allowedHosts[0] ?? row.requirement.declaredApiHosts[0];
+  // `?.[0]` since ADR-0023: a pre-collection LAN row has no declared host either, so
+  // this resolves to undefined and the probe refuses below with NET_NOT_APPROVED —
+  // the honest answer for a connection whose device address has not been collected.
+  const baseHost = row.allowedHosts[0] ?? row.requirement.declaredApiHosts?.[0];
   if (baseHost === undefined) {
     return failure(NET_ERROR_CODES.NET_NOT_APPROVED, `connection '${slot}' has no approved host to probe`);
   }

@@ -884,7 +884,10 @@ function ReapprovalDiffScreen({
   // The OLD side is the FROZEN ceiling (`allowedHosts`), not the old requirement's
   // declared list: what the user is being asked to widen is the grant that is actually
   // serving, and those are the same only until an admission substitution says otherwise.
-  const hostLines = diffLines(row.allowedHosts, pending.declaredApiHosts);
+  // `?? []` since ADR-0023: a LAN-class pending requirement whose address has not
+  // been collected declares no hosts, and the diff then honestly shows the frozen
+  // ceiling's hosts as REMOVED — which is what such a pending edit would do.
+  const hostLines = diffLines(row.allowedHosts, pending.declaredApiHosts ?? []);
 
   const render = (line: DiffLine): ReactElement => (
     <li key={`${line.state}:${line.label}`} data-diff={line.state}>

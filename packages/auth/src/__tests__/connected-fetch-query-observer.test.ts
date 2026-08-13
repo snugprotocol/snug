@@ -93,7 +93,9 @@ function row(requirement: ConnectionRequirement, allowedHosts?: string[]): NetCo
     slot: requirement.slot,
     requirement,
     status: CONNECTION_STATUS.approved,
-    allowedHosts: allowedHosts ?? [...requirement.declaredApiHosts],
+    // `?? []` since ADR-0023 made `declaredApiHosts` required-XOR-`lanHost`. Every
+    // requirement in this suite declares hosts, so the fallback never fires here.
+    allowedHosts: allowedHosts ?? [...(requirement.declaredApiHosts ?? [])],
   };
 }
 
