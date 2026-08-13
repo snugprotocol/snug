@@ -446,12 +446,22 @@ describe('the done screen probes a coinbase row (the registry now pins testReque
     await click(/test this connection/i);
     // The probe rides the REAL executor (JWT mint via WebCrypto is genuinely async) —
     // wait for the rendered outcome rather than a fixed number of microtasks.
+    //
+    // The budget is explicit and generous: a real SEC1→PKCS#8 import plus an ES256 sign
+    // takes single-digit ms alone, but under the full suite (95 files sharing the box)
+    // it intermittently exceeded vi.waitFor's 1000ms default — this test failed roughly
+    // 1 run in 3 at suite scale while passing every time in isolation. The condition is
+    // unchanged; only the patience is. If this ever times out at 10s, the mint is truly
+    // broken (or hung), which is a real failure worth seeing.
     await act(async () => {
-      await vi.waitFor(() => {
-        if (container!.querySelector('[data-testid="connection-test-result"]') === null) {
-          throw new Error('probe outcome not rendered yet');
-        }
-      });
+      await vi.waitFor(
+        () => {
+          if (container!.querySelector('[data-testid="connection-test-result"]') === null) {
+            throw new Error('probe outcome not rendered yet');
+          }
+        },
+        { timeout: 10_000, interval: 25 },
+      );
     });
 
     expect(container!.textContent).toMatch(/rejected these credentials/i);
