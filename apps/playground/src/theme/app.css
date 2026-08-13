@@ -1076,14 +1076,36 @@
   font-weight: 700;
 }
 
+/* THE one-character-per-line bug (TASK-20260813 AC5, owner repro 2026-08-13).
+   `.llm-summary` (flex:1) shared a row with `.llm-meta`, which was `flex-shrink: 0`.
+   The meta line is long — "1.9s · 2,393 in · 66 out · 0% cached" measures ~260px — so
+   in a 340px rail it claimed the row and squeezed the summary to its MIN-CONTENT width,
+   which `overflow-wrap: anywhere` permits to be a single glyph. Result: a model name
+   like "claude-sonnet-5" rendered one character per line, 342px tall.
+
+   Three things fix it together, and all three are needed:
+     1. the head WRAPS instead of squeezing, so the meta drops to its own line rather
+        than starving the summary;
+     2. `flex-basis` gives the summary a real starting width instead of 0;
+     3. `break-word` replaces `anywhere` so min-content can never fall to one character
+        even if a future layout squeezes this row again. */
+.llm-entry-head {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+
 .llm-entry .llm-summary {
-  flex: 1;
-  overflow-wrap: anywhere;
+  flex: 1 1 60%;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .llm-entry .llm-meta {
   color: var(--fg-muted);
+  /* Still never squeezed — but now it wraps to its own line rather than starving the
+     summary of the whole row. */
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 /* An in-flight round trip: the ember rule marks the call the user is waiting on. */

@@ -222,4 +222,47 @@ describe('desktop app icon composition (TASK-20260813 AC3)', () => {
     // And it must be substantial — a centred speck would pass the symmetry check.
     expect((maxX - minX) / w, 'the mark is too small for the tile').toBeGreaterThan(0.5);
   });
+
+  it.each(PNGS)('%s — the logo IS the icon: the mark reaches every edge', (name) => {
+    // OWNER REPORT 2026-08-13: "the logo should cover it completely". The first fix
+    // centred the mark on a dark plate at 61% of the tile (copying apple-touch-icon.svg,
+    // where the plate is load-bearing because iOS squares off transparency). On a
+    // desktop dock that reads as a small logo adrift in a dark square.
+    //
+    // THIS IS THE ASSERTION THE CENTRING TEST ABOVE COULD NOT MAKE: symmetry is
+    // satisfied by ANY concentric mark, so it passed on the 61% art and on the
+    // full-bleed art alike. Measuring how far the EMBER reaches is what separates them.
+    const img = decodePng(resolve(iconDir, name));
+    const { width: w, height: h, pixels } = img;
+    const isEmber = (x: number, y: number): boolean => {
+      const i = (y * w + x) * 4;
+      const [r, g, b, a] = [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
+      return a > 128 && r > 150 && r > b + 60 && g > 60;
+    };
+
+    // The tile is a ROUNDED square, so its corners are legitimately not ember — but the
+    // midpoint of each edge must be, or the mark is not reaching the canvas bounds.
+    const mid = (n: number): number => Math.floor(n / 2);
+    const edges: Array<[string, number, number]> = [
+      ['top', mid(w), 0],
+      ['bottom', mid(w), h - 1],
+      ['left', 0, mid(h)],
+      ['right', w - 1, mid(h)],
+    ];
+    for (const [label, x, y] of edges) {
+      expect(isEmber(x, y), `${name}: the mark does not reach the ${label} edge`).toBe(true);
+    }
+
+    // Belt and braces: the ember must span essentially the whole width, not 61% of it.
+    let minX = w;
+    let maxX = -1;
+    const row = mid(h);
+    for (let x = 0; x < w; x += 1) {
+      if (isEmber(x, row)) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
+    expect((maxX - minX + 1) / w, `${name}: the mark covers too little of the tile`).toBeGreaterThan(0.95);
+  });
 });

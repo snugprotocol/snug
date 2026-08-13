@@ -36,20 +36,38 @@ const desktopRoot = resolve(here, '..');
 const MARK_PATH =
   'M10 2h12a8 8 0 0 1 8 8v12a8 8 0 0 1-8 8H10a8 8 0 0 1-8-8V10a8 8 0 0 1 8-8zm6 9a5 5 0 0 0-5 5v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-6a5 5 0 0 0-5-5z';
 
-const PLATE = '#171310'; // the dark-theme background, as apple-touch-icon.svg uses
-const EMBER = '#e8873a'; // the dark-theme ember; holds contrast on light and dark docks
+const NICHE = '#171310'; // the dark-theme ground, showing through the knocked-out niche
+const EMBER = '#e8873a'; // the ember tile itself; holds contrast on light and dark docks
 
 const SIZE = 1024;
-// apple-touch-icon.svg insets the 32-unit mark by 26/180 ≈ 14.4% per side. Keeping that
-// exact ratio means the desktop icon and the iOS home-screen icon are the same artwork.
-const INSET_RATIO = 26 / 180;
-const inset = Math.round(SIZE * INSET_RATIO);
-const markSize = SIZE - inset * 2;
-const scale = markSize / 32;
+
+/**
+ * THE LOGO *IS* THE ICON (owner, 2026-08-13: "the logo should cover it completely").
+ *
+ * The first pass centred the mark on a dark plate at 61% of the tile, copying
+ * apple-touch-icon.svg. That is right for iOS — which squares off transparency and
+ * composites onto white, so the plate is load-bearing there — but on a desktop dock it
+ * reads as a small logo adrift in a dark square, which is what the owner screenshotted.
+ *
+ * The mark is ALREADY a tile: its path draws a rounded square spanning units 2..30 of a
+ * 32 viewBox, with the arched niche knocked out via evenodd. So the icon is that tile
+ * scaled until it fills the canvas edge to edge — no second plate, no inset. The niche
+ * is painted with the dark ground BEHIND the tile rather than left transparent, so the
+ * shelter still reads as a shape instead of a hole punched through to the wallpaper.
+ *
+ * 32/28 scales units 2..30 (the tile's own bounds) up to the full 0..SIZE canvas.
+ */
+const TILE_INSET = 2; // the mark path's own margin inside its 32-unit viewBox
+const TILE_SPAN = 32 - TILE_INSET * 2; // 28 units of actual tile
+const scale = SIZE / TILE_SPAN;
+const shift = -TILE_INSET * scale; // pull unit 2 back to canvas 0
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}">
-  <rect width="${SIZE}" height="${SIZE}" fill="${PLATE}" />
-  <g transform="translate(${inset} ${inset}) scale(${scale})">
+  <g transform="translate(${shift} ${shift}) scale(${scale})">
+    <!-- The niche ground first, clipped to the tile: the knockout reveals THIS, not the
+         desktop behind the icon. Drawing the same path filled dark, then the evenodd
+         ember tile on top, keeps the two shapes registered to the same geometry. -->
+    <path fill="${NICHE}" d="${MARK_PATH}" />
     <path fill="${EMBER}" fill-rule="evenodd" d="${MARK_PATH}" />
   </g>
 </svg>`;
@@ -100,7 +118,7 @@ try {
   }
 
   console.log(
-    `\nicons regenerated from a ${SIZE}px master (mark inset ${inset}px per side)` +
+    `\nicons regenerated from a ${SIZE}px master (the mark tile fills the canvas edge to edge)` +
       `\nkept ${KEEP.size} shipped targets, dropped ${dropped} unused mobile/store variants`,
   );
 } finally {
