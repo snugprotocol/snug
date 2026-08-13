@@ -61,7 +61,26 @@ export function createDesktopPlatform(): SnugPlatform {
 
   // The flow the wizard is assembling, remembered between redirectUriFor and
   // openExternal (the wizard always calls them in that order within a flow).
-  let pendingFlow: { provider: string; posture: LoopbackPosture; bound: boolean } | null = null;
+  //
+  // It is a CACHE OF THE CURRENT FLOW, never a memory that outlives one (whole-surface
+  // review finding A). `redirectUriFor` runs at register-screen RENDER time, before the
+  // wizard has an active flow, so exits in that window used to leave this set: the next
+  // session then read the previous provider's ephemeral URI as its "register this
+  // exactly" value — defeating the fixed-port contract — and never bound its listener.
+  // Two invariants close that off, both enforced in `redirectUriFor`:
+  //   1. a provider OR posture that differs from the recorded one RESETS rather than
+  //      replaying a stale string;
+  //   2. `bound` is only trusted while the TRANSPORT still holds a recording; once the
+  //      transport has forgotten (its TTL auto-cancel clears `recorded` from the inside,
+  //      telling nobody) we re-bind instead of throwing 'no redirect URI recorded'
+  //      forever with no reachable reset.
+  let pendingFlow: {
+    provider: string;
+    posture: LoopbackPosture;
+    bound: boolean;
+    /** Set at `channelFor` — the handle a flow-scoped `cancel(flowId)` matches on. */
+    flowId?: string;
+  } | null = null;
 
   const assertLoopback = (posture: DesktopRedirectPosture): LoopbackPosture => {
     if (posture !== 'loopback' && posture !== 'loopback-fixed-port') {
@@ -109,11 +128,32 @@ export function createDesktopPlatform(): SnugPlatform {
       async redirectUriFor(flow: { provider?: string; posture: DesktopRedirectPosture }) {
         const posture = assertLoopback(flow.posture);
         const provider = flow.provider ?? 'unknown';
+
+        // A request that does not MATCH what is pending is a different flow, whatever
+        // the wizard's own bookkeeping says (finding A). Reset rather than replay: a
+        // stale string here is the wrong "register this exactly" value on a screen
+        // whose entire job is to be byte-exact.
+        if (pendingFlow !== null && (pendingFlow.provider !== provider || pendingFlow.posture !== posture)) {
+          pendingFlow = null;
+          await transport.cancel();
+        }
+
         if (pendingFlow !== null && pendingFlow.bound) {
           // Active flow: the recorded string, byte-identical for both service
           // call sites and any re-render of the register screen.
-          return transport.redirectUriProvider.redirectUri(pendingFlow.provider) as string;
+          //
+          // The transport is the AUTHORITY on whether a recording still exists. Its TTL
+          // auto-cancel clears `recorded` from the inside and tells nobody, so a
+          // `bound` flag trusted blindly wedged this call into throwing forever with no
+          // reachable reset. Treat a transport that has forgotten as an unbound flow
+          // and fall through to re-bind.
+          try {
+            return transport.redirectUriProvider.redirectUri(pendingFlow.provider) as string;
+          } catch {
+            pendingFlow = null;
+          }
         }
+
         pendingFlow = { provider, posture, bound: false };
         if (posture === 'loopback-fixed-port') {
           // Display-safe: constant URI, no listener until openExternal.
@@ -134,6 +174,9 @@ export function createDesktopPlatform(): SnugPlatform {
         await openInSystemBrowser(url);
       },
       channelFor(flowId: string): ChannelLike {
+        // The wizard calls this AFTER the mint, so this is where the listener/URI the
+        // pending flow already owns acquires the flowId a scoped cancel names.
+        if (pendingFlow !== null) pendingFlow.flowId = flowId;
         const ch: ChannelLike = {
           onmessage: null,
           close: () => {
@@ -143,9 +186,29 @@ export function createDesktopPlatform(): SnugPlatform {
         channels.set(flowId, ch);
         return ch;
       },
-      cancel: async () => {
+      /**
+       * FLOW-SCOPED when `flowId` is given (finding B): it evicts only that flow's
+       * channel, and stops the listener only when that flow is the one holding it. An
+       * unscoped cancel fired from a losing concurrent start used to clear the whole
+       * channel map and stop the live listener — killing the flow that had just won and
+       * parking the wizard on 'awaiting_callback' with nothing left to deliver.
+       *
+       * Without a `flowId` it is the global teardown, which is what a dismissal needs:
+       * it also clears a listener bound before any flow existed (`redirectUriFor` runs
+       * at register-screen render), which no scoped cancel can reach.
+       */
+      cancel: async (flowId?: string) => {
+        if (flowId !== undefined) {
+          channels.delete(flowId);
+          // Stop the listener ONLY when this flow is demonstrably the one holding it.
+          // `pendingFlow === null` means nothing is pending to tear down; a different
+          // flowId means the listener belongs to somebody else. Either way, leaving it
+          // alone is the safe direction — a global cancel is always still reachable.
+          if (pendingFlow === null || pendingFlow.flowId !== flowId) return;
+        } else {
+          channels.clear();
+        }
         pendingFlow = null;
-        channels.clear();
         await transport.cancel();
       },
     },
