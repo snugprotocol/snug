@@ -1,6 +1,6 @@
 # TASK-20260812-desktop-auth-awareness: Desktop-aware dynamic auth — platform truth in prompts/inference, registry request seats, Coinbase CDP repair, Spotify opener fix, Hue LAN connector
 
-- **Status**: planned — awaiting owner approval (Gate 2 STOP)
+- **Status**: in-progress — P0 (plan approved by owner 2026-08-12)
 - **Owner**: jeetu
 - **Risk tier**: **high** — `packages/auth` (registry, executor, admission), `packages/protocol` (request-template seats → spec-sync), `packages/knowledge` (LLM-bound prompts), C1-adjacent (new signing paths, LAN TLS trust); auth/protocol auto-escalate
 - **Branch**: `fix/TASK-20260812-desktop-auth-awareness` (off `main`)
@@ -376,3 +376,13 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   (b) CoinGecko placement pinned to the query form on both platforms (works everywhere)
   — confirm; (c) ES256-only for CDP v1 (Ed25519 keys get an honest error) — confirm;
   (d) dropping the institutional Exchange (passphrase) surface entirely — confirm.
+
+### 2026-08-12 — claude — plan approved; P0 started
+- Done: owner approved the plan as written ("yes approved go ahead" — recommendations
+  (a)–(d) stand as the plan's defaults, none overridden). ADR-0022 and ADR-0023 drafted
+  (`docs/decisions/`, status proposed). P0 fresh-context adversarial plan review
+  dispatched as a workflow: 3 lenses (security/C1-C2 · wiring-claims-vs-code ·
+  scope/feasibility) each paired with default-to-refuted refuters over the task file +
+  both ADR drafts.
+- State: P0 running; no implementation code yet (High-tier gate holds).
+- Next step: fold CONFIRMED findings into plan + ADRs, then P1 (Spotify opener fix).
