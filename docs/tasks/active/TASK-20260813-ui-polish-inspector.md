@@ -48,6 +48,10 @@ own task — but note the stuck timer you reported will still occur on a thrown/
 5. **AC5 — inspector content fits.** Round-trip payload blocks wrap on whitespace and never
    degrade to one-character-per-line, and the rail body produces no horizontal scrollbar at the
    default width.
+   **Outcome (2026-08-13): partially evidenced.** No horizontal scrollbar — verified. The
+   one-character collapse could not be reproduced in any constructed context (see the journal),
+   so the CSS shipped here is hardening rather than a locked fix, and AC4's user-controlled width
+   is what actually makes large payloads readable. Reopen with a repro if it recurs.
 6. **AC6 — inspector toggle.** An icon button toggles the "watch it think" rail off and back on;
    default is **on**; the state persists across reloads.
 7. **AC7 — live timer stops.** When a round trip settles, its elapsed figure freezes at the
@@ -237,3 +241,75 @@ the frames view is deleted while its reducer is retained**. Draft as ADR-0024 at
 - Open questions: the four in the approval message — rail persistence scope, icon plate colour in
   light theme, whether the connections control should also appear for *connected* apps (planned:
   yes), and how far to take the "flagship" restyle of the gate.
+
+### 2026-08-13 — Jeetu — session (plan approved, Phases A + B-timer)
+- Done — **AC1/AC2** (`22d8bad`): `.brand` `line-height: 1` → `1.25` plus a padding/negative-margin
+  pair on `.brand-word` that extends the clip box under the baseline without moving the lockup.
+  Both `overflow` axes must share a value, so `overflow-y: visible` was not available. Verified in
+  real Chromium: clip box 32px / padding 0 before, 44px / 3.84px after; screenshot shows the `g`
+  tail whole. Desktop mounts the same `App`, so both clients are covered by the one change.
+- Done — **AC3** (`c20776e`): committed `apps/desktop/scripts/generate-icons.mjs` (renders the
+  canonical mark via Playwright's Chromium → `tauri icon`) and regenerated all six shipped icons.
+  **Correction to the plan's root cause:** the canvas was opaque black throughout — this was a
+  scale/position defect (mark at x 116..497 of 1024, gap 116 left vs 526 right, ~37% of the tile),
+  not the transparency defect the pre-read suggested. My corner/edge tests passed on the OLD art
+  and only the centring test went red, which is what surfaced the correction. The generator prunes
+  the mobile/store matrix `tauri icon` emits but this desktop-only app never ships, so re-running
+  is idempotent. `appIcon.test.ts` decodes PNGs inline (`node:zlib`, no new dependency).
+- Done — **AC7 adapters half** (`0d32919`): `runAgentTurn` awaited `adapter.complete()` with no
+  `try`/`catch`, so a rejection skipped the `round_trip` emit and left the entry opened by
+  `round_trip_start` pending forever — the reported "timer keeps running as it moves to the next
+  call". Rejections now convert to `ok:false` (abort → `CANCELLED`, not retryable) so the existing
+  `!result.ok` branch still preserves partial text. Four tests, all seen RED first.
+- Done — **AC7/AC8 render half** (`f3e0a22`): keyed `RoundTrip` by `entry.index` alone (the
+  positional suffix changed identity whenever `evict()` shifted the array); added `startedAt` to
+  the entry so `LiveTimer` measures the CALL, not its own mount — the rail's tab strip unmounts
+  the subtree, which restarted a long call's display at 0. Mutation-checked: reverting to
+  mount-relative timing renders `0ms` for a 90s call and the guard fails.
+- State: suites green — adapters 124, server 126, desktop 101, playground 983. Items 1, 2 and 4
+  are done end-to-end.
+- Next step: AC11 (remove the frames view + update the `railTabs.test.tsx` byte-lock), then AC4–AC6
+  (rail divider, toggle, wrap fix), then Phase C.
+- Open questions: none blocking. The four approval questions were answered — global rail
+  persistence, connections control shown whenever rows exist, restyle scoped to the three banners.
+
+### 2026-08-13 — Jeetu — session (Phases B + C complete; all 11 ACs implemented)
+- Done — **AC11** (`842ba55`): deleted `InspectorPanel.tsx`, the `ThinkPanel` frames section and
+  prop, the `RunView` call-site arg, and `.inspector-list`/`.inspector-entry` CSS. Kept
+  `inspector.ts` byte-for-byte — the `railTabs.test.tsx` byte-lock still passes untouched, because
+  what it defends (two separate, value-blind reducers) is unaffected by dropping a view. Added a
+  test that the FEED survives, since `inFlight`/`sawDbOp`/`readySeen` gate two unrelated features
+  and the obvious follow-up cleanup is exactly the wrong move.
+- Done — **AC4/AC6** (`1e689a2`): new `state/railLayout.ts` (clamped, persisted, global) and
+  `ui/RailDivider.tsx`. `.rail`'s literal 340px became `var(--rail-width)`. Pointer events +
+  `setPointerCapture`, plus an `is-resizing` class that disables pointer events on the app frame —
+  capture does NOT cross into a cross-origin iframe, which is the classic splitter-over-iframe
+  failure. Keyboard-operable (`role="separator"`, arrows/Home/End). Toggle defaults ON; only the
+  literal string `'false'` hides it, so a corrupted key fails safe.
+- Done — **AC9/AC10** (`cea9e4a`): connections button in `run-header`, gated on the app having
+  rows (any status) and re-read on `connectionWizardRevisionStore` so a first connection reveals it
+  without a reload; starters excluded (no persisted rows → empty wizard). New `.connection-note`
+  calm surface for needs-connection, with an `is-error` variant keeping `--danger` for genuine
+  rejection — same structure, different temperature. One existing assertion that pinned the old
+  sentence verbatim was rewritten to assert its intent (provider named + status shown).
+- **AC5 — scope corrected, and this is the one thing to know.** The plan blamed
+  `overflow-wrap: anywhere` + a missing `min-width: 0` chain. I could not reproduce the
+  one-character-per-line collapse in ANY constructed context: a browser harness at the rail's
+  340px, at 820/780px viewports, and in the builder's `<details>` context all measured ~35 and ~96
+  chars per line **before** any change. So the CSS shipped under AC5 is defensive hardening
+  (both hazards are real, and they matter more now that the width is variable), **not** a
+  reproduced fix, and the test comments say exactly that rather than claiming a locked defect.
+  The real fix for the unreadable panel is AC4 — the user can now give the payload the width it
+  needs. If the owner can reproduce the collapse, capture the app/payload and it gets its own task.
+- **Live verification** (dev server + real Chromium, not just jsdom): wordmark clip box 44px with
+  the `g` whole; rail 340 → **541px** by dragging the divider left 160px; toggle hides the rail
+  (`.rail` count 0) and restores it at 541px; **541px survives a reload** (`snug:rail-width=541`).
+  Screenshot confirms the frames section is gone, no horizontal scrollbar, and the header carries
+  `export .sqlite` / `☀ light` / `◨ hide` together.
+- State: **Gate 5 green — root `pnpm test` 21/21 tasks pass** (playground 1011, adapters 124,
+  server 126, desktop 101). All 11 ACs implemented; every bug fix mutation-checked.
+- Next step: owner review. Then Gate 6 — ADR-0024 for the rail decision + frames-view removal,
+  lessons entry, `docs/code-map.md` regeneration, PR.
+- Open questions: (1) can the owner reproduce the one-char-per-line collapse, and where? (2) the
+  desktop icon needs eyeballing on a real dock/taskbar — `pnpm --filter desktop bundle` is
+  unbuilt here.
