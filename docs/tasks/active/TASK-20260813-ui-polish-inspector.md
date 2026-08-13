@@ -345,3 +345,32 @@ and both had been mis-diagnosed by me.
   tall**; icon fills the tile.
 - State: suites green — 21/21 root tasks, desktop 105, playground 1011.
 - Next step: owner re-check of the dock icon on real hardware, then Gate 6.
+
+### 2026-08-13 — Jeetu — session (AC7, third and final path: index collisions)
+Owner hit the stuck timer AGAIN on the running desktop app. The first two fixes were real but
+neither was the cause of what he kept seeing. **Two more causes, both fixed** (`4882f13`):
+
+1. **The app transport never reset the inspector.** `RunView` feeds TWO independent turn sources
+   into ONE reducer: `useBuilderChat` (which resets via `onTurnStart`) and `createAppTransport`
+   for the app's own turns — a Chess move — which was given `onLlmEvent` but **no `onTurnStart`**.
+   Builder turns reset; app turns appended forever. This is the same class of wiring bug
+   `appTransportRoundTrips.test.ts` was created for, one seam over.
+2. **`settleEntry` matched the wrong entry.** `agent-turn.ts` numbers round trips from 0 per
+   TURN, so accumulated entries collide on `index`. The plain `.find()` returned the **oldest**
+   entry at that index — already settled — so the completion was spent re-settling it (silently
+   overwriting its duration) while the newer entry stayed `pending: true` **forever, ticking**.
+   Now prefers the oldest UNSETTLED entry, so N starts and N completions drain one-for-one.
+
+The reducer change is the backstop; the `onTurnStart` wiring removes the accumulation that made
+collisions likely. Both are needed — either alone leaves a reachable path.
+
+Reproduced first as a failing reducer test (two entries at index 0, one stuck pending), all three
+new guards mutation-checked, then verified against the **running desktop dev server** via its
+`/@fs/` module graph: both collision shapes now yield `pending: 0` with durations `[10, 50]`
+intact. Playground 1014, root 21/21.
+
+**Lesson for Gate 6 (this is the third sighting of one symptom):** "the timer keeps running" had
+THREE independent causes, and I twice declared it fixed after closing one. When a symptom has a
+shared final surface (here: `pending: true` drives a ticker), enumerate every producer of that
+state before claiming the fix — a green suite after closing one producer proves only that one
+producer is closed. The honest test is the one that asks "what else can leave this state set?"
