@@ -177,6 +177,9 @@ describe('(b) desktop skips the blank pre-open — the OS opener needs no gestur
     expect(windowOpen, 'no blank about:blank window on desktop — both pre-open sites must skip').not.toHaveBeenCalled();
     await settleUntil(() => desktop.opened.length > 0);
     expect(desktop.opened, 'the system browser carries the sign-in').toHaveLength(1);
+    // Same race, one line later: `openExternal` having been called does not mean the
+    // start chain has finished writing the status. Await the state itself.
+    await settleUntil(() => wizard.connectionFlowStatusStore.get().state === 'awaiting_callback');
     expect(wizard.connectionFlowStatusStore.get().state).toBe('awaiting_callback');
 
     // The explicit cancel affordance — the abandonment story for a handle-less popup.
@@ -189,6 +192,15 @@ describe('(b) desktop skips the blank pre-open — the OS opener needs no gestur
     // pre-opened on the way in.
     await click(/sign in to Fake IdP/i);
     expect(windowOpen, 'the retry call site must skip the blank pre-open too').not.toHaveBeenCalled();
+    // AWAIT THE CONDITION, not a tick count. This retry's onClick RETURNS its promise
+    // into React (nothing awaits it), and the refusal is thrown only after
+    // `startConnectionOAuthFlow` awaits the db open and the mint — real async work that
+    // `settle()`'s microtask drain cannot advance. On a loaded CI runner the store is
+    // still 'idle' when this line runs: that is exactly how the workspace leg went red
+    // while passing 8/8 in isolation and 6/6 under full local parallel load.
+    // Reproduced deterministically by adding a 60ms timer inside the start chain, which
+    // reds this assertion in its old form and passes in this one.
+    await settleUntil(() => wizard.connectionFlowStatusStore.get().state === 'error');
     expect(wizard.connectionFlowStatusStore.get().state).toBe('error');
     windowOpen.mockRestore();
   });
@@ -264,6 +276,9 @@ describe('(P3 item 4c) awaiting the system browser — the desktop wait copy and
     await type('client_id', 'cid-1');
     await click(/connect my Fake IdP account/i);
 
+    // Same async-start race as (b): the status is written at the END of a chain that
+    // awaits the db open and the mint, which `settle()`'s microtask drain cannot advance.
+    await settleUntil(() => wizard.connectionFlowStatusStore.get().state === 'awaiting_callback');
     expect(wizard.connectionFlowStatusStore.get().state).toBe('awaiting_callback');
     expect(container!.textContent).toMatch(/we opened your browser — finish signing in there/i);
     expect(container!.textContent).toMatch(/we(’|')re listening/i);
