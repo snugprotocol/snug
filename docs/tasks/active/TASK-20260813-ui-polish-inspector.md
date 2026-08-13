@@ -1,6 +1,6 @@
 # TASK-20260813-ui-polish-inspector: header wordmark, desktop icon, resizable inspector, connection UX
 
-- **Status**: planned (awaiting plan approval)
+- **Status**: in-progress (plan approved 2026-08-13)
 - **Owner**: Jeetu
 - **Risk tier**: **medium**
 - **Branch**: `fix/TASK-20260813-ui-polish-inspector`

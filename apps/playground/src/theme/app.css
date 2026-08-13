@@ -32,7 +32,12 @@
   font-size: var(--text-brand);
   font-weight: 700;
   letter-spacing: -0.01em;
-  line-height: 1;
+  /* NOT `line-height: 1` (TASK-20260813 AC1): at 1 the line box is exactly the em box,
+     so the tail of the "g" in "snug." falls outside it and .brand-word's overflow:hidden
+     — which is there for the ellipsis — cut it clean off. --font-display is a serif with
+     a deep descender, so it was unmissable. 1.25 gives the tail room to live inside the
+     clip box. The header has no fixed height, so the extra leading costs no layout. */
+  line-height: 1.25;
   color: var(--fg);
 }
 
@@ -48,6 +53,13 @@
 
 .brand .brand-word {
   min-width: 0;
+  /* overflow:hidden clips to the CONTENT box, and both axes must share a value — setting
+     overflow-y:visible would silently force overflow-x to auto and add a scrollbar. So the
+     descender gets room the only way that keeps the ellipsis intact (AC2): a padding-bottom
+     that extends the content box under the baseline, pulled back out of the flex layout by
+     an equal negative margin so the lockup's optical centring is unchanged. */
+  padding-bottom: 0.12em;
+  margin-bottom: -0.12em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
