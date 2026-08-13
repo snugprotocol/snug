@@ -1,6 +1,6 @@
 # TASK-20260812-desktop-auth-awareness: Desktop-aware dynamic auth — platform truth in prompts/inference, registry request seats, Coinbase CDP repair, Spotify opener fix, Hue LAN connector
 
-- **Status**: **BUILT — P0–P6 complete, in-branch, unpushed. Awaiting the OWNER MANUAL VERIFICATION below** (2026-08-13)
+- **Status**: **MERGED to `main` 2026-08-13 (PR #42, squash `b851015`).** Code is done; **two things remain open and are NOT closed by the merge**: (1) the owner's three manual verifications below (AC3/AC4/AC7), and (2) the **ADR-0021 D8 decision** — Windows desktop is structurally blocked (WebView2 injects the invoke key into app iframes) and its CI gate is deliberately RED on `main`.
 - **Owner**: jeetu
 - **Risk tier**: **high** — `packages/auth` (registry, executor, admission), `packages/protocol` (request-template seats → spec-sync), `packages/knowledge` (LLM-bound prompts), C1-adjacent (new signing paths, LAN TLS trust); auth/protocol auto-escalate
 - **Branch**: `fix/TASK-20260812-desktop-auth-awareness` (off `main`)
