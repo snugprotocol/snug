@@ -1,6 +1,6 @@
 # TASK-20260812-desktop-hub-scaffold: Tauri 2 Desktop Hub (roadmap A6, pulled forward to Alpha)
 
-- **Status**: draft
+- **Status**: done (merged via PR #41)
 - **Owner**: jeetu (autonomous session, owner-directed: "autonomously complete the whole desktop client using dynamic workflow")
 - **Risk tier**: **high** — touches `packages/auth` (new OAuth transports), registry auth surfaces, and the C2 gate must be re-proven inside a new shell; protocol/auth auto-escalate
 - **Branch**: `feat/TASK-20260812-desktop-hub-scaffold`
