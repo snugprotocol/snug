@@ -8,6 +8,7 @@ import { parseSse, runAgentTurn, tryParseJsonRecord, type AgentTool, type AgentT
 import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
+import { getPlatform } from '../platform/platform.js';
 import { endpointsNeedConfirmStore, getByokKey, type ByokProvider } from '../state/mode.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
@@ -202,9 +203,19 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
   // replaced by the fenced-HTML instruction, and the artifact is extracted from the
   // reply text after the turn. Blast radius (no KB consult round trip, no
   // schema_apply/app_doc_write) is documented in the task file.
+  //
+  // TASK-20260812-desktop-auth-awareness P2 (AC1): the assembly is told which shell it
+  // serves — on desktop the 95-platform-desktop layer is appended LAST; on web (or with
+  // no platform set) the bytes are identical to before the seat existed. ADR-0012 cache
+  // note: the system prefix now differs per PLATFORM, but a client's platform never
+  // changes mid-session (setPlatform is set-once, before boot), so within any one client
+  // the cached prefix stays byte-stable and the per-turn caching discipline holds. The
+  // app-chat lanes ride this same assembly (useBuilderChat builds its agent only here),
+  // so this is their platform decision altitude too.
+  const platform = getPlatform().kind;
   const system = isWebllm
-    ? `${buildHostSystemPrompt({ appBuilder: true, artifacts: false })}${CONTEXT_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`
-    : buildHostSystemPrompt({ appBuilder: true, artifacts: true });
+    ? `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform })}${CONTEXT_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`
+    : buildHostSystemPrompt({ appBuilder: true, artifacts: true, platform });
   return {
     async send(turn, handlers, signal) {
       const { message, contextBlock, history, tools: toolOverride } = asTurn(turn);

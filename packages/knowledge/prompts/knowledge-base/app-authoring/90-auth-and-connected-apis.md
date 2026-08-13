@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served section-by-section through {{appBuilderToolName}} retrieval; the summary layer's trigger clause sends every external-API build here BEFORE code is written (AL-05 AC5/AC10)
 blast-radius: whether builder-authored apps reach external APIs through the host at all, whether the builder ever tries to place a credential in app code (C1), and whether a declared connection is COMPLETE — a requirement missing a field the provider needs produces an app that cannot authenticate and a user who cannot fix it. Headings are retrieval-load-bearing (AL-05 AC10, ADR-0004): a retrieval test pins that build-time auth queries return the emission teaching in searchKnowledge's top results — renaming or de-keywording headings can silently unserve this file.
-source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb); rewritten for Dynamic Auth v2 (TASK-20260810-p2-pipeline, parent §5 R1/R3 — the full-requirement channel, the skip-rules, the completeness bar). Anthropic prompt-engineering best practices re-read 2026-08-10.
+source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb); rewritten for Dynamic Auth v2 (TASK-20260810-p2-pipeline, parent §5 R1/R3 — the full-requirement channel, the skip-rules, the completeness bar); platform-reach copy corrected for the shipped desktop shell + user-typed-LAN rule added (TASK-20260812-desktop-auth-awareness P2, ADR-0021, P0 security amendment 15). Anthropic prompt-engineering best practices re-read 2026-08-13.
 -->
 
 ## Connected APIs: calling an external API with auth, login, and credentials
@@ -58,8 +58,15 @@ you are sure of. An honestly incomplete declaration the user can correct is bett
 confident wrong one: a wrong hostname freezes a ceiling that refuses every real request,
 and the user sees it as an authentication bug with no way to diagnose it. There is no
 live-fetch rung — the host never fetches a documentation URL for you (fetching arbitrary
-URLs would be an unfrozen network surface beside the frozen host allowlist), and
-desktop-native fetch is a FUTURE rung that does not exist yet.
+URLs would be an unfrozen network surface beside the frozen host allowlist).
+
+What the host can reach differs by platform, and only by platform — the rules above hold
+everywhere. In the Snug desktop app the host's own fetch is native, so providers that
+refuse cross-origin browser calls still work there once their hosts are approved; and a
+device on the user's own network — a private RFC-1918 IPv4 address the user approves —
+is reachable from the desktop app only. The browser version of Snug refuses private
+ranges. A LAN address is always typed by the user in the connect flow: never propose,
+guess, or invent a private address in a requirement.
 
 ### Declare the connection: emit the {{connectionRequirementDirectiveKind}} directive as you build
 

@@ -122,6 +122,7 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
       // The RUNTIME assembly (ADR-0018 D1), with the contract appended as a system
       // SUFFIX after the stable layers (ADR-0012's end-of-system rule). The app-builder
       // layers no longer ride app turns in ANY mode.
+      // No platform seat, deliberately: /invoke is the hub (web) path — the desktop shell is direct-mode only and never calls it (TASK-20260812 P2).
       const runtimeSystem = buildHostSystemPrompt({ appBuilder: false, artifacts: false, appRuntime: true });
       return streamTurn(reply, turnDeps, {
         system:
@@ -154,6 +155,7 @@ export function registerInvokeRoute(app: FastifyInstance, deps: InvokeRouteDeps)
       const history: AdapterMessage[] =
         threadId === undefined ? [] : deps.threads.history(threadId).map((m) => ({ role: m.role, content: m.content }));
       return await streamTurn(reply, turnDeps, {
+        // No platform seat, deliberately: /invoke is the hub (web) path — the desktop shell is direct-mode only and never calls it (TASK-20260812 P2).
         system: buildHostSystemPrompt({ appBuilder: true, artifacts: true }),
         messages: [...history, { role: 'user', content: message }],
         withTools: true,
