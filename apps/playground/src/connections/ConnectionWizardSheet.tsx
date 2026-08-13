@@ -59,6 +59,7 @@ import {
   desktopOAuthPostureFor,
   desktopOAuthRefusalFor,
   findRevokedBefore,
+  migrateConnectionRegistryDrift,
   needsReapproval,
   openBlankConnectionOAuthPopup,
   reapproveFromDiff,
@@ -972,7 +973,15 @@ export function ConnectionWizardSheet(): ReactElement | null {
       return;
     }
     let alive = true;
-    void getUserDb().then((db) => {
+    void getUserDb().then(async (db) => {
+      // Amendment 3 (TASK-20260812-desktop-auth-awareness; ADR-0022 consequences):
+      // registry drift is reconciled BEFORE the row is first rendered, so every open
+      // route — Settings, the chat card, the net-error CTA, the AC5 repair banner —
+      // reviews the row the registry would mint TODAY, not the one an older registry
+      // minted once. Idempotent (a migrated row reports no drift), and a failure falls
+      // back to rendering the row exactly as stored — the pre-migration behavior,
+      // never a blocked wizard.
+      await migrateConnectionRegistryDrift(appId, slot).catch(() => undefined);
       if (!alive) return;
       const found = db.getConnection(appId, slot);
       setRow(found);

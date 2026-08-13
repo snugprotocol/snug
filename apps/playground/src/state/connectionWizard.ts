@@ -39,6 +39,7 @@
 import {
   CONNECTION_STATUS,
   NET_ERROR_CODES,
+  deriveConnectionAllowedHosts,
   type ConnectionRequirement,
 } from '@snugprotocol/protocol';
 import { authConnectionCredentialSecretKey, type ConnectionRow, type UserDb } from '@snugprotocol/db';
@@ -48,11 +49,13 @@ import {
   SlotScopedCredentialStore,
   SnugAuthError,
   UserDbCredentialStore,
+  admitConnectionRequirement,
   executeConnectionTestRequest,
   lookupWellKnownProvider,
   requirementFromRegistryEntry,
   requirementToSpec,
   resolveDesktopPosture,
+  type AdmissionChannel,
   type DesktopRedirectPosture,
   type FetchLike,
   type OAuthCallbackInput,
@@ -408,17 +411,28 @@ export async function advanceFromRegister(): Promise<ConnectionWizardResult> {
  * rebind (P3 item 4b: the desktop refusal steering to a different flow, e.g. OAuth →
  * personal access token) changes what credential is even asked for, so it walks the
  * register/credentials half — "done" would claim a connection no secret backs.
+ *
+ * A FIELD-SET change walks the credential half for the same reason as a kind rebind
+ * (TASK-20260812-desktop-auth-awareness amendment 3): "existing secrets are still
+ * valid" is only true while the promoted requirement asks for the SAME boxes. The
+ * field-set-drift migration below stages exactly such an edit (the owner's old
+ * Coinbase triple → the CDP pair), and landing it on 'done' would claim a connection
+ * whose new fields no stored secret backs.
  */
 export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
   return withSession((db, session) => {
     const before = db.getConnection(session.appId, session.slot);
+    const fieldKeys = (requirement: ConnectionRequirement | undefined): string =>
+      JSON.stringify((requirement?.fields ?? []).map((field) => field.key));
     const kindChanged =
       before?.pendingRequirement !== undefined && before.pendingRequirement.kind !== before.requirement.kind;
+    const fieldSetChanged =
+      before?.pendingRequirement !== undefined && fieldKeys(before.pendingRequirement) !== fieldKeys(before.requirement);
     db.reapproveConnection(session.appId, session.slot);
     invalidateNetGrants(session.appId);
     bumpRevision();
     const after = db.getConnection(session.appId, session.slot);
-    connectionWizardStepStore.set(kindChanged ? nextStep('review', after?.requirement) : 'done');
+    connectionWizardStepStore.set(kindChanged || fieldSetChanged ? nextStep('review', after?.requirement) : 'done');
     return { ok: true };
   });
 }
@@ -549,6 +563,123 @@ export function findRevokedBefore(
  */
 export function needsReapproval(row: Pick<ConnectionRow, 'status' | 'pendingRequirement'> | undefined): boolean {
   return row !== undefined && row.status === CONNECTION_STATUS.approved && row.pendingRequirement !== undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Registry drift migration on wizard open (TASK-20260812-desktop-auth-awareness,
+// P0 amendment 3 — BLOCKER seat-migration-gap; ADR-0022 consequences)
+// ---------------------------------------------------------------------------
+
+/** What a wizard open found: nothing to do, a silent seat refresh, or a staged edit. */
+export type RegistryDriftOutcome = 'none' | 'repersisted' | 'staged';
+
+/**
+ * Reconcile an APPROVED row with the registry it borrows from, on wizard open.
+ *
+ * WHY THIS SEAM EXISTS. Rows are admitted once and the executor reads only the
+ * persisted spec — so when the registry starts pinning `request`/`testRequest` seats
+ * (ADR-0022 §1), every row minted before the pin keeps serving the old spec forever:
+ * the owner's existing installs stay exactly as broken as they were, no matter how
+ * correct the registry becomes. The wizard open (Settings, the chat card, the AC5
+ * banner CTA — every route lands in the sheet, which calls this before first render)
+ * is the one moment a human is already looking at the connection, so it is where the
+ * row catches up.
+ *
+ * TWO DRIFT CLASSES, two very different ceremonies:
+ *
+ * 1. REGISTRY-SEAT drift — the field set is UNCHANGED and the registry now pins
+ *    request/testRequest seats the row lacks. The stored secrets are still exactly the
+ *    right ones; only WHERE they are sent (reviewed registry data, exactly what Guard 2b
+ *    reserves for the registry) was missing. The requirement re-runs registry
+ *    substitution via `stagePendingRequirement` (the admission gate is the substituting
+ *    seam — one resolution, never a local re-derivation) and, when the re-derived host
+ *    ceiling is IDENTICAL to the frozen one, is promoted immediately: approval survives
+ *    (`status` never leaves `approved`), secrets are untouched, and no re-approval is
+ *    forced for a grant whose hosts did not move. (`approved_at` is refreshed by the
+ *    promotion accessor — journaled; the STATUS is what the amendment binds.) If the
+ *    ceiling would move at all, nothing is promoted — the staged edit renders as the
+ *    ordinary diff and the user decides.
+ *
+ * 2. FIELD-SET drift — the row's own persisted shape no longer matches any of the
+ *    provider's pinned options (the owner's old api_key/api_secret/passphrase Coinbase
+ *    triple: those credentials expired provider-side; the registry now names a
+ *    different pair). The registry's CURRENT shape for the row's kind is STAGED, never
+ *    promoted here: the user sees the field diff, and approving it routes into the
+ *    credential half for re-entry (`reapproveFromDiff`'s fieldSetChanged rule). Old
+ *    secrets for dropped fields are left in storage untouched — unused by the new
+ *    template, wiped only by the acts that already wipe (revoke, delete).
+ *
+ * WHAT IT NEVER TOUCHES: unapproved rows (admission owns declarations), rows with an
+ * app-staged pending edit already waiting (never clobbered — the existing diff flow
+ * owns them), non-registry providers, revoked tombstones, and every stored secret.
+ */
+export async function migrateConnectionRegistryDrift(appId: string, slot: string): Promise<RegistryDriftOutcome> {
+  const db = await getUserDb();
+  const row = db.getConnection(appId, slot);
+  if (row === undefined || row.status !== CONNECTION_STATUS.approved) return 'none';
+  if (row.pendingRequirement !== undefined) return 'none';
+  const entry = lookupWellKnownProvider(row.requirement.provider.name);
+  if (entry === undefined) return 'none';
+
+  // The ONE admission resolution, re-run over the row's own persisted shape on its own
+  // stored channel — never a local re-implementation of matching/substitution (lesson
+  // 2026-08-12: a guard that refuses AND rewrites must drive both from one resolution;
+  // the same rule binds a MIGRATION that re-derives what admission would write today).
+  const admitted = admitConnectionRequirement(row.requirement, {
+    channel: row.provenance as AdmissionChannel,
+  });
+
+  const fieldKeys = (requirement: Pick<ConnectionRequirement, 'fields'>): string =>
+    JSON.stringify((requirement.fields ?? []).map((field) => field.key));
+  const hostsEqual = (left: readonly string[], right: readonly string[]): boolean =>
+    [...left].sort().join('\n') === [...right].sort().join('\n');
+
+  if (admitted.ok) {
+    const substituted = admitted.requirement;
+    const fieldSetChanged = fieldKeys(row.requirement) !== fieldKeys(substituted);
+    const gainsSeats =
+      (row.requirement.request === undefined && substituted.request !== undefined) ||
+      (row.requirement.testRequest === undefined && substituted.testRequest !== undefined);
+    if (!fieldSetChanged && !gainsSeats) return 'none';
+
+    // Stage the row's OWN requirement: the gate's substitution writes the current
+    // registry values into the pending column (amendment 1 opened exactly this path —
+    // the byte-match exemption is what lets the substituted shape survive the second
+    // admission pass).
+    const staged = db.stagePendingRequirement(appId, slot, row.requirement);
+    const pending = staged.pendingRequirement;
+    if (
+      !fieldSetChanged &&
+      pending !== undefined &&
+      hostsEqual(deriveConnectionAllowedHosts(pending), row.allowedHosts)
+    ) {
+      // Host-identical seat refresh: promote without ceremony. Every approval
+      // transition drops remembered net grants (the R3 rule `advanceFromReview`
+      // states), and the served spec just changed, so this one does too.
+      db.reapproveConnection(appId, slot);
+      invalidateNetGrants(appId);
+      bumpRevision();
+      return 'repersisted';
+    }
+    // The ceiling would move, or the substituted shape changed the boxes (a
+    // registry-provenance row whose fields the registry renamed): the user decides,
+    // through the diff screen the staged column already renders.
+    bumpRevision();
+    return 'staged';
+  }
+
+  // Admission REFUSED the row's own persisted shape — the registry moved out from
+  // under it (Guard 2b: its authored-looking field list matches no current option).
+  // Stage the registry's current shape for the row's kind; the diff screen discloses
+  // the field change and approval routes to re-credential.
+  const option =
+    entry.kind === row.requirement.kind
+      ? undefined
+      : (entry.authOptions ?? []).find((candidate) => candidate.kind === row.requirement.kind);
+  const shaped = requirementFromRegistryEntry(entry, row.requirement.provider.name, slot, option);
+  db.stagePendingRequirement(appId, slot, shaped);
+  bumpRevision();
+  return 'staged';
 }
 
 // ---------------------------------------------------------------------------
