@@ -539,3 +539,29 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   both ADR drafts.
 - State: P0 running; no implementation code yet (High-tier gate holds).
 - Next step: fold CONFIRMED findings into plan + ADRs, then P1 (Spotify opener fix).
+
+### 2026-08-12 — claude — P0 complete (3 rounds), P1 complete
+- P0: wiring lens round 1 (4 confirmed incl. 2 BLOCKERs, probe-executed) + feasibility
+  (5 confirmed incl. 1 BLOCKER) folded; lenses re-ran against the AMENDED plan (resume
+  cache invalidation re-ran everything after the edited security prompt — accidental but
+  valuable: round 2 found the lan-admission-clobber BLOCKER *in my round-1 fold*);
+  security lens succeeded on attempt 3 as a prose agent after two mechanical
+  structured-output failures (placeholder, then retry-cap) — 2 findings (scrub
+  enumeration MAJOR, LAN consent copy MINOR) + 5 clean bills; its citations re-derived
+  by hand before folding. 15 confirmed findings total, all folded into plan + ADRs.
+- P1 (tests first, red proven): `capabilities/main.json` opener grant was a BARE string
+  = empty URL scope = every `openUrl` refused (`ForbiddenUrl`) — now a scoped object
+  `allow: [{url: "https://*"}]`; wizard catch at `connectionWizard.ts` binds the error
+  and renders three differentiated messages (port-41420 collision verbatim / opener
+  denial names Snug / genuine failure appends the cause; flow teardown asserted); belt
+  tests pin the opener scope beside the http one; `openerRealModule.test.ts` closes the
+  wholesale-mock gap (real `oauth.ts` https guard exercised). Desktop 55 (was 50),
+  playground 876 (was 873), both tsc-gated green.
+- Gate note (AC3, deliberate): no in-shell open_url check added — a positive control
+  necessarily opens a real browser on CI, and a refuses-http-only check cannot fail for
+  the regression it would claim to guard (bare grant refuses http too). The build
+  itself schema-validates the capability file, the belt pins its content, the wizard
+  tests hold the pre-open seam. **The live positive proof is the owner's manual Spotify
+  sign-in — owner: please re-test Spotify connect in the desktop app after the next
+  build.**
+- Next step: P2 (platform truth in prompts + inference).
