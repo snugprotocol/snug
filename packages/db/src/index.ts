@@ -29,6 +29,11 @@ export {
   type PersistenceKind,
 } from './persistence.js';
 
+// Desktop 'file' backend (TASK-20260812 AC2): pure-TS PersistenceBackend over an
+// injected filesystem seam — the Tauri shell implements `FileBackendFs` with its
+// read_user_file/write_user_file commands (temp+rename atomicity lives there).
+export { createFileBackend, type FileBackendFs } from './file-backend.js';
+
 export { namespaceToFileName } from './namespace.js';
 
 export {

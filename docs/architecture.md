@@ -91,6 +91,28 @@ validate suite. **Before any UNTRUSTED declaration channel can exist** (an app-i
 flow above all), a `providerName` charset/confusable guard and a registry-borrow ban are
 hard prerequisites — see `docs/next-steps.md`.
 
+## Desktop shell (TASK-20260812-desktop-hub-scaffold, ADR-0021)
+
+`apps/desktop` wraps the SAME playground source (vite alias, `HashRouter`, desktop entry)
+in a Tauri 2 shell — BYOK/local only, no subscription surface. The playground gained ONE
+seam: `src/platform/platform.ts` (`SnugPlatform`, set-once before boot; web default =
+prior behavior byte-for-byte). Desktop supplies: native fetch (`tauri-plugin-http`,
+CORS-free) through the connected-fetch `fetchImpl` seam AND the LLM adapters; a `'file'`
+`PersistenceBackend` persisting `~/Snug/user.sqlite` via atomic Rust commands (userdb +
+sync sidecar share it); loopback OAuth (`RedirectUriProvider`/`CallbackSink` seams,
+`tauri-plugin-oauth`, fixed port 41420 for exact-match providers, system browser only per
+RFC 8252); Ollama autodetect; `.snug` file association through a single-use Rust
+allowlist → confirm dialog → `importUserFile` (F15 arms). Registry entries carry
+human-authored `desktopRedirectPosture` + `browserCallable` seats (registry-level data,
+NOT requirement seats — no protocol change); unsupported postures refuse at wizard entry,
+and `pkce:false` + loopback is structurally refused (auth-code injection). The connected-
+fetch executor gained a desktop-only `transportPolicy` admitting `http` to user-approved
+RFC-1918 IPv4 literals (Hue-class LAN; browser profile unchanged). C2's in-shell proof =
+the 14 browser CSP checks + IPC-unreachability-from-iframe checks + one wizard e2e
+journey, run by the shell-gate harness (`pnpm --filter desktop gate`): macOS GREEN
+2026-08-12, Windows pends first CI run (first workflow: `.github/workflows/ci.yml`).
+Threat surface: `docs/security/threat-model-delta-desktop-shell.md`.
+
 ## Dependency graph (who depends on whom → whose tests also run)
 
 - `protocol` ← `runner`, `sdk`, `server`, `adapters`, `db`, `playground` (change protocol → run everything)
@@ -99,6 +121,7 @@ hard prerequisites — see `docs/next-steps.md`.
 - `adapters` ← `server`, `playground` (browser-direct byok/local)
 - `runner` ← `playground`
 - `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); `playground` now consumes it (AL-03 wires the connected-fetch executor into the runner's NetHandler seam) — change `auth` → run `auth` + `playground`. `runner` does NOT depend on `auth` (value-blind by lint, R4).
+- `desktop` (apps/desktop) consumes the playground SOURCE (vite alias) + `auth`/`db`/`adapters` — change any of those → run `desktop` too (`pnpm --filter desktop test`, plus `test:rust` and the `gate` script for shell-level changes).
 
 ## External dependencies
 LLM providers: Anthropic + OpenAI via `adapters` — browser-direct in byok mode (CORS opt-in header), any OpenAI-compatible localhost endpoint in local mode (Ollama), hub-side in subscription mode. Experimental: `@mlc-ai/web-llm` (pinned, playground-only, code-split) runs a small model in-page on WebGPU behind the `?webllm=1` flag — same AgentAdapter contract via a brain OVERRIDE of the configured mode, tool-free fenced-HTML build path, demo-brain fallback when WebGPU is absent (ADR-0015; GA at 1.2). sql.js (WASM SQLite), OPFS (browser). Hub server: better-sqlite3 stores, openid-client (Google OIDC), @fastify/{cookie,static,cors}. Dropbox HTTP API (example personal sync origin, PKCE public client). No cloud services required for OSS usage.

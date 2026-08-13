@@ -81,7 +81,9 @@ export {
   WELL_KNOWN_PROVIDERS_REGISTRY,
   lookupWellKnownProvider,
   requirementFromRegistryEntry,
+  resolveDesktopPosture,
   resolveInferrerAlias,
+  type DesktopRedirectPosture,
   type WellKnownAuthOption,
   type WellKnownOauthProvider,
 } from './well-known-providers.js';
@@ -167,3 +169,15 @@ export {
   type SnugAuthErrorCode,
   type SpecScope,
 } from './oauth-service.js';
+
+// Desktop loopback OAuth transport (TASK-20260812, ADR-0021): `CallbackSink`'s first
+// production-shaped transport — DI-pure, no tauri imports; the shell injects the
+// `LoopbackListener` and the playground platform seam consumes the transport.
+export {
+  DESKTOP_FLOW_TTL_MS,
+  SNUG_DESKTOP_OAUTH_PORT,
+  buildLoopbackRedirectUri,
+  createDesktopOAuthTransport,
+  type DesktopOAuthTransport,
+  type LoopbackListener,
+} from './desktop-transport.js';

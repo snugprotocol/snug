@@ -1,0 +1,42 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Snug main window. C2 note (AC7): capabilities are scoped to the top-level main window ONLY — the sandboxed app iframes must never reach the IPC bridge; the in-shell hard gate asserts unreachability from inside a srcdoc iframe. HTTP scope note: this list is BELT, not policy — the real ceiling is the connected-fetch executor's frozen per-connection allowlist. It is nonetheless kept as tight as the LAN rung allows: `http://` is admitted only for the three RFC-1918 ranges (172.16-31 enumerated, NOT the whole 172/8), plus the single Ollama probe port on loopback and the debug-gate stub port. Blanket `http://localhost:*` and `http://127.0.0.1:*` are deliberately absent — connected-fetch refuses loopback outright, so nothing legitimate needs them. The two loopback entries are single-purpose: 11434 is the Ollama probe (threat-model delta §3.5, an accepted residual outside the connected-fetch guards), and 43120 is DEBUG-ONLY — the in-shell gate's net-stub target (gate/run-gate.mjs SNUG_GATE_STUB_PORT). Tauri bakes capability scopes at build time, so the gate's port cannot be added conditionally at runtime; it is admitted here permanently and is inert in a release build, where the debug-only host remap that points at it does not exist (net-remap.ts). Overriding SNUG_GATE_STUB_PORT to a different port requires adding that port here too.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "opener:allow-open-url",
+    "oauth:allow-start",
+    "oauth:allow-cancel",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://**" },
+        { "url": "http://10.*.*.*:*" },
+        { "url": "http://172.16.*.*:*" },
+        { "url": "http://172.17.*.*:*" },
+        { "url": "http://172.18.*.*:*" },
+        { "url": "http://172.19.*.*:*" },
+        { "url": "http://172.20.*.*:*" },
+        { "url": "http://172.21.*.*:*" },
+        { "url": "http://172.22.*.*:*" },
+        { "url": "http://172.23.*.*:*" },
+        { "url": "http://172.24.*.*:*" },
+        { "url": "http://172.25.*.*:*" },
+        { "url": "http://172.26.*.*:*" },
+        { "url": "http://172.27.*.*:*" },
+        { "url": "http://172.28.*.*:*" },
+        { "url": "http://172.29.*.*:*" },
+        { "url": "http://172.30.*.*:*" },
+        { "url": "http://172.31.*.*:*" },
+        { "url": "http://192.168.*.*:*" },
+        { "url": "http://127.0.0.1:11434/*" },
+        { "url": "http://127.0.0.1:43120/*" }
+      ]
+    }
+  ]
+}

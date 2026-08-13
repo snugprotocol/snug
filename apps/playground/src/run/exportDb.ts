@@ -6,6 +6,8 @@ import { base64ToBytes } from '@snugprotocol/db';
 import { FRAME_TYPES, PROTOCOL_VERSION, type DbRequestFrame } from '@snugprotocol/protocol';
 import type { DbDriver } from '@snugprotocol/runner';
 
+import { getPlatform } from '../platform/platform.js';
+
 export type ExportResult = { ok: true; blob: Blob } | { ok: false; message: string };
 
 let exportSeq = 0;
@@ -28,8 +30,13 @@ export async function exportDatabase(driver: DbDriver, namespace: string): Promi
   return { ok: true, blob: new Blob([new Uint8Array(bytes)], { type: 'application/x-sqlite3' }) };
 }
 
-/** Kick off a browser download for a blob. */
+/** Kick off a download: the platform's native save dialog when one exists (W2b item 6), else the anchor. */
 export function downloadBlob(blob: Blob, filename: string): void {
+  const saveFile = getPlatform().saveFile;
+  if (saveFile !== undefined) {
+    void blob.arrayBuffer().then((buffer) => saveFile(new Uint8Array(buffer), filename));
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

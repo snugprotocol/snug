@@ -17,6 +17,7 @@ import {
 } from '@snugprotocol/db';
 import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 
+import { getPlatform } from '../platform/platform.js';
 import { refreshAppMeta } from './appMeta.js';
 import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
 import { createStore, useStore } from './store.js';
@@ -100,13 +101,26 @@ async function startLoop(kind: SyncOriginKind): Promise<void> {
     syncStatusStore.set({ origin: 'none', state: 'off' });
     return;
   }
+  if (kind === 'hub' && !getPlatform().capabilities.hubSyncOrigin) {
+    // An imported config can name the hub origin on a platform that has none (relative
+    // /userdb URLs mean nothing against tauri:// — P0 amendment 13). Say so honestly
+    // instead of building a loop that would fail mid-sync.
+    syncStatusStore.set({
+      origin: 'hub',
+      state: 'error',
+      detail: 'hub sync is not available in the desktop app — choose this device only, or dropbox',
+    });
+    return;
+  }
   const provider = await buildProvider(kind);
   if (provider === undefined) return;
   const userDb = await getUserDb();
   loop = createSyncLoop({
     userDb,
     provider,
-    backend: detectPersistenceBackend(USERDB_OPFS_DIR),
+    // The sidecar sits beside the user file — SAME backend as the userdb open
+    // (Decision 7): platform-supplied on desktop, OPFS detection on web.
+    backend: getPlatform().userdbBackend ?? detectPersistenceBackend(USERDB_OPFS_DIR),
     intervalMs: SYNC_INTERVAL_MS,
     // Secrets ride only to personal origins the user explicitly opted into.
     includeSecrets: kind === 'dropbox',

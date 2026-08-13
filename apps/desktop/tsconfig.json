@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@playground/*": ["../playground/src/*"]
+    }
+  },
+  "include": ["src", "vite.config.ts", "vitest.config.ts", "../playground/src"],
+  "exclude": ["src/**/__tests__/**", "../playground/src/**/__tests__/**"]
+}

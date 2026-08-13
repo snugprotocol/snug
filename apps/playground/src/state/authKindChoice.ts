@@ -18,7 +18,7 @@
  * a rebind, never an approval.
  */
 import { getUserDb } from './userdb.js';
-import { openConnectionWizard } from './connectionWizard.js';
+import { openConnectionWizard, refreshOpenConnectionWizard } from './connectionWizard.js';
 import {
   persistConnectionRequirement,
   type ConnectionPersistOutcome,
@@ -46,7 +46,11 @@ export async function chooseAuthOption(input: ChooseAuthOptionInput): Promise<Co
     channel: 'user',
   });
   if (outcome.ok) {
-    openConnectionWizard({ appId: input.appId, slot: input.slot, source: 'directive' });
+    // When the choice was made INSIDE the open wizard (the desktop refusal's steer,
+    // P3 item 4b), reopening would refuse — refresh the live session instead.
+    if (!refreshOpenConnectionWizard(input.appId, input.slot)) {
+      openConnectionWizard({ appId: input.appId, slot: input.slot, source: 'directive' });
+    }
   }
   return outcome;
 }

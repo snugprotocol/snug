@@ -458,6 +458,13 @@
   font: inherit;
 }
 
+/* A locked (web-side desktopOnly) starter reads as unavailable, not broken: greyed,
+   no pointer, the badge carries the plain-words reason (TASK-20260812 P3 item 5). */
+.app-tile .tile-card-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 /* Revealed on hover/focus so the grid stays calm, but always reachable by keyboard
    and always present on touch, where there is no hover. */
 .app-tile .tile-delete {

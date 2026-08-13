@@ -2,13 +2,24 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router-dom';
 
+import {
+  clearOpenUserFileError,
+  openUserFileConfirmStore,
+  openUserFileErrorStore,
+  registerPlatformOpenFile,
+  resolveOpenUserFileConfirm,
+} from './platform/openFile.js';
+import { initDesktopFirstRun } from './desktop/firstRun.js';
+import { ModeCoercionNote } from './desktop/ModeCoercionNote.js';
 import { refreshAppMeta } from './state/appMeta.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
+import { refreshOllama } from './state/ollama.js';
+import { useStore } from './state/store.js';
 import { initWebllm } from './state/webllm.js';
 import { initSync, signOut } from './state/sync.js';
 import { toggleTheme, useTheme } from './state/theme.js';
-import { bootUserDb, recoverFresh, useUserDbStatus } from './state/userdb.js';
+import { bootUserDb, recoverFresh, retryUserDbBoot, useUserDbStatus } from './state/userdb.js';
 import { ConnectionWizardNote } from './connections/ConnectionWizardNote.js';
 import { ConnectionWizardSheet } from './connections/ConnectionWizardSheet.js';
 import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
@@ -31,13 +42,56 @@ export function App(): ReactElement {
   // resume the configured sync origin and probe the hub's optional auth surface.
   useEffect(() => {
     bootUserDb();
-    void initSettings();
+    // The Ollama probe answers BEFORE settings hydrate (P3 item 2): a hydrated
+    // 'subscription' mode coerces to the best available mode, and "is local
+    // available" is the probe's answer. On web the probe is a synchronous no-op,
+    // so this ordering changes nothing there (AC10). The first-run latch reads the
+    // same settings, so it follows hydration.
+    void refreshOllama()
+      .then(() => initSettings())
+      .then(() => initDesktopFirstRun());
     // AL-07: the experimental webllm flag + WebGPU probe (idempotent, flag-gated).
     void initWebllm();
+    // W2b: platform-only seam — a no-op on web (no open handler).
+    registerPlatformOpenFile();
     void refreshAppMeta();
     void initSync();
     void refreshAuth();
   }, []);
+
+  if (dbStatus.state === 'load-failed') {
+    // P3 item 7 — the boot open REJECTED (torn/magic-less file refused by the file
+    // backend). A plain full-screen truth, not a banner over a broken shell: nothing
+    // was overwritten, here is the file, try again when it is back.
+    return (
+      <div className="shell">
+        <main className="shell-main">
+          <div className="error-note" role="alert" data-testid="userdb-load-failed">
+            <p>
+              <strong>Your Snug file couldn&apos;t be read.</strong> It has not been overwritten — it is still on your
+              disk exactly as it was.
+            </p>
+            {dbStatus.path !== undefined ? (
+              <p>
+                file: <code>{dbStatus.path}</code>
+              </p>
+            ) : null}
+            <p className="hint">{dbStatus.message}</p>
+            <p className="hint">
+              if you have a backup or a synced copy, put it back in place — then try again. Nothing happens until you
+              do.
+            </p>
+            <Button variant="primary" onClick={() => retryUserDbBoot()}>
+              try again
+            </Button>
+          </div>
+        </main>
+        {/* Finding 5: THE state where a user double-clicks their backup. Without
+            the dialog here the open event parks invisibly behind this screen. */}
+        <OpenUserFileConfirmDialog />
+      </div>
+    );
+  }
 
   return (
     <div className="shell">
@@ -96,6 +150,8 @@ export function App(): ReactElement {
         </nav>
       </header>
       <WebllmBanner />
+      {/* P3 item 2: the honest trace of a hydrated-subscription coercion (desktop). */}
+      <ModeCoercionNote />
       <main className="shell-main">
         <Routes>
           <Route path="/" element={<HubView />} />
@@ -128,7 +184,84 @@ export function App(): ReactElement {
           reason: refusals happen from every entry point, and a per-view note would be
           silent exactly where the refused click came from (F4, TASK-20260812). */}
       <ConnectionWizardNote />
+      {/* Desktop .snug open-with confirm (W2b): app-level for the same reason as the
+          wizard — an OS open event can arrive on any route. Renders nothing on web. */}
+      <OpenUserFileConfirmDialog />
     </div>
+  );
+}
+
+/**
+ * The `.snug` open-with replace prompt (TASK-20260812 Decision 8): a platform open
+ * event already passed the extension + sqlite-magic gates before this parks — the
+ * dialog's only job is the explicit user decision. Never a silent import.
+ */
+export function OpenUserFileConfirmDialog(): ReactElement | null {
+  const pending = useStore(openUserFileConfirmStore);
+  const error = useStore(openUserFileErrorStore);
+
+  // The failure banner (review finding 5): BAD_IMPORT / TOO_LARGE / a restore that
+  // still would not open used to reject into nothing at all, so a double-click
+  // silently did nothing. It renders whether or not a confirm is parked.
+  const banner =
+    error === null ? null : (
+      <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="that snug file could not be opened">
+        <div className="net-confirm-card">
+          <h2 className="net-confirm-title">that file couldn&apos;t be opened</h2>
+          <p className="net-confirm-body">
+            Nothing was changed — your data is exactly as it was. {error}
+          </p>
+          <div className="field-row net-confirm-actions">
+            <Button variant="primary" onClick={() => clearOpenUserFileError()}>
+              ok
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+
+  if (pending === null) return banner;
+
+  // When the database could not be opened at all, this file is a RESCUE, not a
+  // replacement — there is nothing of the user's to overwrite, and saying
+  // "your current data will be overwritten" would be a lie that scares a user
+  // away from the one action that fixes their problem.
+  const restore = pending.needsRestore;
+  return (
+    <>
+      {banner}
+      <div
+        className="net-confirm-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label={restore ? 'restore from this snug file' : 'replace your snug data'}
+      >
+        <div className="net-confirm-card">
+          <h2 className="net-confirm-title">{restore ? 'restore from this file?' : 'open this snug file?'}</h2>
+          <p className="net-confirm-body">
+            {restore ? (
+              <>
+                Snug couldn&apos;t read your data, so there is nothing to lose. Use <strong>{pending.path}</strong> to
+                start again from this backup?
+              </>
+            ) : (
+              <>
+                Replace your Snug data with the file <strong>{pending.path}</strong>? Your current data will be
+                overwritten.
+              </>
+            )}
+          </p>
+          <div className="field-row net-confirm-actions">
+            <Button variant="ghost" onClick={() => resolveOpenUserFileConfirm(false)}>
+              {restore ? 'not now' : 'keep my current data'}
+            </Button>
+            <Button variant="primary" onClick={() => resolveOpenUserFileConfirm(true)}>
+              {restore ? 'restore from this file' : 'replace'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 
