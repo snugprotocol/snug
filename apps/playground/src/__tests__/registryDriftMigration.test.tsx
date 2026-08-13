@@ -447,25 +447,38 @@ describe('the done screen probes a coinbase row (the registry now pins testReque
     // The probe rides the REAL executor (JWT mint via WebCrypto is genuinely async) —
     // wait for the rendered outcome rather than a fixed number of microtasks.
     //
-    // The budget is explicit and generous: a real SEC1→PKCS#8 import plus an ES256 sign
-    // takes single-digit ms alone, but under the full suite (95 files sharing the box)
-    // it intermittently exceeded vi.waitFor's 1000ms default — this test failed roughly
-    // 1 run in 3 at suite scale while passing every time in isolation. The condition is
-    // unchanged; only the patience is. If this ever times out at 10s, the mint is truly
-    // broken (or hung), which is a real failure worth seeing.
-    await act(async () => {
-      await vi.waitFor(
-        () => {
-          if (container!.querySelector('[data-testid="connection-test-result"]') === null) {
-            throw new Error('probe outcome not rendered yet');
-          }
-        },
-        { timeout: 10_000, interval: 25 },
-      );
-    });
+    // THE BUDGET AND THE TEST'S OWN TIMEOUT MUST AGREE — P4 correction (2026-08-13).
+    // P3 raised this `vi.waitFor` to 10s to cure an intermittent failure, but vitest's
+    // per-test timeout here is the 5000ms DEFAULT (playground's vitest.config.ts sets no
+    // `testTimeout`). A 10s inner budget inside a 5s outer one is unreachable: the test is
+    // killed at 5004ms with vitest's own "Test timed out in 5000ms" while `waitFor` is
+    // still patiently waiting, so the raise could never have taken effect. Measured on the
+    // committed tree, this file still failed 3 runs in 12 (25%) — the P3 fix addressed a
+    // misdiagnosis (a "slow mint"), not the actual mechanism.
+    //
+    // Both numbers are now explicit and the INNER budget is strictly smaller than the
+    // OUTER one, so a real hang is reported by THIS assertion — naming the missing probe
+    // outcome — instead of by an anonymous suite-level timeout that says nothing about
+    // what failed. Measured cost when it passes: the whole 10-test file runs in ~160ms in
+    // isolation and ~500ms under the full suite, so 8s is ~16x headroom over the worst
+    // observed pass, and the 15s test timeout leaves room for the wait to report first.
+    // If this ever times out, the mint is truly broken or hung — a real failure worth
+    // seeing, and now one that arrives with a message.
+    await vi.waitFor(
+      async () => {
+        await settle();
+        if (container!.querySelector('[data-testid="connection-test-result"]') === null) {
+          throw new Error('probe outcome not rendered yet');
+        }
+      },
+      { timeout: 8_000, interval: 25 },
+    );
 
     expect(container!.textContent).toMatch(/rejected these credentials/i);
     // C1: neither the key name nor the PEM leaks into the DOM through the result line.
     expect(container!.innerHTML).not.toContain('BEGIN PRIVATE KEY');
-  });
+    // The OUTER budget, stated beside the inner one so the two can never drift apart
+    // again. It must EXCEED the `vi.waitFor` above, or the wait is unreachable and this
+    // test dies anonymously at the default 5s (the P3 defect corrected here).
+  }, 15_000);
 });
