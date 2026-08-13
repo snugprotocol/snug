@@ -676,3 +676,65 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   nothing LOST. Registry seats/Coinbase entry/wizard probe are the REGISTRY lane's.
 - Next step: P3 registry lane (registry request/testRequest seats + Guard 2b
   one-resolution change + Coinbase CDP entry rewrite + seat-drift migration).
+
+### 2026-08-13 — claude (P3 registry lane) — registry request/testRequest seats + admission amendment 1 (all three parts) + Coinbase CDP rewrite (ADR-0022 §1/§5)
+- Tests first, red proven both times. Commit 1: tsc gate 6 errors (missing type seats)
+  + vitest 5/9 red (queryTemplate-hole + emitter; the 4 greens are negatives that must
+  also survive). Commit 2: auth 21 red pre-implementation (fences + new tests),
+  playground 5 red at persisted altitude. Post-green mutation check on the committed
+  tree: disabling the request byte-match exemption bit 3 tests (double-admission,
+  emitter-shape admission, channel-admission whole-registry idempotence); restored via
+  `git checkout` over the committed file.
+- Registry seats (b28b919): `WellKnownOauthProvider` + `WellKnownAuthOption` gain
+  optional `request`/`testRequest` typed AS the protocol's `ConnectionRequest`/
+  `ConnectionTestRequest` (shape-compat by construction); `requirementFromRegistryEntry`
+  emits them deep-copied under the existing `option ?? entry` flow rule — an option
+  WITHOUT the seats removes them (a sign-in flow never inherits a signing template).
+  Amendment 1(a): `occupiedPromptSeats` counts a request carrying headerTemplate OR
+  queryTemplate; authored queryTemplate-only request on every borrow channel now
+  REFUSED (was: sailed past Guard 2b); empty request still exempt.
+- Coinbase CDP + amendments 1(b)/1(c) (8cd4ecf): fields → `['api_key','private_key']`
+  (pinned labels), pinned `request.headerTemplate` `Bearer {{cdp_jwt(api_key,
+  private_key)}}`, pinned `testRequest` GET /api/v3/brokerage/accounts, CDP-portal
+  registration (consoleUrl `https://portal.cdp.coinbase.com/` — portal ROOT, matching
+  the sibling OAuth option's existing verified citation rather than guessing a deep
+  path); api_secret/passphrase GONE; OAuth option byte-untouched. ONE hoisted
+  `matchAuthOption` handle now drives all three seat exemptions AND substitution;
+  request/testRequest structurally identical to the MATCHED flow's pinned values are
+  exempt (admission runs twice); no matched fields ⇒ no exemption (fail closed,
+  negative-tested incl. cross-option composites). `applyRegistryValues` substitutes
+  both seats channel-agnostically, deep-copied.
+- Fences, classified in the commit: MIGRATED static-kind-registry (exact ordered CDP
+  pair) · registry-template-parity (Coinbase parity re-pointed at the registry's OWN
+  template: tokens↔keys both directions, lint-clean, end-to-end render to a verified
+  3-segment Bearer JWT with the SEC1 fixture key; whole-registry own-keys lint now
+  covers options too) · registry-self-containment AC3 (+request/testRequest
+  present-iff-present + copies; D6 list) · matched-option default list ·
+  inferrer registry-rung lists (x2) · connected-fetch optional-fields suite (the
+  shipped entry lost its only `required:false` seat, so the founding shape moved to a
+  local fixture — every assertion verbatim; mechanism is executor-altitude) ·
+  playground coinbaseJourney (CDP pair + row must persist the pinned seats).
+  OBSOLETE-and-enforced: the passphrase-key parity pins — replaced by a negative that
+  pins the passphrase seat OUT of every entry. UNCHANGED (verified green, no edits):
+  desktop-posture posture/browserCallable tables, channel-admission evasion lists.
+  NEW playground `registrySeatPersistence.test.ts` (amendment 1c persisted shape):
+  pipeline+db double-admission persists the seats; `stagePendingRequirement` of the
+  registry shape ADMITTED on 'starter'- and 'inference'-provenance rows (the
+  seat-drift migration's admission precondition, now open); near-miss staged template
+  still refused.
+- KB truth-up (c49acd1): pinned-provider section now states the registry pins where
+  credentials are sent + how connections are tested (the previously-false promise is
+  true); omit-list names the whole `request` seat; "four helpers" → five with a
+  cdp_jwt use-only-for-that-scheme caveat (the executor lane's helper made the
+  "anything else is rejected" copy false for authored providers too). Generated
+  content regenerated; P2's platform paragraph + headings untouched.
+- DELIBERATELY NOT MOVED, against the executor-lane handoff note: the protocol
+  `connection-requirement.test.ts` Coinbase-Exchange fixture. It imports nothing from
+  the registry, pins the SCHEMA's expressiveness for a signed three-value provider on
+  `api.exchange.coinbase.com`, and its own comment already distinguishes the Exchange
+  surface from retail/CDP. Protocol suite verified green (264) with zero edits — the
+  fixture is not a fence on registry data.
+- Green, tsc-gated: auth 595→620, knowledge 183, playground 885→889, protocol 264
+  (untouched). Left for the playground lane: wizard probe render for Coinbase +
+  done-screen truth, RunView banner, seat-drift wizard-open migration wiring,
+  registry seat data for openweather/coingecko (P4 starters realignment).
