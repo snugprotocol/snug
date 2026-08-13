@@ -95,7 +95,11 @@ function fail(msg) {
 
 function sh(cmd, args, opts = {}) {
   log(`$ ${cmd} ${args.join(' ')}`);
-  const res = spawnSync(cmd, args, { stdio: 'inherit', ...opts });
+  // `shell: true` on Windows: pnpm/npm are `.cmd` shims there, and spawn cannot
+  // execute them directly — it exits with a NULL status (not a code), which is
+  // how the CI windows leg reported "pnpm exited null". `cargo` is a real .exe
+  // and unaffected, but routing both through the same branch keeps one rule.
+  const res = spawnSync(cmd, args, { stdio: 'inherit', shell: process.platform === 'win32', ...opts });
   if (res.status !== 0) fail(`${cmd} exited ${res.status}`);
 }
 

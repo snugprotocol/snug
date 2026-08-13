@@ -57,7 +57,9 @@ function fail(msg) {
 
 function sh(cmd, args) {
   log(`$ ${cmd} ${args.join(' ')}`);
-  const res = spawnSync(cmd, args, { stdio: 'inherit' });
+  // See run-gate.mjs: `.cmd` shims (pnpm/npm) need a shell on Windows or spawn
+  // exits with a NULL status.
+  const res = spawnSync(cmd, args, { stdio: 'inherit', shell: process.platform === 'win32' });
   if (res.status !== 0) fail(`${cmd} exited ${res.status}`);
 }
 
