@@ -58,9 +58,18 @@ export interface DeclaredIntent {
   declaration?: ConnectionRequirement;
   /**
    * Set when a manifest EXISTS for this app's starter but the app no longer matches it.
-   * The Settings surface renders this ("this app's code no longer matches its starter");
-   * everything else treats it as "no declaration". Distinct from the common case of an
-   * app that simply never declared, which reports nothing.
+   * Everything treats it as "no declaration". Distinct from the common case of an app that
+   * simply never declared, which reports nothing.
+   *
+   * NO UI RENDERS THIS TODAY — the only signal a user could ever see is the `console.warn`
+   * at the detection site below. This comment used to claim "the Settings surface renders
+   * this ('this app's code no longer matches its starter')"; no such surface was ever
+   * built, and the claim was corrected in P4 of TASK-20260812-desktop-auth-awareness
+   * rather than left describing a promise as a fact. The consequence is real and worth
+   * naming: a user who edits an installed starter loses its guided connection setup
+   * SILENTLY, with only a console line explaining why. The seat exists precisely so that
+   * surface can be built without re-deriving the fact — queued in docs/next-steps.md,
+   * deliberately not built here (P4 is starter realignment, not a new UI surface).
    */
   mismatch?: DeclarationMismatch;
 }

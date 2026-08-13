@@ -8,7 +8,7 @@ import { useDesktopFirstRun } from '../desktop/firstRun.js';
 import { getPlatform } from '../platform/platform.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary, type LibraryEntry } from '../state/library.js';
-import { listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
+import { listStarterApps, starterInstallSource } from '../starter/starterApps.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { Chip } from '../ui/Chip.js';
@@ -58,12 +58,9 @@ function HubHome(): ReactElement {
   const starters = useMemo(listStarterApps, []);
   const [idea, setIdea] = useState('');
   const [load, setLoad] = useState<LoadState>({ phase: 'loading' });
-  const [installError, setInstallError] = useState<string | undefined>(undefined);
-  /** In-flight latch: a double-click must not race two installs (AC8). */
-  const [installing, setInstalling] = useState<string | undefined>(undefined);
   /** Which tile is showing its inline confirm — no window.confirm (design contract, AC22). */
   const [confirmingDelete, setConfirmingDelete] = useState<string | undefined>(undefined);
-  /** In-flight latch for delete, mirroring `installing`: one confirm = one delete. */
+  /** In-flight latch for delete: one confirm = one delete. */
   const [deleting, setDeleting] = useState<string | undefined>(undefined);
   const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
 
@@ -134,33 +131,21 @@ function HubHome(): ReactElement {
    * the install_source map is the single identity rule, so a starter can never be
    * opened twice into two different apps. Otherwise open the read-only starter route,
    * which offers Install from inside the run view.
+   *
+   * THE HUB HAS NO INSTALL PATH, DELIBERATELY. A local `installStarter` used to live here
+   * — dead since AC18 made installing an explicit act inside the run view — and it saved
+   * the app HTML and navigated, FULL STOP: no `installStarterConnections`, no
+   * `installStarterRuntimeContract`. Rewiring a tile to it would have shipped a connected
+   * starter with no connection row and no runtime contract, i.e. an app whose connect card
+   * never appears and whose credential is never injected. Deleted in P4 of
+   * TASK-20260812-desktop-auth-awareness rather than left as a loaded gun. The ONE install
+   * act is RunView's button (`RunView.tsx`), which copies HTML, connection manifest and
+   * runtime contract together; keep it that way.
    */
   const openStarter = (starterId: string): void => {
     const source = starterInstallSource(starterId);
     const existing = installedBySource.get(source);
     navigate(existing !== undefined ? `/run/${existing}` : `/run/${starterId}`);
-  };
-
-  const installStarter = (starterId: string, name: string): void => {
-    if (installing !== undefined) return;
-    const source = starterInstallSource(starterId);
-    const existing = installedBySource.get(source);
-    if (existing !== undefined) {
-      navigate(`/run/${existing}`);
-      return;
-    }
-    setInstallError(undefined);
-    setInstalling(starterId);
-    void loadStarterHtml(starterId)
-      .then(async (html) => {
-        if (html === undefined) throw new Error('starter not bundled');
-        const entry = await userLibrary().save(html, name, source);
-        navigate(`/run/${entry.id}`);
-      })
-      .catch((err: unknown) => {
-        setInstallError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => setInstalling(undefined));
   };
 
   const onIdeaKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
@@ -278,11 +263,6 @@ function HubHome(): ReactElement {
       )}
 
       <h2 className="section-title">starter apps</h2>
-      {installError !== undefined ? (
-        <div className="error-note" role="alert">
-          install failed — {installError}
-        </div>
-      ) : null}
       {starters.length === 0 ? (
         <EmptyState glyph="⬡" title="no starters bundled" lesson="the examples/ folder ships curated apps in the full build." />
       ) : (

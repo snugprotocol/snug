@@ -6,6 +6,29 @@ Dated, ordered backlog. Append with a date; ✅ when shipped. Task files are the
 
 ## Now / next
 
+- **2026-08-13 — Queued from TASK-20260812-desktop-auth-awareness P4 (starter realignment):**
+  1. **The `html_mismatch` surface has no renderer.** `resolveDeclaredIntent` reports
+     `mismatch: 'html_mismatch'` when an installed starter's code no longer matches the
+     bundled one, and its declared connection is withdrawn — but **nothing renders it**. A
+     `console.warn` at the detection site (`starterDeclaration.ts`) is the only signal, so a
+     user who edits an installed starter loses its guided connection setup SILENTLY. The
+     code comment claimed a Settings surface rendered this; it never existed, and P4
+     corrected the comment rather than build the surface (out of scope). The seat and its
+     tests are in place, so the surface is a UI-only change: render the withdrawal, with the
+     "no manifest at all" case kept distinct (a scary banner on every never-declared app is
+     the failure mode to avoid — pinned by test).
+  2. **CoinGecko has no `testRequest`, and cannot get a useful one today.** Verified live
+     2026-08-13: `api.coingecko.com` is a documented "Keyless Public API" — every endpoint
+     answers 200 with no key, so any probe would report CONNECTED for a typo'd demo key;
+     `/api/v3/key` is Pro-plan-only on `pro-api.coingecko.com` and would fail for every
+     CORRECT demo key. Omission is journaled in the registry entry. Revisit if CoinGecko
+     ever key-gates the demo host, or if a Pro-tier entry is ever authored.
+  3. **`browserCallable` for CoinGecko rests on reflective CORS.** A live OPTIONS probe
+     showed CoinGecko reflects any requested header back in `access-control-allow-headers`
+     rather than serving a fixed allow-list. Our pin uses the QUERY form, which needs no
+     preflight at all, so we do not depend on that behaviour — but any future entry that
+     pins a custom-header credential for a CORS-reflecting provider is one policy change
+     away from breaking in the browser. Prefer the query form where a provider offers both.
 - ✅ **2026-08-12 — Desktop Hub scaffold SHIPPED (TASK-20260812-desktop-hub-scaffold, A6, ADR-0021).** Tauri 2 shell at `apps/desktop` wrapping the playground source: native fetch (CORS wall dead — the 2026-08-12 advisory's rung 2), `~/Snug/user.sqlite` file backend, loopback OAuth (fixed 41420, system browser, RFC 8252), Ollama autodetect + first-run, `.snug` association, registry `desktopRedirectPosture`+`browserCallable` seats, LAN `transportPolicy` (RFC-1918 literals). In-shell hard gate GREEN on macOS (14 CSP + 4 IPC checks + wizard journey 1); first CI ever authored (`.github/workflows/ci.yml`). **Desktop is NOT yet "first-class": the Windows/WebView2 gate leg pends the first CI run.**
 - **2026-08-12 — Desktop follow-ups queued (from TASK-20260812-desktop-hub-scaffold):**
   1. **Windows gate leg** — verify `pnpm --filter desktop gate` on the CI windows runner; only then call desktop first-class (roadmap L6 language).

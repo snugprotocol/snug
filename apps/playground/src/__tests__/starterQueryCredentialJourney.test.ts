@@ -34,8 +34,9 @@ import path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ConnectionRequirement } from '@snugprotocol/protocol';
 import { authConnectionCredentialSecretKey, type UserDb } from '@snugprotocol/db';
-import { createConnectedFetch, type ConnectionRequirement } from '@snugprotocol/auth';
+import { createConnectedFetch } from '@snugprotocol/auth';
 
 import { persistConnectionRequirement } from '../agent/connectionPipeline.js';
 import { connectedFetchDepsFor, invalidateNetGrants } from '../state/net.js';
