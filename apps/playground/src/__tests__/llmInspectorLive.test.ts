@@ -52,6 +52,45 @@ describe('AC8 — in-flight round trips are visible before they resolve', () => 
     expect(state.entries[0]).toMatchObject({ index: 0, pending: false, durationMs: 1234, text: 'reply' });
   });
 
+  // OWNER REPRO 2026-08-13 (second sighting, on the running desktop app): a timer kept
+  // ticking under a finished call. The earlier fixes closed the cases where the adapter
+  // THREW and where a React key changed identity; this is the third and last path.
+  //
+  // How it happens in the shipped app: `agent-turn.ts` numbers round trips from 0 per
+  // TURN, and RunView runs TWO independent turn sources into ONE reducer — the builder
+  // chat (which resets on `onTurnStart`) and the app transport for an app's own turns,
+  // e.g. a Chess move (which was never given `onTurnStart` at all). So two overlapping
+  // turns both open an entry at index 0, and `.find()` settled the FIRST — leaving the
+  // second pending forever, ticking under everything that followed.
+  it('settles the entry that is still PENDING when two turns collide on one index', () => {
+    const state = feed([
+      { type: 'round_trip_start', index: 0, request: { system: 'sys', messages: [] } },
+      { type: 'round_trip', ...trip({ index: 0, durationMs: 10 }) },
+      // A second turn opens at the SAME index — the first has already settled.
+      { type: 'round_trip_start', index: 0, request: { system: 'sys', messages: [] } },
+      { type: 'round_trip', ...trip({ index: 0, durationMs: 50 }) },
+    ]);
+    // THE DEFECT: `.find()` returned the already-settled entry, so this completion was
+    // spent re-settling it (its 10ms silently became 50ms) while the live one kept
+    // ticking. Both must now be settled, each with its own duration.
+    expect(state.entries.filter((entry) => entry.pending), 'a pending entry survived the settle').toHaveLength(0);
+    expect(state.entries.map((entry) => entry.durationMs), 'a settled entry was overwritten').toEqual([10, 50]);
+  });
+
+  it('settles collided entries oldest-first, so a run of turns drains completely', () => {
+    // Two starts, then two completions: each settle must take a different entry, or the
+    // second completion re-settles the first and one stays pending forever.
+    const state = feed([
+      { type: 'round_trip_start', index: 0, request: { system: 'sys', messages: [] } },
+      { type: 'round_trip_start', index: 0, request: { system: 'sys', messages: [] } },
+      { type: 'round_trip', ...trip({ index: 0, durationMs: 10 }) },
+      { type: 'round_trip', ...trip({ index: 0, durationMs: 20 }) },
+    ]);
+    expect(state.entries.filter((entry) => entry.pending)).toHaveLength(0);
+    expect(state.entries).toHaveLength(2);
+    expect(state.entries.map((entry) => entry.durationMs)).toEqual([10, 20]);
+  });
+
   it('shows the request as sent while pending, so the prompt is inspectable mid-call', () => {
     const state = feed([
       {

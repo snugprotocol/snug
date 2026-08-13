@@ -235,8 +235,8 @@ export default function RunView(): ReactElement {
   // read PER SEND inside the transport, so an edit or revert needs no rebuild here
   // (fold F-M1 — there is no contentEpoch dependency and there does not need to be).
   const transport = useMemo(
-    () => createAppTransport(mode, provider, onLlmEvent, id),
-    [mode, provider, onLlmEvent, id],
+    () => createAppTransport(mode, provider, onLlmEvent, id, onTurnStart),
+    [mode, provider, onLlmEvent, id, onTurnStart],
   );
   // The envelope net capability (AL-03): a value-blind NetHandler the runner routes
   // net-request frames to. The executor (in state/net.ts) reads the app's frozen host

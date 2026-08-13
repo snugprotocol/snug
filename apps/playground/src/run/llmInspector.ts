@@ -364,7 +364,21 @@ export function llmInspectorReduce(state: LlmInspectorState, action: AgentTurnEv
   }
 
   if (action.type === 'round_trip') {
-    const existing = state.entries.find((entry) => entry.index === action.index);
+    // Prefer the entry that is still PENDING (TASK-20260813, owner repro 2026-08-13).
+    //
+    // `index` is NOT unique across the reducer's lifetime: agent-turn.ts numbers round
+    // trips from 0 per TURN, and RunView feeds two independent turn sources into this
+    // one reducer (the builder chat and the app's own transport). Two overlapping turns
+    // therefore both open an entry at index 0. Plain `.find()` returned the OLDEST —
+    // already settled — so the settle was wasted on it and the newer entry stayed
+    // `pending: true` forever, ticking under every call that followed. That is the
+    // timer the owner kept seeing.
+    //
+    // Matching the oldest UNSETTLED entry drains them in order: N starts followed by N
+    // completions settle one-for-one, instead of re-settling the same one N times.
+    const existing =
+      state.entries.find((entry) => entry.index === action.index && entry.pending) ??
+      state.entries.find((entry) => entry.index === action.index);
     const settled = settleEntry(existing, action);
     const next = existing === undefined ? [...state.entries, settled] : state.entries.map((e) => (e === existing ? settled : e));
     const { entries, totalBytes } = evict(next);

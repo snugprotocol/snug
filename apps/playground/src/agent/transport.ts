@@ -183,9 +183,22 @@ export function createAppTransport(
   provider: ByokProvider,
   onLlmEvent?: (event: AgentTurnEvent) => void,
   appId?: string,
+  /**
+   * Fired when an APP's turn begins — the same seam `useBuilderChat` gives the builder
+   * (TASK-20260813, owner repro 2026-08-13).
+   *
+   * Without it the inspector was reset by builder turns ONLY, so an app's own turns
+   * (a Chess move) appended forever. Since `agent-turn.ts` numbers round trips from 0
+   * per turn, those accumulated entries collided on index with every later turn, and a
+   * stale `pending` entry could keep its timer ticking under finished calls. The
+   * reducer now settles pending-first as a backstop; this closes the accumulation that
+   * made collisions likely in the first place.
+   */
+  onTurnStart?: () => void,
 ): AgentTransport {
   return {
     send(wire, options) {
+      onTurnStart?.();
       return resolveAppTransport(mode, provider, onLlmEvent, appId).send(wire, options);
     },
   };
