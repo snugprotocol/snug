@@ -92,6 +92,8 @@ export {
   AUTH_ENGINE_HELPER_NAMES,
   AuthTemplateError,
   renderAuthHeaderTemplate,
+  renderAuthRequestTemplates,
+  type AuthRequestTemplates,
   type AuthTemplateContext,
   type AuthTemplateRequest,
 } from './template-engine.js';

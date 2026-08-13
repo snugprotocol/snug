@@ -227,8 +227,13 @@ describe('P1-AC6 — SOURCE PROOF: packages/auth has exactly one seat that calls
 
     // (1) POSITIVE: the FULL delegation expression, not the bare `execute(` token. A
     // substring that a comment or an unrelated identifier can satisfy proves nothing about
-    // where the request goes.
-    expect(probeBody).toContain('createConnectedFetch(deps).execute(');
+    // where the request goes. MIGRATED (TASK-20260812-desktop-auth-awareness P3): the
+    // probe now delegates through `probeDeps` — the SAME deps object with only the
+    // `onAuthShapedFailure` observer stripped (ADR-0022 §4 suppression) — so the pin
+    // follows the expression AND pins the derivation, so `probeDeps` cannot quietly
+    // become a hand-built deps object with a different network seat.
+    expect(probeBody).toContain('const { onAuthShapedFailure: _suppressedForProbe, ...probeDeps } = deps;');
+    expect(probeBody).toContain('createConnectedFetch(probeDeps).execute(');
 
     // (2) NEGATIVE, and this is the half that actually catches a bypass: the probe body
     // must hold NO network seat of its own. `deps.fetchImpl(` anywhere after the probe's

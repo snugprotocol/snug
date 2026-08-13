@@ -632,3 +632,47 @@ v0.3 draft in `docs/spec-drafts/` + spec-changelog entry. **No push** (AL-12 hel
   desktop 55; 2 cached = the protocol tasks run fresh moments earlier in the same tree).
 - Next step: P3 auth lane (registry seats + Coinbase CDP + executor JWT/query injection
   + silent-401 observer).
+
+### 2026-08-13 — claude (P3 executor lane) — cdp_jwt helper + queryTemplate injection + onAuthShapedFailure (ADR-0022 §2/§3/§4)
+- Tests first, red proven both times: cdp-jwt/template-lint 17 red at "unknown template
+  helper 'cdp_jwt'" before the grammar change; connected-fetch-query-observer 11/18 red
+  (the 7 green are pure negatives that must also survive — no-fire on 200/none-kind/
+  cured-retry, off-ceiling refusal — their positive siblings prove the mechanism bites).
+- `cdp_jwt(api_key, private_key)` (commit 1): helper enum 4→5, HELPER_ARITY {2,2},
+  per-argument lint rule STRICTER than generic (both args declared field keys — quoted
+  literals and request tokens refused; the engine receives resolved values and cannot
+  re-check, so the render gate's lint is the enforcement seat). PINNED_HELPERS +
+  engine↔lint both-direction parity moved in the SAME commit (amendment 7; MIGRATED).
+  Claims pinned by test: header {alg ES256, kid, typ JWT, nonce 16-byte hex}; payload
+  {iss cdp, sub, uri '<METHOD> <host><path>' no scheme/no query, nbf now (shared
+  renderTimestamp slot), exp nbf+120}. es256-key.ts DER-wraps SEC1→PKCS#8 (both PEM
+  headers, pasted-\n normalization); honest typed errors: Ed25519 names the CDP-portal
+  fix, undecodable PEM never echoes content, missing WebCrypto ECDSA loud (amdts 4/9).
+  AC4 independent verify: openssl P-256 fixture keys checked in (test keys, not
+  secrets); minted JWT decoded + crypto.subtle.verify against the fixture PUBLIC key,
+  plus a tampered-payload negative so the verify is not vacuous.
+- queryTemplate injection (commit 2): rendered AFTER every gate into the OUTBOUND URL
+  only; confirm gate captures the PRE-injection URL (pinned); a request seat carrying
+  EITHER template suppresses the kind default (query credential never also sent as
+  X-Api-Key); header+query render through ONE RenderState (timestamp agreement pinned)
+  and ONE declared-keys lint resolution. Scrub set widened per amendment 14: rendered
+  query VALUES join the candidates at body/header scrub AND the NET_FETCH_FAILED
+  message (previously unscrubbed) is scrubbed with the FULL set — C1 negatives: thrown
+  credentialed URL redacted, thrown header value redacted, echoed body/etag redacted.
+- onAuthShapedFailure (commit 2): optional ConnectedFetchDeps seat; fires only at the
+  ONE delivery point of execute() when the delivered result is 401/403 AND credentials
+  (header or query) were injected; refresh-cured 401 fires nothing; probe path strips
+  the seat (`executeConnectionTestRequest` → probeDeps). test-request-single-path
+  source-proof pin MIGRATED in the same commit: now pins the probeDeps derivation AND
+  `createConnectedFetch(probeDeps).execute(` — strictly stronger, negative half intact.
+- **Pin adaptation (journaled per the pinned-literals rule):** the pinned literal
+  `onAuthShapedFailure(appId, slot, status)` is the PLAYGROUND-layer shape. At the
+  ConnectedFetchDeps seam the signature is `(slot, status)` — `appId` is execute()'s
+  own argument, already in the caller's hand, so threading it through deps would let a
+  wiring bug report a foreign app's identity. The playground lane adds appId when it
+  forwards to the RunView banner. No other pinned literal touched.
+- Green, tsc-gated: auth 555→595 (31 files). Fences moved with data, same commits:
+  PINNED_HELPERS (MIGRATED), single-path source proof (MIGRATED); nothing OBSOLETE,
+  nothing LOST. Registry seats/Coinbase entry/wizard probe are the REGISTRY lane's.
+- Next step: P3 registry lane (registry request/testRequest seats + Guard 2b
+  one-resolution change + Coinbase CDP entry rewrite + seat-drift migration).

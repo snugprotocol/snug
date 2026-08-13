@@ -294,13 +294,53 @@ export async function renderAuthHeaderTemplate(
   headerTemplate: Record<string, string>,
   ctx: AuthTemplateContext,
 ): Promise<Record<string, string>> {
-  assertLintedTemplate(headerTemplate, { fieldKeys: [...(ctx.declaredFieldKeys ?? Object.keys(ctx.fields))] });
+  return (await renderAuthRequestTemplates({ headerTemplate }, ctx)).headers;
+}
+
+/** The two template seats of a `request` block (ADR-0022 §3). Keys are kept verbatim. */
+export interface AuthRequestTemplates {
+  headerTemplate?: Record<string, string>;
+  queryTemplate?: Record<string, string>;
+}
+
+/**
+ * Render BOTH request templates in ONE pass (TASK-20260812-desktop-auth-awareness P3,
+ * ADR-0022 §3). This is the same gate as `renderAuthHeaderTemplate` — that function is
+ * now a thin wrapper over this one — extended to the query seat with two properties
+ * that are the whole point:
+ *
+ * ONE LINT RESOLUTION. The declared-field-keys list is computed ONCE and drives the
+ * lint of both templates (lesson 2026-08-10: two lints disagreeing about "declared" is
+ * the founding-defect shape). A query template naming an undeclared field fails here
+ * exactly like a header template would, before any credential is read.
+ *
+ * ONE RENDER STATE. Header and query values share a single `RenderState`, so a
+ * timestamp read in a header and a timestamp read in a query parameter are ONE value by
+ * construction — the same second-boundary hazard `RenderState` documents for the
+ * signed-and-sent header pair applies unchanged when one of the pair moves into the URL.
+ *
+ * Rendered QUERY values are credentials destined for a URL: the caller (the executor —
+ * the only production caller) owes them the enumerated scrub obligations of ADR-0022 §3.
+ */
+export async function renderAuthRequestTemplates(
+  templates: AuthRequestTemplates,
+  ctx: AuthTemplateContext,
+): Promise<{ headers: Record<string, string>; query: Record<string, string> }> {
+  const fieldKeys = [...(ctx.declaredFieldKeys ?? Object.keys(ctx.fields))];
+  const headerTemplate = templates.headerTemplate ?? {};
+  const queryTemplate = templates.queryTemplate ?? {};
+  assertLintedTemplate(headerTemplate, { fieldKeys });
+  assertLintedTemplate(queryTemplate, { fieldKeys });
   const state: RenderState = {};
-  const out: Record<string, string> = {};
+  const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(headerTemplate)) {
-    out[key] = await renderAuthTemplateString(value, ctx, state);
+    headers[key] = await renderAuthTemplateString(value, ctx, state);
   }
-  return out;
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(queryTemplate)) {
+    query[key] = await renderAuthTemplateString(value, ctx, state);
+  }
+  return { headers, query };
 }
 
 // ---------------------------------------------------------------------------

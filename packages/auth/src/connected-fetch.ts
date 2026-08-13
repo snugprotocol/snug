@@ -44,6 +44,7 @@ import {
   isWhitelistedNetResponseHeader,
   type AuthSpec,
   type AuthSpecStatus,
+  type ConnectionRequest,
   type ConnectionRequirement,
   type ConnectionStatus,
   type NetMethod,
@@ -55,7 +56,7 @@ import type { AuthConnectionState, CredentialStore } from './credential-store.js
 import { isForbiddenNetHost, isPrivateRfc1918Ipv4Literal } from './net-guards.js';
 import { OAuthService, SnugAuthError, type FetchLike } from './oauth-service.js';
 import { scrubAuthValues } from './scrub.js';
-import { AuthTemplateError, renderAuthHeaderTemplate } from './template-engine.js';
+import { AuthTemplateError, renderAuthRequestTemplates } from './template-engine.js';
 import { AuthTemplateLintError, assertLintedTemplate } from './template-lint.js';
 import type { NetConfirmRequest } from './session-confirm.js';
 
@@ -140,6 +141,25 @@ interface ConnectedFetchBaseDeps {
    * flag: gates 1–3 and 6–10 never read it.
    */
   transportPolicy?: { allowHttpForPrivateHosts: boolean };
+  /**
+   * AUTH-SHAPED FAILURE OBSERVER (ADR-0022 §4, P0 amendment 8) — host-only. Fires when
+   * the FINAL delivered result of `execute()` is a 401/403 AND this executor injected
+   * credentials into that request (header or query). The app-visible result is
+   * untouched — `ok:true`, status as-is; apps legitimately read 401 bodies — so this
+   * seat is how the host learns "the provider rejected the stored credential" without
+   * breaking the app contract.
+   *
+   * Carries `(slot, status)` and NOTHING else: no credentials, no response bytes, no
+   * URL. The `appId` is the caller's own execute() argument, so the playground layer
+   * adds it when it forwards to the RunView banner (the task file's pinned literal
+   * `onAuthShapedFailure(appId, slot, status)` describes THAT layer; the deps-level
+   * adaptation is journaled).
+   *
+   * NOT a retry hook: a 401 cured by the transparent OAuth refresh retry fires nothing
+   * (only the delivered result counts), and `executeConnectionTestRequest` suppresses
+   * the seat entirely — probe outcomes render in the wizard, not as a banner.
+   */
+  onAuthShapedFailure?: (slot: string, status: number) => void;
 }
 
 /**
@@ -505,33 +525,50 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
   interface ResolvedGrant {
     /** null for kind 'none' — nothing to inject (Q6). */
     spec: AuthSpec | null;
+    /** The matched row's slot — the observer's identity seat (ADR-0022 §4). */
+    slot: string;
+    /**
+     * The APPROVED requirement's `request` block, read for the template seats
+     * (headerTemplate + queryTemplate). Sourced from the requirement rather than the
+     * spec projection because the v3 `AuthRequest` dialect predates `queryTemplate` —
+     * same bytes, honestly typed. Absent for kind 'none' (schema coherence forbids it).
+     */
+    requestSeat?: ConnectionRequest;
     allowedHosts: readonly string[];
     store: CredentialStore;
     oauth: OAuthService;
   }
 
-  async function resolveInjectedHeaders(
+  /** What gate 8 injects: headers ride the fetch init; query params join the OUTBOUND URL only. */
+  interface InjectedCredentials {
+    headers: Record<string, string>;
+    query: Record<string, string>;
+  }
+
+  const NOTHING_INJECTED: InjectedCredentials = { headers: {}, query: {} };
+
+  async function resolveInjectedCredentials(
     appId: string,
     grant: ResolvedGrant,
     request: { method: string; url: string; body?: string },
     forceRefresh: boolean,
-  ): Promise<Record<string, string>> {
+  ): Promise<InjectedCredentials> {
     const spec = grant.spec;
     // Q6 — kind 'none': the keyless provider. Injects NOTHING. Approval and the frozen
     // host ceiling still gated this request upstream; "no credential" never means "no
     // gate", which is why `none` is a connection row at all rather than the absence of one.
-    if (spec === null) return {};
+    if (spec === null) return NOTHING_INJECTED;
     if (spec.kind === 'oauth2_auth_code') {
       const scope = { appId, spec, allowedHosts: grant.allowedHosts };
       const token = forceRefresh ? await grant.oauth.refresh(scope) : await grant.oauth.getAccessToken(scope);
-      return { Authorization: `Bearer ${token}` };
+      return { headers: { Authorization: `Bearer ${token}` }, query: {} };
     }
     if (spec.kind === 'oauth2_client_creds') {
       const scope = { appId, spec, allowedHosts: grant.allowedHosts };
       const token = forceRefresh
         ? await grant.oauth.refreshClientCreds(scope)
         : await grant.oauth.getClientCredsAccessToken(scope);
-      return { Authorization: `Bearer ${token}` };
+      return { headers: { Authorization: `Bearer ${token}` }, query: {} };
     }
     // Static kinds — values read from the store PER USE (AL-02 D4, no cache anywhere).
     const fields: Record<string, string> = {};
@@ -545,8 +582,8 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       }
       fields[field.key] = value;
     }
-    const template = spec.request?.headerTemplate;
-    if (template !== undefined) {
+    const requestSeat = grant.requestSeat;
+    if (requestSeat?.headerTemplate !== undefined || requestSeat?.queryTemplate !== undefined) {
       // Lint against the spec's DECLARED field keys, not the keys actually loaded above.
       // The two differ whenever an optional field has no stored value: `fields` would be
       // missing that key. Linting the declaration here is both stricter in the case that
@@ -557,26 +594,36 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // whole fix for the shipped optional-field defect: this lint and the engine's own
       // lint used to consult different lists, so a template naming a blank `required:
       // false` field passed here and was rejected there, and the connection reported
-      // CONNECTED while every request failed closed. One key source, checked twice.
+      // CONNECTED while every request failed closed. One key source, checked twice —
+      // and since ADR-0022 §3 the ONE list drives BOTH template seats (header + query),
+      // which the render seat re-lints and renders through a single shared RenderState.
       const declaredFieldKeys = spec.fields.map((field) => field.key);
-      assertLintedTemplate(template, { fieldKeys: declaredFieldKeys });
-      return renderAuthHeaderTemplate(template, {
+      if (requestSeat.headerTemplate !== undefined) {
+        assertLintedTemplate(requestSeat.headerTemplate, { fieldKeys: declaredFieldKeys });
+      }
+      if (requestSeat.queryTemplate !== undefined) {
+        assertLintedTemplate(requestSeat.queryTemplate, { fieldKeys: declaredFieldKeys });
+      }
+      return renderAuthRequestTemplates(requestSeat, {
         fields,
         declaredFieldKeys,
         request: { method: request.method, url: request.url, ...(request.body !== undefined ? { body: request.body } : {}) },
       });
     }
     // Kind defaults, ported from the source system (browser-safe base64 for Basic).
+    // A request seat carrying EITHER template suppresses these entirely: a provider that
+    // places its credential in the query must not ALSO receive the generic header
+    // (AC6 — "in the query, not as X-Api-Key").
     switch (spec.kind) {
       case 'bearer_token':
-        return { Authorization: `Bearer ${fields[spec.fields[0]!.key] ?? ''}` };
+        return { headers: { Authorization: `Bearer ${fields[spec.fields[0]!.key] ?? ''}` }, query: {} };
       case 'basic_auth': {
         const user = fields[spec.fields[0]!.key] ?? '';
         const pass = fields[spec.fields[1]!.key] ?? '';
-        return { Authorization: `Basic ${utf8ToBase64(`${user}:${pass}`)}` };
+        return { headers: { Authorization: `Basic ${utf8ToBase64(`${user}:${pass}`)}` }, query: {} };
       }
       case 'api_key':
-        return { 'X-Api-Key': fields[spec.fields[0]!.key] ?? '' };
+        return { headers: { 'X-Api-Key': fields[spec.fields[0]!.key] ?? '' }, query: {} };
     }
   }
 
@@ -648,6 +695,12 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       ok: true,
       grant: {
         spec: requirementToSpec(row.requirement),
+        slot: row.slot,
+        // Kind 'none' cannot carry a request block (schema coherence); reading it off the
+        // APPROVED requirement keeps the same no-pending-read discipline as the spec.
+        ...(row.requirement.kind !== 'none' && row.requirement.request !== undefined
+          ? { requestSeat: row.requirement.request }
+          : {}),
         allowedHosts: row.allowedHosts,
         store,
         oauth: oauthFor(store),
@@ -740,11 +793,16 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // Gate 7 — app-supplied credential-shaped headers are ALWAYS stripped (C1).
       const appHeaders = stripCredentialShapedHeaders(input.headers ?? {});
 
+      // Whether the DELIVERED result rode injected credentials — the observer's gate.
+      // Written by every performFetch pass; the retry pass injects the same way, so the
+      // last write always describes the delivered result.
+      let credentialsInjected = false;
+
       const performFetch = async (forceRefresh: boolean): Promise<ConnectedFetchResult> => {
         // Gate 8 — injection (per kind; OAuth paths are ceiling-checked internally, N2b).
-        let injected: Record<string, string>;
+        let injected: InjectedCredentials;
         try {
-          injected = await resolveInjectedHeaders(appId, grant, { method, url: url.href, ...(body !== undefined ? { body } : {}) }, forceRefresh);
+          injected = await resolveInjectedCredentials(appId, grant, { method, url: url.href, ...(body !== undefined ? { body } : {}) }, forceRefresh);
         } catch (err) {
           if (err instanceof SnugAuthError) {
             // The typed CAUSE rides along with the prose. All of these collapse to one wire
@@ -765,20 +823,45 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           throw err;
         }
 
+        credentialsInjected = Object.keys(injected.headers).length > 0 || Object.keys(injected.query).length > 0;
+
+        // THE SCRUB CANDIDATE SET (ADR-0022 §3, P0 amendment 14) — every value this pass
+        // injected, header AND query. Rendered query values are credentials in a URL, so
+        // every site below that scrubs header values scrubs them too. The `query:` key
+        // prefix only prevents a header/query NAME collision from dropping a candidate;
+        // the scrubber reads values, never keys.
+        const scrubCandidates: Record<string, string> = { ...injected.headers };
+        for (const [key, value] of Object.entries(injected.query)) scrubCandidates[`query:${key}`] = value;
+
+        // QUERY INJECTION — into the OUTBOUND URL only, and only HERE, after every gate:
+        // the ceiling/host/SSRF gates matched on the app's own URL, the confirm gate
+        // captured `url.href` BEFORE this line (the user confirms the request the app
+        // asked for, never a URL carrying their credential), and no result field ever
+        // echoes `outboundHref`.
+        let outboundHref = url.href;
+        if (Object.keys(injected.query).length > 0) {
+          const outbound = new URL(url.href);
+          for (const [key, value] of Object.entries(injected.query)) outbound.searchParams.set(key, value);
+          outboundHref = outbound.href;
+        }
+
         // Gate 9 — the fetch itself: injected headers win over app headers; redirects
         // are returned, never followed.
         let response: Response;
         try {
-          response = await deps.fetchImpl(url.href, {
+          response = await deps.fetchImpl(outboundHref, {
             method,
-            headers: { ...appHeaders, ...injected },
+            headers: { ...appHeaders, ...injected.headers },
             ...(body !== undefined ? { body } : {}),
             redirect: 'manual',
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          return failure(NET_ERROR_CODES.NET_FETCH_FAILED, `request failed: ${message}`, true);
+          // Scrubbed with the FULL candidate set (amendment 14): fetch errors routinely
+          // embed the request URL — query string included — and this message reaches
+          // the app.
+          return failure(NET_ERROR_CODES.NET_FETCH_FAILED, `request failed: ${scrubAuthValues(message, scrubCandidates)}`, true);
         }
         if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
           return failure(NET_ERROR_CODES.NET_REDIRECT_BLOCKED, 'the server answered with a redirect — never followed');
@@ -795,10 +878,24 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         const headers: Record<string, string> = {};
         response.headers.forEach((value, name) => {
           if (isWhitelistedNetResponseHeader(name)) {
-            headers[name.toLowerCase()] = scrubAuthValues(value, injected);
+            headers[name.toLowerCase()] = scrubAuthValues(value, scrubCandidates);
           }
         });
-        return { ok: true, status: response.status, headers, body: scrubAuthValues(read.body, injected) };
+        return { ok: true, status: response.status, headers, body: scrubAuthValues(read.body, scrubCandidates) };
+      };
+
+      /**
+       * THE ONE DELIVERY SEAT (ADR-0022 §4, amendment 8). Every result leaves execute()
+       * through here, so "fires only on the FINAL delivered result" is true by
+       * construction: a 401 cured by the refresh retry never reaches this function as
+       * the delivered value, and an uncured one reaches it exactly once. The result is
+       * returned UNTOUCHED — the observer is a side channel, never a remap.
+       */
+      const deliver = (result: ConnectedFetchResult): ConnectedFetchResult => {
+        if (result.ok && (result.status === 401 || result.status === 403) && credentialsInjected) {
+          deps.onAuthShapedFailure?.(grant.slot, result.status);
+        }
+        return result;
       };
 
       const first = await performFetch(false);
@@ -808,12 +905,12 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       if (first.ok && first.status === 401 && isOauthKind) {
         try {
           const second = await performFetch(true);
-          return second.ok ? second : first;
+          return deliver(second.ok ? second : first);
         } catch {
-          return first;
+          return deliver(first);
         }
       }
-      return first;
+      return deliver(first);
     },
   };
 }
@@ -878,5 +975,9 @@ export async function executeConnectionTestRequest(
     return failure(NET_ERROR_CODES.NET_INVALID_REQUEST, 'the stored test request does not form a valid url');
   }
 
-  return createConnectedFetch(deps).execute(appId, { url: probeUrl, method: testRequest.method });
+  // OBSERVER SUPPRESSED (ADR-0022 §4, amendment 8): a probe's whole outcome renders in
+  // the wizard the user is already looking at — routing it through the banner seat too
+  // would double-report every failed probe and let the wizard trigger RunView chrome.
+  const { onAuthShapedFailure: _suppressedForProbe, ...probeDeps } = deps;
+  return createConnectedFetch(probeDeps).execute(appId, { url: probeUrl, method: testRequest.method });
 }
