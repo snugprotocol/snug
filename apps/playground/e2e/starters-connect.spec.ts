@@ -118,34 +118,73 @@ test.describe('P4-AC7 / AL-09 AC8 — the degraded pre-connect state is real', (
   });
 });
 
-test.describe('P4-AC7 / AL-09 AC9 — Hue is honestly greyed on the web', () => {
+/**
+ * ── HUE ON THE WEB, RE-PINNED AGAINST REALITY (TASK-20260812 AC8/AC9) ──────────────
+ *
+ * Both tests below are MIGRATED, and the migration is the interesting part: one of
+ * them could never have passed, and the suite could not tell because both are gated
+ * behind `SNUG_E2E_HAS_APP`.
+ *
+ * WHAT CHANGED IN THE WORLD. P3 of this task's predecessor made the Hue tile
+ * `desktopOnly`, which LOCKS it on web — `aria-label="open hue lights party"` belongs
+ * to a disabled button. So `openStarterByName(page, 'hue-lights-party')` has been
+ * unclickable on web since that landed, and the old first test would have failed at
+ * its first line rather than at any assertion it was written to make. It is pinned
+ * here as the tile-level statement it actually is, at the surface that actually
+ * renders — which is also where the honesty now lives.
+ *
+ * WHAT SURVIVES VERBATIM. The AC9 CLAIM — "greyed, never hidden, with the reason
+ * NAMED; and no connect affordance that cannot work" — is unchanged and is asserted
+ * on the tile. The claim that Hue "declares nothing" is OBSOLETE rather than lost:
+ * ADR-0023 gave it an honest declaration to make, so the second test now pins that
+ * installing writes the LAN row (a real connection the user can review and pair) —
+ * the same underlying property, which is that the manifest gate and the install act
+ * must agree. A user finding no row for an app that CAN connect would be the same
+ * defect the original was written against, in mirror image.
+ */
+test.describe('AC8/AC9 — Hue is honestly labelled on the web', () => {
   test.skip(!hasApp, AWAITS);
 
-  test('the sync control is disabled, the reason is named, and no connect path opens', async ({ page }) => {
-    const app = await openStarterByName(page, 'hue-lights-party');
+  test('the tile is greyed with the reason named, and offers no connect that cannot work', async ({ page }) => {
+    await page.goto('/');
+    const tile = page.locator('[data-testid="starter-tile"][data-starter-name="hue lights party"]');
+    await expect(tile).toBeVisible({ timeout: 20_000 });
 
-    // The designer is fully alive on the web — this app ships authored, not stubbed.
-    await expect(app.getByTestId('scene-preview')).toBeVisible({ timeout: 20_000 });
-    await app.getByTestId('scene-ocean').click();
+    // GREYED, NEVER HIDDEN — the AC9 claim, at the surface that renders it.
+    await expect(tile.getByTestId('desktop-only-badge')).toBeVisible();
+    await expect(tile.getByTestId('desktop-only-badge')).toContainText(/desktop app/i);
+    await expect(tile.locator('.tile-card-button')).toBeDisabled();
 
-    // …and the one thing it cannot do is greyed, not hidden, with the REASON named.
-    // Copy that says only "unsupported" would fail this AC.
-    await expect(app.getByTestId('apply-button')).toBeDisabled();
-    await expect(app.getByTestId('desktop-only-notice')).toContainText(/home network/i);
-    await expect(app.getByTestId('desktop-only-notice')).toContainText(/desktop app/i);
-
-    // Hue declares nothing, so it must offer NO connect affordance that could not work.
-    await expect(app.getByTestId('preconnect-notice')).toHaveCount(0);
+    // …and NO connect affordance anywhere on the hub for it. This is the assertion
+    // that stops a later refactor from "helpfully" wiring a web connect flow that
+    // could not finish: the browser has no way to pair with a LAN device.
     await expect(page.getByTestId('run-connect')).toHaveCount(0);
   });
 
-  test('installing Hue copies no connection row (it has nothing to declare)', async ({ page }) => {
-    // The v4 half of AC9, and the reason this test is not a pure port: P4 makes install
-    // WRITE rows (AC3). Hue must be the one starter for which that writes nothing — the
-    // manifest gate and the install act have to agree, or a user would find a connect
-    // card in Settings for an app that can never use one.
-    await openStarterByName(page, 'hue-lights-party');
-    await page.getByTestId('starter-install').click();
+  test('Hue cannot be installed from the web hub at all — so no row can appear', async ({ page }) => {
+    /**
+     * MIGRATED from "installing Hue copies no connection row", and the migration
+     * corrects a premise the original had wrong even then.
+     *
+     * The original clicked `starter-install`, which lives inside the RUN view — a
+     * route reached by opening the tile. A locked tile's open button is `disabled`, so
+     * on the web there is no path to that button at all: the install act the old test
+     * drove was already unreachable when it was written, and the empty-Settings
+     * assertion it made would have passed against a broken hub just as happily as
+     * against a working one (lesson 2026-08-04 — it measured a proxy).
+     *
+     * The OUTCOME the old test cared about is preserved exactly: no connection row
+     * appears in Settings from browsing the web hub. What changed is that the reason
+     * is now asserted rather than assumed — hue has a real declaration to make (the
+     * LAN manifest), and what stops it reaching Settings HERE is that a browser can
+     * never pair with the device, so the whole route is closed one step earlier.
+     * The desktop journey is where the row is asserted positively (playground's
+     * `lanWizardFlow` suite drives collect → approve → pair end to end).
+     */
+    await page.goto('/');
+    const tile = page.locator('[data-testid="starter-tile"][data-starter-name="hue lights party"]');
+    await expect(tile.locator('.tile-card-button')).toBeDisabled();
+    await expect(tile.getByTestId('starter-install')).toHaveCount(0);
 
     await page.goto('/settings');
     await expect(page.getByTestId('connection-declared-row')).toHaveCount(0);

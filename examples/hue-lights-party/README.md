@@ -1,50 +1,76 @@
 # hue lights party
 
-Design a lighting scene for the party, then sync it to your Philips Hue bridge — **from
-the desktop app**. On the web the designer works fully and the sync control is greyed,
-with the reason stated.
+Design a lighting scene for the party, then connect your Philips Hue bridge — **from the
+desktop app**. On the web the designer works fully, the tile says why it needs desktop,
+and the sync control is greyed with the reason named.
 
-The honest edge of the auth-spectrum shelf (AL-09 / roadmap A8b).
+The LAN edge of the auth-spectrum shelf (roadmap A8b; ADR-0023).
 
 ## Posture
 
 | | |
 |---|---|
-| **Provider** | Philips Hue (LAN-local bridge) |
-| **Credential kind** | **none — it constructs no AuthSpec at all** |
-| **Declared host** | **none — this folder ships no `connection.json`** |
+| **Provider** | Philips Hue (a bridge on your own network) |
+| **Credential kind** | `api_key` — **minted by the bridge, never typed** |
+| **Declared host** | **none pinned** — `lanHost` says one will be COLLECTED |
 | **LLM posture** | **LLM-free** (ADR-0011): `RESPONSE_SCHEMA = null`, no `sendMessage` |
-| **Live on web?** | **No** — authored and greyed, labeled desktop-only on its tile |
+| **Live on web?** | **No** — labelled desktop-only on its tile, honest inside |
 
-## Why this app is not connected
+## What changed, and what did not
 
-Hue's real model is a bridge **discovered on your local network**, authenticated with a
-bridge username you obtain by pressing the physical link button on the device. That does
-not fit the five-kind credential union at all: every kind assumes an internet host the
-connected-fetch executor can reach and a credential the host can inject. A LAN address is
-precisely what the SSRF guard blocks — correctly.
+This folder used to ship **no `connection.json` at all**, because there was no honest
+declaration to make: every credential kind assumed an internet host the executor could
+reach, and a bridge lives at an address your router assigned. ADR-0023 changed that.
 
-So rather than bend the protocol to fit one app, this starter (AL-09 D5/D10, AC9):
+- **`lanHost`** lets a requirement declare that a host will be *collected from the user*
+  rather than pinned by an author. The wizard collects it (RFC-1918 IPv4 literal only),
+  and the collected address freezes into the connection's host ceiling exactly like a
+  pinned one would.
+- **Pairing** replaces typing: press the round button on the bridge, and the wizard asks
+  it for a key of its own. The key goes straight into the host's storage — this app never
+  sees it, and neither does any model.
+- **A TOFU certificate pin** is captured during that same exchange, so later requests
+  verify the bridge against the certificate it actually presented rather than against a
+  public root store it could never satisfy.
 
-- **constructs no AuthSpec** and ships **no `connection.json`** — there is no honest
-  declaration to make, and a fabricated one would be worse than none;
-- **calls no seam.** It is deliberately outside `CONNECTED_APPS` in the validate suite,
-  which is exactly why this file must never grow a `useConnectedFetch` call;
-- **offers no connect button that cannot work.** The sync control is `disabled` and says
-  *why* — a dead button opening a wizard that leads nowhere would be the dishonest option.
+What did **not** change is the honesty rule this starter was written for: the one control
+that cannot work here is *greyed and explained*, never hidden and never wired to a flow
+that leads nowhere.
 
-Desktop-native fetch is documented as a future rung of the auth ladder. The desktop
-scaffold (roadmap A6) was **dropped from this run, not cancelled**, which is why this app
-ships fully authored: the desktop child can light it up later without a rewrite.
+## The manifest is deliberately BARE
 
-## What still works on the web
+```json
+{ "slot": "hue", "provider": { … }, "kind": "api_key",
+  "lanHost": { "class": "rfc1918-ipv4-literal", "label": "Bridge IP address" } }
+```
+
+No `fields`, no `request`, no `declaredApiHosts`. A starter manifest borrows the `hue`
+registry brand, and the admission guard refuses a borrowing channel that authors
+credential-prompt copy or a request template — *where a credential is sent, and what the
+user is told to type, are not an app author's to choose*. Omitting them is what makes the
+registry's human-reviewed values get substituted instead. Adding a "helpful" `fields`
+array would make this manifest unadmittable, and the app would install with a connection
+that could never be created.
+
+## Why the apply control is still greyed
+
+The bridge is reachable from the desktop shell — but **this app is never told its
+address**, and that is deliberate rather than unfinished. `useConnectedFetch` takes a
+literal URL and the host checks it against the frozen ceiling; there is no frame through
+which the host hands an app the list of hosts it may reach. Telling sandboxed app code
+the layout of the user's home network would be a new disclosure with its own review, not
+something a starter may help itself to.
+
+So the app declares the connection, holds the governed seam, and says plainly what it is
+waiting for. The day the runtime can tell an app its approved host, the apply path is the
+only thing that changes.
+
+## What works on the web
 
 Everything except the sync: pick a scene, adjust brightness, choose rooms, and watch the
-preview respond. It is real UI on real state — only *apply to my lights* waits for desktop.
+preview respond. Real UI on real state.
 
 ## Files
 
 - `app.html` — the single-file app (hooks byte-synced to `packages/sdk/embedded/snug-hooks.js`).
-
-No `connection.json`, by design. The declaration resolver treats a manifest-less folder as
-"declares nothing" and grants it no exception of any kind.
+- `connection.json` — the LAN-class declaration described above.

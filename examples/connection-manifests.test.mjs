@@ -61,18 +61,38 @@ import { connectionRequirementSchema } from '@snugprotocol/protocol';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * The FIVE declaring manifests (fold B1), written as a literal five-member list.
+ * The SIX declaring manifests.
  *
- * `hue-lights-party` is deliberately absent: its LAN posture means it constructs no
- * requirement and declares nothing (AL-09 D10), and a manifest for it would mint a connect
- * affordance that cannot work. Its absence is asserted POSITIVELY below rather than
- * expressed as a filter here — a filter that removes a member from a list is invisible at
- * the assertion site, which is exactly how the earlier six-vs-five confusion survived.
+ * ── `hue-lights-party` MIGRATED FROM THE NEGATIVE SET TO THIS LIST ──────────────────
+ * (TASK-20260812-desktop-auth-awareness AC8, ADR-0023.)
+ *
+ * Its absence was never about hue being unworthy of a declaration; it was about there
+ * being no honest declaration to MAKE. The five-kind union assumed an internet host the
+ * executor could reach, and a bridge lives at an address the user's router assigned, so
+ * a manifest would have named a host that could not exist and minted a connect
+ * affordance that could not work. That is a true statement about the protocol as it
+ * stood, and this task changed the protocol: ADR-0023's `lanHost` seat lets a
+ * requirement declare that a host will be COLLECTED, and the desktop's pinned-TLS
+ * transport lets the executor reach it once it is.
+ *
+ * So the old assertion's CLAIM — "no manifest that mints an affordance which cannot
+ * work" — survives intact; what changed is that hue's affordance now works, on the
+ * desktop, and discloses honestly on the web. The negative test it replaced is
+ * classified OBSOLETE (the condition it described no longer exists) rather than LOST,
+ * and the honest-web-greyed posture it protected is now asserted positively by the
+ * disclosure tests rather than by the absence of a file.
  */
-const MANIFEST_APPS = ['connection-demo', 'crypto-portfolio', 'weather-planner', 'my-repos', 'spotify-party-dj'];
+const MANIFEST_APPS = [
+  'connection-demo',
+  'crypto-portfolio',
+  'weather-planner',
+  'my-repos',
+  'spotify-party-dj',
+  'hue-lights-party',
+];
 
-/** The full set of starter folders SURVEYED for a manifest — declarers and hue alike. */
-const SURVEYED_FOLDERS = [...MANIFEST_APPS, 'hue-lights-party'];
+/** The full set of starter folders SURVEYED for a manifest — all declarers now. */
+const SURVEYED_FOLDERS = [...MANIFEST_APPS];
 
 /** Every starter folder P4 lands, manifest-bearing or not — AC2's shelf half. */
 const P4_STARTER_FOLDERS = [
@@ -89,9 +109,9 @@ const readHtml = (app) => readFileSync(path.join(HERE, app, 'app.html'), 'utf8')
 
 // ─────────────────────────────────────────────────────── P4-AC2: the six manifests
 
-test('P4-AC2: exactly five example folders ship a connection.json, and hue ships none', () => {
-  // Pins the COUNT as well as the members. A sixth manifest appearing without a test is a
-  // shelf app declaring a connection nobody reviewed; a fifth going missing is a starter
+test('P4-AC2: exactly six example folders ship a connection.json', () => {
+  // Pins the COUNT as well as the members. A seventh manifest appearing without a test is
+  // a shelf app declaring a connection nobody reviewed; a sixth going missing is a starter
   // that silently stopped declaring.
   const declaring = SURVEYED_FOLDERS.filter((app) => {
     try {
@@ -101,8 +121,8 @@ test('P4-AC2: exactly five example folders ship a connection.json, and hue ships
     }
   });
 
-  assert.equal(declaring.length, 5, 'five folders declare a connection');
-  assert.deepEqual(declaring.sort(), [...MANIFEST_APPS].sort(), 'the five declaring folders, and hue declaring none');
+  assert.equal(declaring.length, 6, 'six folders declare a connection');
+  assert.deepEqual(declaring.sort(), [...MANIFEST_APPS].sort(), 'the six declaring folders');
 });
 
 for (const app of MANIFEST_APPS) {
@@ -136,14 +156,43 @@ for (const app of MANIFEST_APPS) {
   });
 }
 
-test('P4-AC2: hue-lights-party ships NO manifest (LAN posture, AL-09 D10)', () => {
-  // The negative member of the six. Hue is greyed on the web because it reaches the
-  // user's own LAN bridge; a manifest would mint a connect affordance that cannot work,
-  // which is the exact "helpfully wire it to the wizard" refactor AC7's e2e also refuses.
-  assert.throws(
-    () => statSync(path.join(HERE, 'hue-lights-party', 'connection.json')),
-    'hue must declare nothing — it has no reachable connection to declare',
+/**
+ * AC8 — hue's manifest is a LAN-CLASS declaration, and every clause below names a way
+ * it could be wrong (MIGRATED from "hue ships NO manifest"; see MANIFEST_APPS).
+ *
+ * The whole point of the LAN shape is that the manifest does NOT name a host: the
+ * address belongs to the user's router, and a starter that shipped one would either be
+ * wrong for everyone or right for one person by luck. `lanHost` declares that a host
+ * will be collected — which is what the schema's required-XOR-lanHost rule makes
+ * representable, and what the wizard's address step then fills.
+ */
+test('AC8: hue-lights-party declares a LAN-class connection with NO pinned host', () => {
+  const manifest = readManifest('hue-lights-party');
+  assert.equal(manifest.lanHost?.class, 'rfc1918-ipv4-literal', 'the host CLASS the wizard will validate against');
+  assert.ok(typeof manifest.lanHost?.label === 'string' && manifest.lanHost.label.length > 0, 'a label the user reads');
+  assert.ok(
+    !('declaredApiHosts' in manifest),
+    'a LAN manifest pins NO host — the address is the user\'s, collected by the wizard',
   );
+});
+
+/**
+ * AC8 — the manifest stays BARE, and this is the clause most likely to be "helpfully"
+ * broken by a later edit.
+ *
+ * Guard 2b refuses a borrowing channel that authors `fields` or `request`: where a
+ * credential is sent, and what the user is told to type, are exactly the seats a
+ * prompt-injected declaration must not choose. A starter manifest rides the `starter`
+ * channel and borrows the `hue` brand, so authoring either seat here would make the
+ * manifest UNADMITTABLE — the app would install and its connection would refuse, which
+ * is a failure mode nothing on screen would explain. Omitting them is what makes the
+ * registry's pinned values get substituted instead.
+ */
+test('AC8: hue-lights-party\'s manifest is BARE — the registry supplies fields, request and pairing', () => {
+  const manifest = readManifest('hue-lights-party');
+  for (const seat of ['fields', 'request', 'testRequest', 'pairing', 'registration', 'endpoints']) {
+    assert.ok(!(seat in manifest), `a borrowing manifest must not author "${seat}" — the registry pins it`);
+  }
 });
 
 test('P4-AC2: every P4 starter folder is on disk with an app.html and a README.md', () => {
@@ -200,7 +249,10 @@ export function credentialIssues(authored) {
  * `useConnectedFetch` and nothing else. The ELSE half is the load-bearing one — it is
  * what stops a non-connected app from quietly growing a connected surface.
  *
- * `hue-lights-party` is exempt by design: LAN posture, no AuthSpec, no seam.
+ * `hue-lights-party` was exempt while it declared nothing and is NOT exempt any more
+ * (AC8): it ships a LAN-class manifest, so it must reach its bridge through
+ * `useConnectedFetch` like every other connected starter. That is the whole C1 point of
+ * the rewrite — the app never handles the minted key, the host injects it.
  */
 const CONNECTED_APPS = new Set(MANIFEST_APPS);
 

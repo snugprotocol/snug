@@ -147,9 +147,38 @@ function readDeclaredHosts(app) {
     `${app}: connection.json must satisfy connectionRequirementSchema — ${result.error?.message ?? ''}`,
   );
 
+  /*
+    THE HOST RULE, FORKED WITH THE SCHEMA (ADR-0023; TASK-20260812 AC8/AC9).
+
+    Until this task every manifest pinned at least one host, and this assertion
+    said so. The `lanHost` seat makes a SECOND legal shape: a requirement that
+    declares a host will be COLLECTED from the user rather than pinned by the
+    author — which is the only honest declaration for a device at an address the
+    user's own router assigned.
+
+    The old rule's content survives verbatim in branch (a): a manifest with no
+    `lanHost` must still declare a non-empty host list, so nothing is weakened
+    for the five starters it was written for. Branch (b) states the LAN case's
+    own obligation, and it is the STRICTER of the two — a LAN manifest must
+    declare NO hosts at all, because a starter that shipped one would either be
+    wrong for every user or right for one by luck, and it would freeze into a
+    ceiling the review screen describes as "a device on your own network".
+
+    Returning `[]` for a LAN manifest is deliberate and is what `urlAllowed`
+    then does with it: no URL literal in the app's authored code is allowlisted
+    by a LAN declaration. The address is not the author's to know, so it must
+    not appear in authored code — the same conclusion from the other direction.
+  */
   const hosts = parsed.declaredApiHosts;
-  assert.ok(Array.isArray(hosts) && hosts.length > 0, `${app}: connection.json declares a non-empty declaredApiHosts`);
-  return hosts;
+  if (parsed.lanHost === undefined) {
+    assert.ok(Array.isArray(hosts) && hosts.length > 0, `${app}: connection.json declares a non-empty declaredApiHosts`);
+    return hosts;
+  }
+  assert.ok(
+    hosts === undefined,
+    `${app}: a lanHost manifest pins NO host — the address is the user's, collected by the wizard`,
+  );
+  return [];
 }
 
 /**

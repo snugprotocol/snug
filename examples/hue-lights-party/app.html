@@ -339,27 +339,46 @@ function useConnectedFetch() {
     // ============================================================
     // 6. YOUR APP — Hue Lights Party
     // ============================================================
-    // THE HONEST ONE. Philips Hue's real model is a bridge discovered on your LOCAL
-    // NETWORK, authenticated with a bridge username you obtain by pressing the physical
-    // link button. That does not fit the five-kind credential union at all — every kind
-    // assumes an internet host the connected-fetch executor can reach and a credential
-    // the host can inject. A LAN address is exactly what the SSRF guard blocks, and
-    // rightly so.
+    // THE LAN ONE. A Philips Hue bridge lives at an address your own router
+    // assigned, serves a certificate signed by a private CA, and hands out its
+    // credential only when you press the physical button on top of it. Each of
+    // those is a real boundary rather than a missing feature, and this task
+    // (ADR-0023) built the three pieces that clear them: a `lanHost` seat so a
+    // requirement can declare that a host will be COLLECTED, a wizard step that
+    // collects and pairs, and a desktop pinned-TLS transport that can reach the
+    // device once it is paired.
     //
-    // So this app (D5/D10, AC9):
-    //   - ships AUTHORED, not stubbed, so the desktop child can light it up later
-    //     without a rewrite (A6 was dropped from this run, not cancelled);
-    //   - constructs NO AuthSpec and ships NO connection.json — there is no honest
-    //     declaration to make;
-    //   - calls NO seam. It is deliberately outside CONNECTED_APPS in the validate
-    //     suite, and that exemption is the whole reason this file must not grow a
-    //     `useConnectedFetch` call;
-    //   - offers NO connect button that could not work. Greying the control and SAYING
-    //     WHY is the honest move; a dead button that opens a wizard leading nowhere
-    //     would be the dishonest one.
+    // WHAT THIS APP DECLARES, and what it deliberately does NOT do:
     //
-    // The scene preview below is real UI running on real state — you can play with it on
-    // the web. Only the "apply to my lights" action is unavailable, and it says so.
+    //   * it ships a connection.json in the LAN shape, so the bridge is a real
+    //     reviewable connection with a frozen host ceiling — not an app quietly
+    //     talking to a device nobody approved;
+    //   * it NEVER handles the bridge key (C1). Pairing mints it straight into
+    //     the host's storage; the host injects `hue-application-key` on the way
+    //     out. There is no key in this file, none in this page's state, and
+    //     nothing here could print one if it tried;
+    //   * it NEVER names the bridge's address, because it CANNOT — and this is
+    //     the honest limit of the current runtime rather than an omission. The
+    //     address is the user's, frozen into the ceiling at approval, and there
+    //     is no frame through which the host tells an app which hosts it may
+    //     reach: `useConnectedFetch` takes a literal URL and the executor parses
+    //     it with `new URL(...)` before checking the ceiling. A placeholder host
+    //     would not parse; a hardcoded one would be right for exactly one user.
+    //     Telling the app frame the address would be a NEW disclosure — the
+    //     user's own network topology, handed to sandboxed app code — and that
+    //     is a protocol decision with its own review, not something a starter
+    //     may help itself to.
+    //
+    // SO THE APPLY CONTROL STAYS GREYED, and the copy now names the real reason
+    // (an app cannot address the bridge yet) instead of the old one (the desktop
+    // app does not exist), which stopped being true this task. Greyed and
+    // explained beats a button that opens a flow leading nowhere — the same rule
+    // this app has always followed, applied to a boundary that moved.
+    //
+    // The designer below is fully alive on both platforms, which is the doctrine
+    // this shelf exists to show: a connected app is useful before it is
+    // connected, and honest about what it is missing.
+
     const SCENES = [
       { id: 'sunset', name: 'Sunset', emoji: '🌇', colors: ['#f97316', '#e11d48', '#7c3aed'] },
       { id: 'ocean', name: 'Ocean', emoji: '🌊', colors: ['#0ea5e9', '#2563eb', '#14b8a6'] },
@@ -373,10 +392,16 @@ function useConnectedFetch() {
       const { isReady, theme } = useSnugApp({
         appId: 'hue-lights-party',
         displayName: 'Hue Lights Party',
-        description: 'Design a lighting scene for the party and sync it to your Philips Hue bridge — a desktop feature, because the bridge lives on your local network.',
+        description: 'Design a lighting scene for the party and connect your Philips Hue bridge — the bridge lives on your home network, so pairing happens in the desktop app.',
         iconEmoji: '💡',
         iconColor: '#be123c',
       });
+      // THE GOVERNED SEAM, held rather than called (C1/AL-09 AC4): this app
+      // declares a connection, so it reaches the network through this handle and
+      // nothing else. It is the only network object in this file, and the day the
+      // runtime can tell an app its approved host, the apply path below is the
+      // only thing that changes.
+      const net = useConnectedFetch();
       const [scene, setScene] = useState(SCENES[0]);
       const [brightness, setBrightness] = useState(80);
       const [rooms, setRooms] = useState(() => ({ 'Living room': true, Kitchen: false, Bedroom: false }));
@@ -390,20 +415,21 @@ function useConnectedFetch() {
       return (
         <div className="wrap">
           <h1>Hue Lights Party</h1>
-          <p className="sub">design the scene here — sync it to your bridge from the desktop app.</p>
+          <p className="sub">design the scene here — pair your bridge from the desktop app.</p>
 
           {/*
-            AC9: the "why desktop" notice. It names the REASON (a LAN-local bridge, no
-            desktop runtime yet), not a vague "unsupported" — a user who understands why
-            can decide whether to care.
+            THE PRE-CONNECT NOTICE. It names the provider and what the user would
+            DO about it, which is the difference this shelf exists to demonstrate
+            — "connect Philips Hue" tells someone where to go; "unsupported"
+            tells them nothing.
           */}
-          <div className="notice desktop" data-testid="desktop-only-notice">
-            <span aria-hidden="true">🖥️</span>
+          <div className="notice" data-testid="preconnect-notice">
+            <span aria-hidden="true">💡</span>
             <p style={{ margin: 0 }}>
-              <b>syncing needs the desktop app.</b> your Hue bridge lives on your home network,
-              and a web page cannot reach it — that is a browser security boundary, not a missing
-              feature. the desktop app talks to the bridge directly. everything below works right
-              here; only <i>apply to my lights</i> waits for desktop.
+              <b>connect Philips Hue in the desktop app.</b> your bridge sits on your home network,
+              which a web page cannot reach — that is a browser security boundary, not a missing
+              feature. the desktop app finds it, pairs with it when you press the button on top,
+              and keeps its key for you. everything below already works right here.
             </p>
           </div>
 
@@ -468,9 +494,9 @@ function useConnectedFetch() {
             </div>
 
             {/*
-              Greyed, never hidden, and never wired to a connect flow that cannot work.
-              `disabled` + `aria-disabled` + the explanation beneath it — the button says
-              what it would do and why it cannot do it yet.
+              Greyed, never hidden, and never wired to a flow that cannot finish.
+              `disabled` + `aria-disabled` + the reason beneath it — the button
+              says what it would do and why it cannot do it yet.
             */}
             <button
               className="btn"
@@ -481,11 +507,17 @@ function useConnectedFetch() {
             >
               apply to my lights
             </button>
-            <p className="hint" data-testid="apply-hint">
-              available in the desktop app — {chosen.length > 0
-                ? `${chosen.length} room${chosen.length === 1 ? '' : 's'} selected and ready`
-                : 'pick a room to include'}.
-            </p>
+            <div className="notice desktop" data-testid="desktop-only-notice">
+              <span aria-hidden="true">🖥️</span>
+              <p style={{ margin: 0 }}>
+                <b>sending a scene needs the desktop app.</b> your Hue bridge lives on your home
+                network at an address only your router knows, and an app running in this frame is
+                never told that address — so this control waits for the desktop app, which pairs
+                with the bridge and talks to it directly. {chosen.length > 0
+                  ? `${chosen.length} room${chosen.length === 1 ? '' : 's'} selected and ready.`
+                  : 'pick a room to include.'}
+              </p>
+            </div>
           </section>
         </div>
       );
