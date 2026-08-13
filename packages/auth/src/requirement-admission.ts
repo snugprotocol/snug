@@ -67,6 +67,9 @@
  * wall, and the strong field-by-field review remains the human one.
  */
 
+import type { ConnectionLanHostClass } from '@snugprotocol/protocol';
+
+import { isPrivateRfc1918Ipv4Literal } from './net-guards.js';
 import {
   WELL_KNOWN_PROVIDERS_REGISTRY,
   findBrandAdjacentRegistryKeys,
@@ -130,6 +133,21 @@ const readDeclaredHosts = (requirement: Record<string, unknown>): string[] => {
 };
 
 /**
+ * The declared-host seat WITH the absent/empty distinction preserved — which
+ * `readDeclaredHosts` deliberately collapses (every other caller only asks "which hosts
+ * does this claim", and `[]` and absent are the same answer to that question).
+ *
+ * The LAN fork is the one place the difference is semantic: ABSENT is the legitimate
+ * pre-collection shape a LAN registry entry emits, while `[]` is a malformed declaration
+ * that must not be treated as "not collected yet" and quietly admitted.
+ */
+const readDeclaredHostsSeat = (requirement: Record<string, unknown>): string[] | undefined => {
+  const hosts = requirement['declaredApiHosts'];
+  if (hosts === undefined) return undefined;
+  return Array.isArray(hosts) ? hosts.filter((host): host is string => typeof host === 'string') : [];
+};
+
+/**
  * Host normalization for the intersection test: lowercase + trailing-dot strip only.
  *
  * Deliberately NOT `normalizeAuthHost` (packages/protocol): this comparison must be
@@ -141,13 +159,69 @@ const readDeclaredHosts = (requirement: Record<string, unknown>): string[] => {
  */
 const normalizeHost = (host: string): string => host.trim().toLowerCase().replace(/\.$/, '');
 
-/** Registry key -> normalized apiHosts, built once. Small registry; rebuilt cheaply. */
+/**
+ * Registry key -> normalized apiHosts, built once. Small registry; rebuilt cheaply.
+ *
+ * LAN-CLASS ENTRIES ARE SKIPPED (ADR-0023, P0 amendment 10a) — and the skip is
+ * load-bearing twice over.
+ *
+ * FIRST, AS AN AVAILABILITY FIX. A LAN entry pins no `apiHosts` at all, and the old
+ * unconditional `for (const host of entry.apiHosts)` threw
+ * `TypeError: entry.apiHosts is not iterable` the moment such an entry existed — from
+ * inside the guard whose entire job is to fail CLOSED, on EVERY admission of EVERY
+ * requirement, Hue-related or not. Probe-reproduced against the built dist before the
+ * fix; pinned now by `lan-class-registry.test.ts`.
+ *
+ * SECOND, AS A SEMANTIC RULE. Even with a null-safe loop, a LAN entry has nothing
+ * legitimate to contribute to a HOST index: its host is whatever the user typed. Indexing
+ * a collected address would mean the first user who pairs a bridge at 192.168.1.50 makes
+ * every OTHER requirement declaring 192.168.1.50 — their own printer, their own NAS —
+ * borrow the Hue brand. A private address identifies a device on one network, never a
+ * provider. The NAME trigger still reaches LAN entries in full (including
+ * brand-adjacency), which is the trigger that actually catches a borrower.
+ */
 function registryHostIndex(): Map<string, string> {
   const index = new Map<string, string>();
   for (const [key, entry] of Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)) {
-    for (const host of entry.apiHosts) index.set(normalizeHost(host), key);
+    if (entry.lanHost !== undefined) continue;
+    for (const host of entry.apiHosts ?? []) index.set(normalizeHost(host), key);
   }
   return index;
+}
+
+/**
+ * Per-class validators for a `lanHost` entry's collected address (ADR-0023 Decision 1).
+ *
+ * Keyed by the protocol's `ConnectionLanHostClass` so a NEW class cannot compile without
+ * bringing its validator — the same typed-Record discipline the template-helper enum uses
+ * (amendment 7). `isPrivateRfc1918Ipv4Literal` is packages/auth's own guard, the one the
+ * executor's Decision-6 stand-down already keys on, so admission and the transport agree
+ * on the class by construction rather than by coincidence.
+ */
+const LAN_HOST_CLASS_VALIDATORS: Record<ConnectionLanHostClass, (host: string) => boolean> = {
+  'rfc1918-ipv4-literal': isPrivateRfc1918Ipv4Literal,
+};
+
+/**
+ * Does this declaration's host list satisfy the LAN entry's declared class?
+ *
+ * The rule is the protocol schema's, restated at the guard (amendment 10c): a LAN
+ * requirement carries EITHER no hosts (pre-collection) OR exactly one host of the
+ * declared class. Restated rather than delegated because admission runs at the ENVELOPE
+ * boundary (C5) and may see input the schema never parsed — "the schema already checked"
+ * is precisely the assumption a defensive guard may not make.
+ *
+ * What it refuses, and why each matters: a PUBLIC host (the smuggle — a credential aimed
+ * anywhere while the review screen says "a device on your own network"), an OFF-CLASS
+ * literal (loopback, link-local, CGN, IPv6 — each has its own refusals for its own
+ * reasons and none of them is a Hue bridge), and a SECOND host (a second device the user
+ * never paired).
+ */
+function lanHostsAcceptable(declared: readonly string[] | undefined, entry: WellKnownOauthProvider): boolean {
+  if (declared === undefined || declared.length === 0) return declared === undefined; // absent = pre-collection; [] is not
+  if (declared.length !== 1) return false;
+  const inClass = LAN_HOST_CLASS_VALIDATORS[entry.lanHost!.class];
+  return inClass(declared[0]!);
 }
 
 /**
@@ -393,10 +467,39 @@ function applyRegistryValues(
   const matched = matchAuthOption(requirement['fields'], entry);
   const flow = matched ?? entry;
 
+  // THE HOST SEAT, forked for LAN entries (ADR-0023, P0 amendment 10b — a deliberate,
+  // scoped carve-out of ADR-0020 Decision 4's "hosts are ALWAYS the entry's").
+  //
+  // For a normal entry nothing changes and nothing may change: replacement (not merge) of
+  // the declared list by the pinned one IS the borrow ban — `evil.example` is GONE, not
+  // appended. That property is pinned by a test in this same suite so the fork cannot
+  // quietly become "preserve declared hosts" for everyone.
+  //
+  // For a LAN entry there is nothing to substitute WITH — its host is the address the
+  // user just typed. The old unconditional write produced `declaredApiHosts: []` and
+  // deleted it (probe-reproduced: "PROBE-B: ok= true hosts= []"), silently, with ok:true,
+  // so the ceiling froze around nothing and the connection could never serve a request.
+  // So the declaration's own hosts are PRESERVED here — and the class re-validation in
+  // `admitConnectionRequirement` is what makes preserving them safe, by refusing the
+  // borrower that preserves a PUBLIC host under this brand. The two halves ship together;
+  // neither is sufficient alone.
   const substituted: Record<string, unknown> = {
     ...requirement,
     provider,
-    declaredApiHosts: [...entry.apiHosts],
+    ...(entry.lanHost !== undefined
+      ? {
+          // Preserved verbatim, INCLUDING absent (a pre-collection row stays hostless —
+          // spreading `undefined` would add the key, so the seat is written only when the
+          // declaration actually carried one).
+          ...(requirement['declaredApiHosts'] !== undefined
+            ? { declaredApiHosts: requirement['declaredApiHosts'] }
+            : {}),
+          // The LAN seat itself IS pinned registry data — the class and the label the
+          // wizard renders — so it substitutes like `fields` does. Deep-copied for the
+          // same module-singleton reason.
+          lanHost: { ...entry.lanHost },
+        }
+      : { declaredApiHosts: [...(entry.apiHosts ?? [])] }),
   };
 
   // THE CREDENTIAL FIELD LIST — the seat whose absence WAS the founding defect.
@@ -508,6 +611,40 @@ export function admitConnectionRequirement<T>(requirement: T, options: Admission
   const borrowed = findBorrowedEntry(record);
   if (borrowed === undefined) {
     return { ok: true, requirement, issues: [] };
+  }
+
+  // Guard 2c — THE LAN HOST CLASS on a borrow hit (ADR-0023, P0 amendment 10c).
+  //
+  // Runs BEFORE Guard 2b and on EVERY channel including `registry`, because this is not a
+  // question about who may author prompt copy — it is a question about which host may end
+  // up in a frozen ceiling. A public host inside a ceiling the review screen presents as
+  // "a device on your own network" is wrong no matter which channel wrote it, and the
+  // registry channel is exactly where a re-substitution pass lands (the P3 seat-drift
+  // migration re-admits a row's own persisted shape on its stored channel).
+  //
+  // This is the second half of amendment 10b: preserving a borrower's declared hosts is
+  // only safe because this refuses the borrower whose declared host is not of the class.
+  // Refusal, never correction — there is no honest value to correct a wrong bridge
+  // address TO, and silently emptying the seat is the clobber this fork exists to undo.
+  if (borrowed.entry.lanHost !== undefined) {
+    const declared = readDeclaredHostsSeat(record);
+    if (!lanHostsAcceptable(declared, borrowed.entry)) {
+      return {
+        ok: false,
+        borrowed: true,
+        borrowedFrom: borrowed.key,
+        // Substituted for the same reason Guard 2b returns a substituted value on
+        // refusal: a caller rendering a refused requirement must never show the
+        // attacker's rename beside registry-grade copy. `ok:false` is fatal regardless.
+        requirement: applyRegistryValues(record, borrowed.entry) as T,
+        issues: [
+          {
+            path: 'declaredApiHosts',
+            message: `'${borrowed.key}' is a LAN-class provider: its host must be a single address of class '${borrowed.entry.lanHost.class}' collected from the user, so this declaration's hosts are refused rather than substituted`,
+          },
+        ],
+      };
+    }
   }
 
   // Guard 2b — the CREDENTIAL-PROMPT seats on a borrow hit (review MAJOR-1).

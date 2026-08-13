@@ -112,7 +112,11 @@ describe('P4 item 1 — the testRequest decisions (deliberate, journaled)', () =
     // The probe builds its URL from apiHosts[0]; a path is only meaningful on that host.
     for (const key of ['openweather', 'coingecko'] as const) {
       const entry = WELL_KNOWN_PROVIDERS_REGISTRY[key]!;
-      expect(entry.apiHosts.length, `${key} needs a host to probe`).toBeGreaterThan(0);
+      // PREMISE stated, not chained past (P5 widened the type): both of these entries
+      // are pinned-host providers, and a probe on a LAN entry would need the collected
+      // address rather than a registry host.
+      expect(entry.apiHosts, `${key} needs a host to probe`).toBeDefined();
+      expect(entry.apiHosts!.length, `${key} needs a host to probe`).toBeGreaterThan(0);
       if (entry.testRequest === undefined) continue;
       expect(entry.testRequest.pathAndQuery.startsWith('/'), `${key}: probe path must be host-relative`).toBe(true);
     }

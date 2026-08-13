@@ -51,6 +51,12 @@ const KIND_TABLE = {
   coinbase: 'api_key',
   openweather: 'api_key',
   coingecko: 'api_key',
+  // MIGRATED 2026-08-13 (TASK-20260812-desktop-auth-awareness P5, ADR-0023): the 11th
+  // entry, and the first LAN-class one. `api_key` is the honest kind — the bridge reads
+  // a static key from a header; what is unusual about Hue is where the HOST comes from
+  // (the user, not the registry) and how the key is MINTED (a pairing exchange), neither
+  // of which is a kind.
+  hue: 'api_key',
 } as const;
 
 describe('AC1 — every registry entry declares its OWN kind (the table is exhaustive)', () => {
@@ -89,7 +95,18 @@ describe('AC3 — every entry composes through the ONE emitter into a parsing re
       expect(requirement.kind, `${key}: the entry's kind, never a hardcode`).toBe(entry.kind);
       expect(requirement.slot).toBe(key);
       expect(requirement.provider.name).toBe(entry.displayName ?? key);
-      expect(requirement.declaredApiHosts).toEqual([...entry.apiHosts]);
+      // THE HOST FORK (MIGRATED 2026-08-13, P5 / ADR-0023 Decision 1). Pinned-host
+      // entries are unchanged; a LAN entry emits NO declaredApiHosts (the honest
+      // pre-collection shape — the address is the user's to supply) and instead carries
+      // its `lanHost` declaration through. Both halves asserted so neither an emitter
+      // that invents an address nor one that drops the LAN seat survives.
+      if (entry.lanHost !== undefined) {
+        expect(requirement.declaredApiHosts, `${key}: a LAN entry must invent no address`).toBeUndefined();
+        expect(requirement.lanHost, `${key}: the LAN seat must ride through`).toEqual(entry.lanHost);
+      } else {
+        expect(requirement.declaredApiHosts).toEqual([...entry.apiHosts!]);
+        expect(requirement.lanHost, `${key}: a pinned-host entry declares no LAN seat`).toBeUndefined();
+      }
 
       if (entry.fields !== undefined) {
         expect(requirement.fields, `${key}: pinned fields must arrive verbatim (AC2)`).toEqual(entry.fields);
@@ -142,7 +159,16 @@ describe('AC3 — every entry composes through the ONE emitter into a parsing re
         expect(built['fields']).not.toBe(entry.fields);
         expect((built['fields'] as unknown[])[0]).not.toBe(entry.fields[0]);
       }
-      expect(built['declaredApiHosts']).not.toBe(entry.apiHosts);
+      // Same fork: a LAN entry has no host array to copy, so the copy fence moves to the
+      // seat it DOES hand out (MIGRATED 2026-08-13, P5). Without this branch the whole
+      // -registry copy fence would go vacuous on LAN entries — the exact way the
+      // queryTemplate copy fence silently stopped covering the registry at P4.
+      if (entry.lanHost !== undefined) {
+        expect(built['lanHost'], `${key}: the LAN seat must be a COPY`).not.toBe(entry.lanHost);
+        expect(built['lanHost']).toEqual(entry.lanHost);
+      } else {
+        expect(built['declaredApiHosts']).not.toBe(entry.apiHosts);
+      }
       if (entry.endpoints !== undefined) expect(built['endpoints']).not.toBe(entry.endpoints);
       if (entry.registration !== undefined) expect(built['registration']).not.toBe(entry.registration);
       if (entry.request !== undefined) {
@@ -243,7 +269,11 @@ describe('AC1 — multi-option entries: every option is a COMPLETE, parsing cred
         // The option is COMPLETE: its credential-flow seats, the ENTRY's identity seats.
         expect(parsed.data.kind).toBe(option.kind);
         expect(parsed.data.provider.name).toBe(entry.displayName ?? key);
-        expect(parsed.data.declaredApiHosts).toEqual([...entry.apiHosts]);
+        // `!` since P5 widened the seat (apiHosts XOR lanHost). This loop only runs for
+        // entries with authOptions, and a LAN entry declares none — pinned-host by
+        // construction, premise stated rather than chained past.
+        expect(entry.apiHosts, `${key}: an entry with authOptions pins hosts`).toBeDefined();
+        expect(parsed.data.declaredApiHosts).toEqual([...entry.apiHosts!]);
         if (option.fields !== undefined) expect(parsed.data.fields).toEqual(option.fields);
         if (option.endpoints !== undefined) expect(parsed.data.endpoints).toEqual(option.endpoints);
         if (option.registration !== undefined) expect(parsed.data.registration).toEqual(option.registration);

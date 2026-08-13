@@ -198,8 +198,11 @@ describe('desktop postures — the authored values are EXACTLY the verified tabl
     expect(option?.desktopRedirectPosture).toBe('https-bridge');
   });
 
-  it('static-kind entries (no OAuth flow anywhere) carry no posture: coinbase/openweather/coingecko defaults', () => {
-    for (const key of ['coinbase', 'openweather', 'coingecko']) {
+  it('static-kind entries (no OAuth flow anywhere) carry no posture: coinbase/openweather/coingecko/hue defaults', () => {
+    // `hue` MIGRATED in 2026-08-13 (P5): a LAN device runs no OAuth redirect of any
+    // kind, so `undefined` is the correct answer and the posture-completeness suite
+    // treats it exactly like the other static kinds — no new posture literal was needed.
+    for (const key of ['coinbase', 'openweather', 'coingecko', 'hue']) {
       expect(WELL_KNOWN_PROVIDERS_REGISTRY[key]?.desktopRedirectPosture).toBeUndefined();
     }
   });
@@ -213,6 +216,12 @@ describe('desktop postures — browserCallable is a documented fact or ABSENT, n
     { key: 'openweather', value: true },
     // The 2026-08-12 advisory's motivating case: Coinbase blocks browser calls.
     { key: 'coinbase', value: false },
+    // MIGRATED 2026-08-13 (P5, ADR-0023): the Hue bridge serves a private-CA (or
+    // self-signed) certificate on a private IP and sends no CORS headers — a browser
+    // page cannot reach it and has no per-host trust escape. `false` here is a
+    // DOCUMENTED fact, not a guess, and it is what the wizard discloses before anything
+    // is collected. This is the entry that makes the +1 in this table load-bearing.
+    { key: 'hue', value: false },
   ];
 
   for (const { key, value } of BROWSER_CALLABLE) {

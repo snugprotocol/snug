@@ -20,10 +20,57 @@
 
 import type {
   ConnectionKind,
+  ConnectionLanHost,
   ConnectionRequest,
   ConnectionRequirement,
   ConnectionTestRequest,
 } from '@snugprotocol/protocol';
+
+/**
+ * A PAIRING EXCHANGE — how a provider MINTS a credential that the user cannot type
+ * (ADR-0023 Decision 2, TASK-20260812-desktop-auth-awareness P5).
+ *
+ * DESIGNED PROVIDER-AGNOSTICALLY, used by exactly one provider today. A Hue bridge's
+ * application key is not published on any screen: you press the physical link button and
+ * POST to the bridge, which mints and returns one. The wizard therefore needs the
+ * exchange described as DATA — method, path, body, where the minted value lives in the
+ * response, and which declared field it fills — so the next LAN device (a printer, a
+ * hub, a thermostat) is a registry row rather than a new branch in the wizard.
+ *
+ * WHAT THIS SEAT DELIBERATELY CANNOT EXPRESS:
+ *  - A HOST. The exchange always runs against the connection's own frozen ceiling host
+ *    (ADR-0023's binding order: collect address → approve → freeze → pair), so a
+ *    registry-authored host here would be a second host channel around the ceiling.
+ *  - A HEADER TEMPLATE. The pairing request is UNCREDENTIALED by definition — it is the
+ *    request that creates the credential — so there is nothing to inject and no seat to
+ *    inject it through.
+ *  - ARBITRARY RESPONSE HANDLING. `secretPath` is a literal walk (object keys and array
+ *    indices), never an expression: the response comes from a device on the user's
+ *    network and must be READ, never evaluated.
+ *
+ * CUSTODY (C1): the minted value goes straight into `snug_secrets` under the connection's
+ * `secretField` key. The exchange response never enters app-, LLM-, or export-visible
+ * state — the wizard is the only reader, and it reads exactly `secretPath`.
+ */
+export interface WellKnownPairingExchange {
+  /** POST only at v1 — a pairing exchange CREATES a credential, so it is never a read. */
+  method: 'POST';
+  /** Path on the connection's own ceiling host. Leading '/' — never a URL. */
+  pathAndQuery: string;
+  /** The literal JSON body. Pinned registry data — no substitution, no user input. */
+  body: Record<string, string | number | boolean>;
+  /** Literal walk to the minted secret in the response (keys and array indices). */
+  secretPath: ReadonlyArray<string | number>;
+  /** Which of the entry's OWN declared `fields` the minted value fills. */
+  secretField: string;
+  /**
+   * What the user must do BEFORE the exchange will succeed, rendered verbatim by the
+   * wizard immediately before it fires the request. This copy is the whole difference
+   * between a working pairing and an unexplained failure: the exchange only succeeds
+   * inside the device's own consent window.
+   */
+  preconditionInstruction: string;
+}
 
 /**
  * How a provider's OAuth flow can receive its redirect on the DESKTOP shell
@@ -180,8 +227,36 @@ export interface WellKnownOauthProvider {
    * channel and R3 makes it durable).
    */
   authOptions?: WellKnownAuthOption[];
-  /** Human-reviewed API hosts this provider's credential may be injected against. */
-  apiHosts: string[];
+  /**
+   * Human-reviewed API hosts this provider's credential may be injected against.
+   *
+   * OPTIONAL since ADR-0023, and ONLY because of the `lanHost` fork below: the structural
+   * rule is now "pinned `apiHosts` XOR `lanHost`", set-equality-pinned by
+   * `well-known-providers.test.ts`. Every non-LAN entry still MUST carry a non-empty
+   * list, and the same test refuses an entry that carries neither seat or both.
+   */
+  apiHosts?: string[];
+  /**
+   * LAN-CLASS HOST SOURCING — the entry declares that its host is COLLECTED FROM THE
+   * USER rather than pinned (ADR-0023 Decision 1). A Philips Hue bridge's address is
+   * assigned by the user's own router, so no human review could ever pin it.
+   *
+   * The seat rides through `requirementFromRegistryEntry` into the requirement's own
+   * `lanHost` seat (protocol), which is what makes the pre-collection row representable
+   * and what tells the wizard to render an address step. It carries NO address and never
+   * will: the collected value lands in `declaredApiHosts`, the one seat
+   * `deriveConnectionAllowedHosts` unions into the frozen ceiling.
+   *
+   * ENTRY-LEVEL ONLY, like `apiHosts` — for exactly the same reason ADR-0020 gives:
+   * which hosts may receive a credential is a per-PROVIDER decision, never a per-flow
+   * one. An `authOptions` entry may not declare a `lanHost`.
+   */
+  lanHost?: ConnectionLanHost;
+  /**
+   * How this provider's credential is MINTED when the user cannot type it (ADR-0023
+   * Decision 2). Entry-level: the exchange belongs to the device, not to a flow.
+   */
+  pairing?: WellKnownPairingExchange;
   /**
    * The provider's credential FIELD LIST — the seat the static-kind entries needed
    * (TASK-20260810 P4, fold T-M1).
@@ -721,6 +796,101 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     desktopRedirectPosture: 'https-bridge',
     apiHosts: ['api.music.apple.com'],
   },
+  // ─────────────────────────────────────────── the first LAN-CLASS entry (ADR-0023, P5)
+  //
+  // Philips Hue is the entry that forced the host fork. Every other entry pins hosts a
+  // human reviewed; a Hue bridge sits at an address the USER's router assigned, so there
+  // is nothing to pin and never will be. Hence `lanHost` INSTEAD of `apiHosts` — the
+  // registry declares that a host will be collected, the wizard collects and validates
+  // it (RFC-1918 IPv4 literal only), and the collected address freezes into the ceiling
+  // exactly like a pinned one.
+  //
+  // THE THREE ADMISSION CONSEQUENCES, each probe-verified as blocking before this entry
+  // could exist (P0 amendment 10; see `lan-class-registry.test.ts` for the probe output):
+  // `registryHostIndex` must SKIP an apiHosts-less entry (otherwise this row makes every
+  // admission of every requirement throw), `applyRegistryValues` must PRESERVE the
+  // declaration's hosts for a LAN entry (otherwise it deletes the address the user just
+  // typed), and admission must RE-VALIDATE the host class (otherwise a borrower smuggles
+  // a public host under this brand).
+  //
+  // PROVIDER FACTS (task recon, 2026-08-12, primary docs + live probes):
+  //  - CLIP v2 is HTTPS-ONLY on the bridge. The cert's CN is the bridgeId, signed by
+  //    Signify's private CA on current firmware and self-signed on older ones, so native
+  //    fetch refuses it — hence ADR-0023's TOFU pin captured at pairing and the desktop
+  //    `lan_fetch` command. That transport is the DESKTOP lane's; this entry is the
+  //    declaration it serves.
+  //  - The credential is MINTED, not issued: press the bridge's physical link button,
+  //    then POST /api {"devicetype":…,"generateclientkey":true} within ~30 seconds and
+  //    the bridge returns success[0].username — the value the `hue-application-key`
+  //    header carries. (`clientkey` comes back too; it is the Entertainment-API stream
+  //    key, unused at v1 and deliberately not stored.)
+  //  - https://developers.meethue.com/develop/hue-api-v2/getting-started/
+  hue: {
+    displayName: 'Philips Hue',
+    kind: 'api_key',
+    // The names a person actually writes for this device. Both are brand-adjacent by
+    // `findBrandAdjacentRegistryKeys` anyway (they contain the `hue` segment), so the
+    // BAN already reaches them; the aliases are what let the INFERRER's rung 1 resolve
+    // them to this entry instead of guessing a requirement.
+    aliases: ['Philips Hue', 'Hue Bridge'],
+    // NO `apiHosts` — the XOR. See `lanHost` below.
+    lanHost: { class: 'rfc1918-ipv4-literal', label: 'Bridge IP address' },
+    // VERIFIED: the bridge serves a private-CA/self-signed certificate on a private IP.
+    // A browser page cannot reach it — no CORS headers, and the cert fails the browser's
+    // own chain check with no per-host trust escape. This is a DESKTOP-only provider and
+    // the wizard discloses that before anything is collected (the disclosedBrowserWall
+    // pattern; ADR-0023 Decision 1 keeps the ROW portable — web discloses, never breaks).
+    browserCallable: false,
+    // ONE field, and the user never types into it. It exists so the secret has a named
+    // slot in `snug_secrets` and the header template has a key to reference; the PAIRING
+    // exchange below fills it. The copy says so plainly — telling the user to "paste
+    // your application key" would send them hunting for a value no Hue surface displays.
+    fields: [
+      {
+        key: 'application_key',
+        label: 'Bridge application key',
+        type: 'secret',
+        description:
+          'Created for you when you press the link button — Snug asks the bridge for it during setup. There is nothing to look up.',
+      },
+    ],
+    // WHERE the minted key goes: CLIP v2's own header. Never a query parameter, never a
+    // bearer token — the bridge reads exactly this name.
+    request: {
+      headerTemplate: { 'hue-application-key': '{{application_key}}' },
+    },
+    // NO `testRequest`, deliberately (same discipline as coingecko's omission at P4):
+    // every CLIP v2 read requires the key the pairing step mints, so a probe before
+    // pairing can only fail and a probe after it merely repeats what pairing proved. No
+    // button beats a meaningless one — pairing IS the verification.
+    //
+    // THE PAIRING EXCHANGE (ADR-0023 Decision 2). Runs against the connection's own
+    // frozen ceiling host, after approval, over the desktop pinned-TLS command in
+    // `mode:'pair'`. The minted value goes straight to `snug_secrets`.
+    pairing: {
+      method: 'POST',
+      pathAndQuery: '/api',
+      body: { devicetype: 'snug#hub', generateclientkey: true },
+      // success[0].username IS the application key — the bridge's legacy field name for
+      // it, kept because that is what the wire actually returns.
+      secretPath: ['success', 0, 'username'],
+      secretField: 'application_key',
+      preconditionInstruction:
+        'Press the link button — the big round button on top of your Hue bridge — now, then continue within 30 seconds. The bridge only hands out a key during that window.',
+    },
+    registration: {
+      // No console, no account, no developer portal: the "registration" for a Hue bridge
+      // is finding it on your own network and pressing its button. Written for someone
+      // who has never opened a router page.
+      instructions: [
+        'Make sure this computer and the Hue bridge are on the same home network — the bridge is the round white box plugged into your router.',
+        'Find the bridge IP address: open the Philips Hue app, go to Settings → My Hue System → tap your bridge, and read the "IP address" line (it looks like 192.168.1.50). "Find my bridge" below can also look it up for you.',
+        'Type that address into the field below and continue.',
+        'When Snug asks, press the link button — the big round button on top of the bridge — because that is how the bridge knows it is really you standing next to it.',
+        'Continue within 30 seconds of pressing it. The bridge creates the key itself; there is nothing for you to copy or paste.',
+      ],
+    },
+  },
 };
 
 /** Normalize a provider name for lookup (lowercase, alphanum only). */
@@ -923,6 +1093,18 @@ export function requirementFromRegistryEntry(
         }
       : {}),
     ...(flow.testRequest !== undefined ? { testRequest: { ...flow.testRequest } } : {}),
-    declaredApiHosts: [...entry.apiHosts],
+    // THE HOST FORK (ADR-0023 Decision 1) — pinned hosts XOR a lanHost declaration, and
+    // the emitter honors whichever the ENTRY carries (never an option's: hosts are an
+    // identity seat, and a LAN seat is a host seat).
+    //
+    // A LAN entry emits NO `declaredApiHosts` at all. That is the PRE-COLLECTION shape:
+    // the requirement is honest that it has no host yet, `deriveConnectionAllowedHosts`
+    // returns an empty ceiling that refuses everything, and the wizard's address step is
+    // what fills the seat. Emitting a placeholder would be the same lie the endpoints
+    // comment above refuses — a nonexistent host unioned into a frozen ceiling.
+    //
+    // Deep-copied like every other seat: the registry is a module singleton.
+    ...(entry.lanHost !== undefined ? { lanHost: { ...entry.lanHost } } : {}),
+    ...(entry.apiHosts !== undefined ? { declaredApiHosts: [...entry.apiHosts] } : {}),
   };
 }

@@ -355,11 +355,16 @@ describe('P5(a) — the ban fires on BRAND-ADJACENT names, not just exact regist
      */
     const { admitConnectionRequirement } = await loadAdmission();
     for (const [key, entry] of Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)) {
+      // MIGRATED 2026-08-13 (P5, ADR-0023): a LAN-class entry pins no hosts, so its bare
+      // borrower declares the user-collected bridge ADDRESS instead — the shape a real
+      // LAN row has after the wizard's address step. The idempotence property being
+      // pinned is unchanged and now covers the fork: the second admission must not refuse
+      // what the first one produced, including a preserved private literal.
       const bare = {
         slot: key,
         provider: { name: entry.displayName ?? key },
         kind: 'api_key',
-        declaredApiHosts: [...entry.apiHosts],
+        declaredApiHosts: entry.lanHost !== undefined ? ['192.168.1.50'] : [...entry.apiHosts!],
       };
       const first = admitConnectionRequirement(bare, { channel: 'inference' });
       expect(first.ok, `entry "${key}" was refused on the FIRST admission`).toBe(true);
@@ -443,7 +448,12 @@ describe('AC9 — registry-borrow ban fires on declaredApiHosts ∩ registry api
     // added later is covered on arrival instead of silently unguarded.
     const { admitConnectionRequirement } = await loadAdmission();
     for (const [key, entry] of Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)) {
-      for (const host of entry.apiHosts) {
+      // MIGRATED 2026-08-13 (P5, ADR-0023 / amendment 10a): a LAN-class entry pins no
+      // hosts and is deliberately ABSENT from the host index, so it contributes no host
+      // trigger — the reason is written at `registryHostIndex` and pinned as a positive
+      // assertion in `lan-class-registry.test.ts` ("a private literal must not borrow the
+      // hue brand by host"). The rule for every PINNED-host entry is untouched.
+      for (const host of entry.apiHosts ?? []) {
         const result = admitConnectionRequirement(
           requirementFor('api_key', 'Totally Unrelated App', [host]),
           { channel: 'inference' },
