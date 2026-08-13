@@ -93,6 +93,104 @@ describe('AC8 — round trips are observable as they start', () => {
   });
 });
 
+// TASK-20260813 AC7 — every started round trip must be CLOSED.
+//
+// The reported bug: "sometimes the inspector timer keeps running after the call is
+// done and it moves on to the next one." The inspector renders a live ticker for any
+// entry with `pending: true`, and an entry becomes pending on `round_trip_start` and
+// settles on `round_trip`. `runAgentTurn` awaited `adapter.complete()` with no
+// try/catch, so a REJECTED call skipped the `round_trip` emit entirely and left that
+// entry pending forever — ticking under the next call, exactly as described.
+//
+// This is not hypothetical: the webllm adapter throws on its function-calling path,
+// and an aborted turn rejects with an AbortError. The mock/HTTP adapters return
+// `ok:false` instead, which is why the happy-path suites never caught it.
+//
+// Asserted at the ADAPTERS altitude, not at the panel: this is where the decision to
+// emit is made (docs/lessons.md 2026-08-05, "test where the DECISION is made").
+describe('AC7 — a started round trip is always closed, even when the call throws', () => {
+  const boom = (error: unknown): AgentAdapter => ({
+    complete: () => Promise.reject(error),
+  });
+
+  it('emits a terminal round_trip when adapter.complete() rejects', async () => {
+    const events: AgentTurnEvent[] = [];
+    await expect(
+      runAgentTurn({
+        adapter: boom(new Error('webllm exploded')),
+        system: 'sys',
+        messages: [{ role: 'user', content: 'go' }],
+        onEvent: (e) => events.push(e),
+      }),
+    ).resolves.toMatchObject({ ok: false });
+
+    // The pair must balance. A start with no matching round_trip is the stuck timer.
+    const starts = events.filter((e) => e.type === 'round_trip_start');
+    const ends = events.filter((e) => e.type === 'round_trip');
+    expect(starts).toHaveLength(1);
+    expect(ends).toHaveLength(1);
+    expect(ends[0]).toMatchObject({ index: 0, response: { ok: false } });
+  });
+
+  it('reports the thrown message rather than swallowing it into a blank error', async () => {
+    const events: AgentTurnEvent[] = [];
+    await runAgentTurn({
+      adapter: boom(new Error('webllm exploded')),
+      system: 'sys',
+      messages: [{ role: 'user', content: 'go' }],
+      onEvent: (e) => events.push(e),
+    });
+    const end = events.find((e) => e.type === 'round_trip');
+    // The inspector renders this string; "[object Object]" or "" would make a real
+    // failure unreadable in the one surface built to explain it.
+    expect(end).toMatchObject({ response: { ok: false, message: expect.stringContaining('webllm exploded') } });
+  });
+
+  it('closes the round trip when the turn is aborted mid-call', async () => {
+    // An abort rejects the in-flight completion. The entry must still settle, or the
+    // timer keeps running under a turn the user deliberately stopped.
+    const controller = new AbortController();
+    const adapter: AgentAdapter = {
+      complete: ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        }),
+    };
+
+    const events: AgentTurnEvent[] = [];
+    const turn = runAgentTurn({
+      adapter,
+      system: 'sys',
+      messages: [{ role: 'user', content: 'go' }],
+      signal: controller.signal,
+      onEvent: (e) => events.push(e),
+    });
+    await Promise.resolve();
+    controller.abort();
+    await turn;
+
+    expect(events.filter((e) => e.type === 'round_trip_start')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'round_trip')).toHaveLength(1);
+  });
+
+  it('still carries a duration, so the settled entry shows a real elapsed figure', async () => {
+    const events: AgentTurnEvent[] = [];
+    await runAgentTurn({
+      adapter: boom(new Error('nope')),
+      system: 'sys',
+      messages: [{ role: 'user', content: 'go' }],
+      onEvent: (e) => events.push(e),
+    });
+    const end = events.find((e) => e.type === 'round_trip');
+    // Not `toBeGreaterThan(0)` — a rejection can land inside the same millisecond, and
+    // a flaky guard is worse than a loose one. The field must simply be a real number,
+    // because the panel renders it in place of the live ticker.
+    expect(end).toBeDefined();
+    expect(typeof (end as { durationMs: number }).durationMs).toBe('number');
+    expect(Number.isFinite((end as { durationMs: number }).durationMs)).toBe(true);
+  });
+});
+
 describe('AC4 — the wire model name is reported, not guessed', () => {
   it('anthropic reports the model from message_start', async () => {
     const { fetchImpl } = fakeFetch(() => sseResponse(CACHED_FIXTURE));

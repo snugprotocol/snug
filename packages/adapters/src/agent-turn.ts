@@ -131,15 +131,30 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
     // Emitted BEFORE the await: a 30-minute build must show the call in flight, not an
     // empty panel until it returns. Same `index` correlates it with the `round_trip`.
     onEvent?.({ type: 'round_trip_start', index: iteration, request });
-    const result = await adapter.complete({
-      system,
-      messages: conversation,
-      tools: defs,
-      signal,
-      onDelta,
-      ...(options.cache === true ? { cache: true } : {}),
-      ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
-    });
+    // The await is GUARDED (TASK-20260813 AC7). An adapter is contracted to report
+    // failure as `ok:false`, but not every one honours it: the webllm adapter throws on
+    // its function-calling path, and an aborted completion rejects with an AbortError.
+    // An escaping rejection used to skip the `round_trip` emit below, leaving the entry
+    // opened by `round_trip_start` pending FOREVER — which is the inspector timer that
+    // "keeps running after the call is done and moves to the next one".
+    //
+    // Converting to an `ok:false` result rather than rethrowing keeps one exit shape for
+    // the whole loop: the existing `!result.ok` branch preserves partial text from
+    // earlier iterations, which a rethrow would discard.
+    let result: AdapterResult;
+    try {
+      result = await adapter.complete({
+        system,
+        messages: conversation,
+        tools: defs,
+        signal,
+        onDelta,
+        ...(options.cache === true ? { cache: true } : {}),
+        ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
+      });
+    } catch (cause) {
+      result = thrownToResult(cause);
+    }
     onEvent?.({ type: 'round_trip', index: iteration, request, response: result, durationMs: now() - startedAt });
     if (!result.ok) {
       // Text from EARLIER completed iterations is real work — a drop on iteration N
@@ -176,6 +191,33 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
 /** Monotonic where available (browser + node), wall-clock elsewhere. Observation only. */
 function now(): number {
   return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
+}
+
+/**
+ * Turn an escaped adapter rejection into the `ok:false` result the loop expects (AC7).
+ *
+ * An abort is reported as CANCELLED rather than HOST_ERROR and is NOT retryable: the
+ * user stopped the turn on purpose, so a retry would fight them, and a surface that
+ * renders it as a crash would be lying about what happened.
+ *
+ * The message is carried through verbatim because the LLM inspector renders it — the
+ * one surface whose entire job is explaining what the model did. Collapsing a real
+ * stack into "[object Object]" there would defeat the feature.
+ */
+function thrownToResult(cause: unknown): AdapterError {
+  const aborted =
+    (cause instanceof DOMException && cause.name === 'AbortError') ||
+    (cause instanceof Error && cause.name === 'AbortError');
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return aborted
+    ? { ok: false, code: ERROR_CODES.CANCELLED, message: message === '' ? 'turn aborted' : message, retryable: false }
+    : {
+        ok: false,
+        code: ERROR_CODES.HOST_ERROR,
+        // Named so the inspector shows WHERE it broke, not just what was thrown.
+        message: `adapter threw: ${message === '' ? String(cause) : message}`,
+        retryable: false,
+      };
 }
 
 /** Tool errors are data fed back to the model — a bad tool call must not kill the turn. */
