@@ -60,13 +60,19 @@ function cachedPercent(entry: LlmInspectorEntry): number | undefined {
  * through state would re-render the whole round-trip list every 100ms for the length of
  * a 30-minute build (R5). Here only this leaf re-renders, and only while pending.
  */
-function LiveTimer(): ReactElement {
-  const [elapsed, setElapsed] = useState(0);
+function LiveTimer({ startedAt }: { startedAt: number }): ReactElement {
+  // Anchored to when the ROUND TRIP started, not when this component mounted
+  // (TASK-20260813 AC7): the rail's tab strip unmounts this subtree, so a mount-relative
+  // clock restarted a long call's elapsed time at 0 every time the user looked away and
+  // back. Seeded synchronously for the same reason — a 0 first paint would flash a
+  // 30-minute call back to "0ms".
+  const [elapsed, setElapsed] = useState(() => Math.max(0, performance.now() - startedAt));
   useEffect(() => {
-    const startedAt = performance.now();
-    const id = setInterval(() => setElapsed(performance.now() - startedAt), 100);
+    const tick = (): void => setElapsed(Math.max(0, performance.now() - startedAt));
+    tick();
+    const id = setInterval(tick, 100);
     return () => clearInterval(id);
-  }, []);
+  }, [startedAt]);
   return (
     <span data-testid="llm-pending" className="llm-pending">
       {ms(elapsed)}
@@ -114,7 +120,7 @@ const RoundTrip = memo(function RoundTrip({ entry }: { entry: LlmInspectorEntry 
         </span>
         <span className="llm-meta">
           {entry.pending ? (
-            <LiveTimer />
+            <LiveTimer startedAt={entry.startedAt} />
           ) : (
             <>
               {ms(entry.durationMs ?? 0)}
@@ -225,8 +231,16 @@ export function LlmInspectorPanel({ state, mode }: LlmInspectorPanelProps): Reac
         {totalCached !== undefined ? ` · ${totalCached}% cached` : ''}
       </p>
       <ol className="llm-list" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-        {state.entries.map((entry, index) => (
-          <RoundTrip key={`${entry.index}-${index}`} entry={entry} />
+        {/*
+          Keyed by round-trip identity ALONE (TASK-20260813 AC8). This was
+          `${entry.index}-${arrayPosition}`, but `evict()` drops the oldest entries and
+          shifts every survivor's position — so an unchanged entry silently changed key,
+          and React reused or remounted its subtree (including LiveTimer's interval)
+          across identity boundaries. `entry.index` is already unique within a turn:
+          the reducer resets on `onTurnStart`, so positions add nothing but the bug.
+        */}
+        {state.entries.map((entry) => (
+          <RoundTrip key={entry.index} entry={entry} />
         ))}
       </ol>
     </div>

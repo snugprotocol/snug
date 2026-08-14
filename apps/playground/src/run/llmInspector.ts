@@ -58,6 +58,13 @@ export interface LlmInspectorEntry {
   model?: string;
   /** Wall-clock for the round trip. Absent while the call is still in flight (AC8). */
   durationMs?: number;
+  /**
+   * When the round trip STARTED, on the same clock the live timer reads
+   * (`performance.now()`), so the ticker measures the CALL rather than its own mount
+   * (TASK-20260813 AC7). Without this, switching rail tabs away and back — or any
+   * remount — restarted a long call's displayed elapsed time at 0.
+   */
+  startedAt: number;
   /** True between `round_trip_start` and `round_trip` — drives the live timer (AC8). */
   pending: boolean;
   isError: boolean;
@@ -282,9 +289,16 @@ function toPendingEntry(start: AgentRoundTripStart): LlmInspectorEntry {
     text: '',
     toolCalls: [],
     tools: [],
+    // Same clock LiveTimer reads, so the ticker survives a remount (AC7).
+    startedAt: nowMs(),
     pending: true,
     isError: false,
   };
+}
+
+/** Monotonic where available, matching `packages/adapters`' own timing seam. */
+function nowMs(): number {
+  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
 }
 
 /** Fold the completed outcome into a (usually pending) entry, preserving nested tools. */
@@ -350,7 +364,21 @@ export function llmInspectorReduce(state: LlmInspectorState, action: AgentTurnEv
   }
 
   if (action.type === 'round_trip') {
-    const existing = state.entries.find((entry) => entry.index === action.index);
+    // Prefer the entry that is still PENDING (TASK-20260813, owner repro 2026-08-13).
+    //
+    // `index` is NOT unique across the reducer's lifetime: agent-turn.ts numbers round
+    // trips from 0 per TURN, and RunView feeds two independent turn sources into this
+    // one reducer (the builder chat and the app's own transport). Two overlapping turns
+    // therefore both open an entry at index 0. Plain `.find()` returned the OLDEST —
+    // already settled — so the settle was wasted on it and the newer entry stayed
+    // `pending: true` forever, ticking under every call that followed. That is the
+    // timer the owner kept seeing.
+    //
+    // Matching the oldest UNSETTLED entry drains them in order: N starts followed by N
+    // completions settle one-for-one, instead of re-settling the same one N times.
+    const existing =
+      state.entries.find((entry) => entry.index === action.index && entry.pending) ??
+      state.entries.find((entry) => entry.index === action.index);
     const settled = settleEntry(existing, action);
     const next = existing === undefined ? [...state.entries, settled] : state.entries.map((e) => (e === existing ? settled : e));
     const { entries, totalBytes } = evict(next);

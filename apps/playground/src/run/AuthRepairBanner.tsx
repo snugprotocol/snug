@@ -54,11 +54,19 @@ export function AuthRepairBanner({ appId }: { appId: string }): ReactElement | n
   const provider = providerName ?? active.slot;
 
   return (
-    <div className="error-note" role="alert" data-testid="auth-repair-banner">
-      {provider} rejected this app’s credentials ({active.status}). The app keeps running, but this connection needs
-      attention — the key may be wrong, expired, or revoked.
-      <div className="field-row">
+    // AC10: this one IS a genuine failure — a provider actively rejected stored
+    // credentials — so it keeps the danger accent, via the `is-error` variant of the
+    // shared connection surface rather than the old full-bleed `.error-note`. Same
+    // shape as the calm variant, different temperature.
+    <div className="connection-note is-error" role="alert" data-testid="auth-repair-banner">
+      <p className="connection-note-title">{provider} isn’t accepting this app’s key</p>
+      <p className="connection-note-body">
+        The app keeps running, but anything needing {provider} won’t work until this is sorted. The key may be wrong,
+        expired, or revoked ({active.status}).
+      </p>
+      <div className="connection-note-actions">
         <Button
+          variant="primary"
           onClick={() => {
             // Dismiss ONLY on a real open: `openConnectionWizard` refuses (false) when
             // another wizard is parked, and a banner cleared on a refusal would strand

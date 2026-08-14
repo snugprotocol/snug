@@ -98,3 +98,61 @@ describe('brand sizing (AC9)', () => {
     expect(at830).toMatch(/\.identity-name\s*\{\s*display:\s*none/);
   });
 });
+
+// TASK-20260813 AC1/AC2 — the wordmark's descender.
+//
+// The bug: `.brand` set `line-height: 1`, which makes the line box exactly the em box,
+// so the tail of the "g" in "snug." falls OUTSIDE it — and `.brand-word`'s
+// `overflow: hidden` (present for the ellipsis) turned that overflow into a visible
+// cut. `--font-display` is a serif with a deep descender, so it is unmissable.
+//
+// Asserted in CSS rather than by measuring a rendered glyph: jsdom has no layout engine
+// and no font metrics, so `getBoundingClientRect()` returns zeros and could never see
+// this. These two rules ARE the defect, so they are what the guard must pin.
+describe('brand wordmark descender (TASK-20260813 AC1/AC2)', () => {
+  const brandRule = (css: string): string => {
+    // The base `.brand` rule — anchored at line start so `.brand .brand-word` and the
+    // `@media` override cannot be mistaken for it.
+    const match = css.match(/^\.brand\s*\{([^}]*)\}/m);
+    if (match === null) throw new Error('no .brand rule found in app.css');
+    return match[1];
+  };
+
+  const brandWordRule = (css: string): string => {
+    const match = css.match(/\.brand\s+\.brand-word\s*\{([^}]*)\}/);
+    if (match === null) throw new Error('no .brand .brand-word rule found in app.css');
+    return match[1];
+  };
+
+  it('AC1 — .brand does not pin line-height to 1, which clips the descender', () => {
+    const rule = brandRule(read('src/theme/app.css'));
+    // `line-height: 1` is the defect exactly. A larger value (or none) leaves the line
+    // box room for the tail. Unitless 1.0/100%/1em are the same bug spelled differently.
+    expect(rule).not.toMatch(/line-height:\s*(1(\.0+)?|100%|1em|1rem)\s*[;}]/);
+  });
+
+  it('AC1 — the lockup leaves descender room below the wordmark baseline', () => {
+    const css = read('src/theme/app.css');
+    const rule = brandRule(css);
+    const word = brandWordRule(css);
+    // Either the line box itself is generous (line-height >= 1.2 on .brand), or the
+    // wordmark carries explicit padding-bottom to hold the tail inside its clip box.
+    // One of the two MUST be true or the "g" is cut again.
+    const lineHeight = rule.match(/line-height:\s*([0-9.]+)\s*[;}]/);
+    const generousLineBox = lineHeight !== null && Number(lineHeight[1]) >= 1.2;
+    const paddedWord = /padding-bottom:\s*[^;}]+/.test(word);
+    expect(
+      generousLineBox || paddedWord,
+      '.brand needs line-height >= 1.2 or .brand-word needs padding-bottom for the "g" tail',
+    ).toBe(true);
+  });
+
+  it('AC2 — the wordmark still ellipsizes rather than overflowing the header', () => {
+    // The overflow:hidden that caused the clip was there for a REASON — a narrow header
+    // must truncate the brand, not spill it. The fix must not trade one bug for another.
+    const word = brandWordRule(read('src/theme/app.css'));
+    expect(word).toMatch(/text-overflow:\s*ellipsis/);
+    expect(word).toMatch(/white-space:\s*nowrap/);
+    expect(word).toMatch(/overflow:\s*hidden/);
+  });
+});

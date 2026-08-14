@@ -19,11 +19,13 @@ import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import { createNetHandlerFor } from '../state/net.js';
 import {
+  connectionWizardRevisionStore,
   isConnectionRepairableNetError,
   openConnectionWizard,
   openConnectionWizardForApp,
   openConnectionWizardForNetError,
 } from '../state/connectionWizard.js';
+import { useStore } from '../state/store.js';
 import { NetConfirmDialog } from './NetConfirmDialog.js';
 import { AuthRepairBanner } from './AuthRepairBanner.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
@@ -32,12 +34,14 @@ import { useMode, useProvider } from '../state/mode.js';
 import { useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
+import { toggleRailShown, useRailShown } from '../state/railLayout.js';
 import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
+import { RailDivider } from '../ui/RailDivider.js';
 import { Sheet } from '../ui/Sheet.js';
 import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
@@ -53,10 +57,13 @@ import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
 
-// 'inspector' is now ONE surface (AC10): the LLM round-trip section above the
-// bridge/frame timeline, composed by ThinkPanel. The two FEEDS remain separate modules
-// with opposite rules — llmInspector.ts renders bodies, inspector.ts is value-blind
-// (AC11 locks it byte-for-byte). Only the presentation merged.
+// 'inspector' is the LLM round-trip surface, composed by ThinkPanel. It briefly also
+// showed an app↔host frame timeline; TASK-20260813 AC11 removed that view as noise
+// (structure-only rows with no values read as neither debugging nor narrative).
+//
+// The frame FEED (inspector.ts, value-blind and byte-locked) is still wired below and
+// must stay: `inspector.inFlight` drives the app-frame "thinking" pulse and
+// `inspector.sawDbOp` gates the export button. Only its rendering was dropped.
 type RailTab = 'chat' | 'inspector' | 'docs' | 'versions';
 
 /**
@@ -139,6 +146,9 @@ export default function RunView(): ReactElement {
   // mode with the webllm brain override applied, never the raw mode (review F3).
   const turnMode = useTurnMode();
   const theme = useTheme();
+  // Whether the "watch it think" rail is shown (AC6). Global, like the theme — it is a
+  // workspace preference, not a property of any one app.
+  const railShown = useRailShown();
   useAppMetaMap(); // re-render tiles/header when meta lands
 
   const [htmlState, setHtmlState] = useState<HtmlState>({ phase: 'loading' });
@@ -225,8 +235,8 @@ export default function RunView(): ReactElement {
   // read PER SEND inside the transport, so an edit or revert needs no rebuild here
   // (fold F-M1 — there is no contentEpoch dependency and there does not need to be).
   const transport = useMemo(
-    () => createAppTransport(mode, provider, onLlmEvent, id),
-    [mode, provider, onLlmEvent, id],
+    () => createAppTransport(mode, provider, onLlmEvent, id, onTurnStart),
+    [mode, provider, onLlmEvent, id, onTurnStart],
   );
   // The envelope net capability (AL-03): a value-blind NetHandler the runner routes
   // net-request frames to. The executor (in state/net.ts) reads the app's frozen host
@@ -316,6 +326,31 @@ export default function RunView(): ReactElement {
       cancelled = true;
     };
   }, [id]);
+  /**
+   * How many connection slots THIS app has (AC9) — the gate for the header's
+   * "connections" control.
+   *
+   * Counts rows regardless of status: an app that is already connected is exactly the
+   * case the owner reported as unreachable ("there is no manage-connection button once
+   * the connection is established"), and a declared-but-unconnected app needs the same
+   * door. Only zero rows means no control.
+   *
+   * Re-read on `connectionWizardRevisionStore`, which the wizard bumps on every
+   * approve/revoke: without that, connecting an app for the first time would leave the
+   * header showing nothing until a reload.
+   */
+  const wizardRevision = useStore(connectionWizardRevisionStore);
+  const [connectionSlots, setConnectionSlots] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    void getUserDb().then((db) => {
+      if (!cancelled) setConnectionSlots(db.listConnections(id).length);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, wizardRevision]);
+
   const installLatch = useRef(false);
   const installThisStarter = useCallback(async (): Promise<void> => {
     if (installLatch.current || !isStarterId(id)) return;
@@ -472,7 +507,7 @@ export default function RunView(): ReactElement {
         ) : null}
       </div>
       {railTab === 'inspector' ? (
-        <ThinkPanel llm={llmInspector} frames={inspector.entries} mode={turnMode} />
+        <ThinkPanel llm={llmInspector} mode={turnMode} />
       ) : railTab === 'docs' ? (
         <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} mode={turnMode} />
       ) : railTab === 'versions' ? (
@@ -557,10 +592,23 @@ export default function RunView(): ReactElement {
       */}
       <AuthRepairBanner appId={id} />
       {netAuthError !== null ? (
-        <div className="error-note" role="alert" data-testid="net-auth-cta">
-          this app tried to use the network but its connection is not ready ({netAuthError.code}).
-          <div className="field-row">
+        // AC10: "this app wants to connect" is ORDINARY, not a failure — it was
+        // arriving in the same alarm red as a rejected credential. Calm surface, ember
+        // rule, one clear action. Re-approval after an import is the same shape.
+        <div className="connection-note" role="alert" data-testid="net-auth-cta">
+          <p className="connection-note-title">
+            {netAuthError.code === NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED
+              ? 'this connection came with the app — approve it to use it'
+              : 'this app needs a connection to go further'}
+          </p>
+          <p className="connection-note-body">
+            {netAuthError.code === NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED
+              ? 'It arrived already set up, which is exactly why it needs your review before anything is sent. You approve it field by field.'
+              : 'It just tried to reach the network and has nothing approved to reach it with. You review what it wants before any credential is stored.'}
+          </p>
+          <div className="connection-note-actions">
             <Button
+              variant="primary"
               onClick={() => {
                 // `openConnectionWizardForNetError` is async (it reads the app's
                 // connection rows to pick a slot). Dismiss the banner ONLY on a real
@@ -641,6 +689,22 @@ export default function RunView(): ReactElement {
                 {installing ? 'installing…' : 'install'}
               </Button>
             ) : null}
+            {/*
+              AC9 — the connections door, in the ONE place the owner asked for it: the
+              app's own header, beside export and theme. Shown whenever this app has
+              connection rows, connected or not; Settings keeps the cross-app list.
+              Starters are excluded because their declaration is a bundled manifest with
+              no persisted rows yet — a control here would open an empty wizard.
+            */}
+            {connectionSlots > 0 && !isStarterId(id) ? (
+              <Button
+                onClick={() => void openConnectionWizardForApp(id, 'settings')}
+                data-testid="manage-connections"
+                title="review, reconnect, or disconnect what this app connects to"
+              >
+                🔌 connections
+              </Button>
+            ) : null}
             {sawDbOp ? (
               <Button onClick={() => void onExport()} title="download this app’s database as a real .sqlite file">
                 export .sqlite
@@ -653,7 +717,22 @@ export default function RunView(): ReactElement {
               <Button variant="ghost" onClick={() => setSheetOpen(true)} aria-label="open inspector">
                 inspect
               </Button>
-            ) : null}
+            ) : (
+              /* AC6: hide/show "watch it think". On by default — the panel is the
+                 feature — but it competes with the app for width, so it has to be
+                 dismissible. `aria-pressed` makes it a toggle to a screen reader
+                 rather than a button that appears to do nothing. */
+              <Button
+                variant="ghost"
+                onClick={toggleRailShown}
+                aria-pressed={railShown}
+                data-testid="rail-toggle"
+                aria-label={`${railShown ? 'hide' : 'show'} watch it think`}
+                title={`${railShown ? 'hide' : 'show'} the watch it think panel`}
+              >
+                {railShown ? '◨ hide' : '◫ think'}
+              </Button>
+            )}
           </div>
         </header>
         {/*
@@ -760,9 +839,14 @@ export default function RunView(): ReactElement {
         <Sheet title="watch it think" open={sheetOpen} onClose={() => setSheetOpen(false)}>
           {railContent}
         </Sheet>
-      ) : (
-        <Rail title="watch it think">{railContent}</Rail>
-      )}
+      ) : railShown ? (
+        // The divider is a SIBLING of the rail, not a child: it has to sit between the
+        // stage and the rail in the same flex row to be draggable at the seam (AC4).
+        <>
+          <RailDivider />
+          <Rail title="watch it think">{railContent}</Rail>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -22,7 +22,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { AgentRoundTrip, AgentTurnEvent } from '@snugprotocol/adapters';
 
-import { createDirectAppTransport } from '../agent/transport.js';
+import { createAppTransport, createDirectAppTransport } from '../agent/transport.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 // The 'mock' provider is a real adapter with a scripted app reply — no network, and
@@ -103,6 +103,37 @@ describe('the app-frame transport reports LLM round trips (owner bug: BYOK + Che
     expect(events, 'the feed must actually have fired').not.toHaveLength(0);
     // Assert at the seam rather than trusting the downstream redactor.
     expect(JSON.stringify(events), 'C1: a BYOK key must never reach the LLM feed').not.toContain(KEY);
+  });
+
+  // TASK-20260813 (owner repro 2026-08-13, second sighting of the stuck timer).
+  //
+  // The SAME class of wiring bug this file was created for, one seam over. RunView runs
+  // two turn sources into one inspector reducer: the builder chat, which resets it via
+  // `onTurnStart`, and the app's own transport — which was given `onLlmEvent` but never
+  // `onTurnStart`. So a Chess move's round trips APPENDED forever while the builder's
+  // reset. Since agent-turn.ts numbers round trips from 0 per turn, those accumulated
+  // entries collided on index with later turns, and a stale pending entry could keep its
+  // timer ticking under finished calls.
+  it('fires onTurnStart so an app turn resets the inspector, exactly as a builder turn does', async () => {
+    const turnStarts: number[] = [];
+    const transport = createAppTransport(
+      'byok',
+      'mock',
+      undefined,
+      undefined,
+      () => turnStarts.push(Date.now()),
+    );
+    await transport.send(JSON.stringify({ type: 'chat', text: 'hi' }), {
+      signal: new AbortController().signal,
+    });
+    expect(turnStarts, 'an app turn must announce its start').toHaveLength(1);
+
+    // And once PER SEND — a second move resets again, or the ring buffer accumulates
+    // across the whole session, which is what it was doing.
+    await transport.send(JSON.stringify({ type: 'chat', text: 'again' }), {
+      signal: new AbortController().signal,
+    });
+    expect(turnStarts).toHaveLength(2);
   });
 
   it('stays optional — a transport built without the callback still works', async () => {

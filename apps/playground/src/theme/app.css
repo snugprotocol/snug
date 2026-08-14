@@ -32,7 +32,12 @@
   font-size: var(--text-brand);
   font-weight: 700;
   letter-spacing: -0.01em;
-  line-height: 1;
+  /* NOT `line-height: 1` (TASK-20260813 AC1): at 1 the line box is exactly the em box,
+     so the tail of the "g" in "snug." falls outside it and .brand-word's overflow:hidden
+     — which is there for the ellipsis — cut it clean off. --font-display is a serif with
+     a deep descender, so it was unmissable. 1.25 gives the tail room to live inside the
+     clip box. The header has no fixed height, so the extra leading costs no layout. */
+  line-height: 1.25;
   color: var(--fg);
 }
 
@@ -48,6 +53,13 @@
 
 .brand .brand-word {
   min-width: 0;
+  /* overflow:hidden clips to the CONTENT box, and both axes must share a value — setting
+     overflow-y:visible would silently force overflow-x to auto and add a scrollbar. So the
+     descender gets room the only way that keeps the ellipsis intact (AC2): a padding-bottom
+     that extends the content box under the baseline, pulled back out of the flex layout by
+     an equal negative margin so the lockup's optical centring is unchanged. */
+  padding-bottom: 0.12em;
+  margin-bottom: -0.12em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -270,13 +282,67 @@
 /* ---------------------------------------------------------------- rail + sheet */
 
 .rail {
-  width: 340px;
+  /* User-resizable since TASK-20260813 (AC4). The fallback keeps the old fixed width
+     for any context where state/railLayout.ts has not set the property (a test that
+     mounts the rail alone, or storage being unavailable). */
+  width: var(--rail-width, 340px);
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--surface);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* The drag handle between the app stage and the rail (AC4). Visually a hairline; the
+   hit area is deliberately wider than it looks, because a 1px target is a bad joke. */
+.rail-divider {
+  flex: none;
+  width: 6px;
+  margin: 0 -2px; /* overlap the neighbours so the seam still reads as a hairline */
+  cursor: col-resize;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6; /* above .frame-wrap, or the iframe swallows the drag */
+  transition: background var(--dur-1) var(--ease-out);
+  touch-action: none; /* the handle owns the gesture; never scroll the page mid-drag */
+}
+
+.rail-divider:hover,
+.rail-divider:focus-visible {
+  background: var(--ember-glow);
+}
+
+.rail-divider:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: -2px;
+}
+
+/* The grip: three-quarters height so it reads as a handle rather than a border. */
+.rail-divider-grip {
+  width: 2px;
+  height: 2.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.rail-divider:hover .rail-divider-grip,
+.rail-divider:focus-visible .rail-divider-grip {
+  background: var(--ember);
+}
+
+/* While dragging, the app iframe must not capture the pointer or start selecting text
+   — both make the divider feel broken the moment the cursor crosses the stage. */
+.run-layout.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.run-layout.is-resizing .frame-wrap {
+  pointer-events: none;
 }
 
 .rail-header {
@@ -299,6 +365,9 @@
   flex: 1;
   overflow-y: auto;
   padding: var(--space-3);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 .sheet-backdrop {
@@ -723,6 +792,70 @@
   font-size: var(--text-s);
 }
 
+/* ---- connection surfaces (TASK-20260813 AC10) ----
+   A connection that needs setting up is NOT a failure, but every connection surface
+   used `.error-note` — so "this app would like to connect" arrived in the same alarm
+   red as "the provider rejected your key". Red is a strong claim; spending it on the
+   ordinary case leaves nothing louder for the real one and makes routine setup feel
+   like something broke.
+
+   `.connection-note` is the calm form: the app's own surface colour, an ember rule down
+   the leading edge to mark it as wanting attention, and generous type. `.error-note`
+   stays exactly as it was and is now reserved for genuine rejection/failure. */
+.connection-note {
+  border: 1px solid var(--border);
+  /* The ember rule is the whole signal: a coloured edge reads as "attend to me" without
+     the full-bleed alarm wash of --danger-glow. */
+  border-left: 3px solid var(--ember);
+  background: var(--surface);
+  color: var(--fg);
+  border-radius: var(--radius-m);
+  padding: var(--space-4);
+  font-size: var(--text-s);
+  box-shadow: var(--inner-glow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  animation: reveal-in var(--dur-2) var(--ease-out);
+}
+
+/* The lead line carries the WHAT; the rest is detail. */
+.connection-note .connection-note-title {
+  font-family: var(--font-display);
+  font-size: var(--text-m);
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.connection-note .connection-note-body {
+  margin: 0;
+  color: var(--fg-muted);
+  line-height: 1.5;
+  max-width: 62ch; /* a measure that stays readable when the banner spans a wide window */
+}
+
+/* Actions sit on one row, primary first, with the quiet dismiss last. */
+.connection-note .connection-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* The failure variant of the same layout: identical structure, danger accent. Sharing
+   the structure is deliberate — the two states should differ in TEMPERATURE, not in
+   shape, so the surface stays recognisable as it changes. */
+.connection-note.is-error {
+  border-color: var(--danger);
+  border-left-color: var(--danger);
+  background: var(--danger-glow);
+}
+
+.connection-note.is-error .connection-note-title {
+  color: var(--danger);
+}
+
 /* ---------------------------------------------------------------- run view */
 
 .run-layout {
@@ -855,6 +988,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 .think-section-head {
@@ -879,58 +1015,19 @@
   color: var(--fg-muted);
 }
 
-.inspector-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
+/* The app↔host frame timeline's styles lived here until TASK-20260813 (AC11) removed
+   that view. Its reducer (run/inspector.ts) is still live and still feeds the frame-wrap
+   "thinking" pulse and the export-button gate — only the rendering is gone. */
 
-.inspector-entry {
-  display: flex;
-  gap: var(--space-2);
-  align-items: baseline;
-  padding: var(--space-2) var(--space-2);
-  border-radius: var(--radius-s);
-  animation: reveal-in var(--dur-1) var(--ease-out);
-}
-
-.inspector-entry:nth-child(odd) {
-  background: var(--surface-2);
-}
-
-.inspector-entry .dir {
-  flex-shrink: 0;
-  width: 1.2em;
-  text-align: center;
-  color: var(--ember);
-}
-
-.inspector-entry .dir.inbound {
-  color: var(--ok);
-}
-
-.inspector-entry .frame-label {
-  font-weight: 700;
-}
-
-.inspector-entry .frame-detail {
-  color: var(--fg-muted);
-  overflow-wrap: anywhere;
-}
-
-.inspector-entry.is-error .frame-label {
-  color: var(--danger);
-}
-
-/* LLM round-trip inspector — the SIBLING of the frame inspector above, not a variant
-   of it. That one is structural-only by design; this one renders prompt bodies. */
+/* LLM round-trip inspector — the whole of the think surface now. */
 .llm-inspector {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   font-size: var(--text-xs);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 .llm-totals {
@@ -943,6 +1040,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 .llm-entry {
@@ -976,14 +1076,36 @@
   font-weight: 700;
 }
 
+/* THE one-character-per-line bug (TASK-20260813 AC5, owner repro 2026-08-13).
+   `.llm-summary` (flex:1) shared a row with `.llm-meta`, which was `flex-shrink: 0`.
+   The meta line is long — "1.9s · 2,393 in · 66 out · 0% cached" measures ~260px — so
+   in a 340px rail it claimed the row and squeezed the summary to its MIN-CONTENT width,
+   which `overflow-wrap: anywhere` permits to be a single glyph. Result: a model name
+   like "claude-sonnet-5" rendered one character per line, 342px tall.
+
+   Three things fix it together, and all three are needed:
+     1. the head WRAPS instead of squeezing, so the meta drops to its own line rather
+        than starving the summary;
+     2. `flex-basis` gives the summary a real starting width instead of 0;
+     3. `break-word` replaces `anywhere` so min-content can never fall to one character
+        even if a future layout squeezes this row again. */
+.llm-entry-head {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+
 .llm-entry .llm-summary {
-  flex: 1;
-  overflow-wrap: anywhere;
+  flex: 1 1 60%;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .llm-entry .llm-meta {
   color: var(--fg-muted);
+  /* Still never squeezed — but now it wraps to its own line rather than starving the
+     summary of the whole row. */
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 /* An in-flight round trip: the ember rule marks the call the user is waiting on. */
@@ -1029,6 +1151,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  /* AC5: without this the flex item refuses to shrink below min-content,
+     which is how the round-trip payloads collapsed to one character per line. */
+  min-width: 0;
 }
 
 /* Byte size beside a section heading — payloads are whole now, so size is worth showing. */
@@ -1067,7 +1192,13 @@
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  /* `break-word`, NOT `anywhere` (TASK-20260813 AC5). Both break long unbreakable
+     tokens, but `anywhere` also counts those break points when computing MIN-CONTENT
+     width — so inside the flex chain below, the block's intrinsic width collapsed
+     toward a single character and payloads rendered one glyph per line. `break-word`
+     wraps identically at render time without volunteering a 1ch minimum. */
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
 /* ---------------------------------------------------------------- settings */
