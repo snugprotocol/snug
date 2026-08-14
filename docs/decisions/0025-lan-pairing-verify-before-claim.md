@@ -29,26 +29,53 @@ rather than a transport defect:
 
 1. **A pairing exchange carries a required `verify` seat**
    (`WellKnownPairingExchange.verify: { method: 'GET', pathAndQuery }`, registry data,
-   human-reviewed like every other seat). After the key+pin write, the wizard fires the
-   verify read through the PINNED transport (`platform.lanFetch`) with the just-captured
-   pin, injecting the entry's own `request.headerTemplate` with only the just-minted
-   `secretField` value. Only a 2xx sets connection state `connected` and lands the done
-   screen. Hue verifies with `GET /clip/v2/resource/bridge`. `verify` is REQUIRED: a
-   pairing provider that cannot be verified post-mint re-creates this defect.
-2. **Verify failure keeps the mint, not the claim.** Key+pin stay stored (the device did
-   mint them; re-pairing simply overwrites), connection state stays unconnected, and the
-   user gets a fixed-sentence explanation distinguishing "could not reach the device for
-   the check" from "the device refused the minted key". C1 unchanged: the probe response
-   is read for its status only — never stored, rendered, or quoted.
-3. **"Pairing owed" derives from the verified fact, not key presence.** The wizard's
-   gate reads connection state `status === 'connected'` — the same fact the executor
-   honors — so a key-present-but-unverified row lands back on the pair screen, and the
-   component layer stops enumerating secret keys.
+   human-reviewed like every other seat). The pairing write becomes two acts with an
+   honest status between them: key to secrets + connection state
+   `{ status: 'pending', lanPin }` in one step, then the verify read through the PINNED
+   transport (`platform.lanFetch`) with the just-captured pin, injecting the entry's own
+   `request.headerTemplate` (via the auth package's template renderer) with only the
+   just-minted `secretField` value. Only a 2xx upgrades the state to
+   `{ status: 'connected', lanPin, lanVerifiedAt }` and lands the done screen —
+   `lanVerifiedAt` is written by the verify step and nothing else. Hue verifies with
+   `GET /clip/v2/resource/bridge`. `verify` is REQUIRED: a pairing provider that cannot
+   be verified post-mint re-creates this defect.
+2. **Verify failure keeps the mint, not the claim.** Key + pin + `pending` stay (the
+   device did mint them; re-pairing simply overwrites), and the user gets a
+   fixed-sentence explanation distinguishing "could not reach the device for the check"
+   from "the device refused the minted key". No `lastError` is written — the
+   `_connection` KV syncs and exports, and a verify failure is a wizard-screen fact, not
+   a durable one. C1 unchanged: the probe response is read for its STATUS only — the
+   body is never read, stored, rendered, or quoted.
+3. **"Pairing owed" derives from the verified fact, through one reader.** A LAN row is
+   verified iff `status === 'connected'` AND `lanVerifiedAt` is present; one state-layer
+   derivation is the only reader of the connection state, and the wizard sheet holds
+   only its boolean. A key-present-but-unverified row lands back on the pair screen; a
+   PRE-FIX row (`connected` written by the old code, no marker) is likewise
+   pairing-owed — the honest treatment of a claim nothing ever proved, and the reason no
+   data migration is needed. **Accepted divergence:** the connected-fetch executor's LAN
+   gate (9a) continues to key on pin presence, deliberately — a limbo row's app requests
+   fail at the device and route back through the NET_AUTH_FAILED repair CTA into this
+   wizard. Extending gate 9a to consult status was considered and rejected: it would
+   plant a second truth source in the executor for a failure mode that is already
+   self-limiting.
 4. **LAN rows never route through `register`/`credentials`.** `nextStep('review', lanReq)`
    goes to `done` (the pairing interceptor and done screen own everything after review);
    the state transitions for those screens refuse LAN rows outright. The registry's
    walkthrough instructions still render — on the host-collection screen, where they
    always have.
+5. **What was verified is invalidated when what it was verified against changes.** A LAN
+   re-approval whose promoted requirement changes the frozen hosts or the field set
+   downgrades the connection state to `{ status: 'pending' }` (dropping pin and marker)
+   and deletes the pairing-owned secret: a key minted by one device must not ride a
+   ceiling now pointing at another, and "verified with the device at <host>" must never
+   name a host it was not proven against. Host-identical, field-identical re-approvals
+   keep the verified state.
+6. **The sheet cannot render ahead of the facts.** The wizard sheet refuses to render a
+   step for a revision whose row it has not re-read (it tracks the loaded revision and
+   shows the loading hint on mismatch), and its final fallback renders the done screen
+   for a LAN row only when the verified fact holds — so the transient
+   approve-then-re-read window can never flash a success claim, which is the exact lie
+   this ADR exists to kill arriving as a race instead of a route.
 
 ## Consequences
 
@@ -58,8 +85,13 @@ rather than a transport defect:
   and the omission of a user-facing "test connection" button stands; verification is a
   mandatory internal step of the pairing act itself.
 - Future pairing providers must ship a verify read (registry review enforces it by
-  type), and the verify lane exercises exactly the executor's pinned path — so a
-  verified pairing also proves the transport an app will later use.
+  type), and the verify lane rides the same pinned TRANSPORT the executor's LAN lane
+  uses — so a verified pairing also proves the transport an app will later use. It is
+  NOT the executor path (no gates 1–8, no scrub): a deliberate, contained second
+  network call, kept safe by construction — host only from the frozen ceiling,
+  path/method only from the registry, header via the shared template renderer, response
+  read for status alone. Recorded here so it is not mistaken for the "small dedicated
+  fetch" anti-pattern the test-connection probe documents.
 - The starter app's copy stops claiming pairing lives elsewhere; making apps actually
   reach the bridge (the addressing seat) remains open and is explicitly NOT decided
   here.

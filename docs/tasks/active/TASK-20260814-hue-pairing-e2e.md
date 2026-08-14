@@ -1,6 +1,6 @@
 # TASK-20260814-hue-pairing-e2e: Hue wizard — verify before claiming connected; kill the LAN reopen ghost flow
 
-- **Status**: planned — awaiting owner plan approval (Gate 2 stop)
+- **Status**: in-progress — plan approved by owner 2026-08-14; fresh-context AI plan review running (High-tier extra), then Gate 3 tests first
 - **Owner**: Jeetu
 - **Risk tier**: **High** — touches `packages/auth` (registry + `WellKnownPairingExchange`); auto-escalate per PROCESS.md. High-tier extras owed: negative tests, fresh-context AI plan review before implementation, self-sign-off in journal.
 - **Branch**: `fix/TASK-20260814-hue-pairing-e2e`
@@ -49,27 +49,52 @@ scope here.
    state-level guards make `advanceFromRegister`/`saveCredentials` refuse a LAN row with
    an honest message. Unit + component + guard tests.
 2. **AC2 — Reopen tells the truth (the owner's regression).** Reopening the wizard on a
-   paired LAN row: review → approve → connected summary. Never RegisterScreen, never an
-   empty credential box, never a re-pair walk. Component test reproducing the owner's
-   journey — must FAIL on main before the fix.
+   paired-and-verified LAN row: review → approve → connected summary. Never
+   RegisterScreen, never the credential box. Component test reproducing the owner's
+   REAL journey (review issue G corrected the narrative: the ghost flow re-walks the
+   press-the-button instructions and then STRANDS at the un-fillable required key box —
+   `CredentialsScreen.save` refuses the empty field; it does not reach done). The
+   fixture reproduces the pre-fix state shape honestly (`connected`, pin present, no
+   verified marker → re-pair offered; a verified row → summary). Must FAIL on main.
 3. **AC3 — "Connected" is claimed only after verification.** `runLanPairing` order
-   becomes: pair exchange → write key+pin together (unchanged) → **verify read** — a
-   registry-pinned credentialed GET (`verify` seat on `WellKnownPairingExchange`; hue:
-   CLIP v2 `GET /clip/v2/resource/bridge` with the entry's own `hue-application-key`
-   header carrying the just-minted value) through `platform.lanFetch` with the
-   just-captured pin — and only a 2xx sets connection state `connected` + step `done`.
-   Verify failure: key+pin stay stored (the device did mint them; re-pairing overwrites),
-   state stays unconnected, honest fixed-sentence error, wizard stays on the pair screen.
-4. **AC4 — Pairing-owed is derived from the verified fact.** The sheet's gate swaps the
-   `listSecretKeys` presence probe for connection-state `status === 'connected'` — the
-   same fact the executor honors. A key-present-but-unverified row therefore lands back
-   on the pair screen, not on a done screen (closes the limbo AC3 creates and removes a
-   secret-key enumeration from the component layer).
+   becomes: pair exchange → **one write**: key to secrets + connection state
+   `{ status: 'pending', lanPin }` (status is a required enum; `pending` is the honest
+   pre-verify value) → `invalidateNetGrants` → **verify read** — a registry-pinned
+   credentialed GET (`verify` seat on `WellKnownPairingExchange`; hue: CLIP v2
+   `GET /clip/v2/resource/bridge` with the entry's own `hue-application-key` header
+   carrying the just-minted value, rendered via the auth package's exported
+   `renderAuthRequestTemplates` — never a hand-rolled replace) through
+   `platform.lanFetch` with the just-captured pin, **status-only** (the probe body is
+   never read) — and only a 2xx upgrades state to
+   `{ status: 'connected', lanPin, lanVerifiedAt }` + step `done`. Verify failure: key +
+   pin + `pending` stay (the device did mint them; re-pairing overwrites), **no
+   `lastError` write** (that KV syncs/exports), honest fixed-sentence error
+   distinguishing unreachable vs refused, wizard stays on the pair screen. A platform
+   without `lanFetch` gets the fixed unreachable-for-verification sentence.
+4. **AC4 — Pairing-owed is derived from the verified fact, via one reader.**
+   `lanVerifiedAt` (epoch ms, written ONLY by the verify step) is added to
+   `AuthConnectionState`. A LAN row is verified iff
+   `status === 'connected' && lanVerifiedAt` present; a state-layer export
+   (`lanPairingOwed`-shape) is the ONLY reader of the connection state — the sheet holds
+   a boolean set inside its single effect before `loaded` flips (never parses the state,
+   never enumerates secret keys). Consequences pinned by tests:
+   - a key-present-but-unverified row lands on the pair screen;
+   - a **legacy pre-fix row** (`connected` with no `lanVerifiedAt` — the owner's
+     machine) is pairing-owed on reopen: honest re-pair, no migration;
+   - **accepted divergence (review issue 1)**: the executor's LAN gate (connected-fetch
+     gate 9a) keys on pin presence and is deliberately unchanged — a limbo row's app
+     requests fail at the device and route back through the NET_AUTH_FAILED repair CTA
+     into this wizard. Documented in ADR-0025; extending gate 9a was considered and
+     rejected (second truth source in the executor; self-limiting failure).
 5. **AC5 — C1 negatives extended.** The verify request/response never surfaces the key:
-   error copy comes from a fixed sentence set; the probe body is never stored, rendered,
-   or logged. Scan-style negatives in the lanWizardFlow suite pattern.
+   error copy comes from a fixed sentence set; the probe body is never read, stored,
+   rendered, or logged; verify failures write nothing into the synced `_connection` KV
+   beyond the `pending` already there. Scan-style negatives in the lanWizardFlow
+   pattern.
 6. **AC6 — The done screen states what was proven.** LAN done copy names the verified
-   fact ("paired and verified with the device at `<host>`"), not a generic "connected".
+   fact ("paired and verified with the device at `<host>`"), not a generic "connected"
+   — and is sourced from the verified fact, so it can never render for an unverified
+   row.
 7. **AC7 — Starter app copy tells the truth everywhere.** `examples/hue-lights-party`
    drops the two stale claims (preconnect notice implying desktop-connect is elsewhere;
    apply-control copy "waits for the desktop app") for platform-agnostic honest copy:
@@ -77,10 +102,27 @@ scope here.
    runtime capability that does not exist yet (follow-up task). Apply stays greyed.
 8. **AC8 — Suites green across the fan-out**: `auth`, `playground`, `desktop`,
    `examples` (auth is upstream of playground/desktop per architecture.md).
+9. **AC9 — No transient lie during row staleness (review issue 3).** The sheet refuses
+   to render a screen for a revision whose row it has not re-read: the effect records
+   the revision it loaded and the chain shows the loading hint while
+   `loadedRevision !== revision`. Additionally the final fallback branch requires the
+   verified fact for LAN rows (defense in depth: a LAN row that is not verified renders
+   the pair screen, never DoneScreen). Regression test: approve a LAN row and assert
+   DoneScreen/AC6 copy never appears before pairing ran.
+10. **AC10 — Re-approval invalidates what it changes (review issue 4).** A LAN
+    re-approval whose promoted requirement changes the frozen hosts or the field set
+    downgrades connection state to `{ status: 'pending' }` (dropping pin + verified
+    marker) and deletes the pairing-owned secret, so the wizard routes to re-pair and
+    the "verified with the device at <host>" claim can never migrate to a device it was
+    not proven against. Same-kind, same-host, same-fields re-approvals keep the
+    verified state (unchanged behavior).
 
 **Out of scope**: the app-addressing seat (apps naming/reaching the bridge host — needs
 its own ADR + protocol/spec-sync work); Hue Entertainment `clientkey` storage; discovery
-broker changes; any OAuth-lane behavior.
+broker changes; any OAuth-lane behavior; the Settings connections pill (derives
+"connected" from `row.status` for ALL kinds — pre-existing, noted by the plan review,
+its own cleanup); extending connected-fetch gate 9a to consult verified status
+(considered and rejected, see AC4).
 
 ## Plan
 
@@ -123,12 +165,29 @@ Order is tests-first per TDD.md; every step lands on the task branch.
    `pnpm test`); e2e `lanWizardFlow`/`starters-connect` specs updated if they pin the
    old routing.
 7. **High-tier extra**: fresh-context AI review of this plan BEFORE implementation
-   (after owner approval), self-sign-off in journal at close.
+   (after owner approval), self-sign-off in journal at close. **DONE 2026-08-14 —
+   verdict approve-with-changes; all five confirmed issues folded into AC3/AC4/AC9/AC10
+   and ADR-0025 (see journal).**
 8. **Owner hardware retest script** (after merge): rebuild desktop app → open Hue
-   starter → connect → pair (press button) → expect "verified with the device at
-   <ip>" done screen; reopen wizard → connected summary, no re-walk; starter shows
-   honest copy; optionally delete the bridge key row in the Hue app first to force a
-   fresh mint.
+   starter → connect. Because the pre-fix row on the owner's machine carries
+   `connected` with no verified marker, the wizard will offer RE-PAIR on open (AC4) —
+   press the link button, pair, and expect "paired and verified with the device at
+   <ip>". Reopen wizard → connected summary, no re-walk; starter shows honest copy.
+
+**Implementation notes (from the plan review):**
+- `reapproveFromDiff` restructures off sync `withSession` (follow
+  `saveConnectionCredentials`'s hand-rolled async shape) so the AC10 state downgrade
+  can await the credential store.
+- Verify header rendering: `renderAuthRequestTemplates` from `@snugprotocol/auth`
+  (already exported — index.ts), wrapped in a catch emitting a fixed sentence.
+- Ordering preserved: secret+state write → `invalidateNetGrants` → verify → status
+  upgrade (+ a second grant invalidation after upgrade is harmless and kept for
+  symmetry).
+- `lan-class-registry.test.ts`'s "NO testRequest" rationale comment now cites
+  ADR-0025's amendment (no pre-pair probe stands; verification moved inside pairing).
+- The verify probe is a dedicated status-only read on the pinned transport — NOT the
+  executor path; its containment (frozen-ceiling host, registry path, template
+  renderer, no body read) is recorded in ADR-0025 so it is not mistaken for drift.
 
 **Cross-package impact**: `auth` → `playground` → `desktop` (source-consuming). No
 `protocol`, no `runner`, no CI/release config. C1 honored throughout (minted value and
@@ -160,3 +219,23 @@ probe response never leave `runLanPairing`'s scope; done/error copy is fixed-sen
 - Open questions: none blocking; verify-seat header substitution reuses the entry's own
   headerTemplate — confirm during implementation that the existing substitution helper in
   `packages/auth` is reachable from the wizard without new exports.
+
+### 2026-08-14 — Claude (Fable) — session (continued, post-approval)
+- Done: owner approved the plan. High-tier fresh-context adversarial review ran and
+  returned **approve-with-changes** with 5 confirmed issues, all folded into the plan +
+  ADR-0025 before any code: (1) "same fact the executor honors" was FALSE — gate 9a
+  keys on pin presence; divergence now accepted + documented, gate 9a untouched;
+  (2) pre-verify write must pick a status — `pending` chosen, no `lastError` ever
+  written to the synced KV; (3) the reroute would have flashed a transient DoneScreen
+  on every fresh approve (stale-row render race) — AC9 added: revision-matched
+  rendering + verified-fact fallback; (4) re-approvals changing hosts/fields kept a
+  stale "verified" claim — AC10 added: downgrade state + delete pairing-owned secret;
+  (5) pre-fix rows (incl. the owner's machine) carry unverified `connected` —
+  `lanVerifiedAt` marker written only by verify; legacy rows are pairing-owed, no
+  migration. Advisories adopted: `renderAuthRequestTemplates` reuse (open question
+  resolved — already exported), state read stays in the state layer via one derivation,
+  Settings pill noted out-of-scope, verify-fail keeps net-grant invalidation, ghost-flow
+  narrative corrected (strands at the required-field refusal, doesn't reach done).
+- State: plan + ADR amended and committed; Gate 3 starting.
+- Next step: failing tests in plan order (registry seat → routing/reopen regression →
+  verify outcomes → race → re-approval downgrade → C1 scans → starter copy).
