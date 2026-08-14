@@ -1,6 +1,6 @@
 # TASK-20260813-ui-polish-inspector: header wordmark, desktop icon, resizable inspector, connection UX
 
-- **Status**: in-progress (plan approved 2026-08-13)
+- **Status**: **DONE — MERGED to `main` 2026-08-14 (PR #43, squash `f7a6a3e`).** All 11 ACs shipped. **One thing remains open and is NOT closed by the merge:** the desktop icon is verified at the pixel level but has never been seen on a real dock/taskbar — run `pnpm --filter desktop bundle` on real hardware and eyeball it (queued in `docs/next-steps.md`). CI note: the Windows `desktop-shell` gate failed on the three known **ADR-0021 D8** WebView2 checks (`__TAURI_INTERNALS__` / `chrome.webview` reachable from the sandboxed subframe), which were already red on `main` at `ecfc136` and are untouched by this work; macOS and workspace were green, so the merge used `--admin` on that documented baseline.
 - **Owner**: Jeetu
 - **Risk tier**: **medium**
 - **Branch**: `fix/TASK-20260813-ui-polish-inspector`
