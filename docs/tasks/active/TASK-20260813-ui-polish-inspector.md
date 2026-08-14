@@ -374,3 +374,28 @@ THREE independent causes, and I twice declared it fixed after closing one. When 
 shared final surface (here: `pending: true` drives a ticker), enumerate every producer of that
 state before claiming the fix — a green suite after closing one producer proves only that one
 producer is closed. The honest test is the one that asks "what else can leave this state set?"
+
+### 2026-08-14 — Jeetu — close-session (Gate 6)
+
+- **Done, all 11 ACs across 6 owner-reported items.** 13 commits on
+  `fix/TASK-20260813-ui-polish-inspector`. Wordmark descender (AC1/AC2), desktop icon (AC3),
+  resizable + dismissible think rail (AC4/AC6), payload/summary readability (AC5), stuck timer
+  (AC7/AC8 — three separate causes), connections door + calmer connection surfaces (AC9/AC10),
+  frames view removed (AC11).
+- **Three findings of mine were wrong and were corrected on owner evidence** — recorded here
+  because the corrections are the durable part:
+  1. AC3 "centred on a plate" was not what was asked; the logo had to BE the icon. My symmetry
+     assertion passed on both compositions, so it never measured the requirement.
+  2. AC5 was declared unreproducible from CSS-text assertions; the collapse was real and lived in
+     the round-trip **summary line**, not the `<pre>` payload block I kept probing.
+  3. AC7 was declared fixed twice before the actual cause (index collisions from an app transport
+     that never reset) was found.
+- **State:** working tree clean, branch green — root `pnpm test` 21/21 tasks (playground 1014,
+  adapters 124, server 126, desktop 105). Every bug fix mutation-checked; the two layout/visual
+  claims verified in real Chromium, and the timer fix verified against the running desktop dev
+  server.
+- **Next step (single):** merge the PR, then re-run `pnpm --filter desktop bundle` on real
+  hardware and eyeball the dock icon.
+- **Open questions:** none blocking. One unverified-by-me item remains: the desktop icon has been
+  verified at the pixel level but never seen on a real dock/taskbar (no bundle built in this
+  environment).
