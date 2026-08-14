@@ -369,11 +369,14 @@ function useConnectedFetch() {
     //     is a protocol decision with its own review, not something a starter
     //     may help itself to.
     //
-    // SO THE APPLY CONTROL STAYS GREYED, and the copy now names the real reason
-    // (an app cannot address the bridge yet) instead of the old one (the desktop
-    // app does not exist), which stopped being true this task. Greyed and
-    // explained beats a button that opens a flow leading nowhere — the same rule
-    // this app has always followed, applied to a boundary that moved.
+    // SO THE APPLY CONTROL STAYS GREYED, and the copy names the real reason — an app
+    // cannot address the bridge yet, on ANY platform, even after pairing. It must
+    // never frame itself around where the user is standing (TASK-20260814, ADR-0025):
+    // the previous copy said it was "waiting for the desktop app", which read as a lie
+    // to the owner sitting IN the desktop app with a freshly verified pairing, and
+    // turned a successful setup into an apparent failure. Greyed and explained beats
+    // a button that opens a flow leading nowhere — the same rule this app has always
+    // followed, applied to a boundary that moved.
     //
     // The designer below is fully alive on both platforms, which is the doctrine
     // this shelf exists to show: a connected app is useful before it is
@@ -415,7 +418,7 @@ function useConnectedFetch() {
       return (
         <div className="wrap">
           <h1>Hue Lights Party</h1>
-          <p className="sub">design the scene here — pair your bridge from the desktop app.</p>
+          <p className="sub">design the scene here — connect Philips Hue to pair your bridge.</p>
 
           {/*
             THE PRE-CONNECT NOTICE. It names the provider and what the user would
@@ -426,10 +429,10 @@ function useConnectedFetch() {
           <div className="notice" data-testid="preconnect-notice">
             <span aria-hidden="true">💡</span>
             <p style={{ margin: 0 }}>
-              <b>connect Philips Hue in the desktop app.</b> your bridge sits on your home network,
-              which a web page cannot reach — that is a browser security boundary, not a missing
-              feature. the desktop app finds it, pairs with it when you press the button on top,
-              and keeps its key for you. everything below already works right here.
+              <b>connect Philips Hue to pair your bridge.</b> your bridge sits on your home network,
+              which only the Snug desktop app can reach. its connect flow finds the bridge, pairs
+              with it when you press the button on top, checks the new key with the bridge, and
+              keeps it for you. everything below already works right here.
             </p>
           </div>
 
@@ -510,10 +513,10 @@ function useConnectedFetch() {
             <div className="notice desktop" data-testid="desktop-only-notice">
               <span aria-hidden="true">🖥️</span>
               <p style={{ margin: 0 }}>
-                <b>sending a scene needs the desktop app.</b> your Hue bridge lives on your home
-                network at an address only your router knows, and an app running in this frame is
-                never told that address — so this control waits for the desktop app, which pairs
-                with the bridge and talks to it directly. {chosen.length > 0
+                <b>sending a scene from an app isn’t available yet.</b> an app is never told
+                your bridge’s address — that is a privacy boundary of the runtime, whatever
+                platform you are on and even after pairing — and a safe way for apps to talk to
+                paired devices is still to come. your scene is saved and ready for it. {chosen.length > 0
                   ? `${chosen.length} room${chosen.length === 1 ? '' : 's'} selected and ready.`
                   : 'pick a room to include.'}
               </p>
