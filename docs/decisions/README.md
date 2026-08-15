@@ -1,6 +1,6 @@
 # Architecture Decision Records (ADRs)
 
-Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-title.md`. Never rewrite or delete a past ADR — a reversal is a new ADR that supersedes it. Status: `accepted` · `superseded by NNNN` · `proposed`.
+Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-title.md`. Never rewrite or delete a past ADR — a reversal is a new ADR that supersedes it, and the superseding/amending change updates the old ADR's **status line only** in the same commit (ADR-0027). Status: `accepted` · `accepted (amended by NNNN)` · `superseded by NNNN` · `proposed`.
 
 ## Template
 

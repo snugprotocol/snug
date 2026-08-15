@@ -1,6 +1,6 @@
 # 0016 — Who may propose a connection (the trust ladder)
 
-- **Status:** accepted (owner decision 2026-08-08, recorded 2026-08-08)
+- **Status:** accepted (owner decision 2026-08-08, recorded 2026-08-08; amended by 0017 — requirement/grant split)
 - **Date:** 2026-08-08
 - **Task:** TASK-20260807-connection-reachability
 

@@ -1,6 +1,6 @@
 # 0020 — Multi-option auth: the host defaults, discloses, and the user rebinds
 
-- **Status:** accepted (owner decisions Q1–Q4 + the D3 widening, 2026-08-12)
+- **Status:** accepted (owner decisions Q1–Q4 + the D3 widening, 2026-08-12; amended by 0023 — lanHost carve-out from D4's hosts-always-entry invariant)
 - **Date:** 2026-08-12
 - **Task:** TASK-20260812-auth-kind-choice (chained on TASK-20260812-registry-authoritative-auth)
 

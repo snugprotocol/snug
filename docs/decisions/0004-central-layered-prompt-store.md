@@ -1,6 +1,6 @@
 # 0004 — Central layered prompt store in `packages/knowledge/prompts/`
 
-- **Status:** draft (accepted with TASK-20260731-build-hub plan approval)
+- **Status:** accepted (with TASK-20260731-build-hub plan approval; shipped in packages/knowledge/prompts/)
 - **Date:** 2026-07-31
 - **Task:** TASK-20260731-build-hub
 

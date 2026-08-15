@@ -1,6 +1,6 @@
 # 0017 — The requirement/grant split (amends ADR-0016)
 
-- **Status:** accepted (owner decisions Q1–Q9, 2026-08-10; recorded 2026-08-10)
+- **Status:** accepted (owner decisions Q1–Q9, 2026-08-10; recorded 2026-08-10; amended by 0022 — fifth helper cdp_jwt + queryTemplate, so the four-helper prose below is historical)
 - **Date:** 2026-08-10
 - **Task:** TASK-20260810-p0-contracts (child P0 of TASK-20260810-dynamic-auth-rewrite)
 
