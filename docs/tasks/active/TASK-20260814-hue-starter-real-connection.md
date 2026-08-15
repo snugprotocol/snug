@@ -1,6 +1,6 @@
 # TASK-20260814-hue-starter-real-connection: apps address their connections — the Hue starter drives the real bridge
 
-- **Status**: planned — awaiting owner plan approval (Gate 2 stop)
+- **Status**: in-progress — plan approved by owner 2026-08-14; fresh-context AI plan review running (High-tier extra), then Gate 3 tests first
 - **Owner**: Jeetu
 - **Risk tier**: **High** — touches `packages/protocol` (addressing contract → C3 spec-sync) and `packages/auth` (connected-fetch executor); auto-escalate per PROCESS.md
 - **Branch**: `feat/TASK-20260814-hue-starter-real-connection` (stacked on `fix/TASK-20260814-hue-pairing-e2e`, PR #46)
@@ -34,41 +34,76 @@ bridge; real scene writes) · probe-on-load as the status signal (no new frames 
 **Acceptance criteria** (each becomes at least one test):
 
 1. **AC1 — Protocol grammar.** `snug-connection://<slot><pathAndQuery>` owned by
-   `packages/protocol`: scheme constant + one strict parser (slot `[a-z0-9][a-z0-9-]*`,
-   remainder begins with a single `/`; typed failures). Unit tests include hostile
-   shapes (`//`, `\`, `@`, empty slot, uppercase, scheme-in-path).
-2. **AC2 — Executor resolution, gates intact.** Connected-fetch resolves the calling
-   app's OWN slot before gate 1: unknown slot → `NET_INVALID_REQUEST`; unapproved →
-   `NET_NOT_APPROVED`; ceiling ≠ exactly one host → `NET_AMBIGUOUS_CONNECTION`.
-   Resolved URL re-parsed; host must equal the ceiling host (normalization guard). ALL
-   existing gates then run on the resolved URL — including the confirm gate, credential
-   injection, gate 9a's pinned LAN lane, caps and scrub. Literal URLs behave
-   byte-identically (regression-pinned).
-3. **AC3 — C1/C2 negatives.** A symbolic URL for an unapproved row refuses BEFORE any
-   credential read; credential-header stripping and response scrub unchanged; the
-   resolved host never reaches the app in any error message (URL-scrub covers the
-   resolved form). The sandbox gains no new capability — only a new spelling for one it
-   had.
-4. **AC4 — Authoring surfaces teach the scheme.** `useConnectedFetch`'s doc comment in
-   `sdk/embedded/snug-hooks.js` + the app-authoring KB (`90-auth-and-connected-apis.md`)
-   teach when to use symbolic addressing; kb-sync byte-compare enforced across ALL
-   example `app.html` copies + `sdk/types.ts` in one commit; knowledge snapshots
-   updated.
-5. **AC5 — The starter is real.** `hue-lights-party`: mount probe
+   `packages/protocol`: scheme constant + one strict parser. Slot grammar REUSES
+   `CONNECTION_SLOT_RULE` (`/^[a-z0-9][a-z0-9-]{0,39}$/` — review advisory: restating
+   it would let a legit slot become unaddressable); remainder begins with a single `/`;
+   typed failures. Unit tests include hostile shapes (`//`, `\`, `@`, empty slot,
+   uppercase, scheme-in-path, 40+ char slot).
+2. **AC2 — Executor resolution, gates intact, SAME row end to end (review issues 3-4).**
+   Resolution sits AFTER gate 1 (shape/caps — the 4096 bound must precede any DB read)
+   and BEFORE the URL-parse/scheme gates. One `listConnections` read is threaded
+   through BOTH resolution and `resolveGrant` (no TOCTOU between the row that resolved
+   and the row that injects). Refusals: unknown slot → `NET_INVALID_REQUEST`;
+   unapproved → `NET_NOT_APPROVED`; ceiling ≠ exactly one host →
+   `NET_AMBIGUOUS_CONNECTION`. Normalization guard compares via
+   `normalizeAuthHost`/`isHostAllowed`, never raw string equality (`new URL()`
+   lowercases + punycodes). `resolveGrant` RE-RUNS on the resolved host — the
+   imported-row gate and the two-slot ambiguity gate are retained, and same-row
+   injection is structural: the resolving slot's row must be among the host matches, so
+   a unique match IS that row and a second match refuses. **Decided (ADR-0026 §2): two
+   approved slots claiming the resolved host refuse with `NET_AMBIGUOUS_CONNECTION`
+   even though the symbolic URL named one — fail-closed over clever.** Pinned test:
+   slot A named symbolically while slot B claims the same host → refusal, slot B's
+   credential never read. Literal URLs behave byte-identically (regression-pinned).
+3. **AC3 — The resolved host never reaches the APP (review issue 1 — the scrub the
+   draft relied on does not exist).** Mechanism, stated: for symbolic-origin requests
+   the resolved host + href join the scrub candidate set, AND the host-bearing refusal
+   messages on the symbolic path are genericized (gate 5's SSRF refusal at
+   connected-fetch.ts:894 interpolates the host; the ambiguity message at :768
+   likewise; `NET_FETCH_FAILED` embeds transport `err.message` which can carry the
+   URL). **Decided: on web (no `transportPolicy`), a symbolic request resolving to a
+   private host refuses at gate 5 as today — code `NET_SSRF_BLOCKED` — with a
+   host-clean message; the starter maps it alongside `NET_FETCH_FAILED` as
+   "unreachable from here". Pinned by a web-platform test.** A symbolic URL for an
+   unapproved row refuses BEFORE any credential read; header stripping and response
+   scrub unchanged; the sandbox gains no new capability — only a new spelling.
+4. **AC4 — Authoring surfaces teach the scheme, cheaply.** The hooks comment change is
+   a ONE-LINE pointer (the byte-compare lockstep sweeps all 14 example `app.html`
+   copies + `20-html-template.md` + `sdk/types.ts` — review advisory: keep the churn
+   minimal); the real teaching lives in `90-auth-and-connected-apis.md` (not
+   byte-locked) + knowledge snapshots.
+5. **AC5 — The starter is real (desktop).** `hue-lights-party`: mount probe
    `GET snug-connection://hue/clip/v2/resource/room` doubles as the data fetch.
-   Connected → rooms rendered from the bridge (name + grouped_light rid), scene apply =
-   `PUT …/grouped_light/<rid>` with `{on, dimming, color:{xy}}` (hex→CIE-xy converter
-   in-app, scene colors cycled across selected rooms), real brightness, partial
-   failures surfaced per room. Not connected → the designer stays alive with
-   code-keyed honest copy (`NET_NOT_APPROVED` → connect CTA; transport-shaped →
-   "unreachable from here", which is also the web answer) + a re-check control. No
-   mocked room/light data remains anywhere in the file. Single-file, CSP, no-storage
-   and hooks-byte-identity rules hold (examples validate suite).
-6. **AC6 — Spec-sync (C3).** `docs/spec-changelog.md` entry; SPEC_SYNC.md followed for
-   the contract addition. NO push to `snugprotocol/spec` without an explicit ask in
-   that session (recorded here).
+   Connected → rooms rendered from the bridge (`metadata.name` + `services[]` rid where
+   `rtype === 'grouped_light'`), scene apply = `PUT …/grouped_light/<rid>` with
+   `{on, dimming, color:{xy}}` (hex→CIE-xy converter in-app, scene colors cycled across
+   selected rooms), real brightness, partial failures surfaced per room. Not connected
+   → the designer stays alive with code-keyed honest copy (`NET_NOT_APPROVED` →
+   connect CTA; `NET_FETCH_FAILED`/`NET_SSRF_BLOCKED` → "unreachable from here";
+   `NET_AMBIGUOUS_CONNECTION` → its own sentence, NEVER the connect CTA) + a re-check
+   control. No mocked room/light data remains. **Web claims STRUCK (review issue 2):
+   the Hue tile is web-locked by shipped e2e (starters-connect.spec.ts:145-192, a
+   deliberate P3 decision) — unlocking it is the owner's queued UX call (next-steps
+   2026-08-13 item 5), not this task's.** Single-file, CSP, no-storage and
+   hooks-byte-identity rules hold.
+6. **AC6 — Spec-sync (C3).** `docs/spec-changelog.md` entry follows the 2026-08-13
+   INTERNAL-DRAFT posture (auth surface publishes no earlier than Beta exit); SPEC_SYNC
+   followed; NO push to `snugprotocol/spec` without an explicit ask (recorded here).
 7. **AC7 — Suites green across the full graph** (protocol touched → run everything):
-   protocol, auth, sdk, knowledge, playground, desktop, examples — root all-green.
+   protocol, auth, sdk, knowledge, playground, desktop, examples — root green on the
+   surfaces that CAN be green (the Windows desktop-shell gate stays deliberately RED,
+   ADR-0021 D8 — review advisory).
+8. **AC8 — The user sees the truth the app cannot (review advisory, adopted).** The
+   confirm dialog for a symbolic request carries the RESOLVED host (the user-honesty
+   half of the disclosure boundary; `NetConfirmDialog` renders `host`) — pinned by a
+   test that the confirm request's host is the resolved one. Existing grant keying
+   `(app, normalized host, method)` means the first scene PUT prompts once and
+   session-remembers — verified by the review as already-correct behavior.
+9. **AC9 — The ADR-0025 copy pin is REPLACED, not weakened (review issue 5).**
+   `validate.test.mjs`'s "isn't available yet" assertion goes red against the rewrite
+   BY DESIGN: it is replaced in the same commit by pins of the new code-keyed fallback
+   copy; the other two assertions (no "waits for the desktop app", no "which a web
+   page cannot reach") survive verbatim.
 
 **Out of scope**: host→app live status events (probe chosen; hostEvent namespace stays
 open); multi-host symbolic resolution (refused, not invented); scrubbing response
@@ -96,15 +131,19 @@ Order is tests-first per TDD.md; branch stacked on `fix/TASK-20260814-hue-pairin
    snapshots.
 6. **`examples/hue-lights-party`** — the real rewrite (AC5) + examples validate-test
    updates pinning: no mocked rooms, probe present, code-keyed fallback copy.
-7. **Verification** — root `pnpm test` (protocol is upstream of everything); e2e specs
+7. **Threat-model delta** — `docs/security/threat-model-delta-connection-addressing.md`
+   (review advisory: a new app-facing addressing primitive with a stated disclosure
+   boundary follows the house pattern of prior net/auth surface changes).
+8. **Verification** — root `pnpm test` (protocol is upstream of everything); e2e specs
    checked for pinned starter copy.
-8. **High-tier extra** — fresh-context AI plan review BEFORE implementation (after
-   owner approval), self-sign-off at close.
-9. **Owner retest script (after merge):** reinstall the Hue starter (installed apps
-   carry a COPY of app.html — the old install will NOT update itself), open it on
-   desktop with the paired connection: expect real rooms from your bridge, scene apply
-   asks once for the write grant then drives the lights; on web expect the designer +
-   "unreachable from here" honesty.
+9. **High-tier extra** — fresh-context AI plan review BEFORE implementation: **DONE
+   2026-08-14, approve-with-changes; all 5 confirmed issues folded into AC2/AC3/AC5/
+   AC9 and ADR-0026 (see journal)**; self-sign-off at close.
+10. **Owner retest script (after merge):** reinstall the Hue starter (installed apps
+    carry a COPY of app.html — the old install will NOT update itself), open it on
+    desktop with the paired connection: expect real rooms from your bridge; the first
+    scene apply asks once for the write grant (the dialog names your bridge's IP —
+    that's the user-honesty half of the boundary), then drives the lights.
 
 ## Decisions & surprises
 
@@ -141,3 +180,26 @@ Order is tests-first per TDD.md; branch stacked on `fix/TASK-20260814-hue-pairin
 - State: interviewing owner; ADR-0025's hardware verification implicitly CONFIRMED by
   this report (pairing verified against the real bridge).
 - Next step: interview → plan → ADR-0026 draft → branch → stop for approval.
+
+### 2026-08-14 — Claude (Fable) — session (continued, post-approval)
+- Done: owner approved the plan (symbolic URLs · fully real starter · probe-on-load).
+  PR #46 opened for the predecessor branch with the hardware verification recorded.
+  High-tier fresh-context plan review ran: **approve-with-changes, 5 confirmed
+  issues, all folded before Gate 3**: (1) the "existing URL scrub" the draft cited
+  does not exist — mechanism now explicit (resolved host/href join scrub candidates;
+  gate-5/ambiguity/transport messages genericized on the symbolic path; web yields
+  `NET_SSRF_BLOCKED` host-clean, mapped as unreachable); (2) AC5's web claims struck —
+  the Hue tile is web-locked by shipped e2e and unlocking it stays the owner's queued
+  UX call; (3) resolution seat corrected to after-gate-1/before-URL-gates, canonical
+  host comparison, one row read threaded through resolution + `resolveGrant`;
+  (4) same-row pinning made structural and the double-ambiguity semantic DECIDED
+  (fail-closed refusal even when the symbolic URL names one slot; pinned test: slot
+  B's credential never read); (5) the ADR-0025 "isn't available yet" copy pin is
+  REPLACED deliberately, not weakened. Advisories adopted: `CONNECTION_SLOT_RULE`
+  reuse, `NET_AMBIGUOUS_CONNECTION` never renders the connect CTA, https-only
+  carve-out in ADR §5, one-line hooks pointer (teaching in KB), threat-model delta
+  doc, confirm-dialog resolved-host pin (new AC8), AC7 worded against the
+  deliberately-red Windows gate.
+- State: plan + ADR amended; Gate 3 next.
+- Next step: failing tests — protocol parser → executor resolution/refusals/scrub →
+  examples pins; then implement in plan order.
