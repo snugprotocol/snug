@@ -1,6 +1,6 @@
 # 0026 — Connection-relative addressing: apps name their connection, never its host
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260814-hue-starter-real-connection; accepted when the owner approves that plan)
+- **Status:** accepted (2026-08-15, at merge; owner approved the plan and commissioned the merge explicitly)
 - **Date:** 2026-08-14
 - **Task:** TASK-20260814-hue-starter-real-connection
 

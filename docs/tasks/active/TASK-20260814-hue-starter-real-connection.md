@@ -254,3 +254,17 @@ Order is tests-first per TDD.md; branch stacked on `fix/TASK-20260814-hue-pairin
   first apply prompts once (the dialog names the bridge IP) → lights change.
 - Next step: owner review → merge #46 → rebase → PR → merge → move task file to done/
   → hardware retest.
+
+### 2026-08-15 — Claude (Fable) — close-session (Gate 6)
+- Done: PR #46 merged first (owner's explicit instruction); this branch rebased clean
+  onto `main` (8 commits, no conflicts). Gate-6 batch in-branch: ADR-0025 + ADR-0026
+  flipped to **accepted** (0025's §1 clause aligned to the final token-fact guard),
+  three lessons added (mechanical extract-helper recursion; substring-over-template
+  guards; anchored-Edit heading consumption), pairing task file moved to done/ with its
+  close entry, decisions README de-proposed.
+- State: about to verify (root suite on the rebase), push, open the PR, and merge on
+  the owner's standing instruction; the task file moves to done/ in a follow-up commit
+  after the merge (a file cannot record its own merge).
+- Next step: owner hardware retest — REINSTALL the Hue starter (installed apps keep
+  their HTML copy), open on desktop, expect real rooms, first apply prompts once, lights
+  change. Open questions: none; deferred items are queued in next-steps 2026-08-14.
