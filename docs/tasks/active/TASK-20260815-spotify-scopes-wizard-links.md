@@ -1,6 +1,6 @@
 # TASK-20260815-spotify-scopes-wizard-links: Spotify starter 403 repair (registry scopes), provider-error detail on the auth banner, registry-pinned console links
 
-- **Status**: planned
+- **Status**: in-review
 - **Owner**: jeetu (AI: Claude Fable 5)
 - **Risk tier**: **high** — touches `packages/auth` (registry, admission, connected-fetch executor); auto-escalates per PROCESS.md. Plan requires a fresh-context AI review before implementation.
 - **Branch**: `fix/TASK-20260815-spotify-scopes-wizard-links`
@@ -292,3 +292,47 @@ findings folded back before any test is written.
 - Open questions: none blocking. (Implementation may discover the exact
   `reapproveFromDiff` routing needs a variant — plan already scopes it to "fresh
   authorize round trip", tests pin the outcome, not the routing.)
+
+### 2026-08-15 (later) — claude (fable-5) — session (implementation)
+- Done: owner approved the plan; ADR-0028/0029 drafted; High-tier fresh-context plan
+  review returned 2 BLOCKERS + 5 must-fix (all folded — the two big ones: re-consent
+  must invalidate the old tokens in the same act as promotion, and the review/diff
+  screens rendered scopes NOWHERE, so "visible consent" was built, not assumed). Then
+  red-first TDD end to end:
+  - P1 auth: Spotify entry pins the 7-scope set + Feb-2026 walkthrough facts (5-user
+    allowlist, owner Premium); emitter emits `scopes` ENTRY-level; `applyRegistryValues`
+    replaces it on borrow hits (+ deep-copies `registration.instructions`, the review
+    drive-by); `deliver` extracts a ≤160-char scrubbed provider reason and widens
+    `onAuthShapedFailure(slot, status, detail?)`. Auth 747 (tsc-gated), substitution
+    seat mutation-checked (4 red with the seat reverted, emitter tests green).
+  - P2 wizard: ONE `requirementScopesDigest` drives drift detection, the
+    silent-promotion guard, and `reapproveFromDiff` routing; scopes-changed promotion
+    deletes access/refresh tokens + sets connection state `pending` (client_id kept);
+    abandonment pinned (approve → close → nothing serves, reopen offers the walk).
+    ReviewScreen `review-scopes` box + ReapprovalDiffScreen `reapproval-scope-diff`
+    delta; stale protocol comment corrected. Banner renders "{provider} says: …"
+    (plain-text pinned by hostile-copy test). Console links: byte-match via
+    `resolveRegistryEntryByName`, any provenance; near-miss negative rides the
+    legacy-mint harness (the imported-file channel where near-misses can exist —
+    gated accessors can't mint one since substitution replaces registration); desktop
+    anchor preempts to `openExternal` (system browser); copy-only hint reworded.
+  - Verification: auth 747 · playground 1042 · desktop 105 · root
+    `turbo run test --force` **21/21, Cached: 0**.
+- Deviations from plan, journaled: (1) e2e journey 4 left unchanged — its "Meridian"
+  brand is unpinned so its copy-only path still holds; the clickable variant is pinned
+  at component AND desktop altitude (an e2e pinned-provider journey would aim a real
+  authorize endpoint for no added DOM evidence). (2) The AC4 "2-arg when no detail"
+  choice keeps empty-body observer behavior byte-identical (exact-arity matchers pin
+  both shapes). (3) `oauth-service.ts` untouched, as re-planned (the token-leg claim
+  was corrected at plan review).
+- **High-tier self-sign-off (PROCESS.md):** C1 traced — the new detail channel reads
+  only the gate-10-scrubbed delivered body, query-credential echo negative green in
+  both raw and percent-encoded forms; no new fetch caller, no strictness knob, sandbox
+  and CSP untouched; the three "no response bytes" doctrine comments rewritten in the
+  same commit as the code they describe. Every migrated test classified in P2c;
+  red-first evidenced for every new assertion.
+- State: implementation complete on `fix/TASK-20260815-spotify-scopes-wizard-links`;
+  docs (next-steps, code-map, threat-delta S7, ADR index) updated in-branch.
+- Next step: Gate-5 AI diff review → owner review + PR → after merge, the owner manual
+  test (wizard offers scope diff → approve → sign-in shows 7 scopes → playlists load).
+- Open questions: none.

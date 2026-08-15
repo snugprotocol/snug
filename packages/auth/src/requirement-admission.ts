@@ -538,7 +538,14 @@ function applyRegistryValues(
     substituted['endpoints'] = { ...flow.endpoints };
   }
   if (flow.registration !== undefined) {
-    substituted['registration'] = { ...flow.registration };
+    // `instructions` deep-copied like every sibling seat (TASK-20260815 plan-review
+    // note): the shallow spread left the array a LIVE reference to the registry
+    // singleton, which one downstream caller's mutation could repoint for every later
+    // substitution — the exact reason `fields` is deep-copied above.
+    substituted['registration'] = {
+      ...flow.registration,
+      ...(flow.registration.instructions !== undefined ? { instructions: [...flow.registration.instructions] } : {}),
+    };
   }
   // THE REQUEST/TEST SEATS (ADR-0022 §1, amendment 1c) — substituted on every borrow
   // hit, channel-agnostic, because this path is what serves bare starter and inference

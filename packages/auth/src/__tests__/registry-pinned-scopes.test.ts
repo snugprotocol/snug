@@ -117,6 +117,17 @@ describe('ADR-0028 — admission substitution owns the seat on every borrow hit'
     if (admitted.ok) expect(admitted.requirement.scopes).toEqual(['https://mail.google.com/']);
   });
 
+  it('substitution hands out COPIES — scopes and registration.instructions are never live registry references', () => {
+    const admitted = admitConnectionRequirement(STARTER_DECLARATION, { channel: 'starter' });
+    expect(admitted.ok).toBe(true);
+    if (!admitted.ok) return;
+    const entry = WELL_KNOWN_PROVIDERS_REGISTRY['spotify']!;
+    expect(admitted.requirement.scopes).not.toBe(entry.scopes);
+    // The plan-review drive-by: registration was shallow-spread, leaving `instructions`
+    // a live reference to the module singleton every later substitution reads.
+    expect(admitted.requirement.registration?.instructions).not.toBe(entry.registration?.instructions);
+  });
+
   it('is idempotent across the second admission pass (the production path admits twice)', () => {
     const first = admitConnectionRequirement(STARTER_DECLARATION, { channel: 'starter' });
     expect(first.ok).toBe(true);
