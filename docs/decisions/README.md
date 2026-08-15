@@ -45,3 +45,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0024 — The think rail is user-sized and dismissible; the frame view is deleted while its feed lives on](0024-think-rail-user-sized-frames-view-removed.md)
 - [0025 — LAN pairing verifies before it claims; LAN rows never route through the api-key screens](0025-lan-pairing-verify-before-claim.md)
 - [0026 — Connection-relative addressing: apps name their connection, never its host](0026-connection-relative-addressing.md)
+- [0027 — Docs memory is distilled, not accumulated](0027-docs-memory-distilled-not-accumulated.md)

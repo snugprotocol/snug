@@ -1,6 +1,6 @@
 # 0027 — Docs memory is distilled, not accumulated
 
-- **Status:** proposed (accepted when TASK-20260815-docs-context-cleanup's plan is approved)
+- **Status:** accepted (plan approved by owner 2026-08-15)
 - **Date:** 2026-08-15
 - **Task:** TASK-20260815-docs-context-cleanup
 

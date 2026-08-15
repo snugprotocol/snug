@@ -24,7 +24,9 @@ One branch per task — `feat/TASK-<id>` or `fix/TASK-<id>` off `main`. Small ta
 Run suites of every package touched **plus dependents** (graph in [architecture.md](../architecture.md); in doubt → `pnpm test` at root). AI review first, human second — diff AND task file.
 
 ## Gate 6 — Close the loop (never skip)
-`/close-session`: journal entry → lessons → doc drift fixed in the same branch → ADR if a decision was made → **spec-changelog entry if `packages/protocol` changed** → commit everything. Merged & done → move task file to `done/`.
+`/close-session`: journal entry → lessons → doc drift fixed in the same branch → ADR if a decision was made → **spec-changelog entry if `packages/protocol` changed** → commit everything. Merged & done → add one line to `tasks/done/INDEX.md` and delete the task file (ADR-0027; git history is the archive).
+
+**Distill, don't only append (ADR-0027).** Memory the agent loads every session stays small: prune shipped/superseded `next-steps` items on every touch; merge or drop `lessons.md` rules that later work superseded; a superseding ADR updates the old ADR's status line in the same change. Git keeps every historical byte — the working tree keeps only what is currently true.
 
 ## Handoffs
 `/handoff` then `/pickup <task-id>`. A handoff to future-you is still a handoff.
