@@ -14,9 +14,13 @@
  * (`openConnectionWizard` is synchronous and boolean; the v3 lesson about a Promise's
  * truthiness dismissing a CTA the wizard refused is pinned by test here too).
  *
- * C1 — the store carries (appId, slot, status) and nothing else; the provider NAME is
- * read from the connection row so the copy speaks the user's vocabulary, and no
- * response byte or credential can reach this component by construction.
+ * C1 — the store carries (appId, slot, status) plus an OPTIONAL `detail`: a short,
+ * scrubbed plain-text extract of the provider's own error reason, produced by the
+ * executor from the gate-10-scrubbed delivered body (TASK-20260815 AC4). No credential,
+ * no URL, no raw response bytes can reach this component; the detail renders as TEXT
+ * only — never markup, never a link (pinned by the hostile-copy test, same rule as the
+ * registration steps). The provider NAME is read from the connection row so the copy
+ * speaks the user's vocabulary.
  */
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
@@ -64,6 +68,12 @@ export function AuthRepairBanner({ appId }: { appId: string }): ReactElement | n
         The app keeps running, but anything needing {provider} won’t work until this is sorted. The key may be wrong,
         expired, or revoked ({active.status}).
       </p>
+      {active.detail !== undefined ? (
+        <p className="connection-note-body" data-testid="auth-repair-detail">
+          {/* The provider's own diagnosis, verbatim — plain text by construction. */}
+          {provider} says: “{active.detail}”
+        </p>
+      ) : null}
       <div className="connection-note-actions">
         <Button
           variant="primary"

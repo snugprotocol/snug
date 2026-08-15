@@ -107,7 +107,9 @@ describe('createNetHandlerFor — the auth-shaped failure observer reaches the h
     // The app contract is untouched: ok:true, status passed through as-is (ADR-0022 §4 —
     // apps legitimately read 401 bodies; the banner is ADDITIVE, never a remap).
     expect(result).toMatchObject({ ok: true, status: 401 });
-    expect(authShapedFailureStore.get()).toEqual({ appId: APP, slot: SLOT, status: 401 });
+    // MIGRATED 2026-08-15 (TASK-20260815 AC4): the executor now forwards the provider's
+    // own reason — a plain-text body becomes the detail.
+    expect(authShapedFailureStore.get()).toEqual({ appId: APP, slot: SLOT, status: 401, detail: 'unauthorized' });
   });
 
   it('a 403 lands too, with its own status', async () => {
@@ -117,7 +119,7 @@ describe('createNetHandlerFor — the auth-shaped failure observer reaches the h
     });
     const result = await handler.handle(APP, frame('https://api.example.com/v1/data'));
     expect(result).toMatchObject({ ok: true, status: 403 });
-    expect(authShapedFailureStore.get()).toEqual({ appId: APP, slot: SLOT, status: 403 });
+    expect(authShapedFailureStore.get()).toEqual({ appId: APP, slot: SLOT, status: 403, detail: 'forbidden' });
   });
 
   it('NEGATIVE: a 200 fires nothing', async () => {
@@ -282,6 +284,50 @@ describe('AuthRepairBanner — renders the repair CTA on the failing (appId, slo
     expect(text()).toContain('Example');
     expect(text()).toContain('401');
     expect(button(/check this connection/i)).toBeDefined();
+  });
+
+  it("TASK-20260815 AC4: renders the provider's own reason when the failure carries one", async () => {
+    await seedApprovedApp();
+    await renderBanner(APP);
+    await act(async () => {
+      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403, detail: 'Insufficient client scope' });
+      await Promise.resolve();
+    });
+    const detail = container.querySelector('[data-testid="auth-repair-detail"]');
+    expect(detail, 'the provider-says line must render when a detail exists').not.toBeNull();
+    expect(detail!.textContent).toContain('Insufficient client scope');
+    // The provider is named as the SOURCE of the sentence — this is their diagnosis,
+    // not our guess.
+    expect(detail!.textContent).toContain('Example');
+  });
+
+  it('TASK-20260815 AC4 NEGATIVE: no detail → no provider-says line (the guess copy stands alone)', async () => {
+    await seedApprovedApp();
+    await renderBanner(APP);
+    await act(async () => {
+      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403 });
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-testid="auth-repair-detail"]')).toBeNull();
+    expect(text()).toContain('403');
+  });
+
+  it('TASK-20260815 AC4 NEGATIVE (C1-adjacent): detail renders as PLAIN TEXT — markup never becomes elements, URLs never become links', async () => {
+    // Provider-authored text rendered in host chrome: the same hostile-copy rule the
+    // registration steps carry (P3-AC5). React escapes by construction; this pins the
+    // property so a future "make it prettier" cannot quietly add dangerouslySetInnerHTML
+    // or a linkifier.
+    const hostile = '<a href="https://evil.example/fix">click here to fix</a> or visit https://evil.example/fix now';
+    await seedApprovedApp();
+    await renderBanner(APP);
+    await act(async () => {
+      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403, detail: hostile });
+      await Promise.resolve();
+    });
+    const detail = container.querySelector('[data-testid="auth-repair-detail"]')!;
+    expect(detail.querySelector('a'), 'markup must never become an element').toBeNull();
+    expect(detail.querySelector('img')).toBeNull();
+    expect(detail.textContent, 'the hostile string renders VERBATIM as text').toContain('<a href=');
   });
 
   it('the CTA opens the wizard on the EXACT failing (appId, slot) and dismisses the banner', async () => {
