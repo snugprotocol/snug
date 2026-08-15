@@ -16,7 +16,7 @@
  */
 
 import { base64ToBytes, bytesToBase64, bytesToBase64Url, bytesToHex, utf8ToBase64, utf8ToBase64Url } from './base64url.js';
-import { CdpKeyImportError, importEs256PrivateKey } from './es256-key.js';
+import { CdpKeyImportError, importEd25519PrivateKey } from './ed25519-key.js';
 import { assertLintedTemplate } from './template-lint.js';
 
 export class AuthTemplateError extends Error {
@@ -152,24 +152,27 @@ const HELPERS: Record<string, HelperFn> = {
     return bytesToBase64(await hmacBytes(key, messageParts.join('')));
   },
   /**
-   * `cdp_jwt(api_key, private_key)` — mint a fresh Coinbase-CDP ES256 JWT per render
-   * (ADR-0022 §2). Both arguments are DECLARED FIELD KEYS by the lint's per-argument
-   * rule for this helper (never literals, never request tokens): the first resolves to
-   * the CDP key NAME (`organizations/…/apiKeys/…`, non-secret, rides kid/sub) and the
-   * second to the EC private-key PEM (secret, never leaves this function).
+   * `cdp_jwt(api_key, private_key)` — mint a fresh Coinbase-CDP EdDSA JWT per render
+   * (ADR-0030, superseding ADR-0022 §2's ES256-only clause). Both arguments are
+   * DECLARED FIELD KEYS by the lint's per-argument rule for this helper (never
+   * literals, never request tokens): the first resolves to the CDP key NAME
+   * (`organizations/…/apiKeys/…`, non-secret, rides kid/sub) and the second to the
+   * Ed25519 secret (any portal shape — secret, never leaves this function).
    *
-   * CLAIM SHAPE, pinned by cdp-jwt.test.ts: header { alg:'ES256', kid, typ:'JWT',
-   * nonce:<16 random bytes hex> }; payload { iss:'cdp', sub:<key name>,
+   * CLAIM SHAPE, pinned by cdp-jwt.test.ts and byte-identical to the ES256 era
+   * (verified against Coinbase's own jwt_generator): header { alg:'EdDSA', kid,
+   * typ:'JWT', nonce:<16 random bytes hex> }; payload { iss:'cdp', sub:<key name>,
    * uri:'<METHOD> <host><path>' — NO scheme, NO query — nbf:now, exp:now+120 }.
    * The nbf second is read through `renderTimestamp`, so a template that also sends a
    * timestamp header cannot disagree with the JWT about when "now" was (the same
    * memoization the HMAC family relies on).
    *
-   * ES256 ONLY at v1: WebCrypto's raw r||s ECDSA output is exactly the JWS ES256
-   * signature format (probe-verified at P0 — no DER conversion). Key import lives in
-   * es256-key.ts (SEC1→PKCS#8 wrap, both PEM headers, honest typed errors); its
-   * CdpKeyImportError is re-thrown as AuthTemplateError so callers see ONE error type
-   * from the template surface.
+   * Ed25519 ONLY (owner decision 2026-08-15 — one signing path, no algorithm
+   * negotiation): WebCrypto's raw 64-byte Ed25519 output is exactly the JWS EdDSA
+   * signature format (RFC 8037 §3.2 — no conversion). Key import lives in
+   * ed25519-key.ts (armor-first detection, every shape canonicalized to the seed,
+   * honest typed errors, total runtime rule); its CdpKeyImportError is re-thrown as
+   * AuthTemplateError so callers see ONE error type from the template surface.
    */
   cdp_jwt: async (args, ctx, state) => {
     const [apiKeyName, privateKeyPem] = args;
@@ -191,7 +194,7 @@ const HELPERS: Record<string, HelperFn> = {
 
     let signingKey: CryptoKey;
     try {
-      signingKey = await importEs256PrivateKey(privateKeyPem);
+      signingKey = await importEd25519PrivateKey(privateKeyPem);
     } catch (err) {
       if (err instanceof CdpKeyImportError) throw new AuthTemplateError(err.message);
       throw err;
@@ -203,7 +206,7 @@ const HELPERS: Record<string, HelperFn> = {
 
     // `parsed.host` (not hostname) keeps a non-default port in the claim — the uri must
     // describe the request actually sent. Scheme and query are dropped by construction.
-    const header = { alg: 'ES256', kid: apiKeyName, typ: 'JWT', nonce: bytesToHex(nonceBytes) };
+    const header = { alg: 'EdDSA', kid: apiKeyName, typ: 'JWT', nonce: bytesToHex(nonceBytes) };
     const payload = {
       iss: 'cdp',
       sub: apiKeyName,
@@ -216,11 +219,11 @@ const HELPERS: Record<string, HelperFn> = {
     let signature: Uint8Array;
     try {
       signature = new Uint8Array(
-        await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, signingKey, encoder.encode(signingInput)),
+        await crypto.subtle.sign({ name: 'Ed25519' }, signingKey, encoder.encode(signingInput)),
       );
     } catch {
       throw new AuthTemplateError(
-        'this runtime does not implement WebCrypto ECDSA (ES256) — cdp_jwt cannot mint a CDP JWT here',
+        'this runtime does not implement WebCrypto Ed25519 — cdp_jwt cannot mint a CDP JWT here',
       );
     }
     return `${signingInput}.${bytesToBase64Url(signature)}`;

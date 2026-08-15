@@ -644,23 +644,28 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // a browser hub gets an opaque "Failed to fetch"; desktop's native fetch is the
     // advisory's rung 2. The wizard discloses this BEFORE credentials are pasted.
     browserCallable: false,
-    // THE CDP CREDENTIAL PAIR (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §5).
+    // THE CDP CREDENTIAL PAIR (ADR-0030, superseding ADR-0022 §5's EC-key pin).
     //
-    // VERIFIED 2026-08-12 against Coinbase's own docs + live probes (task recon):
-    // retail/Advanced Trade authentication is a CDP key — the key NAME
-    // (`organizations/{org}/apiKeys/{key}`, non-secret, rides the JWT's kid/sub) plus
-    // an EC private key that signs a fresh ES256 JWT per request, sent as
-    // `Authorization: Bearer`. The legacy retail HMAC keys EXPIRED provider-side on
-    // 2025-02-05, so the previous `api_key`/`api_secret`/`passphrase` seats described
-    // credentials Coinbase no longer issues — the entry was never connectable.
-    // HMAC+passphrase survives only on the institutional `api.exchange.coinbase.com`
-    // surface, which is dropped, not carried (out of product scope; recorded in
-    // ADR-0022, deliberately NOT an authOption).
-    // Ed25519 keys are NOT accepted on the Coinbase App surface; EC (ES256) is the
-    // universally safe algorithm, and the wizard/probe errors honestly on an Ed25519
-    // PEM (es256-key.ts).
-    // https://docs.cdp.coinbase.com/coinbase-app/docs/api-key-authentication
-    // https://docs.cdp.coinbase.com/api-reference/v2/authentication (JWT authentication)
+    // VERIFIED 2026-08-15 against Coinbase's JWT-authentication docs + their own
+    // `coinbase-advanced-py` jwt_generator: retail/Advanced Trade authentication is a
+    // CDP key — the key NAME (`organizations/{org}/apiKeys/{key}`, non-secret, rides
+    // the JWT's kid/sub) plus an **Ed25519** secret that signs a fresh EdDSA JWT per
+    // request, sent as `Authorization: Bearer`. Ed25519 is the portal's DEFAULT and
+    // recommended key type; ECDSA (ES256) is Coinbase's documented legacy ("use only
+    // when required by specific SDKs") and is deliberately NOT accepted here — a
+    // legacy EC paste earns a fix-naming error (ed25519-key.ts). The 2026-08-12 recon
+    // note claiming "Ed25519 keys are NOT accepted" read a stale docs page and was
+    // WRONG — the inversion is the founding defect of TASK-20260815-coinbase-ed25519
+    // (the portal's default key type was exactly what the wizard rejected).
+    // The legacy retail HMAC keys EXPIRED provider-side on 2025-02-05; HMAC+passphrase
+    // survives only on the institutional `api.exchange.coinbase.com` surface, which
+    // stays dropped (ADR-0022, deliberately NOT an authOption).
+    // https://docs.cdp.coinbase.com/get-started/authentication/jwt-authentication
+    // https://github.com/coinbase/coinbase-advanced-py (jwt_generator.py)
+    //
+    // FIELD KEY `ed25519_private_key` IS LOAD-BEARING (ADR-0030 §4): the drift and
+    // re-approve digests read field KEYS only, so the rename — not a relabel — is what
+    // makes an EC-era saved row refuse re-admission and walk the credential half again.
     fields: [
       {
         key: 'api_key',
@@ -669,20 +674,21 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         description: 'The full key name shown when you created the key — the organizations/…/apiKeys/… path, not a display label.',
       },
       {
-        key: 'private_key',
-        label: 'EC private key (PEM)',
+        key: 'ed25519_private_key',
+        label: 'Ed25519 private key (secret)',
         type: 'secret',
-        description: 'From the key file you downloaded at creation — paste the whole PEM, BEGIN/END lines included.',
+        description:
+          'The API key secret from the portal — paste the base64 secret exactly as delivered, or the whole PEM key file (BEGIN/END lines included).',
       },
     ],
-    // WHERE the credential goes — the pinned CDP signing template (ADR-0022 §1/§5).
-    // `cdp_jwt` mints the ES256 JWT host-side per request (template-engine.ts); both
-    // arguments are declared field keys by the helper's own lint rule. This seat is
-    // exactly what Guard 2b refuses borrowers for authoring: with it pinned here, the
-    // executor stops falling to the generic `X-Api-Key` kind default that made the
-    // saved credential dead weight.
+    // WHERE the credential goes — the pinned CDP signing template (ADR-0022 §1,
+    // ADR-0030). `cdp_jwt` mints the EdDSA JWT host-side per request
+    // (template-engine.ts); both arguments are declared field keys by the helper's own
+    // lint rule. This seat is exactly what Guard 2b refuses borrowers for authoring:
+    // with it pinned here, the executor stops falling to the generic `X-Api-Key` kind
+    // default that made the saved credential dead weight.
     request: {
-      headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' },
+      headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, ed25519_private_key)}}' },
     },
     // HOW the connection is verified — the wizard's "test this connection" probe:
     // GET https://api.coinbase.com/api/v3/brokerage/accounts (host from apiHosts; a
@@ -695,9 +701,9 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       instructions: [
         'Sign in to the Coinbase Developer Platform (link above) with your Coinbase account and open (or create) a project.',
         'Open API keys and create a new Secret API key with VIEW (read-only) permission — this app never needs to trade.',
-        'Choose the EC (ECDSA / ES256) key type if asked — Ed25519 keys will not work here.',
-        'Download the key file when it is offered: Coinbase shows the private key only once.',
-        'Paste the key name (the organizations/…/apiKeys/… path) and the private key PEM from that file into the fields below.',
+        'Keep the Ed25519 key type (the portal default). Do NOT switch to ECDSA — that is Coinbase’s legacy format and will not work here.',
+        'Copy or download the key secret when it is offered: Coinbase shows it only once.',
+        'Paste the key name (the organizations/…/apiKeys/… path) and the Ed25519 secret (the base64 string, or the whole PEM file) into the fields below.',
       ],
     },
   },
