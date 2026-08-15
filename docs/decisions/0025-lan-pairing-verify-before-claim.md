@@ -1,6 +1,6 @@
 # 0025 — LAN pairing verifies before it claims; LAN rows never route through the api-key screens
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260814-hue-pairing-e2e; accepted when the owner approves that plan)
+- **Status:** accepted (2026-08-15, at PR #46 merge; owner hardware-verified the verify-first pairing against the real bridge on 2026-08-14)
 - **Date:** 2026-08-14
 - **Task:** TASK-20260814-hue-pairing-e2e
 
@@ -33,9 +33,12 @@ rather than a transport defect:
    outcome** (tightened at Gate 5's review): the verify read fires through the PINNED
    transport (`platform.lanFetch`) with the just-captured pin as an IN-MEMORY argument,
    injecting the entry's own `request.headerTemplate` (via the auth package's one
-   template renderer) with only the just-minted `secretField` value — and a render that
-   does not actually carry the minted value refuses rather than degrading into a
-   liveness probe any 2xx would satisfy. Nothing durable lands before the verdict, so
+   template renderer) with only the just-minted `secretField` value — and a template
+   whose VALUES never reference the secret field as a `{{...}}` token (or that renders
+   no headers at all) refuses rather than degrading into a liveness probe any 2xx would
+   satisfy. The check is the static token fact, not a rendered-value substring: a
+   provider whose template TRANSFORMS the secret is genuinely credentialed while
+   carrying it nowhere verbatim. Nothing durable lands before the verdict, so
    the executor's pin-gated LAN lane cannot serve app traffic with an unproven key
    during the round trip, and a crash mid-verify leaves no trace ("unverified ⇒
    re-pair" is the recovery either way). A 2xx writes key + pin +

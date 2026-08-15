@@ -287,6 +287,8 @@ The template below has two zones:
     // The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
     // hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
     // before any write, and scrubs the response. You never see a token.
+    // A connection whose host only the USER knows (a device on their network): address it as
+    // snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
     // ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
     // ============================================================
     function useConnectedFetch() {

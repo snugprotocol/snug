@@ -295,3 +295,12 @@ probe response never leave `runLanPairing`'s scope; done/error copy is fixed-sen
   after merge (procedure in plan step 8 — note the pre-fix row on the owner's machine
   will offer RE-PAIR on open; that is AC4 working, not a regression).
 - Next step: owner review → PR → merge → move task file to done/ → hardware retest.
+
+### 2026-08-15 — Claude (Fable) — close
+- Done: PR #46 squash-merged to `main` (`b60898b`) on the owner's explicit merge
+  instruction; the only red check was the deliberately-red ADR-0021 D8 Windows gate
+  (macOS + workspace green), merged `--admin` per house practice. ADR-0025 flipped to
+  **accepted**. Owner hardware verification PASSED 2026-08-14 ("paired and verified
+  with the device at 192.168.1.x"). Task file moved to done/.
+- State: shipped. Stacked successor (ADR-0026 addressing + real starter) merges next.
+- Next step: none — follow-ups live in next-steps.md (2026-08-14 entries).

@@ -52,23 +52,31 @@ registry's human-reviewed values get substituted instead. Adding a "helpful" `fi
 array would make this manifest unadmittable, and the app would install with a connection
 that could never be created.
 
-## Why the apply control is still greyed
+## How the app reaches the bridge without ever learning its address
 
-The bridge is reachable from the desktop shell — but **this app is never told its
-address**, and that is deliberate rather than unfinished. `useConnectedFetch` takes a
-literal URL and the host checks it against the frozen ceiling; there is no frame through
-which the host hands an app the list of hosts it may reach. Telling sandboxed app code
-the layout of the user's home network would be a new disclosure with its own review, not
-something a starter may help itself to.
+**This app is never told the bridge's address** — and since ADR-0026, that is no longer
+a limitation, just the boundary. Every request is a **connection-relative URL**:
 
-So the app declares the connection, holds the governed seam, and says plainly what it is
-waiting for. The day the runtime can tell an app its approved host, the apply path is the
-only thing that changes.
+    snug-connection://hue/clip/v2/resource/room
+    snug-connection://hue/clip/v2/resource/grouped_light/<rid>   (PUT — the scene write)
 
-## What works on the web
+The host resolves the `hue` slot to the single address the user approved into the frozen
+ceiling, then runs every gate, injects `hue-application-key`, and scrubs the result —
+exactly as it would for a literal URL. The app holds no hostname anywhere in its file;
+the ceiling stays the only place the address lives, and the user's confirm dialog for
+the first write names the real address the app cannot see.
 
-Everything except the sync: pick a scene, adjust brightness, choose rooms, and watch the
-preview respond. Real UI on real state.
+On mount the app makes ONE probe that doubles as the data fetch (the rooms read).
+Success renders the user's real rooms; a coded refusal picks the honest fallback —
+`NET_NOT_APPROVED` shows the connect CTA, transport-shaped failures say the bridge is
+unreachable from here, and `NET_AMBIGUOUS_CONNECTION` gets its own sentence (it is a
+configuration problem the connect button cannot fix).
+
+## What works before the bridge is connected
+
+Everything except the lights themselves: pick a scene, adjust brightness, watch the
+preview respond. Real UI on real state — and the rooms panel says plainly that real
+rooms appear once Philips Hue is connected.
 
 ## Files
 

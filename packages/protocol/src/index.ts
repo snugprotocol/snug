@@ -239,3 +239,4 @@ export {
 } from './security.js';
 
 export { buildJsonSchemas } from './json-schemas.js';
+export { CONNECTION_URL_SCHEME, parseConnectionUrl, type ConnectionUrlParse } from './connection-url.js';

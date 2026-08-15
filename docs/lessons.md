@@ -181,3 +181,12 @@ Short, forward-looking rules learned the hard way. **The agent reads this when p
 
 ## 2026-08-02 — `??` fallbacks make empty env vars a silent foot-gun
 **Context:** apps/server config + .env.example authoring. **What happened:** `SNUG_MODEL=` (present but empty) defeats a `?? 'default'` fallback — empty string is not `undefined` — so the "default" silently becomes `''`. **Rule:** env templates comment optional vars out rather than leaving them empty, and config readers treat `''` as unset (`value || fallback` or explicit trim-check) for any var with a fallback.
+
+## 2026-08-14 — A mechanical extract-helper replace rewrites the helper's own body
+**Context:** TASK-20260814 Gate-5 fold — extracting `slotCredentialStore` over four inline constructions via a scripted find/replace. **What happened:** the replacement ran over the freshly inserted helper too, turning its body into a call to itself — infinite recursion at every call site, caught as a 57-test failure wave. **Rule:** when extracting a helper by textual replacement, insert the helper AFTER the replacements run (or exclude its own definition), and treat a sudden wide failure wave after a "safe" mechanical edit as the suite catching exactly this.
+
+## 2026-08-14 — Substring checks over templates are satisfied by the wrong part
+**Context:** ADR-0025's verify-probe guard ("the credential must actually ride"). **What happened:** two successive review passes each caught a weaker form — first a rendered-value substring (refuses any provider whose template TRANSFORMS the secret), then a whole-template substring (satisfied by the header NAME `hue-application-key` containing the field name `application_key`). **Rule:** a "does X reference Y" guard over template data must match the reference TOKEN in the value grammar (`{{...field...}}`), never a substring over serialized structure — names, keys, and values all collide in a flat string.
+
+## 2026-08-14 — An anchored Edit that consumes a heading must re-emit it
+**Context:** prepending a spec-changelog entry by matching the previous entry's heading as the anchor. **What happened:** the replacement included the new entry but not the consumed heading, silently orphaning the prior entry's body under the new heading — an append-only audit file un-recorded a protocol change, caught only by the conventions review pass. **Rule:** when inserting-by-replacing an anchor line, the anchor must appear verbatim in the replacement; verify append-only files afterward with a headings-only grep.

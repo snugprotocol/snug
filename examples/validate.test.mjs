@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
  * resolve (verified: with `packages/protocol/dist` deleted, `turbo run test
  * --filter=examples` rebuilds protocol BEFORE this file runs).
  */
-import { connectionRequirementSchema, runtimeContractSchema } from '@snugprotocol/protocol';
+import { connectionRequirementSchema, isRfc1918Ipv4Literal, runtimeContractSchema } from '@snugprotocol/protocol';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -66,10 +66,10 @@ const APPS = [
   // spectrum has a working, reviewable example rather than a doc paragraph:
   //   crypto-portfolio → api_key (CoinGecko)      weather-planner  → api_key (OpenWeather)
   //   my-repos         → bearer_token (GitHub)    spotify-party-dj → oauth2_auth_code
-  // `hue-lights-party` is the DELIBERATE NEGATIVE: it reaches a bridge on the user's own
-  // LAN, which a sandboxed web iframe cannot do, so it ships fully alive with the one
-  // impossible control greyed and NO manifest at all. It is in APPS (it has an app.html
-  // and is validated like everything else) and absent from the manifest set on purpose.
+  // `hue-lights-party` is the LAN-class starter: its manifest declares a `lanHost`
+  // connection (the bridge address is COLLECTED from the user, never shipped), and
+  // since ADR-0026 the app drives the real bridge through connection-relative URLs —
+  // the real-connection pins at the bottom of this file are its dedicated gate.
   'crypto-portfolio',
   'weather-planner',
   'my-repos',
@@ -594,10 +594,55 @@ test('hue-lights-party copy is platform-agnostic and names the real runtime gap'
     !/which a web page cannot reach/i.test(html),
     'the preconnect notice must not frame its rationale around being on the web',
   );
-  // The honest reason the apply control is disabled: the capability does not exist yet.
-  assert.match(
-    html,
-    /isn['’]t available yet|not available yet/i,
-    'the disabled apply control must name the missing runtime capability, not a platform',
+  // NOTE (TASK-20260814-hue-starter-real-connection, AC9): the third assertion this test
+  // carried — that the apply control says the capability "isn't available yet" — is
+  // REPLACED by the real-connection pins below, deliberately and in the same commit. The
+  // capability now exists (ADR-0026); pinning its absence would pin a lie.
+});
+
+/**
+ * TASK-20260814-hue-starter-real-connection (ADR-0026) — the hue starter runs on the
+ * REAL connection: symbolic addressing, live CLIP v2 data, and code-keyed honest
+ * fallbacks. No mocked room or light data may remain anywhere in the file.
+ */
+test('hue-lights-party drives the real bridge through connection-relative URLs — no dummy data', () => {
+  const html = readFileSync(path.join(HERE, 'hue-lights-party', 'app.html'), 'utf8');
+
+  // The mount probe doubles as the data fetch (ADR-0026 §4): rooms come from the bridge.
+  assert.ok(
+    html.includes('snug-connection://hue/clip/v2/resource/room'),
+    'the starter must read rooms from the bridge through the symbolic scheme',
   );
+  // Scene apply is a real grouped-light write, addressed symbolically.
+  assert.ok(
+    html.includes('snug-connection://hue/clip/v2/resource/grouped_light/'),
+    'scene apply must write to the bridge through the symbolic scheme',
+  );
+  // The mocked room list is gone — rooms render from the bridge response.
+  assert.ok(
+    !/const ROOMS\s*=/.test(html),
+    'the hardcoded room list must not survive the real-connection rewrite',
+  );
+  assert.ok(
+    !/'Living room'|"Living room"/.test(html),
+    'no mocked room name may remain — rooms come from the bridge',
+  );
+  // Fallbacks are keyed on the executor's CODES, and the ambiguity refusal must never
+  // render the connect CTA (Gate-2 review advisory).
+  assert.ok(html.includes('NET_NOT_APPROVED'), 'the connect CTA must key on NET_NOT_APPROVED');
+  assert.ok(
+    html.includes('NET_AMBIGUOUS_CONNECTION'),
+    'the ambiguity refusal must be handled distinctly (never the connect CTA)',
+  );
+  // No literal bridge host anywhere: the app never learns the address (ADR-0026 §3).
+  // The class check is the PROTOCOL's own (`isRfc1918Ipv4Literal`), never a restated
+  // range table — a restated table keeps passing when the protocol's private class
+  // broadens, and the drift is silent because the two share no source.
+  const dottedQuads = html.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) ?? [];
+  for (const literal of dottedQuads) {
+    assert.ok(
+      !isRfc1918Ipv4Literal(literal),
+      `the starter must not carry a literal private address (found ${literal}) — the ceiling is the only place the host lives`,
+    );
+  }
 });
