@@ -26,7 +26,9 @@ an author the URL no longer has.
    entry and its `authOptions` registrations) — regardless of row provenance. The
    comparison is byte-equality; a one-char-off URL under a registry brand stays
    copy-only. No match — including genuinely user-authored providers with no registry
-   entry — keeps the existing copy-address-and-paste flow and its honest hint copy.
+   entry — keeps the copy-address-and-paste flow, with its hint REWORDED to the new
+   truth ("we haven't pinned this address" — the old "a model proposed it" is false for
+   user- and starter-authored URLs that reach this branch).
 2. **The redirect-URI box stays copy-only everywhere.** It is pasted into the provider's
    form, not navigated; a link affordance would be wrong even for pinned bytes.
 3. **Desktop opens the link via the system-browser opener** (https-only guard), never
@@ -42,3 +44,7 @@ an author the URL no longer has.
   we pinned.** The negative test (near-miss URL stays copy-only) pins it.
 - `consoleUrlIsClickable(row)`'s provenance check is deleted, not augmented — one rule,
   one resolution, per the 2026-08-12 refuse-and-rewrite lesson.
+- Fail-closed residue (accepted): if the registry later EDITS a provider's consoleUrl,
+  persisted rows keep the old bytes (drift detection keys on fields/seats, not
+  registration) and silently fall back to copy-only until any other drift stages them —
+  degraded convenience, never a wrongly-linked URL.

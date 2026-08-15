@@ -18,29 +18,38 @@ to the owner as "the key may be wrong, expired, or revoked", which misdiagnoses 
 provider whose OAuth round trip actually succeeded.
 
 The original posture guarded against the right harm with the wrong rule. The harm is a
-scope grant the user never sees. But requirement `scopes` render on the wizard's review
-screen (order preserved, deliberately — `connection-requirement.ts:653`) and the
-provider's own consent screen lists them again; a registry-pinned scope list is as
-reviewed as pinned hosts or fields. What "no scopes ever" actually bought was providers
-whose APIs are useless without scopes shipping broken by construction.
+scope grant the user never sees. A registry-pinned scope list is as reviewed as pinned
+hosts or fields, and the provider's own consent screen lists it again. (The fresh-context
+plan review caught that the wizard did NOT render `scopes` anywhere — the protocol
+comment at `connection-requirement.ts:653` described rendering that never existed — so
+this task BUILDS the review-screen block and the diff-screen delta rather than assuming
+them; without that, this ADR's justification would be fiction.) What "no scopes ever"
+actually bought was providers whose APIs are useless without scopes shipping broken by
+construction.
 
 ## Decision
 
-1. **A registry entry (or auth option) may pin `scopes`** — a human-reviewed, per-entry
-   list, exactly like `endpoints`/`fields`/`request`. What stays forbidden is the
-   original harm, restated precisely: **a scope the user never sees**. Pinned scopes ride
-   the requirement, render on the review screen, and appear on the provider's consent
-   screen. An entry whose API works scope-less keeps `scopes` undefined.
+1. **A registry entry may pin `scopes` — ENTRY-level only, never per auth option.**
+   Privilege breadth is brand identity, exactly like display name and hosts (ADR-0020's
+   identity-seat rule extended): a flow choice must never change what the credential can
+   do. A human-reviewed list, exactly like `endpoints`/`fields`/`request`. What stays
+   forbidden is the original harm, restated precisely: **a scope the user never sees**.
+   Pinned scopes ride the requirement, render on the wizard review screen (built by this
+   task), and appear on the provider's consent screen. An entry whose API works
+   scope-less keeps `scopes` undefined.
 2. **The seat rides every surface pinned seats ride** (lesson 2026-08-13): emitted by
-   `requirementFromRegistryEntry` under the option-over-entry flow rule (an option
-   without scopes emits none — a different flow never inherits scopes it didn't
-   declare), REPLACED (never merged) by `applyRegistryValues` on every borrow hit, and
-   reconciled by the wizard-open drift migration.
-3. **A scope change on an approved row always re-consents.** The drift migration's
-   silent `repersisted` promotion is structurally unreachable when scopes changed, even
-   with an identical host ceiling: the stored token was minted under the old scopes and
-   providers do not widen on refresh. Scope drift stages a visible diff, and approving it
-   routes through a fresh authorization round trip.
+   `requirementFromRegistryEntry` from the ENTRY (options never carry it — the
+   self-containment sweep stands), REPLACED (never merged) by `applyRegistryValues` on
+   every borrow hit, rendered by the review AND diff screens, and reconciled by the
+   wizard-open drift migration.
+3. **A scope change on an approved row always re-consents, and the old token cannot
+   outlive the approval.** One `scopesChanged` comparison drives drift detection, the
+   silent-promotion guard, and the re-approval routing — the silent `repersisted`
+   promotion is structurally unreachable when scopes changed, even with an identical
+   host ceiling. The scopes-changed promotion **invalidates the stored access/refresh
+   tokens in the same act**: the token was minted under the old consent and providers do
+   not widen on refresh, so an abandoned re-consent must leave an honestly non-serving
+   row (banner + wizard re-offer), never a silently under-scoped one.
 4. **Spotify pins** (owner decision 2026-08-15, read + playback control):
    `playlist-read-private`, `playlist-read-collaborative`, `user-read-private`,
    `user-library-read`, `user-top-read`, `user-read-playback-state`,

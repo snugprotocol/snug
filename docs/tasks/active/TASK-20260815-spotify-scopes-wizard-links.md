@@ -45,36 +45,76 @@ and stays out of scope.
 
 **Acceptance criteria** (each becomes at least one test):
 1. **AC1 — scopes reach the authorize URL.** The Spotify registry entry pins the approved
-   scope set; `requirementFromRegistryEntry` emits `scopes` (option-over-entry flow rule);
-   a Spotify wizard flow's authorize URL carries `scope=` with exactly that set
-   (space-joined, order preserved). Token/refresh legs already send `spec.scopes` —
-   pinned by an integration-shaped test composing the real registry entry through the
-   real `generateAuthUrl`.
+   scope set; `requirementFromRegistryEntry` emits `scopes` as an **ENTRY-level seat**
+   (like display name/hosts — privilege breadth is brand identity, never a flow choice;
+   `WellKnownAuthOption` gains no scopes seat, preserving the
+   `registry-self-containment` options sweep). The AC1 test composes the REAL chain at
+   the production altitude: entry → emitter/admission → `requirementToSpec`
+   (`connected-fetch.ts:471`, scopes at `:495`) → `generateAuthUrl` → URL carries
+   `scope=` with exactly the pinned set (space-joined, order preserved). (Plan-review
+   correction: the auth-code token/refresh legs do NOT send `scope` — only the
+   client-credentials mint does — and that is RFC-correct; no oauth-service change.)
 2. **AC2 — substitution owns scopes.** `applyRegistryValues` REPLACES declared scopes
    with the entry's pinned ones on every borrow hit (a borrowed brand can never widen or
    narrow a scope-pinned entry); entries without pinned scopes preserve today's behavior
    byte-for-byte. Starter manifests stay bare (no manifest change needed).
-3. **AC3 — scope drift forces a fresh sign-in.** Wizard-open drift migration on an
-   approved, scope-less Spotify row STAGES a diff showing the added scopes; approving it
-   routes through a fresh authorization round trip (re-consent), and the silent
-   `repersisted` promotion is structurally unreachable for a scope change even when the
-   host ceiling is identical. (The stored access/refresh token was minted scope-less;
-   providers do not widen on refresh.) Negative: request/testRequest-only seat drift
+3. **AC3 — scope drift forces a fresh sign-in, and the old token cannot outlive the
+   approval.** Wizard-open drift migration on an approved, scope-less Spotify row STAGES
+   a diff showing the added scopes; approving it routes through the credential half into
+   a fresh authorization round trip (re-consent), and the silent `repersisted` promotion
+   is structurally unreachable for a scope change even when the host ceiling is
+   identical. ONE `scopesChanged` comparison (order-sensitive structural compare — the
+   wizard spells its own; `structurallyEqual` is not exported from admission) drives all
+   THREE seats: drift *detection* (`connectionWizard.ts:1272-1276` — today a scope gain
+   is neither `fieldSetChanged` nor `gainsSeats` and never even stages), the
+   silent-promotion guard (`:1284-1288`), and `reapproveFromDiff` routing
+   (`:488-536`). **Token invalidation (plan-review blocker 1):** a scopes-changed
+   promotion deletes the stored access/refresh tokens (or sets a non-serving state) in
+   the SAME act as `reapproveConnection` — the LAN branch at `:504-528` is the shape
+   precedent. **Abandonment test:** approve the scope diff → close the wizard before
+   sign-in completes → connected-fetch must NOT silently serve the old scope-less token
+   (banner/CTA re-fires; the row is honestly non-serving, and reopening the wizard
+   offers the sign-in, not `'none'`). Negative: request/testRequest-only seat drift
    still promotes silently as today.
+3b. **AC3b — re-consent is VISIBLE (plan-review blocker 2).** `ReviewScreen` gains a
+   scopes block (the queryTemplate-box P6 pattern at `ConnectionWizardSheet.tsx:552-574`)
+   and `ReapprovalDiffScreen` renders the scope DELTA — today neither renders scopes at
+   all, and the protocol comment at `connection-requirement.ts:653` describes rendering
+   that does not exist (comment corrected in the same change). Tests pin both surfaces.
+   Without this, a scopes-only staged diff renders as a diff with no visible delta —
+   lessons 2026-08-13's "seat that skips consent" verbatim.
 4. **AC4 — banner shows the provider's reason.** The connected-fetch `deliver` seat
-   extracts a short detail from the failing response body (JSON `error.message` shape
-   first, text head fallback; hard cap ~160 chars; passed through the slot's existing
-   scrub), extends `onAuthShapedFailure(slot, status, detail?)` backward-compatibly, and
+   extracts a short detail from **`result.body`** — NEVER the raw `Response`
+   (`scrubCandidates` is function-local to `performFetch` and out of scope at `deliver`;
+   `result.body` is already read, 1 MiB-capped, and scrubbed with the full candidate set
+   at `connected-fetch.ts:1156`, so the "existing scrub" requirement holds by
+   construction only on that path). JSON `error.message` shape first, text head
+   fallback; hard cap 160 chars. Extends `onAuthShapedFailure(slot, status, detail?)`;
    `AuthRepairBanner` renders "{provider} says: {detail}" when present, current copy
-   when absent. Negative (C1): a query-credential provider's failing URL/value never
-   appears in the detail (scrub asserted through the real scrub path).
+   when absent. The THREE pinned "no response bytes" doctrine comments are rewritten in
+   the same commit (`connected-fetch.ts:181-185`, `net.ts:79-80`,
+   `AuthRepairBanner.tsx:17-19`) — the channel's new contract is "status + a
+   scrubbed, bounded, plain-text extract of the already-delivered body; never
+   credentials, never unscrubbed bytes". Negative (C1): a query-credential provider's
+   failing URL/value never appears in the detail (asserted through the real scrub
+   path). Negative (render): detail is plain text — never a link, never HTML — pinned
+   like the P3-AC5 hostile-instructions test.
 5. **AC5 — registry-pinned console links.** `RegisterScreen` renders a clickable console
    link iff the row's `registration.consoleUrl` byte-matches the resolved registry
-   entry's (or matched option's) pinned `consoleUrl` — regardless of provenance. A
-   one-char-off URL under a registry brand stays copy-only (anti-phishing negative
-   test). Unmatched/user-authored providers keep the copy-address flow with its existing
-   copy. On desktop the link opens via the system browser (https-only opener), never
-   webview navigation.
+   entry's (or its options') pinned `consoleUrl` — regardless of provenance. Resolution
+   MUST be `resolveRegistryEntryByName` (the hue brand-adjacent lesson the drift
+   migration documents at `connectionWizard.ts:1250-1258`), never
+   `lookupWellKnownProvider`. A one-char-off URL under a registry brand stays copy-only
+   (anti-phishing negative test). Unmatched/user-authored providers keep the
+   copy-address flow — with the hint copy REWORDED
+   (`ConnectionWizardSheet.tsx:710`: post-ADR-0029 that branch also serves user/starter
+   URLs no model proposed; say "we haven't pinned it", not "a model proposed it"). On
+   desktop the link opens via the system browser (https-only opener), never webview
+   navigation. Plan-review verified: `applyRegistryValues` DOES substitute
+   `registration` on borrow hits (`requirement-admission.ts:540-542`) so the byte-match
+   premise holds for starter rows — and `:541` is a SHALLOW copy (`instructions` stays a
+   live registry-singleton reference, unlike every deep-copied sibling seat): deep-copy
+   it in this task while AC6 edits that array.
 6. **AC6 — walkthrough copy is current.** Spotify `registration.instructions` state the
    Feb-2026 dev-mode facts: max 5 allowlisted users, owner Premium requirement, sign in
    with the dashboard account or one added under User Management. Redirect-URI exactness
@@ -116,14 +156,15 @@ review BEFORE implementation + self-sign-off in the journal.
 Files: `well-known-providers.ts` (+test), `requirement-admission.ts` (+tests),
 `oauth-service.ts` (no change expected — covered by composition test),
 `connected-fetch.ts` + `scrub.ts` (+tests).
-1. Tests: Spotify entry pins the exact 7-scope set · emitter emits `scopes` under the
-   option-over-entry rule (an option WITHOUT scopes emits none — same rationale as
-   request seats) · composed real-entry → `generateAuthUrl` URL carries the exact
-   `scope=` param · `applyRegistryValues` replaces authored scopes on borrow hit /
+1. Tests: Spotify entry pins the exact 7-scope set · emitter emits `scopes` as an
+   ENTRY-level seat (options never carry it — the existing self-containment sweep at
+   `registry-self-containment.test.ts:292-298` stands) · the AC1 composition test runs
+   entry → emitter/admission → `requirementToSpec` → `generateAuthUrl` and asserts the
+   exact `scope=` param · `applyRegistryValues` replaces authored scopes on borrow hit /
    leaves non-scope-pinned entries byte-identical (structural sweep across the registry)
-   · deliver-seat detail extraction: Spotify JSON error shape, text fallback, 160-char
-   cap, absent on empty/unparseable, **scrub negative with a query-credential fixture**,
-   3-arg observer backward compatibility.
+   · deliver-seat detail extraction from `result.body`: Spotify JSON error shape, text
+   fallback, 160-char cap, absent on empty/unparseable, **scrub negative with a
+   query-credential fixture**, observer arity both ways (detail present and absent).
 2. Implement: entry `scopes` + updated `instructions` (AC6) + stale-comment updates
    (type comment at `well-known-providers.ts:201`, header posture note, line ~561
    comment) · emitter seat · substitution seat · `deliver` extraction + widened
@@ -135,28 +176,64 @@ Files: `well-known-providers.ts` (+test), `requirement-admission.ts` (+tests),
 Files: `state/connectionWizard.ts` (+`connectionWizard.test.tsx`),
 `state/net.ts` (+`authShapedFailureSurface.test`), `run/AuthRepairBanner.tsx`,
 `connections/ConnectionWizardSheet.tsx` (+`desktopWizardSheet.test.tsx`).
-1. Drift tests (AC3): scope-gain on approved row → `staged`, never `repersisted`;
-   approving the staged diff routes into a fresh authorize round trip (assert via the
-   step machine + a flow-start spy); seat-only drift still promotes silently (negative);
-   diff screen renders the scope delta (review renders `scopes` already — pin it).
-2. Drift implementation: extend `migrateConnectionRegistryDrift`'s promotion guard with
-   `scopesChanged` (structural compare of `row.requirement.scopes` vs substituted) and
-   extend `reapproveFromDiff` routing so a scopes-changed approval lands in the connect
-   step (fresh sign-in) rather than silent re-approve. One rule, both halves driven from
-   the same comparison (lesson 2026-08-12: refuse/rewrite from one resolution).
+1. Drift tests (AC3/AC3b): scope-gain on approved row → `staged`, never `repersisted`
+   AND never `'none'` (detection is the first seat — today a scope gain fails the
+   detection gate entirely); approving the staged diff routes through the credential
+   half into a fresh authorize round trip (assert via the step machine + a flow-start
+   spy); the promotion act invalidates the stored tokens; the ABANDONMENT case (approve
+   → close wizard → old token must not serve; reopening offers sign-in); seat-only
+   drift still promotes silently (negative); `ReviewScreen` renders the scopes block;
+   `ReapprovalDiffScreen` renders the scope delta.
+2. Drift implementation: ONE order-sensitive `scopesChanged` comparison driving all
+   three seats — detection (`connectionWizard.ts:1276`), the silent-promotion guard
+   (`:1284`), and `reapproveFromDiff` routing (`:488-536`, reusing the existing
+   `fieldSetChanged`-style routing into the credential half — the connect step alone
+   cannot mint: `startConnectionOAuthFlow({}, …)` has no `client_id` and
+   `generateAuthUrl` never falls back to stored credentials
+   (`oauth-service.ts:357,653-658`), so the user re-pastes the non-secret client ID
+   once; no oauth-service change, custody posture untouched). Token invalidation on
+   scopes-changed promotion follows the LAN-branch shape (`:504-528`). One rule, all
+   halves driven from the same comparison (lesson 2026-08-12).
+2b. Consent surfaces (AC3b): scopes block in `ReviewScreen` (queryTemplate-box
+   pattern), scope delta in `ReapprovalDiffScreen`, comment fix at
+   `connection-requirement.ts:653`.
 3. Banner (AC4): `net.ts` store carries `detail?`; `AuthRepairBanner` renders the
    provider-says line when present; tests for both shapes.
 4. Link rule (AC5): replace `consoleUrlIsClickable(row)` with a resolver that
    `resolveRegistryEntryByName(row.requirement.provider.name)` → byte-match
-   `registration.consoleUrl` against entry AND `authOptions` (matched-option handle
-   where applicable); rewrite the P3-AC4 describe block: starter provenance +
-   byte-match → anchor; near-miss URL → copy-only; unmatched provider → copy-only;
-   hostile-instructions test untouched. Desktop: anchor becomes an
-   `openExternal`-backed control when `getPlatform().oauth !== undefined`
-   (https-only guard already lives in the opener); test in `desktopWizardSheet.test.tsx`.
+   `registration.consoleUrl` against entry AND `authOptions`; rewrite the P3-AC4
+   describe block — the POSITIVE case must move onto a REAL pinned provider (the
+   current fixture brand "Tunecast" resolves to no entry and flips to copy-only under
+   the new rule; the starter case at `connectionWizard.test.tsx:487-491` flips to
+   clickable as intended); near-miss URL → copy-only; unmatched provider → copy-only;
+   hostile-instructions test untouched; hint copy reworded (`:710`). Desktop: anchor
+   becomes an `openExternal`-backed control when `getPlatform().oauth !== undefined`
+   (https-only guard already lives in the opener); test in `desktopWizardSheet.test.tsx`
+   (its Spotify rows declare `'registry'` provenance and survive). ADR-0029 records the
+   fail-closed residue: a future registry consoleUrl edit never re-stages persisted
+   rows, so they fall to copy-only until any other drift stages them.
 5. e2e: extend `e2e/connection-wizard.spec.ts` journey 4's register screen assertion to
    cover the clickable-console-link variant (stub provider registered in the test
    registry — follow the existing journey fixtures).
+
+**P2c — breaking-test inventory (from the fresh-context plan review; each classified
+MIGRATED at implementation per lesson 2026-08-10):**
+- `packages/auth/src/__tests__/well-known-providers.test.ts:42-46` — whole-registry
+  "no entry defaults scopes" sweep → MIGRATED to "only ADR-0028 entries pin scopes"
+  (exact-set assert for Spotify).
+- `packages/auth/src/__tests__/registry-self-containment.test.ts:149-151` — per-entry
+  emitter `scopes` undefined sweep → MIGRATED (Spotify carve-out asserts the pinned
+  set); the OPTIONS sweep at `:292-298` STANDS (entry-level-only decision).
+- `packages/auth/src/__tests__/connected-fetch-query-observer.test.ts:303,309,315,405`
+  — exact-arity observer matchers → MIGRATED to the widened signature.
+- `apps/playground/src/__tests__/authShapedFailureSurface.test.tsx:110,120` —
+  exact-shape store asserts → MIGRATED (detail key).
+- `apps/playground/src/__tests__/connectionWizard.test.tsx:465-470` — P3-AC4 positive
+  case on unpinned "Tunecast" → MIGRATED onto a pinned provider.
+- e2e `connection-wizard.spec.ts:174` ("Meridian", unpinned) survives;
+  `desktopWizardSheet.test.tsx:147` survives; `static-kind-registry.test.ts:148-155`,
+  `registry-substitution.test.ts:151-173`, `demoRequirementStarters`, `examples`
+  manifest suites survive (manifest stays bare).
 
 **P3 — dependents + verification (AC7)**
 - `pnpm --filter auth test` → `--filter playground test` → `--filter desktop test` →
@@ -187,7 +264,21 @@ findings folded back before any test is written.
   (Feb-2026: 5-user allowlist, owner Premium, 1 Client ID; existing-app endpoint changes
   postponed), `GET /v1/me/playlists` unaffected by the Feb-2026 endpoint removals.
   Sources pinned in ADR-0028.
-- 2026-08-15: `scopes` kept OUT of `CREDENTIAL_PROMPT_SEATS` — see ADR-0028 note.
+- 2026-08-15: `scopes` kept OUT of `CREDENTIAL_PROMPT_SEATS` — see ADR-0028 note. The
+  plan review constructed the strongest rule-5 attack (borrowed non-scope-pinned brand
+  with authored maximal scopes) and confirmed it exists TODAY independent of this task;
+  parked beside borrowed-endpoints for the next threat-model pass, acceptable at this
+  tier because AC3b makes the widened ask visible in-wizard.
+- 2026-08-15: **Scopes are ENTRY-level only** (plan review, finding 6): a flow choice
+  never changes privilege breadth (ADR-0020's identity-seat rule extended); the options
+  self-containment sweep stands unchanged.
+- 2026-08-15: **Re-consent routes through the credential half** (finding 4): the connect
+  step alone cannot mint (no stored-client_id fallback in `generateAuthUrl`); the user
+  re-pastes the non-secret client ID once rather than bending the write-only custody
+  posture or touching oauth-service.
+- 2026-08-15: Fresh-context plan review (High tier) returned 2 blockers + 5 must-fix —
+  ALL folded into AC1/AC3/AC3b/AC4/AC5 and P1/P2 above; verdict was "approve after
+  amendments, no re-plan".
 
 ## Session journal (append-only, newest last)
 
