@@ -123,7 +123,7 @@ export function connectedFetchDepsFor(
    * and `executeConnectionTestRequest` strips the seat besides (belt and braces; the
    * negative test drives both).
    */
-  onAuthShapedFailure?: (slot: string, status: number) => void,
+  onAuthShapedFailure?: (slot: string, status: number, detail?: string) => void,
 ): ConnectedFetchDeps {
   return {
     credentialStore: new UserDbCredentialStore(db),
