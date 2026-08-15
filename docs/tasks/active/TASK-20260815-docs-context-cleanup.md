@@ -1,6 +1,6 @@
 # TASK-20260815-docs-context-cleanup: Prune stale/conflicting docs and memory to cut per-session context cost
 
-- **Status**: planned (awaiting owner approval)
+- **Status**: in-review (all phases executed; PR open)
 - **Owner**: Jeetu
 - **Risk tier**: low (docs-only; no package code touched — but process-bearing files, so plan approval required before any deletion)
 - **Branch**: `chore/TASK-20260815-docs-context-cleanup` (to be created after plan approval)
@@ -71,8 +71,27 @@ The agentic-engineering memory (docs/, task files, lessons, next-steps, ADRs, se
 
 ## Decisions & surprises
 
-- 2026-08-15 — Owner approved compaction over accumulation (interview) → ADR-0027 drafted as `proposed`; flips `tasks/README.md` "kept forever".
-- 2026-08-15 — Session memory claiming the app-reply fix is "unpushed on 975f713" conflicts with merged PR #40 on main — memory staleness confirmed as a live problem, not hypothetical.
+- 2026-08-15 — Owner approved compaction over accumulation (interview) → ADR-0027 accepted; flips `tasks/README.md` "kept forever".
+- 2026-08-15 — Session memory claiming the app-reply fix is "unpushed on 975f713" conflicted with merged PR #40 on main — verified: 975f713 is a dangling commit; #40 is a strict superset. Memory staleness confirmed live, corrected in the consolidated memory.
+- 2026-08-15 — "OAuth popup still unbuilt" memory refuted: the popup flow was reinstated in P3 (`baa4588`), inside the very merge the memory describes.
+- 2026-08-15 — All 11 audited active tasks were merged/closed-by-harvest; the only genuinely open work was extracted to next-steps (20-item rollup, deduped).
+- 2026-08-15 — Lessons audit dropped NOTHING outright: all 60 rules still guard live surfaces (5 merged as duplicates). The bloat was narrative, not dead rules.
+- 2026-08-15 — `internal/` is gitignored, so its banners are disk-only (C4 enforced by gitignore; nothing to commit).
+- 2026-08-15 — Local branch `feat/TASK-20260807-starters-auth-spectrum` deleted by `-d` because it matched its upstream; the AL-09 harvest commit `86a564c` survives on `origin/…` (remote untouched).
+- **FLAGS for owner (from the ADR audit, recorded here — decisions, not drift):**
+  1. ADR-0021 D8's Electron-fallback trigger is MET (Windows gate red since 2026-08-13) but the a/b/c platform choice has no ADR yet — whichever is chosen needs its own ADR or a 0021 amendment.
+  2. `llmProposalSchema` still exists in `packages/auth/src` though ADR-0017 named its deletion a P4 exit item; v3's `snug_auth_specs` WAS dropped, so this looks like a retained/repurposed inferrer schema — confirm the P4 exit item is genuinely closed.
+
+## Verification record (Gate 5, 2026-08-15)
+
+- **AC1** ✅ `docs/tasks/active/` holds only this task (11 files closed to `done/INDEX.md`, each verified against `git log main` first).
+- **AC2** ✅ lessons.md 76,117 → 16,804 bytes (−78%); next-steps.md 102,240 → 15,889 bytes (−84%); both hold only re-verified content.
+- **AC3** ✅ 28 ADRs audited; 9 status lines now carry their amendments (0001/0003/0004/0005/0007/0016/0017/0020/0023); none deleted; README vocabulary updated.
+- **AC4** ✅ auto-memory 18 → 4 files (current-state / open-threads / owner-decisions / prompt-reference); every claim re-verified; two refuted claims corrected; backup at `memory/backup-20260815/`.
+- **AC5** ✅ code-map (6 findings) + architecture (7 findings + the stale "broker remains v1.1" line) fixed against the real tree; ~120 path pointers verified.
+- **AC6** ✅ dead-symbol grep (`ConnectionsCard`, `resolveWizardIntent`, `putAuthSpec`, `llmProposalSchema`, `snug_auth_specs`, `auth-wizard.spec`): every hit outside `decisions/`+`spec-changelog` explicitly states the symbol is deleted/dropped.
+- **AC7** ✅ `turbo run test --force` from root: 21/21 tasks, **Cached: 0**, all green (playground 1028/1028).
+- Also: 15 merged local branches pruned (`-d` only; `backup-pre-scrub-20260731` kept); global `~/.claude/CLAUDE.md` work-context corrected (backup `.bak-20260815`); `internal/` bannered on disk.
 
 ## Session journal (append-only, newest last)
 
@@ -81,3 +100,9 @@ The agentic-engineering memory (docs/, task files, lessons, next-steps, ADRs, se
 - State: draft — awaiting interview answers, then plan.
 - Next step: interview → write plan → branch → stop for approval.
 - Open questions: see Decisions & surprises.
+
+### 2026-08-15 (later) — Claude (Fable 5) — session
+- Done: owner approved the plan → executed all phases. 10 parallel read-only audits against `git log main` + live code (done-index ×3, active tasks, lessons, next-steps, ADRs, code-map/architecture, internal/, auto-memory). Writes: ADR-0027 accepted + process docs amended (fed1482); done/ → INDEX.md, 53 files deleted (then +11 more closed); lessons distilled −78% (d287ed6); ADR status lines (64e4147); code-map/architecture drift (6d53637); next-steps rewritten −84% + 11 active tasks closed (4f52170). Non-git: memory 18→4, global CLAUDE.md corrected, internal/ bannered, 15 branches pruned — all backed up first.
+- State: in-review — verification record above all green; PR open.
+- Next step: owner reviews the PR (diff + this file), merges; then this file's own line goes to done/INDEX per the new Gate-6 rule. Owner FLAGs 1–2 (Decisions section) remain open.
+- Open questions: none for this task.
