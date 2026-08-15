@@ -58,6 +58,7 @@ One line per finished task, chronological (append new lines at the bottom on mer
 - **TASK-20260813-ui-polish-inspector** — Wordmark, desktop icon, resizable inspector, connection UX · PR #43, #44 · All 11 ACs shipped; merged `--admin` over the documented D8-red Windows baseline; dock-icon eyeball check still queued.
 - **TASK-20260814-hue-pairing-e2e** — Hue pairing verifies before claiming connected · PR #46 · ADR-0025 · Wizard now pulls and verifies the bridge key, killing the reopen ghost flow; owner hardware-confirmed on the real bridge.
 - **TASK-20260814-hue-starter-real-connection** — Connection-relative addressing; Hue starter drives real bridge · PR #47, #48 · ADR-0026 · Apps address user-supplied hosts via connection-relative URLs (C3 spec-sync); starter drops all mocked rooms/controls.
+- **TASK-20260815-docs-context-cleanup** — Distill the agentic memory (compaction policy) · PR #49 · ADR-0027 · docs 2.1MB→0.5MB: lessons −78% / next-steps −84% (all content re-verified), done/→INDEX, 11 stale active tasks closed, 9 ADR statuses amended, auto-memory 18→4; owner confirmed `llmProposalSchema` retained on purpose.
 
 ## Handoffs & working artifacts (all spent)
 
