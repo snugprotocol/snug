@@ -1,6 +1,6 @@
 # 0023 — LAN-class providers: user-supplied bridge hosts, pairing exchanges, scoped TLS trust
 
-- **Status:** accepted (2026-08-13, at the close of TASK-20260812-desktop-auth-awareness). The P0 and P6 amendments are folded in-file above — this document is the shipped decision, not the draft.
+- **Status:** accepted (2026-08-13, at the close of TASK-20260812-desktop-auth-awareness; amended by 0025 — the 'no testRequest' stance is amended, LAN pairing now verifies before claiming). The P0 and P6 amendments are folded in-file above — this document is the shipped decision, not the draft.
 - **Date:** 2026-08-12
 - **Task:** TASK-20260812-desktop-auth-awareness
 

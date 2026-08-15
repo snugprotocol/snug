@@ -1,6 +1,6 @@
 # 0001 — Adopt the agentic engineering process
 
-- **Status:** accepted
+- **Status:** accepted (amended by 0027 — memory is distilled, not only appended)
 - **Date:** 2026-07-31
 - **Task:** TASK-20260731-bootstrap
 

@@ -1,6 +1,6 @@
 # 0005 — Playground is a Vite + React SPA (supersedes the Next.js line in the internal plan)
 
-- **Status:** draft (accepted with TASK-20260731-build-hub plan approval)
+- **Status:** accepted (with TASK-20260731-build-hub plan approval)
 - **Date:** 2026-07-31
 - **Task:** TASK-20260731-build-hub
 

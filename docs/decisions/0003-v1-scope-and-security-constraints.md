@@ -1,6 +1,6 @@
 # 0003 — v1 scope and hard security constraints inherited from prior production systems
 
-- **Status:** accepted
+- **Status:** accepted (amended by 0007 — per-app-file data posture replaced by the single portable user DB)
 - **Date:** 2026-07-31
 - **Task:** TASK-20260731-bootstrap
 

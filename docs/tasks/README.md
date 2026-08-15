@@ -3,7 +3,7 @@
 Every unit of work gets one file here, created from [TEMPLATE.md](TEMPLATE.md) (usually via `/start-task`). The task file is the durable memory: spec, plan, decisions, session journal, next step. Process: [engineering/PROCESS.md](../engineering/PROCESS.md).
 
 - **`active/`** — in-flight tasks, journals current.
-- **`done/`** — merged & finished, kept forever as searchable history.
+- **`done/INDEX.md`** — one line per finished task (id · title · PR · ADRs · outcome). On merge, add the line and **delete the task file** (ADR-0027); full text stays in git history (`git log --all --oneline -- 'docs/tasks/**<slug>*'`, then `git show <sha>:<path>`).
 
 Naming: `TASK-YYYYMMDD-short-slug.md` (start date); branch mirrors it: `feat/TASK-…` or `fix/TASK-…`.
 

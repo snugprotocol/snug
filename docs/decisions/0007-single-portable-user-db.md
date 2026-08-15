@@ -1,6 +1,6 @@
 # 0007 — Single portable per-user SQLite DB with per-app namespaces and app versioning
 
-- **Status:** accepted
+- **Status:** accepted (amended by 0010 — blob-embedded app-data layout replaced by native app tables)
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-portable-hub
 

@@ -65,6 +65,6 @@ Optimize for **clarity and maintainability** over cleverness.
 ## Memory hygiene
 
 - **Edit the wiki, not the root files** ([conventions.md](conventions.md#sync-rule)).
-- **Decisions are append-only.** New ADR per decision.
-- **next-steps is dated.** Append with a date; prune stale items.
+- **Decisions are append-only** — new ADR per decision; a superseding ADR updates the old one's status line in the same change.
+- **Distill, don't only append (ADR-0027).** Working tree = currently-true memory; git history = archive. Done tasks compact to one line in `tasks/done/INDEX.md`; lessons merge/drop when superseded; next-steps prunes shipped/superseded items on every touch.
 - **Amend conventions/standards in the same change** that motivates them.
