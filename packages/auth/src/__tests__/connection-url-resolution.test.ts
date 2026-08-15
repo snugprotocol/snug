@@ -179,8 +179,8 @@ describe('ADR-0026 §2 — resolution translates, the pipeline gates', () => {
     const result = await executor.execute(APP, { url: 'snug-connection://sonos/api', method: 'GET' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe(NET_ERROR_CODES.NET_INVALID_REQUEST);
-    expect(result.error.message).not.toContain(BRIDGE);
+    expect(result.code).toBe(NET_ERROR_CODES.NET_INVALID_REQUEST);
+    expect(result.message).not.toContain(BRIDGE);
     expect(calls).toHaveLength(0);
     expect(lanCalls).toHaveLength(0);
   });
@@ -190,7 +190,7 @@ describe('ADR-0026 §2 — resolution translates, the pipeline gates', () => {
     const result = await executor.execute(APP, { url: 'snug-connection://hue/clip/v2/resource/room', method: 'GET' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe(NET_ERROR_CODES.NET_NOT_APPROVED);
+    expect(result.code).toBe(NET_ERROR_CODES.NET_NOT_APPROVED);
   });
 
   it('a ceiling with two hosts refuses NET_AMBIGUOUS_CONNECTION — a symbolic address must have one meaning', async () => {
@@ -205,7 +205,7 @@ describe('ADR-0026 §2 — resolution translates, the pipeline gates', () => {
     const result = await executor.execute(APP, { url: 'snug-connection://multi/v1', method: 'GET' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe(NET_ERROR_CODES.NET_AMBIGUOUS_CONNECTION);
+    expect(result.code).toBe(NET_ERROR_CODES.NET_AMBIGUOUS_CONNECTION);
   });
 
   it('a MALFORMED connection url refuses NET_INVALID_REQUEST instead of falling through to scheme gates', async () => {
@@ -213,7 +213,7 @@ describe('ADR-0026 §2 — resolution translates, the pipeline gates', () => {
     const result = await executor.execute(APP, { url: 'snug-connection://HUE/clip', method: 'GET' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe(NET_ERROR_CODES.NET_INVALID_REQUEST);
+    expect(result.code).toBe(NET_ERROR_CODES.NET_INVALID_REQUEST);
   });
 
   it('TWO approved slots claiming the resolved host refuse fail-closed — and the rival credential is never read', async () => {
@@ -234,7 +234,7 @@ describe('ADR-0026 §2 — resolution translates, the pipeline gates', () => {
     const result = await h.executor.execute(APP, { url: 'snug-connection://hue/clip/v2/resource/room', method: 'GET' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe(NET_ERROR_CODES.NET_AMBIGUOUS_CONNECTION);
+    expect(result.code).toBe(NET_ERROR_CODES.NET_AMBIGUOUS_CONNECTION);
     // Refused BEFORE any credential read — neither slot's secret was touched.
     const credentialKeys = [
       authConnectionCredentialSecretKey(APP, 'hue', 'application_key'),
@@ -256,8 +256,8 @@ describe('ADR-0026 §3 — the resolved host never reaches the APP', () => {
     const result = await executor.execute(APP, { url: 'snug-connection://hue/clip/v2/resource/room', method: 'GET' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe(NET_ERROR_CODES.NET_SSRF_BLOCKED);
-    expect(result.error.message).not.toContain(BRIDGE);
+    expect(result.code).toBe(NET_ERROR_CODES.NET_SSRF_BLOCKED);
+    expect(result.message).not.toContain(BRIDGE);
   });
 
   it('a transport failure message is scrubbed of the resolved address', async () => {
@@ -267,8 +267,8 @@ describe('ADR-0026 §3 — the resolved host never reaches the APP', () => {
     const result = await executor.execute(APP, { url: 'snug-connection://hue/clip/v2/resource/room', method: 'GET' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe(NET_ERROR_CODES.NET_FETCH_FAILED);
-    expect(result.error.message).not.toContain(BRIDGE);
+    expect(result.code).toBe(NET_ERROR_CODES.NET_FETCH_FAILED);
+    expect(result.message).not.toContain(BRIDGE);
   });
 
   it('response BODIES are NOT scrubbed of the device’s own address — the provider’s data surface stays intact', async () => {

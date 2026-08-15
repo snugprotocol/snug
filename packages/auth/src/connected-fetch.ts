@@ -42,6 +42,7 @@ import {
   NET_METHODS,
   STRIP_HEADERS,
   isWhitelistedNetResponseHeader,
+  parseConnectionUrl,
   type AuthSpec,
   type AuthSpecStatus,
   type ConnectionRequest,
@@ -753,8 +754,17 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
   async function resolveGrant(
     appId: string,
     host: string,
+    /**
+     * ADR-0026 §2 — the symbolic path threads its OWN rows read through here (one read
+     * decides both resolution and injection; a second read would be a TOCTOU seam
+     * between the row that resolved and the row that injects) and supplies a
+     * HOST-CLEAN label for refusal copy (§3: on that path the host is the user's
+     * private fact). The literal path passes neither and behaves byte-identically.
+     */
+    preset?: { rows: readonly NetConnectionRow[]; hostLabel: string },
   ): Promise<{ ok: true; grant: ResolvedGrant } | { ok: false; failure: ConnectedFetchResult }> {
-    const rows = await deps.connectionReader.listConnections(appId);
+    const rows = preset?.rows ?? (await deps.connectionReader.listConnections(appId));
+    const hostLabel = preset?.hostLabel ?? `'${host}'`;
     const resolution = resolveSlot(rows, host);
 
     if (resolution.kind === 'ambiguous') {
@@ -765,7 +775,7 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         ok: false,
         failure: failure(
           NET_ERROR_CODES.NET_AMBIGUOUS_CONNECTION,
-          `two approved connections (${resolution.slots.join(', ')}) both claim '${host}' — refusing to guess which credential to send`,
+          `two approved connections (${resolution.slots.join(', ')}) both claim ${hostLabel} — refusing to guess which credential to send`,
         ),
       };
     }
@@ -858,9 +868,58 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       //
       // Gate 1 (shape) still precedes both, so an unknown top-level field still loses to
       // shape validation rather than to the URL.
+
+      // ADR-0026 — CONNECTION-RELATIVE ADDRESSING. Resolution sits AFTER gate 1 (the
+      // shape/size bounds must precede any DB read) and BEFORE the URL gates, so every
+      // gate below sees the RESOLVED url and resolution GRANTS nothing — it only
+      // translates a slot the app already declared into the ceiling host the user
+      // already approved. On this path the resolved host is the USER's private fact:
+      // refusal copy here is host-clean, gate 5's message branches, and transport
+      // errors scrub the resolved forms (§3). The rows read here is threaded into
+      // `resolveGrant` below — ONE read decides both resolution and injection, and
+      // re-running `resolveGrant` on the resolved host is what keeps same-row
+      // injection structural: the resolving slot's approved row must be among the host
+      // matches, so a unique match IS that row, and two matches refuse fail-closed
+      // (the slot name selects a ceiling to translate through, never a
+      // credential-routing tiebreak).
+      let requestUrl = input.url;
+      let symbolic: { slot: string; rows: readonly NetConnectionRow[]; ceilingHost: string } | undefined;
+      const connectionUrl = parseConnectionUrl(input.url);
+      if (!connectionUrl.ok && connectionUrl.reason === 'malformed') {
+        return failure(
+          NET_ERROR_CODES.NET_INVALID_REQUEST,
+          'malformed connection url — the shape is snug-connection://<slot>/<path>',
+        );
+      }
+      if (connectionUrl.ok) {
+        const rows = await deps.connectionReader.listConnections(appId);
+        const row = rows.find((candidate) => candidate.slot === connectionUrl.slot);
+        if (row === undefined) {
+          return failure(
+            NET_ERROR_CODES.NET_INVALID_REQUEST,
+            `this app declares no connection named '${connectionUrl.slot}'`,
+          );
+        }
+        if (row.status !== CONNECTION_STATUS.approved) {
+          return failure(
+            NET_ERROR_CODES.NET_NOT_APPROVED,
+            `no approved connection covers this request — connect ${row.requirement.provider.name} to continue`,
+          );
+        }
+        if (row.allowedHosts.length !== 1) {
+          return failure(
+            NET_ERROR_CODES.NET_AMBIGUOUS_CONNECTION,
+            `the '${connectionUrl.slot}' connection does not resolve to exactly one host — a symbolic address must have one meaning`,
+          );
+        }
+        const ceilingHost = row.allowedHosts[0]!;
+        requestUrl = `https://${ceilingHost}${connectionUrl.pathAndQuery}`;
+        symbolic = { slot: connectionUrl.slot, rows, ceilingHost };
+      }
+
       let url: URL;
       try {
-        url = new URL(input.url);
+        url = new URL(requestUrl);
       } catch {
         return failure(NET_ERROR_CODES.NET_INVALID_REQUEST, 'url does not parse');
       }
@@ -868,6 +927,16 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         return failure(NET_ERROR_CODES.NET_INVALID_REQUEST, 'urls with embedded credentials are not allowed');
       }
       const host = url.hostname;
+      // ADR-0026 normalization guard (defense in depth under the parser's grammar): the
+      // resolved URL's host must still be the ceiling host it was built from, compared
+      // CANONICALLY (`new URL` lowercases and punycodes). Host-clean by construction —
+      // the message names the PATH as the problem, because it is.
+      if (symbolic !== undefined && !isHostAllowed(host, [symbolic.ceilingHost])) {
+        return failure(
+          NET_ERROR_CODES.NET_INVALID_REQUEST,
+          'the connection url path did not resolve cleanly — check the path',
+        );
+      }
       // Decision 6 — the ONLY reads of the transport policy. `lanPrivateHost` names the
       // one host class the desktop profile treats differently; computing it once keeps
       // gates 4 and 5 exempting EXACTLY the same requests (a drift between the two would
@@ -881,7 +950,13 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
 
       // Gates 2+3 — host-assigned binding (R5); the grant must exist, be approved, and
       // (v4) be the UNIQUE approved grant claiming this host.
-      const resolved = await resolveGrant(appId, host);
+      const resolved = await resolveGrant(
+        appId,
+        host,
+        symbolic !== undefined
+          ? { rows: symbolic.rows, hostLabel: `the '${symbolic.slot}' connection's device` }
+          : undefined,
+      );
       if (!resolved.ok) return resolved.failure;
       const grant = resolved.grant;
 
@@ -890,8 +965,16 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // class computed above: such a host is forbidden for no reason BEYOND being
       // private, and the frozen ceiling (gates 2+3) has already vouched for it.
       // Loopback/link-local/names are outside that class and still refuse here.
+      // ADR-0026 §3: the symbolic branch is HOST-CLEAN — on that path this message
+      // reaches an app that must never learn the resolved address, and on web (no
+      // transport policy) this is exactly where a resolved LAN host lands.
       if (!lanPrivateHost && isForbiddenNetHost(host)) {
-        return failure(NET_ERROR_CODES.NET_SSRF_BLOCKED, `host '${host}' is a private/loopback target`);
+        return failure(
+          NET_ERROR_CODES.NET_SSRF_BLOCKED,
+          symbolic !== undefined
+            ? 'this connection resolves to an address on your local network, which this platform cannot reach'
+            : `host '${host}' is a private/loopback target`,
+        );
       }
 
       // Gate 6 — mutating methods need the user's confirmation BEFORE credentials move.
@@ -1015,8 +1098,16 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           const message = err instanceof Error ? err.message : String(err);
           // Scrubbed with the FULL candidate set (amendment 14): fetch errors routinely
           // embed the request URL — query string included — and this message reaches
-          // the app.
-          return failure(NET_ERROR_CODES.NET_FETCH_FAILED, `request failed: ${scrubAuthValues(message, scrubCandidates)}`, true);
+          // the app. On the symbolic path the RESOLVED host and href join the set
+          // (ADR-0026 §3) — ERROR-ONLY candidates, deliberately: the response-body
+          // scrub below excludes them, because a device echoing its own address in a
+          // payload is the provider's data surface, not a host-side disclosure, and
+          // redacting private-IP shapes out of JSON would corrupt legitimate payloads.
+          const errorScrub =
+            symbolic === undefined
+              ? scrubCandidates
+              : { ...scrubCandidates, 'resolved:host': symbolic.ceilingHost, 'resolved:href': outboundHref };
+          return failure(NET_ERROR_CODES.NET_FETCH_FAILED, `request failed: ${scrubAuthValues(message, errorScrub)}`, true);
         }
         if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
           return failure(NET_ERROR_CODES.NET_REDIRECT_BLOCKED, 'the server answered with a redirect — never followed');
