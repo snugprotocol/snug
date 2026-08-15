@@ -939,3 +939,64 @@ describe('P3 fold — Q7: the done screen probes the connection when the require
     expect(container.innerHTML).not.toContain('token-value-for-the-probe');
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 AC3b (ADR-0028, plan-review blocker 2) — scopes are VISIBLE
+// ---------------------------------------------------------------------------
+//
+// RED-FIRST against a sheet that renders scopes NOWHERE. ADR-0028's whole justification
+// is "a pinned scope list is not silent because the user sees it" — these tests are what
+// make that claim true rather than fiction (the protocol comment claiming "scopes is
+// what the review renders" described rendering that did not exist).
+
+describe('AC3b — scopes render on the review screen and as a reapproval delta (ADR-0028)', () => {
+  const scoped = {
+    ...oauthRequirement,
+    scopes: ['playlist-read-private', 'user-modify-playback-state'],
+  };
+
+  it('the review screen lists every scope, in declaration order', async () => {
+    declare(scoped);
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await renderSheet();
+
+    const block = container.querySelector('[data-testid="review-scopes"]');
+    expect(block, 'a scoped sign-in must disclose what it may do BEFORE approval').not.toBeNull();
+    const items = [...block!.querySelectorAll('li')].map((node) => node.textContent ?? '');
+    expect(items).toEqual(['playlist-read-private', 'user-modify-playback-state']);
+  });
+
+  it('NEGATIVE: a requirement with no scopes renders no scopes block', async () => {
+    declare(oauthRequirement);
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await renderSheet();
+
+    expect(container.querySelector('[data-testid="review-scopes"]')).toBeNull();
+  });
+
+  it('a scopes-ONLY staged edit renders a visible delta — never a diff whose every line reads unchanged', async () => {
+    declare(oauthRequirement, { approve: true });
+    db.stagePendingRequirement(APP, 'spotify', scoped);
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await renderSheet();
+
+    const diff = container.querySelector('[data-testid="reapproval-scope-diff"]');
+    expect(diff, 'the scope delta IS the whole change — it must be the visible one').not.toBeNull();
+    const added = [...diff!.querySelectorAll('[data-diff="added"]')].map((node) => node.textContent ?? '').join(' | ');
+    expect(added).toContain('playlist-read-private');
+    expect(added).toContain('user-modify-playback-state');
+  });
+
+  it('NEGATIVE: a host-widening diff with no scopes anywhere renders no scope-diff box', async () => {
+    declare(coinbaseRequirement, { approve: true });
+    db.stagePendingRequirement(APP, 'coinbase', {
+      ...coinbaseRequirement,
+      declaredApiHosts: [...coinbaseRequirement.declaredApiHosts, 'evil.attacker.example'],
+    });
+    openConnectionWizard({ appId: APP, slot: 'coinbase', source: 'settings' });
+    await renderSheet();
+
+    expect(container.querySelector('[data-testid="reapproval-diff"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="reapproval-scope-diff"]')).toBeNull();
+  });
+});

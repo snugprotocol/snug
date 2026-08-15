@@ -650,7 +650,9 @@ export function deriveConnectionAllowedHosts(requirement: ConnectionRequirement)
  * be read as intent rather than literally. Every array in a requirement is SEMANTICALLY
  * ORDERED and user-visible: `registration.instructions` is a numbered walkthrough
  * (step 3 before step 1 is a different walkthrough), `fields` is the wizard's input
- * order, and `scopes` is what the review renders. Sorting them would make two
+ * order, and `scopes` renders in declaration order on the wizard's review screen and
+ * scope-diff box (built by TASK-20260815 — until then this sentence described a
+ * renderer that did not exist) as well as the provider's consent page. Sorting them would make two
  * requirements that a user would read as different collapse to one hash — so a
  * reordered walkthrough would silently keep its `requirement_version` and, worse, ride
  * through the edit pipeline as a no-op with nothing re-reviewed. "Stable" is satisfied

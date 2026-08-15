@@ -531,6 +531,33 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
         </div>
       ) : null}
 
+      {(requirement.scopes ?? []).length > 0 ? (
+        <div className="field" data-testid="review-scopes">
+          {/*
+            THE SCOPES BOX (TASK-20260815 AC3b, ADR-0028). This box is what makes
+            "pinned scopes are never silent" TRUE: the plan review found the protocol
+            comment claiming "scopes is what the review renders" while no renderer
+            existed — a seat that skips the review screen is admitted for free (the
+            queryTemplate lesson, 2026-08-13). Rendered VERBATIM in declaration order,
+            as `code`, exactly like the template boxes above: the scope strings are what
+            the provider's own consent screen will list, and a friendly paraphrase here
+            would leave the user meeting them for the first time on the provider's page.
+          */}
+          <label>what this sign-in may do</label>
+          <ul>
+            {(requirement.scopes ?? []).map((scope) => (
+              <li key={scope}>
+                <code>{scope}</code>
+              </li>
+            ))}
+          </ul>
+          <span className="hint">
+            the provider shows this same list on its consent screen when you sign in — nothing broader can be asked for
+            without coming back here first.
+          </span>
+        </div>
+      ) : null}
+
       {headerTemplate !== undefined ? (
         <div className="field">
           <label>what gets sent with every request</label>
@@ -1282,6 +1309,10 @@ function ReapprovalDiffScreen({
   // been collected declares no hosts, and the diff then honestly shows the frozen
   // ceiling's hosts as REMOVED — which is what such a pending edit would do.
   const hostLines = diffLines(row.allowedHosts, pending.declaredApiHosts ?? []);
+  // ADR-0028 (TASK-20260815 AC3b): without this delta, a scopes-ONLY staged edit — the
+  // exact edit the scope-drift migration stages — rendered as a diff whose every line
+  // read unchanged: an approval request for nothing the user could see.
+  const scopeLines = diffLines(row.requirement.scopes ?? [], pending.scopes ?? []);
 
   const render = (line: DiffLine): ReactElement => (
     <li key={`${line.state}:${line.label}`} data-diff={line.state}>
@@ -1306,6 +1337,12 @@ function ReapprovalDiffScreen({
           <label>where this app may send them</label>
           <ul>{hostLines.map(render)}</ul>
         </div>
+        {scopeLines.length > 0 ? (
+          <div className="field">
+            <label>what this sign-in may do</label>
+            <ul data-testid="reapproval-scope-diff">{scopeLines.map(render)}</ul>
+          </div>
+        ) : null}
       </div>
       <Button variant="primary" onClick={onReapprove}>
         approve these changes
