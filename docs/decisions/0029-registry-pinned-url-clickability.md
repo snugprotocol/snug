@@ -1,6 +1,6 @@
 # 0029 — Console-URL clickability keys on registry-pinned bytes, not row provenance
 
-- **Status:** proposed (plan approved by owner 2026-08-15; implementation in flight)
+- **Status:** accepted (2026-08-15, at merge; owner approved the plan, verified the fixed wizard flow live, and commissioned the merge explicitly)
 - **Date:** 2026-08-15
 - **Task:** TASK-20260815-spotify-scopes-wizard-links
 

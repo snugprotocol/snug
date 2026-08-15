@@ -377,3 +377,20 @@ findings folded back before any test is written.
 - State: all fixes green — auth 751 · playground 1046 · desktop 105 · root
   `turbo run test --force` 21/21, Cached: 0 (third forced run this task).
 - Next step: owner review + PR.
+
+### 2026-08-15 (close) — claude (fable-5) — session (Gate 6)
+- Done: **owner hardware-verified the fix live — "all working now"**: scope diff staged
+  at wizard open → approved → fresh sign-in (consent listed the pinned scopes) →
+  playlists load in the starter. This closes BOTH standing next-steps items (Spotify
+  desktop sign-in AC3 from PR #42, and the "Spotify real PKCE round trip" from the
+  2026-08-08 real-provider gap). Owner explicitly commissioned: open PR, merge, return
+  to main.
+- Gate 6: ADR-0028/0029 statuses → accepted; next-steps pruned (both Spotify items
+  marked verified); THREE lessons added (gate/disclosure comparison semantics ·
+  destructive-act-before-transition ordering · comment-claims-about-other-surfaces);
+  architecture header updated. Protocol changed comment-only → NO spec-changelog entry
+  (no schema bytes; conventions reviewer concurred).
+- State: merging via PR; after merge the close-out PR moves this file to
+  `done/INDEX.md` per ADR-0027.
+- Next step: (post-merge housekeeping only) close-out PR + session memory update.
+- Open questions: none.
