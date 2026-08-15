@@ -59,12 +59,22 @@ interface PairCall {
   init: { method: string; body?: string; headers?: Record<string, string> };
 }
 
+interface LanFetchCall {
+  url: string;
+  init: RequestInit;
+  pin: string;
+}
+
 interface FakeDesktop {
   platform: SnugPlatform;
   pairCalls: PairCall[];
   fetchCalls: string[];
+  /** Every PINNED request — the verify probe rides here (ADR-0025). */
+  lanFetchCalls: LanFetchCall[];
   /** What the next `lanPair` resolves to (or throws, when set to an Error). */
   pairResult: { status: number; body: string; pin?: { fingerprint: string; cn: string } } | Error;
+  /** What the next pinned `lanFetch` answers (or throws, when set to an Error). */
+  lanFetchResult: { status: number } | Error;
   discoveryBody: string;
 }
 
@@ -72,11 +82,13 @@ function fakeDesktop(): FakeDesktop {
   const state: FakeDesktop = {
     pairCalls: [],
     fetchCalls: [],
+    lanFetchCalls: [],
     pairResult: {
       status: 200,
       body: JSON.stringify([{ success: { username: MINTED, clientkey: 'ENTERTAINMENT-KEY' } }]),
       pin: { fingerprint: PIN, cn: 'ECB5FAFFFE123456' },
     },
+    lanFetchResult: { status: 200 },
     discoveryBody: JSON.stringify([{ id: 'ecb5faff', internalipaddress: BRIDGE }]),
     platform: {
       kind: 'desktop',
@@ -85,7 +97,12 @@ function fakeDesktop(): FakeDesktop {
         state.fetchCalls.push(url);
         return new Response(state.discoveryBody, { status: 200 });
       },
-      lanFetch: async () => new Response('{}', { status: 200 }),
+      lanFetch: async (url, init, pin) => {
+        state.lanFetchCalls.push({ url, init, pin });
+        if (state.lanFetchResult instanceof Error) throw state.lanFetchResult;
+        // The verify probe must never read the body — an empty one keeps that honest.
+        return new Response('', { status: state.lanFetchResult.status });
+      },
       lanPair: async (url, init) => {
         state.pairCalls.push({ url, init });
         if (state.pairResult instanceof Error) throw state.pairResult;
@@ -657,5 +674,317 @@ describe('a LAN row opened on the web platform', () => {
     const outcome = await harness.wizard.runLanPairing();
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.message).toMatch(/desktop app/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR-0025 — verify before claiming, and the routes that could lie
+// (TASK-20260814-hue-pairing-e2e; the owner's hardware report)
+// ---------------------------------------------------------------------------
+
+/** The pre-fix state shape the old code wrote: connected, pinned, never verified. */
+function seedLegacyPairedState(harness: Harness): void {
+  harness.db.setSecret(`auth:${APP}:${SLOT}:application_key`, MINTED);
+  harness.db.setSecret(
+    `auth:${APP}:${SLOT}:_connection`,
+    JSON.stringify({ status: 'connected', lanPin: { fingerprint: PIN, cn: 'ECB5FAFFFE123456' } }),
+  );
+}
+
+function connState(harness: Harness): Record<string, unknown> {
+  return JSON.parse(harness.db.getSecret(`auth:${APP}:${SLOT}:_connection`) ?? '{}') as Record<string, unknown>;
+}
+
+describe('the verify read (ADR-0025 §1-2) — pairing proves the key it minted', () => {
+  it('fires the registry verify GET at the frozen host with the minted key and the captured pin, then claims verified', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => desktop.lanFetchCalls.length > 0);
+
+    // The probe: registry path on the CEILING host, GET, the entry's own header
+    // carrying the just-minted value, over the pin captured seconds earlier.
+    const probe = desktop.lanFetchCalls[0]!;
+    expect(probe.url).toBe(`https://${BRIDGE}/clip/v2/resource/bridge`);
+    expect(probe.init.method).toBe('GET');
+    expect((probe.init.headers as Record<string, string>)['hue-application-key']).toBe(MINTED);
+    expect(probe.pin).toBe(PIN);
+
+    await settleUntil(() => connState(harness)['status'] === 'connected');
+    const state = connState(harness);
+    expect(typeof state['lanVerifiedAt'], 'the marker only the verify step writes').toBe('number');
+    expect(state['lanPin']).toEqual({ fingerprint: PIN, cn: 'ECB5FAFFFE123456' });
+
+    // AC6 — the done copy names the PROVEN fact and the device it was proven against.
+    await settleUntil(() => /paired and verified/i.test(container?.textContent ?? ''));
+    expect(container?.textContent ?? '').toContain(BRIDGE);
+  });
+
+  it('a verify REFUSAL keeps key + pin + pending, stays on the pair screen, and says the device did not accept the key', async () => {
+    const desktop = fakeDesktop();
+    desktop.lanFetchResult = { status: 403 };
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => testId('lan-pair-error') !== null);
+
+    // The mint is kept (the device DID create it; re-pairing overwrites)…
+    expect(harness.db.getSecret(`auth:${APP}:${SLOT}:application_key`)).toBe(MINTED);
+    // …but the claim is not: pending, no verified marker, and NO lastError in the
+    // synced KV (a verify failure is a wizard-screen fact, not a durable one).
+    const state = connState(harness);
+    expect(state['status']).toBe('pending');
+    expect(state['lanVerifiedAt']).toBeUndefined();
+    expect(state['lastError']).toBeUndefined();
+
+    expect(testId('lan-pair-step'), 're-pair is offered, not a done screen').not.toBeNull();
+    expect(testId('lan-pair-error')?.textContent ?? '').toMatch(/didn't accept|did not accept/i);
+    expect(container?.textContent ?? '').not.toMatch(/paired and verified/i);
+    // C1 — the failure path surfaces no credential.
+    expect(container?.textContent ?? '').not.toContain(MINTED);
+  });
+
+  it('a verify TRANSPORT failure is named distinctly from a refusal, and claims nothing', async () => {
+    const desktop = fakeDesktop();
+    desktop.lanFetchResult = new Error('lan_fetch: request failed: connection reset');
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => testId('lan-pair-error') !== null);
+
+    const message = testId('lan-pair-error')?.textContent ?? '';
+    expect(message).toMatch(/couldn't reach the device to check|could not reach the device to check/i);
+    expect(message).not.toMatch(/didn't accept|did not accept/i);
+    expect(connState(harness)['status']).toBe('pending');
+    expect(container?.textContent ?? '').not.toMatch(/paired and verified/i);
+  });
+
+  it('a platform whose shell ships lanPair but no lanFetch cannot claim connected', async () => {
+    const desktop = fakeDesktop();
+    delete (desktop.platform as { lanFetch?: unknown }).lanFetch;
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => testId('lan-pair-error') !== null);
+
+    expect(connState(harness)['status']).toBe('pending');
+    expect(connState(harness)['lanVerifiedAt']).toBeUndefined();
+    expect(container?.textContent ?? '').not.toMatch(/paired and verified/i);
+  });
+});
+
+describe('LAN routing (ADR-0025 §4) — register/credentials are pairing-owned', () => {
+  it("nextStep for a LAN requirement goes review → done — the walkthrough renders on the host screen, the credential is minted", async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    const requirement = harness.db.getConnection(APP, SLOT)!.requirement;
+    expect(harness.wizard.isLanRequirement(requirement), 'the fixture must actually be LAN-class').toBe(true);
+    expect(harness.wizard.nextStep('review', requirement)).toBe('done');
+  });
+
+  it('advanceFromRegister REFUSES a LAN row when driven directly', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+
+    const outcome = await harness.wizard.advanceFromRegister();
+    expect(outcome.ok).toBe(false);
+  });
+
+  it('saveConnectionCredentials REFUSES a LAN row and writes nothing — the key is minted, never typed', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+
+    const outcome = await harness.wizard.saveConnectionCredentials({ application_key: 'typed-by-hand' });
+    expect(outcome.ok).toBe(false);
+    expect(harness.db.getSecret(`auth:${APP}:${SLOT}:application_key`)).toBeUndefined();
+  });
+});
+
+describe("the reopen (ADR-0025 §3) — the owner's regression", () => {
+  it('a paired-but-UNVERIFIED row (the pre-fix shape) reopens to RE-PAIR — never the register walk, never the credential box', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    // Collect + approve through the real screens, then transplant the legacy state —
+    // the shape a pairing under the OLD code left behind: connected + pin, no marker.
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+    seedLegacyPairedState(harness);
+
+    // Reopen — the journey the owner actually took.
+    harness.wizard.closeConnectionWizard();
+    await settle();
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await settle();
+    await click(button(/approve this connection/i));
+
+    // The truth: an unverified claim is a pairing still owed.
+    expect(testId('lan-pair-step'), 'an unverified row re-pairs').not.toBeNull();
+    // NEVER the ghost flow: no "get your … credentials" register walk, no credential box.
+    expect(container?.textContent ?? '').not.toMatch(/get your philips hue credentials/i);
+    expect(testId('credentials-custody')).toBeNull();
+  });
+
+  it('a paired-and-VERIFIED row reopens to the connected summary — no re-walk, no re-pair demand', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+    // A REAL pairing under the new code: mint, pin, verify — all through the screens.
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => connState(harness)['status'] === 'connected');
+
+    harness.wizard.closeConnectionWizard();
+    await settle();
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await settle();
+    await click(button(/approve this connection/i));
+
+    expect(container?.textContent ?? '').toMatch(/paired and verified/i);
+    expect(container?.textContent ?? '').toContain(BRIDGE);
+    expect(button(/i pressed the button/i), 'a verified row owes no pairing').toBeUndefined();
+    expect(container?.textContent ?? '').not.toMatch(/get your philips hue credentials/i);
+    expect(testId('credentials-custody')).toBeNull();
+  });
+
+  it('approving a fresh LAN row never flashes a success claim while the row re-read is in flight (ADR-0025 §6)', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await type(testId('lan-host-input') as HTMLInputElement, BRIDGE);
+    await click(button(/^use this address$/i));
+
+    // Click approve and then poll EVERY microtask boundary: no intermediate render may
+    // claim success before pairing has run.
+    const approve = button(/approve this connection/i)!;
+    await act(async () => {
+      approve.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    for (let i = 0; i < 25; i++) {
+      expect(container?.textContent ?? '').not.toMatch(/paired and verified|is connected/i);
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    await settle();
+    expect(testId('lan-pair-step'), 'the settled screen is the pairing step').not.toBeNull();
+  });
+});
+
+describe('re-approval invalidation (ADR-0025 §5) — verified never migrates to a device it was not proven against', () => {
+  it('a staged HOST change downgrades the state and deletes the minted key — re-pair required at the new address', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => connState(harness)['status'] === 'connected');
+
+    harness.db.stagePendingRequirement(APP, SLOT, { ...bareHue, declaredApiHosts: ['192.168.1.99'] });
+    const outcome = await harness.wizard.reapproveFromDiff();
+    expect(outcome.ok).toBe(true);
+
+    expect(harness.db.getConnection(APP, SLOT)?.allowedHosts).toEqual(['192.168.1.99']);
+    expect(
+      harness.db.getSecret(`auth:${APP}:${SLOT}:application_key`),
+      "the old device's key must not ride a ceiling pointing at a new one",
+    ).toBeUndefined();
+    const state = connState(harness);
+    expect(state['status']).toBe('pending');
+    expect(state['lanPin']).toBeUndefined();
+    expect(state['lanVerifiedAt']).toBeUndefined();
+  });
+
+  it('a host-identical re-approval KEEPS the verified state and the key', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => connState(harness)['status'] === 'connected');
+
+    harness.db.stagePendingRequirement(APP, SLOT, { ...bareHue, declaredApiHosts: [BRIDGE] });
+    const outcome = await harness.wizard.reapproveFromDiff();
+    expect(outcome.ok).toBe(true);
+
+    expect(harness.db.getSecret(`auth:${APP}:${SLOT}:application_key`)).toBe(MINTED);
+    const state = connState(harness);
+    expect(state['status']).toBe('connected');
+    expect(typeof state['lanVerifiedAt']).toBe('number');
+  });
+});
+
+describe('Gate-5 review regressions (ADR-0025 hardening)', () => {
+  it('a LAN → non-LAN kind rebind wipes the mint, the pin and the marker — proof never survives the class it was proven in', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => connState(harness)['status'] === 'connected');
+
+    // The promoted requirement drops the lanHost seat entirely — a different class.
+    harness.db.stagePendingRequirement(APP, SLOT, {
+      slot: SLOT,
+      provider: { name: 'Example Cloud' },
+      kind: 'api_key',
+      declaredApiHosts: ['api.example.com'],
+      fields: [{ key: 'token', label: 'API token', type: 'secret' }],
+    });
+    const outcome = await harness.wizard.reapproveFromDiff();
+    expect(outcome.ok).toBe(true);
+
+    expect(
+      harness.db.getSecret(`auth:${APP}:${SLOT}:application_key`),
+      'the bridge-minted key must not outlive the LAN class',
+    ).toBeUndefined();
+    const state = connState(harness);
+    expect(state['status']).toBe('pending');
+    expect(state['lanPin']).toBeUndefined();
+    expect(state['lanVerifiedAt']).toBeUndefined();
+  });
+
+  it('a step FORCED to credentials cannot walk an unproven LAN row into the api-key screens', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+
+    // Not a route any shipped transition takes — the point is that the pairing gate
+    // must hold whatever the step store says, because the chain's protection is
+    // otherwise order-dependent inside a long ternary.
+    await act(async () => {
+      harness.wizard.connectionWizardStepStore.set('credentials');
+    });
+    await settle();
+
+    expect(testId('lan-pair-step'), 'the pairing gate intercepts before the step branches').not.toBeNull();
+    expect(testId('credentials-custody')).toBeNull();
+    expect(container?.textContent ?? '').not.toMatch(/get your philips hue credentials/i);
   });
 });

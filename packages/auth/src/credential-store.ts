@@ -49,6 +49,15 @@ export interface AuthConnectionState {
    * journaled, and is never a trust input.
    */
   lanPin?: { fingerprint: string; cn?: string };
+  /**
+   * Epoch ms when the ADR-0025 verify read last PROVED the LAN credential against the
+   * pinned device. Written by the wizard's verify step and NOTHING else. Its absence on
+   * a `connected` LAN state marks a pre-ADR-0025 claim nothing ever proved — the wizard
+   * treats that as pairing still owed, which is what makes the legacy rows (paired
+   * under the old instant-claim code) repair themselves honestly on next open instead
+   * of needing a data migration.
+   */
+  lanVerifiedAt?: number;
 }
 
 /** The secrets quartet — the structural slice of UserDb the store consumes. */

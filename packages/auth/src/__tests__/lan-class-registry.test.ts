@@ -222,9 +222,42 @@ describe('P5/AC7 — the `hue` registry entry (the 11th, and the first LAN-class
 
   it('NO testRequest — every CLIP v2 read needs the key the PAIRING step mints, so a probe before pairing is meaningless', () => {
     // Same discipline as coingecko's deliberate omission (P4): no button beats a
-    // meaningless one. Pairing itself is the verification — it either mints a key or it
-    // does not.
+    // meaningless one. No PRE-pair probe can succeed, and no user-facing test button is
+    // offered. Verification itself moved INSIDE the pairing act as its mandatory final
+    // step (ADR-0025 — the `verify` seat below); this omission is about the seats it
+    // was always about.
     expect(WELL_KNOWN_PROVIDERS_REGISTRY['hue']?.testRequest).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // The verify seat (ADR-0025) — pairing must PROVE the key it minted
+  // -------------------------------------------------------------------------
+
+  it('carries a REQUIRED verify seat: a credentialed read the wizard fires before claiming connected (ADR-0025)', () => {
+    const verify = WELL_KNOWN_PROVIDERS_REGISTRY['hue']?.pairing?.verify;
+    expect(verify, 'a pairing exchange that cannot be verified post-mint re-creates the instant-connected defect').toBeDefined();
+    // GET only: the verify read must be side-effect-free on the device — it proves the
+    // key, it never exercises it.
+    expect(verify?.method).toBe('GET');
+    // CLIP v2's bridge resource: the one read every bridge serves, and it requires the
+    // `hue-application-key` header — an unauthenticated 200 cannot fake it.
+    expect(verify?.pathAndQuery).toBe('/clip/v2/resource/bridge');
+  });
+
+  it('the verify path is a PATH on the ceiling host — leading slash, never a URL, never a host', () => {
+    const verify = WELL_KNOWN_PROVIDERS_REGISTRY['hue']!.pairing!.verify;
+    expect(verify.pathAndQuery.startsWith('/')).toBe(true);
+    expect(verify.pathAndQuery).not.toMatch(/^[a-z]+:\/\//i);
+    expect(verify.pathAndQuery).not.toContain('://');
+  });
+
+  it('the verify credential rides the entry\'s OWN header template — no second injection vocabulary', () => {
+    // The wizard renders `request.headerTemplate` with only the pairing secretField's
+    // just-minted value; this pins that the template actually references that field, so
+    // the verify read is credentialed by construction rather than by a parallel seat.
+    const entry = WELL_KNOWN_PROVIDERS_REGISTRY['hue']!;
+    const template = JSON.stringify(entry.request?.headerTemplate ?? {});
+    expect(template).toContain(`{{${entry.pairing!.secretField}}}`);
   });
 });
 

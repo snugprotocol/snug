@@ -43,3 +43,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0022 — Registry request seats, host-side signing functions, and auth-shaped failure surfacing](0022-registry-request-seats.md)
 - [0023 — LAN-class providers: user-supplied bridge hosts, pairing exchanges, scoped TLS trust](0023-lan-class-providers.md)
 - [0024 — The think rail is user-sized and dismissible; the frame view is deleted while its feed lives on](0024-think-rail-user-sized-frames-view-removed.md)
+- [0025 — LAN pairing verifies before it claims; LAN rows never route through the api-key screens](0025-lan-pairing-verify-before-claim.md) _(proposed)_

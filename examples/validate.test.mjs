@@ -568,3 +568,36 @@ test('the imported connectionRequirementSchema is the REAL strict contract, not 
   });
   assert.equal(missingHosts.success, false, 'declaredApiHosts is required — there is no ungated kind');
 });
+
+/**
+ * TASK-20260814-hue-pairing-e2e (ADR-0025) — the hue starter's copy must tell the truth
+ * on EVERY platform and in EVERY connection state.
+ *
+ * The owner's hardware test surfaced two claims that read as lies from the desktop app
+ * after a successful pairing:
+ *   - the apply control's "this control waits for the desktop app" — the user WAS in
+ *     the desktop app, paired, and the control still said it was waiting for it;
+ *   - the preconnect notice's web-framed rationale ("which a web page cannot reach")
+ *     rendered verbatim on desktop, implying the user was somewhere they were not.
+ * Together they made a SUCCESSFUL pairing indistinguishable from a failed one — the
+ * app's real blocker is the runtime's app-addressing gap (apps are never told the
+ * bridge's address), and the copy must name that, not a platform the user may not be on.
+ */
+test('hue-lights-party copy is platform-agnostic and names the real runtime gap', () => {
+  const html = readFileSync(path.join(HERE, 'hue-lights-party', 'app.html'), 'utf8');
+
+  assert.ok(
+    !/waits for the desktop app/i.test(html),
+    'the apply control must not claim to wait for the desktop app — it is false there after pairing',
+  );
+  assert.ok(
+    !/which a web page cannot reach/i.test(html),
+    'the preconnect notice must not frame its rationale around being on the web',
+  );
+  // The honest reason the apply control is disabled: the capability does not exist yet.
+  assert.match(
+    html,
+    /isn['’]t available yet|not available yet/i,
+    'the disabled apply control must name the missing runtime capability, not a platform',
+  );
+});

@@ -70,6 +70,23 @@ export interface WellKnownPairingExchange {
    * inside the device's own consent window.
    */
   preconditionInstruction: string;
+  /**
+   * THE VERIFY READ (ADR-0025) — the credentialed request the wizard fires after the
+   * mint and BEFORE it claims connected. GET only: it PROVES the key, it never
+   * exercises it. It runs on the pinned transport against the connection's own frozen
+   * ceiling host, the credential rides the entry's own `request.headerTemplate`
+   * (rendered with only the just-minted `secretField` value — no second injection
+   * vocabulary), and the response is read for its STATUS alone.
+   *
+   * REQUIRED, deliberately: a pairing provider that cannot be verified post-mint
+   * re-creates the instant-connected defect this seat exists to kill — the owner's
+   * hardware report that a wizard said "connected" while nothing had proven the key.
+   */
+  verify: {
+    method: 'GET';
+    /** Path on the connection's own ceiling host. Leading '/' — never a URL. */
+    pathAndQuery: string;
+  };
 }
 
 /**
@@ -896,6 +913,12 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       secretField: 'application_key',
       preconditionInstruction:
         'Press the link button — the big round button on top of your Hue bridge — now, then continue within 30 seconds. The bridge only hands out a key during that window.',
+      // THE VERIFY READ (ADR-0025): CLIP v2's bridge resource — the one read every
+      // bridge serves, and it 401/403s without a valid `hue-application-key`, so an
+      // unauthenticated 200 cannot fake it. Verified against the live API docs at the
+      // original task recon (2026-08-12) and re-checked for this seat: the response is
+      // read for its STATUS only, so its body shape can drift freely.
+      verify: { method: 'GET', pathAndQuery: '/clip/v2/resource/bridge' },
     },
     registration: {
       // No console, no account, no developer portal: the "registration" for a Hue bridge
