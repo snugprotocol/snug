@@ -62,11 +62,11 @@ const STATIC_KIND_ENTRIES = [
     // MIGRATED 2026-08-13 (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §5): the
     // old `['api_key', 'api_secret', 'passphrase']` set described retail HMAC keys that
     // Coinbase EXPIRED provider-side on 2025-02-05 — an entry that was never
-    // connectable. Current CDP credentials are a key NAME plus an EC private key
-    // signing a per-request ES256 JWT (`{{cdp_jwt(api_key, private_key)}}` — see
+    // connectable. Current CDP credentials are a key NAME plus an Ed25519 private key
+    // signing a per-request EdDSA JWT (`{{cdp_jwt(api_key, ed25519_private_key)}}` — see
     // `registry-request-seats.test.ts` for the pinned template and
     // `registry-template-parity.test.ts` for the token↔field-key parity).
-    fieldKeys: ['api_key', 'private_key'],
+    fieldKeys: ['api_key', 'ed25519_private_key'],
   },
   { key: 'openweather', displayName: 'OpenWeather', apiHost: 'api.openweathermap.org', fieldKeys: ['api_key'] },
   { key: 'coingecko', displayName: 'CoinGecko', apiHost: 'api.coingecko.com', fieldKeys: ['api_key'] },

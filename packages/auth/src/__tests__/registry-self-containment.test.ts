@@ -375,7 +375,7 @@ describe('D3 — the inferrer alias map: human-authored, collision-free, and NOT
     // pair — the old api_secret/passphrase seats described expired HMAC keys.
     expect(substituted.fields?.map((field) => field.key), 'while the FIELD list is substituted').toEqual([
       'api_key',
-      'private_key',
+      'ed25519_private_key',
     ]);
   });
 

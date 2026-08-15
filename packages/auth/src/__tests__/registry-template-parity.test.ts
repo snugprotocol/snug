@@ -12,7 +12,7 @@
 //
 //   - MIGRATED: the Coinbase parity. The registry now carries its OWN pinned
 //     `request.headerTemplate` (ADR-0022 §1) — `Authorization: Bearer
-//     {{cdp_jwt(api_key, private_key)}}` — so the parity is between the ENTRY's template
+//     {{cdp_jwt(api_key, ed25519_private_key)}}` — so the parity is between the ENTRY's template
 //     tokens and the ENTRY's field keys, both read from the same reviewed object. The
 //     old suite compared the registry against a transcription of the KB-taught HMAC
 //     template; the transcription seat is gone because the artifact it transcribed is
@@ -89,12 +89,12 @@ describe('P3 (MIGRATED) — the Coinbase pinned template and field keys CANNOT f
   it('EVERY token RESOLVES end to end — the pinned template renders a real Bearer JWT', async () => {
     // The proof that would have caught the founding fork by itself: render the PINNED
     // template with a value under each REGISTRY key and assert no header comes out
-    // empty or still carrying `{{...}}`. The private key is the checked-in SEC1 test
-    // fixture — the exact PEM shape the CDP portal downloads (amendment 4).
-    const sec1Pem = readFileSync(join(__dirname, 'fixtures', 'cdp-test-key.sec1.pem'), 'utf8');
+    // empty or still carrying `{{...}}`. The private key is the checked-in Ed25519
+    // PKCS#8 test fixture — the exact PEM shape the CDP portal delivers (ADR-0030 §2).
+    const ed25519Pem = readFileSync(join(__dirname, 'fixtures', 'ed25519-test-key.pkcs8.pem'), 'utf8');
     const values: Record<string, string> = {
       api_key: 'organizations/11111111-2222-3333-4444-555555555555/apiKeys/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      private_key: sec1Pem,
+      ed25519_private_key: ed25519Pem,
     };
     expect(Object.keys(values).sort()).toEqual([...registryFieldKeys('coinbase')].sort());
 
