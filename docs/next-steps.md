@@ -6,6 +6,11 @@ Dated, ordered backlog. Append with a date; ✅ when shipped. Task files are the
 
 ## Now / next
 
+- **2026-08-14 — Queued from TASK-20260814-hue-starter-real-connection (ADR-0026) Gate-5 review:**
+  1. **A requirement-derived flow classification** (`credentials | pair | oauth`) consulted by the step machine and the sheet, replacing the five hand-placed `isLanRequirement` guards (nextStep early-return, two transition refusals, the approve pre-collection guard, the sheet catch-all). Each is belt-to-braces for the others today; the next non-credentials flow class must rediscover all five or reproduce the ghost flow.
+  2. **Shared auth test harness** — `memoryQuartet`/row/harness scaffolding now exists in ten `packages/auth/src/__tests__/` files by copy; extract `__tests__/helpers.ts` before the quartet interface changes again.
+  3. **Scope the failed-pairing revision bump** — every failed verify re-runs `migrateConnectionRegistryDrift` (a full admission pass) through the sheet's revision effect just to redisplay the pair screen; a slot-scoped announcement would skip the re-migration for the same open session.
+  4. **LanPairScreen `onPaired` prop is dead machinery** (the store owns success routing) — delete it before someone wires real logic into it.
 - **2026-08-14 — Queued from TASK-20260814-hue-pairing-e2e (ADR-0025) Gate-5 review, each with its reason:**
   1. **Widen `withSession` to accept an async callback and collapse the five hand-rolled copies** (`reapproveFromDiff`, `saveConnectionCredentials`, `recordLanHost`, `runLanPairing`/`runLanPairingAttempt`, `testConnection`). The copies have already drifted — two lack the try/catch, so a `getUserDb()` rejection throws out of `void`-discarded call sites — and the missing post-await recheck this review caught in `reapproveFromDiff` is exactly the class the helper existed to prevent. One-line signature change; mechanical migration.
   2. **A shared revision-gated row hook** (`useConnectionRow(appId, slot)`-shape). The wizard sheet now gates rendering on `loadedRevision === revision` (ADR-0025 §6); `ConnectionSlotsCard` and `AuthChoiceCard` subscribe to the same revision store with the same async-re-read shape and NO gate. Benign today (neither renders step-derived claims) — but the fix is a per-component convention until the hook owns it.

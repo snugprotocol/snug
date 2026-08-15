@@ -203,3 +203,54 @@ Order is tests-first per TDD.md; branch stacked on `fix/TASK-20260814-hue-pairin
 - State: plan + ADR amended; Gate 3 next.
 - Next step: failing tests — protocol parser → executor resolution/refusals/scrub →
   examples pins; then implement in plan order.
+
+### 2026-08-14 — Claude (Fable) — session (continued, Gates 3-5)
+- Done — Gate 3: red tests (protocol parser 19-case table incl. hostile shapes; 12
+  executor resolution/disclosure tests; examples real-connection pins replacing the
+  ADR-0025 copy pin per AC9). Gate 4: protocol `connection-url.ts` (slot rule imported,
+  three-way result); executor resolution (post-gate-1, one rows read through
+  `resolveGrant`, host-clean symbolic refusals, error-only scrub); hooks one-liner with
+  the full 16-surface lockstep (kb-sync + examples byte-compares green); KB teaching
+  section; the REAL starter (mount probe doubles as rooms fetch, per-room grouped_light
+  scene writes, code-keyed fallbacks); spec-changelog INTERNAL-DRAFT entry;
+  threat-model delta; code-map row; README rewrite.
+- Done — Gate 5: /code-review high, EIGHT finder angles, all folded:
+  - executor: imported rows keep `NET_IMPORTED_UNAPPROVED` on the symbolic path (the
+    one live divergence); `new URL(path, base)` construction; whitespace-normalized
+    scheme match (the WHATWG-stripping mismatch); delivery-seat backstop scrub so the
+    disclosure boundary holds by construction; shared refusal helpers.
+  - wizard (stacked-branch hardening): session-scoped error-store write AND durable
+    writes (a stale failed attempt can no longer clobber a newer verified pairing —
+    this supersedes the earlier keep-proof-on-close choice, deliberately); verify
+    guard is the value-token template fact (the header NAME satisfied the substring
+    form); 401/403 vs device-busy verify sentences; reapproval catch bumps; error
+    store cleared on refresh + §5 downgrade; `slotCredentialStore` helper.
+  - starter: table-driven notices with a "connected it — check again" exit from the
+    connect phase (the frame cannot observe pairing finishing); first-write-then-
+    parallel apply aborting on denial/unreachable; delivered 401/403 → connect CTA;
+    results keyed by room id (Hue permits duplicate names); the RFC-1918 pin derives
+    from the protocol classifier.
+  - docs: restored the 2026-08-13 spec-changelog heading my entry had consumed; fixed
+    the examples suite's stale "NO manifest" hue comment.
+  - One self-inflicted defect caught by the suite mid-fold (the extracted store helper
+    briefly recursed into itself) — fixed before commit; the 57-test failure wave was
+    exactly the tsc-gated suite doing its job.
+  - Deliberately deferred, queued in next-steps with reasons: flow-kind classification
+    (five-guard scatter), shared auth test harness (tenth copy), scoped failed-pairing
+    bump, dead `onPaired` prop. Gate 9a divergence and probe-in-playground remain
+    ADR-recorded decisions.
+- Verification: auth 729 · playground 1028 · protocol 299+19 · sdk 41 · examples
+  149+34 · root 21/21 green after every fold.
+- **High-tier self-sign-off**: plan fresh-context-reviewed before implementation (5
+  issues folded pre-code); tests first (red commit precedes implementation); C1/C2
+  negatives present (symbolic-path host-clean tests, credential-never-read test,
+  response-body non-scrub pin); spec-sync satisfied at the INTERNAL-DRAFT posture with
+  zero schema bytes changed and NO spec-repo push; no test deleted or weakened (the
+  one replaced pin is AC9's documented replacement, stronger in the same commit).
+  Signed: Claude (Fable), 2026-08-14.
+- State: branch complete pending owner review; stacked on PR #46 (merge that first,
+  then this rebases clean). Owner retest owed after merge — REINSTALL the starter
+  (installed apps keep their HTML copy), then: open on desktop → real rooms appear →
+  first apply prompts once (the dialog names the bridge IP) → lights change.
+- Next step: owner review → merge #46 → rebase → PR → merge → move task file to done/
+  → hardware retest.
