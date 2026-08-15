@@ -268,3 +268,11 @@ Order is tests-first per TDD.md; branch stacked on `fix/TASK-20260814-hue-pairin
 - Next step: owner hardware retest — REINSTALL the Hue starter (installed apps keep
   their HTML copy), open on desktop, expect real rooms, first apply prompts once, lights
   change. Open questions: none; deferred items are queued in next-steps 2026-08-14.
+
+### 2026-08-15 — Claude (Fable) — merged
+- Done: PR #47 squash-merged to `main` on the owner's explicit no-wait instruction
+  (merged --admin; the Windows gate stays deliberately red per ADR-0021 D8). Task file
+  moved to done/.
+- State: shipped. ADR-0026 accepted.
+- Next step: owner hardware retest — REINSTALL the Hue starter, desktop, real rooms,
+  first apply prompts once, lights change.
