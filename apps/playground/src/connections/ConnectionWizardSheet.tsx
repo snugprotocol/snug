@@ -52,6 +52,7 @@ import {
   cancelConnectionOAuthFlow,
   canPairLanDevice,
   lanConnectionVerified,
+  lanPairingErrorStore,
   closeConnectionWizard,
   discoverLanHosts,
   forceCloseWizard,
@@ -427,20 +428,19 @@ function LanHostScreen({
  */
 function LanPairScreen({ row, onPaired }: { row: ConnectionRow; onPaired: () => void }): ReactElement {
   const [pairing, setPairing] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
+  // The error lives in the STORE, not in component state: a failed attempt bumps the
+  // revision (durable state changed), the bump remounts this screen through the
+  // loading gate, and a local error would be eaten by exactly that remount.
+  const error = useStore(lanPairingErrorStore) ?? undefined;
   const exchange = lanPairingExchangeFor(row.requirement);
   const provider = row.requirement.provider.name;
   const host = row.allowedHosts[0];
 
   const pair = (): void => {
-    setError(undefined);
     setPairing(true);
     void runLanPairing()
       .then((result) => {
-        if (!result.ok) {
-          setError(result.message);
-          return;
-        }
+        if (!result.ok) return;
         onPaired();
       })
       .finally(() => setPairing(false));
@@ -1095,10 +1095,20 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
             AC6 (ADR-0025) — the LAN done copy names the PROVEN fact and the device it
             was proven against. This branch is only reachable through the verified-fact
             gate in the render chain, so "verified" here is a report, never a promise.
+            The host is guarded the same way LanPairScreen guards it: an empty ceiling
+            must degrade the sentence, never render a claim about a device it cannot
+            name.
           */
           <>
-            paired and verified with the device at <code>{row.allowedHosts[0]}</code> — it accepted the new key when we
-            checked. You can disconnect it any time from Settings → Connections.
+            paired and verified with{' '}
+            {row.allowedHosts[0] !== undefined ? (
+              <>
+                the device at <code>{row.allowedHosts[0]}</code>
+              </>
+            ) : (
+              'your device'
+            )}{' '}
+            — it accepted the new key when we checked. You can disconnect it any time from Settings → Connections.
           </>
         ) : (
           <>
@@ -1345,7 +1355,6 @@ export function ConnectionWizardSheet(): ReactElement | null {
   const revision = useStore(connectionWizardRevisionStore);
   const [row, setRow] = useState<ConnectionRow | undefined>(undefined);
   const [revoked, setRevoked] = useState<RevokedBefore | undefined>(undefined);
-  const [loaded, setLoaded] = useState(false);
   /**
    * Has the ADR-0025 verify read PROVEN this LAN connection? A BOOLEAN, never the
    * state object — the `_connection` KV carries the pin, and this component must not
@@ -1359,7 +1368,10 @@ export function ConnectionWizardSheet(): ReactElement | null {
    * a chain evaluated with a fresh step against a stale row once rendered a success
    * screen for a pairing that had not run. Rendering is therefore gated on
    * `loadedRevision === revision`: between a store write and the re-read, the sheet
-   * says "loading" rather than guessing.
+   * says "loading" rather than guessing. `-1` doubles as "never loaded" — the open
+   * path always bumps the revision to ≥1, so the mismatch covers the first render too
+   * (the former separate `loaded` boolean was this same fact stored twice, and two
+   * lockstep setters are one early-return away from disagreeing).
    */
   const [loadedRevision, setLoadedRevision] = useState(-1);
   /** Set only when the store REFUSES a close because a sign-in is mid-flight (M9). */
@@ -1372,7 +1384,6 @@ export function ConnectionWizardSheet(): ReactElement | null {
     if (appId === undefined || slot === undefined) {
       setRow(undefined);
       setRevoked(undefined);
-      setLoaded(false);
       setLanVerified(false);
       setLoadedRevision(-1);
       return;
@@ -1398,7 +1409,6 @@ export function ConnectionWizardSheet(): ReactElement | null {
       setRevoked(found === undefined ? undefined : findRevokedBefore(db, appId, found.requirement, slot));
       setLanVerified(verified);
       setLoadedRevision(revision);
-      setLoaded(true);
     });
     return () => {
       alive = false;
@@ -1459,20 +1469,21 @@ export function ConnectionWizardSheet(): ReactElement | null {
   /** Pre-collection: no address on the row yet, so nothing to review or freeze. */
   const lanNeedsHost = isLanRow && !lanWall && !lanHostCollected(row.requirement);
   /**
-   * Post-approval, pre-PROOF: the ceiling is frozen and the verify read has not
-   * passed. Keyed on the VERIFIED fact rather than on a step or on key presence
-   * (ADR-0025 §3): a wizard reopened after a half-finished pairing — or after a
-   * pairing whose claim nothing ever proved, which is every row the pre-ADR-0025
-   * code left behind — must land back on the pairing step rather than on a done
-   * screen claiming a connection no proof backs.
+   * Past the review, pre-PROOF: everything a LAN row may show between the review
+   * screen and the done screen is the pairing step. Keyed on the VERIFIED fact rather
+   * than on a step, a status, or key presence (ADR-0025 §3): a wizard reopened after a
+   * half-finished pairing — or after a pairing whose claim nothing ever proved, which
+   * is every row the pre-ADR-0025 code left behind — must land back on the pairing
+   * step rather than on a done screen claiming a connection no proof backs.
+   *
+   * DELIBERATELY A CATCH-ALL (Gate-5 finding): no `status === approved` conjunct and
+   * placed ABOVE the step-keyed branches, so no step value — however it was arrived
+   * at — can walk an unproven LAN row into the register/credentials screens or the
+   * done screen. A row that reaches here in a state pairing cannot serve gets the
+   * pairing screen's own refusal on click, which names what to do next; that is
+   * strictly more honest than any screen the step branches could render.
    */
-  const lanNeedsPairing =
-    isLanRow &&
-    !lanWall &&
-    !lanNeedsHost &&
-    step !== 'review' &&
-    row.status === CONNECTION_STATUS.approved &&
-    !lanVerified;
+  const lanNeedsPairing = isLanRow && !lanWall && !lanNeedsHost && step !== 'review' && !lanVerified;
 
   if (session === null) return null;
 
@@ -1518,7 +1529,7 @@ export function ConnectionWizardSheet(): ReactElement | null {
         </div>
       ) : null}
 
-      {!loaded || loadedRevision !== revision ? (
+      {loadedRevision !== revision ? (
         /*
           ADR-0025 §6 — the row for THIS revision has not landed yet. A store
           transition moves the step synchronously and the row refresh is async;
@@ -1591,16 +1602,13 @@ export function ConnectionWizardSheet(): ReactElement | null {
             });
           }}
         />
-      ) : isLanRow && !lanVerified ? (
-        /*
-          DEFENSE IN DEPTH under the loading gate above (ADR-0025 §6): whatever route
-          lands a LAN row here — a future step-machine edit, a re-approval branch, a
-          state this file has not imagined — an UNVERIFIED LAN row renders the pairing
-          step, never the done screen. The done screen's LAN copy claims a proof; this
-          branch is what makes that claim structurally impossible to render unproven.
-        */
-        <LanPairScreen row={row} onPaired={() => undefined} />
       ) : (
+        /*
+          A LAN row can only be here VERIFIED: the catch-all pairing branch above
+          intercepts every unproven LAN row before the step-keyed branches, so the done
+          screen's "paired and verified" claim is structurally impossible to render
+          unproven (ADR-0025 §6).
+        */
         <DoneScreen row={row} onClose={requestClose} />
       )}
       </div>

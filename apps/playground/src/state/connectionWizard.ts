@@ -167,6 +167,7 @@ export function openConnectionWizard(request: OpenConnectionWizardRequest): bool
   }
   connectionWizardNoteStore.set(null);
   connectionFlowStatusStore.set({ state: 'idle' });
+  lanPairingErrorStore.set(null);
   connectionWizardStepStore.set('review');
   connectionWizardSlotStore.set(request.slot);
   connectionWizardStore.set({
@@ -304,6 +305,7 @@ export function forceCloseWizard(): void {
   connectionWizardStepStore.set('review');
   connectionWizardSlotStore.set(null);
   connectionFlowStatusStore.set({ state: 'idle' });
+  lanPairingErrorStore.set(null);
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +392,13 @@ export async function advanceFromReview(): Promise<ConnectionWizardResult> {
   return withSession((db, session) => {
     const row = db.getConnection(session.appId, session.slot);
     if (row === undefined) return { ok: false, message: 'this connection has no declared requirement' };
+    // ADR-0023's binding order, restated at the transition (Gate-5 finding): approving
+    // a pre-collection LAN row would freeze an EMPTY ceiling that refuses everything,
+    // and for a LAN row `nextStep` lands 'done' — a strand with nothing to pair
+    // against. The sheet's screen order already prevents this; the store refuses too.
+    if (isLanRequirement(row.requirement) && !lanHostCollected(row.requirement)) {
+      return { ok: false, message: 'type the device address first — approving now would lock in an empty one' };
+    }
 
     if (row.status === CONNECTION_STATUS.declared) {
       const approved = db.approveConnection(session.appId, session.slot);
@@ -439,6 +448,22 @@ export async function advanceFromRegister(): Promise<ConnectionWizardResult> {
  * Coinbase triple → the CDP pair), and landing it on 'done' would claim a connection
  * whose new fields no stored secret backs.
  */
+/**
+ * ONE digest for "did the field SET change" and ONE ceiling comparison — shared by the
+ * re-approval branch and the drift migration below (Gate-5 reuse finding: the private
+ * copies had already diverged, and the divergent one was the one deciding a credential
+ * deletion). The host comparison is order-insensitive on purpose: today
+ * `deriveConnectionAllowedHosts` sorts, but a destructive downgrade must not silently
+ * depend on a sort it does not own.
+ */
+function requirementFieldKeysDigest(requirement: Pick<ConnectionRequirement, 'fields'> | undefined): string {
+  return JSON.stringify((requirement?.fields ?? []).map((field) => field.key));
+}
+
+function connectionHostsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return [...left].sort().join('\n') === [...right].sort().join('\n');
+}
+
 export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
   // Hand-rolled async rather than `withSession` (whose callback is sync): the ADR-0025
   // §5 downgrade below awaits the credential store, and a fire-and-forget write there
@@ -449,38 +474,50 @@ export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
     const db = await getUserDb();
     if (connectionWizardStore.get() !== session) return { ok: false, message: 'the wizard session changed' };
     const before = db.getConnection(session.appId, session.slot);
-    const fieldKeys = (requirement: ConnectionRequirement | undefined): string =>
-      JSON.stringify((requirement?.fields ?? []).map((field) => field.key));
     const kindChanged =
       before?.pendingRequirement !== undefined && before.pendingRequirement.kind !== before.requirement.kind;
     const fieldSetChanged =
-      before?.pendingRequirement !== undefined && fieldKeys(before.pendingRequirement) !== fieldKeys(before.requirement);
+      before?.pendingRequirement !== undefined &&
+      requirementFieldKeysDigest(before.pendingRequirement) !== requirementFieldKeysDigest(before.requirement);
     db.reapproveConnection(session.appId, session.slot);
     invalidateNetGrants(session.appId);
     const after = db.getConnection(session.appId, session.slot);
 
     // ADR-0025 §5 — verified never migrates to a device it was not proven against. A
-    // LAN re-approval that moved the frozen ceiling or changed the field set carries
-    // the old mint and the old proof NOWHERE: the key was minted by one device, the
-    // pin captured from its certificate, and the verify read performed against it —
-    // none of which says anything about whatever now answers at the promoted address.
-    const hostsChanged =
-      JSON.stringify(before?.allowedHosts ?? []) !== JSON.stringify(after?.allowedHosts ?? []);
-    if (isLanRequirement(after?.requirement) && (hostsChanged || fieldSetChanged || kindChanged)) {
+    // re-approval that moved a LAN ceiling, changed the field set, or moved the row
+    // INTO or OUT OF the LAN class carries the old mint and the old proof NOWHERE.
+    // `before || after` (Gate-5 finding): keying on the destination alone let a
+    // LAN→non-LAN rebind strand the minted key, the pin and the marker — resurrectable
+    // later as a proof against a device the row no longer points at.
+    const lanInvolved = isLanRequirement(before?.requirement) || isLanRequirement(after?.requirement);
+    if (
+      lanInvolved &&
+      (kindChanged ||
+        fieldSetChanged ||
+        !connectionHostsEqual(before?.allowedHosts ?? [], after?.allowedHosts ?? []))
+    ) {
+      // A Set because both generations usually resolve the SAME pairing secret key —
+      // the two entries exist for the rebind case, not because two secrets exist.
+      const secretKeys = new Set<string>();
       for (const requirement of [before?.requirement, after?.requirement]) {
         const exchange = lanPairingExchangeFor(requirement);
         if (exchange !== undefined) {
-          db.deleteSecret(authConnectionCredentialSecretKey(session.appId, session.slot, exchange.secretField));
+          secretKeys.add(authConnectionCredentialSecretKey(session.appId, session.slot, exchange.secretField));
         }
       }
+      for (const key of secretKeys) db.deleteSecret(key);
       const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), session.slot);
       // A REPLACING write, deliberately: `pending` with no pin and no marker is the
       // whole truth about a device we have not met.
       await store.setConnectionState(session.appId, { status: 'pending' });
-      invalidateNetGrants(session.appId);
     }
 
     bumpRevision();
+    // The step write races a possible close/reopen across the await above. The row
+    // changes stand — they are this slot's truth — but steering the step store would
+    // steer whatever wizard is open NOW (the withSession recheck, restated for the
+    // second suspension point this function grew).
+    if (connectionWizardStore.get() !== session) return { ok: true };
     connectionWizardStepStore.set(kindChanged || fieldSetChanged ? nextStep('review', after?.requirement) : 'done');
     return { ok: true };
   } catch (err) {
@@ -803,7 +840,23 @@ function pairingErrorMessage(body: string): string | undefined {
  * talk to. When the verifier captured nothing, that absence is the truth and
  * this refuses rather than inventing a fingerprint.
  */
+/**
+ * The pairing error, held in a STORE rather than in screen-local state (Gate-5
+ * finding): the failure paths bump the revision (a durable state change must announce
+ * itself to every subscriber), the bump remounts the pairing screen through the
+ * loading gate, and a screen-local error would be thrown away by exactly that remount.
+ * Fixed sentences only — never device text, never a credential (C1).
+ */
+export const lanPairingErrorStore = createStore<string | null>(null);
+
 export async function runLanPairing(): Promise<LanPairingOutcome> {
+  lanPairingErrorStore.set(null);
+  const outcome = await runLanPairingAttempt();
+  if (!outcome.ok) lanPairingErrorStore.set(outcome.message);
+  return outcome;
+}
+
+async function runLanPairingAttempt(): Promise<LanPairingOutcome> {
   const session = connectionWizardStore.get();
   if (session === null) return { ok: false, message: 'no wizard session' };
   const pair = getPlatform().lanPair;
@@ -880,48 +933,48 @@ export async function runLanPairing(): Promise<LanPairingOutcome> {
     };
   }
 
-  // BOTH WRITES, HERE, TOGETHER — under the HONEST pre-verify status (ADR-0025 §1):
-  // `pending`, because nothing has proven the key yet. A stale `lanVerifiedAt` from an
-  // earlier pairing is dropped in the same write: the marker may only ever describe THE
-  // key now in the store.
-  const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), session.slot);
-  db.setSecret(authConnectionCredentialSecretKey(session.appId, session.slot, exchange.secretField), minted);
-  const previous = await store.getConnectionState(session.appId);
-  const pendingState: AuthConnectionState = {
-    ...(previous ?? {}),
-    status: 'pending',
-    lanPin: { fingerprint: pin.fingerprint, cn: pin.cn },
-  };
-  delete pendingState.lanVerifiedAt;
-  await store.setConnectionState(session.appId, pendingState);
-  // A key was written, so remembered grant verdicts are stale REGARDLESS of how the
-  // verify below lands (plan-review advisory D).
-  invalidateNetGrants(session.appId);
-
-  // THE VERIFY READ (ADR-0025 §1-2) — the wizard proves the key before it claims it.
-  // Failure keeps the mint and the `pending` above: re-pairing overwrites, and the pair
-  // screen (which the sheet derives from the unverified state) is the retry surface.
-  // NO revision bump on the failure paths, deliberately: nothing the sheet RENDERS
-  // changed (the row is untouched and the row was already unverified), and a bump here
-  // would remount the pairing screen through the loading gate and throw away the very
-  // error message the user needs. The `pending` state is re-read on the next open,
-  // which always bumps.
+  // THE VERIFY READ FIRST, THE WRITES AFTER (ADR-0025 §1-2, tightened at Gate 5's
+  // review): NOTHING durable lands until the verdict is in. The pin rides to the probe
+  // as an in-memory argument, so the executor's pin-gated LAN lane cannot serve app
+  // traffic with an unproven key during the round trip — the store simply does not
+  // hold one yet. A crash anywhere before the write below leaves no trace, and
+  // "unverified ⇒ re-pair" is already the honest recovery.
   const verdict = await runLanVerifyProbe(host, exchange, row.requirement, minted, pin.fingerprint);
-  if (!verdict.ok) return verdict;
-  if (connectionWizardStore.get() !== session) {
-    // The user left mid-verify. The `pending` truth stands; nothing claims connected.
-    return { ok: false, message: 'the wizard session changed' };
+
+  // ONE write per outcome, and the key + pin + status land TOGETHER in it. A stale
+  // `lanVerifiedAt` from an earlier pairing is dropped either way: the marker may only
+  // ever describe the key now in the store, and only the verify above may write it.
+  const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), session.slot);
+  const previous = await store.getConnectionState(session.appId);
+  const carried: Partial<AuthConnectionState> = { ...(previous ?? {}) };
+  delete carried.lanVerifiedAt;
+  db.setSecret(authConnectionCredentialSecretKey(session.appId, session.slot, exchange.secretField), minted);
+  if (!verdict.ok) {
+    // Failure keeps the mint, not the claim (ADR-0025 §2): the device DID create this
+    // key and re-pairing overwrites it; `pending` is the whole truth about it. The pin
+    // is stored beside it so a later request path fails at the device rather than at
+    // the handshake — the accepted §3 divergence, now confined to this one outcome.
+    await store.setConnectionState(session.appId, {
+      ...carried,
+      status: 'pending',
+      lanPin: { fingerprint: pin.fingerprint, cn: pin.cn },
+    });
+    invalidateNetGrants(session.appId);
+    bumpRevision();
+    return verdict;
   }
-  const verified = await store.getConnectionState(session.appId);
   await store.setConnectionState(session.appId, {
-    ...(verified ?? {}),
+    ...carried,
     status: 'connected',
     lanPin: { fingerprint: pin.fingerprint, cn: pin.cn },
     lanVerifiedAt: Date.now(),
   });
   invalidateNetGrants(session.appId);
   bumpRevision();
-  connectionWizardStepStore.set('done');
+  // The PROOF is kept even when the user closed the wizard mid-verify — the physical
+  // button press is not wasted (Gate-5 finding). Only the STEP is session-scoped:
+  // steering the step store would steer whatever wizard is open now.
+  if (connectionWizardStore.get() === session) connectionWizardStepStore.set('done');
   return { ok: true };
 }
 
@@ -971,6 +1024,14 @@ async function runLanVerifyProbe(
     );
     headers = rendered.headers;
   } catch {
+    return { ok: false, message: LAN_VERIFY_UNPREPARABLE };
+  }
+  // THE CREDENTIAL MUST ACTUALLY RIDE (Gate-5 finding): a requirement with no header
+  // template — or one whose template never references the pairing's secret field —
+  // renders zero credentialed headers WITHOUT throwing, and the probe would degrade
+  // into a liveness check any 2xx satisfies. An unauthenticated 200 must never mint a
+  // verified claim, so a render that did not carry the minted value refuses here.
+  if (!Object.values(headers).some((value) => value.includes(minted))) {
     return { ok: false, message: LAN_VERIFY_UNPREPARABLE };
   }
   let status: number;
@@ -1160,14 +1221,9 @@ export async function migrateConnectionRegistryDrift(appId: string, slot: string
     channel: row.provenance as AdmissionChannel,
   });
 
-  const fieldKeys = (requirement: Pick<ConnectionRequirement, 'fields'>): string =>
-    JSON.stringify((requirement.fields ?? []).map((field) => field.key));
-  const hostsEqual = (left: readonly string[], right: readonly string[]): boolean =>
-    [...left].sort().join('\n') === [...right].sort().join('\n');
-
   if (admitted.ok) {
     const substituted = admitted.requirement;
-    const fieldSetChanged = fieldKeys(row.requirement) !== fieldKeys(substituted);
+    const fieldSetChanged = requirementFieldKeysDigest(row.requirement) !== requirementFieldKeysDigest(substituted);
     const gainsSeats =
       (row.requirement.request === undefined && substituted.request !== undefined) ||
       (row.requirement.testRequest === undefined && substituted.testRequest !== undefined);
@@ -1182,7 +1238,7 @@ export async function migrateConnectionRegistryDrift(appId: string, slot: string
     if (
       !fieldSetChanged &&
       pending !== undefined &&
-      hostsEqual(deriveConnectionAllowedHosts(pending), row.allowedHosts)
+      connectionHostsEqual(deriveConnectionAllowedHosts(pending), row.allowedHosts)
     ) {
       // Host-identical seat refresh: promote without ceremony. Every approval
       // transition drops remembered net grants (the R3 rule `advanceFromReview`

@@ -936,3 +936,55 @@ describe('re-approval invalidation (ADR-0025 §5) — verified never migrates to
     expect(typeof state['lanVerifiedAt']).toBe('number');
   });
 });
+
+describe('Gate-5 review regressions (ADR-0025 hardening)', () => {
+  it('a LAN → non-LAN kind rebind wipes the mint, the pin and the marker — proof never survives the class it was proven in', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+    await click(button(/i pressed the button/i));
+    await settleUntil(() => connState(harness)['status'] === 'connected');
+
+    // The promoted requirement drops the lanHost seat entirely — a different class.
+    harness.db.stagePendingRequirement(APP, SLOT, {
+      slot: SLOT,
+      provider: { name: 'Example Cloud' },
+      kind: 'api_key',
+      declaredApiHosts: ['api.example.com'],
+      fields: [{ key: 'token', label: 'API token', type: 'secret' }],
+    });
+    const outcome = await harness.wizard.reapproveFromDiff();
+    expect(outcome.ok).toBe(true);
+
+    expect(
+      harness.db.getSecret(`auth:${APP}:${SLOT}:application_key`),
+      'the bridge-minted key must not outlive the LAN class',
+    ).toBeUndefined();
+    const state = connState(harness);
+    expect(state['status']).toBe('pending');
+    expect(state['lanPin']).toBeUndefined();
+    expect(state['lanVerifiedAt']).toBeUndefined();
+  });
+
+  it('a step FORCED to credentials cannot walk an unproven LAN row into the api-key screens', async () => {
+    const desktop = fakeDesktop();
+    const harness = await fresh(desktop.platform);
+    harness.wizard.openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await render(<harness.Sheet />);
+    await collectAndApprove(harness);
+
+    // Not a route any shipped transition takes — the point is that the pairing gate
+    // must hold whatever the step store says, because the chain's protection is
+    // otherwise order-dependent inside a long ternary.
+    await act(async () => {
+      harness.wizard.connectionWizardStepStore.set('credentials');
+    });
+    await settle();
+
+    expect(testId('lan-pair-step'), 'the pairing gate intercepts before the step branches').not.toBeNull();
+    expect(testId('credentials-custody')).toBeNull();
+    expect(container?.textContent ?? '').not.toMatch(/get your philips hue credentials/i);
+  });
+});

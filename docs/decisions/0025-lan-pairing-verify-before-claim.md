@@ -29,23 +29,30 @@ rather than a transport defect:
 
 1. **A pairing exchange carries a required `verify` seat**
    (`WellKnownPairingExchange.verify: { method: 'GET', pathAndQuery }`, registry data,
-   human-reviewed like every other seat). The pairing write becomes two acts with an
-   honest status between them: key to secrets + connection state
-   `{ status: 'pending', lanPin }` in one step, then the verify read through the PINNED
-   transport (`platform.lanFetch`) with the just-captured pin, injecting the entry's own
-   `request.headerTemplate` (via the auth package's template renderer) with only the
-   just-minted `secretField` value. Only a 2xx upgrades the state to
-   `{ status: 'connected', lanPin, lanVerifiedAt }` and lands the done screen —
+   human-reviewed like every other seat). **Verify first, then ONE durable write per
+   outcome** (tightened at Gate 5's review): the verify read fires through the PINNED
+   transport (`platform.lanFetch`) with the just-captured pin as an IN-MEMORY argument,
+   injecting the entry's own `request.headerTemplate` (via the auth package's one
+   template renderer) with only the just-minted `secretField` value — and a render that
+   does not actually carry the minted value refuses rather than degrading into a
+   liveness probe any 2xx would satisfy. Nothing durable lands before the verdict, so
+   the executor's pin-gated LAN lane cannot serve app traffic with an unproven key
+   during the round trip, and a crash mid-verify leaves no trace ("unverified ⇒
+   re-pair" is the recovery either way). A 2xx writes key + pin +
+   `{ status: 'connected', lanVerifiedAt }` together and lands the done screen —
    `lanVerifiedAt` is written by the verify step and nothing else. Hue verifies with
    `GET /clip/v2/resource/bridge`. `verify` is REQUIRED: a pairing provider that cannot
    be verified post-mint re-creates this defect.
-2. **Verify failure keeps the mint, not the claim.** Key + pin + `pending` stay (the
-   device did mint them; re-pairing simply overwrites), and the user gets a
-   fixed-sentence explanation distinguishing "could not reach the device for the check"
-   from "the device refused the minted key". No `lastError` is written — the
-   `_connection` KV syncs and exports, and a verify failure is a wizard-screen fact, not
-   a durable one. C1 unchanged: the probe response is read for its STATUS only — the
-   body is never read, stored, rendered, or quoted.
+2. **Verify failure keeps the mint, not the claim.** The failure outcome's one write is
+   key + pin + `{ status: 'pending' }` (the device did mint them; re-pairing simply
+   overwrites), and the user gets a fixed-sentence explanation distinguishing "could
+   not reach the device for the check" from "the device refused the minted key" — held
+   in a store rather than screen state, because the failure bump remounts the pairing
+   screen and a local error would be eaten by exactly that remount. Every outcome bumps
+   the revision: a durable state change always announces itself. No `lastError` is
+   written — the `_connection` KV syncs and exports, and a verify failure is a
+   wizard-screen fact, not a durable one. C1 unchanged: the probe response is read for
+   its STATUS only — the body is never read, stored, rendered, or quoted.
 3. **"Pairing owed" derives from the verified fact, through one reader.** A LAN row is
    verified iff `status === 'connected'` AND `lanVerifiedAt` is present; one state-layer
    derivation is the only reader of the connection state, and the wizard sheet holds
@@ -63,13 +70,17 @@ rather than a transport defect:
    the state transitions for those screens refuse LAN rows outright. The registry's
    walkthrough instructions still render — on the host-collection screen, where they
    always have.
-5. **What was verified is invalidated when what it was verified against changes.** A LAN
-   re-approval whose promoted requirement changes the frozen hosts or the field set
-   downgrades the connection state to `{ status: 'pending' }` (dropping pin and marker)
-   and deletes the pairing-owned secret: a key minted by one device must not ride a
-   ceiling now pointing at another, and "verified with the device at <host>" must never
-   name a host it was not proven against. Host-identical, field-identical re-approvals
-   keep the verified state.
+5. **What was verified is invalidated when what it was verified against changes.** A
+   re-approval that moves a LAN ceiling, changes the field set, or moves the row INTO
+   or OUT OF the LAN class (`before || after` — keying on the destination alone let a
+   LAN→non-LAN rebind strand the mint and the proof, resurrectable on a later rebind
+   back) downgrades the connection state to `{ status: 'pending' }` (dropping pin and
+   marker) and deletes the pairing-owned secret: a key minted by one device must not
+   ride a ceiling now pointing at another, and "verified with the device at <host>"
+   must never name a host it was not proven against. The ceiling comparison is
+   order-insensitive and shared with the drift migration's — a destructive downgrade
+   must not depend on a sort it does not own. Host-identical, field-identical
+   re-approvals keep the verified state.
 6. **The sheet cannot render ahead of the facts.** The wizard sheet refuses to render a
    step for a revision whose row it has not re-read (it tracks the loaded revision and
    shows the loading hint on mismatch), and its final fallback renders the done screen

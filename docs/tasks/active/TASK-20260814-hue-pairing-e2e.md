@@ -239,3 +239,59 @@ probe response never leave `runLanPairing`'s scope; done/error copy is fixed-sen
 - State: plan + ADR amended and committed; Gate 3 starting.
 - Next step: failing tests in plan order (registry seat → routing/reopen regression →
   verify outcomes → race → re-approval downgrade → C1 scans → starter copy).
+
+### 2026-08-14 — Claude (Fable) — session (continued, Gates 3-5)
+- Done — Gate 3: red tests committed (2 auth registry + 12 wizard + 1 examples; 11 of
+  the wizard tests failed on main as designed, the AC9 race test guards the new route).
+  Gate 4: implemented auth verify seat + `lanVerifiedAt`, LAN step routing + guards,
+  verify probe, connected-state gate, revision-matched rendering, done copy, starter
+  copy. All suites green (auth 717, playground 1028, desktop 105, examples 182).
+- Done — Gate 5: /code-review at high effort (multi-angle finders + adversarial
+  verification). 10 verified findings, 1 candidate REFUTED (order-sensitive host
+  compare cannot misfire today — `deriveConnectionAllowedHosts` sorts, load-bearing for
+  import reconciliation; kept as a reuse fix anyway). Fixes applied, each with its
+  regression pinned where testable:
+  - **Verify-first, ONE durable write per outcome** in `runLanPairing` (was: write
+    pending+pin, then verify, then upgrade). Closes the widened executor window (pin
+    was in the store before the verdict; gate 9a keys on pin presence), the double
+    whole-DB persist flush, the post-verify re-read/clobber race, and restores
+    "key+pin+status land together". Mid-verify wizard close now KEEPS a successful
+    proof (the button press is not wasted) and only the step write is session-scoped.
+  - **Uncredentialed-probe refusal**: a header render that does not carry the minted
+    value refuses (`LAN_VERIFY_UNPREPARABLE`) instead of degrading into a liveness
+    probe a captive portal could satisfy.
+  - **Rebind hole closed**: the §5 downgrade keys on `before || after` LAN class (+
+    regression test staging a LAN→api_key rebind).
+  - **Session recheck after `reapproveFromDiff`'s new await** before the step write
+    (the withSession invariant, restated for the second suspension point).
+  - **Failure paths bump the revision** and the pairing error moved to
+    `lanPairingErrorStore` (fixed sentences only) so the remount cannot eat it.
+  - **Consolidated LAN gate**: one catch-all pairing branch ABOVE the step-keyed
+    branches (no status conjunct, tail fallback removed) — no step value can walk an
+    unproven LAN row into register/credentials/done (+ forced-step regression test).
+  - **Shared `requirementFieldKeysDigest`/`connectionHostsEqual`** helpers (reapproval
+    + drift migration read one definition; comparison order-insensitive), Set-deduped
+    secret deletion, single grant invalidation, `loaded` folded into `loadedRevision`,
+    DoneScreen host guard, pre-collection LAN approve refusal in `advanceFromReview`.
+  - **Doc drift fixed in-branch**: code-map LAN row (verify seat + marker), ADR-0025
+    §1/§2/§5 rewritten to the verify-first single-write shape, next-steps queued the
+    four follow-ups (async withSession, shared row hook, Settings pill
+    verified-awareness, probe→auth relocation).
+  - Deliberately NOT changed, with reasons on record: executor gate 9a stays
+    pin-keyed (ADR-0025 §3 accepted divergence, now confined to the failure outcome);
+    `nextStep` returns 'done' for LAN from any step (total by design — every caller
+    enumerated safe by the review's own verifier); Settings pill (queued);
+    corrupt-`_connection` reads as unverified → re-pair (self-healing and honest —
+    the executor could not use a corrupt pin either); HubView badge + starter README
+    copy (true in their web-only contexts).
+- Verification: root `pnpm test` 21/21 green after fixes.
+- **High-tier self-sign-off**: plan reviewed fresh-context before implementation and
+  its five findings folded pre-code; tests first (red commit precedes implementation);
+  C1 negatives present (probe body never read, fixed sentences, store scans); no
+  protocol schema touched (spec-sync not triggered); no test deleted or weakened; the
+  one deliberate residual (gate 9a divergence) is an ADR-recorded decision, not an
+  oversight. Signed: Claude (Fable), 2026-08-14.
+- State: branch complete pending owner review + merge; owner hardware retest owed
+  after merge (procedure in plan step 8 — note the pre-fix row on the owner's machine
+  will offer RE-PAIR on open; that is AC4 working, not a regression).
+- Next step: owner review → PR → merge → move task file to done/ → hardware retest.
