@@ -1,6 +1,6 @@
 # Snug — Architecture
 
-> Status: **implemented (living-apps evolution + hub ops + hub polish + observability/caching + Dynamic Auth v2 + lean runtime turns & intent-routed data chat, pre-launch)** — 2026-08-11, TASK-20260804-observability-caching (on TASK-20260804-hub-polish (on TASK-20260803-hub-ops (on living-apps, TASK-20260803-living-apps, on portable-hub, TASK-20260803-portable-hub). Hub ops added: long-run builds (48-iteration ceiling — there was never a timeout), 30-minute server lifetimes, a build step timeline, an in-memory LLM round-trip inspector (a SIBLING of the structural frame inspector, never an extension), cascade app delete with a terminal-delete tombstone, and the LLM-optional app doctrine (ADR-0011)). Hub polish added: a header identity menu with the Google avatar, the ember-niche brand mark, one merged "think" rail surface, round-trip observability in the build view AND the app-frame transport, explicit starter install (a starter is read-only until owned), build-thread continuity, and CAS conflicts that reach the divergence resolver instead of throwing. Observability/caching added: LIVE round-trip observation (calls and tools appear as they start, each timed), the wire model name, prompt caching on the stable tools+system prefix of BUILDER turns only (a per-TURN request flag — the app-frame envelopes are below the cacheable minimum and deliberately excluded) (ADR-0012), cache-hit reporting as a cached %, and a rotating status line replacing the duplicate step timeline. The inspector's memory bound moved from a per-field ingest cap to a total-bytes budget so expanded payloads can be shown whole.) Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is spec v0.2 draft schema v2 (`docs/spec-drafts/spec-v0.2-userdb.md`). Auth broker (app credentials) remains v1.1 — hub LOGIN shipped separately in `apps/server`.
+> Status: **implemented (living-apps evolution + hub ops + hub polish + observability/caching + Dynamic Auth v2 + lean runtime turns & intent-routed data chat, pre-launch)** — 2026-08-15 (post-08-11 merges, each with its own section or ADR: registry-authoritative auth + multi-option auth kind ADR-0020 · desktop shell ADR-0021 · desktop-aware auth/LAN providers ADR-0022/0023 · think-rail ADR-0024 · LAN verify-before-claim ADR-0025 · connection-relative addressing ADR-0026), TASK-20260804-observability-caching (on TASK-20260804-hub-polish (on TASK-20260803-hub-ops (on living-apps, TASK-20260803-living-apps, on portable-hub, TASK-20260803-portable-hub). Hub ops added: long-run builds (48-iteration ceiling — there was never a timeout), 30-minute server lifetimes, a build step timeline, an in-memory LLM round-trip inspector (a SIBLING of the structural frame inspector, never an extension), cascade app delete with a terminal-delete tombstone, and the LLM-optional app doctrine (ADR-0011)). Hub polish added: a header identity menu with the Google avatar, the ember-niche brand mark, one merged "think" rail surface, round-trip observability in the build view AND the app-frame transport, explicit starter install (a starter is read-only until owned), build-thread continuity, and CAS conflicts that reach the divergence resolver instead of throwing. Observability/caching added: LIVE round-trip observation (calls and tools appear as they start, each timed), the wire model name, prompt caching on the stable tools+system prefix of BUILDER turns only (a per-TURN request flag — the app-frame envelopes are below the cacheable minimum and deliberately excluded) (ADR-0012), cache-hit reporting as a cached %, and a rotating status line replacing the duplicate step timeline. The inspector's memory bound moved from a per-field ingest cap to a total-bytes budget so expanded payloads can be shown whole.) Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is internal-draft schema v6 (`docs/spec-drafts/spec-v0.2-userdb.md` staged; `userdb-schema.ts` is the truth). Auth broker (hosted credential custody) is deliberately unbuilt — RFC at 1.6, GA at 2.0 (roadmap v2, owner decision 2026-08-05); hub LOGIN shipped separately in `apps/server`.
 >
 > **TASK-20260811 (ADR-0018/0019) added two protocol-level USPs.** (1) **Lean runtime
 > turns**: an installed app's own LLM turns are assembled from a compact, version-pinned
@@ -43,7 +43,7 @@
 └──────────────────────────────────────────────────────────────────────────────────────────┘
    packages/protocol = envelope/frames (v1) + net-request/net-response (AL-03 internal
      draft, own size class, NOT in schemas/) + userdb-schema.ts (spec v0.2 storage
-     surface; v5 internal draft: snug_connections — snug_auth_specs was dropped at v5)
+     surface; v6 internal draft — v5: snug_connections, snug_auth_specs dropped; v6: runtime_contract_json)
      + auth-schema.ts + connection-requirement.ts (internal)
    apps/server (OPTIONAL hub) = /invoke + artifact cache + Google OIDC + /userdb + static
    packages/auth (AL-02/AL-03, ADR-0014) = Dynamic Auth pure core + connected-fetch
@@ -69,7 +69,7 @@ Exactly three proposers exist, and the review each one gets is fixed:
 | Proposer | Channel | Review |
 |---|---|---|
 | the user | Settings / net-error CTA | manual entry |
-| the builder LLM (already reviewed) | chat directive → `resolveWizardIntent` | registry rung light · inference strong |
+| the builder LLM (already reviewed) | chat directive → `finalizeConnectionDeclaration` (post-turn, `connectionPipeline.ts`) | registry rung light · inference strong |
 | the **install act** | starter's `examples/<folder>/connection.json` | **always strong** (field-by-field) |
 
 The install-act rung (TASK-20260807-connection-reachability) exists because a chat-less
@@ -85,11 +85,14 @@ attacker's. Any mismatch is reported in Settings, never silently withdrawn.
 The declaration rides in its own immutable wizard-session field, so it forces the strong
 review unconditionally — no mid-session action (notably "infer from docs") can downgrade
 it to the light path. **Every write still goes through an explicit user approval in the
-wizard; the only non-test `putAuthSpec` call site lives there.** Manifests are trusted
+wizard; connection rows are staged via `stagePendingRequirement` and written only on wizard
+approval (`putAuthSpec` and `snug_auth_specs` died at userdb v5).** Manifests are trusted
 only because they are first-party, in-repo, PR-reviewed content gated by the `examples`
 validate suite. **Before any UNTRUSTED declaration channel can exist** (an app-import
-flow above all), a `providerName` charset/confusable guard and a registry-borrow ban are
-hard prerequisites — see `docs/next-steps.md`.
+flow above all), a `providerName` charset/confusable guard and a registry-borrow ban were
+named hard prerequisites — both LANDED with TASK-20260812 (guard in
+`packages/protocol/src/connection-requirement.ts`, borrow ban in
+`packages/auth/src/requirement-admission.ts`).
 
 ## Desktop shell (TASK-20260812-desktop-hub-scaffold, ADR-0021)
 
@@ -110,7 +113,10 @@ fetch executor gained a desktop-only `transportPolicy` admitting `http` to user-
 RFC-1918 IPv4 literals (Hue-class LAN; browser profile unchanged). C2's in-shell proof =
 the 14 browser CSP checks + IPC-unreachability-from-iframe checks + one wizard e2e
 journey, run by the shell-gate harness (`pnpm --filter desktop gate`): macOS GREEN
-2026-08-12, Windows pends first CI run (first workflow: `.github/workflows/ci.yml`).
+2026-08-12; Windows RAN 2026-08-13 and FAILED deliberately — wry's WebView2 backend
+ignores `for_main_frame_only`, so `__TAURI_INTERNALS__` reaches app iframes: ADR-0021 D8
+trigger MET, gate stays RED pending the owner's platform decision (Electron / macOS-only
+/ upstream fix).
 Threat surface: `docs/security/threat-model-delta-desktop-shell.md`.
 
 ### Desktop-aware dynamic auth (TASK-20260812-desktop-auth-awareness, ADR-0022 + ADR-0023)
@@ -166,13 +172,13 @@ accept-and-capture does not exist. Threat surface:
 
 ## Dependency graph (who depends on whom → whose tests also run)
 
-- `protocol` ← `runner`, `sdk`, `server`, `adapters`, `db`, `playground` (change protocol → run everything)
+- `protocol` ← `runner`, `sdk`, `server`, `adapters`, `db`, `knowledge`, `playground` (change protocol → run everything)
 - `db` ← `sdk`, `playground` (userdb schema constants come FROM protocol)
-- `knowledge` ← `server`, `playground`
+- `knowledge` ← `server`, `playground`, `desktop`; `sdk` dev-depends on it (the KB≡SDK sync suite)
 - `adapters` ← `server`, `playground` (browser-direct byok/local)
-- `runner` ← `playground`
+- `runner` ← `playground`, `server`; `adapters`/`db`/`sdk` dev-depend on it (their suites exercise it)
 - `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); `playground` now consumes it (AL-03 wires the connected-fetch executor into the runner's NetHandler seam) — change `auth` → run `auth` + `playground`. `runner` does NOT depend on `auth` (value-blind by lint, R4).
-- `desktop` (apps/desktop) consumes the playground SOURCE (vite alias) + `auth`/`db`/`adapters` — change any of those → run `desktop` too (`pnpm --filter desktop test`, plus `test:rust` and the `gate` script for shell-level changes).
+- `desktop` (apps/desktop) consumes the playground SOURCE (vite alias) + ALL seven @snugprotocol packages (protocol/runner/sdk/db/knowledge/adapters/auth per its package.json) — change any of those → run `desktop` too (`pnpm --filter desktop test`, plus `test:rust` and the `gate` script for shell-level changes).
 
 ## External dependencies
 LLM providers: Anthropic + OpenAI via `adapters` — browser-direct in byok mode (CORS opt-in header), any OpenAI-compatible localhost endpoint in local mode (Ollama), hub-side in subscription mode. Experimental: `@mlc-ai/web-llm` (pinned, playground-only, code-split) runs a small model in-page on WebGPU behind the `?webllm=1` flag — same AgentAdapter contract via a brain OVERRIDE of the configured mode, tool-free fenced-HTML build path, demo-brain fallback when WebGPU is absent (ADR-0015; GA at 1.2). sql.js (WASM SQLite), OPFS (browser). Hub server: better-sqlite3 stores, openid-client (Google OIDC), @fastify/{cookie,static,cors}. Dropbox HTTP API (example personal sync origin, PKCE public client). No cloud services required for OSS usage.
