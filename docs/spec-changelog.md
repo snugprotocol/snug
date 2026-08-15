@@ -4,7 +4,27 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
-## 2026-08-13 — INTERNAL DRAFT, not staged for any push — TASK-20260812-desktop-auth-awareness (P5, protocol lane)
+## 2026-08-14 — INTERNAL DRAFT, not staged for any push — TASK-20260814-hue-starter-real-connection (ADR-0026)
+**Excluded from every spec push** (same publication line as the entries below: the auth
+surface publishes no earlier than Beta exit). One additive CONTRACT change, zero schema
+bytes changed — `schemas/*.json` are untouched because `netRequestSchema.url` was always
+a bounded plain string.
+
+**Connection-relative addressing: `snug-connection://<slot><pathAndQuery>`** (ADR-0026).
+An app may address its OWN declared connection by slot instead of by a host it cannot
+know; the executor resolves the slot to the connection's single approved ceiling host
+and runs the entire existing gate pipeline on the resolved URL. Grammar is owned by
+`packages/protocol/src/connection-url.ts` (`CONNECTION_URL_SCHEME`,
+`parseConnectionUrl`; slot grammar is `CONNECTION_SLOT_RULE` by import). Refusal
+semantics: unknown slot → `NET_INVALID_REQUEST`; unapproved → `NET_NOT_APPROVED`;
+ceiling ≠ exactly one host, or two approved slots claiming the resolved host →
+`NET_AMBIGUOUS_CONNECTION` (fail-closed: the slot name selects a ceiling to translate
+through, never a credential-routing tiebreak). The resolved host is disclosed to the
+USER (confirm dialog) and never to the APP (host-clean refusals; error-only scrub of
+resolved forms; response bodies deliberately not scrubbed — provider data surface).
+
+Staged prose: to be folded into the auth draft's requirement/executor sections at the
+next spec-draft revision; the normative text at v1 is ADR-0026 + this entry.
 **Excluded from every spec push** (AL-12 HELD; auth surface publishes no earlier than
 Beta exit). One additive change to the internal v0.3 auth draft, no wire-surface impact —
 `schemas/*.json` byte-unchanged for the same publication-line reason as the P3 entry

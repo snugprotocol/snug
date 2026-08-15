@@ -68,6 +68,34 @@ is reachable from the desktop app only. The browser version of Snug refuses priv
 ranges. A LAN address is always typed by the user in the connect flow: never propose,
 guess, or invent a private address in a requirement.
 
+### Addressing a connection whose host only the user knows (connection-relative URLs)
+
+Some connections resolve to an address the app can never know at authoring time — a
+Philips Hue bridge on the user's own network is the canonical case. For those, do not
+write a hostname at all: address the CONNECTION by its slot,
+
+    net.fetch('snug-connection://<slot>/<path>')
+    net.fetch('snug-connection://hue/clip/v2/resource/room')
+
+and the host resolves the slot to the single address the user approved, then runs every
+gate, credential injection and scrub exactly as for a literal URL. The app never learns
+the address — not from a hook, not from an error message. This is the extract-never-invent
+rule's addressing twin: a private address is the user's fact, and a symbolic URL is how an
+app uses it without holding it.
+
+Rules that keep this honest:
+- Only the app's OWN declared slots resolve, and only while the connection is approved
+  with exactly one approved host. Anything else refuses with a coded error — handle
+  `NET_NOT_APPROVED` with your "connect <provider>" state, treat `NET_FETCH_FAILED` and
+  `NET_SSRF_BLOCKED` as "the device isn't reachable from here", and give
+  `NET_AMBIGUOUS_CONNECTION` its own sentence (it is a configuration problem, never a
+  reason to show the connect button).
+- Declare the connection exactly as before (the `lanHost` shape for devices); the
+  symbolic URL changes how the app ADDRESSES the connection, never what it declares.
+- Use symbolic URLs only when the host genuinely cannot be known (a `lanHost`
+  connection, or a user-specific endpoint). For ordinary providers keep literal
+  hostnames — they are what the user reviews on the approval screen.
+
 ### Declare the connection: emit the {{connectionRequirementDirectiveKind}} directive as you build
 
 This directive is how the user gets to log in or hand over a key: it is the only way an

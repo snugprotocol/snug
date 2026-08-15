@@ -316,6 +316,8 @@ function useAppDB() {
 // The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
 // hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
 // before any write, and scrubs the response. You never see a token.
+// A connection whose host only the USER knows (a device on their network): address it as
+// snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
 // ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
 // ============================================================
 function useConnectedFetch() {
@@ -339,48 +341,31 @@ function useConnectedFetch() {
     // ============================================================
     // 6. YOUR APP — Hue Lights Party
     // ============================================================
-    // THE LAN ONE. A Philips Hue bridge lives at an address your own router
-    // assigned, serves a certificate signed by a private CA, and hands out its
-    // credential only when you press the physical button on top of it. Each of
-    // those is a real boundary rather than a missing feature, and this task
-    // (ADR-0023) built the three pieces that clear them: a `lanHost` seat so a
-    // requirement can declare that a host will be COLLECTED, a wizard step that
-    // collects and pairs, and a desktop pinned-TLS transport that can reach the
-    // device once it is paired.
+    // THE LAN ONE, NOW REAL (ADR-0026; TASK-20260814-hue-starter-real-connection).
+    // A Philips Hue bridge lives at an address only the user's router knows, and this
+    // app NEVER learns it: every request is a connection-relative URL
+    // (snug-connection://hue/...) the host resolves to the address the user approved,
+    // then gates, credential-injects and scrubs exactly like any other request. The
+    // key stays in the host's storage (C1); the address stays in the frozen ceiling.
     //
-    // WHAT THIS APP DECLARES, and what it deliberately does NOT do:
+    // WHAT THIS APP DOES ON MOUNT: one probe that doubles as the data fetch —
+    // GET /clip/v2/resource/room. Success means connected AND the real rooms arrive
+    // in the same answer. A coded refusal picks the honest fallback:
+    //   NET_NOT_APPROVED          -> "connect Philips Hue" (the connect CTA)
+    //   NET_FETCH_FAILED /
+    //   NET_SSRF_BLOCKED          -> the bridge is not reachable from here (the truth
+    //                                on the web profile, and on desktop when the
+    //                                bridge is off or the network moved)
+    //   NET_AMBIGUOUS_CONNECTION  -> its own sentence, NEVER the connect CTA (it is a
+    //                                configuration problem, not a missing connection)
+    // The designer stays fully alive in every state — a connected app is useful
+    // before it is connected, and honest about what it is missing.
     //
-    //   * it ships a connection.json in the LAN shape, so the bridge is a real
-    //     reviewable connection with a frozen host ceiling — not an app quietly
-    //     talking to a device nobody approved;
-    //   * it NEVER handles the bridge key (C1). Pairing mints it straight into
-    //     the host's storage; the host injects `hue-application-key` on the way
-    //     out. There is no key in this file, none in this page's state, and
-    //     nothing here could print one if it tried;
-    //   * it NEVER names the bridge's address, because it CANNOT — and this is
-    //     the honest limit of the current runtime rather than an omission. The
-    //     address is the user's, frozen into the ceiling at approval, and there
-    //     is no frame through which the host tells an app which hosts it may
-    //     reach: `useConnectedFetch` takes a literal URL and the executor parses
-    //     it with `new URL(...)` before checking the ceiling. A placeholder host
-    //     would not parse; a hardcoded one would be right for exactly one user.
-    //     Telling the app frame the address would be a NEW disclosure — the
-    //     user's own network topology, handed to sandboxed app code — and that
-    //     is a protocol decision with its own review, not something a starter
-    //     may help itself to.
-    //
-    // SO THE APPLY CONTROL STAYS GREYED, and the copy names the real reason — an app
-    // cannot address the bridge yet, on ANY platform, even after pairing. It must
-    // never frame itself around where the user is standing (TASK-20260814, ADR-0025):
-    // the previous copy said it was "waiting for the desktop app", which read as a lie
-    // to the owner sitting IN the desktop app with a freshly verified pairing, and
-    // turned a successful setup into an apparent failure. Greyed and explained beats
-    // a button that opens a flow leading nowhere — the same rule this app has always
-    // followed, applied to a boundary that moved.
-    //
-    // The designer below is fully alive on both platforms, which is the doctrine
-    // this shelf exists to show: a connected app is useful before it is
-    // connected, and honest about what it is missing.
+    // Scene apply is a REAL write: PUT /clip/v2/resource/grouped_light/<rid> per
+    // selected room with {on, dimming, color:{xy}}. The first write asks the user
+    // once (the host's confirm gate — that dialog names the bridge's address, which
+    // the user knows and this app never will); the grant is remembered for the
+    // session. Partial failures are surfaced per room, never averaged away.
 
     const SCENES = [
       { id: 'sunset', name: 'Sunset', emoji: '🌇', colors: ['#f97316', '#e11d48', '#7c3aed'] },
@@ -389,52 +374,157 @@ function useConnectedFetch() {
       { id: 'disco', name: 'Disco', emoji: '🪩', colors: ['#ec4899', '#8b5cf6', '#22d3ee'] },
     ];
 
-    const ROOMS = ['Living room', 'Kitchen', 'Bedroom'];
+    // sRGB hex -> CIE 1931 xy (D65), the color space CLIP v2 grouped_light speaks.
+    // Standard linearization then the sRGB->XYZ matrix; xy is the chromaticity
+    // projection. Good enough for scene colors; gamut clamping is the bridge's job.
+    function hexToXy(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      const lin = (v) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+      const r = lin((n >> 16) & 255), g = lin((n >> 8) & 255), b = lin(n & 255);
+      const X = 0.4124 * r + 0.3576 * g + 0.1805 * b;
+      const Y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const Z = 0.0193 * r + 0.1192 * g + 0.9505 * b;
+      const sum = X + Y + Z;
+      if (sum === 0) return { x: 0.3127, y: 0.329 }; // black -> D65 white point; dimming carries the darkness
+      return { x: +(X / sum).toFixed(4), y: +(Y / sum).toFixed(4) };
+    }
+
+    const ROOMS_URL = 'snug-connection://hue/clip/v2/resource/room';
+    const GROUPED_LIGHT_URL = 'snug-connection://hue/clip/v2/resource/grouped_light/';
 
     function App() {
       const { isReady, theme } = useSnugApp({
         appId: 'hue-lights-party',
         displayName: 'Hue Lights Party',
-        description: 'Design a lighting scene for the party and connect your Philips Hue bridge — the bridge lives on your home network, so pairing happens in the desktop app.',
+        description: 'Design a lighting scene and send it to your real Philips Hue rooms — the app addresses your bridge through its connection and never learns your network.',
         iconEmoji: '💡',
         iconColor: '#be123c',
       });
-      // THE GOVERNED SEAM, held rather than called (C1/AL-09 AC4): this app
-      // declares a connection, so it reaches the network through this handle and
-      // nothing else. It is the only network object in this file, and the day the
-      // runtime can tell an app its approved host, the apply path below is the
-      // only thing that changes.
+      // THE GOVERNED SEAM (C1): the only network object in this file. Every URL it is
+      // handed is connection-relative — no hostname appears anywhere in this app.
       const net = useConnectedFetch();
       const [scene, setScene] = useState(SCENES[0]);
       const [brightness, setBrightness] = useState(80);
-      const [rooms, setRooms] = useState(() => ({ 'Living room': true, Kitchen: false, Bedroom: false }));
+      // bridge: {phase:'checking'} | {phase:'connected', rooms:[{id,name,groupedLight,childCount}]}
+      //       | {phase:'connect'} | {phase:'unreachable'} | {phase:'ambiguous'} | {phase:'error', message}
+      const [bridge, setBridge] = useState({ phase: 'checking' });
+      const [selected, setSelected] = useState({});
+      const [applying, setApplying] = useState(false);
+      const [applyResults, setApplyResults] = useState(null);
 
       useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
 
+      const loadRooms = useCallback(async () => {
+        setBridge({ phase: 'checking' });
+        setApplyResults(null);
+        const res = await net.fetch(ROOMS_URL);
+        if (res.ok && res.status === 200) {
+          let rooms;
+          try {
+            const parsed = JSON.parse(res.body);
+            rooms = (parsed.data || []).map((room) => ({
+              id: room.id,
+              name: (room.metadata && room.metadata.name) || 'Room',
+              groupedLight: ((room.services || []).find((s) => s.rtype === 'grouped_light') || {}).rid || null,
+              childCount: (room.children || []).length,
+            }));
+          } catch (err) {
+            setBridge({ phase: 'error', message: 'the bridge answered in a shape this app could not read — try again' });
+            return;
+          }
+          setBridge({ phase: 'connected', rooms });
+          setSelected((prev) => (Object.keys(prev).length > 0 ? prev : (rooms[0] ? { [rooms[0].id]: true } : {})));
+          return;
+        }
+        if (res.ok) {
+          setBridge({ phase: 'error', message: 'the bridge answered ' + res.status + ' — try again in a moment' });
+          return;
+        }
+        const code = res.error && res.error.code;
+        if (code === 'NET_NOT_APPROVED') setBridge({ phase: 'connect' });
+        else if (code === 'NET_FETCH_FAILED' || code === 'NET_SSRF_BLOCKED') setBridge({ phase: 'unreachable' });
+        else if (code === 'NET_AMBIGUOUS_CONNECTION') setBridge({ phase: 'ambiguous' });
+        else setBridge({ phase: 'error', message: (res.error && res.error.message) || 'something went wrong — try again' });
+      }, [net]);
+
+      useEffect(() => { if (isReady) loadRooms(); }, [isReady, loadRooms]);
+
       if (!isReady) return <div className="connecting">connecting to the host…</div>;
 
-      const chosen = ROOMS.filter((room) => rooms[room]);
+      const rooms = bridge.phase === 'connected' ? bridge.rooms : [];
+      const chosen = rooms.filter((room) => selected[room.id] && room.groupedLight);
+
+      const apply = async () => {
+        setApplying(true);
+        setApplyResults(null);
+        const results = [];
+        for (let i = 0; i < chosen.length; i++) {
+          const room = chosen[i];
+          const color = scene.colors[i % scene.colors.length];
+          const res = await net.fetch(GROUPED_LIGHT_URL + room.groupedLight, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ on: { on: true }, dimming: { brightness }, color: { xy: hexToXy(color) } }),
+          });
+          results.push({
+            name: room.name,
+            ok: Boolean(res.ok && res.status < 300),
+            message: res.ok
+              ? (res.status < 300 ? 'lit' : 'the bridge answered ' + res.status)
+              : (res.error && res.error.code === 'NET_CONFIRM_DENIED'
+                  ? 'you declined this write'
+                  : 'could not reach this room — check the bridge and try again'),
+          });
+        }
+        setApplyResults(results);
+        setApplying(false);
+      };
 
       return (
         <div className="wrap">
           <h1>Hue Lights Party</h1>
-          <p className="sub">design the scene here — connect Philips Hue to pair your bridge.</p>
+          <p className="sub">design the scene here — connect Philips Hue to light up your real rooms.</p>
 
-          {/*
-            THE PRE-CONNECT NOTICE. It names the provider and what the user would
-            DO about it, which is the difference this shelf exists to demonstrate
-            — "connect Philips Hue" tells someone where to go; "unsupported"
-            tells them nothing.
-          */}
-          <div className="notice" data-testid="preconnect-notice">
-            <span aria-hidden="true">💡</span>
-            <p style={{ margin: 0 }}>
-              <b>connect Philips Hue to pair your bridge.</b> your bridge sits on your home network,
-              which only the Snug desktop app can reach. its connect flow finds the bridge, pairs
-              with it when you press the button on top, checks the new key with the bridge, and
-              keeps it for you. everything below already works right here.
-            </p>
-          </div>
+          {bridge.phase === 'connect' ? (
+            <div className="notice" data-testid="preconnect-notice">
+              <span aria-hidden="true">💡</span>
+              <p style={{ margin: 0 }}>
+                <b>connect Philips Hue to pair your bridge.</b> pairing runs in the Snug desktop
+                app’s connect flow — press the button on top of the bridge when it asks, and Snug
+                checks the new key with the bridge and keeps it for you. everything below already
+                works while you decide.
+              </p>
+            </div>
+          ) : null}
+          {bridge.phase === 'unreachable' ? (
+            <div className="notice" data-testid="unreachable-notice">
+              <span aria-hidden="true">📡</span>
+              <p style={{ margin: 0 }}>
+                <b>your bridge isn’t reachable from here.</b> the Snug desktop app on your home
+                network can reach it — check the bridge is powered on, then{' '}
+                <button type="button" className="chip" onClick={loadRooms}>check again</button>
+              </p>
+            </div>
+          ) : null}
+          {bridge.phase === 'ambiguous' ? (
+            <div className="notice" data-testid="ambiguous-notice">
+              <span aria-hidden="true">⚠️</span>
+              <p style={{ margin: 0 }}>
+                <b>this app’s Hue connection doesn’t point at exactly one device.</b> open
+                Settings → Connections and review it — this isn’t something connecting again can
+                fix.
+              </p>
+            </div>
+          ) : null}
+          {bridge.phase === 'error' ? (
+            <div className="notice" data-testid="bridge-error-notice">
+              <span aria-hidden="true">⚠️</span>
+              <p style={{ margin: 0 }}>
+                {bridge.message}{' '}
+                <button type="button" className="chip" onClick={loadRooms}>try again</button>
+              </p>
+            </div>
+          ) : null}
 
           <section className="card">
             <h2>🎨 pick a scene</h2>
@@ -445,7 +535,7 @@ function useConnectedFetch() {
                   type="button"
                   className="chip"
                   aria-pressed={scene.id === option.id}
-                  data-testid={`scene-${option.id}`}
+                  data-testid={'scene-' + option.id}
                   onClick={() => setScene(option)}
                 >
                   <span aria-hidden="true">{option.emoji}</span> {option.name}
@@ -457,70 +547,84 @@ function useConnectedFetch() {
               className="preview"
               data-testid="scene-preview"
               style={{
-                background: `linear-gradient(120deg, ${scene.colors.join(', ')})`,
+                background: 'linear-gradient(120deg, ' + scene.colors.join(', ') + ')',
                 opacity: 0.25 + (brightness / 100) * 0.75,
               }}
             >
-              <span>{scene.emoji} {scene.name}</span>
+              {scene.name} · {brightness}%
             </div>
 
-            <label className="slider-label" htmlFor="brightness">
-              brightness <b>{brightness}%</b>
-            </label>
+            <label className="slider-label" htmlFor="brightness">brightness</label>
             <input
               id="brightness"
               className="slider"
               type="range"
-              min="10"
+              min="1"
               max="100"
-              step="5"
               value={brightness}
+              data-testid="brightness-slider"
               onChange={(event) => setBrightness(Number(event.target.value))}
             />
           </section>
 
           <section className="card">
-            <h2>🏠 rooms</h2>
-            <div className="cities">
-              {ROOMS.map((room) => (
-                <button
-                  key={room}
-                  type="button"
-                  className="chip"
-                  aria-pressed={Boolean(rooms[room])}
-                  data-testid={`room-${room.toLowerCase().replace(/\s+/g, '-')}`}
-                  onClick={() => setRooms((prev) => ({ ...prev, [room]: !prev[room] }))}
-                >
-                  {room}
-                </button>
-              ))}
-            </div>
+            <h2>🏠 your rooms</h2>
+            {bridge.phase === 'checking' ? (
+              <div className="skeleton" data-testid="rooms-loading" />
+            ) : bridge.phase === 'connected' ? (
+              rooms.length === 0 ? (
+                <p className="hint" data-testid="no-rooms">
+                  your bridge has no rooms yet — create one in the Philips Hue app, then check back.
+                </p>
+              ) : (
+                <div className="cities">
+                  {rooms.map((room) => (
+                    <button
+                      key={room.id}
+                      type="button"
+                      className="chip"
+                      aria-pressed={Boolean(selected[room.id])}
+                      data-testid={'room-' + room.id}
+                      onClick={() => setSelected((prev) => ({ ...prev, [room.id]: !prev[room.id] }))}
+                    >
+                      {room.name}
+                      {room.childCount > 0 ? ' · ' + room.childCount + ' light' + (room.childCount === 1 ? '' : 's') : ''}
+                    </button>
+                  ))}
+                </div>
+              )
+            ) : (
+              <p className="hint" data-testid="rooms-placeholder">
+                your real rooms appear here once Philips Hue is connected.
+              </p>
+            )}
 
-            {/*
-              Greyed, never hidden, and never wired to a flow that cannot finish.
-              `disabled` + `aria-disabled` + the reason beneath it — the button
-              says what it would do and why it cannot do it yet.
-            */}
             <button
               className="btn"
               type="button"
-              disabled
-              aria-disabled="true"
+              disabled={bridge.phase !== 'connected' || chosen.length === 0 || applying}
               data-testid="apply-button"
+              onClick={apply}
             >
-              apply to my lights
+              {applying ? 'lighting up…' : 'apply to my lights'}
             </button>
-            <div className="notice desktop" data-testid="desktop-only-notice">
-              <span aria-hidden="true">🖥️</span>
-              <p style={{ margin: 0 }}>
-                <b>sending a scene from an app isn’t available yet.</b> an app is never told
-                your bridge’s address — that is a privacy boundary of the runtime, whatever
-                platform you are on and even after pairing — and a safe way for apps to talk to
-                paired devices is still to come. your scene is saved and ready for it. {chosen.length > 0
-                  ? `${chosen.length} room${chosen.length === 1 ? '' : 's'} selected and ready.`
+            {bridge.phase === 'connected' ? (
+              <p className="hint" data-testid="apply-hint">
+                {chosen.length > 0
+                  ? chosen.length + ' room' + (chosen.length === 1 ? '' : 's') + ' selected — the first apply asks once for permission to write.'
                   : 'pick a room to include.'}
               </p>
-            </div>
+            ) : null}
+
+            {applyResults !== null ? (
+              <div className={'result' + (applyResults.every((r) => r.ok) ? '' : ' err')} data-testid="apply-results">
+                {applyResults.map((r) => (
+                  <div key={r.name}>
+                    <span className="code">{r.name}</span>: {r.message}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </section>
         </div>
       );
