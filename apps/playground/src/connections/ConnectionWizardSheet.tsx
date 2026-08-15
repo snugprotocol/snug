@@ -42,7 +42,7 @@ import type { ReactElement } from 'react';
 
 import { CONNECTION_STATUS, type ConnectionField, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { type ConnectionRow } from '@snugprotocol/db';
-import { lookupWellKnownProvider } from '@snugprotocol/auth';
+import { lookupWellKnownProvider, resolveRegistryEntryByName } from '@snugprotocol/auth';
 
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';
@@ -147,17 +147,40 @@ function provenanceCopy(row: ConnectionRow): string {
 }
 
 /**
- * Q3 — is the console URL CLICKABLE? Only for `registry`, where the URL is one WE pinned.
+ * ADR-0029 (MIGRATED from Q3, TASK-20260815) — is the console URL CLICKABLE? Iff its
+ * BYTES match the pinned registry value for the row's RESOLVED provider, whatever the
+ * row's provenance.
  *
- * Everywhere else the URL came from a model or an app author, and rendering an
- * attacker-influenceable destination as a one-tap anchor inside the platform's own
- * credential wizard is the phishing hand-off in its purest form. Copy-only is the
- * mitigation — and the FULL url stays visible, because truncating the host is what turns
- * a copy-only affordance back into a phishing aid: a user who cannot read where they are
- * being sent cannot refuse to go.
+ * Provenance was the wrong key: a starter/inference row whose provider matched the
+ * registry had this URL SUBSTITUTED from the registry (`applyRegistryValues` replaces
+ * `registration` on every borrow hit), so the shipped Spotify starter rendered
+ * copy-paste for an address Snug itself pinned. The anti-phishing rule survives intact
+ * as what it always meant: rendering an attacker-influenceable destination as a one-tap
+ * anchor inside the platform's own credential wizard is the phishing hand-off in its
+ * purest form — so anything NOT byte-identical to our pinned value (including a
+ * near-miss one character off, the class an imported user file can carry) stays
+ * copy-only, with the FULL url visible, because truncating the host is what turns a
+ * copy-only affordance back into a phishing aid.
+ *
+ * Resolution is `resolveRegistryEntryByName` — the brand-adjacent rung admission itself
+ * uses — never the exact-key `lookupWellKnownProvider` (the hue lesson the drift
+ * migration documents: display names are not registry keys). Options' registrations are
+ * checked too: an option's console URL is as pinned as the entry's.
  */
 function consoleUrlIsClickable(row: ConnectionRow): boolean {
-  return row.provenance === 'registry';
+  const consoleUrl = row.requirement.registration?.consoleUrl;
+  if (consoleUrl === undefined) return false;
+  const entry = resolveRegistryEntryByName(row.requirement.provider.name)?.entry;
+  if (entry === undefined) return false;
+  // The byte-match is against the ROW'S OWN FLOW — the entry when the row's kind is the
+  // entry's, an option when it is that option's (Gate-5 review). Matching against ANY
+  // pinned URL let an imported row (the R-4 channel, where substitution never re-ran)
+  // pair one flow's registration STEPS with a one-tap link to a DIFFERENT flow's
+  // console — still a pinned page, so not a phishing hand-off, but a walkthrough whose
+  // link cannot be followed. Kind-mismatched pinned URLs fall to copy-only, fail-closed.
+  return [entry, ...(entry.authOptions ?? [])].some(
+    (flow) => flow.kind === row.requirement.kind && flow.registration?.consoleUrl === consoleUrl,
+  );
 }
 
 /** Plain-text step list. Text children only — see the AC5 note in the module doc. */
@@ -486,6 +509,7 @@ function LanPairScreen({ row, onPaired }: { row: ConnectionRow; onPaired: () => 
 function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () => void }): ReactElement {
   const requirement = row.requirement;
   const fields = requirement.fields ?? [];
+  const scopes = requirement.scopes ?? [];
   const registration = requirement.registration;
   // ONE resolution, both seats — the discipline P3 applied to the lint, applied here to
   // the disclosure, so the review can never fall behind what the executor will send.
@@ -528,6 +552,36 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
         <div className="field">
           <label>how you get them</label>
           <StepList steps={registration.instructions ?? []} testId="review-registration-steps" />
+        </div>
+      ) : null}
+
+      {scopes.length > 0 ? (
+        <div className="field" data-testid="review-scopes">
+          {/*
+            THE SCOPES BOX (TASK-20260815 AC3b, ADR-0028). This box is what makes
+            "pinned scopes are never silent" TRUE: the plan review found the protocol
+            comment claiming "scopes is what the review renders" while no renderer
+            existed — a seat that skips the review screen is admitted for free (the
+            queryTemplate lesson, 2026-08-13). Rendered VERBATIM in declaration order,
+            as `code`, exactly like the template boxes above: the scope strings are what
+            the provider's own consent screen will list, and a friendly paraphrase here
+            would leave the user meeting them for the first time on the provider's page.
+          */}
+          <label>what this sign-in may do</label>
+          <ul>
+            {/* Index-keyed (Gate-5 review): authored scopes under a non-pinned brand
+                may contain duplicates, and this screen's whole job is VERBATIM
+                disclosure — a colliding key must not let React drop a line. */}
+            {scopes.map((scope, index) => (
+              <li key={`${index}:${scope}`}>
+                <code>{scope}</code>
+              </li>
+            ))}
+          </ul>
+          <span className="hint">
+            the provider shows this same list on its consent screen when you sign in — nothing broader can be asked for
+            without coming back here first.
+          </span>
         </div>
       ) : null}
 
@@ -633,7 +687,10 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
 function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () => void }): ReactElement {
   const registration = row.requirement.registration;
   const consoleUrl = registration?.consoleUrl;
-  const clickable = consoleUrlIsClickable(row);
+  // Memoized: the resolution walks the registry (brand-adjacent scan on miss) and this
+  // screen re-renders on every copy-button click and async redirect-URI arrival, while
+  // the answer can only change with the row (Gate-5 review, efficiency).
+  const clickable = useMemo(() => consoleUrlIsClickable(row), [row]);
   const [copied, setCopied] = useState(false);
 
   /**
@@ -693,21 +750,42 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
         <div className="field" data-testid="register-console">
           {clickable ? (
             <span data-testid="register-console-link">
-              <a href={consoleUrl} target="_blank" rel="noreferrer">
+              {/*
+                ADR-0029 §3: on desktop the link opens via the SYSTEM browser (the same
+                RFC 8252 posture as the sign-in leg — the webview never navigates to a
+                provider), so the anchor's default navigation is preempted when the
+                platform carries an opener. The href stays real either way: hover shows
+                the destination, and the web branch is exactly the old behavior.
+              */}
+              <a
+                href={consoleUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={
+                  platformOauth !== undefined
+                    ? (event) => {
+                        event.preventDefault();
+                        void platformOauth.openExternal(consoleUrl);
+                      }
+                    : undefined
+                }
+              >
                 {consoleUrl}
               </a>
             </span>
           ) : (
             <>
               {/*
-                Copy-only (Q3). The full address is shown so the user can read where they
-                are being sent and decide for themselves — see `consoleUrlIsClickable`.
+                Copy-only (ADR-0029). The full address is shown so the user can read
+                where they are being sent and decide for themselves — see
+                `consoleUrlIsClickable`.
               */}
               <code className="redirect-uri" data-testid="register-console-url">
                 {consoleUrl}
               </code>
               <span className="hint">
-                open this address yourself — we don’t link it, because a model proposed it rather than us pinning it.
+                open this address yourself — we don’t link it, because we haven’t pinned it: it came from a model or an
+                app author, not from Snug’s own registry.
               </span>
               <Button
                 onClick={() => {
@@ -1282,6 +1360,10 @@ function ReapprovalDiffScreen({
   // been collected declares no hosts, and the diff then honestly shows the frozen
   // ceiling's hosts as REMOVED — which is what such a pending edit would do.
   const hostLines = diffLines(row.allowedHosts, pending.declaredApiHosts ?? []);
+  // ADR-0028 (TASK-20260815 AC3b): without this delta, a scopes-ONLY staged edit — the
+  // exact edit the scope-drift migration stages — rendered as a diff whose every line
+  // read unchanged: an approval request for nothing the user could see.
+  const scopeLines = diffLines(row.requirement.scopes ?? [], pending.scopes ?? []);
 
   const render = (line: DiffLine): ReactElement => (
     <li key={`${line.state}:${line.label}`} data-diff={line.state}>
@@ -1306,6 +1388,12 @@ function ReapprovalDiffScreen({
           <label>where this app may send them</label>
           <ul>{hostLines.map(render)}</ul>
         </div>
+        {scopeLines.length > 0 ? (
+          <div className="field">
+            <label>what this sign-in may do</label>
+            <ul data-testid="reapproval-scope-diff">{scopeLines.map(render)}</ul>
+          </div>
+        ) : null}
       </div>
       <Button variant="primary" onClick={onReapprove}>
         approve these changes

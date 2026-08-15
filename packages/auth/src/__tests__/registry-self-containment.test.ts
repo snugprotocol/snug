@@ -146,9 +146,15 @@ describe('AC3 — every entry composes through the ONE emitter into a parsing re
       } else {
         expect(requirement.pkce).toBeUndefined();
       }
-      // Standing posture: scopes are never emitted (default scopes are silent privilege
-      // widening), and no entry may carry them in the first place.
-      expect(requirement.scopes).toBeUndefined();
+      // MIGRATED 2026-08-15 (ADR-0028): an entry may pin a reviewed, ADR-recorded scope
+      // list, and the emitter must hand it out verbatim — ENTRY-level only (the options
+      // sweep below still refuses per-option scopes). Entries pinning none must still
+      // emit none: the old posture survives for them.
+      if (entry.scopes !== undefined) {
+        expect(requirement.scopes, `${key}: the pinned scopes must arrive verbatim`).toEqual(entry.scopes);
+      } else {
+        expect(requirement.scopes).toBeUndefined();
+      }
     });
 
     it(`${key}: the emitter hands out COPIES, never live registry references`, () => {

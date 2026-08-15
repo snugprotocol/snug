@@ -28,6 +28,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { authConnectionCredentialSecretKey } from '@snugprotocol/db';
 
 import { ConnectionWizardSheet } from '../connections/ConnectionWizardSheet.js';
+import { DEMO_STARTER_REQUIREMENTS } from '../agent/demoRequirement.js';
 import {
   __resetConnectionWizardForTests,
   connectionFlowStatusStore,
@@ -453,7 +454,25 @@ describe('P3-AC3 — custody copy is ADR-0014 clause 5 verbatim (fold F-M1)', ()
 // P3-AC4 — Q3 provenance branching on the register screen
 // ---------------------------------------------------------------------------
 
-describe('P3-AC4 — Q3: consoleUrl renders clickable for registry, copy-only otherwise', () => {
+// MIGRATED 2026-08-15 (TASK-20260815, ADR-0029). WAS keyed on provenance ('registry' →
+// anchor, everything else → copy-only), which made the SHIPPED Spotify starter
+// (provenance 'starter', every URL substituted from the registry) render copy-paste for
+// an address Snug itself pinned — the owner read it as a bug, and it was one: the rule
+// protected against an author the URL no longer had. NOW keyed on the fact that matters:
+// the URL's BYTES match the pinned registry value for the row's resolved provider. The
+// old positive case rode the unpinned fixture brand "Tunecast", which under the byte
+// rule is copy-only whatever its provenance — the positive cases moved onto the REAL
+// Spotify entry, which is also the shape that ships.
+describe('P3-AC4 (ADR-0029) — consoleUrl clickability keys on registry-pinned bytes, not provenance', () => {
+  /**
+   * The shipped starter manifest, via the exported mirror whose documented job is
+   * matching the shipped manifests (Gate-5 review: a retyped copy claiming
+   * "byte-shaped" keeps passing after the real manifest changes) — substitution fills
+   * the rest.
+   */
+  const spotifyStarterManifest = DEMO_STARTER_REQUIREMENTS['starter-spotify'] as unknown as Record<string, unknown>;
+  const SPOTIFY_CONSOLE = 'https://developer.spotify.com/dashboard';
+
   async function openRegisterScreen(requirement: Record<string, unknown>, provenance: string): Promise<void> {
     declare(requirement, { provenance });
     openConnectionWizard({ appId: APP, slot: requirement['slot'] as string, source: 'settings' });
@@ -462,32 +481,45 @@ describe('P3-AC4 — Q3: consoleUrl renders clickable for registry, copy-only ot
     expect(connectionWizardStepStore.get()).toBe<ConnectionWizardStep>('register');
   }
 
-  it('REGISTRY provenance: the console url is a real clickable anchor (the URL is pinned by us)', async () => {
-    await openRegisterScreen(oauthRequirement, 'registry');
-    const anchor = container.querySelector<HTMLAnchorElement>('[data-testid="register-console-link"] a, a[data-testid="register-console-link"]');
-    expect(anchor, 'registry providers get a clickable dashboard link').not.toBeNull();
-    expect(anchor!.getAttribute('href')).toBe(oauthRequirement.registration.consoleUrl);
+  it('STARTER provenance, registry-substituted URL: a real clickable anchor — the owner complaint this task fixes', async () => {
+    await openRegisterScreen(spotifyStarterManifest, 'starter');
+    const anchor = container.querySelector<HTMLAnchorElement>(
+      '[data-testid="register-console-link"] a, a[data-testid="register-console-link"]',
+    );
+    expect(anchor, 'a registry-pinned URL gets a link whatever channel carried it').not.toBeNull();
+    expect(anchor!.getAttribute('href')).toBe(SPOTIFY_CONSOLE);
   });
 
-  it('INFERENCE provenance: copy-only, no anchor, and the FULL url is visible', async () => {
+  it('INFERENCE provenance under a pinned brand: clickable too — the bytes are ours', async () => {
+    await openRegisterScreen(spotifyStarterManifest, 'inference');
+    expect(
+      container.querySelector('[data-testid="register-console-link"] a, a[data-testid="register-console-link"]'),
+    ).not.toBeNull();
+  });
+
+  it('REGISTRY provenance under an UNPINNED brand: copy-only — provenance alone no longer buys a link', async () => {
+    await openRegisterScreen(oauthRequirement, 'registry');
+    expect(container.querySelector('[data-testid="register-console"] a')).toBeNull();
+    expect(text()).toContain(oauthRequirement.registration.consoleUrl);
+    expect(button(/copy/i)).toBeDefined();
+  });
+
+  it('UNPINNED provider (inference): copy-only, no anchor, the FULL url visible, and the hint tells the new truth', async () => {
     await openRegisterScreen(coinbaseRequirement, 'inference');
     expect(container.querySelector('[data-testid="register-console"] a')).toBeNull();
     // Copy-only still means the user can READ where they are being sent — truncating the
     // host is what makes a copy-only affordance a phishing aid rather than a defense.
     expect(text()).toContain(coinbaseRequirement.registration.consoleUrl);
+    // ADR-0029: this branch also serves user- and starter-authored URLs no model
+    // proposed, so the hint says what is actually true — we haven't pinned it.
+    expect(text()).toContain('we haven’t pinned it');
     expect(button(/copy/i)).toBeDefined();
   });
 
-  it('USER_DOCS provenance: copy-only, no anchor', async () => {
+  it('USER_DOCS provenance under an unpinned brand: copy-only, no anchor', async () => {
     await openRegisterScreen(coinbaseRequirement, 'user_docs');
     expect(container.querySelector('[data-testid="register-console"] a')).toBeNull();
     expect(text()).toContain(coinbaseRequirement.registration.consoleUrl);
-  });
-
-  it('STARTER provenance: copy-only, no anchor', async () => {
-    await openRegisterScreen(oauthRequirement, 'starter');
-    expect(container.querySelector('[data-testid="register-console"] a')).toBeNull();
-    expect(text()).toContain(oauthRequirement.registration.consoleUrl);
   });
 });
 
@@ -937,5 +969,66 @@ describe('P3 fold — Q7: the done screen probes the connection when the require
     // Whatever the outcome in this environment, the pasted value must appear NOWHERE —
     // not in the result line, not in an error message, not in a debug echo.
     expect(container.innerHTML).not.toContain('token-value-for-the-probe');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 AC3b (ADR-0028, plan-review blocker 2) — scopes are VISIBLE
+// ---------------------------------------------------------------------------
+//
+// RED-FIRST against a sheet that renders scopes NOWHERE. ADR-0028's whole justification
+// is "a pinned scope list is not silent because the user sees it" — these tests are what
+// make that claim true rather than fiction (the protocol comment claiming "scopes is
+// what the review renders" described rendering that did not exist).
+
+describe('AC3b — scopes render on the review screen and as a reapproval delta (ADR-0028)', () => {
+  const scoped = {
+    ...oauthRequirement,
+    scopes: ['playlist-read-private', 'user-modify-playback-state'],
+  };
+
+  it('the review screen lists every scope, in declaration order', async () => {
+    declare(scoped);
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await renderSheet();
+
+    const block = container.querySelector('[data-testid="review-scopes"]');
+    expect(block, 'a scoped sign-in must disclose what it may do BEFORE approval').not.toBeNull();
+    const items = [...block!.querySelectorAll('li')].map((node) => node.textContent ?? '');
+    expect(items).toEqual(['playlist-read-private', 'user-modify-playback-state']);
+  });
+
+  it('NEGATIVE: a requirement with no scopes renders no scopes block', async () => {
+    declare(oauthRequirement);
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await renderSheet();
+
+    expect(container.querySelector('[data-testid="review-scopes"]')).toBeNull();
+  });
+
+  it('a scopes-ONLY staged edit renders a visible delta — never a diff whose every line reads unchanged', async () => {
+    declare(oauthRequirement, { approve: true });
+    db.stagePendingRequirement(APP, 'spotify', scoped);
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await renderSheet();
+
+    const diff = container.querySelector('[data-testid="reapproval-scope-diff"]');
+    expect(diff, 'the scope delta IS the whole change — it must be the visible one').not.toBeNull();
+    const added = [...diff!.querySelectorAll('[data-diff="added"]')].map((node) => node.textContent ?? '').join(' | ');
+    expect(added).toContain('playlist-read-private');
+    expect(added).toContain('user-modify-playback-state');
+  });
+
+  it('NEGATIVE: a host-widening diff with no scopes anywhere renders no scope-diff box', async () => {
+    declare(coinbaseRequirement, { approve: true });
+    db.stagePendingRequirement(APP, 'coinbase', {
+      ...coinbaseRequirement,
+      declaredApiHosts: [...coinbaseRequirement.declaredApiHosts, 'evil.attacker.example'],
+    });
+    openConnectionWizard({ appId: APP, slot: 'coinbase', source: 'settings' });
+    await renderSheet();
+
+    expect(container.querySelector('[data-testid="reapproval-diff"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="reapproval-scope-diff"]')).toBeNull();
   });
 });

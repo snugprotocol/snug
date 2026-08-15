@@ -456,3 +456,36 @@ describe('(e) browserCallable:false discloses on the WEB wizard before credentia
     expect(container!.querySelector('[data-testid="browser-callable-disclosure"]')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 (ADR-0029 §3) — the console LINK rides the system browser on desktop
+// ---------------------------------------------------------------------------
+
+describe('ADR-0029 §3 — a registry-pinned console link opens via the SYSTEM browser on desktop', () => {
+  it('clicking the anchor calls openExternal with the pinned URL; window.open is never called', async () => {
+    const desktop = fakeDesktop();
+    const { db, wizard, Sheet } = await fresh(desktop.platform);
+    const spotify = lookupWellKnownProvider('Spotify')!;
+    const requirement = requirementFromRegistryEntry(spotify, 'Spotify', 'spotify');
+    declare(db, requirement as unknown as Record<string, unknown>, false);
+    const windowOpen = vi.spyOn(window, 'open');
+
+    wizard.openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await render(<Sheet />);
+    await click(/approve this connection/i);
+    await settle();
+
+    const anchor = container!.querySelector<HTMLAnchorElement>('[data-testid="register-console-link"] a');
+    expect(anchor, 'a registry-pinned console URL is clickable on desktop too (ADR-0029 §1)').not.toBeNull();
+    await act(async () => {
+      anchor!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    await settleUntil(() => desktop.opened.length > 0);
+
+    expect(desktop.opened, 'the system browser carries the dashboard visit').toContain(
+      'https://developer.spotify.com/dashboard',
+    );
+    expect(windowOpen, 'the webview must not open provider pages itself').not.toHaveBeenCalled();
+    windowOpen.mockRestore();
+  });
+});

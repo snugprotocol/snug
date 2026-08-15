@@ -538,7 +538,14 @@ function applyRegistryValues(
     substituted['endpoints'] = { ...flow.endpoints };
   }
   if (flow.registration !== undefined) {
-    substituted['registration'] = { ...flow.registration };
+    // `instructions` deep-copied like every sibling seat (TASK-20260815 plan-review
+    // note): the shallow spread left the array a LIVE reference to the registry
+    // singleton, which one downstream caller's mutation could repoint for every later
+    // substitution — the exact reason `fields` is deep-copied above.
+    substituted['registration'] = {
+      ...flow.registration,
+      ...(flow.registration.instructions !== undefined ? { instructions: [...flow.registration.instructions] } : {}),
+    };
   }
   // THE REQUEST/TEST SEATS (ADR-0022 §1, amendment 1c) — substituted on every borrow
   // hit, channel-agnostic, because this path is what serves bare starter and inference
@@ -566,6 +573,24 @@ function applyRegistryValues(
   // copy describe a flow the code would not perform.
   if (flow.pkce !== undefined) {
     substituted['pkce'] = flow.pkce;
+  }
+  // SCOPES (ADR-0028) — an IDENTITY seat, read from the ENTRY (never the matched
+  // option): privilege breadth is a per-provider decision, like which hosts receive the
+  // credential. REPLACEMENT, not merge, for the same reason as hosts: a borrower keeping
+  // `user-read-email` beside the pinned list while presenting as registry-backed is the
+  // whole harm. When the entry pins none, an authored list is left as-is — that is
+  // ADR-0028 rule 5's recorded residue (beside borrowed-endpoints, next-steps
+  // 2026-08-12), pinned by a characterization test, mitigated by the review screen
+  // rendering scopes (AC3b) before any approval.
+  //
+  // Written only onto declarations whose KIND consumes scopes (Gate-5 review):
+  // admission never substitutes kind, so a static-kind borrower under a scope-pinned
+  // brand would otherwise gain a seat meaningless to it — and every such legacy row
+  // would stage a spurious "what this sign-in may do" diff at wizard open, routing an
+  // API-key user through a re-consent ceremony scopes cannot affect.
+  const declarationKind = requirement['kind'];
+  if (entry.scopes !== undefined && (declarationKind === 'oauth2_auth_code' || declarationKind === 'oauth2_client_creds')) {
+    substituted['scopes'] = [...entry.scopes];
   }
   return substituted;
 }

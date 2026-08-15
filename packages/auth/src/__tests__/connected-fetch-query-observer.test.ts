@@ -300,19 +300,20 @@ describe('AC5 — onAuthShapedFailure fires only on the FINAL credentialed 401/4
     const result = await executor.execute(APP, { url: 'https://api.example.com/v1/data', method: 'GET' });
     expect(result).toMatchObject({ ok: true, status: 401 });
     expect(observer).toHaveBeenCalledTimes(1);
-    expect(observer).toHaveBeenCalledWith('example', 401);
+    // MIGRATED 2026-08-15 (TASK-20260815 AC4): a text body becomes the detail arg.
+    expect(observer).toHaveBeenCalledWith('example', 401, 'unauthorized');
   });
 
   it('fires on 403 too', async () => {
     const { executor, observer } = harness({ respond: () => new Response('forbidden', { status: 403 }) });
     expect((await executor.execute(APP, { url: WEATHER_URL, method: 'GET' })).ok).toBe(true);
-    expect(observer).toHaveBeenCalledWith('openweather', 403);
+    expect(observer).toHaveBeenCalledWith('openweather', 403, 'forbidden');
   });
 
   it('a QUERY-injected credential counts as injected — the observer fires for the query slot', async () => {
     const { executor, observer } = harness({ respond: () => new Response('unauthorized', { status: 401 }) });
     await executor.execute(APP, { url: WEATHER_URL, method: 'GET' });
-    expect(observer).toHaveBeenCalledWith('openweather', 401);
+    expect(observer).toHaveBeenCalledWith('openweather', 401, 'unauthorized');
   });
 
   it('NEGATIVE: does not fire on a 200', async () => {
@@ -402,7 +403,7 @@ describe('AC5 — onAuthShapedFailure fires only on the FINAL credentialed 401/4
     const result = await executor.execute(APP, { url: 'https://api.spotify.example/v1/me', method: 'GET' });
     expect(result).toMatchObject({ ok: true, status: 401 });
     expect(observer).toHaveBeenCalledTimes(1);
-    expect(observer).toHaveBeenCalledWith('spotify', 401);
+    expect(observer).toHaveBeenCalledWith('spotify', 401, 'unauthorized');
   });
 
   it('NEGATIVE: executeConnectionTestRequest SUPPRESSES the observer (probe outcomes render in the wizard)', async () => {
@@ -417,5 +418,113 @@ describe('AC5 — onAuthShapedFailure fires only on the FINAL credentialed 401/4
     const result = await executeConnectionTestRequest(deps, APP, 'example');
     expect(result).toMatchObject({ ok: true, status: 401 });
     expect(observer, 'the wizard translates probe failures itself — no banner').not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 AC4 — the observer carries the provider's own reason (scrubbed, bounded)
+// ---------------------------------------------------------------------------
+//
+// RED-FIRST at Gate 3 against the 2-arg observer. The detail is extracted from
+// `result.body` — the ALREADY-SCRUBBED, 1 MiB-capped delivered body — never from the
+// raw Response (`scrubCandidates` is function-local to performFetch and deliberately
+// out of scope at the delivery seat). Recognized JSON shapes first (Spotify's
+// {"error":{"message"}}, RFC 6749 error_description, bare message/error strings), text
+// head as fallback; HTML and unrecognized JSON yield NO detail (a markup blob in a
+// banner is noise, not diagnosis); hard cap 160 chars. When there is no detail the
+// observer fires with TWO args, so empty-body behavior is byte-identical to before.
+
+describe('AC4 — auth-failure detail extraction', () => {
+  const fire = async (body: string, headers?: Record<string, string>) => {
+    const { executor, observer } = harness({
+      respond: () => new Response(body, { status: 403, headers: headers ?? {} }),
+    });
+    await executor.execute(APP, { url: WEATHER_URL, method: 'GET' });
+    return observer;
+  };
+
+  it("extracts Spotify's error.message shape", async () => {
+    const observer = await fire('{"error":{"status":403,"message":"Insufficient client scope"}}');
+    expect(observer).toHaveBeenCalledWith('openweather', 403, 'Insufficient client scope');
+  });
+
+  it('extracts RFC 6749 error_description', async () => {
+    const observer = await fire('{"error":"invalid_scope","error_description":"The token lacks playlist access"}');
+    expect(observer).toHaveBeenCalledWith('openweather', 403, 'The token lacks playlist access');
+  });
+
+  it('extracts a bare message field, then a bare string error field', async () => {
+    expect(await fire('{"message":"User not registered in the Developer Dashboard"}')).toHaveBeenCalledWith(
+      'openweather',
+      403,
+      'User not registered in the Developer Dashboard',
+    );
+    expect(await fire('{"error":"forbidden_by_policy"}')).toHaveBeenCalledWith(
+      'openweather',
+      403,
+      'forbidden_by_policy',
+    );
+  });
+
+  it('falls back to the text head for a plain-text body', async () => {
+    const observer = await fire('quota exceeded for this key');
+    expect(observer).toHaveBeenCalledWith('openweather', 403, 'quota exceeded for this key');
+  });
+
+  it('yields NO detail for an HTML error page (2-arg call, exact arity)', async () => {
+    const observer = await fire('<!DOCTYPE html><html><body>403 Forbidden</body></html>');
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(observer).toHaveBeenCalledWith('openweather', 403);
+  });
+
+  it('yields NO detail for an empty body or unrecognized JSON (2-arg call)', async () => {
+    expect(await fire('')).toHaveBeenCalledWith('openweather', 403);
+    expect(await fire('{"code":40301,"retriable":false}')).toHaveBeenCalledWith('openweather', 403);
+  });
+
+  it('Gate-5: MALFORMED/truncated JSON yields NO detail — brace noise never reaches the banner', async () => {
+    // A >1 MiB JSON error truncated mid-token by gate 10 no longer parses; the first
+    // cut fell through to the text head and forwarded 160 chars of raw JSON.
+    const observer = await fire('{"error":{"status":403,"message":"Insuffici');
+    expect(observer).toHaveBeenCalledWith('openweather', 403);
+  });
+
+  it('Gate-5: structured non-object bodies yield NO detail — arrays, JSON strings, JSONP guards', async () => {
+    expect(await fire('[{"error":{"type":1,"description":"unauthorized user"}}]')).toHaveBeenCalledWith(
+      'openweather',
+      403,
+    );
+    expect(await fire('"forbidden"')).toHaveBeenCalledWith('openweather', 403);
+    expect(await fire(')]}\'\n{"error":{"message":"nope"}}')).toHaveBeenCalledWith('openweather', 403);
+  });
+
+  it('Gate-5: a body above the 8 KiB pre-gate yields NO detail — no megabyte parse to harvest 160 chars', async () => {
+    const observer = await fire('quota exceeded '.repeat(1000));
+    expect(observer).toHaveBeenCalledWith('openweather', 403);
+  });
+
+  it('caps the detail at 160 chars', async () => {
+    const long = 'x'.repeat(400);
+    const observer = await fire(`{"error":{"message":"${long}"}}`);
+    const detail = observer.mock.calls[0]![2] as string;
+    expect(detail.length).toBe(160);
+  });
+
+  it('C1 NEGATIVE: a body echoing the credentialed URL never leaks the credential into the detail', async () => {
+    // The query credential is injected into the outbound URL; a provider error that
+    // echoes the request URL therefore embeds the credential. The delivered body is
+    // scrubbed at gate 10, and the detail must inherit that scrub — both the raw and
+    // the percent-encoded form (the P6 lesson: the two forms must not drift).
+    const { executor, observer, calls } = harness({
+      respond: () => {
+        const echoed = calls[0]?.url ?? '';
+        return new Response(JSON.stringify({ error: { message: `denied for ${echoed}` } }), { status: 403 });
+      },
+    });
+    await executor.execute(APP, { url: WEATHER_URL, method: 'GET' });
+    expect(observer).toHaveBeenCalledTimes(1);
+    const detail = (observer.mock.calls[0]![2] as string | undefined) ?? '';
+    expect(detail).not.toContain(QUERY_KEY_VALUE);
+    expect(detail).not.toContain(encodeURIComponent(QUERY_KEY_VALUE));
   });
 });

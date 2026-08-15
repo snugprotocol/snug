@@ -46,3 +46,5 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0025 — LAN pairing verifies before it claims; LAN rows never route through the api-key screens](0025-lan-pairing-verify-before-claim.md)
 - [0026 — Connection-relative addressing: apps name their connection, never its host](0026-connection-relative-addressing.md)
 - [0027 — Docs memory is distilled, not accumulated](0027-docs-memory-distilled-not-accumulated.md)
+- [0028 — Registry-pinned OAuth scopes: reviewed registry data, never silent defaults](0028-registry-pinned-scopes.md)
+- [0029 — Console-URL clickability keys on registry-pinned bytes, not row provenance](0029-registry-pinned-url-clickability.md)

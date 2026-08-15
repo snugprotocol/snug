@@ -67,22 +67,27 @@ export function resolveNetConfirm(decision: NetConfirmDecision): void {
 
 /**
  * AUTH-SHAPED FAILURE (TASK-20260812-desktop-auth-awareness AC5; ADR-0022 §4). The
- * executor's deps seat reports `(slot, status)` when the FINAL delivered result of a
- * request it injected credentials into is a 401/403 — the app-visible result stays
- * untouched (`ok:true`, status as-is). THIS layer adds the `appId` it already holds
- * (the host-assigned netAppId, never anything the app claimed — the pinned literal
- * `onAuthShapedFailure(appId, slot, status)` names this playground altitude) and the
- * RunView banner renders the repair CTA from here.
+ * executor's deps seat reports `(slot, status, detail?)` when the FINAL delivered
+ * result of a request it injected credentials into is a 401/403 — the app-visible
+ * result stays untouched (`ok:true`, status as-is). THIS layer adds the `appId` it
+ * already holds (the host-assigned netAppId, never anything the app claimed — the
+ * pinned literal `onAuthShapedFailure(appId, slot, status)` names this playground
+ * altitude) and the RunView banner renders the repair CTA from here.
  *
  * One failure at a time (v1), like the confirm store: the banner is a doorbell, not a
  * ledger — a second failure overwrites the first, and repairing the connection is what
- * stops the ringing. Carries appId/slot/status and NOTHING else (C1: no credential, no
- * response bytes, no URL).
+ * stops the ringing. Carries appId/slot/status plus, since TASK-20260815 AC4, an
+ * OPTIONAL `detail`: a short, scrubbed, plain-text extract of the provider's own error
+ * reason, produced by the executor from the DELIVERED (gate-10-scrubbed, size-capped)
+ * body — never a credential, never a URL, never raw response bytes. It exists because
+ * the banner's guess copy misdiagnosed the Spotify scope-less 403; the provider's own
+ * sentence ("Insufficient client scope") is the one-look diagnosis.
  */
 export interface AuthShapedFailure {
   appId: string;
   slot: string;
   status: number;
+  detail?: string;
 }
 
 /** null when no credentialed 401/403 is waiting on the user. The RunView banner renders this. */
@@ -118,7 +123,7 @@ export function connectedFetchDepsFor(
    * and `executeConnectionTestRequest` strips the seat besides (belt and braces; the
    * negative test drives both).
    */
-  onAuthShapedFailure?: (slot: string, status: number) => void,
+  onAuthShapedFailure?: (slot: string, status: number, detail?: string) => void,
 ): ConnectedFetchDeps {
   return {
     credentialStore: new UserDbCredentialStore(db),
@@ -199,12 +204,12 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
       // shared with the wizard's Q7 probe so both surfaces route through ONE configured
       // executor rather than two that could drift apart on gates.
       const executor = createConnectedFetch(
-        connectedFetchDepsFor(db, fetchImpl, (slot, status) =>
-          // The executor reports (slot, status); the appId is OUR argument — the
-          // host-assigned binding this handler was invoked with. Adding it here (not
-          // inside the executor) means a wiring bug can never report a foreign app's
-          // identity (the deps-level adaptation journaled in the task file).
-          authShapedFailureStore.set({ appId: netAppId, slot, status }),
+        connectedFetchDepsFor(db, fetchImpl, (slot, status, detail) =>
+          // The executor reports (slot, status, detail?); the appId is OUR argument —
+          // the host-assigned binding this handler was invoked with. Adding it here
+          // (not inside the executor) means a wiring bug can never report a foreign
+          // app's identity (the deps-level adaptation journaled in the task file).
+          authShapedFailureStore.set({ appId: netAppId, slot, status, ...(detail !== undefined ? { detail } : {}) }),
         ),
       );
       // The runner already validated the frame shape (strict schema); pass the app-facing

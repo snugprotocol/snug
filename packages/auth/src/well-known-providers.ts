@@ -13,9 +13,13 @@
  *     is applied only where the registry says so — never hardcoded in the OAuth
  *     service (the source system hardcoded it for every provider).
  *
- * Deliberately out of scope (carried from the source): no default scopes (silent
- * privilege widening), no runtime .well-known fetching — every entry here was
- * reviewed by a human.
+ * Deliberately out of scope (carried from the source): no runtime .well-known fetching —
+ * every entry here was reviewed by a human. Scopes: the original "no default scopes"
+ * posture was AMENDED by ADR-0028 — an entry may pin a human-reviewed, ADR-recorded
+ * scope list (ENTRY-level only, never per option; privilege breadth is brand identity),
+ * because the harm was always "a scope the user never sees" and pinned scopes render on
+ * the wizard review screen and the provider's consent screen. Entries not recorded in
+ * ADR-0028 still pin none.
  */
 
 import type {
@@ -198,7 +202,13 @@ export interface WellKnownOauthProvider {
     refreshUrl?: string;
     revokeUrl?: string;
   };
-  /** Default scopes — ALWAYS undefined by policy; callers must declare scopes. */
+  /**
+   * Pinned scopes — undefined for every entry NOT recorded in ADR-0028. A pinned list
+   * is reviewed registry data: emitted into the requirement, REPLACED over any authored
+   * list on borrow hits, rendered by the wizard review/diff screens, and a change on an
+   * approved row always re-consents (the drift migration refuses to promote it
+   * silently). ENTRY-level only — options never carry scopes.
+   */
   scopes?: string[];
   /** PKCE recommended by the provider? Defaults to true at the transformer. */
   pkce?: boolean;
@@ -369,6 +379,19 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // https://developer.spotify.com/documentation/web-api/tutorials/migration-insecure-redirect-uri
     desktopRedirectPosture: 'loopback-fixed-port',
     apiHosts: ['api.spotify.com'],
+    // ADR-0028 §4 (owner decision 2026-08-15, read + playback control) — ORDERED as the
+    // consent screen renders them. A scope-less Spotify token can read only public data:
+    // the starter's own `GET /v1/me/playlists` answered 403, surfaced as "the key may be
+    // wrong, expired, or revoked". `user-read-email` deliberately excluded.
+    scopes: [
+      'playlist-read-private',
+      'playlist-read-collaborative',
+      'user-read-private',
+      'user-library-read',
+      'user-top-read',
+      'user-read-playback-state',
+      'user-modify-playback-state',
+    ],
     // KEY IS `client_id`, matching the oauth2_auth_code shape used at
     // demoRequirement.ts:265. A PKCE flow needs the Client ID and NOTHING else from the
     // user — no client secret, which is exactly what the walkthrough below promises. A
@@ -392,7 +415,12 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         'Give the app any name and description — this is YOUR registration; Snug never sees it.',
         'In the app\'s settings, add the "redirect URI to register" shown below as a Redirect URI — copy it exactly as displayed, then save. Spotify matches it character for character and refuses sign-in on any mismatch.',
         'On the same settings page, copy the Client ID into the field below. Leave the client secret alone — this hub signs in with PKCE and never needs one.',
-        'New Spotify apps start in Development mode: only users you list may sign in, which is fine for your own hub — add family members under "User Management" if they will use this app too.',
+        // VERIFIED 2026-08-15 against Spotify's Feb-2026 policy update: Development mode
+        // now allows at most FIVE allowlisted users (was 25), requires the app owner to
+        // hold an active Premium subscription, and grants one Client ID per developer.
+        // https://developer.spotify.com/blog/2026-02-06-update-on-developer-access-and-platform-security
+        'New Spotify apps start in Development mode: sign in with the SAME Spotify account that owns this dashboard app, or add the listening account under "User Management" first (Spotify allows up to five). Anyone else completes sign-in but every request is refused (403).',
+        'Development mode also requires the app owner to hold an active Spotify Premium subscription — a free-tier owner sees sign-in succeed and every request refused.',
       ],
     },
   },
@@ -558,8 +586,9 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
   //
   // NO `endpoints` (the reason P0 made the seat optional): these providers have no
   // authorize/token URLs, and inventing placeholders would union a nonexistent host into
-  // the FROZEN ceiling via `deriveConnectionAllowedHosts`. NO `scopes`, per the standing
-  // registry posture — default scopes are silent privilege widening.
+  // the FROZEN ceiling via `deriveConnectionAllowedHosts`. NO `scopes` — a static-kind
+  // credential has no consent screen to scope (and ADR-0028 pins scopes only where an
+  // ADR records them).
   coinbase: {
     displayName: 'Coinbase',
     kind: 'api_key',
@@ -1190,5 +1219,14 @@ export function requirementFromRegistryEntry(
     // Deep-copied like every other seat: the registry is a module singleton.
     ...(entry.lanHost !== undefined ? { lanHost: { ...entry.lanHost } } : {}),
     ...(entry.apiHosts !== undefined ? { declaredApiHosts: [...entry.apiHosts] } : {}),
+    // SCOPES ARE AN IDENTITY SEAT (ADR-0028): read from the ENTRY, never an option —
+    // privilege breadth is a per-PROVIDER decision exactly like which hosts receive the
+    // credential, and a flow choice must never move it. Emitted only for the flows that
+    // CONSUME scopes (Gate-5 review): a static-kind flow under a scope-pinned entry has
+    // no consent screen for them, and carrying the seat anyway is what made static rows
+    // stage a meaningless "what this sign-in may do" diff. Deep-copied like every seat.
+    ...(entry.scopes !== undefined && (flow.kind === 'oauth2_auth_code' || flow.kind === 'oauth2_client_creds')
+      ? { scopes: [...entry.scopes] }
+      : {}),
   };
 }
