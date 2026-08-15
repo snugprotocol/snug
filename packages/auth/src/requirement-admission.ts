@@ -567,6 +567,17 @@ function applyRegistryValues(
   if (flow.pkce !== undefined) {
     substituted['pkce'] = flow.pkce;
   }
+  // SCOPES (ADR-0028) — an IDENTITY seat, read from the ENTRY (never the matched
+  // option): privilege breadth is a per-provider decision, like which hosts receive the
+  // credential. REPLACEMENT, not merge, for the same reason as hosts: a borrower keeping
+  // `user-read-email` beside the pinned list while presenting as registry-backed is the
+  // whole harm. When the entry pins none, an authored list is left as-is — that is
+  // ADR-0028 rule 5's recorded residue (beside borrowed-endpoints, next-steps
+  // 2026-08-12), pinned by a characterization test, mitigated by the review screen
+  // rendering scopes (AC3b) before any approval.
+  if (entry.scopes !== undefined) {
+    substituted['scopes'] = [...entry.scopes];
+  }
   return substituted;
 }
 

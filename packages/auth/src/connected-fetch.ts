@@ -178,17 +178,23 @@ interface ConnectedFetchBaseDeps {
    * seat is how the host learns "the provider rejected the stored credential" without
    * breaking the app contract.
    *
-   * Carries `(slot, status)` and NOTHING else: no credentials, no response bytes, no
-   * URL. The `appId` is the caller's own execute() argument, so the playground layer
-   * adds it when it forwards to the RunView banner (the task file's pinned literal
-   * `onAuthShapedFailure(appId, slot, status)` describes THAT layer; the deps-level
-   * adaptation is journaled).
+   * Carries `(slot, status, detail?)` and NOTHING else: no credentials, no URL, and no
+   * raw response bytes. `detail` (TASK-20260815 AC4, ADR-0028 era) is a SHORT extract of
+   * the provider's own error reason — read from the DELIVERED body only (already
+   * scrubbed with the full candidate set and 1 MiB-capped at gate 10, never the raw
+   * `Response`), recognized JSON error shapes or a plain-text head, hard-capped at 160
+   * chars, absent for HTML/unrecognized bodies. It exists because the banner's guess
+   * copy ("the key may be wrong, expired, or revoked") misdiagnosed the Spotify
+   * scope-less 403; the provider names the actual reason ("Insufficient client scope" /
+   * "User not registered in the Developer Dashboard"). The `appId` is the caller's own
+   * execute() argument, so the playground layer adds it when it forwards to the RunView
+   * banner (the deps-level adaptation is journaled).
    *
    * NOT a retry hook: a 401 cured by the transparent OAuth refresh retry fires nothing
    * (only the delivered result counts), and `executeConnectionTestRequest` suppresses
    * the seat entirely — probe outcomes render in the wizard, not as a banner.
    */
-  onAuthShapedFailure?: (slot: string, status: number) => void;
+  onAuthShapedFailure?: (slot: string, status: number, detail?: string) => void;
 }
 
 /**
@@ -1173,7 +1179,15 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
        */
       const deliver = (result: ConnectedFetchResult): ConnectedFetchResult => {
         if (result.ok && (result.status === 401 || result.status === 403) && credentialsInjected) {
-          deps.onAuthShapedFailure?.(grant.slot, result.status);
+          // The detail reads the DELIVERED body — scrubbed and capped at gate 10 — never
+          // the raw Response (`scrubCandidates` is performFetch-local by design). A
+          // 2-arg call when no detail exists keeps empty-body behavior byte-identical.
+          const detail = extractAuthFailureDetail(result.body);
+          if (detail !== undefined) {
+            deps.onAuthShapedFailure?.(grant.slot, result.status, detail);
+          } else {
+            deps.onAuthShapedFailure?.(grant.slot, result.status);
+          }
         }
         if (!result.ok && symbolic !== undefined) {
           return {
@@ -1202,6 +1216,49 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       return deliver(first);
     },
   };
+}
+
+/** TASK-20260815 AC4: max chars of provider error text forwarded to the observer. */
+const MAX_AUTH_FAILURE_DETAIL_CHARS = 160;
+
+/**
+ * Extract a short human-readable reason from an auth-shaped failure body.
+ *
+ * INPUT CONTRACT: the DELIVERED `result.body` — already scrubbed of every injected
+ * credential form and 1 MiB-capped at gate 10. This function must never be handed raw
+ * transport bytes; it adds bounding and shape-recognition, not scrubbing.
+ *
+ * Recognized shapes, in order: Spotify's `{"error":{"message":…}}`, RFC 6749
+ * `error_description`, a bare `message` string, a bare `error` string. JSON without a
+ * recognized message yields NOTHING (raw JSON in a banner is noise, not diagnosis), and
+ * so does markup (an HTML error page's head is garbage). Plain text becomes the head,
+ * hard-capped — a plain-text reason like "quota exceeded" is exactly the honesty the
+ * banner wants.
+ */
+function extractAuthFailureDetail(body: string): string | undefined {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) return undefined;
+  const cap = (text: string): string => text.slice(0, MAX_AUTH_FAILURE_DETAIL_CHARS);
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      const error = parsed['error'];
+      const candidates: unknown[] = [
+        typeof error === 'object' && error !== null ? (error as Record<string, unknown>)['message'] : undefined,
+        parsed['error_description'],
+        parsed['message'],
+        typeof error === 'string' ? error : undefined,
+      ];
+      const hit = candidates.find(
+        (candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0,
+      );
+      return hit !== undefined ? cap(hit.trim()) : undefined;
+    } catch {
+      // Not parseable JSON after all — fall through to the plain-text rule.
+    }
+  }
+  if (trimmed.startsWith('<')) return undefined;
+  return cap(trimmed);
 }
 
 // ------------------------------------------------------- the testRequest probe (Q7)
