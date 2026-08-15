@@ -39,9 +39,28 @@ describe('registry entries', () => {
     expect(google!.endpoints!.revokeUrl).toBe('https://oauth2.googleapis.com/revoke');
   });
 
-  it('does not default scopes for ANY entry (no silent privilege widening)', () => {
-    for (const entry of Object.values(WELL_KNOWN_PROVIDERS_REGISTRY)) {
-      expect(entry.scopes).toBeUndefined();
+  // MIGRATED 2026-08-15 (TASK-20260815-spotify-scopes-wizard-links, ADR-0028).
+  //
+  // WAS: "does not default scopes for ANY entry (no silent privilege widening)". The
+  // harm that rule named — a scope the user never sees — is now prevented by rendering
+  // (review screen + provider consent screen), not by absence: an entry whose API is
+  // useless scope-less (Spotify: a scope-less token 403s the starter's own playlist
+  // read) may pin a human-reviewed, ADR-recorded list. Everything NOT recorded in an
+  // ADR still pins nothing, and that half of the old rule survives verbatim below.
+  it('only ADR-0028-recorded entries pin scopes; every other entry still pins none', () => {
+    const ADR_0028_SCOPE_ENTRIES = new Set(['spotify']);
+    for (const [key, entry] of Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)) {
+      if (ADR_0028_SCOPE_ENTRIES.has(key)) {
+        expect(entry.scopes, `${key}: an ADR-recorded scope pin must be a non-empty list`).toBeDefined();
+        expect(entry.scopes!.length, key).toBeGreaterThan(0);
+        for (const scope of entry.scopes!) {
+          // Scope-shaped: no whitespace (the join is space-delimited) and no duplicates.
+          expect(scope, key).toMatch(/^\S+$/);
+        }
+        expect(new Set(entry.scopes!).size, `${key}: duplicate scopes`).toBe(entry.scopes!.length);
+      } else {
+        expect(entry.scopes, `${key}: pinning scopes requires an ADR-0028 entry`).toBeUndefined();
+      }
     }
   });
 
