@@ -471,6 +471,19 @@ function requirementFieldKeysDigest(requirement: Pick<ConnectionRequirement, 'fi
   return JSON.stringify((requirement?.fields ?? []).map((field) => field.key));
 }
 
+/**
+ * ONE digest for "did the SCOPES change" (ADR-0028 rule 3) — shared by the drift
+ * migration's detection gate, its silent-promotion guard, and `reapproveFromDiff`'s
+ * routing/invalidation, so the three seats can never disagree about what "changed"
+ * means. ORDER-SENSITIVE on purpose: scopes are semantically ordered (the review and
+ * consent screens render them in declaration order), and admission's own structural
+ * compare treats reordering as change. (`structurallyEqual` is admission-private; this
+ * is the wizard's one spelling, pinned by the AC3 tests.)
+ */
+function requirementScopesDigest(requirement: Pick<ConnectionRequirement, 'scopes'> | undefined): string {
+  return JSON.stringify(requirement?.scopes ?? []);
+}
+
 function connectionHostsEqual(left: readonly string[], right: readonly string[]): boolean {
   return [...left].sort().join('\n') === [...right].sort().join('\n');
 }
@@ -490,6 +503,9 @@ export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
     const fieldSetChanged =
       before?.pendingRequirement !== undefined &&
       requirementFieldKeysDigest(before.pendingRequirement) !== requirementFieldKeysDigest(before.requirement);
+    const scopesChanged =
+      before?.pendingRequirement !== undefined &&
+      requirementScopesDigest(before.pendingRequirement) !== requirementScopesDigest(before.requirement);
     db.reapproveConnection(session.appId, session.slot);
     invalidateNetGrants(session.appId);
     const after = db.getConnection(session.appId, session.slot);
@@ -527,13 +543,39 @@ export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
       lanPairingErrorStore.set(null);
     }
 
+    // ADR-0028 rule 3 (TASK-20260815 AC3, plan-review blocker 1) — the OLD MINT CANNOT
+    // OUTLIVE THE CONSENT IT WAS ISSUED UNDER. A scopes-changed promotion rewrites what
+    // the connection claims it may do, but the stored access/refresh tokens were minted
+    // under the OLD scopes and no provider widens on refresh — so promoting while they
+    // survive leaves a row that LOOKS re-consented and still 403s, and (worse) an
+    // abandoned sign-in leaves it that way silently, with the healing diff gone. The
+    // tokens are deleted IN THE SAME ACT as the promotion; the client id survives (a
+    // public identifier the credentials screen re-collects). The LAN branch above is
+    // this rule's precedent for a different credential class; they never overlap (a LAN
+    // row is never oauth2_auth_code).
+    const oauthInvolved =
+      before?.requirement.kind === 'oauth2_auth_code' || after?.requirement.kind === 'oauth2_auth_code';
+    if (scopesChanged && oauthInvolved) {
+      for (const field of ['access_token', 'refresh_token']) {
+        db.deleteSecret(authConnectionCredentialSecretKey(session.appId, session.slot, field));
+      }
+      const store = slotCredentialStore(db, session.slot);
+      await store.setConnectionState(session.appId, { status: 'pending' });
+    }
+
     bumpRevision();
     // The step write races a possible close/reopen across the await above. The row
     // changes stand — they are this slot's truth — but steering the step store would
     // steer whatever wizard is open NOW (the withSession recheck, restated for the
     // second suspension point this function grew).
     if (connectionWizardStore.get() !== session) return { ok: true };
-    connectionWizardStepStore.set(kindChanged || fieldSetChanged ? nextStep('review', after?.requirement) : 'done');
+    // A scope change re-walks the credential half like a kind/field change: 'done'
+    // would claim a connection whose new consent no sign-in has granted (AC3 routing;
+    // the connect step alone cannot mint — generateAuthUrl has no stored-client_id
+    // fallback — so the walk goes through credentials, one client-id re-paste).
+    connectionWizardStepStore.set(
+      kindChanged || fieldSetChanged || scopesChanged ? nextStep('review', after?.requirement) : 'done',
+    );
     return { ok: true };
   } catch (err) {
     // The durable writes above (re-approval, secret deletion) may have landed before
@@ -1273,7 +1315,12 @@ export async function migrateConnectionRegistryDrift(appId: string, slot: string
     const gainsSeats =
       (row.requirement.request === undefined && substituted.request !== undefined) ||
       (row.requirement.testRequest === undefined && substituted.testRequest !== undefined);
-    if (!fieldSetChanged && !gainsSeats) return 'none';
+    // ADR-0028 rule 3 — the SAME digest that drives `reapproveFromDiff`'s routing and
+    // token invalidation. Without this predicate a scope gain is neither fieldSet nor
+    // seat drift, so the detection gate returned 'none' and a scope-less row (the
+    // owner's real Spotify install) could never heal at all.
+    const scopesChanged = requirementScopesDigest(row.requirement) !== requirementScopesDigest(substituted);
+    if (!fieldSetChanged && !gainsSeats && !scopesChanged) return 'none';
 
     // Stage the row's OWN requirement: the gate's substitution writes the current
     // registry values into the pending column (amendment 1 opened exactly this path —
@@ -1283,6 +1330,11 @@ export async function migrateConnectionRegistryDrift(appId: string, slot: string
     const pending = staged.pendingRequirement;
     if (
       !fieldSetChanged &&
+      // A scope change NEVER promotes silently, host-identical or not: the stored token
+      // was minted under the old scopes, and a silent repersist would claim a consent
+      // nobody gave (ADR-0028 rule 3 — the promotion guard is the second of the three
+      // seats the one digest drives).
+      !scopesChanged &&
       pending !== undefined &&
       connectionHostsEqual(deriveConnectionAllowedHosts(pending), row.allowedHosts)
     ) {

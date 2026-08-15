@@ -31,6 +31,7 @@ import { webcrypto } from 'node:crypto';
 
 import {
   authConnectionCredentialSecretKey,
+  authConnectionStateSecretKey,
   createMemoryBackend,
   openUserDb,
   type ConnectionAdmissionGate,
@@ -49,6 +50,7 @@ import {
   connectionWizardStepStore,
   migrateConnectionRegistryDrift,
   openConnectionWizard,
+  reapproveFromDiff,
   testConnection,
 } from '../state/connectionWizard.js';
 import { resetLibraryForTests } from '../state/library.js';
@@ -121,16 +123,17 @@ let db: UserDb;
  */
 async function installDbWithLegacyRow(
   requirement: Record<string, unknown>,
-  opts: { secrets?: Record<string, string>; provenance?: string } = {},
+  opts: { secrets?: Record<string, string>; provenance?: string; slot?: string } = {},
 ): Promise<UserDb> {
+  const slot = opts.slot ?? SLOT;
   resetUserDbForTests();
   resetLibraryForTests();
   const backend = createMemoryBackend();
   const older = await openUserDb({ backend, locateWasm, persistDebounceMs: 1 });
   if (older.status !== 'ok') throw new Error(`older-hub open failed: ${older.status}`);
   older.userDb.installApp({ appId: APP, displayName: 'Drift App', html: '<p>drift</p>' });
-  older.userDb.putDeclaredConnection(APP, SLOT, requirement, (opts.provenance ?? 'starter') as never);
-  older.userDb.approveConnection(APP, SLOT);
+  older.userDb.putDeclaredConnection(APP, slot, requirement, (opts.provenance ?? 'starter') as never);
+  older.userDb.approveConnection(APP, slot);
   for (const [key, value] of Object.entries(opts.secrets ?? {})) older.userDb.setSecret(key, value);
   await older.userDb.close();
 
@@ -481,4 +484,126 @@ describe('the done screen probes a coinbase row (the registry now pins testReque
     // again. It must EXCEED the `vi.waitFor` above, or the wait is unreachable and this
     // test dies anonymously at the default 5s (the P3 defect corrected here).
   }, 15_000);
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 AC3 (ADR-0028 rule 3) — SCOPE drift: staged + re-consent, never silent
+// ---------------------------------------------------------------------------
+//
+// RED-FIRST at Gate 3 against a drift migration whose detection gate reads only
+// fieldSet/request/testRequest (a scope gain is neither, so today it returns 'none' and
+// the owner's scope-less Spotify row never heals) and a reapproveFromDiff that promotes
+// the requirement while the OLD scope-less token keeps serving (the plan-review
+// blocker: providers do not widen a token on refresh, so re-consent that leaves the
+// old mint alive is a lie about what the connection can do).
+
+describe('ADR-0028 rule 3 — scope drift stages, re-approval re-consents, the old token cannot outlive it', () => {
+  const SPOTIFY_SLOT = 'spotify';
+  const spotifyEntry = WELL_KNOWN_PROVIDERS_REGISTRY['spotify']!;
+  const SPOTIFY_SCOPES = [...(spotifyEntry.scopes ?? [])];
+
+  /** The pre-ADR-0028 persisted shape: exactly today's registry emission minus scopes. */
+  const scopelessShape = (): Record<string, unknown> => {
+    const shape = requirementFromRegistryEntry(spotifyEntry, 'Spotify', SPOTIFY_SLOT) as unknown as Record<
+      string,
+      unknown
+    >;
+    delete shape['scopes'];
+    return shape;
+  };
+
+  const ACCESS_KEY = authConnectionCredentialSecretKey(APP, SPOTIFY_SLOT, 'access_token');
+  const REFRESH_KEY = authConnectionCredentialSecretKey(APP, SPOTIFY_SLOT, 'refresh_token');
+  const CLIENT_KEY = authConnectionCredentialSecretKey(APP, SPOTIFY_SLOT, 'client_id');
+  const STATE_KEY = authConnectionStateSecretKey(APP, SPOTIFY_SLOT);
+
+  async function mintScopelessConnectedRow(): Promise<void> {
+    db = await installDbWithLegacyRow(scopelessShape(), {
+      slot: SPOTIFY_SLOT,
+      secrets: {
+        [ACCESS_KEY]: 'legacy-access-token-1',
+        [REFRESH_KEY]: 'legacy-refresh-token-1',
+        [CLIENT_KEY]: 'legacy-client-id',
+        [STATE_KEY]: JSON.stringify({ status: 'connected', obtainedAt: Date.now(), expiresIn: 3600 }),
+      },
+    });
+  }
+
+  it("store-level: a scope gain is STAGED — never 'none', never a silent repersist — approval and secrets untouched at stage time", async () => {
+    await mintScopelessConnectedRow();
+    expect(SPOTIFY_SCOPES.length, 'fixture: the registry must pin scopes for this drift to exist').toBeGreaterThan(0);
+
+    const outcome = await migrateConnectionRegistryDrift(APP, SPOTIFY_SLOT);
+    expect(outcome).toBe('staged');
+
+    const row = db.getConnection(APP, SPOTIFY_SLOT)!;
+    expect(row.status, 'staging is disclosure, not a downgrade').toBe('approved');
+    expect(row.requirement.scopes, 'the SERVED requirement is unchanged until the user approves').toBeUndefined();
+    expect(row.pendingRequirement?.scopes).toEqual(SPOTIFY_SCOPES);
+    // Nothing is invalidated by LOOKING: the user has decided nothing yet.
+    expect(db.getSecret(ACCESS_KEY)).toBe('legacy-access-token-1');
+    expect(db.getSecret(REFRESH_KEY)).toBe('legacy-refresh-token-1');
+    expect(JSON.parse(db.getSecret(STATE_KEY)!).status).toBe('connected');
+
+    expect(await migrateConnectionRegistryDrift(APP, SPOTIFY_SLOT), 'a staged edit is never clobbered').toBe('none');
+  });
+
+  it('approving the scope diff routes into the credential half AND invalidates the old mint (tokens gone, state pending, client id kept)', async () => {
+    await mintScopelessConnectedRow();
+    expect(await migrateConnectionRegistryDrift(APP, SPOTIFY_SLOT)).toBe('staged');
+
+    openConnectionWizard({ appId: APP, slot: SPOTIFY_SLOT, source: 'settings', mode: 'reapprove' });
+    const result = await reapproveFromDiff();
+    expect(result).toEqual({ ok: true });
+
+    // Routing: a scope change re-walks register → credentials → connect. 'done' would
+    // claim a connection whose consent the user has not given.
+    expect(connectionWizardStepStore.get()).toBe('register');
+
+    const row = db.getConnection(APP, SPOTIFY_SLOT)!;
+    expect(row.status).toBe('approved');
+    expect(row.requirement.scopes, 'the promoted requirement carries the pinned scopes').toEqual(SPOTIFY_SCOPES);
+    expect(row.pendingRequirement).toBeUndefined();
+
+    // THE BLOCKER RULE: the scope-less mint cannot outlive the approval it predates.
+    expect(db.getSecret(ACCESS_KEY), 'access token deleted with the consent it was minted under').toBeUndefined();
+    expect(db.getSecret(REFRESH_KEY), 'refresh token cannot silently re-mint the old breadth').toBeUndefined();
+    expect(JSON.parse(db.getSecret(STATE_KEY)!).status, 'the row is honestly non-serving').toBe('pending');
+    // The client id is a public identifier the credentials screen re-collects; deleting
+    // it buys nothing — but the TOKENS are the consent artifacts and must go.
+    expect(db.getSecret(CLIENT_KEY)).toBe('legacy-client-id');
+  });
+
+  it('ABANDONMENT: approve → close the wizard before signing in → nothing serves the old token, and reopening offers the walk to sign-in', async () => {
+    await mintScopelessConnectedRow();
+    expect(await migrateConnectionRegistryDrift(APP, SPOTIFY_SLOT)).toBe('staged');
+    openConnectionWizard({ appId: APP, slot: SPOTIFY_SLOT, source: 'settings', mode: 'reapprove' });
+    await reapproveFromDiff();
+
+    // The user walks away mid re-consent.
+    __resetConnectionWizardForTests();
+
+    // The persisted truth stands: no token, non-serving state — the executor's serving
+    // path reads exactly these two, so "the old token keeps working" has no substrate.
+    expect(db.getSecret(ACCESS_KEY)).toBeUndefined();
+    expect(db.getSecret(REFRESH_KEY)).toBeUndefined();
+    expect(JSON.parse(db.getSecret(STATE_KEY)!).status).toBe('pending');
+
+    // Reopening is not a dead end: the wizard opens at review, the drift migration has
+    // nothing left to say ('none' — requirement already matches the registry), and the
+    // step machine's walk from review reaches the connect screen.
+    expect(await migrateConnectionRegistryDrift(APP, SPOTIFY_SLOT)).toBe('none');
+    expect(openConnectionWizard({ appId: APP, slot: SPOTIFY_SLOT, source: 'settings' })).toBe(true);
+    expect(connectionWizardStepStore.get()).toBe('review');
+  });
+
+  it("NEGATIVE: seat-only drift (request/testRequest) still repersists silently — the coinbase path is unchanged by the scope rule", async () => {
+    db = await installDbWithLegacyRow(seatlessShape(), {
+      secrets: {
+        [authConnectionCredentialSecretKey(APP, SLOT, 'api_key')]: 'organizations/test-org/apiKeys/test-key',
+        [authConnectionCredentialSecretKey(APP, SLOT, 'private_key')]: EC_PRIVATE_KEY_PEM,
+      },
+    });
+    expect(await migrateConnectionRegistryDrift(APP, SLOT)).toBe('repersisted');
+  });
 });
