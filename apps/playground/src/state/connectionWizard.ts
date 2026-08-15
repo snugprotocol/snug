@@ -144,6 +144,7 @@ export function refreshOpenConnectionWizard(appId: string, slot: string): boolea
   const session = connectionWizardStore.get();
   if (session === null || session.appId !== appId || session.slot !== slot) return false;
   connectionFlowStatusStore.set({ state: 'idle' });
+  lanPairingErrorStore.set(null);
   connectionWizardStepStore.set('review');
   bumpRevision();
   return true;
@@ -449,6 +450,16 @@ export async function advanceFromRegister(): Promise<ConnectionWizardResult> {
  * whose new fields no stored secret backs.
  */
 /**
+ * The ONE spelling of the slot-scoped credential store (Gate-5 reuse finding: four
+ * inline copies of the two-layer wrap, one of which decides a credential deletion — a
+ * partially-updated wrap would have the downgrade path and the verify path reading
+ * connection state through differently-configured stores).
+ */
+function slotCredentialStore(db: UserDb, slot: string): SlotScopedCredentialStore {
+  return new SlotScopedCredentialStore(new UserDbCredentialStore(db), slot);
+}
+
+/**
  * ONE digest for "did the field SET change" and ONE ceiling comparison — shared by the
  * re-approval branch and the drift migration below (Gate-5 reuse finding: the private
  * copies had already diverged, and the divergent one was the one deciding a credential
@@ -506,10 +517,14 @@ export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
         }
       }
       for (const key of secretKeys) db.deleteSecret(key);
-      const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), session.slot);
+      const store = slotCredentialStore(db, session.slot);
       // A REPLACING write, deliberately: `pending` with no pin and no marker is the
-      // whole truth about a device we have not met.
+      // whole truth about a device we have not met. A previous attempt's pairing error
+      // is cleared with it — the pair screen this re-routes to describes a NEW device,
+      // and a stale refusal sentence would claim it already rejected a key it has
+      // never seen (Gate-5 finding).
       await store.setConnectionState(session.appId, { status: 'pending' });
+      lanPairingErrorStore.set(null);
     }
 
     bumpRevision();
@@ -521,6 +536,11 @@ export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
     connectionWizardStepStore.set(kindChanged || fieldSetChanged ? nextStep('review', after?.requirement) : 'done');
     return { ok: true };
   } catch (err) {
+    // The durable writes above (re-approval, secret deletion) may have landed before
+    // the throw — announce regardless, so no surface keeps rendering a row that
+    // changed underneath it. A bump with nothing changed is a cheap no-op re-read;
+    // a change with no bump is a lie that persists (Gate-5 finding).
+    bumpRevision();
     return { ok: false, message: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -850,9 +870,13 @@ function pairingErrorMessage(body: string): string | undefined {
 export const lanPairingErrorStore = createStore<string | null>(null);
 
 export async function runLanPairing(): Promise<LanPairingOutcome> {
+  const session = connectionWizardStore.get();
   lanPairingErrorStore.set(null);
   const outcome = await runLanPairingAttempt();
-  if (!outcome.ok) lanPairingErrorStore.set(outcome.message);
+  // SESSION-SCOPED, like every store write after an await (Gate-5 line-scan finding):
+  // a slow attempt resolving after the user moved to a DIFFERENT row must not paint
+  // its error — possibly naming the old device — onto the new row's pairing screen.
+  if (!outcome.ok && connectionWizardStore.get() === session) lanPairingErrorStore.set(outcome.message);
   return outcome;
 }
 
@@ -941,10 +965,20 @@ async function runLanPairingAttempt(): Promise<LanPairingOutcome> {
   // "unverified ⇒ re-pair" is already the honest recovery.
   const verdict = await runLanVerifyProbe(host, exchange, row.requirement, minted, pin.fingerprint);
 
+  // THE DURABLE WRITES ARE SESSION-SCOPED (Gate-5 line-scan finding, and it supersedes
+  // the earlier keep-the-proof-on-close choice): an attempt that outlived its session
+  // writes NOTHING. The hazard the guard closes is worse than the button press it
+  // wastes — a slow FAILED attempt resolving after the user re-paired would otherwise
+  // overwrite the newer pairing's verified state and minted key with its own stale,
+  // unverified ones.
+  if (connectionWizardStore.get() !== session) {
+    return { ok: false, message: 'the wizard session changed' };
+  }
+
   // ONE write per outcome, and the key + pin + status land TOGETHER in it. A stale
   // `lanVerifiedAt` from an earlier pairing is dropped either way: the marker may only
   // ever describe the key now in the store, and only the verify above may write it.
-  const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), session.slot);
+  const store = slotCredentialStore(db, session.slot);
   const previous = await store.getConnectionState(session.appId);
   const carried: Partial<AuthConnectionState> = { ...(previous ?? {}) };
   delete carried.lanVerifiedAt;
@@ -971,9 +1005,8 @@ async function runLanPairingAttempt(): Promise<LanPairingOutcome> {
   });
   invalidateNetGrants(session.appId);
   bumpRevision();
-  // The PROOF is kept even when the user closed the wizard mid-verify — the physical
-  // button press is not wasted (Gate-5 finding). Only the STEP is session-scoped:
-  // steering the step store would steer whatever wizard is open now.
+  // The step write stays session-scoped even past the guard above (two awaits sit
+  // between them): steering the step store would steer whatever wizard is open now.
   if (connectionWizardStore.get() === session) connectionWizardStepStore.set('done');
   return { ok: true };
 }
@@ -986,6 +1019,8 @@ const LAN_VERIFY_UNREACHABLE =
   "we couldn't reach the device to check the new key — make sure it's still powered on and on this network, then try pairing again";
 const LAN_VERIFY_UNPREPARABLE =
   "we couldn't prepare the check for the new key — try pairing again";
+const LAN_VERIFY_DEVICE_BUSY =
+  "the device couldn't answer the check just now — wait a moment, then try pairing again";
 
 /**
  * THE VERIFY READ (ADR-0025) — a deliberate, CONTAINED second network path, and the
@@ -1026,12 +1061,18 @@ async function runLanVerifyProbe(
   } catch {
     return { ok: false, message: LAN_VERIFY_UNPREPARABLE };
   }
-  // THE CREDENTIAL MUST ACTUALLY RIDE (Gate-5 finding): a requirement with no header
-  // template — or one whose template never references the pairing's secret field —
-  // renders zero credentialed headers WITHOUT throwing, and the probe would degrade
-  // into a liveness check any 2xx satisfies. An unauthenticated 200 must never mint a
-  // verified claim, so a render that did not carry the minted value refuses here.
-  if (!Object.values(headers).some((value) => value.includes(minted))) {
+  // THE CREDENTIAL MUST ACTUALLY RIDE (Gate-5 finding, twice-tightened by its own
+  // review): a requirement with no header template — or one whose template never
+  // references the pairing's secret field — renders zero credentialed headers WITHOUT
+  // throwing, and the probe would degrade into a liveness check any 2xx satisfies. The
+  // check is the STATIC template fact: some template VALUE references the secret field
+  // as a {{...}} token. Values only, token-scoped — a raw substring over the whole
+  // template is satisfied by the header NAME alone ('hue-application-key' contains
+  // 'application_key'), and a rendered-value substring would refuse any future
+  // provider whose template TRANSFORMS the secret (base64, a signing helper).
+  const secretTokenRule = new RegExp(`\\{\\{[^}]*\\b${exchange.secretField}\\b[^}]*\\}\\}`);
+  const templateValues = Object.values(requirement.request?.headerTemplate ?? {});
+  if (!templateValues.some((value) => secretTokenRule.test(value)) || Object.keys(headers).length === 0) {
     return { ok: false, message: LAN_VERIFY_UNPREPARABLE };
   }
   let status: number;
@@ -1045,7 +1086,12 @@ async function runLanVerifyProbe(
   } catch {
     return { ok: false, message: LAN_VERIFY_UNREACHABLE };
   }
-  if (status < 200 || status >= 300) return { ok: false, message: LAN_VERIFY_REFUSED };
+  // REFUSED means the DEVICE said no to the credential (auth-shaped statuses only).
+  // Everything else non-2xx is the device being unable to answer right now — telling
+  // the user "it didn't accept the key, press the button again" for a 503 sends them
+  // walking to the bridge to cure a condition the button cannot touch (Gate-5 finding).
+  if (status === 401 || status === 403) return { ok: false, message: LAN_VERIFY_REFUSED };
+  if (status < 200 || status >= 300) return { ok: false, message: LAN_VERIFY_DEVICE_BUSY };
   return { ok: true };
 }
 
@@ -1058,7 +1104,7 @@ async function runLanVerifyProbe(
  * is honestly NOT verified, which is what routes those rows back through pairing.
  */
 export async function lanConnectionVerified(db: UserDb, appId: string, slot: string): Promise<boolean> {
-  const store = new SlotScopedCredentialStore(new UserDbCredentialStore(db), slot);
+  const store = slotCredentialStore(db, slot);
   const state = await store.getConnectionState(appId);
   return state?.status === 'connected' && typeof state.lanVerifiedAt === 'number';
 }
@@ -1637,7 +1683,7 @@ function slotBoundService(
 ): ConnectionOAuthServiceLike {
   if (hooks.service !== undefined) return hooks.service;
   return new OAuthService({
-    store: new SlotScopedCredentialStore(new UserDbCredentialStore(db), slot),
+    store: slotCredentialStore(db, slot),
     redirectUriProvider: { redirectUri: redirectUri ?? (() => `${window.location.origin}/oauth/callback`) },
     flowStore: flowStateStore,
     ...serviceFetchDep(),

@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
  * resolve (verified: with `packages/protocol/dist` deleted, `turbo run test
  * --filter=examples` rebuilds protocol BEFORE this file runs).
  */
-import { connectionRequirementSchema, runtimeContractSchema } from '@snugprotocol/protocol';
+import { connectionRequirementSchema, isRfc1918Ipv4Literal, runtimeContractSchema } from '@snugprotocol/protocol';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -66,10 +66,10 @@ const APPS = [
   // spectrum has a working, reviewable example rather than a doc paragraph:
   //   crypto-portfolio → api_key (CoinGecko)      weather-planner  → api_key (OpenWeather)
   //   my-repos         → bearer_token (GitHub)    spotify-party-dj → oauth2_auth_code
-  // `hue-lights-party` is the DELIBERATE NEGATIVE: it reaches a bridge on the user's own
-  // LAN, which a sandboxed web iframe cannot do, so it ships fully alive with the one
-  // impossible control greyed and NO manifest at all. It is in APPS (it has an app.html
-  // and is validated like everything else) and absent from the manifest set on purpose.
+  // `hue-lights-party` is the LAN-class starter: its manifest declares a `lanHost`
+  // connection (the bridge address is COLLECTED from the user, never shipped), and
+  // since ADR-0026 the app drives the real bridge through connection-relative URLs —
+  // the real-connection pins at the bottom of this file are its dedicated gate.
   'crypto-portfolio',
   'weather-planner',
   'my-repos',
@@ -635,8 +635,14 @@ test('hue-lights-party drives the real bridge through connection-relative URLs �
     'the ambiguity refusal must be handled distinctly (never the connect CTA)',
   );
   // No literal bridge host anywhere: the app never learns the address (ADR-0026 §3).
-  assert.ok(
-    !/192\.168\.|10\.\d+\.|172\.(1[6-9]|2\d|3[01])\./.test(html),
-    'the starter must not carry any literal private address — the ceiling is the only place the host lives',
-  );
+  // The class check is the PROTOCOL's own (`isRfc1918Ipv4Literal`), never a restated
+  // range table — a restated table keeps passing when the protocol's private class
+  // broadens, and the drift is silent because the two share no source.
+  const dottedQuads = html.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) ?? [];
+  for (const literal of dottedQuads) {
+    assert.ok(
+      !isRfc1918Ipv4Literal(literal),
+      `the starter must not carry a literal private address (found ${literal}) — the ceiling is the only place the host lives`,
+    );
+  }
 });

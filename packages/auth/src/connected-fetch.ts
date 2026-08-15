@@ -283,6 +283,27 @@ const failure = (code: string, message: string, retryable = false): ConnectedFet
 });
 
 /**
+ * The ONE spelling of each approval-state refusal (Gate-5 reuse finding): the literal
+ * path's zero-match arm and ADR-0026's symbolic pre-check refuse the SAME conditions,
+ * and two hand-rolled copies of the sentence (or a dropped IMPORTED arm — the live
+ * divergence the review caught) would show the same app two different remedies for one
+ * state depending on how it spelled the URL.
+ */
+const notApprovedFailure = (providerName?: string): ConnectedFetchResult =>
+  failure(
+    NET_ERROR_CODES.NET_NOT_APPROVED,
+    providerName === undefined
+      ? 'no approved connection covers this request'
+      : `no approved connection covers this request — connect ${providerName} to continue`,
+  );
+
+const importedUnapprovedFailure = (): ConnectedFetchResult =>
+  failure(
+    NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED,
+    'this connection arrived via import/sync — re-approve it in settings before the app can use it',
+  );
+
+/**
  * The TOFU pin's shape: 64 lowercase hex characters — a SHA-256 over the leaf
  * certificate's DER, as `lan_fetch`'s `fingerprint_der` produces it.
  *
@@ -787,24 +808,9 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         (row) => row.imported === true && row.status !== CONNECTION_STATUS.approved && isHostAllowed(host, deriveRowHosts(row)),
       );
       if (importedCandidate !== undefined) {
-        return {
-          ok: false,
-          failure: failure(
-            NET_ERROR_CODES.NET_IMPORTED_UNAPPROVED,
-            'this connection arrived via import/sync — re-approve it in settings before the app can use it',
-          ),
-        };
+        return { ok: false, failure: importedUnapprovedFailure() };
       }
-      const named = resolution.declaredProvider;
-      return {
-        ok: false,
-        failure: failure(
-          NET_ERROR_CODES.NET_NOT_APPROVED,
-          named === undefined
-            ? 'no approved connection covers this request'
-            : `no approved connection covers this request — connect ${named} to continue`,
-        ),
-      };
+      return { ok: false, failure: notApprovedFailure(resolution.declaredProvider) };
     }
 
     const row = resolution.row;
@@ -884,7 +890,14 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // credential-routing tiebreak).
       let requestUrl = input.url;
       let symbolic: { slot: string; rows: readonly NetConnectionRow[]; ceilingHost: string } | undefined;
-      const connectionUrl = parseConnectionUrl(input.url);
+      // The parser sees the SAME normalization WHATWG `new URL` applies (strip
+      // tab/newline anywhere, trim edges) — otherwise ' snug-connection://x/y' is
+      // classified not-connection-url here, falls through to the literal path, parses
+      // as the snug-connection scheme after URL's own stripping, and dies three gates
+      // later as a mystifying scheme-block instead of the malformed refusal the
+      // grammar promises (Gate-5 finding). The literal path is untouched: it keeps
+      // `input.url`, which `new URL` normalizes identically itself.
+      const connectionUrl = parseConnectionUrl(input.url.trim().replace(/[\t\n\r]/g, ''));
       if (!connectionUrl.ok && connectionUrl.reason === 'malformed') {
         return failure(
           NET_ERROR_CODES.NET_INVALID_REQUEST,
@@ -901,10 +914,10 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           );
         }
         if (row.status !== CONNECTION_STATUS.approved) {
-          return failure(
-            NET_ERROR_CODES.NET_NOT_APPROVED,
-            `no approved connection covers this request — connect ${row.requirement.provider.name} to continue`,
-          );
+          // The SAME classification the literal path's zero-match arm applies — an
+          // imported row keeps its distinct code and its "re-approve" remedy on the
+          // symbolic path too (Gate-5 reuse finding: the first draft dropped this arm).
+          return row.imported === true ? importedUnapprovedFailure() : notApprovedFailure(row.requirement.provider.name);
         }
         if (row.allowedHosts.length !== 1) {
           return failure(
@@ -913,7 +926,20 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           );
         }
         const ceilingHost = row.allowedHosts[0]!;
-        requestUrl = `https://${ceilingHost}${connectionUrl.pathAndQuery}`;
+        // `new URL(path, base)`, never concatenation — the same discipline
+        // `executeConnectionTestRequest` documents: under concatenation a smuggled
+        // `//evil.example/x` resolves to a NEW host, while base-resolution keeps the
+        // authority and lets the canonical guard below fail closed for free. The
+        // parser's grammar already refuses the known shapes; this makes the unknown
+        // ones refuse too.
+        try {
+          requestUrl = new URL(connectionUrl.pathAndQuery, `https://${ceilingHost}`).href;
+        } catch {
+          return failure(
+            NET_ERROR_CODES.NET_INVALID_REQUEST,
+            'the connection url path did not resolve cleanly — check the path',
+          );
+        }
         symbolic = { slot: connectionUrl.slot, rows, ceilingHost };
       }
 
@@ -1134,12 +1160,29 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
        * THE ONE DELIVERY SEAT (ADR-0022 §4, amendment 8). Every result leaves execute()
        * through here, so "fires only on the FINAL delivered result" is true by
        * construction: a 401 cured by the refresh retry never reaches this function as
-       * the delivered value, and an uncured one reaches it exactly once. The result is
-       * returned UNTOUCHED — the observer is a side channel, never a remap.
+       * the delivered value, and an uncured one reaches it exactly once. A SUCCESS is
+       * returned untouched — the observer is a side channel, never a remap.
+       *
+       * ADR-0026 §3, enforced STRUCTURALLY (Gate-5 altitude finding): on the symbolic
+       * path, every FAILURE message is scrubbed of the resolved host and href here —
+       * one seat, all messages — so a future gate or edited sentence that forgets to
+       * branch on `symbolic` still cannot hand the app the user's private address.
+       * The branched host-clean copy upstream remains the primary (better sentences);
+       * this is the backstop that makes the boundary hold by construction. Response
+       * BODIES are untouched (ok results pass through) — the provider's data surface.
        */
       const deliver = (result: ConnectedFetchResult): ConnectedFetchResult => {
         if (result.ok && (result.status === 401 || result.status === 403) && credentialsInjected) {
           deps.onAuthShapedFailure?.(grant.slot, result.status);
+        }
+        if (!result.ok && symbolic !== undefined) {
+          return {
+            ...result,
+            message: scrubAuthValues(result.message, {
+              'resolved:host': symbolic.ceilingHost,
+              'resolved:href': url.href,
+            }),
+          };
         }
         return result;
       };

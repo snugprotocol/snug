@@ -25,6 +25,8 @@ resolved forms; response bodies deliberately not scrubbed — provider data surf
 
 Staged prose: to be folded into the auth draft's requirement/executor sections at the
 next spec-draft revision; the normative text at v1 is ADR-0026 + this entry.
+
+## 2026-08-13 — INTERNAL DRAFT, not staged for any push — TASK-20260812-desktop-auth-awareness (P5, protocol lane)
 **Excluded from every spec push** (AL-12 HELD; auth surface publishes no earlier than
 Beta exit). One additive change to the internal v0.3 auth draft, no wire-surface impact —
 `schemas/*.json` byte-unchanged for the same publication-line reason as the P3 entry

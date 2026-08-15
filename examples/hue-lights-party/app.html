@@ -436,6 +436,12 @@ function useConnectedFetch() {
           setSelected((prev) => (Object.keys(prev).length > 0 ? prev : (rooms[0] ? { [rooms[0].id]: true } : {})));
           return;
         }
+        if (res.ok && (res.status === 401 || res.status === 403)) {
+          // A DELIVERED auth refusal (the executor returns real statuses as ok:true):
+          // "try again" can never cure a refused key — the connect flow can.
+          setBridge({ phase: 'connect' });
+          return;
+        }
         if (res.ok) {
           setBridge({ phase: 'error', message: 'the bridge answered ' + res.status + ' — try again in a moment' });
           return;
@@ -454,27 +460,42 @@ function useConnectedFetch() {
       const rooms = bridge.phase === 'connected' ? bridge.rooms : [];
       const chosen = rooms.filter((room) => selected[room.id] && room.groupedLight);
 
+      // ONE room first (it carries the single confirm prompt — the grant is remembered
+      // per app+host+method), then the rest IN PARALLEL so a scene lands as a scene,
+      // not a light-by-light crawl over per-call pinned-TLS handshakes. A declined
+      // confirm or an unreachable bridge on that first write ABORTS the rest: one
+      // decision, one timeout — never N of them.
+      const putRoom = async (room, index) => {
+        const color = scene.colors[index % scene.colors.length];
+        const res = await net.fetch(GROUPED_LIGHT_URL + room.groupedLight, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ on: { on: true }, dimming: { brightness }, color: { xy: hexToXy(color) } }),
+        });
+        const code = !res.ok && res.error ? res.error.code : null;
+        return {
+          id: room.id,
+          name: room.name,
+          ok: Boolean(res.ok && res.status < 300),
+          abort: code === 'NET_CONFIRM_DENIED' || code === 'NET_FETCH_FAILED' || code === 'NET_SSRF_BLOCKED',
+          message: res.ok
+            ? (res.status < 300 ? 'lit' : 'the bridge answered ' + res.status)
+            : (code === 'NET_CONFIRM_DENIED'
+                ? 'you declined this write'
+                : 'could not reach this room — check the bridge and try again'),
+        };
+      };
+
       const apply = async () => {
         setApplying(true);
         setApplyResults(null);
-        const results = [];
-        for (let i = 0; i < chosen.length; i++) {
-          const room = chosen[i];
-          const color = scene.colors[i % scene.colors.length];
-          const res = await net.fetch(GROUPED_LIGHT_URL + room.groupedLight, {
-            method: 'PUT',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ on: { on: true }, dimming: { brightness }, color: { xy: hexToXy(color) } }),
-          });
-          results.push({
-            name: room.name,
-            ok: Boolean(res.ok && res.status < 300),
-            message: res.ok
-              ? (res.status < 300 ? 'lit' : 'the bridge answered ' + res.status)
-              : (res.error && res.error.code === 'NET_CONFIRM_DENIED'
-                  ? 'you declined this write'
-                  : 'could not reach this room — check the bridge and try again'),
-          });
+        const first = await putRoom(chosen[0], 0);
+        let results;
+        if (first.abort) {
+          results = [first].concat(chosen.slice(1).map((room) => ({ id: room.id, name: room.name, ok: false, message: 'skipped' })));
+        } else {
+          const rest = await Promise.all(chosen.slice(1).map((room, index) => putRoom(room, index + 1)));
+          results = [first].concat(rest);
         }
         setApplyResults(results);
         setApplying(false);
@@ -485,46 +506,72 @@ function useConnectedFetch() {
           <h1>Hue Lights Party</h1>
           <p className="sub">design the scene here — connect Philips Hue to light up your real rooms.</p>
 
-          {bridge.phase === 'connect' ? (
-            <div className="notice" data-testid="preconnect-notice">
-              <span aria-hidden="true">💡</span>
-              <p style={{ margin: 0 }}>
-                <b>connect Philips Hue to pair your bridge.</b> pairing runs in the Snug desktop
-                app’s connect flow — press the button on top of the bridge when it asks, and Snug
-                checks the new key with the bridge and keeps it for you. everything below already
-                works while you decide.
-              </p>
-            </div>
-          ) : null}
-          {bridge.phase === 'unreachable' ? (
-            <div className="notice" data-testid="unreachable-notice">
-              <span aria-hidden="true">📡</span>
-              <p style={{ margin: 0 }}>
-                <b>your bridge isn’t reachable from here.</b> the Snug desktop app on your home
-                network can reach it — check the bridge is powered on, then{' '}
-                <button type="button" className="chip" onClick={loadRooms}>check again</button>
-              </p>
-            </div>
-          ) : null}
-          {bridge.phase === 'ambiguous' ? (
-            <div className="notice" data-testid="ambiguous-notice">
-              <span aria-hidden="true">⚠️</span>
-              <p style={{ margin: 0 }}>
-                <b>this app’s Hue connection doesn’t point at exactly one device.</b> open
-                Settings → Connections and review it — this isn’t something connecting again can
-                fix.
-              </p>
-            </div>
-          ) : null}
-          {bridge.phase === 'error' ? (
-            <div className="notice" data-testid="bridge-error-notice">
-              <span aria-hidden="true">⚠️</span>
-              <p style={{ margin: 0 }}>
-                {bridge.message}{' '}
-                <button type="button" className="chip" onClick={loadRooms}>try again</button>
-              </p>
-            </div>
-          ) : null}
+          {(() => {
+            // ONE notice element, table-driven (four copy-pasted blocks invited drift —
+            // a lost aria-hidden or testid in one of them would be invisible).
+            const NOTICES = {
+              connect: {
+                emoji: '💡',
+                testid: 'preconnect-notice',
+                // The one phase every user must LEAVE — and the frame cannot observe
+                // pairing finishing, so the exit is this button, not a magic refresh.
+                retry: 'connected it — check again',
+                body: (
+                  <>
+                    <b>connect Philips Hue to pair your bridge.</b> pairing runs in the Snug desktop
+                    app’s connect flow — press the button on top of the bridge when it asks, and Snug
+                    checks the new key with the bridge and keeps it for you. everything below already
+                    works while you decide.
+                  </>
+                ),
+              },
+              unreachable: {
+                emoji: '📡',
+                testid: 'unreachable-notice',
+                retry: 'check again',
+                body: (
+                  <>
+                    <b>your bridge isn’t reachable from here.</b> the Snug desktop app on your home
+                    network can reach it — check the bridge is powered on, then
+                  </>
+                ),
+              },
+              ambiguous: {
+                emoji: '⚠️',
+                testid: 'ambiguous-notice',
+                retry: null,
+                body: (
+                  <>
+                    <b>this app’s Hue connection doesn’t point at exactly one device.</b> open
+                    Settings → Connections and review it — this isn’t something connecting again can
+                    fix.
+                  </>
+                ),
+              },
+              error: {
+                emoji: '⚠️',
+                testid: 'bridge-error-notice',
+                retry: 'try again',
+                body: <>{bridge.message}</>,
+              },
+            };
+            const notice = NOTICES[bridge.phase];
+            if (!notice) return null;
+            return (
+              <div className="notice" data-testid={notice.testid}>
+                <span aria-hidden="true">{notice.emoji}</span>
+                <p style={{ margin: 0 }}>
+                  {notice.body}
+                  {notice.retry ? (
+                    <>
+                      {' '}
+                      <button type="button" className="chip" onClick={loadRooms}>{notice.retry}</button>
+                    </>
+                  ) : null}
+                </p>
+              </div>
+            );
+          })()}
 
           <section className="card">
             <h2>🎨 pick a scene</h2>
@@ -619,7 +666,7 @@ function useConnectedFetch() {
             {applyResults !== null ? (
               <div className={'result' + (applyResults.every((r) => r.ok) ? '' : ' err')} data-testid="apply-results">
                 {applyResults.map((r) => (
-                  <div key={r.name}>
+                  <div key={r.id}>
                     <span className="code">{r.name}</span>: {r.message}
                   </div>
                 ))}
