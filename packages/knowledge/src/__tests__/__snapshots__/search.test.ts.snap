@@ -113,6 +113,7 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
       "## Connected APIs: calling an external API with auth, login, and credentials",
       "### Design the app against useConnectedFetch (it must work before it is connected)",
       "### Research the provider's authentication before you declare it",
+      "### Addressing a connection whose host only the user knows (connection-relative URLs)",
       "### Declare the connection: emit the connection_requirement directive as you build",
       "### Declare EVERY credential the provider requires (the completeness bar)",
       "### Tell the user where to get the credential (registration walkthrough)",
