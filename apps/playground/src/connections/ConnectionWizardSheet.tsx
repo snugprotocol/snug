@@ -42,7 +42,7 @@ import type { ReactElement } from 'react';
 
 import { CONNECTION_STATUS, type ConnectionField, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { type ConnectionRow } from '@snugprotocol/db';
-import { lookupWellKnownProvider } from '@snugprotocol/auth';
+import { lookupWellKnownProvider, resolveRegistryEntryByName } from '@snugprotocol/auth';
 
 import { getUserDb } from '../state/userdb.js';
 import { useStore } from '../state/store.js';
@@ -147,17 +147,36 @@ function provenanceCopy(row: ConnectionRow): string {
 }
 
 /**
- * Q3 — is the console URL CLICKABLE? Only for `registry`, where the URL is one WE pinned.
+ * ADR-0029 (MIGRATED from Q3, TASK-20260815) — is the console URL CLICKABLE? Iff its
+ * BYTES match the pinned registry value for the row's RESOLVED provider, whatever the
+ * row's provenance.
  *
- * Everywhere else the URL came from a model or an app author, and rendering an
- * attacker-influenceable destination as a one-tap anchor inside the platform's own
- * credential wizard is the phishing hand-off in its purest form. Copy-only is the
- * mitigation — and the FULL url stays visible, because truncating the host is what turns
- * a copy-only affordance back into a phishing aid: a user who cannot read where they are
- * being sent cannot refuse to go.
+ * Provenance was the wrong key: a starter/inference row whose provider matched the
+ * registry had this URL SUBSTITUTED from the registry (`applyRegistryValues` replaces
+ * `registration` on every borrow hit), so the shipped Spotify starter rendered
+ * copy-paste for an address Snug itself pinned. The anti-phishing rule survives intact
+ * as what it always meant: rendering an attacker-influenceable destination as a one-tap
+ * anchor inside the platform's own credential wizard is the phishing hand-off in its
+ * purest form — so anything NOT byte-identical to our pinned value (including a
+ * near-miss one character off, the class an imported user file can carry) stays
+ * copy-only, with the FULL url visible, because truncating the host is what turns a
+ * copy-only affordance back into a phishing aid.
+ *
+ * Resolution is `resolveRegistryEntryByName` — the brand-adjacent rung admission itself
+ * uses — never the exact-key `lookupWellKnownProvider` (the hue lesson the drift
+ * migration documents: display names are not registry keys). Options' registrations are
+ * checked too: an option's console URL is as pinned as the entry's.
  */
 function consoleUrlIsClickable(row: ConnectionRow): boolean {
-  return row.provenance === 'registry';
+  const consoleUrl = row.requirement.registration?.consoleUrl;
+  if (consoleUrl === undefined) return false;
+  const entry = resolveRegistryEntryByName(row.requirement.provider.name)?.entry;
+  if (entry === undefined) return false;
+  const pinned = [
+    entry.registration?.consoleUrl,
+    ...(entry.authOptions ?? []).map((option) => option.registration?.consoleUrl),
+  ];
+  return pinned.some((url) => url !== undefined && url === consoleUrl);
 }
 
 /** Plain-text step list. Text children only — see the AC5 note in the module doc. */
@@ -720,21 +739,42 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
         <div className="field" data-testid="register-console">
           {clickable ? (
             <span data-testid="register-console-link">
-              <a href={consoleUrl} target="_blank" rel="noreferrer">
+              {/*
+                ADR-0029 §3: on desktop the link opens via the SYSTEM browser (the same
+                RFC 8252 posture as the sign-in leg — the webview never navigates to a
+                provider), so the anchor's default navigation is preempted when the
+                platform carries an opener. The href stays real either way: hover shows
+                the destination, and the web branch is exactly the old behavior.
+              */}
+              <a
+                href={consoleUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={
+                  getPlatform().oauth !== undefined
+                    ? (event) => {
+                        event.preventDefault();
+                        void getPlatform().oauth!.openExternal(consoleUrl);
+                      }
+                    : undefined
+                }
+              >
                 {consoleUrl}
               </a>
             </span>
           ) : (
             <>
               {/*
-                Copy-only (Q3). The full address is shown so the user can read where they
-                are being sent and decide for themselves — see `consoleUrlIsClickable`.
+                Copy-only (ADR-0029). The full address is shown so the user can read
+                where they are being sent and decide for themselves — see
+                `consoleUrlIsClickable`.
               */}
               <code className="redirect-uri" data-testid="register-console-url">
                 {consoleUrl}
               </code>
               <span className="hint">
-                open this address yourself — we don’t link it, because a model proposed it rather than us pinning it.
+                open this address yourself — we don’t link it, because we haven’t pinned it: it came from a model or an
+                app author, not from Snug’s own registry.
               </span>
               <Button
                 onClick={() => {

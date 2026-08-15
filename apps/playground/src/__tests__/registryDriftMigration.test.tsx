@@ -607,3 +607,38 @@ describe('ADR-0028 rule 3 — scope drift stages, re-approval re-consents, the o
     expect(await migrateConnectionRegistryDrift(APP, SLOT)).toBe('repersisted');
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 AC5 (ADR-0029) — the anti-phishing NEGATIVE needs a legacy row
+// ---------------------------------------------------------------------------
+//
+// Admission substitution REPLACES `registration` on every borrow hit, so a near-miss
+// console URL under a registry brand cannot be minted through any gated accessor — but
+// it CAN arrive in an imported user file (threat-delta R-4's channel), which is exactly
+// the row this harness's permissive-then-gated mint models. The byte-match rule must
+// hold against that row: one character off the pinned URL, no anchor.
+
+describe('ADR-0029 — a near-miss console URL under the Spotify brand stays copy-only', () => {
+  it('one character off the pinned URL renders NO anchor — copy-only, full address visible', async () => {
+    const shape = requirementFromRegistryEntry(
+      WELL_KNOWN_PROVIDERS_REGISTRY['spotify']!,
+      'Spotify',
+      'spotify',
+    ) as unknown as Record<string, unknown>;
+    const NEAR_MISS = 'https://developer.spotify.com/dashboardd';
+    (shape['registration'] as Record<string, unknown>)['consoleUrl'] = NEAR_MISS;
+    db = await installDbWithLegacyRow(shape, { slot: 'spotify' });
+
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await renderSheet();
+    // No drift stages here (fields/seats/scopes all match the registry), so the row
+    // keeps its near-miss registration — the wizard must simply refuse to link it.
+    await click(/approve this connection/i);
+
+    const consoleBox = container?.querySelector('[data-testid="register-console"]');
+    expect(consoleBox, 'the register screen must render its console box').not.toBeNull();
+    expect(consoleBox!.querySelector('a'), 'a near-miss URL must never become an anchor').toBeNull();
+    expect(container?.textContent ?? '').toContain(NEAR_MISS);
+    expect(button(/copy/i)).toBeDefined();
+  });
+});
