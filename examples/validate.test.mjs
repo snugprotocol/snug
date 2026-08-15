@@ -594,10 +594,49 @@ test('hue-lights-party copy is platform-agnostic and names the real runtime gap'
     !/which a web page cannot reach/i.test(html),
     'the preconnect notice must not frame its rationale around being on the web',
   );
-  // The honest reason the apply control is disabled: the capability does not exist yet.
-  assert.match(
-    html,
-    /isn['’]t available yet|not available yet/i,
-    'the disabled apply control must name the missing runtime capability, not a platform',
+  // NOTE (TASK-20260814-hue-starter-real-connection, AC9): the third assertion this test
+  // carried — that the apply control says the capability "isn't available yet" — is
+  // REPLACED by the real-connection pins below, deliberately and in the same commit. The
+  // capability now exists (ADR-0026); pinning its absence would pin a lie.
+});
+
+/**
+ * TASK-20260814-hue-starter-real-connection (ADR-0026) — the hue starter runs on the
+ * REAL connection: symbolic addressing, live CLIP v2 data, and code-keyed honest
+ * fallbacks. No mocked room or light data may remain anywhere in the file.
+ */
+test('hue-lights-party drives the real bridge through connection-relative URLs — no dummy data', () => {
+  const html = readFileSync(path.join(HERE, 'hue-lights-party', 'app.html'), 'utf8');
+
+  // The mount probe doubles as the data fetch (ADR-0026 §4): rooms come from the bridge.
+  assert.ok(
+    html.includes('snug-connection://hue/clip/v2/resource/room'),
+    'the starter must read rooms from the bridge through the symbolic scheme',
+  );
+  // Scene apply is a real grouped-light write, addressed symbolically.
+  assert.ok(
+    html.includes('snug-connection://hue/clip/v2/resource/grouped_light/'),
+    'scene apply must write to the bridge through the symbolic scheme',
+  );
+  // The mocked room list is gone — rooms render from the bridge response.
+  assert.ok(
+    !/const ROOMS\s*=/.test(html),
+    'the hardcoded room list must not survive the real-connection rewrite',
+  );
+  assert.ok(
+    !/'Living room'|"Living room"/.test(html),
+    'no mocked room name may remain — rooms come from the bridge',
+  );
+  // Fallbacks are keyed on the executor's CODES, and the ambiguity refusal must never
+  // render the connect CTA (Gate-2 review advisory).
+  assert.ok(html.includes('NET_NOT_APPROVED'), 'the connect CTA must key on NET_NOT_APPROVED');
+  assert.ok(
+    html.includes('NET_AMBIGUOUS_CONNECTION'),
+    'the ambiguity refusal must be handled distinctly (never the connect CTA)',
+  );
+  // No literal bridge host anywhere: the app never learns the address (ADR-0026 §3).
+  assert.ok(
+    !/192\.168\.|10\.\d+\.|172\.(1[6-9]|2\d|3[01])\./.test(html),
+    'the starter must not carry any literal private address — the ceiling is the only place the host lives',
   );
 });
