@@ -10,6 +10,8 @@
 // `requirementToSpec`, and sent by `generateAuthUrl`. AC1's test runs that WHOLE chain
 // at the production altitude (lesson 2026-08-05: test where the decision is made — a
 // hand-built spec would pass against a broken emitter).
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { ConnectionRequirement } from '@snugprotocol/protocol';
 import {
@@ -34,16 +36,18 @@ const SPOTIFY_SCOPES = [
   'user-modify-playback-state',
 ];
 
-/** The shipped starter manifest, byte-shaped (examples/spotify-party-dj/connection.json). */
-const STARTER_DECLARATION: ConnectionRequirement = {
-  slot: 'spotify',
-  provider: {
-    name: 'Spotify',
-    docsUrl: 'https://developer.spotify.com/documentation/web-api',
-  },
-  kind: 'oauth2_auth_code',
-  declaredApiHosts: ['api.spotify.com'],
-};
+/**
+ * The shipped starter manifest — READ from the file that ships, not retyped (Gate-5
+ * review: a hand copy claiming "byte-shaped" keeps passing after the real manifest
+ * changes, and the whole point of the AC1 chain test is that THE SHIPPED declaration
+ * reaches a scoped authorize URL).
+ */
+const STARTER_DECLARATION = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL('../../../../examples/spotify-party-dj/connection.json', import.meta.url)),
+    'utf8',
+  ),
+) as ConnectionRequirement;
 
 function memoryQuartet(): {
   getSecret(key: string): string | undefined;
@@ -115,6 +119,22 @@ describe('ADR-0028 — admission substitution owns the seat on every borrow hit'
     const admitted = admitConnectionRequirement(authored, { channel: 'starter' });
     expect(admitted.ok).toBe(true);
     if (admitted.ok) expect(admitted.requirement.scopes).toEqual(['https://mail.google.com/']);
+  });
+
+  it('NEGATIVE (Gate-5): a STATIC-kind declaration under the Spotify brand gains NO scopes — the seat is meaningless to its kind', () => {
+    // Admission never substitutes kind, so without this gate every legacy api_key row
+    // brand-resolving to a scope-pinned entry would stage a spurious "what this sign-in
+    // may do" diff at wizard open and route its user through a re-consent ceremony
+    // scopes cannot affect.
+    const staticDeclaration: ConnectionRequirement = {
+      slot: 'spotify',
+      provider: { name: 'Spotify' },
+      kind: 'api_key',
+      declaredApiHosts: ['api.spotify.com'],
+    };
+    const admitted = admitConnectionRequirement(staticDeclaration, { channel: 'starter' });
+    expect(admitted.ok).toBe(true);
+    if (admitted.ok) expect(admitted.requirement.scopes).toBeUndefined();
   });
 
   it('substitution hands out COPIES — scopes and registration.instructions are never live registry references', () => {

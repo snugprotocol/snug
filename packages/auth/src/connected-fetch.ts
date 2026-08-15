@@ -1178,15 +1178,22 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
        * BODIES are untouched (ok results pass through) — the provider's data surface.
        */
       const deliver = (result: ConnectedFetchResult): ConnectedFetchResult => {
-        if (result.ok && (result.status === 401 || result.status === 403) && credentialsInjected) {
+        if (
+          result.ok &&
+          (result.status === 401 || result.status === 403) &&
+          credentialsInjected &&
+          deps.onAuthShapedFailure !== undefined
+        ) {
           // The detail reads the DELIVERED body — scrubbed and capped at gate 10 — never
-          // the raw Response (`scrubCandidates` is performFetch-local by design). A
-          // 2-arg call when no detail exists keeps empty-body behavior byte-identical.
+          // the raw Response (`scrubCandidates` is performFetch-local by design), and
+          // only when someone is LISTENING: the wizard probe strips the seat, so its
+          // 401/403 outcomes must not pay for an extraction nobody reads. A 2-arg call
+          // when no detail exists keeps empty-body behavior byte-identical.
           const detail = extractAuthFailureDetail(result.body);
           if (detail !== undefined) {
-            deps.onAuthShapedFailure?.(grant.slot, result.status, detail);
+            deps.onAuthShapedFailure(grant.slot, result.status, detail);
           } else {
-            deps.onAuthShapedFailure?.(grant.slot, result.status);
+            deps.onAuthShapedFailure(grant.slot, result.status);
           }
         }
         if (!result.ok && symbolic !== undefined) {
@@ -1222,6 +1229,14 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
 const MAX_AUTH_FAILURE_DETAIL_CHARS = 160;
 
 /**
+ * Bodies above this size yield no detail at all. A real provider error envelope is a
+ * few hundred bytes; the delivered body can be up to the 1 MiB gate-10 cap, and parsing
+ * a megabyte of JSON to pull 160 chars on every credentialed 401/403 is work an
+ * adversarial or verbose provider gets to bill us for (Gate-5 review, efficiency).
+ */
+const MAX_AUTH_FAILURE_BODY_CHARS = 8_192;
+
+/**
  * Extract a short human-readable reason from an auth-shaped failure body.
  *
  * INPUT CONTRACT: the DELIVERED `result.body` — already scrubbed of every injected
@@ -1229,13 +1244,18 @@ const MAX_AUTH_FAILURE_DETAIL_CHARS = 160;
  * transport bytes; it adds bounding and shape-recognition, not scrubbing.
  *
  * Recognized shapes, in order: Spotify's `{"error":{"message":…}}`, RFC 6749
- * `error_description`, a bare `message` string, a bare `error` string. JSON without a
- * recognized message yields NOTHING (raw JSON in a banner is noise, not diagnosis), and
- * so does markup (an HTML error page's head is garbage). Plain text becomes the head,
- * hard-capped — a plain-text reason like "quota exceeded" is exactly the honesty the
- * banner wants.
+ * `error_description`, a bare `message` string, a bare `error` string. Everything
+ * structured-but-unrecognized yields NOTHING — raw JSON in a banner is noise, not
+ * diagnosis — and the Gate-5 review found the first cut leaking exactly that: a
+ * MALFORMED `{` body (a >1 MiB JSON error truncated mid-token by gate 10 no longer
+ * parses) fell through to the text head, and JSON ARRAYS (Hue CLIP v1 errors),
+ * JSON strings and `)]}'`-guarded bodies skipped the JSON branch entirely. So: a `{`
+ * body parses or yields nothing, and a body opening with `[`, `<`, `"` or `)` is
+ * structure/markup, never prose. Plain text becomes the head, hard-capped — a
+ * plain-text reason like "quota exceeded" is exactly the honesty the banner wants.
  */
 function extractAuthFailureDetail(body: string): string | undefined {
+  if (body.length > MAX_AUTH_FAILURE_BODY_CHARS) return undefined;
   const trimmed = body.trim();
   if (trimmed.length === 0) return undefined;
   const cap = (text: string): string => text.slice(0, MAX_AUTH_FAILURE_DETAIL_CHARS);
@@ -1254,10 +1274,11 @@ function extractAuthFailureDetail(body: string): string | undefined {
       );
       return hit !== undefined ? cap(hit.trim()) : undefined;
     } catch {
-      // Not parseable JSON after all — fall through to the plain-text rule.
+      // Malformed or truncated JSON: brace noise is not a diagnosis.
+      return undefined;
     }
   }
-  if (trimmed.startsWith('<')) return undefined;
+  if ('[<")'.includes(trimmed[0]!)) return undefined;
   return cap(trimmed);
 }
 

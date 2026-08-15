@@ -642,3 +642,113 @@ describe('ADR-0029 — a near-miss console URL under the Spotify brand stays cop
     expect(button(/copy/i)).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 Gate-5 review fixes — the scope rule's edges
+// ---------------------------------------------------------------------------
+
+describe('Gate-5 — scope drift edges: reorders, both OAuth kinds, invalidation ordering', () => {
+  const spotifyEntry2 = WELL_KNOWN_PROVIDERS_REGISTRY['spotify']!;
+
+  it("a REORDERED-but-equal scope set is NOT drift — no staged diff whose every line reads unchanged, no token loss ('none')", async () => {
+    // Consent breadth is a SET (RFC 6749); the diff screen renders set-membership. An
+    // order-sensitive digest staged an approval with no visible delta, and approving it
+    // destroyed a working connection's tokens (cross-file trace finding).
+    const shape = requirementFromRegistryEntry(spotifyEntry2, 'Spotify', 'spotify') as unknown as Record<
+      string,
+      unknown
+    >;
+    shape['scopes'] = [...(shape['scopes'] as string[])].reverse();
+    db = await installDbWithLegacyRow(shape, { slot: 'spotify' });
+    expect(await migrateConnectionRegistryDrift(APP, 'spotify')).toBe('none');
+  });
+
+  it('token invalidation lands BEFORE the promotion — a mid-invalidation throw must leave the healing diff intact', async () => {
+    // If reapproveConnection landed first and a delete then threw, the row would be
+    // permanently promoted with the old tokens alive and the drift migration would
+    // find requirement === registry forever ('none') — the unhealable state.
+    const shape = requirementFromRegistryEntry(spotifyEntry2, 'Spotify', 'spotify') as unknown as Record<
+      string,
+      unknown
+    >;
+    delete shape['scopes'];
+    db = await installDbWithLegacyRow(shape, {
+      slot: 'spotify',
+      secrets: {
+        [authConnectionCredentialSecretKey(APP, 'spotify', 'access_token')]: 'legacy-access-token-1',
+        [authConnectionStateSecretKey(APP, 'spotify')]: JSON.stringify({ status: 'connected', obtainedAt: 1, expiresIn: 3600 }),
+      },
+    });
+    expect(await migrateConnectionRegistryDrift(APP, 'spotify')).toBe('staged');
+
+    const deleteSpy = vi.spyOn(db, 'deleteSecret');
+    const promoteSpy = vi.spyOn(db, 'reapproveConnection');
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings', mode: 'reapprove' });
+    expect(await reapproveFromDiff()).toEqual({ ok: true });
+
+    expect(deleteSpy).toHaveBeenCalled();
+    expect(promoteSpy).toHaveBeenCalledTimes(1);
+    const firstDelete = Math.min(...deleteSpy.mock.invocationCallOrder);
+    const promotion = promoteSpy.mock.invocationCallOrder[0]!;
+    expect(firstDelete, 'invalidation must precede the promotion').toBeLessThan(promotion);
+    deleteSpy.mockRestore();
+    promoteSpy.mockRestore();
+  });
+
+  it("oauth2_client_creds is covered too — its mint is exactly as consent-bound ('the old mint cannot outlive the consent')", async () => {
+    const ccRequirement: Record<string, unknown> = {
+      slot: 'nimbus',
+      provider: { name: 'Nimbus B2B' },
+      kind: 'oauth2_client_creds',
+      endpoints: { tokenUrl: 'https://auth.nimbus-b2b.example/oauth/token' },
+      fields: [
+        { key: 'client_id', label: 'Client ID', type: 'text' },
+        { key: 'client_secret', label: 'Client Secret', type: 'secret' },
+      ],
+      declaredApiHosts: ['api.nimbus-b2b.example'],
+      scopes: ['read:reports'],
+    };
+    const ACCESS = authConnectionCredentialSecretKey(APP, 'nimbus', 'access_token');
+    const STATE = authConnectionStateSecretKey(APP, 'nimbus');
+    db = await installDbWithLegacyRow(ccRequirement, {
+      slot: 'nimbus',
+      secrets: {
+        [ACCESS]: 'cc-access-token-1',
+        [STATE]: JSON.stringify({ status: 'connected', obtainedAt: 1, expiresIn: 3600 }),
+      },
+    });
+    db.stagePendingRequirement(APP, 'nimbus', { ...ccRequirement, scopes: ['read:reports', 'write:reports'] });
+
+    openConnectionWizard({ appId: APP, slot: 'nimbus', source: 'settings', mode: 'reapprove' });
+    expect(await reapproveFromDiff()).toEqual({ ok: true });
+
+    expect(db.getSecret(ACCESS), 'the old-scope client-creds token must not outlive the widened claim').toBeUndefined();
+    expect(JSON.parse(db.getSecret(STATE)!).status).toBe('pending');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 Gate-5 (ADR-0029) — the byte-match is against the ROW'S OWN FLOW
+// ---------------------------------------------------------------------------
+
+describe("ADR-0029 — a pinned URL belonging to a DIFFERENT flow of the same brand stays copy-only", () => {
+  it("a bearer_token GitHub row carrying the OAuth option's console renders NO anchor", async () => {
+    // Imported-file channel: substitution never re-ran, so the row pairs the PAT flow's
+    // registration steps with the OAuth-apps console URL. Still a pinned page — not a
+    // phishing hand-off — but a walkthrough whose one-tap link cannot be followed.
+    const github = WELL_KNOWN_PROVIDERS_REGISTRY['github']!;
+    const shape = requirementFromRegistryEntry(github, 'GitHub', 'github') as unknown as Record<string, unknown>;
+    expect((shape['kind'] as string), 'fixture premise: the entry default is the PAT flow').toBe('bearer_token');
+    (shape['registration'] as Record<string, unknown>)['consoleUrl'] = 'https://github.com/settings/developers';
+    db = await installDbWithLegacyRow(shape, { slot: 'github' });
+
+    openConnectionWizard({ appId: APP, slot: 'github', source: 'settings' });
+    await renderSheet();
+    await click(/approve this connection/i);
+
+    const consoleBox = container?.querySelector('[data-testid="register-console"]');
+    expect(consoleBox).not.toBeNull();
+    expect(consoleBox!.querySelector('a'), "another flow's pinned URL must not become this flow's anchor").toBeNull();
+    expect(container?.textContent ?? '').toContain('https://github.com/settings/developers');
+  });
+});

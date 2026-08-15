@@ -1221,7 +1221,12 @@ export function requirementFromRegistryEntry(
     ...(entry.apiHosts !== undefined ? { declaredApiHosts: [...entry.apiHosts] } : {}),
     // SCOPES ARE AN IDENTITY SEAT (ADR-0028): read from the ENTRY, never an option —
     // privilege breadth is a per-PROVIDER decision exactly like which hosts receive the
-    // credential, and a flow choice must never move it. Deep-copied like every seat.
-    ...(entry.scopes !== undefined ? { scopes: [...entry.scopes] } : {}),
+    // credential, and a flow choice must never move it. Emitted only for the flows that
+    // CONSUME scopes (Gate-5 review): a static-kind flow under a scope-pinned entry has
+    // no consent screen for them, and carrying the seat anyway is what made static rows
+    // stage a meaningless "what this sign-in may do" diff. Deep-copied like every seat.
+    ...(entry.scopes !== undefined && (flow.kind === 'oauth2_auth_code' || flow.kind === 'oauth2_client_creds')
+      ? { scopes: [...entry.scopes] }
+      : {}),
   };
 }

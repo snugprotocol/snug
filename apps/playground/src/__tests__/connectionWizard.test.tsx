@@ -28,6 +28,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { authConnectionCredentialSecretKey } from '@snugprotocol/db';
 
 import { ConnectionWizardSheet } from '../connections/ConnectionWizardSheet.js';
+import { DEMO_STARTER_REQUIREMENTS } from '../agent/demoRequirement.js';
 import {
   __resetConnectionWizardForTests,
   connectionFlowStatusStore,
@@ -463,13 +464,13 @@ describe('P3-AC3 — custody copy is ADR-0014 clause 5 verbatim (fold F-M1)', ()
 // rule is copy-only whatever its provenance — the positive cases moved onto the REAL
 // Spotify entry, which is also the shape that ships.
 describe('P3-AC4 (ADR-0029) — consoleUrl clickability keys on registry-pinned bytes, not provenance', () => {
-  /** The shipped starter manifest, byte-shaped — substitution fills the rest. */
-  const spotifyStarterManifest = {
-    slot: 'spotify',
-    provider: { name: 'Spotify', docsUrl: 'https://developer.spotify.com/documentation/web-api' },
-    kind: 'oauth2_auth_code',
-    declaredApiHosts: ['api.spotify.com'],
-  } as const satisfies Record<string, unknown>;
+  /**
+   * The shipped starter manifest, via the exported mirror whose documented job is
+   * matching the shipped manifests (Gate-5 review: a retyped copy claiming
+   * "byte-shaped" keeps passing after the real manifest changes) — substitution fills
+   * the rest.
+   */
+  const spotifyStarterManifest = DEMO_STARTER_REQUIREMENTS['starter-spotify'] as unknown as Record<string, unknown>;
   const SPOTIFY_CONSOLE = 'https://developer.spotify.com/dashboard';
 
   async function openRegisterScreen(requirement: Record<string, unknown>, provenance: string): Promise<void> {

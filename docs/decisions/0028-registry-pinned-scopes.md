@@ -46,10 +46,20 @@ construction.
    outlive the approval.** One `scopesChanged` comparison drives drift detection, the
    silent-promotion guard, and the re-approval routing — the silent `repersisted`
    promotion is structurally unreachable when scopes changed, even with an identical
-   host ceiling. The scopes-changed promotion **invalidates the stored access/refresh
-   tokens in the same act**: the token was minted under the old consent and providers do
-   not widen on refresh, so an abandoned re-consent must leave an honestly non-serving
-   row (banner + wizard re-offer), never a silently under-scoped one.
+   host ceiling. The comparison is **SET-based** (Gate-5 review): RFC 6749's `scope`
+   parameter is unordered, so a pure reorder is not a consent change — it neither
+   stages (the set-based diff renderer would show an approval with no visible delta)
+   nor invalidates tokens; adds and removes do both. The scopes-changed promotion
+   **invalidates the stored access/refresh tokens for BOTH token-minting OAuth kinds**
+   (`oauth2_auth_code` and `oauth2_client_creds` — the client-credentials mint sends
+   `scope` too), and the invalidation runs **before** the promotion so a mid-write
+   failure leaves the recoverable state (old requirement + staged diff), never a
+   promoted row with live old-scope tokens and no healing diff. The token was minted
+   under the old consent and providers do not widen on refresh, so an abandoned
+   re-consent must leave an honestly non-serving row (banner + wizard re-offer), never
+   a silently under-scoped one. Substitution and emission write the seat only onto
+   declarations whose KIND consumes scopes — a static-kind row under a scope-pinned
+   brand gains nothing and stages nothing.
 4. **Spotify pins** (owner decision 2026-08-15, read + playback control):
    `playlist-read-private`, `playlist-read-collaborative`, `user-read-private`,
    `user-library-read`, `user-top-read`, `user-read-playback-state`,

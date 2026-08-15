@@ -582,7 +582,14 @@ function applyRegistryValues(
   // ADR-0028 rule 5's recorded residue (beside borrowed-endpoints, next-steps
   // 2026-08-12), pinned by a characterization test, mitigated by the review screen
   // rendering scopes (AC3b) before any approval.
-  if (entry.scopes !== undefined) {
+  //
+  // Written only onto declarations whose KIND consumes scopes (Gate-5 review):
+  // admission never substitutes kind, so a static-kind borrower under a scope-pinned
+  // brand would otherwise gain a seat meaningless to it — and every such legacy row
+  // would stage a spurious "what this sign-in may do" diff at wizard open, routing an
+  // API-key user through a re-consent ceremony scopes cannot affect.
+  const declarationKind = requirement['kind'];
+  if (entry.scopes !== undefined && (declarationKind === 'oauth2_auth_code' || declarationKind === 'oauth2_client_creds')) {
     substituted['scopes'] = [...entry.scopes];
   }
   return substituted;

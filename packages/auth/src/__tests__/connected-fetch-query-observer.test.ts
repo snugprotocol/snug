@@ -482,6 +482,27 @@ describe('AC4 — auth-failure detail extraction', () => {
     expect(await fire('{"code":40301,"retriable":false}')).toHaveBeenCalledWith('openweather', 403);
   });
 
+  it('Gate-5: MALFORMED/truncated JSON yields NO detail — brace noise never reaches the banner', async () => {
+    // A >1 MiB JSON error truncated mid-token by gate 10 no longer parses; the first
+    // cut fell through to the text head and forwarded 160 chars of raw JSON.
+    const observer = await fire('{"error":{"status":403,"message":"Insuffici');
+    expect(observer).toHaveBeenCalledWith('openweather', 403);
+  });
+
+  it('Gate-5: structured non-object bodies yield NO detail — arrays, JSON strings, JSONP guards', async () => {
+    expect(await fire('[{"error":{"type":1,"description":"unauthorized user"}}]')).toHaveBeenCalledWith(
+      'openweather',
+      403,
+    );
+    expect(await fire('"forbidden"')).toHaveBeenCalledWith('openweather', 403);
+    expect(await fire(')]}\'\n{"error":{"message":"nope"}}')).toHaveBeenCalledWith('openweather', 403);
+  });
+
+  it('Gate-5: a body above the 8 KiB pre-gate yields NO detail — no megabyte parse to harvest 160 chars', async () => {
+    const observer = await fire('quota exceeded '.repeat(1000));
+    expect(observer).toHaveBeenCalledWith('openweather', 403);
+  });
+
   it('caps the detail at 160 chars', async () => {
     const long = 'x'.repeat(400);
     const observer = await fire(`{"error":{"message":"${long}"}}`);

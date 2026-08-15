@@ -22,13 +22,17 @@ an author the URL no longer has.
 ## Decision
 
 1. **A console URL renders as a clickable link iff its bytes match the pinned registry
-   value** for the row's resolved provider (`resolveRegistryEntryByName`, checking the
-   entry and its `authOptions` registrations) — regardless of row provenance. The
+   value for the row's OWN FLOW** — the entry when the row's kind is the entry's, an
+   option when it is that option's (`resolveRegistryEntryByName`; Gate-5 tightening:
+   matching ANY pinned URL let an imported row pair one flow's registration steps with
+   a one-tap link to a different flow's console — still a pinned page, but a
+   walkthrough whose link cannot be followed) — regardless of row provenance. The
    comparison is byte-equality; a one-char-off URL under a registry brand stays
-   copy-only. No match — including genuinely user-authored providers with no registry
-   entry — keeps the copy-address-and-paste flow, with its hint REWORDED to the new
-   truth ("we haven't pinned this address" — the old "a model proposed it" is false for
-   user- and starter-authored URLs that reach this branch).
+   copy-only, and so does a kind-mismatched pinned URL. No match — including genuinely
+   user-authored providers with no registry entry — keeps the copy-address-and-paste
+   flow, with its hint REWORDED to the new truth ("we haven't pinned this address" —
+   the old "a model proposed it" is false for user- and starter-authored URLs that
+   reach this branch).
 2. **The redirect-URI box stays copy-only everywhere.** It is pasted into the provider's
    form, not navigated; a link affordance would be wrong even for pinned bytes.
 3. **Desktop opens the link via the system-browser opener** (https-only guard), never

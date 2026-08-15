@@ -172,11 +172,15 @@ function consoleUrlIsClickable(row: ConnectionRow): boolean {
   if (consoleUrl === undefined) return false;
   const entry = resolveRegistryEntryByName(row.requirement.provider.name)?.entry;
   if (entry === undefined) return false;
-  const pinned = [
-    entry.registration?.consoleUrl,
-    ...(entry.authOptions ?? []).map((option) => option.registration?.consoleUrl),
-  ];
-  return pinned.some((url) => url !== undefined && url === consoleUrl);
+  // The byte-match is against the ROW'S OWN FLOW — the entry when the row's kind is the
+  // entry's, an option when it is that option's (Gate-5 review). Matching against ANY
+  // pinned URL let an imported row (the R-4 channel, where substitution never re-ran)
+  // pair one flow's registration STEPS with a one-tap link to a DIFFERENT flow's
+  // console — still a pinned page, so not a phishing hand-off, but a walkthrough whose
+  // link cannot be followed. Kind-mismatched pinned URLs fall to copy-only, fail-closed.
+  return [entry, ...(entry.authOptions ?? [])].some(
+    (flow) => flow.kind === row.requirement.kind && flow.registration?.consoleUrl === consoleUrl,
+  );
 }
 
 /** Plain-text step list. Text children only — see the AC5 note in the module doc. */
@@ -505,6 +509,7 @@ function LanPairScreen({ row, onPaired }: { row: ConnectionRow; onPaired: () => 
 function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () => void }): ReactElement {
   const requirement = row.requirement;
   const fields = requirement.fields ?? [];
+  const scopes = requirement.scopes ?? [];
   const registration = requirement.registration;
   // ONE resolution, both seats — the discipline P3 applied to the lint, applied here to
   // the disclosure, so the review can never fall behind what the executor will send.
@@ -550,7 +555,7 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
         </div>
       ) : null}
 
-      {(requirement.scopes ?? []).length > 0 ? (
+      {scopes.length > 0 ? (
         <div className="field" data-testid="review-scopes">
           {/*
             THE SCOPES BOX (TASK-20260815 AC3b, ADR-0028). This box is what makes
@@ -564,8 +569,11 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
           */}
           <label>what this sign-in may do</label>
           <ul>
-            {(requirement.scopes ?? []).map((scope) => (
-              <li key={scope}>
+            {/* Index-keyed (Gate-5 review): authored scopes under a non-pinned brand
+                may contain duplicates, and this screen's whole job is VERBATIM
+                disclosure — a colliding key must not let React drop a line. */}
+            {scopes.map((scope, index) => (
+              <li key={`${index}:${scope}`}>
                 <code>{scope}</code>
               </li>
             ))}
@@ -679,7 +687,10 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
 function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () => void }): ReactElement {
   const registration = row.requirement.registration;
   const consoleUrl = registration?.consoleUrl;
-  const clickable = consoleUrlIsClickable(row);
+  // Memoized: the resolution walks the registry (brand-adjacent scan on miss) and this
+  // screen re-renders on every copy-button click and async redirect-URI arrival, while
+  // the answer can only change with the row (Gate-5 review, efficiency).
+  const clickable = useMemo(() => consoleUrlIsClickable(row), [row]);
   const [copied, setCopied] = useState(false);
 
   /**
@@ -751,10 +762,10 @@ function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () 
                 target="_blank"
                 rel="noreferrer"
                 onClick={
-                  getPlatform().oauth !== undefined
+                  platformOauth !== undefined
                     ? (event) => {
                         event.preventDefault();
-                        void getPlatform().oauth!.openExternal(consoleUrl);
+                        void platformOauth.openExternal(consoleUrl);
                       }
                     : undefined
                 }

@@ -336,3 +336,44 @@ findings folded back before any test is written.
 - Next step: Gate-5 AI diff review → owner review + PR → after merge, the owner manual
   test (wizard offers scope diff → approve → sign-in shows 7 scopes → playlists load).
 - Open questions: none.
+
+### 2026-08-15 (later still) — claude (fable-5) — review (Gate 5, /code-review high)
+- Done: seven-angle review (line-by-line, removed-behavior, cross-file trace,
+  efficiency, simplification, altitude, conventions — conventions returned zero
+  findings). Verified findings FIXED in-branch, each with a pinning test:
+  1. **Scope comparison is now SET-based** (`requirementScopesDigest` sorts): the
+     order-sensitive digest beside the set-based diff renderer meant a reordered-but-
+     equal scope list (imported row / future registry reorder) staged a diff whose
+     every line read "unchanged" — and approving it destroyed a working connection's
+     tokens. Reorders now neither stage nor invalidate; adds/removes do both.
+  2. **Token invalidation covers `oauth2_client_creds`** (its mint sends `scope` too)
+     and reads BOTH row generations' kinds.
+  3. **Invalidation runs BEFORE the promotion**: a mid-write throw now leaves the
+     recoverable state (old requirement + staged diff) instead of a permanently
+     promoted row with live old-scope tokens and no healing diff ('none' forever).
+     Ordering pinned by a call-order spy test.
+  4. **`extractAuthFailureDetail` hardened to its own contract**: malformed/truncated
+     `{` bodies, JSON arrays (Hue CLIP v1 style), JSON strings and `)]}'"`-guarded
+     bodies now yield NO detail (raw JSON noise reached the banner before); 8 KiB
+     pre-gate (no megabyte parse for 160 chars); extraction skipped entirely when no
+     observer is wired (the probe path pays nothing).
+  5. **ADR-0029 byte-match is per-FLOW**: the row's kind must match the flow whose
+     console URL it carries — an imported bearer_token GitHub row carrying the OAuth
+     option's console no longer gets a link pairing PAT instructions with the
+     OAuth-apps page.
+  6. **Substitution/emission write scopes only onto OAuth-kind declarations** — a
+     static-kind row under the Spotify brand no longer gains a meaningless seat and a
+     spurious re-consent diff.
+  7. Small: `consoleUrlIsClickable` memoized; `platformOauth` binding reused (dead
+     `getPlatform()` duplicates + non-null assertion gone); ReviewScreen `scopes`
+     hoisted; scope list index-keyed (duplicate authored scopes must not drop a line);
+     test fixtures now READ the shipped manifest (`connection.json` in auth,
+     `DEMO_STARTER_REQUIREMENTS` in playground) instead of retyped copies.
+- Declined/queued (next-steps 2026-08-15, altitude findings): auth-layer export of the
+  pinned-URL rule; structural drift compare + seat classification table; auth-layer
+  invalidation op; shared ExternalLink; shared memoryQuartet helper.
+- ADR-0028 rule 3 and ADR-0029 rule 1 amended to record the set-comparison and
+  flow-match rules; threat-delta S7 already stated the now-true extraction contract.
+- State: all fixes green — auth 751 · playground 1046 · desktop 105 · root
+  `turbo run test --force` 21/21, Cached: 0 (third forced run this task).
+- Next step: owner review + PR.
