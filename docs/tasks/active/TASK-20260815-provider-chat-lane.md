@@ -79,3 +79,24 @@ Cross-package: protocol → everything reruns; knowledge → server/playground/d
 - State: awaiting umbrella plan approval; then fresh-context plan review before Gate 3.
 - Next step: on approval — branch, failing tests for AC1-AC3 first.
 - Open questions: none.
+
+### 2026-08-15 (later) — Claude (Fable 5) — session
+- Done: owner approved the umbrella plan; fresh-context plan review ran (AMEND FIRST —
+  2 blockers, 5 majors, 5 minors; all resolved into ACs 1-13 and the Decisions section).
+  Gates 3-4 complete: red-first at every layer (protocol tsc gate → laneForIntent;
+  derived prompt-coverage loop → caught the latent `app_question` example gap; playground
+  tsc gate → provider modules). Implemented: protocol intents + `CHAT_LANES` +
+  `LANE_FOR_INTENT`; classifier prompt (2 new intents, hard-case rules, 3 new examples,
+  connections seat in the user slot); `providerContext.ts`; `providerTools.ts`
+  (shared-assembly execution, call cap, abort-denies-parked-confirm, unconditional
+  RFC-1918 render scrub); confirm FIFO queue; `NetConfirmDialog` → App shell;
+  `useBuilderChat` provider lane + `onProviderNetError` CTA seat (RunView consumer);
+  KB 90/95 teaching. Threat delta authored
+  (`docs/security/threat-model-delta-provider-chat-lane.md`); ADR-0031 flipped accepted.
+  Fixture lesson en route: the singleton remember-gate leaked a grant across tests
+  reusing one app id — invalidateNetGrants in beforeEach, mirroring real transitions.
+- State: layer suites green (protocol 302 · knowledge 183 · playground 1082/106 files);
+  forced root run + Gate 5 fresh-context implementation review pending.
+- Next step: root `turbo run test --force` result → Gate 5 adversarial review with C1
+  probes + targeted mutation checks → journal sign-off → PR.
+- Open questions: none.
