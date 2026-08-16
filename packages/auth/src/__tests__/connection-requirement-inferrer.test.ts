@@ -81,7 +81,7 @@ describe('AC2 — a registry hit emits the entry\'s pinned fields VERBATIM', () 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.requirement?.fields).toEqual(WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.fields);
-    expect(result.requirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+    expect(result.requirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
   });
 
   it('an entry with NO fields emits none — no invented input (google)', async () => {
@@ -288,7 +288,7 @@ describe('AC6 — aliases are human-authored ONLY; lookalikes fall through', () 
     expect(result.provenance).toBe('registry');
     expect(result.requirement?.kind).toBe('api_key');
     expect(result.requirement?.provider.name, 'the PINNED display name, never the near-miss').toBe('Coinbase');
-    expect(result.requirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+    expect(result.requirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
   });
 
   it("'Cooinbase' and 'Sp0tify' do NOT match — ADR-0017's lookalike posture is pinned, not reopened", async () => {

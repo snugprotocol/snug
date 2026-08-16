@@ -96,7 +96,7 @@ describe("AC5 — the 'user' channel rebind: a chosen variant's list is blessed 
     // MIGRATED 2026-08-13 (P3 Coinbase CDP rewrite): the default list is the CDP pair.
     expect((result.requirement as AdmittedShape).fields?.map((field) => field.key)).toEqual([
       'api_key',
-      'private_key',
+      'ed25519_private_key',
     ]);
   });
 

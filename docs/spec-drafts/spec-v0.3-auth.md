@@ -555,9 +555,13 @@ published:
   scrubbing by design. Pure-ASCII lookalike provider names are accepted (§4.2). See
   ADR-0017 §Residual risk.
 - **Multi-account per provider is out of scope.** Slots are per-provider, not per-account.
-- **Asymmetric signing schemes (JWT/ES256/EdDSA) are not expressible** by the pinned
-  helper enum. Providers migrating to them are not supported by this draft, and no rung
-  for them is pre-built.
+- **Asymmetric signing schemes (JWT/ES256/EdDSA) are not GENERICALLY expressible** by
+  the pinned helper enum. The reference implementation ships exactly one
+  provider-scoped signer outside this draft's surface — `cdp_jwt`, minting a
+  Coinbase-CDP EdDSA (Ed25519) JWT (ADR-0030; ES256 at v1 per ADR-0022, since
+  dropped) — and generalizing that into a spec-level rung is deliberately NOT
+  pre-built: each new signing scheme is a reviewed helper addition, never a
+  configuration knob.
 - **The kind set is closed at six.** Widening it is a schema version change, not a
   configuration change.
 - **This is v0.3 DRAFT prose for an internal implementation.** The reference

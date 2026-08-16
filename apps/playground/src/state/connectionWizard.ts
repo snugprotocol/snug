@@ -539,6 +539,29 @@ export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
       await store.setConnectionState(session.appId, { status: 'pending' });
     }
 
+    // ADR-0030 §5 (TASK-20260815 AC4) — secrets for DROPPED fields are deleted, and
+    // deleted BEFORE the promotion lands, in the same pre-promotion block as the token
+    // invalidation above and for the same ordering reason: a throw after a landed
+    // promotion strands the orphan with no healing diff left, permanently unreachable
+    // dead weight in snug_secrets (C5). Keyed on dropped DECLARED keys, never a
+    // blanket wipe — a field both generations declare (the api_key name) keeps its
+    // stored value and rides through the re-credential walk untouched. This inverts
+    // the earlier "old secrets stay in storage" posture on purpose (owner decision
+    // 2026-08-15; the drift MIGRATION still never touches a secret — deletion belongs
+    // to re-approval, the same act that already invalidates tokens).
+    // GUARDED on the staged shape EXPLICITLY declaring a field list (review-confirmed
+    // finding): `fields` is schema-optional, and a pending edit that legitimately
+    // omits it must read as "says nothing about fields" — treating it as "every field
+    // dropped" would wipe ALL of a working row's secrets on approval.
+    if (before?.pendingRequirement?.fields !== undefined) {
+      const stagedKeys = new Set(before.pendingRequirement.fields.map((field) => field.key));
+      for (const field of before.requirement.fields ?? []) {
+        if (!stagedKeys.has(field.key)) {
+          db.deleteSecret(authConnectionCredentialSecretKey(session.appId, session.slot, field.key));
+        }
+      }
+    }
+
     db.reapproveConnection(session.appId, session.slot);
     invalidateNetGrants(session.appId);
     const after = db.getConnection(session.appId, session.slot);
@@ -1289,13 +1312,15 @@ export type RegistryDriftOutcome = 'none' | 'repersisted' | 'staged';
  *    triple: those credentials expired provider-side; the registry now names a
  *    different pair). The registry's CURRENT shape for the row's kind is STAGED, never
  *    promoted here: the user sees the field diff, and approving it routes into the
- *    credential half for re-entry (`reapproveFromDiff`'s fieldSetChanged rule). Old
- *    secrets for dropped fields are left in storage untouched — unused by the new
- *    template, wiped only by the acts that already wipe (revoke, delete).
+ *    credential half for re-entry (`reapproveFromDiff`'s fieldSetChanged rule).
+ *    Secrets for dropped fields are deleted AT RE-APPROVAL, pre-promotion
+ *    (ADR-0030 §5 — the deliberate inversion of the earlier leave-in-place posture;
+ *    `reapproveFromDiff` owns that act, alongside the token invalidation it mirrors).
  *
  * WHAT IT NEVER TOUCHES: unapproved rows (admission owns declarations), rows with an
  * app-staged pending edit already waiting (never clobbered — the existing diff flow
- * owns them), non-registry providers, revoked tombstones, and every stored secret.
+ * owns them), non-registry providers, revoked tombstones, and every stored secret
+ * (dropped-field deletion belongs to RE-APPROVAL, never to this migration).
  */
 export async function migrateConnectionRegistryDrift(appId: string, slot: string): Promise<RegistryDriftOutcome> {
   const db = await getUserDb();
@@ -1390,6 +1415,21 @@ export type ConnectionTestOutcome =
   | { ok: false; code: string; message: string };
 
 /**
+ * The ONE construction of the AC5 "unexpected" outcome — a fixed sentence carrying
+ * `err.name` ONLY, never `err.message` (below the scrub seat a library's message is
+ * arbitrary text and no scrub candidates exist at this altitude, C5). Exported so the
+ * sheet's belt-and-braces `.catch` renders the SAME sentence as `testConnection`'s own
+ * catch — one implementation, one pin, no drift (review finding).
+ */
+export function unexpectedTestOutcome(err: unknown): ConnectionTestOutcome {
+  return {
+    ok: false,
+    code: 'UNEXPECTED',
+    message: `the test failed unexpectedly (${err instanceof Error ? err.name : typeof err})`,
+  };
+}
+
+/**
  * Run the requirement's declared probe through the REAL connected-fetch executor.
  *
  * IT IS A THIN PASS-THROUGH TO `executeConnectionTestRequest`, AND THAT IS THE POINT. The
@@ -1419,20 +1459,21 @@ export async function testConnection(
 ): Promise<ConnectionTestOutcome> {
   const session = connectionWizardStore.get();
   if (session === null) return { ok: false, code: 'NO_SESSION', message: 'no wizard session' };
-  const db = await getUserDb();
-  if (connectionWizardStore.get() !== session) {
-    return { ok: false, code: 'SESSION_CHANGED', message: 'the wizard session changed' };
-  }
-  // THE SAME DEPS THE APP RUNTIME USES — same confirm gate instance, same store, same
-  // unfiltered reader. Assembling a second deps object here would configure a second
-  // network path with its own gates, which is precisely what the single-path discipline
-  // around `executeConnectionTestRequest` exists to prevent.
-  const result = await executeConnectionTestRequest(
-    fetchImpl === undefined ? connectedFetchDepsFor(db) : connectedFetchDepsFor(db, fetchImpl),
-    session.appId,
-    session.slot,
-  );
-  if (!result.ok) return { ok: false, code: result.code, message: result.message };
+  try {
+    const db = await getUserDb();
+    if (connectionWizardStore.get() !== session) {
+      return { ok: false, code: 'SESSION_CHANGED', message: 'the wizard session changed' };
+    }
+    // THE SAME DEPS THE APP RUNTIME USES — same confirm gate instance, same store, same
+    // unfiltered reader. Assembling a second deps object here would configure a second
+    // network path with its own gates, which is precisely what the single-path discipline
+    // around `executeConnectionTestRequest` exists to prevent.
+    const result = await executeConnectionTestRequest(
+      fetchImpl === undefined ? connectedFetchDepsFor(db) : connectedFetchDepsFor(db, fetchImpl),
+      session.appId,
+      session.slot,
+    );
+    if (!result.ok) return { ok: false, code: result.code, message: result.message };
 
   /**
    * A 2xx IS THE ONLY PASS, and this translation is the reason the probe is worth having.
@@ -1449,15 +1490,22 @@ export async function testConnection(
    * likely place for a credential echo, and this screen is the worst possible place to
    * print one.
    */
-  if (result.status >= 200 && result.status < 300) return { ok: true, status: result.status };
-  return {
-    ok: false,
-    code: `HTTP_${result.status}`,
-    message:
-      result.status === 401 || result.status === 403
-        ? `${result.status} — the provider rejected these credentials. Check you pasted them correctly, and that the key is still active.`
-        : `the provider answered ${result.status}.`,
-  };
+    if (result.status >= 200 && result.status < 300) return { ok: true, status: result.status };
+    return {
+      ok: false,
+      code: `HTTP_${result.status}`,
+      message:
+        result.status === 401 || result.status === 403
+          ? `${result.status} — the provider rejected these credentials. Check you pasted them correctly, and that the key is still active.`
+          : `the provider answered ${result.status}.`,
+    };
+  } catch (err) {
+    // TASK-20260815 AC5 — the probe surface is TOTAL. Every deliberate outcome above
+    // was engineered to name status/structure only; a NON-TYPED throw (an executor
+    // internal, a db open failure) used to escape as an unhandled rejection and render
+    // NOTHING — the blank-result silent path the owner hit.
+    return unexpectedTestOutcome(err);
+  }
 }
 
 // ---------------------------------------------------------------------------

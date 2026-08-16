@@ -22,7 +22,7 @@ const srcDir = join(__dirname, '..');
  * `hmac_sha256_b64` is the encoding-capable variant that makes Coinbase-Exchange's
  * base64(HMAC(base64decode(secret), msg)) expressible — plus `cdp_jwt`
  * (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §2): the second signing-capable
- * family, minting a per-request ES256 CDP JWT host-side. This table moves IN THE SAME
+ * family, minting a per-request EdDSA (Ed25519) CDP JWT host-side (ADR-0030). This table moves IN THE SAME
  * COMMIT as the engine/lint grammar change (P0 amendment 7); the enum-equality tests
  * below are the fence.
  */

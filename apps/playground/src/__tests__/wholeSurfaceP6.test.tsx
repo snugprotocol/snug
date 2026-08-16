@@ -133,9 +133,9 @@ describe('T3-1 — the review screen discloses QUERY credential placement, not j
         kind: 'api_key',
         fields: [
           { key: 'api_key', label: 'API key name', type: 'text', required: true },
-          { key: 'private_key', label: 'EC private key (PEM)', type: 'secret', required: true },
+          { key: 'ed25519_private_key', label: 'Ed25519 private key (secret)', type: 'secret', required: true },
         ],
-        request: { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' } },
+        request: { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, ed25519_private_key)}}' } },
         declaredApiHosts: ['api.coinbase.com'],
       },
       'registry',

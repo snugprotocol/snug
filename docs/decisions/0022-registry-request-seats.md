@@ -1,6 +1,6 @@
 # 0022 — Registry request seats, host-side signing functions, and auth-shaped failure surfacing
 
-- **Status:** accepted (2026-08-13, at the close of TASK-20260812-desktop-auth-awareness). The P0 and P6 amendments are folded in-file above — this document is the shipped decision, not the draft.
+- **Status:** accepted (2026-08-13, at the close of TASK-20260812-desktop-auth-awareness). The P0 and P6 amendments are folded in-file above — this document is the shipped decision, not the draft. **§2's "ES256 only at v1" clause (and its SEC1→PKCS#8 key-import amendment) is SUPERSEDED by [ADR-0030](0030-cdp-jwt-ed25519.md)** (2026-08-15): `cdp_jwt` signs EdDSA from an Ed25519 secret, and the Coinbase entry's secret field is `ed25519_private_key`. Every other section stands.
 - **Date:** 2026-08-12
 - **Task:** TASK-20260812-desktop-auth-awareness
 

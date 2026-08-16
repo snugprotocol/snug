@@ -140,8 +140,11 @@ never refused.
 the one `requirementFromRegistryEntry` emitter and substituted on every channel's borrow
 hit by `applyRegistryValues` — with refusal and substitution driven by the SAME
 matched-option handle. The template grammar gained a fifth helper and second signing
-family, `{{cdp_jwt(api_key, private_key)}}`: a host-side ES256 mint (`es256-key.ts`
-DER-wraps CDP's SEC1 PEM into the PKCS#8 WebCrypto requires) whose `uri` claim binds the
+family, `{{cdp_jwt(api_key, ed25519_private_key)}}`: a host-side EdDSA mint
+(`ed25519-key.ts` canonicalizes every CDP secret shape — PKCS#8 PEM, base64 64-byte
+seed‖pubkey, bare seed — to the seed and re-wraps it in the fixed PKCS#8 prefix
+WebCrypto requires; ES256 was v1, dropped by ADR-0030 when Coinbase's portal moved to
+Ed25519-by-default) whose `uri` claim binds the
 signature to the live outbound request, `exp` at +120 s. `queryTemplate` renders into the
 URL **after** every gate, suppresses the kind default so a query credential is never also
 a header, and joins an enumerated scrub site list. Rows are admitted once and never re-read

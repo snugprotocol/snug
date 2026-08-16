@@ -77,6 +77,7 @@ import {
   saveConnectionCredentials,
   startConnectionOAuthFlow,
   testConnection,
+  unexpectedTestOutcome,
   type ConnectionTestOutcome,
   type ConnectionWizardSession,
   type DesktopOAuthAlternative,
@@ -1156,17 +1157,42 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
    */
   const probeable = row.requirement.testRequest !== undefined && row.requirement.kind !== 'oauth2_auth_code';
 
+  /**
+   * TASK-20260815 AC6 — "connected" is EARNED, not declared. For a probeable non-LAN
+   * row the heading claims a connection only after a PASSING probe; until then the
+   * honest claim is that the credentials are saved. This closes the second silent path
+   * of the owner's Coinbase repro: an unverifiable-but-broken credential rendered a
+   * "connected" heading while public market data made the app look alive, and the
+   * first real feedback was a 401 far from this screen.
+   *
+   * The gate is `probeable ∧ ¬LAN`, and the LAN exclusion is deliberately explicit
+   * even though no LAN entry pins a testRequest today (plan-review 7a): a LAN done
+   * screen reports a pairing PROVEN against a named device (ADR-0025), and a future
+   * LAN probe must never downgrade that proven claim to "saved until you probe".
+   */
+  // ONE derivation for both the label and the hint (review finding: two inline copies
+  // of `claimGated && !probeVerified` invite the exact split-truth this AC prevents).
+  const awaitingProbe = probeable && !isLanRequirement(row.requirement) && outcome?.ok !== true;
+
   const runTest = (): void => {
     setTesting(true);
     setOutcome(undefined);
     void testConnection()
       .then(setOutcome)
+      // AC5 belt-and-braces: `testConnection` is total, but a rejection reaching this
+      // chain must still render a line, never a blank result area. The outcome comes
+      // from the ONE shared construction (fixed sentence, err.name only — C5).
+      .catch((err: unknown) => setOutcome(unexpectedTestOutcome(err)))
       .finally(() => setTesting(false));
   };
 
   return (
     <div className="field">
-      <label>{row.requirement.provider.name} is connected</label>
+      <label>
+        {awaitingProbe
+          ? `${row.requirement.provider.name} credentials saved`
+          : `${row.requirement.provider.name} is connected`}
+      </label>
       <span className="hint">
         {isLanRequirement(row.requirement) ? (
           /*
@@ -1190,8 +1216,9 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
           </>
         ) : (
           <>
-            this app can now reach {row.allowedHosts.join(', ')} on your behalf. You can disconnect it any time from
-            Settings → Connections.
+            this app can now reach {row.allowedHosts.join(', ')} on your behalf.{' '}
+            {awaitingProbe ? 'Run the test below to confirm the connection works. ' : ''}You can
+            disconnect it any time from Settings → Connections.
           </>
         )}
       </span>

@@ -20,7 +20,7 @@ import { requirementFromRegistryEntry, WELL_KNOWN_PROVIDERS_REGISTRY } from '@sn
 import { persistConnectionRequirement } from '../agent/connectionPipeline.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
-const CDP_REQUEST = { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' } };
+const CDP_REQUEST = { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, ed25519_private_key)}}' } };
 const CDP_TEST_REQUEST = { method: 'GET', pathAndQuery: '/api/v3/brokerage/accounts' };
 
 /** The bare borrower shape starters actually ship — no prompt seats authored. */
@@ -50,7 +50,7 @@ describe('amendment 1(c) — the substituted seats survive the PRODUCTION double
     // with a seatless row here is exactly the tautology lesson 2026-08-12 warns about.
     const row = db.getConnection('app-seat-persist', 'coinbase');
     expect(row).toBeDefined();
-    expect(row!.requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+    expect(row!.requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
     expect(row!.requirement.request, 'the pinned signing template must reach the row').toEqual(CDP_REQUEST);
     expect(row!.requirement.testRequest, 'the pinned probe must reach the row').toEqual(CDP_TEST_REQUEST);
     // And no credential was created by any of it (C1 sanity).
@@ -76,7 +76,7 @@ describe('amendment 1(c) — the substituted seats survive the PRODUCTION double
       expect(row.pendingRequirement, 'the staged requirement must persist').toBeDefined();
       expect(row.pendingRequirement?.request).toEqual(CDP_REQUEST);
       expect(row.pendingRequirement?.testRequest).toEqual(CDP_TEST_REQUEST);
-      expect(row.pendingRequirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+      expect(row.pendingRequirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
       // The live grant is untouched while the edit waits (fold B2 — re-pinned here
       // because this test exists to prove the stage path OPENS, not that it widens).
       expect(row.status).toBe('approved');
@@ -92,7 +92,7 @@ describe('amendment 1(c) — the substituted seats survive the PRODUCTION double
     const entry = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!;
     const shaped = requirementFromRegistryEntry(entry, 'Coinbase', 'coinbase');
     (shaped.request as { headerTemplate: Record<string, string> }).headerTemplate['Authorization'] =
-      'Bearer {{cdp_jwt(api_key, private_key)}} ';
+      'Bearer {{cdp_jwt(api_key, ed25519_private_key)}} ';
 
     expect(() => db.stagePendingRequirement('app-stage-tamper', 'coinbase', shaped)).toThrow();
   });

@@ -223,7 +223,7 @@ describe('amendment 1(a) — a queryTemplate-carrying request is an OCCUPIED pro
 // entry to pin the new seats; P3 item 3)
 // ---------------------------------------------------------------------------
 
-const CDP_REQUEST = { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' } } as const;
+const CDP_REQUEST = { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, ed25519_private_key)}}' } } as const;
 const CDP_TEST_REQUEST = { method: 'GET', pathAndQuery: '/api/v3/brokerage/accounts' } as const;
 
 describe('P3 item 3 — the Coinbase entry pins the CDP request/testRequest seats', () => {
@@ -263,7 +263,7 @@ describe('amendment 1(c) — substitution serves the pinned seats to every borro
       };
       expect(requirement.request, 'the pinned signing template must arrive').toEqual(CDP_REQUEST);
       expect(requirement.testRequest, 'the pinned probe must arrive').toEqual(CDP_TEST_REQUEST);
-      expect(requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+      expect(requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
     });
   }
 
@@ -272,7 +272,7 @@ describe('amendment 1(c) — substitution serves the pinned seats to every borro
     const requirement = result.requirement as unknown as { request: { headerTemplate: Record<string, string> } };
     requirement.request.headerTemplate['Authorization'] = 'MUTATED BY CALLER';
     expect(WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']?.request?.headerTemplate?.['Authorization']).toBe(
-      'Bearer {{cdp_jwt(api_key, private_key)}}',
+      'Bearer {{cdp_jwt(api_key, ed25519_private_key)}}',
     );
   });
 
@@ -316,7 +316,7 @@ describe('amendment 1(b) — the byte-match exemption: ONE resolution, all three
       {
         ...bareCoinbase(),
         fields: WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!.fields!.map((field) => ({ ...field })),
-        request: { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}} ' } }, // trailing space
+        request: { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, ed25519_private_key)}} ' } }, // trailing space
       },
       { channel: 'starter' },
     );
