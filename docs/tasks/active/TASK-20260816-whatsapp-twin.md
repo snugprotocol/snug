@@ -1,6 +1,6 @@
 # TASK-20260816-whatsapp-twin: WhatsApp thread companion — persona analysis + mimic replies
 
-- **Status**: planned (awaiting owner plan approval — Gate 2 STOP)
+- **Status**: in-progress (plan approved + amended; Phase A landed green)
 - **Owner**: jeetu
 - **Risk tier**: **High** (touches `packages/protocol` connection-requirement schema, `packages/auth` registry/admission/executor, a new Tauri IPC command — auto-escalate per PROCESS.md; full TDD + negative tests + fresh-context AI plan review before implementation + journal self-sign-off)
 - **Branch**: `feat/TASK-20260816-whatsapp-twin` (created off `main` @ 5825fb7)
@@ -542,3 +542,39 @@ one" clause is retired as unrepresentable-by-construction, which is the better o
 - Open questions for the owner: (1) unix-domain socket vs TCP for the sidecar (UDS removes
   port squatting entirely; desktop-only + spawn-supervised means nothing requires TCP);
   (2) the port default and starter name from the previous entry still stand.
+
+### 2026-08-16 — claude — Phase A (owner ratified the amended plan; UDS chosen)
+- Owner decision: **unix-domain socket**, not TCP. Folded into the plan and ADR-0032 §4:
+  port squatting becomes unrepresentable (no port to race for; 0600 filesystem permissions
+  decide who connects), `sidecar_fetch`'s admission simplifies to method+path, and the
+  "every port but the pinned one" AC3 clause retires as unnecessary. Windows named-pipe
+  twin is authored behind the same seam but gated red with the rest of the D8 story.
+- Done, Phase A (tests FIRST, then implementation):
+  - `connection-linked-device.test.ts` (8 tests) written and confirmed RED for the right
+    reason before any implementation — the two "the kind exists" assertions failed.
+  - `linked_device` appended to `AUTH_KINDS` (`auth-schema.ts`); **appended, never
+    inserted**, so no stored row's kind can be re-read as a different kind.
+  - Schema coherence arm placed BEFORE the `none` arm (which ends in an early return):
+    must declare its token field, no OAuth endpoints, **no `lanHost` seat**.
+  - **Mutation-checked**: neutralizing the arm turns all three coherence tests red, each
+    for its own reason. Before the arm existed they passed only because an unknown kind is
+    rejected wholesale — i.e. they were measuring nothing, the exact trap lessons.md names.
+- Three pinned-set tripwires fired and were updated DELIBERATELY, not regenerated blindly:
+  `AUTH_KINDS` order+membership, `CONNECTION_KINDS` (`none` stays last), and the
+  auth-schema snapshot (verified: exactly one line added, no other drift).
+- **Consequence found by the gates, not by inspection** — the one worth remembering:
+  `render.ts:59` injects `AUTH_KINDS.join(', ')` straight into the auth-spec-inferrer's
+  system prompt, so adding a kind silently told the model it may PROPOSE `linked_device`.
+  It must never: that kind needs a companion helper the user installed, so an inferred row
+  is a connection that can never work. Added an explicit refusal rule to the prompt plus
+  its own test (asserting the WHY, so a future edit cannot drop the carve-out while keeping
+  the list injection) — and note the prompt is compiled: `.md` edits need `gen:content`.
+  **Generalizable lesson (for Gate 6): a value injected into a prompt makes every future
+  addition to that value a prompt change.**
+- Two exhaustive kind switches in user-facing consent copy (`ConnectionWizardSheet.tsx`,
+  `ConnectionSlotsCard.tsx`) failed the type gate and gained honest `linked_device` wording
+  — "links as an extra device… can read and send as you… your sign-in details are never
+  given to Snug". Consent copy states the consequence, never the enum.
+- Verified: root `turbo run test --force` **21/21 tasks, 0 cached** (protocol 302→310,
+  knowledge 183→184; every other count unchanged).
+- Next step: Phase B.0 — the shared sidecar contract constants module (must precede C and D).
