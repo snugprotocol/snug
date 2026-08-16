@@ -16,7 +16,7 @@
  */
 
 import { base64ToBytes, bytesToBase64, bytesToBase64Url, bytesToHex, utf8ToBase64, utf8ToBase64Url } from './base64url.js';
-import { CdpKeyImportError, importEd25519PrivateKey } from './ed25519-key.js';
+import { CdpKeyImportError, ED25519_RUNTIME_ERROR, importEd25519PrivateKey } from './ed25519-key.js';
 import { assertLintedTemplate } from './template-lint.js';
 
 export class AuthTemplateError extends Error {
@@ -152,7 +152,7 @@ const HELPERS: Record<string, HelperFn> = {
     return bytesToBase64(await hmacBytes(key, messageParts.join('')));
   },
   /**
-   * `cdp_jwt(api_key, private_key)` — mint a fresh Coinbase-CDP EdDSA JWT per render
+   * `cdp_jwt(api_key_field, private_key_field)` — mint a fresh Coinbase-CDP EdDSA JWT per render
    * (ADR-0030, superseding ADR-0022 §2's ES256-only clause). Both arguments are
    * DECLARED FIELD KEYS by the lint's per-argument rule for this helper (never
    * literals, never request tokens): the first resolves to the CDP key NAME
@@ -179,7 +179,12 @@ const HELPERS: Record<string, HelperFn> = {
     if (args.length !== 2 || apiKeyName === undefined || privateKeyPem === undefined || apiKeyName === '' || privateKeyPem === '') {
       // Covers the blank declared-optional case too: an empty key name or PEM must fail
       // loudly here, never mint a JWT "signed" with nothing. Names no values (C5).
-      throw new AuthTemplateError('cdp_jwt requires (api_key, private_key) — both declared fields must have values');
+      // ROLE-suffixed argument names (the lint's own wording at template-lint.ts) —
+      // never bare field keys, which read as registry field names and steer the user
+      // toward authoring a field the lint would then refuse (review finding).
+      throw new AuthTemplateError(
+        'cdp_jwt requires (api_key_field, private_key_field) — both declared fields must have values',
+      );
     }
     const req = ctx.request;
     if (req === undefined) {
@@ -222,9 +227,9 @@ const HELPERS: Record<string, HelperFn> = {
         await crypto.subtle.sign({ name: 'Ed25519' }, signingKey, encoder.encode(signingInput)),
       );
     } catch {
-      throw new AuthTemplateError(
-        'this runtime does not implement WebCrypto Ed25519 — cdp_jwt cannot mint a CDP JWT here',
-      );
+      // The ONE runtime-absence sentence, owned by ed25519-key.ts (review: two typed
+      // copies of a user-facing diagnosis drift).
+      throw new AuthTemplateError(ED25519_RUNTIME_ERROR);
     }
     return `${signingInput}.${bytesToBase64Url(signature)}`;
   },

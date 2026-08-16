@@ -423,6 +423,51 @@ describe('AC4 — an EC-era api_key/private_key row refuses re-admission, stages
     expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'private_key'))).toBeUndefined();
     expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'))).toBe(KEY_NAME);
   });
+
+  it('NEGATIVE: a staged shape with NO field list deletes NOTHING — "says nothing about fields" is not "all fields dropped"', async () => {
+    // Review-confirmed finding: `fields` is schema-optional, so a pending edit that
+    // omits it entirely must not read as "every field dropped" — that would wipe ALL
+    // of a working row's secrets at approval. Modeled on a NON-registry provider
+    // (no substitution refills the field list on stage).
+    resetUserDbForTests();
+    resetLibraryForTests();
+    const backend = createMemoryBackend();
+    const older = await openUserDb({ backend, locateWasm, persistDebounceMs: 1 });
+    if (older.status !== 'ok') throw new Error('open failed');
+    older.userDb.installApp({ appId: APP, displayName: 'Drift App', html: '<p>drift</p>' });
+    older.userDb.putDeclaredConnection(
+      APP,
+      'zephyr',
+      {
+        slot: 'zephyr',
+        provider: { name: 'Zephyr Weather' },
+        kind: 'bearer_token',
+        fields: [{ key: 'token', label: 'API token', type: 'secret' }],
+        declaredApiHosts: ['api.zephyr-weather.example'],
+      },
+      'inference' as never,
+    );
+    older.userDb.approveConnection(APP, 'zephyr');
+    older.userDb.setSecret(authConnectionCredentialSecretKey(APP, 'zephyr', 'token'), 'zephyr-live-token');
+    older.userDb.stagePendingRequirement(APP, 'zephyr', {
+      slot: 'zephyr',
+      provider: { name: 'Zephyr Weather' },
+      kind: 'bearer_token',
+      declaredApiHosts: ['api.zephyr-weather.example'],
+    });
+    await older.userDb.close();
+    const reopened = await openUserDb({ backend, locateWasm, persistDebounceMs: 1, admissionGate: productionGate });
+    if (reopened.status !== 'ok') throw new Error('reopen failed');
+    setUserDbForTests(reopened.userDb);
+    db = reopened.userDb;
+
+    expect(openConnectionWizard({ appId: APP, slot: 'zephyr', source: 'settings' })).toBe(true);
+    const result = await reapproveFromDiff();
+    expect(result.ok).toBe(true);
+
+    // The working credential SURVIVES an approval whose staged shape omitted `fields`.
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, 'zephyr', 'token'))).toBe('zephyr-live-token');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -492,94 +537,16 @@ describe('amendment 3 — negatives', () => {
 
 // ---------------------------------------------------------------------------
 // Item 2 — the Coinbase probe lights up on the PRODUCTION path
+// (shared walk + probe-wait helpers live here; the AC5/AC6 describes below reuse them)
 // ---------------------------------------------------------------------------
 
-describe('the done screen probes a coinbase row (the registry now pins testRequest)', () => {
-  it('walks the wizard to done, offers "test this connection", and translates a 401 honestly', async () => {
-    // Production-gated from the start: a BARE starter borrow — admission substitutes the
-    // full current shape, seats included (the registry lane's persistence pin, consumed
-    // here by the component surface).
-    db = await installTestUserDb();
-    db.installApp({ appId: APP, displayName: 'Portfolio', html: '<p>cb</p>' });
-    db.putDeclaredConnection(
-      APP,
-      SLOT,
-      { slot: SLOT, provider: { name: 'Coinbase' }, kind: 'api_key', declaredApiHosts: ['api.coinbase.com'] },
-      'starter',
-    );
-
-    openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
-    await renderSheet();
-
-    await click(/approve this connection/i);
-    // The registry pins a registration walkthrough → the register screen renders.
-    await click(/got my credentials/i);
-
-    for (const [key, value] of [
-      ['api_key', 'organizations/test-org/apiKeys/test-key'],
-      ['ed25519_private_key', ED25519_PRIVATE_KEY_PEM],
-    ] as const) {
-      const input = container!.querySelector<HTMLInputElement>(`input[data-field-key="${key}"]`);
-      expect(input, `the ${key} box must render`).not.toBeNull();
-      await act(async () => {
-        input!.value = value;
-        input!.dispatchEvent(new Event('input', { bubbles: true }));
-      });
-    }
-    await click(/save my credentials/i);
-    expect(connectionWizardStepStore.get()).toBe('done');
-
-    const probe = button(/test this connection/i);
-    expect(probe, 'the probeable gate lights up for a coinbase row').toBeDefined();
-
-    // The provider rejects the credentials: the DONE SCREEN translation renders — the
-    // same vocabulary the wizard has always used, now reachable for a pinned provider.
-    vi.stubGlobal('fetch', async () => new Response('{"error":"unauthorized"}', { status: 401 }));
-    await click(/test this connection/i);
-    // The probe rides the REAL executor (JWT mint via WebCrypto is genuinely async) —
-    // wait for the rendered outcome rather than a fixed number of microtasks.
-    //
-    // THE BUDGET AND THE TEST'S OWN TIMEOUT MUST AGREE — P4 correction (2026-08-13).
-    // P3 raised this `vi.waitFor` to 10s to cure an intermittent failure, but vitest's
-    // per-test timeout here is the 5000ms DEFAULT (playground's vitest.config.ts sets no
-    // `testTimeout`). A 10s inner budget inside a 5s outer one is unreachable: the test is
-    // killed at 5004ms with vitest's own "Test timed out in 5000ms" while `waitFor` is
-    // still patiently waiting, so the raise could never have taken effect. Measured on the
-    // committed tree, this file still failed 3 runs in 12 (25%) — the P3 fix addressed a
-    // misdiagnosis (a "slow mint"), not the actual mechanism.
-    //
-    // Both numbers are now explicit and the INNER budget is strictly smaller than the
-    // OUTER one, so a real hang is reported by THIS assertion — naming the missing probe
-    // outcome — instead of by an anonymous suite-level timeout that says nothing about
-    // what failed. Measured cost when it passes: the whole 10-test file runs in ~160ms in
-    // isolation and ~500ms under the full suite, so 8s is ~16x headroom over the worst
-    // observed pass, and the 15s test timeout leaves room for the wait to report first.
-    // If this ever times out, the mint is truly broken or hung — a real failure worth
-    // seeing, and now one that arrives with a message.
-    await vi.waitFor(
-      async () => {
-        await settle();
-        if (container!.querySelector('[data-testid="connection-test-result"]') === null) {
-          throw new Error('probe outcome not rendered yet');
-        }
-      },
-      { timeout: 8_000, interval: 25 },
-    );
-
-    expect(container!.textContent).toMatch(/rejected these credentials/i);
-    // C1: neither the key name nor the PEM leaks into the DOM through the result line.
-    expect(container!.innerHTML).not.toContain('BEGIN PRIVATE KEY');
-    // The OUTER budget, stated beside the inner one so the two can never drift apart
-    // again. It must EXCEED the `vi.waitFor` above, or the wait is unreachable and this
-    // test dies anonymously at the default 5s (the P3 defect corrected here).
-  }, 15_000);
-});
-
-// ---------------------------------------------------------------------------
-// TASK-20260815 AC5 + AC6 — the probe chain is TOTAL, and "connected" is earned
-// ---------------------------------------------------------------------------
-
-/** Walk a bare coinbase starter borrow to the done screen with real credentials. */
+/**
+ * Walk a bare coinbase starter borrow to the done screen with real credentials —
+ * production-gated from the first write: admission substitutes the full current
+ * registry shape, seats included (the registry lane's persistence pin, consumed here
+ * by the component surface). ONE copy on purpose (review finding: the walk existed
+ * inline in two describes and each flow change had to be hand-mirrored).
+ */
 async function walkCoinbaseToDone(): Promise<void> {
   db = await installTestUserDb();
   db.installApp({ appId: APP, displayName: 'Portfolio', html: '<p>cb</p>' });
@@ -592,12 +559,14 @@ async function walkCoinbaseToDone(): Promise<void> {
   openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
   await renderSheet();
   await click(/approve this connection/i);
+  // The registry pins a registration walkthrough → the register screen renders.
   await click(/got my credentials/i);
   for (const [key, value] of [
     ['api_key', 'organizations/test-org/apiKeys/test-key'],
     ['ed25519_private_key', ED25519_PRIVATE_KEY_PEM],
   ] as const) {
     const input = container!.querySelector<HTMLInputElement>(`input[data-field-key="${key}"]`);
+    expect(input, `the ${key} box must render`).not.toBeNull();
     await act(async () => {
       input!.value = value;
       input!.dispatchEvent(new Event('input', { bubbles: true }));
@@ -607,6 +576,23 @@ async function walkCoinbaseToDone(): Promise<void> {
   expect(connectionWizardStepStore.get()).toBe('done');
 }
 
+/**
+ * Wait for the probe's rendered outcome. The probe rides the REAL executor (JWT mint
+ * via WebCrypto is genuinely async) — wait for the rendered outcome rather than a
+ * fixed number of microtasks.
+ *
+ * THE BUDGET AND EACH CALLER'S OWN TIMEOUT MUST AGREE — P4 correction (2026-08-13).
+ * P3 raised this `vi.waitFor` to 10s to cure an intermittent failure, but vitest's
+ * per-test timeout here is the 5000ms DEFAULT (playground's vitest.config.ts sets no
+ * `testTimeout`). A 10s inner budget inside a 5s outer one is unreachable: the test is
+ * killed at 5004ms with vitest's own "Test timed out in 5000ms" while `waitFor` is
+ * still patiently waiting, so the raise could never have taken effect. Measured on the
+ * committed tree, this file still failed 3 runs in 12 (25%) — the P3 fix addressed a
+ * misdiagnosis (a "slow mint"), not the actual mechanism. Both numbers are now
+ * explicit; every test calling this helper passes an OUTER timeout (15s) strictly
+ * larger than this 8s inner budget, so a real hang is reported by THIS assertion —
+ * naming the missing probe outcome — with ~16x headroom over the worst observed pass.
+ */
 async function waitForProbeResult(): Promise<void> {
   await vi.waitFor(
     async () => {
@@ -618,6 +604,29 @@ async function waitForProbeResult(): Promise<void> {
     { timeout: 8_000, interval: 25 },
   );
 }
+
+describe('the done screen probes a coinbase row (the registry now pins testRequest)', () => {
+  it('walks the wizard to done, offers "test this connection", and translates a 401 honestly', async () => {
+    await walkCoinbaseToDone();
+
+    const probe = button(/test this connection/i);
+    expect(probe, 'the probeable gate lights up for a coinbase row').toBeDefined();
+
+    // The provider rejects the credentials: the DONE SCREEN translation renders — the
+    // same vocabulary the wizard has always used, now reachable for a pinned provider.
+    vi.stubGlobal('fetch', async () => new Response('{"error":"unauthorized"}', { status: 401 }));
+    await click(/test this connection/i);
+    await waitForProbeResult();
+
+    expect(container!.textContent).toMatch(/rejected these credentials/i);
+    // C1: neither the key name nor the PEM leaks into the DOM through the result line.
+    expect(container!.innerHTML).not.toContain('BEGIN PRIVATE KEY');
+  }, 15_000);
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 AC5 + AC6 — the probe chain is TOTAL, and "connected" is earned
+// ---------------------------------------------------------------------------
 
 describe('AC5 — an unexpected non-typed throw renders an honest line, never a blank result area', () => {
   it('store-level: testConnection is TOTAL — a non-Response fetch return becomes {ok:false} naming err.name only', async () => {
@@ -820,13 +829,23 @@ describe('ADR-0028 rule 3 — scope drift stages, re-approval re-consents, the o
   });
 
   it("NEGATIVE: seat-only drift (request/testRequest) still repersists silently — the coinbase path is unchanged by the scope rule", async () => {
+    // Secrets stored under the shape's DECLARED keys (review finding: the old fixture
+    // kept the retired 'private_key' key, which made the survival pin vacuous — a
+    // migration that wiped declared-field secrets would still have passed).
     db = await installDbWithLegacyRow(seatlessShape(), {
       secrets: {
         [authConnectionCredentialSecretKey(APP, SLOT, 'api_key')]: 'organizations/test-org/apiKeys/test-key',
-        [authConnectionCredentialSecretKey(APP, SLOT, 'private_key')]: EC_PRIVATE_KEY_PEM,
+        [authConnectionCredentialSecretKey(APP, SLOT, 'ed25519_private_key')]: ED25519_PRIVATE_KEY_PEM,
       },
     });
     expect(await migrateConnectionRegistryDrift(APP, SLOT)).toBe('repersisted');
+    // The silent repersist NEVER touches a stored secret.
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'))).toBe(
+      'organizations/test-org/apiKeys/test-key',
+    );
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'ed25519_private_key'))).toBe(
+      ED25519_PRIVATE_KEY_PEM,
+    );
   });
 });
 

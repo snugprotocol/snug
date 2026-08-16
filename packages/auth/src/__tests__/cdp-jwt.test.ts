@@ -227,6 +227,21 @@ describe('AC2 — legacy/invalid shapes earn honest fix-naming errors, no key ec
     await expect(attempt).rejects.toThrow(/Ed25519 API key/);
   });
 
+  it('an ARMORLESS SEC1 body (legacy key file minus BEGIN/END lines) STILL earns the EC fix — never a length error', async () => {
+    // A SEC1 ECPrivateKey DER carries only the prime256v1 curve OID, never
+    // id-ecPublicKey (byte-verified against this very fixture at review) — the paste
+    // style the armorless-Ed25519 branch exists to serve must not misdiagnose the
+    // legacy key TYPE as a paste-SHAPE problem.
+    const armorlessSec1 = EC_SEC1_PEM.split('\n')
+      .filter((line) => !line.includes('-----'))
+      .join('');
+    const attempt = renderJwt(armorlessSec1);
+    await expect(attempt).rejects.toThrow(AuthTemplateError);
+    await expect(attempt).rejects.toThrow(/Ed25519 API key/);
+    const err = await renderJwt(armorlessSec1).catch((e: unknown) => e as Error);
+    expect((err as Error).message).not.toMatch(/bytes|BEGIN\/END/);
+  });
+
   it('unrecognizable armor earns a typed error that never echoes the pasted content', async () => {
     const pasted = '-----BEGIN OPENSSH PRIVATE KEY-----\nZm9vYmFyCg==\n-----END OPENSSH PRIVATE KEY-----';
     const attempt = renderJwt(pasted);
@@ -312,12 +327,11 @@ describe("cdp_jwt engine-half guards (the lint's rules are tested in template-li
     );
   });
 
-  it('wrong arity throws the honest (api_key, private_key) message', async () => {
+  it('wrong arity throws the role-named message — never a literal field key (review finding)', async () => {
     // Direct string render — below the lint gate — so this is the ENGINE refusing.
-    // The message names the ROLES of the two arguments, not the registry's field keys.
     await expect(
       renderAuthTemplateString('{{cdp_jwt(api_key)}}', ctxWith(ED25519_PEM, ACCOUNTS_REQUEST)),
-    ).rejects.toThrow(/cdp_jwt requires \(api_key, private_key\)/);
+    ).rejects.toThrow(/cdp_jwt requires \(api_key_field, private_key_field\)/);
   });
 
   it('a BLANK declared ed25519_private_key field throws honestly instead of signing with nothing', async () => {

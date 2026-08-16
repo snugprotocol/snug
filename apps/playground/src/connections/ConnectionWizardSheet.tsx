@@ -77,6 +77,7 @@ import {
   saveConnectionCredentials,
   startConnectionOAuthFlow,
   testConnection,
+  unexpectedTestOutcome,
   type ConnectionTestOutcome,
   type ConnectionWizardSession,
   type DesktopOAuthAlternative,
@@ -1169,8 +1170,9 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
    * screen reports a pairing PROVEN against a named device (ADR-0025), and a future
    * LAN probe must never downgrade that proven claim to "saved until you probe".
    */
-  const claimGated = probeable && !isLanRequirement(row.requirement);
-  const probeVerified = outcome?.ok === true;
+  // ONE derivation for both the label and the hint (review finding: two inline copies
+  // of `claimGated && !probeVerified` invite the exact split-truth this AC prevents).
+  const awaitingProbe = probeable && !isLanRequirement(row.requirement) && outcome?.ok !== true;
 
   const runTest = (): void => {
     setTesting(true);
@@ -1178,22 +1180,16 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
     void testConnection()
       .then(setOutcome)
       // AC5 belt-and-braces: `testConnection` is total, but a rejection reaching this
-      // chain must still render a line, never a blank result area. Same fixed
-      // sentence, `err.name` only (C5).
-      .catch((err: unknown) =>
-        setOutcome({
-          ok: false,
-          code: 'UNEXPECTED',
-          message: `the test failed unexpectedly (${err instanceof Error ? err.name : typeof err})`,
-        }),
-      )
+      // chain must still render a line, never a blank result area. The outcome comes
+      // from the ONE shared construction (fixed sentence, err.name only — C5).
+      .catch((err: unknown) => setOutcome(unexpectedTestOutcome(err)))
       .finally(() => setTesting(false));
   };
 
   return (
     <div className="field">
       <label>
-        {claimGated && !probeVerified
+        {awaitingProbe
           ? `${row.requirement.provider.name} credentials saved`
           : `${row.requirement.provider.name} is connected`}
       </label>
@@ -1221,7 +1217,7 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
         ) : (
           <>
             this app can now reach {row.allowedHosts.join(', ')} on your behalf.{' '}
-            {claimGated && !probeVerified ? 'Run the test below to confirm the connection works. ' : ''}You can
+            {awaitingProbe ? 'Run the test below to confirm the connection works. ' : ''}You can
             disconnect it any time from Settings → Connections.
           </>
         )}

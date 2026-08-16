@@ -549,8 +549,12 @@ export async function reapproveFromDiff(): Promise<ConnectionWizardResult> {
     // the earlier "old secrets stay in storage" posture on purpose (owner decision
     // 2026-08-15; the drift MIGRATION still never touches a secret — deletion belongs
     // to re-approval, the same act that already invalidates tokens).
-    if (before?.pendingRequirement !== undefined) {
-      const stagedKeys = new Set((before.pendingRequirement.fields ?? []).map((field) => field.key));
+    // GUARDED on the staged shape EXPLICITLY declaring a field list (review-confirmed
+    // finding): `fields` is schema-optional, and a pending edit that legitimately
+    // omits it must read as "says nothing about fields" — treating it as "every field
+    // dropped" would wipe ALL of a working row's secrets on approval.
+    if (before?.pendingRequirement?.fields !== undefined) {
+      const stagedKeys = new Set(before.pendingRequirement.fields.map((field) => field.key));
       for (const field of before.requirement.fields ?? []) {
         if (!stagedKeys.has(field.key)) {
           db.deleteSecret(authConnectionCredentialSecretKey(session.appId, session.slot, field.key));
@@ -1411,6 +1415,21 @@ export type ConnectionTestOutcome =
   | { ok: false; code: string; message: string };
 
 /**
+ * The ONE construction of the AC5 "unexpected" outcome — a fixed sentence carrying
+ * `err.name` ONLY, never `err.message` (below the scrub seat a library's message is
+ * arbitrary text and no scrub candidates exist at this altitude, C5). Exported so the
+ * sheet's belt-and-braces `.catch` renders the SAME sentence as `testConnection`'s own
+ * catch — one implementation, one pin, no drift (review finding).
+ */
+export function unexpectedTestOutcome(err: unknown): ConnectionTestOutcome {
+  return {
+    ok: false,
+    code: 'UNEXPECTED',
+    message: `the test failed unexpectedly (${err instanceof Error ? err.name : typeof err})`,
+  };
+}
+
+/**
  * Run the requirement's declared probe through the REAL connected-fetch executor.
  *
  * IT IS A THIN PASS-THROUGH TO `executeConnectionTestRequest`, AND THAT IS THE POINT. The
@@ -1484,14 +1503,8 @@ export async function testConnection(
     // TASK-20260815 AC5 — the probe surface is TOTAL. Every deliberate outcome above
     // was engineered to name status/structure only; a NON-TYPED throw (an executor
     // internal, a db open failure) used to escape as an unhandled rejection and render
-    // NOTHING — the blank-result silent path the owner hit. The message carries
-    // `err.name` ONLY, never `err.message`: below the scrub seat a library's message
-    // is arbitrary text and no scrub candidates exist at this altitude (C5).
-    return {
-      ok: false,
-      code: 'UNEXPECTED',
-      message: `the test failed unexpectedly (${err instanceof Error ? err.name : typeof err})`,
-    };
+    // NOTHING — the blank-result silent path the owner hit.
+    return unexpectedTestOutcome(err);
   }
 }
 

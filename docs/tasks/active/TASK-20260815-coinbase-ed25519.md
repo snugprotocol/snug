@@ -1,6 +1,6 @@
 # TASK-20260815-coinbase-ed25519: cdp_jwt goes Ed25519 — fix Coinbase connect/portfolio
 
-- **Status**: in-progress (plan approved by owner 2026-08-15; High-tier fresh-context plan review PASSED — "approve with amendments", all 8 applied to plan + ADR-0030 before implementation)
+- **Status**: in-review (implementation complete, Gate-5 green + AI diff review applied; awaiting owner review/merge and the AC8 hardware test)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (touches `packages/auth` — credential broker; auto-escalate per PROCESS.md)
 - **Branch**: `fix/TASK-20260815-coinbase-ed25519` (to be created after plan approval)
@@ -272,3 +272,43 @@ to the flake.
   runtimes: packages/auth `node` env (Node v22.13.1) and playground `jsdom` env.
 - State: Gate 2 fully closed. Entering Gate 3 (Phase A tests-first).
 - Next step: rewrite `cdp-jwt.test.ts` against ACs 1-2, then registry-pin suites.
+
+### 2026-08-15 — Claude (Fable) — session (cont. 2: Gates 3-5)
+- Done: **Gate 3** — cdp-jwt suite rewritten RED-first (23 tests: EdDSA claim pins, all
+  portal shapes, armor-first errors, total runtime rule incl. the subtle-fallback
+  plain-Error shape, C5 no-echo negatives); registry pins renamed across 7 auth suites.
+  **Gate 4** — `ed25519-key.ts` replaces `es256-key.ts` (armor-first detection, every
+  shape canonicalized to the seed, RFC 8410 prefix wrap); `cdp_jwt` signs `EdDSA`
+  (claims unchanged); Coinbase entry re-pinned (`ed25519_private_key`, Ed25519
+  walkthrough); EC-era drift re-prompt + ADR-0030 §5 pre-promotion orphan deletion;
+  AC5 total `testConnection`; AC6 earned "connected" claim. KB + docs trued.
+  **Gate 5** — auth 37 files / playground 103 files / root `turbo run test --force`
+  21/21 green (twice; second run after review fixes pending below). Found and fixed a
+  verification trap mid-phase: playground resolves `@snugprotocol/auth` from `dist/`,
+  so its first "green" ran against the STALE build — rebuilt and re-ran (lesson noted).
+  **AI diff review** (8-finder + verify, level high) → 10 reported findings, 4
+  correctness-grade fixed in-branch: (1) fields-undefined staged shape would have
+  wiped ALL row secrets (guard + non-vacuous negative test — proven RED against the
+  unguarded variant); (2) armorless SEC1 paste missed the EC fix-naming error
+  (prime256v1 OID added, byte-verified); (3) seat-drift negative's secret sat under
+  the retired key (fixture fixed + survival assertions); (4) engine error named the
+  retired `private_key` field (role-form message). Plus 4 dedup/simplification fixes
+  (shared `unexpectedTestOutcome`, exported `ED25519_RUNTIME_ERROR`, drift-suite walk
+  helpers deduped, single `awaitingProbe` derivation). Declined with reasons: key
+  import memo (sub-ms work; a cache would hold the pasted secret in module state),
+  test keygen parallelization (ms-scale), 64-byte pubkey self-check (plan 5d accepted
+  risk — the probe catches it in-wizard), signJws relocation (alg pinned by tests;
+  the shared error constant addresses the drift risk), describe.each parameterization
+  (three distinct fixtures read clearer). Queued to next-steps items 3-5: probe-
+  verification persistence (owner decision), onReapprove failure surfacing,
+  deletion-in-`db.reapproveConnection` refactor.
+- State: awaiting final root re-verify; then PR. **High-tier self-sign-off:** C1/C5
+  audited — no error path, log, or DOM echo carries key bytes (pinned by negatives);
+  the signing surface SHRANK (one algorithm, one signing path, no negotiation); C2/C3
+  untouched (no protocol change, no sandbox change); the one destructive-adjacent new
+  behavior (orphan deletion) is pre-promotion-ordered, dropped-keys-only, guarded
+  against fields-less shapes, and recoverable (staged diff survives a failed
+  promotion). I sign off on this change as implemented.
+- Next step: owner review + merge; then AC8 hardware test (procedure in next-steps).
+- Open questions: `kid` format nuance (Plan §3) — resolves at AC8; if the bare key id
+  401s, the fix is field-guidance wording only.

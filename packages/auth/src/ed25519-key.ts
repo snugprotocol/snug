@@ -47,8 +47,16 @@ const ED25519_PKCS8_PREFIX = [
 /** DER OID id-Ed25519 (1.3.101.112) as it appears inside an AlgorithmIdentifier. */
 const ED25519_OID = [0x06, 0x03, 0x2b, 0x65, 0x70];
 
-/** DER OID id-ecPublicKey (1.2.840.10045.2.1) — the EC (legacy) marker. */
+/** DER OID id-ecPublicKey (1.2.840.10045.2.1) — the EC marker in PKCS#8 keys. */
 const EC_PUBLIC_KEY_OID = [0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+
+/**
+ * DER OID prime256v1 (1.2.840.10045.3.1.7) — the EC marker in SEC1 keys. A SEC1
+ * ECPrivateKey DER carries ONLY the curve OID, never id-ecPublicKey (byte-verified
+ * against the legacy CDP download fixture at review), so an armorless SEC1 paste
+ * needs this second pattern or it would misdiagnose as a wrong-length error.
+ */
+const EC_P256_CURVE_OID = [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 
 /** OCTET STRING(34){ OCTET STRING(32) } — the tag run that immediately precedes the seed. */
 const SEED_TAG_RUN = [0x04, 0x22, 0x04, 0x20];
@@ -56,7 +64,12 @@ const SEED_TAG_RUN = [0x04, 0x22, 0x04, 0x20];
 const EC_LEGACY_ERROR =
   "this is an EC (ECDSA) private key — Coinbase's legacy key type. Create an Ed25519 API key in the CDP portal and paste its secret instead";
 
-const RUNTIME_ERROR = 'this runtime does not implement WebCrypto Ed25519 — cdp_jwt cannot mint a CDP JWT here';
+/**
+ * The one honest runtime-absence sentence — exported so the template engine's sign
+ * catch reuses THIS string instead of retyping it (one owner, no drift).
+ */
+export const ED25519_RUNTIME_ERROR =
+  'this runtime does not implement WebCrypto Ed25519 — cdp_jwt cannot mint a CDP JWT here';
 
 function findPattern(haystack: Uint8Array, pattern: readonly number[]): number {
   const limit = haystack.length - pattern.length;
@@ -142,7 +155,13 @@ function seedFromBase64(paste: string): Uint8Array {
     // 64 = seed‖pubkey (the portal download); 32 = bare seed. The first 32 bytes sign.
     return bytes.subarray(0, 32);
   }
-  if (bytes[0] === 0x30 && findPattern(bytes, EC_PUBLIC_KEY_OID) !== -1) {
+  if (
+    bytes[0] === 0x30 &&
+    (findPattern(bytes, EC_PUBLIC_KEY_OID) !== -1 || findPattern(bytes, EC_P256_CURVE_OID) !== -1)
+  ) {
+    // BOTH EC encodings: an armorless PKCS#8 body carries id-ecPublicKey, an armorless
+    // SEC1 body carries only the curve OID — either one is the legacy key type and
+    // must earn the fix-naming error, never the wrong-length misdiagnosis.
     throw new CdpKeyImportError(EC_LEGACY_ERROR);
   }
   if (bytes[0] === 0x30 && findPattern(bytes, ED25519_OID) !== -1) {
@@ -164,7 +183,7 @@ export async function importEd25519PrivateKey(raw: string): Promise<CryptoKey> {
   const seed = paste.includes('-----BEGIN') ? seedFromPem(paste) : seedFromBase64(paste);
 
   if (typeof crypto === 'undefined' || crypto.subtle === undefined) {
-    throw new CdpKeyImportError(RUNTIME_ERROR);
+    throw new CdpKeyImportError(ED25519_RUNTIME_ERROR);
   }
 
   const pkcs8 = new Uint8Array(ED25519_PKCS8_PREFIX.length + seed.length);
@@ -178,6 +197,6 @@ export async function importEd25519PrivateKey(raw: string): Promise<CryptoKey> {
     // seed, so the failure cannot be the user's key — naming any other cause would
     // send the user to re-create a valid credential. No error-name allowlist: the
     // desktop subtle-fallback throws a plain Error, not NotSupportedError.
-    throw new CdpKeyImportError(RUNTIME_ERROR);
+    throw new CdpKeyImportError(ED25519_RUNTIME_ERROR);
   }
 }
