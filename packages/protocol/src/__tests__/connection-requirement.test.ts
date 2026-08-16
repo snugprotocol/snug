@@ -337,13 +337,18 @@ describe('AC3 — provider.name confusable guard (promoted from AL-10; ADR-0016 
 // ------------------------------------------------------------------------ AC4
 
 describe('AC4 — the `none` kind is a first-class union member (Q6: take the cheap schema window now)', () => {
-  it('CONNECTION_KINDS is the five shipped discriminators PLUS none', () => {
+  it('CONNECTION_KINDS is every AUTH_KINDS discriminator PLUS none', () => {
+    // `none` stays LAST because CONNECTION_KINDS is `[...AUTH_KINDS, 'none']` — a new auth
+    // kind appends INSIDE the spread, ahead of it. `linked_device` joined at
+    // TASK-20260816/ADR-0032; see the AUTH_KINDS pin in auth-schema.test.ts for why
+    // appending (never inserting) is the compatibility-preserving move.
     expect([...CONNECTION_KINDS]).toEqual([
       'api_key',
       'bearer_token',
       'basic_auth',
       'oauth2_client_creds',
       'oauth2_auth_code',
+      'linked_device',
       'none',
     ]);
   });

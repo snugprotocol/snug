@@ -447,10 +447,25 @@ migration story for existing frozen ceilings, and re-opens `canonicalRequirement
 (`:694`) — a stored-ceiling byte change mass-demotes live approvals (`:605-611`). Its own
 ADR at minimum, and not justified by one provider.
 
-Open for owner ratification (does not block Phase A): a **unix-domain socket** (0600) or
-Windows named pipe instead of TCP would eliminate port squatting entirely. The task already
-accepts a desktop-only, spawn-supervised runtime, so nothing requires TCP. Deferred as a
-Phase-C design choice, recorded so it is a decision rather than an omission.
+**OWNER DECISION (2026-08-16): unix-domain socket, not TCP.** The sidecar listens on a UDS
+at `~/Snug/whatsapp-sidecar.sock` with `0600` permissions, created by `sidecar_ctl`. This
+is strictly stronger than the TCP design and simplifies it:
+- **Port squatting is unrepresentable** — there is no port to race for, and filesystem
+  permissions (not a bind order) decide who may connect. The spawn-nonce mitigation stays
+  as defense in depth but is no longer the only thing standing between a squatter and the
+  pairing flow.
+- **`sidecar_fetch`'s admission simplifies**: no host check and no port check, because
+  there is no TCP endpoint at all. What it admits is the METHOD + PATH against the
+  enumerated contract, over a socket path the Rust side owns. Nothing on the machine's
+  network stack can reach the sidecar — not another app, not another user's process, not a
+  browser page.
+- **`isForbiddenNetHost` is untouched and now trivially so**: no loopback URL ever exists.
+- Windows: a named pipe with an equivalent DACL is the twin. Since the desktop Windows leg
+  is deliberately red (ADR-0021 D8), v1 ships the UDS path and the named-pipe twin is
+  authored behind the same seam, gated red with the rest of the Windows story rather than
+  faked green.
+AC3 is re-pointed at socket-path + method + path admission; the "every port but the pinned
+one" clause is retired as unrepresentable-by-construction, which is the better outcome.
 
 ## Decisions & surprises
 

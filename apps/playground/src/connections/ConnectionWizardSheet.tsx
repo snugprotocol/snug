@@ -126,6 +126,8 @@ function plainKind(requirement: ConnectionRequirement): string {
       return `this app uses a secret value from your ${provider} account to identify itself on every request.`;
     case 'api_key':
       return `this app uses secrets from your ${provider} account to identify itself on every request.`;
+    case 'linked_device':
+      return `this app links to ${provider} as an extra device on your account — the way scanning a code adds a computer — and can then read and send as you. Your ${provider} sign-in details are never given to Snug, and you can unlink the device from ${provider} at any time.`;
     case 'none':
       return `this app talks to ${provider} without any credentials — nothing of yours is used.`;
   }
