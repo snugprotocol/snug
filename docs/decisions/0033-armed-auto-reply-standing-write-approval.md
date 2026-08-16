@@ -23,10 +23,24 @@ human approves, the host freezes" needs an answer for approval that happens *ahe
    be armed at a time (v1). The armed state is disclosed wherever the connection is
    disclosed (Settings' connections card) — a standing approval the user cannot see is not
    an approval.
-3. **The gate order does not change.** An armed send traverses the SAME executor pipeline;
-   the confirm gate consults the standing scope instead of prompting — armed is a recorded
-   answer, not a bypass. Anything outside the frozen scope (different thread, different
-   host, rate exceeded, quiet hours) prompts or refuses exactly as today.
+3. **The gate order does not change, and the standing grant is a SEPARATE gate.** An armed
+   send traverses the same executor pipeline; armed is a recorded answer, not a bypass.
+
+   The session-remember gate is deliberately NOT widened to carry it. `createSessionConfirmGate`
+   (`packages/auth/src/session-confirm.ts:36-55`) keys grants on `(appId, normalizedHost,
+   method)` in an in-memory `Set`, and its header pins "lives in MEMORY only (never
+   persisted — it dies with the page)" as an intended property. Every armed send is a `POST`
+   to the same sidecar host, so **that key cannot tell the armed thread from any other
+   thread**: remembering one send would authorize all of them. It also has no clock (needed
+   for rate cap and quiet hours), no DB handle, and it is a module-level singleton shared
+   with the wizard's probe path (`net.ts:100-118`) — widening it would widen the probe too.
+
+   So a standing grant lives in its own gate, consulted BEFORE the session gate, keyed on
+   (appId, slot, threadJid, trigger scope), persisted with the connection, enforcing cap +
+   quiet hours + kill switch, and returning "no opinion" outside its frozen scope so the
+   normal confirm still runs. The executor's confirm seat sees a URL, not a thread, so the
+   thread identity must be derived from the request — itself a security seat: a send whose
+   body JID disagrees with its path JID must REFUSE, never pick one.
 4. **Every unattended send is journaled** in the app-visible activity feed (what was
    received, what was sent, when) — silent ghostwriting is not offered.
 5. **Manual Reply is not armed**: it always shows the draft for one-tap confirm.

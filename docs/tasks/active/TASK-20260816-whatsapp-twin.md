@@ -62,28 +62,36 @@ gets the same consistent auth wizard (owner ask, 2026-08-16).
   applies human-like send pacing + the ADR-0033 rate cap as mitigation, never evasion.
 
 **Acceptance criteria** (each becomes at least one test):
-1. **Protocol**: `linked_device` kind + `lanHost` class `'loopback-ipv4-literal'` parse and
-   validate; declaredApiHosts-XOR-lanHost holds; class rules refuse non-loopback literals,
-   DNS names, IPv6; spec-changelog + staged draft updated.
+1. **Protocol**: the `linked_device` kind parses and validates, with a pinned
+   `declaredApiHosts` (NOT a `lanHost` seat — see BLOCKER B3); every exhaustive
+   kind-switch site compiles or fails loud; spec-changelog + staged draft updated.
 2. **Registry**: `whatsapp-personal` entry (kind `linked_device`, loopback seat, pairing
    seats: start/qr/status/verify, `headerTemplate` for the sidecar token) emits through
    `requirementFromRegistryEntry`; structural suites (`static-kind-registry`,
    `registry-self-containment`) extended; admission preserves the declaration's loopback
    host on borrow and refuses a public host smuggled under the entry (ADR-0023 §1 parallel).
-3. **Executor**: http-to-loopback admitted ONLY via desktop `transportPolicy` for the
-   approved frozen ceiling; browser profile byte-identical when absent (negative);
-   credential-header strip, 1 MiB cap, mutating-confirm gate all fire unchanged on the
-   loopback path.
+3. **Reachability (REPLACED per B1/B5)**: `sidecar_fetch` refuses, in Rust before a socket
+   opens, every host but `127.0.0.1`, every port but the one `sidecar_ctl` spawned, and
+   every path outside the enumerated contract — one negative test per class, each
+   red-proven against the naive implementation. `/pair/*` is unreachable from the
+   app-facing path (negative). `isForbiddenNetHost` still refuses loopback on the general
+   executor path, `transportPolicy` is unchanged, and `netTransportCapability.test.ts`'s
+   two-port assertion passes **unmodified** — the capability file gains NO new entry.
+   Explicit negative: an app with an approved WhatsApp connection cannot reach `:11434`,
+   `:2375`, `:43120`, or another slot's sidecar port.
 4. **Wizard**: full linked_device journey — review (with ToS disclosure copy) → loopback
    collect/confirm → approve/freeze → pair (QR rendered from sidecar, poll to linked, token
    → `snug_secrets`) → verify-before-claim (ADR-0025 pattern: `GET /session/status` with the
    just-minted token before any connected claim) → done; web shows the desktop-only
    disclosure wall; pairing-abandon and sidecar-unreachable paths surface named errors.
-5. **Sidecar**: pairing mints the access token exactly once; every non-pair route 401s
-   without it; server binds 127.0.0.1 only (never 0.0.0.0); chats/history/messages/send
-   endpoints are thread-scoped; responses ≤ net-frame size class; **no route ever
-   serializes WhatsApp session key material** (negative test over every route with a
-   populated real-shaped auth store).
+5. **Sidecar**: pairing mints the access token exactly once (≥256-bit CSPRNG) and completes
+   only when the spawn-time nonce matches, so a bind-race squatter cannot pair; **EVERY**
+   route requires the token — `/pair/*` included, reachable from the wizard only, never
+   from an app (this replaces the original "every non-pair route 401s", which made the
+   pairing routes an unauthenticated token-disclosure surface — see B5); server binds
+   127.0.0.1 only (never 0.0.0.0); chats/history/messages/send endpoints are thread-scoped;
+   responses ≤ net-frame size class; **no route ever serializes WhatsApp session key
+   material** (negative test over every route against a populated real-shaped auth store).
 6. **Starter**: `examples/whatsapp/` installs from the shelf (11th app), declares via
    `connection.json` (install-act rung), ships `runtime-contract.json` + `authoring/`
    provenance bundle; `validate.test.mjs` APPS/folder parity + LLM-posture + no-form rules
@@ -95,7 +103,12 @@ gets the same consistent auth wizard (owner ask, 2026-08-16).
    Auto-reply sends ONLY while armed; arm freezes scope (group tagged-only / DM all),
    rate cap enforced, kill switch disarms immediately; every send goes through the
    connected-fetch mutating gate (armed = ADR-0033 standing scope, not a gate bypass);
-   outgoing drafts are composed in the thread's observed user-response language.
+   outgoing drafts are composed in the thread's observed user-response language; **every
+   unattended send is written to an app-visible activity journal** (ADR-0033 §4, A8).
+   Load-bearing negatives: an armed grant does NOT satisfy a confirm for a different
+   thread; does NOT satisfy the wizard probe path (the confirm gate is a module-level
+   singleton shared with it, `net.ts:100-118`); approve/re-approve/revoke clears standing
+   grants; and rate-cap / quiet-hours refusals are distinguishable from a user denial.
 9. **Translate**: received messages in a non-default language render the translate control
    (default-language messages must NOT — negative); tap yields an LLM translation into the
    default language, cached in the app DB; default language changeable in app settings.
@@ -104,6 +117,20 @@ gets the same consistent auth wizard (owner ask, 2026-08-16).
     Windows leg stays deliberately red (ADR-0021 D8 unchanged).
 11. **Disclosures & data dignity**: ToS/ban-risk copy pinned in wizard + README; per-thread
     persona data has a visible "forget this thread" deletion affordance that cascades.
+12. **New-reader scrub (B4)**: every LLM-bound payload derived from thread content passes a
+    scrub at the turn's altitude — participant phone numbers and JIDs replaced with stable
+    per-thread pseudonyms — with a negative test driving a real-shaped export containing a
+    phone number and asserting it never appears in the LLM request body. Wizard consent
+    copy (not only the README) states that under BYOK, other people's messages are sent to
+    the configured model provider under the user's own key.
+13. **Export parser (fixtures hostile to the mechanism)**: iOS bracketed, Android dashed,
+    US 12-hour, dot-separated locale, and bidi-control-prefixed (U+200E / U+202F) line
+    shapes all parse; multiline bodies attach to their parent message rather than splitting
+    (the bug that would silently corrupt every per-person statistic); system lines,
+    `<Media omitted>` and deletion tombstones never become messages; a message body
+    CONTAINING a timestamp-shaped line stays one message. Export-derived (display-name)
+    and live-derived (JID) identities are never silently merged — two participants sharing
+    a display name must not be conflated.
 
 **Out of scope**: media/voice messages (text-only v1); multiple simultaneously-armed threads
 (one thread armed at a time); auto-reply while the hub app is closed (needs the ungoverned-
@@ -115,26 +142,39 @@ brain alternative — rejected); browser live path (disclosure wall); subscripti
 
 **Order** (tests FIRST within each phase; each phase is a reviewable commit chain):
 
-- **Phase A — protocol** (`packages/protocol/src/connection-requirement.ts` + tests beside
-  `connection-lan-host.test`): add kind `linked_device` to the kind enum; extend `lanHost`
-  class union with `'loopback-ipv4-literal'` + literal validator (RESTATED per the ADR-0023
-  precedent — auth→protocol cycle); spec-changelog entry + SPEC_SYNC staged-draft note.
-- **Phase B — auth** (`well-known-providers.ts`, `requirement-admission.ts`,
-  `net-guards.ts`, `connected-fetch.ts` + suites): `whatsapp-personal` entry with pairing
-  seats (QR start/poll/verify — modeled on the hue pairing seat family, ADR-0023 §2 +
-  ADR-0025 verify); admission fork honors the new class on every channel; transportPolicy
-  loopback allowance (desktop-only, class-keyed); executor routes loopback over plain
-  `fetchImpl` http (NOT `lanFetch` — no TLS pin exists on loopback; scheme-axis note from
-  the code-map LAN row applies). Negative tests per AC2/AC3.
+- **Phase A — protocol** (tests first): add `linked_device` to **`AUTH_KINDS` in
+  `packages/protocol/src/auth-schema.ts:35`** — NOT to `CONNECTION_KINDS`, which is derived
+  from it (`connection-requirement.ts:66`); add a kind-coherence arm in the superRefine
+  (`:550-571`, beside `'none'`'s) if the kind carries structural constraints. **No `lanHost`
+  class is added** (B3/B5). Spec-changelog + SPEC_SYNC staged-draft note.
+- **Phase B.0 — the shared contract (A5, lands FIRST)**: one constants module pinning every
+  sidecar route, header name, and error code, imported by sidecar, wizard, and app alike.
+  Per lessons.md:53, two surfaces inventing `x-snug-csrf` vs `x-csrf-token` integrated
+  dead-on-arrival; Phase D's tests cannot be authored before these shapes exist.
+- **Phase B — auth** (`well-known-providers.ts`, `requirement-admission.ts` + suites):
+  the `whatsapp-personal` entry, kind `linked_device`, pinning a real host and NO `lanHost`
+  seat. `WellKnownPairingExchange` gains a discriminated `device-link` variant (A3) —
+  start → QR → poll → token — since the existing shape is a one-shot POST with a single
+  `secretPath` and cannot express a poll. Gate 8's per-kind injection dispatch
+  (`connected-fetch.ts:1029`) gains the `linked_device` arm; the hardcoded scopes
+  disjunction (`well-known-providers.ts:1234`) is extended only if the kind consumes scopes.
+  **`net-guards.ts`, `transportPolicy`, and the executor's host gates are NOT touched.**
+  Brand-adjacency/alias coverage per A10. Phases A+B land together (A4: the exhaustive
+  `Record`s and kind switches will not compile until both are in).
 - **Phase C — sidecar** (NEW `apps/whatsapp-sidecar/`: `src/{server,routes,session,store}.ts`,
   Baileys behind a `WaSocket` seam so tests run against a scripted fake): pair/QR/status,
   token mint + auth middleware, chats list, history pages, since-cursor message poll, send
   with human-like pacing, loopback bind guard. Own vitest suite, tsc-gated like every
   package (AC5). Workspace + turbo wiring; add to root graph.
 - **Phase D — wizard** (`state/connectionWizard.ts`, `ConnectionWizardSheet.tsx` + tests):
-  linked_device step machine (QR screen + linked-poll reusing the pairing step-machine
-  seam ADR-0023 built "provider-agnostically"), ToS consent copy, verify-before-claim
-  write (`lanVerifiedAt` pattern), web disclosure wall (AC4).
+  a `linked_device` flow built as its OWN derived-boolean family beside the LAN one — NOT
+  by extending `isLanRequirement` (B3: it is `lanHost !== undefined` with 13 call sites and
+  a mandatory 64-hex TLS pin a loopback sidecar can never satisfy), and NOT by adding a step
+  to the enum (`:79`), which the sheet documents at `:1570-1601` as a deliberate refusal.
+  QR screen + linked-poll + ToS/BYOK consent copy + verify-before-claim (the ADR-0025
+  `lanVerifiedAt` pattern, its own marker) + web disclosure wall. Negative: a
+  `linked_device` row never enters `runLanPairingAttempt`, and `isLanRequirement` is false
+  for it (AC4).
 - **Phase E — starter** (`examples/whatsapp/` app.html single-file + embedded hooks,
   `connection.json`, `runtime-contract.json`, `authoring/` bundle; `starterApps.ts` shelf
   row; validate suites): thread picker → Persona Lab (user voice card, member profiles,
@@ -143,12 +183,17 @@ brain alternative — rejected); browser live path (disclosure wall); subscripti
   affordance. Export-.txt parser lives in the app; analysis prompts ride the runtime
   contract (read `docs/.../prompt-engineering-reference` memory before authoring). Real
   sql.js DDL run once per the 2026-08-15 lesson (AC6/AC7/AC9/AC11).
-- **Phase F — armed auto-reply** (`state/net.ts` + `packages/auth/src/session-confirm.ts`
-  seam + app-side loop): arming rides a NEW scoped standing approval per ADR-0033 —
-  thread-scoped (slot + chat JID), frozen trigger scope, rate cap, quiet hours, kill
-  switch; persisted per app; every send still traverses the executor's gate order (AC8).
-- **Phase G — desktop spawn** (`apps/desktop/src-tauri`): `sidecar_ctl` command
-  (start/stop/status of system-node sidecar), supervision, gate additions (AC10).
+- **Phase F — armed auto-reply**: a NEW `StandingApprovalGate` consulted BEFORE the session
+  gate (B2/ADR-0033 §3) — keyed (appId, slot, threadJid, trigger scope), persisted with the
+  connection, enforcing cap + quiet hours + kill switch, returning "no opinion" outside its
+  frozen scope. `session-confirm.ts` keeps its memory-only property untouched. Thread
+  identity is derived from the request and disagreeing path/body JIDs REFUSE. Plus the
+  activity journal (A8). AC8's four negatives are the load-bearing tests.
+- **Phase G — desktop spawn** (`apps/desktop/src-tauri`, moved EARLIER — after C, per S5,
+  since C/D cannot be exercised without it): `sidecar_ctl` (spawn/supervise/stop, sole
+  writer of the port and the spawn nonce) and **`sidecar_fetch`** (host+port+path admission
+  in Rust, `/pair/*` off the app path) on the `lanfetch.rs` template, with cargo tests per
+  refusal class; both commands join the C2 IPC gate scope (AC10).
 - **Phase H — docs close**: ADR-0032/0033 accepted, threat-model delta
   `docs/security/threat-model-delta-whatsapp-sidecar.md` (session-key custody, loopback
   local-process risk → token auth, pairing-window residual, ToS/ban residual,
@@ -248,6 +293,165 @@ that cannot express ports. **Leading answer: keep the executor path** (its confi
 what ADR-0033 arming consults, and its scrub is what protects the LLM reader), with the
 ceiling holding the symbolic host and `sidecar_fetch` enforcing the real pin underneath.
 
+## BLOCKER B3 (fresh-context review, verified independently) — `lanHost` is the WRONG seat: it would drag the row into hue's pinned-TLS pairing path
+
+`isLanRequirement` is `requirement?.lanHost !== undefined` and NOTHING else
+(`connectionWizard.ts:731-733`), and it has **13 call sites** across
+`connectionWizard.ts` (`:345, :400, :428, :575, :657, :737, :842, :1203`) and
+`ConnectionWizardSheet.tsx` (`:1175, :1197, :1519, :1581`). So any WhatsApp requirement
+carrying a `lanHost` seat — of ANY class — fires every one of them and is routed into
+hue-shaped host collection and hue-shaped pairing, whose `runLanPairingAttempt`
+**hard-requires a 64-hex TLS certificate pin** (`:1031-1036`, refusing outright when
+absent) over `https://${host}` (`:993`). A loopback sidecar serves plain http and has no
+certificate, so it can NEVER satisfy that check. The withdrawn design was a dead end that
+would only have surfaced mid-Phase-D.
+
+Also confirmed: **there is no `pairing` step to reuse.** The wizard step enum is
+`'review' | 'register' | 'credentials' | 'connect' | 'done'` (`connectionWizard.ts:79`);
+the LAN screens are derived booleans, and the sheet documents (`:1570-1601`) why new steps
+were deliberately NOT added. The plan's claim that ADR-0023 "built a provider-agnostic
+pairing step machine" was **read from ADR-0023's prose (L116), not from code** — exactly
+the failure lessons.md:69 (2026-08-15) warns about: *"A comment's claim about ANOTHER
+surface is a pointer to verify, never evidence."* I repeated the very mistake the lessons
+file exists to prevent, and the plan is corrected rather than the claim defended.
+
+**Resolution: the sidecar connection does NOT use the `lanHost` seat.** It is a
+`linked_device` requirement whose `declaredApiHosts` pins ONE symbolic host, with
+reachability enforced by `sidecar_fetch` in Rust (B1). `isLanRequirement` therefore stays
+false for it, all 13 sites keep their current behavior byte-for-byte, and the `linked_device`
+wizard flow gets its own derived-boolean family beside the LAN one rather than colonizing it.
+AC4 gains a negative: **a `linked_device` row never enters the LAN pairing path** —
+`runLanPairingAttempt` refuses it by name, and `isLanRequirement` returns false for it.
+
+## Further amendments from the fresh-context review (all verified before acceptance)
+
+- **A1 (was B2 in the review) — `transportPolicy` has no class dimension.** It is a single
+  boolean consulted via a hard-coded call: `lanPrivateHost = deps.transportPolicy?.allowHttpForPrivateHosts === true && isPrivateRfc1918Ipv4Literal(host)`
+  (`connected-fetch.ts:977-978`), standing down the SSRF guard at `:1003` and forking
+  transport at `:1122`. Under B1's redesign the executor is NOT modified at all for
+  loopback — no class dispatch, no new policy seat, RFC-1918 behavior byte-identical. This
+  is now a *reason to prefer* the `sidecar_fetch` design, not extra work.
+- **A2 — the Tauri capability file states the position explicitly.** `apps/desktop/src-tauri/capabilities/main.json`
+  records that blanket `http://127.0.0.1:*` is *deliberately absent* because "connected-fetch
+  refuses loopback outright", with only two single-purpose port-scoped entries (Ollama 11434,
+  debug gate 43120). The sidecar gets exactly ONE port-scoped entry in that same style — an AC.
+- **A3 — the registry `pairing` seat cannot express QR+poll.** `WellKnownPairingExchange`
+  (`well-known-providers.ts:59-94`) is a one-shot `POST` with a single `secretPath`; WhatsApp
+  needs start → QR → poll → token. Phase B must add a discriminated variant
+  (`kind: 'exchange' | 'device-link'`) rather than overloading the exchange shape.
+- **A4 — Phase A will not compile green alone.** `LAN_HOST_CLASS_VALIDATORS` is an exhaustive
+  `Record<ConnectionLanHostClass, …>` (`requirement-admission.ts:200-202`) and the protocol
+  superRefine has a twin map (`connection-requirement.ts:537-539`). Adding the `linked_device`
+  KIND has the same exhaustiveness effect wherever kind is switched on. Phases A+B land
+  together, or the task file states the expected red. (Fail-loud is the intended design.)
+- **A5 — pin the sidecar HTTP contract FIRST.** Promote the shared constants module to a
+  **Phase B.0** deliverable, before both the sidecar (C) and the wizard (D), per lessons.md:53
+  (2026-08-03: two agents invented `x-snug-csrf` vs `x-csrf-token` and integrated
+  dead-on-arrival). Phase D's tests cannot be written before these shapes exist.
+- **A6 — Gate 9a's condition must be class-explicit.** Today `lanPrivateHost && url.protocol === 'https:'`
+  (`:1122`); make any future class fork explicit so an https loopback URL can never be routed
+  at `lanFetch` and refused for a missing pin. Latent under B1, pinned by a negative test.
+- **A7 — `isCollectableLanHost` is a THIRD copy of the class rule** (`connectionWizard.ts:757-770`,
+  deliberately duplicated and cross-check-tested) and is used as a pairing guard at `:985`.
+  Untouched under B1's redesign; listed so the next class change does not miss it.
+- **A8 — journal the sends.** ADR-0033 §4 requires an app-visible activity feed for every
+  unattended send; AC8 did not mention it. Added.
+- **A9 — three list edits for the starter**, not one: `APPS`, `CONNECTED_APPS`, and
+  `LLM_FREE_APPS` in `examples/validate.test.mjs` (parity enforced at `:496-512`, README at
+  `:522`, authoring bundle at `:381`).
+- **A10 — brand-impersonation coverage.** `registryHostIndex` skips `lanHost` entries, so the
+  borrow ban reaches them by NAME only; "WhatsApp" is a high-value brand to impersonate.
+  Under B3 the entry pins a real host, so it rejoins the host index — but alias /
+  brand-adjacency coverage still gets an explicit test, as the hue entry has.
+
+## BLOCKER B4 (fresh-context review) — third-party message content reaching a third-party LLM is a NEW READER with no scrub derived
+
+`scrubAuthValues` (`packages/auth/src/scrub.ts:21-36`) scrubs **injected credential values
+only**, by exact substring, for delivery **into the iframe**
+(`connected-fetch.ts:1159,1162`). This app sends *other people's private messages* — people
+who never consented and are not Snug users — to a third-party LLM API, and builds
+psychological profiles of them. lessons.md:40 is exactly on point: when the consumer class
+changes (app→LLM), re-derive what the scrub protects **per reader, at the new reader's
+altitude**. AC11 covered deletion and ToS copy, not disclosure-at-send.
+
+**New AC12 (added):** every LLM-bound payload derived from thread content passes a
+**new-reader scrub at the turn's altitude**: participant phone numbers and JIDs are replaced
+with stable per-thread pseudonyms before the turn, with a negative test driving a
+real-shaped export containing a phone number and asserting it never appears in the LLM
+request body. The wizard consent copy (not only the README) must state that with BYOK, other
+people's messages are sent to the configured model provider under the user's own key. The
+threat delta gains a **third-party-consent residual** distinct from the impersonation
+residual — different people, different harm.
+
+## BLOCKER B5 (adversarial review) — cross-app sidecar token capture, and the final reachability design
+
+The adversarial review returned **UNSAFE — REDESIGN** on the original loopback proposal and
+found an attack B1 alone does not close. Because the ceiling is host-granular, and because
+AC5 as originally written said *"every non-pair route 401s without it"* — making `/pair/*`
+**unauthenticated by design** — a SECOND app approved for `127.0.0.1` (its own unrelated
+sidecar, or a hostile one) could poll the WhatsApp sidecar's `GET /pair/status` and
+**capture its access token**. That is a C1 token-boundary break reached entirely through
+approved surfaces: the per-slot credential isolation is not broken, it is bypassed by
+fetching the credential over the network.
+
+The reachable population also matters and is qualitatively worse than RFC-1918. Loopback is
+where software binds *because* it treats "local = authenticated": Docker's TCP socket
+(`POST /containers/create` with a host bind mount is root-equivalent), Ollama on 11434,
+Postgres/Redis/Elasticsearch, Jupyter kernels (arbitrary code execution), and the
+playground's own Vite dev server (`/@fs/` traversal). RFC-1918 reaches *appliances that
+have their own auth*. Confirmed independently: `capabilities/main.json:4` records that
+blanket `http://127.0.0.1:*` was **deliberately removed** because "connected-fetch refuses
+loopback outright", and `netTransportCapability.test.ts:77-79` pins that exactly two
+single-purpose loopback ports (11434 Ollama, 43120 debug gate) may exist. ADR-0021:38 states
+"any further widening needs its own ADR."
+
+Also confirmed: the original design was **unrepresentable**, not merely unwise.
+`CONNECTION_HOST_RULE` (`connection-requirement.ts:211`) is LDH-only so a colon cannot pass,
+and `normalizeAuthHost` (`auth-schema.ts:345-357`) requires `url.port === ''` — so
+`"127.0.0.1:8787"` can never equal a URL-derived hostname and fails closed. ADR-0032 §4 as
+drafted described an artifact the schema cannot store.
+
+**FINAL DESIGN (supersedes B1's sketch; ADR-0032 §4 to be rewritten before Phase A):**
+The sidecar is **not a host — it is a capability.** Modeling it as a ceiling entry is a
+category error: the Hue bridge's address is genuinely user-chosen and unknowable, whereas
+Snug *spawns the sidecar itself* and therefore already knows where it is.
+
+1. **`sidecar_fetch`, a dedicated Rust command** on the `lanfetch.rs` template (whose header
+   states the principle: *"every other guard is enforced HERE in Rust, before any socket is
+   opened, because the TS caller is not the last word on what the shell will dial"*).
+2. **The port is never webview-supplied.** `sidecar_ctl` binds the listener and is the only
+   writer of the port into shell state; `admit()` refuses any host but `127.0.0.1` and any
+   port but the one THIS shell spawned. Port granularity becomes structurally
+   unrepresentable rather than schema-enforced.
+3. **Path allowlist in Rust** — only the enumerated contract routes, so the command can
+   never become a general loopback fetch primitive.
+4. **`/pair/*` is main-window/wizard ONLY, never reachable on the app-facing path.** This
+   closes the token-capture attack at its source rather than mitigating it.
+5. **Spawn-time shared secret**: `sidecar_ctl` hands the sidecar an argv/env nonce, so a
+   process that wins the bind race cannot complete pairing. (Loopback cleartext is NOT an
+   eavesdropping risk — packets never leave the kernel — but port squatting is real, and
+   unlike the RFC-1918 rung there is no TLS pin to defeat it.) The access token is ≥256 bits
+   of CSPRNG entropy and required on every route including `/session/status`.
+6. **`isForbiddenNetHost` and `isPrivateRfc1918Ipv4Literal` are NOT touched**, and
+   `transportPolicy` gains no field. AC3's "browser profile byte-identical" then holds *by
+   construction* rather than by test, and `netTransportCapability.test.ts`'s two-port
+   assertion stays green **unmodified** — which is the signal the design is right.
+7. **A2 is therefore WITHDRAWN**: a dedicated Rust command needs no `http:default` scope, so
+   the capability file gains NO new entry at all. AC3 is amended accordingly.
+8. **Addressing** rides ADR-0026 `snug-connection://whatsapp/...`, the slot resolving to the
+   sidecar transport, which also buys host-cleanliness for free.
+
+Considered and rejected: widening `CONNECTION_HOST_RULE`/`normalizeAuthHost` to carry
+`host:port`. That changes the host-identity primitive shared by EVERY connection, forces a
+migration story for existing frozen ceilings, and re-opens `canonicalRequirementHash`
+(`:694`) — a stored-ceiling byte change mass-demotes live approvals (`:605-611`). Its own
+ADR at minimum, and not justified by one provider.
+
+Open for owner ratification (does not block Phase A): a **unix-domain socket** (0600) or
+Windows named pipe instead of TCP would eliminate port squatting entirely. The task already
+accepts a desktop-only, spawn-supervised runtime, so nothing requires TCP. Deferred as a
+Phase-C design choice, recorded so it is a decision rather than an omission.
+
 ## Decisions & surprises
 
 - 2026-08-16: Task opened from owner brief; interview locked scope/runtime/send-posture/auth-kind
@@ -289,3 +493,37 @@ ceiling holding the symbolic host and `sidecar_fetch` enforcing the real pin und
 - Next step: owner approves plan → fresh-context AI plan review (High tier) → Phase A tests.
 - Open questions: sidecar port default (8787 proposed); starter display name ("Twin" proposed);
   whether desktop spawn (Phase G) may land in a follow-up PR within the task if the chain grows.
+
+### 2026-08-16 — claude — plan review (High-tier prerequisite; owner approved the v1 plan)
+- Done: the mandatory fresh-context plan review plus a dedicated adversarial review of the
+  loopback proposal, both against the REAL code; Baileys 7.0.0-rc14 API verified from the
+  published tarball. Five blockers found and the plan amended **before any implementation
+  code was written** — which is the entire point of this gate:
+  - **B1** the frozen ceiling is port-blind (`app-host-freeze.ts:24-27`), so `127.0.0.1`
+    would have granted every loopback port; **B5** confirmed `127.0.0.1:8787` is
+    *unstorable* (LDH host rule + `normalizeAuthHost` requires an empty port), and that
+    unauthenticated `/pair/*` routes let a second approved app steal the sidecar token.
+    Reachability redesigned onto a Rust `sidecar_fetch` command; no ceiling, no capability
+    entry, no executor change.
+  - **B3** a `lanHost` seat would have dragged the row into hue's pinned-TLS pairing path
+    (13 `isLanRequirement` sites; mandatory 64-hex pin) — a dead end that would have
+    surfaced mid-Phase-D. The plan's "provider-agnostic pairing step machine" claim was
+    read from ADR-0023's PROSE and is false in code (there is no pairing step at all).
+    That is exactly the failure lessons.md:69 warns about, committed by me; recorded rather
+    than quietly fixed.
+  - **B2** the session-confirm gate cannot carry a thread-scoped standing grant
+    (`(appId, host, method)`, memory-only, no clock, shared with the wizard probe) —
+    ADR-0033 §3 rewritten around a separate `StandingApprovalGate`.
+  - **B4** LLM-bound message content is a NEW READER (lessons.md:40) with no scrub derived;
+    added AC12 (pseudonymize JIDs/phone numbers) and a third-party-consent residual.
+  - Plus A1-A10 and AC13 (export-parser fixtures hostile to the mechanism).
+- **Correction to my earlier plan claim**: the `linked_device` kind is added to `AUTH_KINDS`
+  (`auth-schema.ts:35`), not to `CONNECTION_KINDS`, which is derived from it. Phases A+B
+  must land together — the exhaustive `Record`s will not compile otherwise (A4).
+- State: **STOPPED again for owner re-approval.** The approved plan changed materially
+  (reachability mechanism, wizard flow strategy, standing-grant design, two new ACs), and
+  the owner approved v1, not this. Still no implementation code.
+- Next step: owner ratifies the amended plan → Phase A+B failing tests together.
+- Open questions for the owner: (1) unix-domain socket vs TCP for the sidecar (UDS removes
+  port squatting entirely; desktop-only + spawn-supervised means nothing requires TCP);
+  (2) the port default and starter name from the previous entry still stand.

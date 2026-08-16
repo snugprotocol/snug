@@ -23,18 +23,37 @@ user-authored WhatsApp app gets the same wizard (2026-08-16 interview).
    — every analysis/compose turn runs in the governed host (the "LLM calls originate from the
    host page only" invariant), so the sidecar is transport + custody, never a second brain.
 2. **Credential custody split (C1).** WhatsApp session keys live ONLY in the sidecar's disk
-   store and are serialized on no HTTP route. What enters `snug_secrets` is a **sidecar access
-   token** minted exactly once at pairing (the Hue shape: exchange → minted secret → header
-   injection), so any local process cannot drive the user's WhatsApp unauthenticated.
+   store (Baileys' `useMultiFileAuthState`) and are serialized on no HTTP route. What enters
+   `snug_secrets` is a **sidecar access token** minted exactly once at pairing (the Hue
+   shape: exchange → minted secret → header injection), ≥256 bits of CSPRNG entropy,
+   required on **every** route. Pairing completes only when the sidecar is handed the
+   spawn-time nonce by `sidecar_ctl`, so a process that wins the bind race on the port
+   cannot mint itself into the sidecar's position — loopback has no TLS pin to fall back on.
 3. **`linked_device` kind.** `connection-requirement` gains the kind; registry entries of this
    kind carry pairing seats (start → QR render → linked-status poll → **verify-before-claim**
    per ADR-0025) and a `headerTemplate` injecting the minted token. Admission stays
    kind-agnostic (D6 pin intact); the wizard forks on kind for UX only (QR screen + poll).
-4. **Loopback class.** `lanHost` class union gains `'loopback-ipv4-literal'`; the wizard
-   pre-fills `127.0.0.1:<port>` (port editable) and freezes it into the ceiling. The executor's
-   desktop `transportPolicy` admits plain http to that class's approved ceiling hosts only —
-   over `fetchImpl`, NOT `lan_fetch` (no TLS pin exists on loopback). Browser profile stays
-   byte-identical; web renders the desktop-only disclosure wall (ADR-0023 pattern).
+4. **The sidecar is a capability, not a host** (rewritten 2026-08-16 after the Gate-2
+   adversarial review returned UNSAFE on the original loopback-class draft; see the task
+   file's B1/B3/B5). No `lanHost` class is added and **no loopback host ever enters a frozen
+   ceiling**. Reachability is a dedicated Tauri command, `sidecar_fetch`, built on the
+   `lan_fetch` template — enforcing in Rust, before a socket opens: host exactly
+   `127.0.0.1`, port exactly the one `sidecar_ctl` spawned (never webview-supplied), and
+   path within the enumerated contract. `/pair/*` is reachable from the wizard only, never
+   from an app. `isForbiddenNetHost`'s unconditional loopback refusal, `transportPolicy`,
+   and the desktop capability belt are all left untouched.
+
+   *Why the original draft was wrong, recorded so it is not re-proposed:* the frozen ceiling
+   is host-granular with no port dimension (`app-host-freeze.ts:24-27` compares
+   `new URL(url).hostname`), and `CONNECTION_HOST_RULE` (LDH-only) plus `normalizeAuthHost`
+   (requires an empty port) make `127.0.0.1:8787` **unstorable**. The only representable
+   ceiling entry, `127.0.0.1`, would have granted every loopback port on the machine —
+   Docker's TCP socket, Ollama, database admin surfaces, Jupyter kernels, another app's
+   sidecar — over a path with no Rust-side host gate and no TLS pin, i.e. strictly weaker
+   than the RFC-1918 rung it cited as precedent. Adding a `lanHost` seat would additionally
+   have routed the row into hue's pinned-TLS pairing path (`isLanRequirement` is
+   `lanHost !== undefined`, 13 call sites), which demands a 64-hex certificate pin that a
+   plain-http loopback sidecar can never produce.
 5. **ToS honesty.** Unofficial WhatsApp automation violates WhatsApp's ToS; account bans
    happen. The wizard consent copy and the starter README state this plainly; pacing/rate
    guardrails (ADR-0033) are mitigation, never detection evasion.
@@ -52,9 +71,16 @@ user-authored WhatsApp app gets the same wizard (2026-08-16 interview).
 
 ## Consequences
 
-- First loopback-class connection and first sidecar precedent (the BYOK CORS relay thread can
-  reuse the pattern). New threat-delta doc: session-key custody, local-process risk → token
-  auth, pairing-window residual, ToS/ban residual, impersonation-consent residual.
+- First sidecar precedent (the BYOK CORS relay thread can reuse the pattern) — and it
+  establishes that a locally-spawned helper is reached by a **purpose-built Rust command**,
+  not by widening the host ceiling. New threat-delta doc: session-key custody, port-squatting
+  residual, pairing-window residual, ToS/ban residual, impersonation-consent residual, and —
+  distinct from impersonation — a **third-party-consent residual**: the analysed group
+  members never consented and are not Snug users, and under BYOK their messages reach the
+  user's configured model provider.
+- Open (Phase C, does not block): a unix-domain socket / named pipe instead of TCP would
+  remove port squatting entirely; the runtime is already desktop-only and spawn-supervised,
+  so nothing requires TCP.
 - Spec impact stays internal-draft (connection-requirement is outside `schemas/` sources), with
   spec-changelog + staged-draft notes per SPEC_SYNC.
 - The desktop `sidecar_ctl` IPC command joins the C2 gate scope (IPC unreachable from iframes).
