@@ -1,0 +1,1556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Should I?</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #edf3f9; --fg: #16293c; --muted: #5d7488;
+      --card: #ffffff; --border: #d6e1ec; --shadow: 0 10px 30px rgba(23, 55, 90, 0.10);
+      --accent: #2f6fd0; --accent-soft: #e2edfb; --accent-fg: #f6faff;
+      --good: #177a45; --good-soft: #d9f2e3;
+      --maybe: #96690b; --maybe-soft: #f7ecca;
+      --skip: #b5382c; --skip-soft: #fae1dd;
+      --sky-day-top: #3f86d8; --sky-day-bottom: #a5cdf2;
+      --sky-clouds-top: #6f8598; --sky-clouds-bottom: #aebfcd;
+      --sky-rain-top: #4d5f70; --sky-rain-bottom: #8299ab;
+      --sky-snow-top: #8ea6ba; --sky-snow-bottom: #dbe6ee;
+      --sky-night-top: #16233f; --sky-night-bottom: #35496e;
+      --sun: #ffd75e; --sun-glow: rgba(255, 214, 90, 0.55);
+      --moon: #e9edf5; --moon-glow: rgba(210, 222, 240, 0.35);
+      --cloud: rgba(255, 255, 255, 0.88); --cloud-dim: rgba(228, 235, 242, 0.55);
+      --rain-streak: rgba(255, 255, 255, 0.45); --snow-dot: rgba(255, 255, 255, 0.92);
+      --scene-scrim: rgba(9, 22, 38, 0.55); --scene-fg: #f5f9ff;
+      --skel: #dfe8f0; --skel-hi: #f2f7fb;
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1823; --fg: #e2ecf5; --muted: #8ba1b5;
+      --card: #172433; --border: #2a3c50; --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      --accent: #5da0ef; --accent-soft: #16324f; --accent-fg: #08111c;
+      --good: #4cc07a; --good-soft: #123526;
+      --maybe: #d9a83c; --maybe-soft: #35290e;
+      --skip: #e2685a; --skip-soft: #3a1713;
+      --sky-day-top: #2e5f9e; --sky-day-bottom: #5d87b8;
+      --sky-clouds-top: #47586a; --sky-clouds-bottom: #6c7f92;
+      --sky-rain-top: #37444f; --sky-rain-bottom: #5c6f80;
+      --sky-snow-top: #5d7186; --sky-snow-bottom: #93a7ba;
+      --sky-night-top: #0d1730; --sky-night-bottom: #263a5c;
+      --sun: #ffd75e; --sun-glow: rgba(255, 214, 90, 0.40);
+      --moon: #e9edf5; --moon-glow: rgba(190, 205, 228, 0.28);
+      --cloud: rgba(226, 233, 244, 0.80); --cloud-dim: rgba(200, 212, 226, 0.42);
+      --rain-streak: rgba(235, 242, 250, 0.38); --snow-dot: rgba(240, 246, 252, 0.90);
+      --scene-scrim: rgba(4, 10, 20, 0.62); --scene-fg: #f0f6fd;
+      --skel: #22344a; --skel-hi: #2e455f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; font-family: inherit; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .wrap { max-width: 1060px; margin: 0 auto; padding: 18px 14px 44px; }
+    header.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    h1 {
+      font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+      font-size: clamp(1.8rem, 4.5vw, 2.4rem); font-weight: 600; letter-spacing: -0.01em;
+      margin: 0; color: var(--fg);
+    }
+    h1 .q { color: var(--accent); }
+    .tag { color: var(--muted); font-size: 0.95rem; }
+    .topbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0 14px; }
+    .place-chips { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
+    .chip {
+      border: 1px solid var(--border); background: var(--card); color: var(--fg);
+      border-radius: 999px; padding: 8px 14px; font-size: 0.88rem;
+      transition: border-color 160ms ease-out, background 160ms ease-out, transform 160ms ease-out;
+    }
+    .chip:hover { border-color: var(--accent); }
+    .chip:active { transform: scale(0.97); }
+    .chip.on { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+    .updated { color: var(--muted); font-size: 0.8rem; }
+    .tabs { display: flex; gap: 8px; margin: 0 0 18px; }
+    .tab {
+      flex: 1; max-width: 190px; border: 1px solid var(--border); background: var(--card);
+      border-radius: 12px; padding: 10px 12px; font-size: 0.95rem; color: var(--muted); font-weight: 600;
+      transition: border-color 160ms ease-out, background 160ms ease-out, color 160ms ease-out;
+    }
+    .tab.on { color: var(--fg); border-color: var(--accent); background: var(--accent-soft); }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: var(--shadow); }
+    .card h2 { margin: 0 0 10px; font-size: 0.78rem; text-transform: lowercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 700; }
+    .notice {
+      border: 1px solid var(--border); border-left: 4px solid var(--maybe); background: var(--card);
+      border-radius: 12px; padding: 12px 14px; font-size: 0.9rem; line-height: 1.5; margin: 0 0 16px;
+    }
+    .notice.err { border-left-color: var(--skip); }
+    .empty { color: var(--muted); font-size: 0.9rem; font-style: italic; line-height: 1.55; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); font-style: italic; font-family: Georgia, serif; }
+    .dots { display: inline-flex; gap: 4px; }
+    .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.1s ease-out infinite; }
+    .dots i:nth-child(2) { animation-delay: 0.18s; } .dots i:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes blink { 0%, 70%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
+
+    /* ---- the composed scene ---- */
+    .scene { position: relative; border-radius: 18px; overflow: hidden; min-height: 240px; border: 1px solid var(--border); box-shadow: var(--shadow); }
+    .scene.sky-day { background: linear-gradient(180deg, var(--sky-day-top), var(--sky-day-bottom)); }
+    .scene.sky-clouds { background: linear-gradient(180deg, var(--sky-clouds-top), var(--sky-clouds-bottom)); }
+    .scene.sky-rain { background: linear-gradient(180deg, var(--sky-rain-top), var(--sky-rain-bottom)); }
+    .scene.sky-snow { background: linear-gradient(180deg, var(--sky-snow-top), var(--sky-snow-bottom)); }
+    .scene.sky-night { background: linear-gradient(180deg, var(--sky-night-top), var(--sky-night-bottom)); }
+    .scene.ghost { filter: saturate(0.35); }
+    .sun {
+      position: absolute; top: 24px; right: 32px; width: 64px; height: 64px; border-radius: 50%;
+      background: var(--sun); box-shadow: 0 0 44px 16px var(--sun-glow);
+      animation: glow 5s ease-in-out infinite alternate;
+    }
+    @keyframes glow { from { box-shadow: 0 0 34px 12px var(--sun-glow); } to { box-shadow: 0 0 52px 20px var(--sun-glow); } }
+    .moon {
+      position: absolute; top: 26px; right: 38px; width: 52px; height: 52px; border-radius: 50%;
+      background: var(--moon); box-shadow: 0 0 30px 8px var(--moon-glow), inset -12px -7px 0 3px var(--sky-night-top);
+    }
+    .cloud {
+      position: absolute; height: 24px; width: 84px; border-radius: 999px; background: var(--cloud);
+      animation: drift 11s ease-in-out infinite alternate;
+    }
+    .cloud::before, .cloud::after { content: ""; position: absolute; background: inherit; border-radius: 50%; }
+    .cloud::before { width: 36px; height: 36px; top: -17px; left: 13px; }
+    .cloud::after { width: 24px; height: 24px; top: -11px; left: 45px; }
+    .cloud.dim { background: var(--cloud-dim); animation-duration: 15s; }
+    @keyframes drift { from { transform: translateX(-10px); } to { transform: translateX(10px); } }
+    .rainfx {
+      position: absolute; inset: 0; pointer-events: none; opacity: 0.35;
+      background-image: repeating-linear-gradient(100deg, var(--rain-streak) 0 2px, transparent 2px 26px);
+      animation: rainfall 0.8s linear infinite;
+    }
+    @keyframes rainfall { from { background-position: 0 0; } to { background-position: -18px 96px; } }
+    .snowfx {
+      position: absolute; inset: 0; pointer-events: none; opacity: 0.85;
+      background-image: radial-gradient(var(--snow-dot) 1.6px, transparent 2.4px), radial-gradient(var(--snow-dot) 1.1px, transparent 1.9px);
+      background-size: 54px 54px, 36px 36px;
+      animation: snowfall 8s linear infinite;
+    }
+    @keyframes snowfall { from { background-position: 0 -54px, 18px -36px; } to { background-position: 14px 54px, 4px 36px; } }
+    .scene-place { position: absolute; top: 14px; left: 18px; font-size: 0.9rem; font-weight: 600; color: var(--scene-fg); text-shadow: 0 1px 8px var(--scene-scrim); }
+    .scene-info {
+      position: absolute; left: 0; right: 0; bottom: 0; padding: 44px 18px 14px;
+      background: linear-gradient(180deg, transparent, var(--scene-scrim) 60%);
+      color: var(--scene-fg); display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+    }
+    .temp-big { font-size: clamp(2.6rem, 7vw, 3.6rem); font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+    .cond { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .cond .desc { font-size: 1.02rem; font-weight: 600; text-transform: capitalize; }
+    .cond .meta { font-size: 0.82rem; opacity: 0.92; }
+
+    /* ---- sun arc ---- */
+    .arc-wrap { display: flex; flex-direction: column; gap: 4px; }
+    .arc-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.8rem; }
+    .arc-note { color: var(--muted); font-size: 0.85rem; margin: 4px 0 0; }
+
+    /* ---- 24h timeline ---- */
+    .tl { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+    .tl-cell { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 2px 6px; border-radius: 12px; border: 1px solid transparent; }
+    .tl-cell.best { border-color: var(--accent); background: var(--accent-soft); }
+    .tl-hour { font-size: 0.68rem; color: var(--muted); font-weight: 600; }
+    .tl-bar { display: block; width: 12px; height: 56px; border-radius: 999px; background: var(--skel); position: relative; overflow: hidden; }
+    .tl-fill { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 999px; transition: height 300ms ease-out; }
+    .tl-fill.good { background: var(--good); }
+    .tl-fill.maybe { background: var(--maybe); }
+    .tl-fill.skip { background: var(--skip); }
+    .tl-temp { font-size: 0.8rem; font-weight: 700; }
+    .tl-pop { font-size: 0.66rem; color: var(--muted); min-height: 0.95em; }
+    .best-line { margin: 12px 0 0; color: var(--muted); font-size: 0.88rem; }
+    .best-line b { color: var(--fg); }
+    .legend { display: flex; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 0.72rem; }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+    .legend .lg-good i { background: var(--good); } .legend .lg-maybe i { background: var(--maybe); } .legend .lg-skip i { background: var(--skip); }
+
+    /* ---- verdicts & decisions ---- */
+    .verdict {
+      border-radius: 999px; padding: 6px 12px; font-size: 0.78rem; font-weight: 800;
+      letter-spacing: 0.05em; text-transform: uppercase; border: 1px solid; flex: none;
+    }
+    .verdict.good { color: var(--good); background: var(--good-soft); border-color: var(--good); }
+    .verdict.maybe { color: var(--maybe); background: var(--maybe-soft); border-color: var(--maybe); }
+    .verdict.skip { color: var(--skip); background: var(--skip-soft); border-color: var(--skip); }
+    .verdict.none { color: var(--muted); background: var(--bg); border-color: var(--border); }
+    .verdict.small { padding: 3px 8px; font-size: 0.64rem; }
+    .decision { display: flex; flex-direction: column; gap: 8px; }
+    .d-head { display: flex; align-items: center; gap: 10px; }
+    .d-emoji { font-size: 1.5rem; flex: none; }
+    .d-title-wrap { flex: 1; min-width: 0; }
+    .d-title { margin: 0; font-size: 1.05rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .d-window { color: var(--muted); font-size: 0.8rem; }
+    .icon-btn { border: none; background: none; color: var(--muted); font-size: 1rem; border-radius: 10px; flex: none; }
+    .icon-btn:hover { color: var(--skip); background: var(--skip-soft); }
+    .d-reason { margin: 0; font-size: 0.92rem; line-height: 1.45; }
+    .d-reason.dim { color: var(--muted); font-style: italic; }
+    .d-best { color: var(--muted); }
+    .agent-note { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 12px 12px 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+    .src-tag { align-self: flex-start; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+    .d-tip { margin: 0; font-size: 0.85rem; color: var(--muted); }
+    .note-fail { margin: 0; color: var(--muted); font-size: 0.85rem; font-style: italic; }
+    .d-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .logged { color: var(--good); font-weight: 700; font-size: 0.88rem; }
+    .btn {
+      border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg);
+      border-radius: 12px; padding: 10px 16px; font-size: 0.92rem; font-weight: 700;
+      transition: transform 160ms ease-out, filter 160ms ease-out;
+    }
+    .btn:hover { filter: brightness(1.07); }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .btn.ghost { background: transparent; color: var(--accent); }
+    .btn.subtle { background: var(--card); border-color: var(--border); color: var(--fg); }
+
+    /* ---- composer, journal, places ---- */
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+    .text-input {
+      flex: 1; min-width: 160px; min-height: 48px; border-radius: 12px; border: 1.5px solid var(--border);
+      background: var(--bg); color: var(--fg); padding: 0 14px; font-size: 0.98rem;
+    }
+    .text-input:focus { border-color: var(--accent); }
+    .kind-hint { color: var(--muted); font-size: 0.8rem; margin: 2px 0 10px; }
+    .presets { display: flex; gap: 8px; flex-wrap: wrap; }
+    .j-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); font-size: 0.88rem; }
+    .j-row.first { border-top: none; }
+    .j-date { color: var(--muted); font-size: 0.74rem; width: 52px; flex: none; }
+    .j-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .j-src { color: var(--muted); font-size: 0.64rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; flex: none; }
+    .j-outcome { color: var(--muted); font-size: 0.8rem; flex: none; }
+    .place-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+    .place-row.first { border-top: none; }
+    .place-name { flex: 1; min-width: 0; font-weight: 600; }
+    .place-sub { display: block; color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+    .cmp-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); font-size: 0.9rem; }
+    .cmp-row.first { border-top: none; }
+    .cmp-clock { color: var(--muted); font-size: 0.76rem; width: 58px; flex: none; }
+    .cmp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cmp-desc { color: var(--muted); font-size: 0.78rem; display: block; text-transform: capitalize; }
+    .cmp-temp { font-weight: 800; width: 44px; text-align: right; flex: none; }
+
+    /* ---- hero (un-connected) & skeletons ---- */
+    .hero-copy h3 { margin: 0 0 6px; font-size: 1.15rem; }
+    .hero-copy p { margin: 0 0 10px; line-height: 1.55; font-size: 0.94rem; }
+    .hero-copy code { background: var(--accent-soft); border-radius: 6px; padding: 1px 6px; font-size: 0.85em; }
+    .steps { margin: 0 0 10px; padding-left: 18px; line-height: 1.6; font-size: 0.93rem; }
+    .steps li { margin-bottom: 6px; }
+    .skel { position: relative; overflow: hidden; background: var(--skel); border-radius: 12px; }
+    .skel::after {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(100deg, transparent 20%, var(--skel-hi) 50%, transparent 80%);
+      animation: shimmer 1.6s ease-in-out infinite;
+    }
+    @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+    .skel-scene { min-height: 240px; border-radius: 18px; }
+    .skel-line { height: 14px; margin: 8px 0; }
+    .skel-bar { display: block; width: 12px; height: 56px; border-radius: 999px; }
+
+    @media (max-width: 880px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 420px) {
+      .wrap { padding: 14px 8px 36px; }
+      .card { padding: 12px; }
+      .tl { gap: 4px; }
+      .tl-bar { height: 44px; }
+      .scene { min-height: 210px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+// hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+// before any write, and scrubs the response. You never see a token.
+// A connection whose host only the USER knows (a device on their network): address it as
+// snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    const RESPONSE_SCHEMA = {
+      verdict: "string: 'good' | 'maybe' | 'skip' — your final call on this one decision",
+      reason: 'string: one or two plain sentences grounded ONLY in the forecast slots provided (ALWAYS include)',
+      bestWindow: "string (optional): the most comfortable stretch inside the window, e.g. '18:00–20:00'",
+      tip: 'string (optional): one short practical tip — layers, sunscreen, go an hour earlier…',
+    };
+
+    // ============================================================
+    // 6. YOUR APP — Should I? (forecasts turned into decisions)
+    // ============================================================
+    // Complement, never clone: every weather app shows you numbers; this one answers
+    // the question you actually had — "run at 6? hang laundry? water tonight?".
+    // Verdicts are computed LOCALLY from OpenWeather's 5-day/3-hour forecast, so the
+    // app is fully useful with no model in the loop; "ask the agent" upgrades one
+    // card with a judgement call, validated hard against RESPONSE_SCHEMA. A failed
+    // or off-schema reply (the keyless demo brain's canned answer is exactly that)
+    // leaves the local verdict standing with a visible note — stated honestly, never
+    // faked (ADR-0011). Decision cards and logged outcomes live in the app's own
+    // SQLite file: a decision journal no weather app keeps.
+    //
+    // The host injects the `openweather` connection's key as the `appid` query
+    // parameter on every request — no key ever appears in these URLs or this file.
+    const OW = 'https://api.openweathermap.org';
+
+    const KINDS = [
+      { id: 'active', emoji: '🏃', label: 'outdoor effort', hint: 'run, ride, walk — comfort inside the window decides' },
+      { id: 'dry', emoji: '👕', label: 'needs dry hours', hint: 'laundry, painting — the whole window has to stay dry' },
+      { id: 'water', emoji: '🌱', label: 'skip if rain is coming', hint: 'watering — reads the next 24 h of rain instead of the window' },
+    ];
+
+    const WINDOWS = [
+      { id: 'morning', label: 'morning', off: 0, h1: 5, h2: 10 },
+      { id: 'midday', label: 'midday', off: 0, h1: 10, h2: 15 },
+      { id: 'evening', label: 'evening', off: 0, h1: 16, h2: 21 },
+      { id: 'tonight', label: 'tonight', off: 0, h1: 19, h2: 24 },
+      { id: 'tmrw-morning', label: 'tomorrow morning', off: 1, h1: 5, h2: 10 },
+      { id: 'tmrw-evening', label: 'tomorrow evening', off: 1, h1: 16, h2: 21 },
+    ];
+
+    const PRESETS = [
+      { title: 'evening run', kind: 'active', window: 'evening' },
+      { title: 'hang laundry', kind: 'dry', window: 'midday' },
+      { title: 'cycle to work', kind: 'active', window: 'tmrw-morning' },
+      { title: 'water the garden', kind: 'water', window: 'tonight' },
+    ];
+
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS places (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        region TEXT NOT NULL DEFAULT '',
+        country TEXT NOT NULL DEFAULT '',
+        lat REAL NOT NULL,
+        lon REAL NOT NULL,
+        added_at TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        emoji TEXT NOT NULL DEFAULT '',
+        day_offset INTEGER NOT NULL DEFAULT 0,
+        start_hour INTEGER NOT NULL,
+        end_hour INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS journal (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_id INTEGER,
+        title TEXT NOT NULL,
+        place TEXT NOT NULL DEFAULT '',
+        verdict TEXT NOT NULL,
+        source TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        outcome TEXT NOT NULL,
+        decided_at TEXT NOT NULL
+      )`,
+    ];
+
+    // ---- small helpers -------------------------------------------------
+    const two = (n) => String(n).padStart(2, '0');
+    const safeNum = (v, fallback) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
+    };
+    const parseBody = (body) => {
+      if (body == null) return null;
+      if (typeof body === 'object') return body;
+      if (typeof body === 'string') { try { return JSON.parse(body); } catch (e) { return null; } }
+      return null;
+    };
+    const localShift = (dtSec, tz) => new Date((dtSec + tz) * 1000);
+    const fmtHour = (dtSec, tz) => two(localShift(dtSec, tz).getUTCHours()) + ':00';
+    const fmtClock = (dtSec, tz) => {
+      const d = localShift(dtSec, tz);
+      return two(d.getUTCHours()) + ':' + two(d.getUTCMinutes());
+    };
+    const localDay = (dtSec, tz) => Math.floor((dtSec + tz) / 86400);
+    const dayTag = (dtSec, tz, nowSec) => {
+      const off = localDay(dtSec, tz) - localDay(nowSec, tz);
+      if (off <= 0) return 'today';
+      if (off === 1) return 'tomorrow';
+      return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][localShift(dtSec, tz).getUTCDay()];
+    };
+    const timeAgo = (ms) => {
+      const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+      return m === 0 ? 'just now' : m + 'm ago';
+    };
+    const windowText = (d) => (d.day_offset === 0 ? 'today ' : 'tomorrow ') + two(d.start_hour) + '–' + two(d.end_hour);
+    const placeLabel = (p) => (p ? p.name + (p.country ? ', ' + p.country : '') : '');
+
+    const slotFromApi = (it) => ({
+      dt: safeNum(it.dt),
+      temp: Math.round(safeNum(it.main && it.main.temp)),
+      feels: Math.round(safeNum(it.main && it.main.feels_like)),
+      hum: Math.round(safeNum(it.main && it.main.humidity)),
+      wind: safeNum(it.wind && it.wind.speed),
+      gust: safeNum(it.wind && it.wind.gust),
+      pop: safeNum(it.pop),
+      rain: safeNum(it.rain && it.rain['3h']),
+      snow: safeNum(it.snow && it.snow['3h']),
+      main: (it.weather && it.weather[0] && it.weather[0].main) || 'Clouds',
+      desc: (it.weather && it.weather[0] && it.weather[0].description) || '',
+    });
+
+    /** Map a governed-net result to an honest failure category, or null when usable. */
+    const classifyNet = (res) => {
+      if (!res.ok) {
+        const code = res.error && res.error.code;
+        if (code === 'NET_NOT_APPROVED') return { kind: 'unconnected' };
+        return { kind: 'net', msg: (res.error && res.error.message) || 'no response' };
+      }
+      if (res.status === 401) return { kind: 'key' };
+      if (res.status === 429) return { kind: 'rate' };
+      if (res.status >= 400) return { kind: 'net', msg: 'OpenWeather answered ' + res.status };
+      return null;
+    };
+    const netCopy = (bad) => {
+      if (bad.kind === 'key') return 'OpenWeather rejected the key (401). Brand-new free keys can take an hour or two to activate; if this one is older, re-run the connection with a fresh key.';
+      if (bad.kind === 'rate') return 'OpenWeather rate limit hit (429) — the free tier allows about 60 calls a minute. Give it a minute, then refresh.';
+      if (bad.kind === 'shape') return bad.msg;
+      return 'Could not reach OpenWeather through the host' + (bad.msg ? ' (' + bad.msg + ')' : '') + '.';
+    };
+
+    // ---- local rules: comfort scoring & verdicts -----------------------
+    const comfortScore = (slot, kind) => {
+      let s = 100;
+      const t = slot.feels;
+      if (kind === 'dry') {
+        s -= slot.pop * 85;
+        s -= Math.min(30, slot.rain * 20);
+        if (slot.hum > 70) s -= (slot.hum - 70) * 1.2;
+        if (t < 4) s -= (4 - t) * 4;
+        if (slot.wind > 2 && slot.wind < 9) s += 6; // a breeze dries laundry
+        if (slot.wind >= 12) s -= (slot.wind - 12) * 3;
+      } else {
+        if (t < 12) s -= (12 - t) * 3;
+        if (t > 22) s -= (t - 22) * 4;
+        if (slot.wind > 4) s -= (slot.wind - 4) * 4;
+        if (slot.gust > 12) s -= (slot.gust - 12) * 2;
+        s -= slot.pop * 55;
+        s -= Math.min(30, slot.rain * 10);
+        s -= Math.min(40, slot.snow * 12);
+      }
+      return Math.max(0, Math.min(100, Math.round(s)));
+    };
+    const bandOf = (s) => (s >= 70 ? 'good' : s >= 45 ? 'maybe' : 'skip');
+
+    const slotReason = (slot, kind, tz) => {
+      const at = fmtHour(slot.dt, tz);
+      const bits = [];
+      if (slot.pop >= 0.35) bits.push(Math.round(slot.pop * 100) + '% chance of rain around ' + at);
+      else if (slot.rain > 0.2) bits.push('a little rain around ' + at);
+      if (slot.snow > 0) bits.push('snow around ' + at);
+      if (slot.feels <= 2) bits.push('feels like ' + slot.feels + '°');
+      else if (slot.feels >= 27) bits.push('feels like ' + slot.feels + '° — hot');
+      if (slot.wind >= 9) bits.push('windy (' + Math.round(slot.wind) + ' m/s)');
+      if (kind === 'dry' && slot.hum >= 85) bits.push(slot.hum + '% humidity — slow drying');
+      if (bits.length === 0) {
+        if (kind === 'dry') return 'dry air and ' + slot.feels + '° around ' + at + ' — things will dry';
+        return slot.feels + '° and ' + (slot.desc || 'settled') + ' around ' + at;
+      }
+      return bits.slice(0, 2).join(', ');
+    };
+
+    const slotsInWindow = (slots, tz, nowSec, off, h1, h2) =>
+      slots.filter((s) => {
+        const day = localDay(s.dt, tz) - localDay(nowSec, tz);
+        const hour = localShift(s.dt, tz).getUTCHours();
+        return day === off && hour >= h1 && hour < h2;
+      });
+
+    const compactForAgent = (slots, tz, nowSec) =>
+      slots.slice(0, 8).map((s) => ({
+        at: dayTag(s.dt, tz, nowSec) + ' ' + fmtHour(s.dt, tz),
+        temp: s.temp,
+        feels: s.feels,
+        wind: Math.round(s.wind * 10) / 10,
+        pop: Math.round(s.pop * 100) / 100,
+        rain: Math.round((s.rain + s.snow) * 10) / 10,
+        desc: s.desc,
+      }));
+
+    /** The local verdict for one decision card — deterministic, explainable rules. */
+    const decideLocal = (d, wx, nowSec) => {
+      const tz = wx.tz;
+      const live = wx.slots.filter((s) => s.dt >= nowSec - 5400); // keep the slot we're inside
+      if (d.kind === 'water') {
+        const next = live.filter((s) => s.dt <= nowSec + 86400);
+        const totalWet = next.reduce((a, s) => a + s.rain + s.snow, 0);
+        const maxPop = next.reduce((a, s) => Math.max(a, s.pop), 0);
+        const wet = Math.round(totalWet * 10) / 10;
+        let verdict, reason;
+        if (totalWet >= 3 || maxPop >= 0.6) {
+          verdict = 'skip';
+          reason = 'rain is coming — about ' + wet + ' mm in the next 24 h (' + Math.round(maxPop * 100) + '% at peak). Let the sky do it.';
+        } else if (totalWet >= 1 || maxPop >= 0.35) {
+          verdict = 'maybe';
+          reason = 'some rain is possible in the next 24 h (' + Math.round(maxPop * 100) + '% at peak) — a light watering is enough.';
+        } else {
+          verdict = 'good';
+          reason = 'no meaningful rain in the next 24 h — tonight is on you.';
+        }
+        return { verdict, reason, slotsForAgent: compactForAgent(next, tz, nowSec) };
+      }
+      let win = slotsInWindow(live, tz, nowSec, d.day_offset, d.start_hour, d.end_hour);
+      let note = '';
+      if (win.length === 0 && d.day_offset === 0) {
+        win = slotsInWindow(live, tz, nowSec, 1, d.start_hour, d.end_hour);
+        if (win.length > 0) note = 'today’s window has passed — reading tomorrow';
+      }
+      if (win.length === 0) {
+        return { verdict: 'maybe', reason: 'that window is outside the 5-day forecast', slotsForAgent: compactForAgent(live, tz, nowSec) };
+      }
+      const scored = win.map((s) => ({ s, score: comfortScore(s, d.kind) }));
+      // Laundry needs the WHOLE window dry (judge by the worst slot); for effort you
+      // can pick your moment (judge by the best one).
+      const pick = d.kind === 'dry'
+        ? scored.reduce((a, b) => (b.score < a.score ? b : a))
+        : scored.reduce((a, b) => (b.score > a.score ? b : a));
+      const best = scored.reduce((a, b) => (b.score > a.score ? b : a));
+      const verdict = bandOf(pick.score);
+      let reason = slotReason(pick.s, d.kind, tz);
+      if (note !== '') reason += ' · ' + note;
+      const out = { verdict, reason, slotsForAgent: compactForAgent(win, tz, nowSec) };
+      if (d.kind === 'active' && win.length > 1) {
+        out.bestWindow = fmtHour(best.s.dt, tz) + '–' + fmtHour(best.s.dt + 10800, tz);
+      }
+      return out;
+    };
+
+    /** Referee: accept the agent's advice ONLY if the whole shape checks out. */
+    const validateAdvice = (data) => {
+      if (!data || typeof data !== 'object') return null;
+      if (data.verdict !== 'good' && data.verdict !== 'maybe' && data.verdict !== 'skip') return null;
+      if (typeof data.reason !== 'string' || data.reason.trim() === '') return null;
+      const out = { verdict: data.verdict, reason: data.reason.trim().slice(0, 280) };
+      if (typeof data.bestWindow === 'string' && data.bestWindow.trim() !== '') out.bestWindow = data.bestWindow.trim().slice(0, 40);
+      if (typeof data.tip === 'string' && data.tip.trim() !== '') out.tip = data.tip.trim().slice(0, 160);
+      return out;
+    };
+
+    const skyClass = (c, nowSec) => {
+      const night = c.sunrise > 0 && c.sunset > 0 && (nowSec < c.sunrise || nowSec > c.sunset);
+      if (night) return 'sky-night';
+      if (c.main === 'Clear') return 'sky-day';
+      if (c.main === 'Snow') return 'sky-snow';
+      if (c.main === 'Rain' || c.main === 'Drizzle' || c.main === 'Thunderstorm') return 'sky-rain';
+      return 'sky-clouds';
+    };
+
+    // ---- presentational pieces -----------------------------------------
+    function Scene({ current, nowSec, place }) {
+      const cls = skyClass(current, nowSec);
+      const night = cls === 'sky-night';
+      const wet = current.main === 'Rain' || current.main === 'Drizzle' || current.main === 'Thunderstorm';
+      const snowy = current.main === 'Snow';
+      const cloudy = current.main !== 'Clear';
+      return (
+        <div className={'scene ' + cls} role="img"
+          aria-label={(current.desc || 'weather') + ', ' + current.temp + ' degrees in ' + place}>
+          {night ? <div className="moon" /> : null}
+          {!night && !cloudy ? <div className="sun" /> : null}
+          {cloudy ? <div className="cloud dim" style={{ top: '52px', left: '10%' }} /> : null}
+          {cloudy ? <div className="cloud" style={{ top: '88px', left: '44%' }} /> : null}
+          {cloudy ? <div className="cloud dim" style={{ top: '36px', left: '68%' }} /> : null}
+          {wet ? <div className="rainfx" /> : null}
+          {snowy ? <div className="snowfx" /> : null}
+          <span className="scene-place">{place}</span>
+          <div className="scene-info">
+            <span className="temp-big">{current.temp}°</span>
+            <div className="cond">
+              <span className="desc">{current.desc || current.main}</span>
+              <span className="meta">
+                feels {current.feels}° · wind {Math.round(current.wind)} m/s · humidity {current.hum}%
+              </span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function SunArc({ current, tz, nowSec }) {
+      const { sunrise, sunset } = current;
+      if (!(sunrise > 0) || !(sunset > 0)) return <p className="arc-note">no sunrise data for this place.</p>;
+      const f = Math.max(0, Math.min(1, (nowSec - sunrise) / Math.max(1, sunset - sunrise)));
+      const up = nowSec >= sunrise && nowSec <= sunset;
+      const x = 100 - 86 * Math.cos(Math.PI * f);
+      const y = 58 - 46 * Math.sin(Math.PI * f);
+      const dayLen = sunset - sunrise;
+      const note = up
+        ? Math.floor(dayLen / 3600) + ' h ' + two(Math.floor((dayLen % 3600) / 60)) + ' m of daylight'
+        : nowSec < sunrise
+          ? 'first light at ' + fmtClock(sunrise, tz)
+          : 'sun is down — back around ' + fmtClock(sunrise, tz) + ' tomorrow';
+      return (
+        <div className="arc-wrap">
+          <svg viewBox="0 0 200 64" width="100%" role="img" aria-label={'sun arc: sunrise ' + fmtClock(sunrise, tz) + ', sunset ' + fmtClock(sunset, tz)}>
+            <path d="M 14 58 A 86 46 0 0 1 186 58" fill="none" strokeWidth="2" strokeDasharray="4 5" style={{ stroke: 'var(--border)' }} />
+            <line x1="6" y1="58" x2="194" y2="58" strokeWidth="1" style={{ stroke: 'var(--border)' }} />
+            {up ? <circle cx={x} cy={y} r="7" strokeWidth="2" style={{ fill: 'var(--sun)', stroke: 'var(--card)' }} /> : null}
+          </svg>
+          <div className="arc-labels">
+            <span>↑ {fmtClock(sunrise, tz)}</span>
+            <span>↓ {fmtClock(sunset, tz)}</span>
+          </div>
+          <p className="arc-note">{note}</p>
+        </div>
+      );
+    }
+
+    function Timeline({ slots, tz, nowSec }) {
+      const scored = slots.map((s) => ({ s, score: comfortScore(s, 'active') }));
+      const bestIdx = scored.reduce((bi, x, i) => (x.score > scored[bi].score ? i : bi), 0);
+      return (
+        <div>
+          <div className="tl">
+            {scored.map((x, i) => (
+              <div key={x.s.dt} className={'tl-cell' + (i === bestIdx && x.score >= 45 ? ' best' : '')}>
+                <span className="tl-hour">{fmtHour(x.s.dt, tz)}</span>
+                <span className="tl-bar" aria-label={'comfort ' + x.score + ' of 100'}>
+                  <span className={'tl-fill ' + bandOf(x.score)} style={{ height: x.score + '%' }} />
+                </span>
+                <span className="tl-temp">{x.s.temp}°</span>
+                <span className="tl-pop">{x.s.pop >= 0.2 ? '💧' + Math.round(x.s.pop * 100) + '%' : ''}</span>
+              </div>
+            ))}
+          </div>
+          <div className="legend" aria-hidden="true">
+            <span className="lg-good"><i />good</span>
+            <span className="lg-maybe"><i />maybe</span>
+            <span className="lg-skip"><i />skip</span>
+          </div>
+        </div>
+      );
+    }
+
+    function DecisionCard({ d, v, note, hasWx, logged, onAsk, onOutcome, onDelete }) {
+      const agent = note && note.status === 'done' ? note.advice : null;
+      const asking = note && note.status === 'asking';
+      const shown = agent || v;
+      return (
+        <section className="card decision">
+          <div className="d-head">
+            <span className="d-emoji" aria-hidden="true">{d.emoji}</span>
+            <div className="d-title-wrap">
+              <h3 className="d-title">{d.title}</h3>
+              <span className="d-window">{windowText(d)}</span>
+            </div>
+            {shown
+              ? <span className={'verdict ' + shown.verdict}>{shown.verdict}</span>
+              : <span className="verdict none">—</span>}
+            <button className="icon-btn" aria-label={'delete ' + d.title} onClick={() => onDelete(d)}>✕</button>
+          </div>
+          {!hasWx
+            ? <p className="d-reason dim">no forecast yet — pick a place (and a working connection) to get a verdict.</p>
+            : null}
+          {hasWx && v && !agent ? (
+            <p className="d-reason">
+              {v.reason}
+              {v.bestWindow ? <span className="d-best"> · best {v.bestWindow}</span> : null}
+            </p>
+          ) : null}
+          {agent ? (
+            <div className="agent-note">
+              <span className="src-tag">agent’s call</span>
+              <p className="d-reason">{agent.reason}</p>
+              {agent.bestWindow || agent.tip ? (
+                <p className="d-tip">
+                  {agent.bestWindow ? 'best ' + agent.bestWindow : ''}
+                  {agent.bestWindow && agent.tip ? ' · ' : ''}
+                  {agent.tip || ''}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {note && note.status === 'failed'
+            ? <p className="note-fail">{note.note} — the local read stands.</p>
+            : null}
+          <div className="d-actions">
+            <button className="btn ghost" disabled={asking || !hasWx || !v} onClick={() => onAsk(d)}>
+              {asking ? <span className="dots"><i /><i /><i /></span> : 'ask the agent'}
+            </button>
+            {logged
+              ? <span className="logged">logged ✓</span>
+              : <React.Fragment>
+                  <button className="btn subtle" disabled={!shown} onClick={() => onOutcome(d, 'did it')}>I did it</button>
+                  <button className="btn subtle" disabled={!shown} onClick={() => onOutcome(d, 'passed')}>I passed</button>
+                </React.Fragment>}
+          </div>
+        </section>
+      );
+    }
+
+    // ---- the app --------------------------------------------------------
+    function App() {
+      const { isReady, theme, sendMessage } = useSnugApp({
+        appId: 'weather-should-i',
+        displayName: 'Should I?',
+        description: 'Forecasts turned into decisions: good/maybe/skip verdicts for the plans you actually have, a comfort timeline, saved places, and a decision journal you own.',
+        iconEmoji: '🌦',
+        iconColor: '#2f6fd0',
+      });
+      const net = useConnectedFetch();
+      const db = useAppDB();
+      const [prefs, setPrefs] = usePersistedState('should-i-prefs', { activePlaceId: null });
+
+      const [placesRows, setPlaces] = useState([]);
+      const [decisions, setDecisions] = useState([]);
+      const [journal, setJournal] = useState([]);
+      const [dbErr, setDbErr] = useState(null);
+      const [tab, setTab] = useState('today');
+      const [wx, setWx] = useState(null); // { current, slots, tz, at }
+      const [wxErr, setWxErr] = useState(null);
+      const [wxLoading, setWxLoading] = useState(false);
+      const [connState, setConnState] = useState('unknown'); // unknown | ok | unconnected
+      const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+      const [agentNotes, setAgentNotes] = useState({});
+      const [logged, setLogged] = useState({});
+      const [composer, setComposer] = useState({ title: '', kind: 'active', window: 'evening' });
+      const [q, setQ] = useState('');
+      const [geoResults, setGeoResults] = useState(null);
+      const [geoBusy, setGeoBusy] = useState(false);
+      const [geoErr, setGeoErr] = useState(null);
+      const [compare, setCompare] = useState(null); // { at, rows }
+      const compareBusyRef = useRef(false);
+      const [compareBusy, setCompareBusy] = useState(false);
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+      useEffect(() => {
+        const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 30000);
+        return () => clearInterval(t);
+      }, []);
+
+      const activePlace = useMemo(
+        () => placesRows.find((p) => p.id === prefs.activePlaceId) || placesRows[0] || null,
+        [placesRows, prefs.activePlaceId]
+      );
+
+      // ---- SQLite ----
+      const loadPlaces = async () => {
+        const res = await db.exec('SELECT id, name, region, country, lat, lon FROM places ORDER BY id', []);
+        setPlaces(res.rows.map(([id, name, region, country, lat, lon]) => ({ id, name, region, country, lat, lon })));
+      };
+      const loadDecisions = async () => {
+        const res = await db.exec('SELECT id, title, kind, emoji, day_offset, start_hour, end_hour FROM decisions ORDER BY id', []);
+        setDecisions(res.rows.map(([id, title, kind, emoji, day_offset, start_hour, end_hour]) =>
+          ({ id, title, kind, emoji, day_offset, start_hour, end_hour })));
+      };
+      const loadJournal = async () => {
+        const res = await db.exec('SELECT id, title, place, verdict, source, outcome, decided_at FROM journal ORDER BY id DESC LIMIT 12', []);
+        setJournal(res.rows.map(([id, title, place, verdict, source, outcome, decided_at]) =>
+          ({ id, title, place, verdict, source, outcome, decided_at })));
+      };
+
+      useEffect(() => {
+        if (!isReady) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []);
+            if (!cancelled) { await loadPlaces(); await loadDecisions(); await loadJournal(); }
+          } catch (e) {
+            if (!cancelled) setDbErr(String((e && e.message) || e));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isReady]);
+
+      // ---- weather through the governed seam ----
+      const loadWeather = useCallback(async (place) => {
+        if (!place) return;
+        setWxLoading(true);
+        const qs = 'lat=' + place.lat + '&lon=' + place.lon + '&units=metric';
+        const [cRes, fRes] = await Promise.all([
+          net.fetch(OW + '/data/2.5/weather?' + qs),
+          net.fetch(OW + '/data/2.5/forecast?' + qs),
+        ]);
+        setWxLoading(false);
+        const bad = classifyNet(cRes) || classifyNet(fRes);
+        if (bad) {
+          if (bad.kind === 'unconnected') setConnState('unconnected');
+          setWxErr(bad); // keep any older wx on screen — stale data beats no data, and we say so
+          return;
+        }
+        setConnState('ok');
+        const cur = parseBody(cRes.body);
+        const fc = parseBody(fRes.body);
+        if (!cur || !cur.main || !fc || !Array.isArray(fc.list) || fc.list.length === 0) {
+          setWxErr({ kind: 'shape', msg: 'Unexpected response shape from OpenWeather.' });
+          return;
+        }
+        setWxErr(null);
+        setWx({
+          current: {
+            temp: Math.round(safeNum(cur.main.temp)),
+            feels: Math.round(safeNum(cur.main.feels_like)),
+            hum: Math.round(safeNum(cur.main.humidity)),
+            wind: safeNum(cur.wind && cur.wind.speed),
+            desc: (cur.weather && cur.weather[0] && cur.weather[0].description) || '',
+            main: (cur.weather && cur.weather[0] && cur.weather[0].main) || 'Clouds',
+            sunrise: safeNum(cur.sys && cur.sys.sunrise),
+            sunset: safeNum(cur.sys && cur.sys.sunset),
+          },
+          slots: fc.list.map(slotFromApi),
+          tz: safeNum(cur.timezone, safeNum(fc.city && fc.city.timezone)),
+          at: Date.now(),
+        });
+      }, [net]);
+
+      useEffect(() => {
+        if (!isReady || !activePlace) return;
+        loadWeather(activePlace);
+      }, [isReady, activePlace && activePlace.id, loadWeather]);
+
+      // ---- geocoding (Places) ----
+      const searchPlaces = async () => {
+        const query = q.trim();
+        if (query === '' || geoBusy) return;
+        setGeoBusy(true);
+        setGeoErr(null);
+        setGeoResults(null);
+        const res = await net.fetch(OW + '/geo/1.0/direct?q=' + encodeURIComponent(query) + '&limit=5');
+        setGeoBusy(false);
+        const bad = classifyNet(res);
+        if (bad) {
+          if (bad.kind === 'unconnected') { setConnState('unconnected'); return; }
+          setGeoErr(netCopy(bad));
+          return;
+        }
+        setConnState('ok');
+        const list = parseBody(res.body);
+        if (!Array.isArray(list)) { setGeoErr('Unexpected response shape from OpenWeather.'); return; }
+        if (list.length === 0) { setGeoErr('No places found for “' + query + '”.'); return; }
+        setGeoResults(list.map((g) => ({
+          name: g.name || query, region: g.state || '', country: g.country || '',
+          lat: safeNum(g.lat), lon: safeNum(g.lon),
+        })));
+      };
+
+      const savePlace = async (g) => {
+        try {
+          await db.exec('INSERT INTO places (name, region, country, lat, lon, added_at) VALUES (?, ?, ?, ?, ?, ?)',
+            [g.name, g.region, g.country, g.lat, g.lon, new Date().toISOString()]);
+          const idRes = await db.exec('SELECT last_insert_rowid()', []);
+          const newId = idRes.rows[0] && idRes.rows[0][0];
+          await loadPlaces();
+          if (newId != null) setPrefs((prev) => ({ ...prev, activePlaceId: newId }));
+          setGeoResults(null);
+          setQ('');
+          setCompare(null);
+        } catch (e) { setDbErr(String((e && e.message) || e)); }
+      };
+
+      const removePlace = async (p) => {
+        try {
+          await db.exec('DELETE FROM places WHERE id = ?', [p.id]);
+          await loadPlaces();
+          if (prefs.activePlaceId === p.id) setPrefs((prev) => ({ ...prev, activePlaceId: null }));
+          if (placesRows.length <= 1) { setWx(null); setWxErr(null); } // last place gone — no stale sky
+          setCompare(null);
+        } catch (e) { setDbErr(String((e && e.message) || e)); }
+      };
+
+      // ---- compare strip (same hour, across places) ----
+      const loadCompare = useCallback(async () => {
+        if (compareBusyRef.current || placesRows.length === 0) return;
+        compareBusyRef.current = true;
+        setCompareBusy(true);
+        const rows = await Promise.all(placesRows.slice(0, 8).map(async (p) => {
+          const res = await net.fetch(OW + '/data/2.5/weather?lat=' + p.lat + '&lon=' + p.lon + '&units=metric');
+          const bad = classifyNet(res);
+          if (bad) {
+            if (bad.kind === 'unconnected') setConnState('unconnected');
+            return { id: p.id, name: p.name, err: true };
+          }
+          const cur = parseBody(res.body);
+          if (!cur || !cur.main) return { id: p.id, name: p.name, err: true };
+          const pseudo = {
+            feels: Math.round(safeNum(cur.main.feels_like)),
+            hum: Math.round(safeNum(cur.main.humidity)),
+            wind: safeNum(cur.wind && cur.wind.speed),
+            gust: safeNum(cur.wind && cur.wind.gust),
+            pop: 0,
+            rain: safeNum(cur.rain && cur.rain['1h']),
+            snow: safeNum(cur.snow && cur.snow['1h']),
+          };
+          return {
+            id: p.id, name: p.name,
+            temp: Math.round(safeNum(cur.main.temp)),
+            desc: (cur.weather && cur.weather[0] && cur.weather[0].description) || '',
+            band: bandOf(comfortScore(pseudo, 'active')),
+            clock: fmtClock(Math.floor(Date.now() / 1000), safeNum(cur.timezone)),
+          };
+        }));
+        setCompare({ at: Date.now(), rows });
+        compareBusyRef.current = false;
+        setCompareBusy(false);
+      }, [placesRows, net]);
+
+      useEffect(() => {
+        if (tab !== 'places' || !isReady || connState === 'unconnected' || placesRows.length === 0) return;
+        if (compare && Date.now() - compare.at < 5 * 60 * 1000) return;
+        loadCompare();
+      }, [tab, isReady, placesRows, connState, compare, loadCompare]);
+
+      // ---- decisions ----
+      const verdicts = useMemo(() => {
+        if (!wx) return {};
+        const map = {};
+        for (const d of decisions) map[d.id] = decideLocal(d, wx, nowSec);
+        return map;
+      }, [decisions, wx, nowSec]);
+
+      const addDecision = async (preset) => {
+        const title = (preset ? preset.title : composer.title).trim();
+        if (title === '') return;
+        const win = WINDOWS.find((w) => w.id === (preset ? preset.window : composer.window)) || WINDOWS[2];
+        const kind = KINDS.find((k) => k.id === (preset ? preset.kind : composer.kind)) || KINDS[0];
+        try {
+          await db.exec('INSERT INTO decisions (title, kind, emoji, day_offset, start_hour, end_hour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [title, kind.id, kind.emoji, win.off, win.h1, win.h2, new Date().toISOString()]);
+          await loadDecisions();
+          if (!preset) setComposer((prev) => ({ ...prev, title: '' }));
+        } catch (e) { setDbErr(String((e && e.message) || e)); }
+      };
+
+      const removeDecision = async (d) => {
+        try {
+          await db.exec('DELETE FROM decisions WHERE id = ?', [d.id]);
+          await loadDecisions();
+          setAgentNotes((prev) => { const next = { ...prev }; delete next[d.id]; return next; });
+        } catch (e) { setDbErr(String((e && e.message) || e)); }
+      };
+
+      const askAgent = async (d) => {
+        const local = verdicts[d.id];
+        if (!local || !wx) return;
+        setAgentNotes((prev) => ({ ...prev, [d.id]: { status: 'asking' } }));
+        // Lean request (ADR-0018): the ask rides the payload; the SITUATION —
+        // place + the window's forecast slots — rides `state`, once, bounded.
+        const result = await sendMessage('should_i', {
+          decision: { title: d.title, kind: d.kind, window: windowText(d) },
+          localVerdict: local.verdict,
+        }, {
+          state: { place: placeLabel(activePlace), slots: local.slotsForAgent },
+          responseSchema: RESPONSE_SCHEMA,
+        });
+        if (!result.ok) {
+          const msg = (result.error && result.error.message) || 'no reply';
+          setAgentNotes((prev) => ({ ...prev, [d.id]: { status: 'failed', note: 'the agent went quiet (' + msg + ')' } }));
+          return;
+        }
+        const advice = validateAdvice(result.data);
+        if (!advice) {
+          setAgentNotes((prev) => ({ ...prev, [d.id]: { status: 'failed', note: 'the agent answered off-script' } }));
+          return;
+        }
+        setAgentNotes((prev) => ({ ...prev, [d.id]: { status: 'done', advice } }));
+      };
+
+      const logOutcome = async (d, outcome) => {
+        const note = agentNotes[d.id];
+        const local = verdicts[d.id];
+        const used = note && note.status === 'done'
+          ? { verdict: note.advice.verdict, source: 'agent', reason: note.advice.reason }
+          : local
+            ? { verdict: local.verdict, source: 'local', reason: local.reason }
+            : null;
+        if (!used) return;
+        try {
+          await db.exec('INSERT INTO journal (decision_id, title, place, verdict, source, reason, outcome, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [d.id, d.title, placeLabel(activePlace), used.verdict, used.source, used.reason, outcome, new Date().toISOString()]);
+          setLogged((prev) => ({ ...prev, [d.id]: true }));
+          await loadJournal();
+        } catch (e) { setDbErr(String((e && e.message) || e)); }
+      };
+
+      if (!isReady) return <div className="connecting">reading the sky…</div>;
+
+      const hasWx = !!wx;
+      const next8 = hasWx ? wx.slots.filter((s) => s.dt >= nowSec - 5400).slice(0, 8) : [];
+      const bestStretch = (() => {
+        if (next8.length === 0) return null;
+        const scored = next8.map((s) => ({ s, score: comfortScore(s, 'active') }));
+        const top = scored.reduce((a, b) => (b.score > a.score ? b : a));
+        if (top.score < 45) return null;
+        return { label: dayTag(top.s.dt, wx.tz, nowSec) + ' ' + fmtHour(top.s.dt, wx.tz) + '–' + fmtHour(top.s.dt + 10800, wx.tz), band: bandOf(top.score) };
+      })();
+
+      const header = (
+        <header className="brand">
+          <h1>should <span className="q">I?</span></h1>
+          <span className="tag">forecasts, turned into answers</span>
+        </header>
+      );
+
+      // ---- un-connected: an honest, designed dead-end -------------------
+      if (connState === 'unconnected') {
+        return (
+          <div className="wrap">
+            {header}
+            <div className="topbar" />
+            <div className="layout">
+              <div className="col">
+                <div className="scene sky-day ghost" aria-hidden="true">
+                  <div className="sun" />
+                  <div className="cloud dim" style={{ top: '56px', left: '12%' }} />
+                  <div className="cloud" style={{ top: '96px', left: '46%' }} />
+                  <div className="scene-info">
+                    <span className="temp-big">—°</span>
+                    <div className="cond">
+                      <span className="desc">waiting for a connection</span>
+                      <span className="meta">no forecast, no made-up numbers</span>
+                    </div>
+                  </div>
+                </div>
+                <section className="card">
+                  <h2>next 24 h</h2>
+                  <div className="tl">
+                    {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+                      <div key={i} className="tl-cell">
+                        <span className="tl-hour">··</span>
+                        <span className="skel skel-bar" />
+                        <span className="tl-temp">–</span>
+                        <span className="tl-pop" />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+              <aside className="col">
+                <section className="card hero-copy">
+                  <h2>connect openweather — it’s free</h2>
+                  <p><b>Should I?</b> runs on OpenWeather’s free tier, and this app never touches your key:</p>
+                  <ol className="steps">
+                    <li>Create a free API key at <b>openweathermap.org</b> (a couple of minutes; brand-new keys can take an hour or two to go live).</li>
+                    <li>Open this app’s <b>connection card</b> in Snug and paste the key into the wizard.</li>
+                    <li>The host stores the key and appends it to every OpenWeather call as the <code>appid</code> query parameter — host-side, on web and desktop alike. This page never sees it.</li>
+                  </ol>
+                  <p className="kind-hint">Until then there are no forecasts, so there are no verdicts. Your saved places, decision cards, and journal are kept and wake up with the connection.</p>
+                </section>
+              </aside>
+            </div>
+          </div>
+        );
+      }
+
+      const wxNotice = wxErr ? (
+        <p className={'notice' + (wxErr.kind === 'key' || wxErr.kind === 'net' ? ' err' : '')} role="status">
+          {netCopy(wxErr)}{hasWx ? ' Showing the last good forecast (' + timeAgo(wx.at) + ').' : ''}
+        </p>
+      ) : null;
+
+      // ---- surfaces ------------------------------------------------------
+      const todaySurface = (
+        <div className="layout">
+          <div className="col">
+            {hasWx
+              ? <Scene current={wx.current} nowSec={nowSec} place={placeLabel(activePlace)} />
+              : wxLoading
+                ? <div className="skel skel-scene" aria-label="loading the scene" />
+                : (
+                  <section className="card">
+                    <h2>no place yet</h2>
+                    <p className="empty">
+                      Add a place in the places tab to compose your sky. Or skip the app entirely and
+                      ask the chat directly — try “will Saturday morning stay dry in Olden?”.
+                    </p>
+                    <button className="btn" style={{ marginTop: 10 }} onClick={() => setTab('places')}>add a place</button>
+                  </section>
+                )}
+            <section className="card">
+              <h2>next 24 h — where the good windows are</h2>
+              {hasWx && next8.length > 0 ? (
+                <div>
+                  <Timeline slots={next8} tz={wx.tz} nowSec={nowSec} />
+                  {bestStretch
+                    ? <p className="best-line">best stretch to be outside: <b>{bestStretch.label}</b></p>
+                    : <p className="best-line">no properly comfortable window in the next 24 h — check the cards before committing.</p>}
+                </div>
+              ) : (
+                <div className="tl">
+                  {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+                    <div key={i} className="tl-cell">
+                      <span className="tl-hour">··</span>
+                      <span className={wxLoading ? 'skel skel-bar' : 'tl-bar'} />
+                      <span className="tl-temp">–</span>
+                      <span className="tl-pop" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+          <aside className="col">
+            <section className="card">
+              <h2>the sun today</h2>
+              {hasWx
+                ? <SunArc current={wx.current} tz={wx.tz} nowSec={nowSec} />
+                : <div><div className="skel skel-line" style={{ height: 40 }} /><div className="skel skel-line" style={{ width: '55%' }} /></div>}
+            </section>
+            <section className="card">
+              <h2>today’s calls</h2>
+              {decisions.length === 0
+                ? <p className="empty">no decision cards yet — that’s the whole trick here. make one in the decisions tab.</p>
+                : decisions.slice(0, 3).map((d, i) => {
+                    const n = agentNotes[d.id];
+                    const shown = (n && n.status === 'done' && n.advice) || verdicts[d.id];
+                    return (
+                      <div key={d.id} className={'j-row' + (i === 0 ? ' first' : '')}>
+                        <span aria-hidden="true">{d.emoji}</span>
+                        <span className="j-title">{d.title}</span>
+                        {shown ? <span className={'verdict small ' + shown.verdict}>{shown.verdict}</span> : <span className="verdict small none">—</span>}
+                      </div>
+                    );
+                  })}
+              <button className="btn ghost" style={{ marginTop: 10 }} onClick={() => setTab('decisions')}>plan in decisions</button>
+            </section>
+          </aside>
+        </div>
+      );
+
+      const decisionsSurface = (
+        <div className="layout">
+          <div className="col">
+            {decisions.length === 0 ? (
+              <section className="card">
+                <h2>what this tab is for</h2>
+                <p className="empty">
+                  A decision card is a question you keep asking — “evening run?”, “hang laundry?” —
+                  answered from the live forecast with a good / maybe / skip verdict. Start from a
+                  preset below. And for one-off questions the cards don’t cover, the chat lane reads
+                  the same forecast: try “will Saturday morning stay dry in Olden?”.
+                </p>
+              </section>
+            ) : (
+              decisions.map((d) => (
+                <DecisionCard key={d.id} d={d} v={verdicts[d.id]} note={agentNotes[d.id]}
+                  hasWx={hasWx} logged={!!logged[d.id]}
+                  onAsk={askAgent} onOutcome={logOutcome} onDelete={removeDecision} />
+              ))
+            )}
+          </div>
+          <aside className="col">
+            <section className="card">
+              <h2>new decision</h2>
+              <div className="row">
+                <input type="text" className="text-input" value={composer.title} maxLength={40}
+                  placeholder="what’s the plan? e.g. tennis with Ravi"
+                  aria-label="decision title"
+                  onChange={(e) => setComposer((prev) => ({ ...prev, title: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addDecision(null); }} />
+              </div>
+              <div className="row">
+                {KINDS.map((k) => (
+                  <button key={k.id} className={'chip' + (composer.kind === k.id ? ' on' : '')}
+                    onClick={() => setComposer((prev) => ({ ...prev, kind: k.id }))}>
+                    {k.emoji} {k.label}
+                  </button>
+                ))}
+              </div>
+              <p className="kind-hint">{(KINDS.find((k) => k.id === composer.kind) || KINDS[0]).hint}</p>
+              <div className="row">
+                {WINDOWS.map((w) => (
+                  <button key={w.id} className={'chip' + (composer.window === w.id ? ' on' : '')}
+                    onClick={() => setComposer((prev) => ({ ...prev, window: w.id }))}>
+                    {w.label}
+                  </button>
+                ))}
+              </div>
+              <button className="btn" disabled={composer.title.trim() === ''} onClick={() => addDecision(null)}>add the card</button>
+            </section>
+            <section className="card">
+              <h2>one-tap starters</h2>
+              <div className="presets">
+                {PRESETS.map((p) => (
+                  <button key={p.title} className="chip" onClick={() => addDecision(p)}>
+                    {(KINDS.find((k) => k.id === p.kind) || KINDS[0]).emoji} {p.title}
+                  </button>
+                ))}
+              </div>
+            </section>
+            <section className="card">
+              <h2>decision journal</h2>
+              {journal.length === 0
+                ? <p className="empty">verdicts you act on land here — the history no weather app keeps.</p>
+                : journal.map((j, i) => (
+                    <div key={j.id} className={'j-row' + (i === 0 ? ' first' : '')}>
+                      <span className="j-date">{new Date(j.decided_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                      <span className="j-title">{j.title}</span>
+                      <span className={'verdict small ' + j.verdict}>{j.verdict}</span>
+                      <span className="j-src">{j.source}</span>
+                      <span className="j-outcome">{j.outcome}</span>
+                    </div>
+                  ))}
+            </section>
+          </aside>
+        </div>
+      );
+
+      const placesSurface = (
+        <div className="layout">
+          <div className="col">
+            <section className="card">
+              <h2>find a place</h2>
+              <div className="row">
+                <input type="text" className="text-input" value={q} maxLength={60}
+                  placeholder="city name — Olden, Reykjavík, Pune…"
+                  aria-label="search for a city"
+                  onChange={(e) => setQ(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') searchPlaces(); }} />
+                <button className="btn" disabled={q.trim() === '' || geoBusy} onClick={searchPlaces}>
+                  {geoBusy ? <span className="dots"><i /><i /><i /></span> : 'search'}
+                </button>
+              </div>
+              {geoErr ? <p className="empty" role="status">{geoErr}</p> : null}
+              {geoResults
+                ? geoResults.map((g, i) => (
+                    <div key={g.name + g.lat + i} className={'place-row' + (i === 0 ? ' first' : '')}>
+                      <span className="place-name">
+                        {g.name}
+                        <span className="place-sub">{[g.region, g.country].filter(Boolean).join(' · ')}</span>
+                      </span>
+                      <button className="btn subtle" onClick={() => savePlace(g)}>save</button>
+                    </div>
+                  ))
+                : null}
+            </section>
+            <section className="card">
+              <h2>saved places</h2>
+              {placesRows.length === 0
+                ? <p className="empty">nowhere yet — each saved place is geocoded once and kept in your own file.</p>
+                : placesRows.map((p, i) => (
+                    <div key={p.id} className={'place-row' + (i === 0 ? ' first' : '')}>
+                      <span className="place-name">
+                        {p.name}
+                        <span className="place-sub">{[p.region, p.country].filter(Boolean).join(' · ')}</span>
+                      </span>
+                      {activePlace && activePlace.id === p.id
+                        ? <span className="verdict small good">active</span>
+                        : <button className="chip" onClick={() => setPrefs((prev) => ({ ...prev, activePlaceId: p.id }))}>make active</button>}
+                      <button className="icon-btn" aria-label={'remove ' + p.name} onClick={() => removePlace(p)}>✕</button>
+                    </div>
+                  ))}
+            </section>
+          </div>
+          <aside className="col">
+            <section className="card">
+              <h2>right now, side by side</h2>
+              {placesRows.length < 2
+                ? <p className="empty">save two or more places and this strip compares the same hour across them.</p>
+                : compareBusy && !compare
+                  ? <div><div className="skel skel-line" /><div className="skel skel-line" /><div className="skel skel-line" style={{ width: '70%' }} /></div>
+                  : compare
+                    ? (
+                      <div>
+                        {compare.rows.map((r, i) => (
+                          <div key={r.id} className={'cmp-row' + (i === 0 ? ' first' : '')}>
+                            <span className="cmp-clock">{r.err ? '—' : r.clock}</span>
+                            <span className="cmp-name">
+                              {r.name}
+                              {r.err ? <span className="cmp-desc">no reading</span> : <span className="cmp-desc">{r.desc}</span>}
+                            </span>
+                            {r.err ? null : <span className={'verdict small ' + r.band}>{r.band}</span>}
+                            <span className="cmp-temp">{r.err ? '–' : r.temp + '°'}</span>
+                          </div>
+                        ))}
+                        <p className="kind-hint" style={{ marginTop: 8 }}>local time at each place · updated {timeAgo(compare.at)}</p>
+                        <button className="btn ghost" disabled={compareBusy} onClick={loadCompare}>refresh the strip</button>
+                      </div>
+                    )
+                    : null}
+            </section>
+          </aside>
+        </div>
+      );
+
+      return (
+        <div className="wrap">
+          {header}
+          <div className="topbar">
+            <div className="place-chips" role="group" aria-label="active place">
+              {placesRows.map((p) => (
+                <button key={p.id} className={'chip' + (activePlace && activePlace.id === p.id ? ' on' : '')}
+                  onClick={() => setPrefs((prev) => ({ ...prev, activePlaceId: p.id }))}>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+            {activePlace ? (
+              <button className="chip" disabled={wxLoading} onClick={() => loadWeather(activePlace)} aria-label="refresh the forecast">
+                {wxLoading ? <span className="dots"><i /><i /><i /></span> : '↻ refresh'}
+              </button>
+            ) : null}
+            {hasWx ? <span className="updated" role="status">updated {timeAgo(wx.at)}</span> : null}
+          </div>
+          {dbErr ? <p className="notice err" role="status">storage hiccup: {dbErr}</p> : null}
+          {wxNotice}
+          <nav className="tabs" aria-label="surfaces">
+            <button className={'tab' + (tab === 'today' ? ' on' : '')} onClick={() => setTab('today')}>today</button>
+            <button className={'tab' + (tab === 'decisions' ? ' on' : '')} onClick={() => setTab('decisions')}>
+              decisions{decisions.length > 0 ? ' · ' + decisions.length : ''}
+            </button>
+            <button className={'tab' + (tab === 'places' ? ' on' : '')} onClick={() => setTab('places')}>places</button>
+          </nav>
+          {tab === 'today' ? todaySurface : tab === 'decisions' ? decisionsSurface : placesSurface}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

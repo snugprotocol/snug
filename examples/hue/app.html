@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Moodboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f4f0e8; --fg: #251f2e; --muted: #7c7389;
+      --card: #fdfbf6; --card2: #ece6d9; --border: #e0d8c8;
+      --accent: #6d59d6; --accent-soft: #e9e4fa; --on-accent: #f9f7ff;
+      --danger: #b8432f; --ok: #3e7a52;
+      --skeleton: #ece5d7; --track: #e4ddcf; --thumb: #fffdf8;
+      --shadow: 0 12px 32px rgba(58, 44, 90, 0.12);
+      --shadow-sm: 0 3px 10px rgba(58, 44, 90, 0.10);
+      --veil: rgba(244, 240, 232, 0.78);
+    }
+    :root[data-theme="dark"] {
+      --bg: #131019; --fg: #ece7df; --muted: #9a92a9;
+      --card: #1c1826; --card2: #262033; --border: #342d47;
+      --accent: #a293ef; --accent-soft: #2b2444; --on-accent: #17112b;
+      --danger: #e26a50; --ok: #7cc491;
+      --skeleton: #241f33; --track: #2c2540; --thumb: #efeaff;
+      --shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+      --shadow-sm: 0 3px 12px rgba(0, 0, 0, 0.4);
+      --veil: rgba(19, 16, 25, 0.78);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; font-family: inherit; }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 20px 14px 90px; }
+    header.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    h1 {
+      font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+      font-size: clamp(1.9rem, 5vw, 2.5rem); font-weight: 600; letter-spacing: -0.01em;
+      margin: 0;
+    }
+    h1 .glyph { font-size: 0.8em; margin-right: 2px; }
+    .tag { color: var(--muted); font-size: 0.95rem; font-style: italic; font-family: Georgia, serif; }
+    .topline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0 14px; }
+    .status {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 14px; border-radius: 999px; background: var(--card);
+      border: 1px solid var(--border); font-size: 0.92rem; color: var(--muted);
+      min-height: 36px; transition: color 180ms ease-out, border-color 180ms ease-out;
+    }
+    .status.hot { color: var(--accent); border-color: var(--accent); }
+    .status.bad { color: var(--danger); border-color: var(--danger); }
+    .dots { display: inline-flex; gap: 4px; }
+    .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.1s ease-out infinite; }
+    .dots i:nth-child(2) { animation-delay: 0.18s; } .dots i:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes blink { 0%, 70%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
+    .tabs { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+    .tab {
+      border: 1px solid var(--border); background: var(--card); color: var(--muted);
+      border-radius: 999px; padding: 10px 20px; font-size: 0.95rem;
+      transition: border-color 160ms ease-out, background 160ms ease-out, color 160ms ease-out;
+    }
+    .tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); font-weight: 600; }
+    .chip {
+      border: 1px solid var(--border); background: var(--card); color: var(--fg);
+      border-radius: 999px; padding: 8px 14px; font-size: 0.85rem;
+      transition: border-color 160ms ease-out, transform 160ms ease-out;
+    }
+    .chip:hover { border-color: var(--accent); }
+    .chip:active { transform: scale(0.97); }
+    .chip:disabled { opacity: 0.5; cursor: default; }
+    .btn {
+      border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent);
+      border-radius: 12px; padding: 10px 18px; font-size: 0.95rem; font-weight: 600;
+      transition: transform 160ms ease-out, filter 160ms ease-out;
+    }
+    .btn:hover { filter: brightness(1.07); } .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.5; cursor: default; transform: none; filter: none; }
+    .btn.ghost { background: transparent; color: var(--accent); }
+    .btn.danger { border-color: var(--danger); background: transparent; color: var(--danger); }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    @media (min-width: 680px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (min-width: 1000px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    .tile {
+      position: relative; background: var(--card); border: 1px solid var(--border);
+      border-radius: 18px; overflow: hidden; box-shadow: var(--shadow-sm);
+      transition: box-shadow 220ms ease-out, border-color 220ms ease-out;
+    }
+    .tile { box-shadow: var(--shadow-sm), 0 0 44px var(--room-glow-soft, transparent); }
+    .tile.picked { border-color: var(--accent); }
+    .lamp {
+      display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start;
+      width: 100%; min-height: 118px; padding: 14px 16px 10px; border: none; text-align: left;
+      background: radial-gradient(130% 100% at 50% 0%, var(--room-glow, transparent) 0%, transparent 68%), var(--card2);
+      transition: background 260ms ease-out;
+    }
+    .tile.off .lamp { background: var(--card2); }
+    .lampname {
+      font-family: Georgia, 'Iowan Old Style', serif; font-size: 1.25rem; font-weight: 600;
+      color: var(--fg); text-shadow: 0 1px 4px var(--card);
+    }
+    .lampstate { font-size: 0.82rem; color: var(--muted); margin-top: 2px; }
+    .pick {
+      position: absolute; top: 8px; right: 8px; width: 44px; height: 44px;
+      border-radius: 50%; border: 1px solid var(--border); background: var(--card);
+      color: transparent; font-size: 1rem; line-height: 1;
+      transition: color 160ms ease-out, border-color 160ms ease-out, background 160ms ease-out;
+    }
+    .pick:hover { border-color: var(--accent); }
+    .pick.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    .tilebody { padding: 10px 14px 14px; }
+    input[type="range"].bri {
+      -webkit-appearance: none; appearance: none; display: block;
+      width: 100%; height: 44px; margin: 0 0 8px; background: transparent; cursor: pointer;
+    }
+    .bri::-webkit-slider-runnable-track {
+      height: 8px; border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent) var(--fill, 50%), var(--track) var(--fill, 50%));
+    }
+    .bri::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 22px; height: 22px; margin-top: -7px; border-radius: 50%;
+      background: var(--thumb); border: 2px solid var(--accent); box-shadow: var(--shadow-sm);
+    }
+    .bri::-moz-range-track { height: 8px; border-radius: 999px; background: var(--track); }
+    .bri::-moz-range-progress { height: 8px; border-radius: 999px; background: var(--accent); }
+    .bri::-moz-range-thumb {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--thumb); border: 2px solid var(--accent);
+    }
+    .bri:disabled { opacity: 0.45; cursor: default; }
+    .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+    .sw {
+      width: 44px; height: 44px; flex: none; border-radius: 12px;
+      border: 1px solid var(--border); background: var(--sw, var(--card2));
+      transition: transform 140ms ease-out, border-color 140ms ease-out;
+    }
+    .sw:hover { border-color: var(--fg); transform: translateY(-1px); }
+    .sw:active { transform: scale(0.94); }
+    .sw:disabled { opacity: 0.45; cursor: default; transform: none; }
+    .surface { display: flex; flex-direction: column; gap: 18px; }
+    .secname {
+      margin: 6px 0 -6px; font-size: 0.8rem; text-transform: lowercase; letter-spacing: 0.08em;
+      color: var(--muted); font-weight: 600;
+    }
+    .cards { display: grid; grid-template-columns: 1fr; gap: 14px; }
+    @media (min-width: 680px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (min-width: 1000px) { .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } .cards.wide { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 16px; box-shadow: var(--shadow-sm);
+    }
+    .moodname { font-family: Georgia, 'Iowan Old Style', serif; font-size: 1.25rem; font-weight: 600; margin: 0; }
+    .moodnote { color: var(--muted); font-size: 0.86rem; font-style: italic; font-family: Georgia, serif; margin: 2px 0 10px; }
+    .badge {
+      display: inline-block; font-size: 0.7rem; letter-spacing: 0.06em; text-transform: lowercase;
+      color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; margin-left: 8px; vertical-align: middle;
+    }
+    .band {
+      height: 46px; border-radius: 12px; border: 1px solid var(--border);
+      background: var(--band, var(--card2)); filter: saturate(1.12);
+      margin-bottom: 10px;
+    }
+    .band.tall { height: 86px; }
+    .roomsline { color: var(--muted); font-size: 0.78rem; margin: 0 0 12px; min-height: 1em; }
+    .actrow { display: flex; gap: 8px; flex-wrap: wrap; }
+    .saverow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .text {
+      flex: 1; min-width: 200px; min-height: 44px; padding: 10px 14px;
+      border-radius: 12px; border: 1px solid var(--border);
+      background: var(--card); color: var(--fg); font-size: 0.95rem; font-family: inherit;
+    }
+    .text:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    textarea.ask {
+      width: 100%; min-height: 84px; resize: vertical; padding: 12px 14px;
+      border-radius: 12px; border: 1px solid var(--border);
+      background: var(--card); color: var(--fg); font-size: 1rem; font-family: inherit;
+      margin-bottom: 10px;
+    }
+    textarea.ask:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .lead { font-size: 1.02rem; line-height: 1.5; margin: 0 0 12px; }
+    .examples { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .quote {
+      font-family: Georgia, 'Iowan Old Style', serif; font-style: italic;
+      font-size: 1.05rem; line-height: 1.5; margin: 6px 0 12px;
+    }
+    .assign { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .assign li { display: flex; align-items: center; gap: 10px; font-size: 0.92rem; }
+    .assign .dot { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 1px solid var(--border); background: var(--chipc, var(--card2)); }
+    .assign .pct { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .note { color: var(--muted); font-size: 0.85rem; }
+    .fineprint { color: var(--muted); font-size: 0.8rem; font-style: italic; margin: 2px 0 0; }
+    .soft { color: var(--muted); font-size: 0.9rem; margin: 0; }
+    .designer .lanehint ul { margin: 8px 0 0; padding-left: 18px; }
+    .designer .lanehint li { margin: 4px 0; font-size: 0.9rem; color: var(--muted); }
+    .designer .twocol { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }
+    @media (min-width: 860px) { .designer .twocol { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); } }
+    .stagegrid { position: relative; }
+    .overlay {
+      position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center;
+      padding-top: 26px; background: var(--veil); border-radius: 18px;
+    }
+    .overlay .card { max-width: 540px; margin: 0 12px; box-shadow: var(--shadow); }
+    .skelgrid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    @media (min-width: 680px) { .skelgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (min-width: 1000px) { .skelgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    .skel {
+      min-height: 214px; border-radius: 18px; border: 1px solid var(--border);
+      background: linear-gradient(100deg, var(--skeleton) 40%, var(--card) 50%, var(--skeleton) 60%);
+      background-size: 200% 100%; animation: sheen 1.5s ease-in-out infinite;
+    }
+    .skel.short { min-height: 120px; }
+    @keyframes sheen { 0% { background-position: 120% 0; } 100% { background-position: -80% 0; } }
+    .batchbar {
+      position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 30;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+      max-width: calc(100vw - 20px); padding: 10px 14px;
+      background: var(--card); border: 1px solid var(--accent); border-radius: 18px; box-shadow: var(--shadow);
+    }
+    .bcount { font-size: 0.85rem; color: var(--accent); font-weight: 600; padding: 0 4px; }
+    .toast {
+      position: fixed; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 40;
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px 16px; font-size: 0.9rem; box-shadow: var(--shadow); max-width: calc(100vw - 30px);
+    }
+    .connecting {
+      display: flex; align-items: center; justify-content: center; min-height: 60vh;
+      color: var(--muted); font-style: italic; font-family: Georgia, serif;
+    }
+    @media (max-width: 420px) {
+      .wrap { padding: 14px 8px 110px; }
+      .tab { padding: 10px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+// hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+// before any write, and scrubs the response. You never see a token.
+// A connection whose host only the USER knows (a device on their network): address it as
+// snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+// ============================================================
+// 5. RESPONSE SCHEMA — describe the JSON the agent must return
+// ============================================================
+const RESPONSE_SCHEMA = {
+  mood: {
+    name: "string: a short, evocative name for the look, e.g. 'Golden Hour'",
+    rooms: [
+      {
+        roomName: 'string: EXACTLY one of the room names from state.rooms — spell it as given',
+        brightness: 'number: 1-100 (percent)',
+        colorXy: { x: 'number: CIE x, 0-1', y: 'number: CIE y, 0-1' },
+        mirek: 'number: color temperature, 153 (coolest) to 500 (warmest) — give mirek OR colorXy per room, never both',
+      },
+    ],
+    narration: 'string: one or two lines, a lighting designer describing the look (ALWAYS include)',
+  },
+};
+
+// ============================================================
+// 6. YOUR APP — Moodboard (rooms, light, and the agent as lighting designer)
+// ============================================================
+// The Hue app is switches and sliders; Moodboard treats light as MOOD — composed,
+// named, remembered. Every bridge call is addressed SYMBOLICALLY through the app's
+// `hue` connection (snug-connection://hue/...): the host resolves the one address the
+// user approved in the connection wizard, injects the paired key, and confirms every
+// write. The app never learns where the bridge lives, and never needs to.
+
+// ---- small utilities --------------------------------------------------------
+const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** The governed seam hands back `body` as parsed JSON or raw text — accept both. */
+const parseBody = (body) => {
+  if (body == null) return null;
+  if (typeof body === 'object') return body;
+  if (typeof body === 'string') { try { return JSON.parse(body); } catch (e) { return null; } }
+  return null;
+};
+
+/** CIE xy + brightness (0..1) to sRGB, per the Hue wide-gamut conversion. */
+function xyToRgb(x, y, bri) {
+  if (!(y > 0)) return { r: 40, g: 40, b: 40 };
+  const Y = bri, X = (Y / y) * x, Z = (Y / y) * (1 - x - y);
+  let r = X * 1.656492 - Y * 0.354851 - Z * 0.255038;
+  let g = -X * 0.707196 + Y * 1.655397 + Z * 0.036152;
+  let b = X * 0.051713 - Y * 0.121364 + Z * 1.01153;
+  const gam = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+  r = gam(Math.max(0, r)); g = gam(Math.max(0, g)); b = gam(Math.max(0, b));
+  const max = Math.max(r, g, b, 1);
+  return { r: Math.round((r / max) * 255), g: Math.round((g / max) * 255), b: Math.round((b / max) * 255) };
+}
+
+/** Color temperature (mirek) to an approximate sRGB white, via the blackbody curve. */
+function mirekToRgb(mirek) {
+  const t = 1e6 / clampNum(mirek, 100, 600) / 100; // kelvin / 100
+  let r, g;
+  if (t <= 66) { r = 255; g = clampNum(99.47 * Math.log(t) - 161.12, 0, 255); }
+  else { r = clampNum(329.7 * Math.pow(t - 60, -0.1332), 0, 255); g = clampNum(288.12 * Math.pow(t - 60, -0.0755), 0, 255); }
+  const b = t >= 66 ? 255 : t <= 19 ? 0 : clampNum(138.52 * Math.log(t - 10) - 305.04, 0, 255);
+  return { r: Math.round(r), g: Math.round(g), b: Math.round(b) };
+}
+
+const rgbCss = (c, a) => 'rgba(' + c.r + ', ' + c.g + ', ' + c.b + ', ' + (a == null ? 1 : a) + ')';
+
+/** The display color of one mood entry ({ xy } | { mirek } | brightness-only | { off }). */
+const entryRgb = (e) => (e.xy ? xyToRgb(e.xy.x, e.xy.y, 0.72) : mirekToRgb(e.mirek || 366));
+
+// ---- curated palette + built-in moods --------------------------------------
+// Hand-picked, deliberately few: a designer's swatch card, not a color-picker widget.
+const SWATCHES = [
+  { id: 'candle', label: 'Candle', mirek: 500 },
+  { id: 'warm', label: 'Warm', mirek: 370 },
+  { id: 'neutral', label: 'Neutral', mirek: 250 },
+  { id: 'day', label: 'Day', mirek: 182 },
+  { id: 'ember', label: 'Ember', xy: { x: 0.56, y: 0.4 } },
+  { id: 'rose', label: 'Rose', xy: { x: 0.42, y: 0.26 } },
+  { id: 'lagoon', label: 'Lagoon', xy: { x: 0.17, y: 0.25 } },
+  { id: 'iris', label: 'Iris', xy: { x: 0.25, y: 0.14 } },
+];
+
+// Recipes, not room lists: each built-in adapts to WHATEVER rooms the bridge reports.
+const BUILT_IN_MOODS = [
+  { id: 'candlelight', name: 'Candlelight', tagline: 'the whole house by flame', recipe: () => ({ brightness: 22, mirek: 500 }) },
+  { id: 'focus', name: 'Focus', tagline: 'cool, even, wide awake', recipe: () => ({ brightness: 95, mirek: 182 }) },
+  {
+    id: 'dusk', name: 'Dusk', tagline: 'the hour the day lets go',
+    recipe: (i) => [
+      { brightness: 42, xy: { x: 0.55, y: 0.4 } },
+      { brightness: 30, xy: { x: 0.44, y: 0.27 } },
+      { brightness: 22, xy: { x: 0.29, y: 0.17 } },
+    ][i % 3],
+  },
+  {
+    id: 'cinema', name: 'Cinema', tagline: 'lights down, screen up',
+    recipe: (i, n) => (n > 2 && i % 3 === 2 ? { brightness: 16, xy: { x: 0.18, y: 0.12 } } : { brightness: 9, mirek: 454 }),
+  },
+];
+
+const builtinEntries = (mood, rooms) => {
+  const base = rooms.length > 0 ? rooms : [1, 2, 3, 4].map((n) => ({ name: 'room ' + n }));
+  return base.map((r, i) => ({ roomName: r.name, ...mood.recipe(i, base.length) }));
+};
+
+const EXAMPLES = [
+  'golden hour in the study',
+  'a quiet rainy evening, everywhere',
+  'the bar from a film noir',
+  'sunday morning, slow and bright',
+];
+
+// ---- agent-reply validation (hard, entry by entry) --------------------------
+// The reply is untrusted JSON. Shape errors reject the whole proposal (the narration,
+// if any, still shows as plain text); per-entry errors drop just that entry, and the
+// preview says which room names were dropped. Numbers are clamped to the bridge's own
+// legal ranges, never trusted raw.
+function validateProposal(data, rooms) {
+  const d = data && typeof data === 'object' ? data : {};
+  const mood = d.mood && typeof d.mood === 'object' ? d.mood : null;
+  const narration = mood && typeof mood.narration === 'string' ? mood.narration.trim()
+    : typeof d.narration === 'string' ? d.narration.trim() : '';
+  if (!mood || !Array.isArray(mood.rooms)) return { ok: false, narration };
+  const name = typeof mood.name === 'string' && mood.name.trim() ? mood.name.trim().slice(0, 48) : 'Untitled look';
+  const byName = new Map(rooms.map((r) => [r.name.trim().toLowerCase(), r]));
+  const seen = new Set();
+  const entries = [];
+  const dropped = [];
+  for (const raw of mood.rooms) {
+    if (!raw || typeof raw !== 'object' || typeof raw.roomName !== 'string') { dropped.push('an unnamed entry'); continue; }
+    const room = byName.get(raw.roomName.trim().toLowerCase());
+    if (!room || seen.has(room.id)) { dropped.push(raw.roomName.trim()); continue; }
+    const brightness = Number(raw.brightness);
+    if (!Number.isFinite(brightness)) { dropped.push(raw.roomName.trim()); continue; }
+    const entry = { roomName: room.name, brightness: clampNum(Math.round(brightness), 1, 100) };
+    const xy = raw.colorXy;
+    if (xy && typeof xy === 'object' && Number.isFinite(Number(xy.x)) && Number.isFinite(Number(xy.y))) {
+      entry.xy = { x: clampNum(Number(xy.x), 0, 1), y: clampNum(Number(xy.y), 0, 1) };
+    } else if (Number.isFinite(Number(raw.mirek))) {
+      entry.mirek = clampNum(Math.round(Number(raw.mirek)), 153, 500);
+    }
+    seen.add(room.id);
+    entries.push(entry);
+  }
+  if (entries.length === 0) return { ok: false, narration };
+  return { ok: true, mood: { name, narration, entries }, dropped };
+}
+
+// ---- CLIP v2 composition ----------------------------------------------------
+// rooms -> each room's grouped_light (its one-write dimmer switch) and member lights
+// (color detail only; every write in this app targets the room's grouped_light).
+function composeRooms(roomBody, glBody, lightBody) {
+  const roomsRaw = Array.isArray(roomBody && roomBody.data) ? roomBody.data.filter((r) => r && r.type === 'room') : [];
+  const gls = new Map();
+  for (const gl of Array.isArray(glBody && glBody.data) ? glBody.data : []) { if (gl && gl.id) gls.set(gl.id, gl); }
+  const lights = Array.isArray(lightBody && lightBody.data) ? lightBody.data : [];
+  return roomsRaw
+    .map((room) => {
+      const name = (room.metadata && room.metadata.name) || 'Unnamed room';
+      const services = Array.isArray(room.services) ? room.services : [];
+      const glRef = services.find((s) => s && s.rtype === 'grouped_light');
+      const gl = glRef ? gls.get(glRef.rid) : null;
+      const deviceIds = new Set((Array.isArray(room.children) ? room.children : []).map((c) => c && c.rid).filter(Boolean));
+      const members = lights.filter((l) => l && l.owner && deviceIds.has(l.owner.rid));
+      const lit = members.filter((l) => l.on && l.on.on);
+      const litXy = lit.filter((l) => l.color && l.color.xy && Number.isFinite(l.color.xy.x) && Number.isFinite(l.color.xy.y));
+      const litCt = lit.filter((l) => l.color_temperature && Number.isFinite(l.color_temperature.mirek));
+      let color = null;
+      if (litXy.length > 0) {
+        color = {
+          xy: {
+            x: litXy.reduce((s, l) => s + l.color.xy.x, 0) / litXy.length,
+            y: litXy.reduce((s, l) => s + l.color.xy.y, 0) / litXy.length,
+          },
+        };
+      } else if (litCt.length > 0) {
+        color = { mirek: Math.round(litCt.reduce((s, l) => s + l.color_temperature.mirek, 0) / litCt.length) };
+      }
+      return {
+        id: room.id,
+        name,
+        groupedLightId: glRef ? glRef.rid : null,
+        on: !!(gl && gl.on && gl.on.on),
+        brightness: gl && gl.dimming && Number.isFinite(gl.dimming.brightness) ? Math.round(gl.dimming.brightness) : 0,
+        lightCount: members.length,
+        color,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+const roomGlow = (room) => {
+  if (!room.on) return { strong: 'transparent', soft: 'transparent' };
+  const c = room.color && room.color.xy ? xyToRgb(room.color.xy.x, room.color.xy.y, 0.72) : mirekToRgb((room.color && room.color.mirek) || 366);
+  const level = clampNum(room.brightness, 1, 100) / 100;
+  return { strong: rgbCss(c, 0.22 + 0.6 * level), soft: rgbCss(c, 0.06 + 0.24 * level) };
+};
+
+const swatchBody = (sw) => (sw.mirek ? { color_temperature: { mirek: sw.mirek } } : { color: { xy: sw.xy } });
+const swatchCss = (sw) => rgbCss(sw.mirek ? mirekToRgb(sw.mirek) : xyToRgb(sw.xy.x, sw.xy.y, 0.75), 1);
+
+// ---- presentational pieces --------------------------------------------------
+function PaletteBand({ entries, tall }) {
+  const stops = entries.map((e) => (e.off ? 'transparent' : rgbCss(entryRgb(e), 0.9)));
+  const band = stops.length > 1
+    ? 'linear-gradient(90deg, ' + stops.join(', ') + ')'
+    : stops.length === 1 ? stops[0] : undefined;
+  return <div className={'band' + (tall ? ' tall' : '')} style={band ? { '--band': band } : undefined} aria-hidden="true" />;
+}
+
+function MoodCard({ name, note, badge, entries, canApply, applyLabel, onApply, onDelete, deleteArmed }) {
+  const line = entries.map((e) => e.roomName + (e.off ? ' off' : ' ' + e.brightness + '%')).join(' · ');
+  return (
+    <article className="card">
+      <h3 className="moodname">{name}{badge && <span className="badge">{badge}</span>}</h3>
+      {note && <p className="moodnote">{note}</p>}
+      <PaletteBand entries={entries} />
+      <p className="roomsline">{line}</p>
+      <div className="actrow">
+        <button className="btn" onClick={onApply} disabled={!canApply}>{applyLabel}</button>
+        {onDelete && (
+          <button className={'btn ' + (deleteArmed ? 'danger' : 'ghost')} onClick={onDelete}>
+            {deleteArmed ? 'tap again to remove' : 'remove'}
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function SkeletonGrid({ count }) {
+  return (
+    <div className="skelgrid" aria-hidden="true">
+      {Array.from({ length: count || 6 }, (_, i) => <div key={i} className="skel" />)}
+    </div>
+  );
+}
+
+function RoomTile({ room, busy, selected, disabled, onToggle, onSelect, onBrightness, onSwatch }) {
+  const [bri, setBri] = useState(room.brightness);
+  useEffect(() => { setBri(room.brightness); }, [room.brightness, room.id]);
+  const glow = roomGlow(room);
+  return (
+    <article
+      className={'tile' + (room.on ? '' : ' off') + (selected ? ' picked' : '')}
+      style={{ '--room-glow': glow.strong, '--room-glow-soft': glow.soft }}
+    >
+      <button
+        className="lamp"
+        onClick={() => onToggle(room)}
+        disabled={disabled || busy}
+        aria-pressed={room.on}
+        aria-label={(room.on ? 'Turn off ' : 'Turn on ') + room.name}
+      >
+        <span className="lampname">{room.name}</span>
+        <span className="lampstate">
+          {busy ? 'changing…' : room.on ? bri + '% · ' + room.lightCount + (room.lightCount === 1 ? ' light' : ' lights') : 'off · tap to light'}
+        </span>
+      </button>
+      <button
+        className={'pick' + (selected ? ' on' : '')}
+        onClick={() => onSelect(room)}
+        aria-pressed={selected}
+        aria-label={(selected ? 'Deselect ' : 'Select ') + room.name + ' for batch changes'}
+      >✓</button>
+      <div className="tilebody">
+        <input
+          type="range" className="bri" min="1" max="100" value={bri}
+          disabled={disabled}
+          style={{ '--fill': bri + '%' }}
+          onChange={(e) => { const v = Number(e.target.value); setBri(v); onBrightness(room, v); }}
+          aria-label={room.name + ' brightness'}
+        />
+        <div className="swatches" role="group" aria-label={room.name + ' color'}>
+          {SWATCHES.map((sw) => (
+            <button
+              key={sw.id} className="sw" style={{ '--sw': swatchCss(sw) }} title={sw.label}
+              onClick={() => onSwatch(room, sw)} disabled={disabled}
+              aria-label={room.name + ': ' + sw.label}
+            />
+          ))}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+// Un-connected and unhappy bridge states, each honest about WHOSE problem it is.
+// NET_AMBIGUOUS_CONNECTION deliberately never renders the pairing copy: two approved
+// addresses is a configuration knot, not a missing connection.
+const BRIDGE_NOTICES = {
+  unconnected: {
+    title: 'no bridge paired yet',
+    body: 'Pairing lives in Snug’s connection wizard, not in the app. Open Moodboard’s connect card: the wizard collects your bridge’s address, walks you through pressing the round link button, and pins the bridge’s certificate on first use. Moodboard itself never learns the address — it asks for rooms by name and the host does the addressing.',
+    note: 'A Hue bridge lives on your home network, so this connection resolves from the Snug desktop app; the browser build declines private-network devices.',
+  },
+  unreachable: {
+    title: 'the bridge didn’t answer',
+    body: 'The connection is set up, but nothing came back. The bridge may be unplugged — or you may be away from the network it lives on. It answers again the moment you’re back on that network.',
+  },
+  ambiguous: {
+    title: 'one bridge at a time',
+    body: 'This connection currently resolves to more than one approved address, and Moodboard won’t guess between bridges. That’s a configuration knot rather than a pairing problem: open the hue connection’s settings and keep exactly one bridge approved.',
+  },
+  rejected: {
+    title: 'the bridge said no',
+    body: 'It answered, but refused this app’s key — usually the pairing was removed on the bridge. Re-run pairing from the connection wizard to mint a fresh key.',
+  },
+  error: {
+    title: 'something went sideways',
+    body: 'The bridge answered in a way Moodboard didn’t expect. Try again in a moment.',
+  },
+};
+
+function BridgeNotice({ phase, detail, onRetry }) {
+  const n = BRIDGE_NOTICES[phase] || BRIDGE_NOTICES.error;
+  return (
+    <div className="card" role="status">
+      <h3 className="moodname">{n.title}</h3>
+      <p className="lead">{n.body}</p>
+      {detail && <p className="note">{detail}</p>}
+      {n.note && <p className="note">{n.note}</p>}
+      <div className="actrow" style={{ marginTop: 10 }}>
+        <button className="btn ghost" onClick={onRetry}>check again</button>
+      </div>
+    </div>
+  );
+}
+
+// ---- the app ----------------------------------------------------------------
+function App() {
+  const { isReady, theme, sendMessage } = useSnugApp({
+    appId: 'hue-moodboard',
+    displayName: 'Moodboard',
+    description: 'Rooms, light, and a lighting designer with a model behind it: compose, save, and apply whole-house moods on your Hue bridge.',
+    iconEmoji: '🌗',
+    iconColor: '#6d59d6',
+  });
+  const net = useConnectedFetch();
+  const db = useAppDB();
+  const [ui, setUi] = usePersistedState('hue-moodboard-ui', { tab: 'rooms' });
+  const [bridge, setBridgeState] = useState({ phase: 'loading', detail: '' });
+  const [rooms, setRooms] = useState([]);
+  const [selection, setSelection] = useState([]);
+  const [busyRooms, setBusyRooms] = useState({});
+  const [savedMoods, setSavedMoods] = useState(null); // null = still loading from SQL
+  const [applying, setApplying] = useState(null); // { name, done, total }
+  const [snapName, setSnapName] = useState('');
+  const [armedDelete, setArmedDelete] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [designer, setDesigner] = useState({ phase: 'idle', input: '', proposal: null, dropped: [], fallback: '', error: '' });
+  const briTimers = useRef({});
+  const armTimer = useRef(null);
+
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+  const showToast = useCallback((text) => setToast(text), []);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4200);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // -- bridge reads (all symbolic: the app addresses the CONNECTION, never a host) --
+  const mapNetError = (error) => {
+    const code = error && error.code;
+    if (code === 'NET_NOT_APPROVED') return { phase: 'unconnected', detail: '' };
+    if (code === 'NET_AMBIGUOUS_CONNECTION') return { phase: 'ambiguous', detail: '' };
+    if (code === 'NET_FETCH_FAILED' || code === 'NET_SSRF_BLOCKED') return { phase: 'unreachable', detail: '' };
+    if (code === 'HOST_ERROR') return { phase: 'loading', detail: '' };
+    return { phase: 'error', detail: (error && error.message) || '' };
+  };
+
+  const loadBridge = useCallback(async (quiet) => {
+    if (!quiet) setBridgeState((b) => (b.phase === 'ready' ? b : { phase: 'loading', detail: '' }));
+    const roomRes = await net.fetch('snug-connection://hue/clip/v2/resource/room');
+    if (!roomRes.ok) { setBridgeState(mapNetError(roomRes.error)); return; }
+    if (roomRes.status === 401 || roomRes.status === 403) { setBridgeState({ phase: 'rejected', detail: '' }); return; }
+    if (roomRes.status >= 400) { setBridgeState({ phase: 'error', detail: 'the bridge answered with status ' + roomRes.status }); return; }
+    const [glRes, lightRes] = await Promise.all([
+      net.fetch('snug-connection://hue/clip/v2/resource/grouped_light'),
+      net.fetch('snug-connection://hue/clip/v2/resource/light'),
+    ]);
+    if (!glRes.ok) { setBridgeState(mapNetError(glRes.error)); return; }
+    const composed = composeRooms(parseBody(roomRes.body), parseBody(glRes.body), lightRes.ok ? parseBody(lightRes.body) : null);
+    setRooms(composed);
+    setBridgeState({ phase: 'ready', detail: '' });
+  }, [net]);
+
+  useEffect(() => {
+    if (!isReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await db.exec('CREATE TABLE IF NOT EXISTS moods (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, source TEXT NOT NULL, narration TEXT, rooms_json TEXT NOT NULL, created_at TEXT NOT NULL)', []);
+        if (!cancelled) await loadMoods();
+      } catch (e) { if (!cancelled) setSavedMoods([]); }
+    })();
+    loadBridge(false);
+    return () => { cancelled = true; };
+  }, [isReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -- bridge writes (each PUT is one governed, host-confirmed write) --
+  const putGroupedLight = useCallback((groupedLightId, body) => net.fetch(
+    'snug-connection://hue/clip/v2/resource/grouped_light/' + groupedLightId,
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+  ), [net]);
+
+  const setBusy = (roomId, value) => setBusyRooms((prev) => ({ ...prev, [roomId]: value }));
+  const patchRoom = (roomId, patch) => setRooms((prev) => prev.map((r) => (r.id === roomId ? { ...r, ...patch } : r)));
+
+  const handleWriteRefusal = (error) => {
+    const code = error && error.code;
+    if (code === 'NET_NOT_APPROVED' || code === 'NET_AMBIGUOUS_CONNECTION' || code === 'NET_FETCH_FAILED' || code === 'NET_SSRF_BLOCKED') {
+      setBridgeState(mapNetError(error));
+    } else {
+      showToast('that change didn’t go through' + (error && error.message ? ' — ' + error.message : '.'));
+    }
+  };
+
+  const writeRoom = async (room, body, patch) => {
+    if (!room.groupedLightId) return false;
+    setBusy(room.id, true);
+    const res = await putGroupedLight(room.groupedLightId, body);
+    setBusy(room.id, false);
+    if (!res.ok) { handleWriteRefusal(res.error); return false; }
+    if (res.status >= 400) { showToast('the bridge refused that change (status ' + res.status + ').'); return false; }
+    if (patch) patchRoom(room.id, patch);
+    return true;
+  };
+
+  const toggleRoom = (room) => writeRoom(room, { on: { on: !room.on } }, { on: !room.on });
+
+  const commitBrightness = (room, value) => writeRoom(
+    room,
+    { on: { on: true }, dimming: { brightness: value } },
+    { on: true, brightness: value },
+  );
+
+  // Sliders fire continuously; the bridge (and the user's confirm) deserves ONE write
+  // per gesture, so commits are debounced per room.
+  const onBrightness = (room, value) => {
+    const timers = briTimers.current;
+    if (timers[room.id]) clearTimeout(timers[room.id]);
+    timers[room.id] = setTimeout(() => { delete timers[room.id]; commitBrightness(room, value); }, 450);
+  };
+  useEffect(() => () => {
+    for (const id of Object.keys(briTimers.current)) clearTimeout(briTimers.current[id]);
+    if (armTimer.current) clearTimeout(armTimer.current);
+  }, []);
+
+  const applySwatch = (room, sw) => writeRoom(
+    room,
+    { on: { on: true }, ...swatchBody(sw) },
+    { on: true, color: sw.mirek ? { mirek: sw.mirek } : { xy: sw.xy } },
+  );
+
+  // -- batch (sequenced over the selection; one governed write per room) --
+  const toggleSelect = (room) => setSelection((prev) => (prev.includes(room.id) ? prev.filter((id) => id !== room.id) : [...prev, room.id]));
+
+  const batchRun = async (makeBody, makePatch) => {
+    const targets = rooms.filter((r) => selection.includes(r.id) && r.groupedLightId);
+    for (const room of targets) {
+      const okWrite = await writeRoom(room, makeBody(room), makePatch(room));
+      if (!okWrite) break; // a refusal mid-batch means stop asking, not keep hammering
+    }
+  };
+  const batchPower = (onVal) => batchRun(() => ({ on: { on: onVal } }), () => ({ on: onVal }));
+  const batchLevel = (v) => batchRun(
+    () => ({ on: { on: true }, dimming: { brightness: v } }),
+    () => ({ on: true, brightness: v }),
+  );
+  const batchSwatch = (sw) => batchRun(
+    () => ({ on: { on: true }, ...swatchBody(sw) }),
+    () => ({ on: true, color: sw.mirek ? { mirek: sw.mirek } : { xy: sw.xy } }),
+  );
+
+  // -- moods: SQL persistence (schema: one row per mood, entries as a JSON column) --
+  const loadMoods = useCallback(async () => {
+    try {
+      const { rows } = await db.exec('SELECT id, name, source, narration, rooms_json, created_at FROM moods ORDER BY id DESC', []);
+      setSavedMoods(rows.map((r) => {
+        let entries = [];
+        try { const parsed = JSON.parse(r[4]); if (Array.isArray(parsed)) entries = parsed; } catch (e) { /* a corrupt row renders empty, never crashes */ }
+        return { id: r[0], name: r[1], source: r[2], narration: r[3], entries, createdAt: r[5] };
+      }));
+    } catch (e) { setSavedMoods([]); }
+  }, [db]);
+
+  const saveMood = async (name, source, narration, entries) => {
+    const trimmed = (name || '').trim().slice(0, 48);
+    if (!trimmed) return false;
+    if (entries.length === 0) { showToast('nothing to save — the bridge reports no rooms.'); return false; }
+    try {
+      await db.exec(
+        'INSERT INTO moods (name, source, narration, rooms_json, created_at) VALUES (?, ?, ?, ?, ?)',
+        [trimmed, source, narration || null, JSON.stringify(entries), new Date().toISOString()],
+      );
+      await loadMoods();
+      showToast('“' + trimmed + '” saved to your moods.');
+      return true;
+    } catch (e) { showToast('could not save that mood.'); return false; }
+  };
+
+  // Two-tap delete instead of a blocking dialog: first tap arms, second removes.
+  const deleteMood = async (mood) => {
+    if (armedDelete !== mood.id) {
+      setArmedDelete(mood.id);
+      if (armTimer.current) clearTimeout(armTimer.current);
+      armTimer.current = setTimeout(() => setArmedDelete(null), 2600);
+      return;
+    }
+    setArmedDelete(null);
+    try {
+      await db.exec('DELETE FROM moods WHERE id = ?', [mood.id]);
+      await loadMoods();
+    } catch (e) { showToast('could not remove that mood.'); }
+  };
+
+  const snapshotEntries = () => rooms.map((r) => {
+    if (!r.on) return { roomName: r.name, off: true };
+    const entry = { roomName: r.name, brightness: clampNum(r.brightness, 1, 100) };
+    if (r.color && r.color.xy) entry.xy = { x: +r.color.xy.x.toFixed(4), y: +r.color.xy.y.toFixed(4) };
+    else if (r.color && r.color.mirek) entry.mirek = r.color.mirek;
+    return entry;
+  });
+
+  const saveSnapshot = async () => {
+    if (await saveMood(snapName, 'snapshot', null, snapshotEntries())) setSnapName('');
+  };
+
+  // -- applying a mood: sequenced grouped_light writes, then one re-read --
+  const applyEntries = async (name, entries) => {
+    if (bridge.phase !== 'ready' || applying) return;
+    const plan = [];
+    const skipped = [];
+    for (const e of entries) {
+      const room = rooms.find((r) => r.name.trim().toLowerCase() === String(e.roomName || '').trim().toLowerCase());
+      if (room && room.groupedLightId) plan.push({ room, e });
+      else skipped.push(e.roomName);
+    }
+    if (plan.length === 0) { showToast('none of that mood’s rooms exist here right now.'); return; }
+    setApplying({ name, done: 0, total: plan.length });
+    let failed = 0;
+    let halted = false;
+    for (let i = 0; i < plan.length; i++) {
+      const { room, e } = plan[i];
+      let body;
+      if (e.off) body = { on: { on: false } };
+      else {
+        body = { on: { on: true }, dimming: { brightness: clampNum(Math.round(e.brightness || 1), 1, 100) } };
+        if (e.xy) body.color = { xy: { x: clampNum(e.xy.x, 0, 1), y: clampNum(e.xy.y, 0, 1) } };
+        else if (e.mirek) body.color_temperature = { mirek: clampNum(Math.round(e.mirek), 153, 500) };
+      }
+      const res = await putGroupedLight(room.groupedLightId, body);
+      if (!res.ok) { handleWriteRefusal(res.error); halted = true; break; }
+      if (res.status >= 400) failed += 1;
+      setApplying({ name, done: i + 1, total: plan.length });
+    }
+    setApplying(null);
+    await loadBridge(true);
+    if (halted) showToast('“' + name + '” stopped early — the writes were not approved.');
+    else if (failed > 0) showToast('“' + name + '” lit, but the bridge refused ' + failed + (failed === 1 ? ' room.' : ' rooms.'));
+    else showToast('“' + name + '” is on' + (skipped.length ? ' — ' + skipped.length + ' room(s) in the mood don’t exist here, skipped.' : '.'));
+  };
+
+  // -- the designer (the app's one agent turn) --
+  const roomInventory = (r) => {
+    const entry = { name: r.name, on: r.on, brightness: r.brightness };
+    if (r.color && r.color.xy) entry.xy = { x: +r.color.xy.x.toFixed(3), y: +r.color.xy.y.toFixed(3) };
+    else if (r.color && r.color.mirek) entry.mirek = r.color.mirek;
+    return entry;
+  };
+
+  const composeMood = async () => {
+    const request = designer.input.trim();
+    if (!request || bridge.phase !== 'ready' || rooms.length === 0 || designer.phase === 'thinking') return;
+    setDesigner((d) => ({ ...d, phase: 'thinking', proposal: null, dropped: [], fallback: '', error: '' }));
+    // Lean request (ADR-0018): the payload carries the ask; the live situation — the
+    // room inventory — rides `state`, once, with nothing duplicated between them.
+    const result = await sendMessage('design_mood', { request }, {
+      state: { rooms: rooms.map(roomInventory) },
+      responseSchema: RESPONSE_SCHEMA,
+    });
+    if (!result.ok) {
+      setDesigner((d) => ({ ...d, phase: 'error', error: (result.error && result.error.message) || 'the designer went quiet — try again.' }));
+      return;
+    }
+    const verdict = validateProposal(result.data, rooms);
+    if (!verdict.ok) {
+      setDesigner((d) => ({
+        ...d, phase: 'fallback',
+        fallback: verdict.narration || 'the designer answered off-script, so nothing was staged — ask again.',
+      }));
+      return;
+    }
+    setDesigner((d) => ({ ...d, phase: 'preview', proposal: verdict.mood, dropped: verdict.dropped }));
+  };
+
+  const applyProposal = async () => {
+    const p = designer.proposal;
+    if (!p) return;
+    await applyEntries(p.name, p.entries);
+  };
+  const saveProposal = async () => {
+    const p = designer.proposal;
+    if (p) await saveMood(p.name, 'designer', p.narration, p.entries);
+  };
+  const discardProposal = () => setDesigner((d) => ({ ...d, phase: 'idle', proposal: null, dropped: [] }));
+
+  // -- render --
+  if (!isReady) return <div className="connecting">warming the studio…</div>;
+
+  const ready = bridge.phase === 'ready';
+  const tab = ui.tab || 'rooms';
+  const setTab = (t) => setUi((prev) => ({ ...prev, tab: t }));
+  const offline = ['unconnected', 'unreachable', 'ambiguous', 'rejected', 'error'].includes(bridge.phase);
+
+  const statusText = bridge.phase === 'loading' ? 'finding your rooms…'
+    : ready ? rooms.length + (rooms.length === 1 ? ' room' : ' rooms') + ' · bridge linked'
+    : bridge.phase === 'unconnected' ? 'bridge not paired yet'
+    : bridge.phase === 'unreachable' ? 'the bridge didn’t answer'
+    : bridge.phase === 'ambiguous' ? 'connection needs exactly one bridge'
+    : bridge.phase === 'rejected' ? 'the bridge refused this app’s key'
+    : bridge.detail || 'something went wrong';
+
+  const selectionCount = selection.filter((id) => rooms.some((r) => r.id === id)).length;
+  const p = designer.proposal;
+
+  return (
+    <div className="wrap">
+      <header className="brand">
+        <h1><span className="glyph" aria-hidden="true">🌗</span> Moodboard</h1>
+        <span className="tag">light as mood — composed, named, remembered</span>
+      </header>
+
+      <div className="topline">
+        <div className={'status' + (bridge.phase === 'loading' || applying ? ' hot' : offline ? ' bad' : '')} role="status">
+          {(bridge.phase === 'loading' || applying) && <span className="dots"><i /><i /><i /></span>}
+          {applying ? 'lighting “' + applying.name + '” · ' + applying.done + '/' + applying.total : statusText}
+        </div>
+        <button className="chip" onClick={() => loadBridge(false)} disabled={bridge.phase === 'loading'}>refresh</button>
+      </div>
+
+      <nav className="tabs" role="tablist" aria-label="Moodboard surfaces">
+        {[['rooms', 'rooms'], ['moods', 'moods'], ['designer', 'designer']].map(([id, label]) => (
+          <button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>
+        ))}
+      </nav>
+
+      {tab === 'rooms' && (
+        <section className="surface">
+          {bridge.phase === 'loading' && <SkeletonGrid />}
+          {offline && (
+            <div className="stagegrid">
+              <SkeletonGrid />
+              <div className="overlay">
+                <BridgeNotice phase={bridge.phase} detail={bridge.detail} onRetry={() => loadBridge(false)} />
+              </div>
+            </div>
+          )}
+          {ready && rooms.length === 0 && (
+            <div className="card">
+              <h3 className="moodname">linked, but no rooms yet</h3>
+              <p className="lead">The bridge answered with an empty house. Group your lights into rooms in any Hue setup flow and they’ll appear here — Moodboard composes with rooms, it doesn’t create them.</p>
+            </div>
+          )}
+          {ready && rooms.length > 0 && (
+            <div className="grid">
+              {rooms.map((room) => (
+                <RoomTile
+                  key={room.id}
+                  room={room}
+                  busy={!!busyRooms[room.id]}
+                  selected={selection.includes(room.id)}
+                  disabled={!!applying}
+                  onToggle={toggleRoom}
+                  onSelect={toggleSelect}
+                  onBrightness={onBrightness}
+                  onSwatch={applySwatch}
+                />
+              ))}
+            </div>
+          )}
+          {ready && (
+            <p className="fineprint">
+              every change is one governed write — Snug asks before anything reaches the bridge, and a session “yes” lets a whole mood land in one tap.
+            </p>
+          )}
+        </section>
+      )}
+
+      {tab === 'moods' && (
+        <section className="surface">
+          {!ready && <p className="soft">moods apply once the bridge is linked — until then the palettes below preview against a stand-in set of rooms.</p>}
+          <div className="saverow">
+            <input
+              className="text" value={snapName} placeholder="name the current look…"
+              onChange={(e) => setSnapName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveSnapshot(); }}
+              disabled={!ready}
+              aria-label="Name for the current look"
+            />
+            <button className="btn ghost" onClick={saveSnapshot} disabled={!ready || !snapName.trim()}>save current look</button>
+          </div>
+
+          <h2 className="secname">house moods</h2>
+          <div className="cards">
+            {BUILT_IN_MOODS.map((m) => {
+              const entries = builtinEntries(m, rooms);
+              return (
+                <MoodCard
+                  key={m.id} name={m.name} note={m.tagline} entries={entries}
+                  canApply={ready && !applying}
+                  applyLabel={applying && applying.name === m.name ? 'lighting ' + applying.done + '/' + applying.total : 'light it'}
+                  onApply={() => applyEntries(m.name, entries)}
+                />
+              );
+            })}
+          </div>
+
+          <h2 className="secname">your moods</h2>
+          {savedMoods === null && <div className="skelgrid"><div className="skel short" /><div className="skel short" /></div>}
+          {savedMoods && savedMoods.length === 0 && (
+            <p className="soft">nothing saved yet — compose one with the designer, or set the rooms by hand and save the look above.</p>
+          )}
+          {savedMoods && savedMoods.length > 0 && (
+            <div className="cards wide">
+              {savedMoods.map((m) => (
+                <MoodCard
+                  key={m.id} name={m.name} badge={m.source} entries={m.entries}
+                  note={m.narration || undefined}
+                  canApply={ready && !applying}
+                  applyLabel={applying && applying.name === m.name ? 'lighting ' + applying.done + '/' + applying.total : 'light it'}
+                  onApply={() => applyEntries(m.name, m.entries)}
+                  onDelete={() => deleteMood(m)}
+                  deleteArmed={armedDelete === m.id}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {tab === 'designer' && (
+        <section className="surface designer">
+          {designer.phase === 'preview' && p ? (
+            <div className="card">
+              <h2 className="moodname">{p.name}</h2>
+              {p.narration && <p className="quote">“{p.narration}”</p>}
+              <PaletteBand entries={p.entries} tall />
+              <ul className="assign">
+                {p.entries.map((e) => (
+                  <li key={e.roomName}>
+                    <span className="dot" style={{ '--chipc': rgbCss(entryRgb(e), 1) }} aria-hidden="true" />
+                    {e.roomName}
+                    <span className="pct">{e.brightness}%</span>
+                  </li>
+                ))}
+              </ul>
+              {designer.dropped.length > 0 && (
+                <p className="note">it also named {designer.dropped.join(', ')} — not rooms here, so those were dropped.</p>
+              )}
+              <div className="actrow">
+                <button className="btn" onClick={applyProposal} disabled={!ready || !!applying}>
+                  {applying ? 'lighting…' : 'light these rooms'}
+                </button>
+                <button className="btn ghost" onClick={saveProposal}>save to moods</button>
+                <button className="btn ghost" onClick={discardProposal}>discard</button>
+              </div>
+              <p className="fineprint">a preview costs nothing — nothing reaches the bridge until you light it, and Snug confirms each room’s write.</p>
+            </div>
+          ) : (
+            <div className="twocol">
+              <div className="card">
+                <p className="lead">
+                  Describe a feeling; the designer answers with one look for the whole house — previewed as a palette first, applied only when you say so.
+                </p>
+                {!ready && (
+                  <p className="note">
+                    {bridge.phase === 'unconnected'
+                      ? 'the designer reads your real rooms, so pair the bridge first — the connection wizard handles it.'
+                      : 'the designer reads your real rooms — it wakes up when the bridge answers.'}
+                  </p>
+                )}
+                {ready && rooms.length === 0 && <p className="note">the bridge has no rooms yet — the designer needs at least one.</p>}
+                <div className="examples">
+                  {EXAMPLES.map((x) => (
+                    <button key={x} className="chip" onClick={() => setDesigner((d) => ({ ...d, input: x }))}>{x}</button>
+                  ))}
+                </div>
+                <textarea
+                  className="ask" value={designer.input} placeholder="golden hour in the study…"
+                  onChange={(e) => { const v = e.target.value; setDesigner((d) => ({ ...d, input: v })); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); composeMood(); } }}
+                  aria-label="Describe the mood you want"
+                />
+                <div className="actrow">
+                  <button className="btn" onClick={composeMood} disabled={!ready || rooms.length === 0 || designer.phase === 'thinking' || !designer.input.trim()}>
+                    compose
+                  </button>
+                </div>
+                {designer.phase === 'thinking' && (
+                  <p className="quote" role="status"><span className="dots"><i /><i /><i /></span> composing the light…</p>
+                )}
+                {designer.phase === 'fallback' && (
+                  <div role="status">
+                    <p className="quote">“{designer.fallback}”</p>
+                    <p className="note">that reply didn’t fit the mood schema, so nothing was staged — rephrase and try again.</p>
+                  </div>
+                )}
+                {designer.phase === 'error' && (
+                  <p className="note" role="status">the designer went quiet ({designer.error}) — try again.</p>
+                )}
+              </div>
+              <aside className="card lanehint">
+                <h3 className="moodname">the chat works too</h3>
+                <p className="note">
+                  The chat lane beside this app reaches the same bridge, under the same approvals. Quick one-offs belong there — the designer is for looks you’ll want again:
+                </p>
+                <ul>
+                  <li>“set every lamp except the bedroom to 20%”</li>
+                  <li>“dim the hallway to 10%”</li>
+                  <li>“which rooms are still on?”</li>
+                </ul>
+              </aside>
+            </div>
+          )}
+        </section>
+      )}
+
+      {selectionCount > 0 && ready && tab === 'rooms' && (
+        <div className="batchbar" role="toolbar" aria-label="Batch light changes">
+          <span className="bcount">{selectionCount} room{selectionCount > 1 ? 's' : ''}</span>
+          <button className="chip" onClick={() => batchPower(true)}>on</button>
+          <button className="chip" onClick={() => batchPower(false)}>off</button>
+          {[10, 35, 65, 100].map((v) => (
+            <button key={v} className="chip" onClick={() => batchLevel(v)}>{v}%</button>
+          ))}
+          {SWATCHES.map((sw) => (
+            <button key={sw.id} className="sw" style={{ '--sw': swatchCss(sw) }} title={sw.label} onClick={() => batchSwatch(sw)} aria-label={'Selected rooms: ' + sw.label} />
+          ))}
+          <button className="chip" onClick={() => setSelection([])}>clear</button>
+        </div>
+      )}
+
+      {toast && <div className="toast" role="status">{toast}</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

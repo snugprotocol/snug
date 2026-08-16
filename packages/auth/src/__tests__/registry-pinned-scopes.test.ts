@@ -44,7 +44,7 @@ const SPOTIFY_SCOPES = [
  */
 const STARTER_DECLARATION = JSON.parse(
   readFileSync(
-    fileURLToPath(new URL('../../../../examples/spotify-party-dj/connection.json', import.meta.url)),
+    fileURLToPath(new URL('../../../../examples/spotify/connection.json', import.meta.url)),
     'utf8',
   ),
 ) as ConnectionRequirement;

@@ -57,9 +57,11 @@ async function renderHub(harness: Harness): Promise<void> {
   });
 }
 
+// RE-POINTED (TASK-20260815-starter-apps-rebuild): `hue-lights-party` became `hue`, so
+// the tile's accessible name is now plain "hue". Same folder role, same desktopOnly row.
 function hueTile(): HTMLElement | undefined {
   return [...(container?.querySelectorAll<HTMLElement>('[data-testid="starter-tile"]') ?? [])].find(
-    (tile) => tile.getAttribute('data-starter-name') === 'hue lights party',
+    (tile) => tile.getAttribute('data-starter-name') === 'hue',
   );
 }
 

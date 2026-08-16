@@ -1,0 +1,34 @@
+{
+  "slot": "coinbase",
+  "provider": {
+    "name": "Coinbase"
+  },
+  "kind": "api_key",
+  "fields": [
+    {
+      "key": "api_key",
+      "label": "API key name (organizations/\u2026/apiKeys/\u2026)",
+      "type": "text",
+      "description": "The full key name shown when you created the key \u2014 the organizations/\u2026/apiKeys/\u2026 path, not a display label."
+    },
+    {
+      "key": "ed25519_private_key",
+      "label": "Ed25519 private key (secret)",
+      "type": "secret",
+      "description": "The API key secret from the portal \u2014 paste the base64 secret exactly as delivered, or the whole PEM key file (BEGIN/END lines included)."
+    }
+  ],
+  "registration": {
+    "consoleUrl": "https://portal.cdp.coinbase.com/",
+    "instructions": [
+      "Sign in to the Coinbase Developer Platform (link above) with your Coinbase account and open (or create) a project.",
+      "Open API keys and create a new Secret API key with VIEW (read-only) permission \u2014 this app never needs to trade.",
+      "Keep the Ed25519 key type (the portal default). Do NOT switch to ECDSA \u2014 that is Coinbase\u2019s legacy format and will not work here.",
+      "Copy or download the key secret when it is offered: Coinbase shows it only once.",
+      "Paste the key name (the organizations/\u2026/apiKeys/\u2026 path) and the Ed25519 secret (the base64 string, or the whole PEM file) into the fields below."
+    ]
+  },
+  "declaredApiHosts": [
+    "api.coinbase.com"
+  ]
+}

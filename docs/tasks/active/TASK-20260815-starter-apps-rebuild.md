@@ -99,6 +99,82 @@ _(running)_
 
 ### 2026-08-15 — Claude (Fable 5) — session
 - Done: spec + plan drafted under the umbrella interview; Trade Copilot located + shape-verified in the owner's DB (read-only). Owner addition folded in same-day: per-starter `authoring/` provenance bundle (prompts + standard-slug wiki docs; trade-copilot's docs seeded from its real `snug_app_docs` rows — vision/requirements/plan/lessons/next-tasks all present in the DB). AC9 + plan steps 2/3 updated.
+
+### 2026-08-15 (build) — Claude (Fable 5) — session
+- Done: branch stacked on child B (same rationale journaled there). Curation landed
+  first (9 removals; APPS 10 / LLM_FREE 2 / MANIFEST 5 with the count pin 6→5; hue pins
+  repointed; pocket-ledger's parseCents section retired with its app; STARTER_LOOKS +
+  README rewritten). **trade-copilot** ported: app-authored code byte-verbatim (52,838
+  chars asserted against the stored row), hooks block re-copied from the current SDK
+  (the original predated the banner — AC4's fidelity claim is scoped to the app-authored
+  tail, journaled here), live requirement minus registry-refused seats as the manifest,
+  REAL wiki docs shipped in authoring/docs. **Plan deviation (journaled):** the four
+  clean-slate apps were authored by parallel agents writing DISJOINT folders in the main
+  tree with git forbidden, not worktrees — the lesson's mechanism (shared git index) is
+  absent with no-git agents, and the validate suite is the integration gate; commits
+  serialized by the orchestrator. Each agent saved its verbatim build brief to
+  authoring/prompts/01-build.md (owner's provenance ask) + vision/requirements/plan
+  docs. All four landed green: Rewind (Spotify; honest scope adaptation — recently-played
+  absent from the ADR-0028 pin → labeled degrade), Moodboard (Hue; symbolic-only,
+  grouped_light as the whole write surface), Should I? (OpenWeather), Standup (GitHub).
+  Examples suite 147/147. Playground repointed by a fifth agent (1102/109 green;
+  CoinGecko query-credential rows + trip-planner/pocket-ledger e2e journeys OBSOLETE
+  with citations; demoRequirement → starter-coinbase). code-map drift fixed.
+- State: TWAP extension agent in flight on trade-copilot; then the design pass.
+- Next step: TWAP → real-browser design pass (AC7 screenshots) → full suites → Gate 5
+  fresh-context review → PR stacked on child B.
+- Open questions: none.
+
+### 2026-08-15 (close) — Claude (Fable 5) — session
+- Done: **TWAP** landed (increment-exact slicing, render-only agent verdict, per-slice
+  governed POSTs with deterministic client_order_id, pause-skips-never-late,
+  interrupted-on-reopen; its headless-mount review caught the ported app's missing DDL
+  backfill AND a limit-price hang — both fixed). **Design pass (AC7)**: 20 shots
+  (5 apps × 2 themes × 2 widths) via Playwright against the live playground — no
+  horizontal overflow anywhere; caught a REAL bug all mocked checks missed: Standup's
+  `DEFERRABLE` column name is an SQLite reserved word (table never created) → renamed
+  `deferred_items`, lesson recorded in the app bundle; first pass's theme probe was
+  itself wrong (stamped the attribute, not the store — v2 sets the persisted store).
+  Screenshot set delivered to the owner directly. **Auth cross-package repoint**
+  (registry-substitution + pinned-scopes suites; CoinGecko row OBSOLETE with inline
+  probes cited, connection-demo control MIGRATED inline). Known polish item: browse-mode
+  apps render the runner's "no net capability" detail verbatim above their connect
+  cards — dev-toned copy, host-owned string, deferred. next-steps hardware
+  verifications repointed at the new shelf (+ weather/github live passes folded in).
+- State: examples 147/147 · playground 1102/109 · auth 759/37 · root forced 21/21 ×2.
+  Gate-5 fresh-context review in flight.
+- Next step: review findings → fixes → PR (base: child B's branch).
+- Open questions: none.
+
+### 2026-08-15 (Gate 5 close) — Claude (Fable 5) — review + fixes
+- Done: fresh-context review verdict FIX FIRST (2 MAJOR, 5 MINOR); the review
+  independently RE-VERIFIED the port fidelity (34,351 chars byte-identical below the
+  banner vs the owner's DB), TWAP no-double-fire/pause/cancel safety, all five
+  manifests admitting on the starter channel, and the OBSOLETE/MIGRATED classifications.
+  Fixes: **MAJOR-1** → the AC9 authoring-provenance gate now exists in
+  `validate.test.mjs` (presence + slug validity + stub floor for the five, plus the
+  shelf-glob scope pin DERIVED from `starterApps.ts` source; mutation-checked red on a
+  hidden prompt). **MAJOR-2** → the 20-shot design-pass set copied durably to
+  `~/Snug/design-pass-20260815-starter-shelf/` (6 representative shots also delivered
+  to the owner in-session); the "missing journal entries" half was reviewer staleness —
+  they were committed (38cfc40) after its diff snapshot, including the root-forced
+  result. MINORs: orphaned money-arithmetic banner removed; stale "still being
+  authored" comment re-verified against the shipped weather app; 00-assembly app-id
+  conflation fixed + lessons prose corrected (byte-matching borrow); trade-copilot
+  contract now names the `coinbase` slot literal (597/600 chars). TWAP MINOR (a
+  'sending' slice surviving pause can still commit after its confirm) accepted:
+  every slice rides the per-order confirm gate and the late outcome journals honestly.
+- State: examples 153/153 · playground 1102/109 · final root forced run next.
+- Next step: forced root → push → PR (base: `feat/TASK-20260815-inline-cards`).
+- Open questions: none.
 - State: awaiting umbrella approval; sequenced after child B.
 - Next step: on B's merge — branch, curation-gate commit first (step 1).
+- Open questions: none.
+
+### 2026-08-16 — Claude (Fable 5) — close-session
+- Done: PR #58 merged by owner instruction (2026-08-16). Reserved-word lesson promoted
+  to docs/lessons.md (real-engine DDL rule).
+- State: merged; task complete. Compacts to `done/INDEX.md` per ADR-0027. Owner hardware
+  passes queued in next-steps (Coinbase/TWAP, Moodboard, Rewind, weather, github).
+- Next step: none.
 - Open questions: none.

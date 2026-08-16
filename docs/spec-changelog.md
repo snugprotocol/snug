@@ -4,6 +4,26 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-15 — INTERNAL DRAFT, not staged for any push — TASK-20260815-provider-chat-lane (ADR-0031)
+**Excluded from every spec push** (chat-intent stays on ADR-0019's publication line:
+internal draft, OUT of `json-schemas.ts` SOURCES — the guard test pins it). Zero schema
+bytes changed; wire protocol v1 untouched.
+
+**Provider chat lane + the exhaustive lane map** (ADR-0031 §2). The app-chat intent
+vocabulary (`packages/protocol/src/chat-intent.ts`) gains `provider_read` /
+`provider_write`, and lane assignment becomes ONE compile-checked map —
+`LANE_FOR_INTENT` / `laneForIntent()` (`satisfies Record<ChatIntent, ChatLane>`, new
+`CHAT_LANES` = data · feature · provider · answer) — replacing the predicate else-chain
+whose fall-through silently routed unknown intents to the answer lane. Predicates
+(`isDataIntent` / `isFeatureIntent` / new `isProviderIntent`) survive as derived views
+of the map. Provider-lane turns execute LLM-composed requests through the UNCHANGED
+connected-fetch executor (host-granular ceiling, confirm gate, host-side injection,
+scrub) — no auth/runner/wire change anywhere in the lane.
+
+Staged prose: joins the chat-intent internal draft at the next spec-draft revision; the
+normative text at v1 is ADR-0031 + this entry. Threat surface:
+`docs/security/threat-model-delta-provider-chat-lane.md`.
+
 ## 2026-08-14 — INTERNAL DRAFT, not staged for any push — TASK-20260814-hue-starter-real-connection (ADR-0026)
 **Excluded from every spec push** (same publication line as the entries below: the auth
 surface publishes no earlier than Beta exit). One additive CONTRACT change, zero schema

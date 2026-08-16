@@ -38,7 +38,8 @@ import { STARTER_PREFIX } from './starterApps.js';
  * Raw glob, exactly like `starterApps.ts`'s `app.html` pattern. `query: '?raw'` is
  * load-bearing: Vite never parses the manifest at transform time, so a malformed
  * `connection.json` can never break the BUILD — it degrades to "this app declares
- * nothing", which is the state every example except `connection-demo` is already in.
+ * nothing", which is the state every non-declaring example (chess, flying-pig, the
+ * pillar games) is already in.
  */
 const manifestModules = import.meta.glob('../../../../examples/*/connection.json', {
   query: '?raw',

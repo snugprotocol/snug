@@ -1,11 +1,13 @@
 // starters.spec.ts — TASK-20260806-starters-pillars AC4/AC5 (umbrella AL-08).
 //
-// One real-browser test per pillar starter: hub shelf → open READ-ONLY → the app
-// boots inside the C2 sandbox → one meaningful interaction → no unexpected console
-// errors. Everything runs on the keyless default (byok + demo brain): the three
-// LLM-free starters never call the model at all (ADR-0011), and the two
-// agent-as-brain starters receive the demo brain's canned off-schema reply — which
-// is exactly their graceful-fallback path, so the fallback IS what these tests pin.
+// One real-browser test per keeper starter journey: hub shelf → open READ-ONLY → the
+// app boots inside the C2 sandbox → one meaningful interaction → no unexpected console
+// errors. Everything runs on the keyless default (byok + demo brain): the LLM-free
+// starter (trivia-night) never calls the model at all (ADR-0011), and the two
+// agent-as-brain starters (adventure-quest, quiz-me) receive the demo brain's canned
+// off-schema reply — which is exactly their graceful-fallback path, so the fallback IS
+// what these tests pin. (trip-planner and pocket-ledger left the shelf in
+// TASK-20260815-starter-apps-rebuild — see the note where their journeys stood.)
 //
 // SPA-navigation only (no mid-test page.goto reloads beyond the entry): an
 // ephemeral context's OPFS does not survive hard reloads (lessons 2026-08-03).
@@ -126,49 +128,13 @@ test.describe('pillar starters (AL-08) — open read-only, interact, stay clean'
     expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
   });
 
-  test('trip planner — a dream place lands, a packing item checks off', async ({ page }) => {
-    const errors = watchConsole(page);
-    const app = await openStarter(page, 'trip-planner');
-
-    await app.getByRole('textbox', { name: /add a dream place/i }).fill('Norway', { timeout: 20_000 });
-    await app.getByRole('button', { name: /add place/i }).click();
-    await expect(app.getByText('Norway')).toBeVisible();
-
-    // The tab's accessible name starts with its emoji ("🎒 packing") — no ^ anchor.
-    await app.getByRole('button', { name: /packing/i }).click();
-    await app.getByRole('textbox', { name: /add something to pack/i }).fill('sunscreen');
-    await app.getByRole('button', { name: /add item/i }).click();
-    const check = app.getByRole('button', { name: /pack sunscreen/i });
-    await check.click();
-    await expect(check).toHaveAttribute('aria-pressed', 'true');
-
-    // The whole plan is a real SQLite file the family owns.
-    await expect(page.getByRole('button', { name: 'export .sqlite' })).toBeVisible({ timeout: 20_000 });
-
-    expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
-  });
-
-  test('pocket ledger — money in, money out, the app keeps honest totals', async ({ page }) => {
-    const errors = watchConsole(page);
-    const app = await openStarter(page, 'pocket-ledger');
-
-    await app.getByRole('textbox', { name: /what was it/i }).fill('lemonade stand', { timeout: 20_000 });
-    await app.getByRole('textbox', { name: /how much/i }).fill('12.50');
-    await app.getByRole('button', { name: /money in/i }).click();
-
-    await app.getByRole('textbox', { name: /what was it/i }).fill('paper cups');
-    await app.getByRole('textbox', { name: /how much/i }).fill('4');
-    await app.getByRole('button', { name: /money out/i }).click();
-
-    await expect(app.getByTestId('total-in')).toHaveText('$12.50');
-    await expect(app.getByTestId('total-out')).toHaveText('$4.00');
-    await expect(app.getByTestId('total-kept')).toHaveText('$8.50');
-
-    // The export-your-books story: a real .sqlite leaves with the user.
-    await expect(page.getByRole('button', { name: 'export .sqlite' })).toBeVisible({ timeout: 20_000 });
-
-    expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
-  });
+  // OBSOLETE (TASK-20260815-starter-apps-rebuild, per docs/lessons.md 2026-08-10): the
+  // `trip-planner` and `pocket-ledger` per-app journeys were removed WITH their subjects —
+  // both folders left the shelf in the re-curation, with no successor app (the connected
+  // five are covered by starters-connect.spec.ts, not by this file's LLM-free/demo-brain
+  // journeys). The generic shelf properties those two tests also happened to exercise
+  // (read-only open, install offered, export affordance, zero-trace browsing) are all
+  // still asserted below against the surviving keepers.
 
   // ── Adversarial-review finding 1: browsing must leave ZERO trace in the user file ──
   //

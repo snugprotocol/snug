@@ -43,7 +43,11 @@ import {
 } from '../starter/starterDeclaration.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
-const DEMO_FOLDER = 'connection-demo';
+// RE-POINTED (TASK-20260815-starter-apps-rebuild): `connection-demo` was removed in the
+// shelf re-curation; `weather` is the plain-api_key declaring folder that stands in.
+// Every suite here injects fixtures, so the folder is only the key the injected map and
+// `install_source` agree on — the manifest values remain deliberate fixture values.
+const DEMO_FOLDER = 'weather';
 const DEMO_SOURCE = `starter:${DEMO_FOLDER}`;
 const DECLARED_HOST = 'api.example.com';
 const SLOT = 'example-api';

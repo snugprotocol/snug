@@ -24,14 +24,18 @@ import path from 'node:path';
 import { connectionRequirementSchema, deriveConnectionAllowedHosts } from '@snugprotocol/protocol';
 import { admitConnectionRequirement } from '@snugprotocol/auth';
 
-/** apps/playground → repo root → examples/hue-lights-party/connection.json */
-const MANIFEST_PATH = path.resolve(process.cwd(), '..', '..', 'examples', 'hue-lights-party', 'connection.json');
+/**
+ * apps/playground → repo root → examples/hue/connection.json
+ * (RE-POINTED: `hue-lights-party` became `hue` in TASK-20260815-starter-apps-rebuild;
+ * the shipped manifest keeps the same slot, kind and LAN posture.)
+ */
+const MANIFEST_PATH = path.resolve(process.cwd(), '..', '..', 'examples', 'hue', 'connection.json');
 
 function shippedManifest(): unknown {
   return JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'));
 }
 
-describe('the shipped hue-lights-party manifest', () => {
+describe('the shipped hue manifest', () => {
   it('parses as a v4 connection requirement', () => {
     const parsed = connectionRequirementSchema.safeParse(shippedManifest());
     expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [], null, 2)).toBe(true);

@@ -99,3 +99,10 @@ _(running)_
 - State: playground 1107/109 · desktop 105/11 green; final root forced run next.
 - Next step: forced root → push → PR (base: `feat/TASK-20260815-provider-chat-lane`).
 - Open questions: none.
+
+### 2026-08-16 — Claude (Fable 5) — close-session
+- Done: PR #57 merged by owner instruction (2026-08-16).
+- State: merged; task complete. Compacts to `done/INDEX.md` per ADR-0027. Recorded gap
+  carried: hook-level pick-reaches-next-turn e2e (browser-e2e sweep candidate).
+- Next step: none.
+- Open questions: none.

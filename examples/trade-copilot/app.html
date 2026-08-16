@@ -1,0 +1,1972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Coinbase Trade Copilot</title>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #17171f; --muted: #6b7280;
+    --card: #f4f4f8; --border: #e2e2ea; --accent: #0052FF;
+    --up: #17a673; --down: #e0455a; --warn: #b8860b;
+    --card2: #ffffff;
+  }
+  :root[data-theme="dark"] {
+    --bg: #10121a; --fg: #ececf4; --muted: #9a9aad;
+    --card: #191c26; --border: #2b2e3a; --accent: #4d8dff;
+    --up: #34d399; --down: #f87171; --warn: #eab308;
+    --card2: #1f2230;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  button { min-width: 44px; min-height: 44px; cursor: pointer; font-family: inherit; }
+  input, select { font-family: inherit; }
+
+  .connecting { display:flex; align-items:center; justify-content:center; height:100vh; color:var(--muted); font-size:15px; }
+
+  .shell { max-width: 1320px; margin: 0 auto; padding: 16px 16px 40px; }
+
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding: 10px 4px 18px; flex-wrap: wrap;
+  }
+  .brand { display:flex; align-items:center; gap:10px; }
+  .brand-icon {
+    width:38px; height:38px; border-radius:10px; background:var(--accent);
+    display:flex; align-items:center; justify-content:center; font-size:19px;
+    flex-shrink:0;
+  }
+  .brand-text h1 { font-size:17px; margin:0; font-weight:700; }
+  .brand-text p { font-size:12px; margin:0; color:var(--muted); }
+
+  .topbar-right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .risk-select {
+    background:var(--card); color:var(--fg); border:1px solid var(--border);
+    border-radius:8px; padding:8px 10px; font-size:12px;
+  }
+
+  .conn-dot { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); padding:6px 10px; border:1px solid var(--border); border-radius:20px; background:var(--card); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex-shrink:0; }
+  .dot.ok { background: var(--up); }
+  .dot.bad { background: var(--down); }
+
+  .grid {
+    display:grid; gap:14px;
+    grid-template-columns: 300px 1fr 340px;
+    align-items:start;
+  }
+  @media (max-width: 1080px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--card); border:1px solid var(--border); border-radius:14px;
+    padding:14px; overflow:hidden;
+  }
+  .panel h2 {
+    font-size:13px; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted);
+    margin:0 0 10px; display:flex; align-items:center; justify-content:space-between;
+  }
+  .panel h2 .refresh-btn {
+    min-width:auto; min-height:auto; background:none; border:none; color:var(--accent);
+    font-size:12px; padding:2px 4px;
+  }
+
+  .empty-state {
+    text-align:center; padding: 22px 10px; color:var(--muted); font-size:13px; line-height:1.5;
+  }
+  .empty-state .big-emoji { font-size:28px; display:block; margin-bottom:8px; }
+  .connect-hint {
+    background: var(--card2); border:1px dashed var(--border); border-radius:10px;
+    padding:12px; font-size:12px; color:var(--muted); margin-top:8px;
+  }
+
+  .holding-row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:8px 0; border-bottom:1px solid var(--border); font-size:13px;
+  }
+  .holding-row:last-child { border-bottom:none; }
+  .holding-ccy { font-weight:600; }
+  .holding-sub { font-size:11px; color:var(--muted); }
+  .portfolio-total { font-size:22px; font-weight:700; margin-bottom:2px; }
+  .portfolio-total-label { font-size:11px; color:var(--muted); margin-bottom:10px; }
+
+  .btn {
+    background: var(--accent); color:#fff; border:none; border-radius:9px;
+    padding:9px 14px; font-size:13px; font-weight:600;
+  }
+  .btn.secondary { background: var(--card2); color:var(--fg); border:1px solid var(--border); }
+  .btn.buy { background: var(--up); }
+  .btn.sell { background: var(--down); }
+  .btn:disabled { opacity:0.5; cursor:default; }
+  .btn-row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+
+  .watchlist-item {
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:7px 8px; border-radius:8px; cursor:pointer; font-size:13px;
+  }
+  .watchlist-item:hover { background: var(--card2); }
+  .watchlist-item.active { background: var(--accent); color:#fff; }
+  .watchlist-item .rm { opacity:0.5; font-size:11px; }
+
+  .asset-search {
+    width:100%; padding:9px 10px; border-radius:9px; border:1px solid var(--border);
+    background: var(--card2); color:var(--fg); font-size:13px; margin-bottom:8px;
+  }
+  .search-results {
+    max-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:9px;
+    margin-bottom:10px; background:var(--card2);
+  }
+  .search-result-row {
+    display:flex; justify-content:space-between; padding:7px 10px; font-size:12px;
+    cursor:pointer; border-bottom:1px solid var(--border);
+  }
+  .search-result-row:last-child { border-bottom:none; }
+  .search-result-row:hover { background: var(--card); }
+
+  .ticker-card { display:flex; flex-direction:column; gap:2px; margin-bottom:12px; }
+  .ticker-symbol { font-size:13px; color:var(--muted); }
+  .ticker-price { font-size:32px; font-weight:800; letter-spacing:-0.5px; }
+  .ticker-change { font-size:13px; font-weight:600; }
+  .ticker-change.up { color: var(--up); }
+  .ticker-change.down { color: var(--down); }
+  .ticker-meta { font-size:11px; color:var(--muted); margin-top:4px; }
+
+  .sparkline-wrap { margin: 6px 0 12px; }
+
+  .book-cols { display:flex; gap:10px; }
+  .book-col { flex:1; min-width:0; }
+  .book-col h3 { font-size:11px; text-transform:uppercase; color:var(--muted); margin:0 0 6px; }
+  .book-row {
+    position:relative; display:flex; justify-content:space-between; font-size:11.5px;
+    padding:3px 6px; border-radius:4px; margin-bottom:2px; overflow:hidden; font-variant-numeric: tabular-nums;
+  }
+  .book-row .bar { position:absolute; top:0; bottom:0; right:0; z-index:0; opacity:0.18; }
+  .book-row.bid .bar { background: var(--up); }
+  .book-row.ask .bar { background: var(--down); }
+  .book-row span { position:relative; z-index:1; }
+  .book-row.bid { color: var(--up); }
+  .book-row.ask { color: var(--down); }
+
+  .form-row { margin-bottom:10px; }
+  .form-row label { display:block; font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .form-row input, .form-row select {
+    width:100%; padding:9px 10px; border-radius:9px; border:1px solid var(--border);
+    background: var(--card2); color:var(--fg); font-size:13px;
+  }
+  .side-toggle { display:flex; gap:6px; margin-bottom:10px; }
+  .side-toggle button { flex:1; border-radius:9px; border:1px solid var(--border); background:var(--card2); color:var(--fg); font-size:13px; font-weight:600; padding:9px; }
+  .side-toggle button.active.buy { background: var(--up); color:#fff; border-color:var(--up); }
+  .side-toggle button.active.sell { background: var(--down); color:#fff; border-color:var(--down); }
+  .type-toggle { display:flex; gap:6px; margin-bottom:10px; }
+  .type-toggle button { flex:1; border-radius:9px; border:1px solid var(--border); background:var(--card2); color:var(--fg); font-size:12px; padding:7px; }
+  .type-toggle button.active { background: var(--accent); color:#fff; border-color:var(--accent); }
+
+  .notice { border-radius:9px; padding:9px 11px; font-size:12px; margin-top:8px; line-height:1.4; }
+  .notice.error { background: rgba(224,69,90,0.12); color: var(--down); border:1px solid rgba(224,69,90,0.3); }
+  .notice.success { background: rgba(23,166,115,0.12); color: var(--up); border:1px solid rgba(23,166,115,0.3); }
+  .notice.info { background: rgba(77,141,255,0.1); color: var(--accent); border:1px solid rgba(77,141,255,0.3); }
+
+  .order-log-row { font-size:11.5px; padding:7px 0; border-bottom:1px solid var(--border); }
+  .order-log-row:last-child { border-bottom:none; }
+  .order-log-top { display:flex; justify-content:space-between; }
+  .order-log-side { font-weight:700; }
+  .order-log-side.buy { color: var(--up); }
+  .order-log-side.sell { color: var(--down); }
+  .order-log-status { font-size:10px; color:var(--muted); }
+
+  .copilot-panel { grid-column: 1 / -1; margin-top:2px; }
+  .copilot-feed { display:flex; flex-direction:column; gap:10px; max-height: 360px; overflow-y:auto; padding-right:4px; }
+  .copilot-note {
+    display:flex; gap:10px; background: var(--card2); border:1px solid var(--border);
+    border-radius:12px; padding:10px 12px;
+  }
+  .copilot-avatar {
+    width:30px; height:30px; border-radius:50%; background:var(--accent); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0;
+  }
+  .copilot-body { flex:1; min-width:0; }
+  .copilot-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
+  .copilot-name { font-weight:700; font-size:12.5px; }
+  .copilot-time { font-size:10.5px; color:var(--muted); }
+  .tag { font-size:10px; padding:2px 7px; border-radius:20px; border:1px solid var(--border); color:var(--muted); }
+  .tag.sentiment-bullish { color: var(--up); border-color: var(--up); }
+  .tag.sentiment-bearish, .tag.sentiment-cautious { color: var(--down); border-color: var(--down); }
+  .tag.risk-high { color: var(--down); border-color: var(--down); }
+  .tag.risk-medium { color: var(--warn); border-color: var(--warn); }
+  .tag.risk-low { color: var(--up); border-color: var(--up); }
+  .copilot-msg { font-size:13px; line-height:1.5; }
+  .copilot-suggestion { margin-top:6px; font-size:12px; padding:7px 9px; background:var(--card); border-radius:8px; border-left:3px solid var(--accent); }
+  .copilot-flags { display:flex; gap:5px; flex-wrap:wrap; margin-top:6px; }
+  .flag-chip { font-size:10.5px; padding:2px 8px; border-radius:20px; background: rgba(224,69,90,0.12); color:var(--down); }
+
+  .spinner { display:inline-block; width:13px; height:13px; border-radius:50%; border:2px solid var(--border); border-top-color: var(--accent); animation: spin 0.7s linear infinite; vertical-align:middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .muted-small { font-size:11px; color:var(--muted); }
+  .divider { height:1px; background:var(--border); margin:12px 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+// hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+// before any write, and scrubs the response. You never see a token.
+// A connection whose host only the USER knows (a device on their network): address it as
+// snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. RESPONSE SCHEMA — describe the JSON the agent must return
+// ============================================================
+const RESPONSE_SCHEMA = {
+  kind: "string: 'portfolio_review' | 'order_check' | 'market_take' | 'twap_check'",
+  message: "string: human-readable commentary in the copilot's voice (ALWAYS include)",
+  sentiment: "string: 'bullish' | 'bearish' | 'neutral' | 'cautious'",
+  riskLevel: "string: 'low' | 'medium' | 'high'",
+  suggestion: "string (optional): one concrete, non-guaranteed suggestion",
+  flags: "array of strings (optional): short risk warnings e.g. 'concentration risk', 'thin book'",
+  assessment: "string (kind 'twap_check' only): 'looks_sound' | 'workable_with_care' | 'reconsider' — verdict on the TWAP plan as a whole",
+  risks: "array of strings (kind 'twap_check' only): plan-specific risks, e.g. 'slices sit near the product minimum', 'four hours is long for a headline day'",
+  adjustment: "string (optional, kind 'twap_check' only): ONE concrete change to the plan, e.g. 'stretch to 4h and drop to 8 slices' — advisory; the app never applies it automatically",
+};
+
+// ============================================================
+// Helpers
+// ============================================================
+const COINBASE_HOST = 'https://api.coinbase.com';
+const POPULAR_PRODUCTS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'DOGE-USD', 'XRP-USD', 'AVAX-USD'];
+
+function safeNum(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
+}
+
+function parseBody(body) {
+  if (body == null) return null;
+  if (typeof body === 'object') return body;
+  if (typeof body === 'string') {
+    try { return JSON.parse(body); } catch (e) { return null; }
+  }
+  return null;
+}
+
+function fmtUSD(n, opts) {
+  const num = safeNum(n, 0);
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency', currency: 'USD',
+      minimumFractionDigits: opts && opts.decimals != null ? opts.decimals : (Math.abs(num) < 1 ? 4 : 2),
+      maximumFractionDigits: opts && opts.decimals != null ? opts.decimals : (Math.abs(num) < 1 ? 6 : 2),
+    }).format(num);
+  } catch (e) {
+    return '$' + num.toFixed(2);
+  }
+}
+
+function fmtPct(n) {
+  const num = safeNum(n, 0);
+  return (num > 0 ? '+' : '') + num.toFixed(2) + '%';
+}
+
+function fmtQty(n) {
+  const num = safeNum(n, 0);
+  if (num === 0) return '0';
+  if (Math.abs(num) < 1) return num.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+  return num.toLocaleString('en-US', { maximumFractionDigits: 4 });
+}
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return '';
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 5) return 'just now';
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+function Sparkline({ points, up }) {
+  if (!points || points.length < 2) {
+    return <div className="muted-small">Collecting live samples…</div>;
+  }
+  const w = 260, h = 44, pad = 3;
+  const min = Math.min(...points), max = Math.max(...points);
+  const range = (max - min) || 1;
+  const step = (w - pad * 2) / (points.length - 1);
+  const path = points.map((p, i) => {
+    const x = pad + i * step;
+    const y = h - pad - ((p - min) / range) * (h - pad * 2);
+    return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  const color = up ? 'var(--up)' : 'var(--down)';
+  return (
+    <svg width={w} height={h} viewBox={'0 0 ' + w + ' ' + h} style={{ display: 'block' }}>
+      <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CopilotAvatarText() { return '🤖'; }
+
+// ============================================================
+// Smart order (TWAP) — 02-twap-extension helpers
+// ============================================================
+const TWAP_DURATIONS = [
+  { minutes: 15, label: '15m' },
+  { minutes: 60, label: '1h' },
+  { minutes: 240, label: '4h' },
+];
+const TWAP_SLICE_MIN = 4;
+const TWAP_SLICE_MAX = 12;
+
+function twapDurationLabel(minutes) {
+  const d = TWAP_DURATIONS.find((x) => x.minutes === safeNum(minutes));
+  return d ? d.label : safeNum(minutes) + 'm';
+}
+
+function decimalsOf(increment) {
+  const s = String(increment);
+  const i = s.indexOf('.');
+  return i < 0 ? 0 : Math.min(8, s.length - i - 1);
+}
+
+/**
+ * Equal slices computed in WHOLE INCREMENTS of the product's size increment, so every
+ * slice is a size Coinbase will accept verbatim. The first slices absorb the remainder:
+ * any two slices differ by at most one increment. Returns string sizes, or null when
+ * the total cannot put at least one increment into every slice.
+ */
+function splitEqualSlices(total, count, increment) {
+  const inc = safeNum(increment) > 0 ? safeNum(increment) : 0.00000001;
+  const dp = safeNum(increment) > 0 ? decimalsOf(increment) : 8;
+  const totalUnits = Math.floor(total / inc + 1e-9);
+  if (totalUnits < count) return null;
+  const per = Math.floor(totalUnits / count);
+  const rem = totalUnits - per * count;
+  return Array.from({ length: count }, (_, i) => ((per + (i < rem ? 1 : 0)) * inc).toFixed(dp));
+}
+
+function roundToIncrement(value, increment) {
+  const inc = safeNum(increment);
+  if (inc <= 0) return String(value);
+  return (Math.floor(value / inc + 1e-9) * inc).toFixed(decimalsOf(increment));
+}
+
+function fmtOffset(totalSec) {
+  const s = Math.max(0, Math.round(safeNum(totalSec)));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const two = (n) => String(n).padStart(2, '0');
+  return h > 0 ? h + ':' + two(m) + ':' + two(sec) : m + ':' + two(sec);
+}
+
+function fmtClock(iso) {
+  if (!iso) return '';
+  const t = new Date(iso);
+  if (!Number.isFinite(t.getTime())) return '';
+  try { return t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  catch (e) { return t.toTimeString().slice(0, 8); }
+}
+
+/**
+ * The strict read of Ledger's TWAP verdict. Anything off-shape returns null and the
+ * plan stands exactly as the user wrote it, with a "Ledger had no opinion" note —
+ * the agent advises; it never edits, arms, or executes a plan.
+ */
+function parseTwapVerdict(data) {
+  if (!data || typeof data !== 'object') return null;
+  const assessment = typeof data.assessment === 'string' ? data.assessment.trim() : '';
+  if (!assessment) return null;
+  const risks = Array.isArray(data.risks)
+    ? data.risks.filter((r) => typeof r === 'string' && r.trim()).slice(0, 6).map((r) => r.trim())
+    : [];
+  const adjustment = typeof data.adjustment === 'string' && data.adjustment.trim() ? data.adjustment.trim() : null;
+  const message = typeof data.message === 'string' ? data.message.trim() : '';
+  return { assessment, risks, adjustment, message };
+}
+
+const TWAP_SLICE_STATUS_LABEL = {
+  planned: 'planned', pending: 'queued', sending: 'confirming…',
+  accepted: 'accepted', rejected: 'rejected', error: 'error', skipped: 'skipped',
+};
+
+const TWAP_DDL = [
+  // Backfill: the ported v1 code reads/writes these three tables but never created
+  // them (the hub had made them out-of-band). IF NOT EXISTS keeps any real data.
+  'CREATE TABLE IF NOT EXISTS watchlist (product_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS orders_log (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, product_id TEXT, side TEXT, order_type TEXT, base_size TEXT, quote_size TEXT, limit_price TEXT, status TEXT, coinbase_order_id TEXT, raw_response TEXT)',
+  'CREATE TABLE IF NOT EXISTS copilot_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, product_id TEXT, kind TEXT, sentiment TEXT, risk_level TEXT, message TEXT, suggestion TEXT)',
+  // The smart-order journal. A plan row appears when a plan is ARMED (drafts stay in
+  // memory); slice rows update live as each governed, user-confirmed POST settles.
+  'CREATE TABLE IF NOT EXISTS twap_plans (plan_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, product_id TEXT NOT NULL, side TEXT NOT NULL, exec_style TEXT NOT NULL, total_size TEXT NOT NULL, size_unit TEXT NOT NULL, duration_min INTEGER NOT NULL, slice_count INTEGER NOT NULL, interval_sec INTEGER NOT NULL, status TEXT NOT NULL, verdict_assessment TEXT, verdict_risks TEXT, verdict_adjustment TEXT, started_at TEXT, ended_at TEXT)',
+  'CREATE TABLE IF NOT EXISTS twap_slices (plan_id TEXT NOT NULL, slice_index INTEGER NOT NULL, due_at TEXT, size TEXT NOT NULL, status TEXT NOT NULL, client_order_id TEXT NOT NULL, limit_price TEXT, coinbase_order_id TEXT, detail TEXT, executed_at TEXT, PRIMARY KEY (plan_id, slice_index))',
+];
+
+// The surface's CSS lives HERE, below the byte-locked banner, and is rendered as a
+// second style element by the app — the head's style block above the banner must stay
+// byte-identical. Same tokens, spacing scale, and radii as the head styles.
+const TWAP_CSS = `
+  .twap-panel { grid-column: 1 / -1; }
+  .twap-layout { display:grid; grid-template-columns: 300px 1fr; gap:14px; align-items:start; }
+  @media (max-width: 900px) { .twap-layout { grid-template-columns: 1fr; } }
+  .twap-note { font-size:11.5px; color:var(--muted); line-height:1.5; margin-top:8px; }
+  .twap-plan-card { background:var(--card2); border:1px solid var(--border); border-radius:12px; padding:12px; }
+  .twap-headline { font-size:13.5px; font-weight:700; line-height:1.4; }
+  .twap-subline { font-size:11.5px; color:var(--muted); margin-top:2px; }
+  .twap-progress { font-size:12px; margin-top:10px; font-variant-numeric: tabular-nums; }
+  .twap-rail { overflow-x:auto; margin-top:12px; padding-bottom:4px; }
+  .twap-track { position:relative; display:flex; gap:10px; padding-top:16px; min-width:max-content; }
+  .twap-track::before { content:''; position:absolute; top:7px; left:10px; right:10px; height:2px; background:var(--border); }
+  .twap-slice { position:relative; background:var(--card); border:1px solid var(--border); border-radius:10px; padding:7px 9px; min-width:112px; font-size:11.5px; line-height:1.45; }
+  .twap-slice::before { content:''; position:absolute; top:-13px; left:12px; width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .twap-slice.s-sending::before { background:var(--accent); animation: twapPulse 1s ease-in-out infinite; }
+  .twap-slice.s-accepted::before { background:var(--up); }
+  .twap-slice.s-rejected::before, .twap-slice.s-error::before { background:var(--down); }
+  .twap-slice.s-skipped::before { background:var(--warn); }
+  @keyframes twapPulse { 0%, 100% { opacity:1; } 50% { opacity:0.35; } }
+  .twap-slice-head { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
+  .twap-slice-size { font-variant-numeric: tabular-nums; }
+  .slice-chip { display:inline-block; font-size:10px; padding:1px 7px; border-radius:12px; border:1px solid var(--border); color:var(--muted); margin-top:4px; }
+  .slice-chip.s-sending { color:var(--accent); border-color:var(--accent); }
+  .slice-chip.s-accepted { color:var(--up); border-color:var(--up); }
+  .slice-chip.s-rejected, .slice-chip.s-error { color:var(--down); border-color:var(--down); }
+  .slice-chip.s-skipped { color:var(--warn); border-color:var(--warn); }
+  .twap-slice-detail { color:var(--muted); font-size:10.5px; margin-top:3px; overflow-wrap:anywhere; }
+  .twap-verdict { margin-top:10px; padding:9px 11px; background:var(--card); border-left:3px solid var(--accent); border-radius:8px; font-size:12.5px; line-height:1.5; }
+  .twap-verdict.v-care { border-left-color: var(--warn); }
+  .twap-verdict.v-reconsider { border-left-color: var(--down); }
+  .twap-verdict-risks { margin:6px 0 0; padding-left:18px; }
+  .twap-verdict-risks li { margin-bottom:2px; }
+  .plan-badge { font-size:10px; padding:2px 8px; border-radius:20px; border:1px solid var(--border); color:var(--muted); text-transform:none; letter-spacing:0; }
+  .plan-badge.p-running { color:var(--accent); border-color:var(--accent); }
+  .plan-badge.p-paused { color:var(--warn); border-color:var(--warn); }
+  .plan-badge.p-done { color:var(--up); border-color:var(--up); }
+  .plan-badge.p-cancelled, .plan-badge.p-interrupted { color:var(--down); border-color:var(--down); }
+  .twap-journal-row { padding:8px 0; border-bottom:1px solid var(--border); font-size:12px; }
+  .twap-journal-row:last-child { border-bottom:none; }
+  .twap-journal-top { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+  .slice-dots { display:flex; gap:3px; margin-top:5px; flex-wrap:wrap; }
+  .slice-dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .slice-dot.s-accepted { background:var(--up); }
+  .slice-dot.s-rejected, .slice-dot.s-error { background:var(--down); }
+  .slice-dot.s-skipped { background:var(--warn); }
+  @media (max-width: 640px) {
+    .twap-track { flex-direction:column; padding-top:0; padding-left:16px; min-width:0; }
+    .twap-track::before { top:10px; bottom:10px; left:3px; right:auto; width:2px; height:auto; }
+    .twap-slice::before { top:11px; left:-17px; }
+    .twap-slice { min-width:0; }
+  }
+`;
+
+// ============================================================
+// APP
+// ============================================================
+function App() {
+  const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
+    appId: 'coinbase-trade-copilot',
+    displayName: 'Coinbase Trade Copilot',
+    description: 'A live crypto dashboard: your Coinbase portfolio, real-time prices and order books, one-click trading, TWAP smart-order plans, and an AI copilot that reviews your positions, orders, and plans.',
+    iconEmoji: '📈',
+    iconColor: '#0052FF',
+  });
+  const connectedFetch = useConnectedFetch();
+  const db = useAppDB();
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  const [prefs, setPrefs] = usePersistedState('coinbase-copilot-prefs', {
+    selectedProductId: 'BTC-USD',
+    riskTolerance: 'balanced',
+    orderForm: { side: 'BUY', orderType: 'MARKET', quoteSize: '25', baseSize: '', limitPrice: '' },
+    twapForm: { productId: '', side: 'BUY', execStyle: 'MARKET', totalSize: '100', durationMin: 60, sliceCount: '6' },
+  });
+
+  // Connection / data state
+  const [products, setProducts] = useState([]);
+  const [productsError, setProductsError] = useState(null);
+  const [productsLoading, setProductsLoading] = useState(false);
+
+  const [accounts, setAccounts] = useState([]);
+  const [accountsError, setAccountsError] = useState(null);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+
+  const [ticker, setTicker] = useState(null);
+  const [tickerError, setTickerError] = useState(null);
+  const [book, setBook] = useState({ bids: [], asks: [] });
+  const [bookError, setBookError] = useState(null);
+  const priceHistoryRef = useRef({});
+  const [historyTick, setHistoryTick] = useState(0);
+
+  const [watchlist, setWatchlist] = useState([]);
+  const [search, setSearch] = useState('');
+
+  const [ordersLog, setOrdersLog] = useState([]);
+  const [copilotNotes, setCopilotNotes] = useState([]);
+
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [orderNotice, setOrderNotice] = useState(null);
+  const [copilotBusy, setCopilotBusy] = useState(false);
+  const [copilotNotice, setCopilotNotice] = useState(null);
+
+  // Smart order (TWAP) state. The ACTIVE plan lives in a ref that is mutated
+  // synchronously and mirrored into React state: the run engine (a timer plus
+  // long-lived awaits on governed fetches) must never act on a stale closure.
+  const [activePlan, setActivePlanState] = useState(null);
+  const activePlanRef = useRef(null);
+  const twapEngineRef = useRef({ firing: false });
+  const [twapJournal, setTwapJournal] = useState([]);
+  const [twapNotice, setTwapNotice] = useState(null);
+  const [twapFormError, setTwapFormError] = useState(null);
+
+  const pollingRef = useRef({ inFlight: false });
+  const selectedProductId = prefs.selectedProductId || 'BTC-USD';
+  const orderForm = prefs.orderForm || { side: 'BUY', orderType: 'MARKET', quoteSize: '25', baseSize: '', limitPrice: '' };
+  const twapForm = prefs.twapForm || { productId: '', side: 'BUY', execStyle: 'MARKET', totalSize: '100', durationMin: 60, sliceCount: '6' };
+
+  const setOrderForm = (patch) => {
+    setPrefs((prev) => ({ ...prev, orderForm: { ...(prev.orderForm || {}), ...patch } }));
+  };
+  const setSelectedProductId = (id) => {
+    setPrefs((prev) => ({ ...prev, selectedProductId: id }));
+  };
+  const setRiskTolerance = (v) => setPrefs((prev) => ({ ...prev, riskTolerance: v }));
+  const setTwapForm = (patch) => {
+    setPrefs((prev) => ({ ...prev, twapForm: { ...(prev.twapForm || {}), ...patch } }));
+  };
+
+  const applyPlanUpdate = useCallback((updater) => {
+    const next = typeof updater === 'function' ? updater(activePlanRef.current) : updater;
+    activePlanRef.current = next;
+    setActivePlanState(next);
+    return next;
+  }, []);
+
+  // ---- Data loaders --------------------------------------------------
+  const loadProducts = useCallback(async () => {
+    setProductsLoading(true);
+    const res = await connectedFetch.fetch(
+      COINBASE_HOST + '/api/v3/brokerage/market/products?product_type=SPOT&limit=250'
+    );
+    setProductsLoading(false);
+    if (!res.ok) {
+      setProductsError(res.error && res.error.message ? res.error.message : 'Could not reach Coinbase.');
+      return;
+    }
+    if (res.status && res.status >= 400) {
+      setProductsError('Coinbase responded with an error (status ' + res.status + ').');
+      return;
+    }
+    const parsed = parseBody(res.body);
+    const list = (parsed && Array.isArray(parsed.products)) ? parsed.products : [];
+    if (!list.length) {
+      setProductsError('No products returned.');
+      return;
+    }
+    setProductsError(null);
+    setProducts(list.filter((p) => (p.quote_currency_id === 'USD' || p.quote_display_symbol === 'USD') && p.status !== 'delisted'));
+  }, [connectedFetch]);
+
+  const loadAccounts = useCallback(async () => {
+    setAccountsLoading(true);
+    const res = await connectedFetch.fetch(COINBASE_HOST + '/api/v3/brokerage/accounts?limit=250');
+    setAccountsLoading(false);
+    if (!res.ok) {
+      setAccountsError(res.error && res.error.message ? res.error.message : 'Not connected to Coinbase yet.');
+      return;
+    }
+    if (res.status && res.status >= 400) {
+      setAccountsError('Coinbase rejected the accounts request (status ' + res.status + '). Check the connected API key’s permissions.');
+      return;
+    }
+    const parsed = parseBody(res.body);
+    const list = (parsed && Array.isArray(parsed.accounts)) ? parsed.accounts : [];
+    setAccountsError(null);
+    setAccounts(list.filter((a) => safeNum(a.available_balance && a.available_balance.value) > 0 || a.default));
+  }, [connectedFetch]);
+
+  const loadTickerAndBook = useCallback(async (productId) => {
+    if (!productId || pollingRef.current.inFlight) return;
+    if (document.visibilityState === 'hidden') return;
+    pollingRef.current.inFlight = true;
+    const [pRes, bRes] = await Promise.all([
+      connectedFetch.fetch(COINBASE_HOST + '/api/v3/brokerage/market/products/' + encodeURIComponent(productId)),
+      connectedFetch.fetch(COINBASE_HOST + '/api/v3/brokerage/market/product_book?product_id=' + encodeURIComponent(productId) + '&limit=14'),
+    ]);
+    pollingRef.current.inFlight = false;
+
+    if (!pRes.ok || (pRes.status && pRes.status >= 400)) {
+      setTickerError((pRes.error && pRes.error.message) || 'Live price feed unavailable — connect Coinbase to see market data.');
+    } else {
+      const parsed = parseBody(pRes.body);
+      if (parsed && parsed.price != null) {
+        setTickerError(null);
+        setTicker(parsed);
+        const hist = priceHistoryRef.current;
+        const arr = hist[productId] || [];
+        arr.push(safeNum(parsed.price));
+        if (arr.length > 40) arr.shift();
+        hist[productId] = arr;
+        setHistoryTick((n) => n + 1);
+      } else {
+        setTickerError('Unexpected response shape from Coinbase.');
+      }
+    }
+
+    if (!bRes.ok || (bRes.status && bRes.status >= 400)) {
+      setBookError((bRes.error && bRes.error.message) || 'Order book unavailable — connect Coinbase to see live depth.');
+    } else {
+      const parsed = parseBody(bRes.body);
+      const pb = parsed && parsed.pricebook;
+      if (pb) {
+        setBookError(null);
+        setBook({ bids: Array.isArray(pb.bids) ? pb.bids : [], asks: Array.isArray(pb.asks) ? pb.asks : [] });
+      } else {
+        setBookError('Unexpected order book response.');
+      }
+    }
+  }, [connectedFetch]);
+
+  const loadWatchlist = useCallback(async () => {
+    try {
+      const { rows } = await db.exec('SELECT product_id FROM watchlist ORDER BY created_at ASC');
+      setWatchlist((rows || []).map((r) => r[0]));
+    } catch (e) { /* table not ready yet — ignore */ }
+  }, [db]);
+
+  const loadOrdersLog = useCallback(async () => {
+    try {
+      const { rows } = await db.exec(
+        'SELECT created_at, product_id, side, order_type, base_size, quote_size, limit_price, status, coinbase_order_id FROM orders_log ORDER BY id DESC LIMIT 12'
+      );
+      setOrdersLog((rows || []).map((r) => ({
+        createdAt: r[0], productId: r[1], side: r[2], orderType: r[3],
+        baseSize: r[4], quoteSize: r[5], limitPrice: r[6], status: r[7], coinbaseOrderId: r[8],
+      })));
+    } catch (e) { /* ignore */ }
+  }, [db]);
+
+  const loadCopilotNotes = useCallback(async () => {
+    try {
+      const { rows } = await db.exec(
+        'SELECT created_at, product_id, kind, sentiment, risk_level, message, suggestion FROM copilot_notes ORDER BY id DESC LIMIT 20'
+      );
+      setCopilotNotes((rows || []).map((r) => ({
+        createdAt: r[0], productId: r[1], kind: r[2], sentiment: r[3], riskLevel: r[4], message: r[5], suggestion: r[6],
+      })));
+    } catch (e) { /* ignore */ }
+  }, [db]);
+
+  const loadTwapJournal = useCallback(async () => {
+    try {
+      const { rows } = await db.exec(
+        'SELECT plan_id, created_at, product_id, side, exec_style, total_size, size_unit, duration_min, slice_count, status, verdict_assessment FROM twap_plans ORDER BY created_at DESC LIMIT 8'
+      );
+      const plans = (rows || []).map((r) => ({
+        planId: r[0], createdAt: r[1], productId: r[2], side: r[3], execStyle: r[4],
+        totalSize: r[5], sizeUnit: r[6], durationMin: r[7], sliceCount: r[8],
+        status: r[9], verdictAssessment: r[10], sliceStatuses: [],
+      }));
+      for (const p of plans) {
+        const res = await db.exec('SELECT status FROM twap_slices WHERE plan_id = ? ORDER BY slice_index ASC', [p.planId]);
+        p.sliceStatuses = (res.rows || []).map((r) => r[0]);
+      }
+      setTwapJournal(plans);
+    } catch (e) { /* journal is best-effort */ }
+  }, [db]);
+
+  // ---- Effects ---------------------------------------------------------
+  useEffect(() => {
+    if (!isReady) return;
+    loadProducts();
+    loadAccounts();
+    loadWatchlist();
+    loadOrdersLog();
+    loadCopilotNotes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady]);
+
+  // Smart order schema + honest reopen. Nothing executes while the app is closed, so
+  // any plan still marked running/paused is settled as INTERRUPTED before the journal
+  // renders — pending slices skipped, in-flight ones flagged for a manual check.
+  useEffect(() => {
+    if (!isReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        for (const stmt of TWAP_DDL) await db.exec(stmt, []);
+        const { rows } = await db.exec("SELECT plan_id FROM twap_plans WHERE status IN ('running', 'paused')", []);
+        if ((rows || []).length > 0) {
+          await db.exec("UPDATE twap_slices SET status = 'skipped', detail = 'app closed before this slice was due' WHERE status = 'pending' AND plan_id IN (SELECT plan_id FROM twap_plans WHERE status IN ('running', 'paused'))", []);
+          await db.exec("UPDATE twap_slices SET status = 'error', detail = 'app closed while this slice was confirming — check Coinbase for the real outcome' WHERE status = 'sending' AND plan_id IN (SELECT plan_id FROM twap_plans WHERE status IN ('running', 'paused'))", []);
+          await db.exec("UPDATE twap_plans SET status = 'interrupted', ended_at = ? WHERE status IN ('running', 'paused')", [new Date().toISOString()]);
+          if (!cancelled) setTwapNotice({ type: 'info', text: 'A previous run was interrupted when the app closed. Nothing executes in the background, so its unsent slices were marked skipped — the journal below has the details.' });
+        }
+      } catch (e) { /* schema is best-effort — the planner still renders */ }
+      if (!cancelled) loadTwapJournal();
+    })();
+    return () => { cancelled = true; };
+  }, [isReady, db, loadTwapJournal]);
+
+  useEffect(() => {
+    if (!isReady || !selectedProductId) return;
+    loadTickerAndBook(selectedProductId);
+    const interval = setInterval(() => loadTickerAndBook(selectedProductId), 4000);
+    return () => clearInterval(interval);
+  }, [isReady, selectedProductId, loadTickerAndBook]);
+
+  // ---- Actions ---------------------------------------------------------
+  const addToWatchlist = async (productId) => {
+    if (!productId || watchlist.includes(productId)) return;
+    try {
+      await db.exec('INSERT OR IGNORE INTO watchlist (product_id, created_at) VALUES (?, ?)', [productId, new Date().toISOString()]);
+      loadWatchlist();
+    } catch (e) { /* ignore */ }
+  };
+  const removeFromWatchlist = async (productId, e) => {
+    if (e) e.stopPropagation();
+    try {
+      await db.exec('DELETE FROM watchlist WHERE product_id = ?', [productId]);
+      loadWatchlist();
+    } catch (e2) { /* ignore */ }
+  };
+
+  const totalPortfolioUsd = useMemo(() => {
+    return accounts.reduce((sum, a) => {
+      const ccy = a.currency;
+      const bal = safeNum(a.available_balance && a.available_balance.value);
+      if (ccy === 'USD' || ccy === 'USDC') return sum + bal;
+      const prod = products.find((p) => p.base_currency_id === ccy && (p.quote_currency_id === 'USD'));
+      const px = prod ? safeNum(prod.price) : (ccy === selectedProductId.split('-')[0] ? safeNum(ticker && ticker.price) : 0);
+      return sum + bal * px;
+    }, 0);
+  }, [accounts, products, ticker, selectedProductId]);
+
+  const validateOrder = () => {
+    if (orderForm.orderType === 'MARKET') {
+      if (orderForm.side === 'BUY' && safeNum(orderForm.quoteSize) <= 0) return 'Enter a USD amount to buy.';
+      if (orderForm.side === 'SELL' && safeNum(orderForm.baseSize) <= 0) return 'Enter a quantity to sell.';
+    } else {
+      if (safeNum(orderForm.baseSize) <= 0) return 'Enter a quantity.';
+      if (safeNum(orderForm.limitPrice) <= 0) return 'Enter a limit price.';
+    }
+    return null;
+  };
+
+  const buildOrderConfiguration = () => {
+    if (orderForm.orderType === 'MARKET') {
+      return orderForm.side === 'BUY'
+        ? { market_market_ioc: { quote_size: String(safeNum(orderForm.quoteSize)) } }
+        : { market_market_ioc: { base_size: String(safeNum(orderForm.baseSize)) } };
+    }
+    return { limit_limit_gtc: { base_size: String(safeNum(orderForm.baseSize)), limit_price: String(safeNum(orderForm.limitPrice)), post_only: false } };
+  };
+
+  const submitOrder = async () => {
+    const err = validateOrder();
+    if (err) { setOrderNotice({ type: 'error', text: err }); return; }
+    setPlacingOrder(true);
+    setOrderNotice(null);
+    const orderBody = {
+      client_order_id: crypto.randomUUID(),
+      product_id: selectedProductId,
+      side: orderForm.side,
+      order_configuration: buildOrderConfiguration(),
+    };
+    const res = await connectedFetch.fetch(COINBASE_HOST + '/api/v3/brokerage/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(orderBody),
+    });
+    setPlacingOrder(false);
+
+    let status = 'error';
+    let coinbaseOrderId = null;
+    let rawText = '';
+    if (!res.ok) {
+      setOrderNotice({ type: 'error', text: (res.error && res.error.message) || 'Order failed — Coinbase is not connected yet.' });
+      rawText = JSON.stringify(res.error || {});
+    } else {
+      const parsed = parseBody(res.body);
+      rawText = JSON.stringify(parsed || res.body || {});
+      if (parsed && parsed.success) {
+        status = 'submitted';
+        coinbaseOrderId = (parsed.success_response && parsed.success_response.order_id) || parsed.order_id || null;
+        setOrderNotice({ type: 'success', text: 'Order submitted to Coinbase' + (coinbaseOrderId ? ' (#' + String(coinbaseOrderId).slice(0, 8) + '…)' : '') + '.' });
+      } else {
+        status = 'rejected';
+        const em = (parsed && parsed.error_response && (parsed.error_response.message || parsed.error_response.error)) || 'Coinbase rejected the order.';
+        setOrderNotice({ type: 'error', text: em });
+      }
+    }
+
+    try {
+      await db.exec(
+        'INSERT INTO orders_log (created_at, product_id, side, order_type, base_size, quote_size, limit_price, status, coinbase_order_id, raw_response) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        [new Date().toISOString(), selectedProductId, orderForm.side, orderForm.orderType,
+         orderForm.baseSize || null, orderForm.quoteSize || null, orderForm.limitPrice || null,
+         status, coinbaseOrderId, rawText.slice(0, 1800)]
+      );
+      loadOrdersLog();
+    } catch (e) { /* ignore logging failure */ }
+
+    // Ask the copilot for a take on this order, best-effort.
+    setCopilotBusy(true);
+    const result = await sendMessage('review_order', {
+      order: orderBody,
+      outcomeStatus: status,
+      productId: selectedProductId,
+      market: ticker ? { price: ticker.price, change24h: ticker.price_percentage_change_24h, volume24h: ticker.volume_24h } : null,
+      portfolioUsd: totalPortfolioUsd,
+      riskTolerance: prefs.riskTolerance,
+    }, {
+      state: { selectedProductId, orderForm, recentOrders: ordersLog.slice(0, 5), riskTolerance: prefs.riskTolerance },
+      responseSchema: RESPONSE_SCHEMA,
+    });
+    setCopilotBusy(false);
+    if (result.ok && result.data) {
+      const d = result.data;
+      try {
+        await db.exec(
+          'INSERT INTO copilot_notes (created_at, product_id, kind, sentiment, risk_level, message, suggestion) VALUES (?,?,?,?,?,?,?)',
+          [new Date().toISOString(), selectedProductId, d.kind || 'order_check', d.sentiment || null, d.riskLevel || null, d.message || '', d.suggestion || null]
+        );
+        loadCopilotNotes();
+      } catch (e) { /* ignore */ }
+    } else if (!result.ok) {
+      setCopilotNotice({ type: 'error', text: (result.error && result.error.message) || 'Copilot could not weigh in this time.' });
+    }
+  };
+
+  const askPortfolioReview = async () => {
+    setCopilotBusy(true);
+    setCopilotNotice(null);
+    const holdingsSummary = accounts.map((a) => ({
+      currency: a.currency,
+      balance: safeNum(a.available_balance && a.available_balance.value),
+    }));
+    const result = await sendMessage('review_portfolio', {
+      holdings: holdingsSummary,
+      totalPortfolioUsd,
+      selectedProductId,
+      market: ticker ? { price: ticker.price, change24h: ticker.price_percentage_change_24h } : null,
+      riskTolerance: prefs.riskTolerance,
+    }, {
+      state: { holdings: holdingsSummary, totalPortfolioUsd, riskTolerance: prefs.riskTolerance },
+      responseSchema: RESPONSE_SCHEMA,
+    });
+    setCopilotBusy(false);
+    if (result.ok && result.data) {
+      const d = result.data;
+      try {
+        await db.exec(
+          'INSERT INTO copilot_notes (created_at, product_id, kind, sentiment, risk_level, message, suggestion) VALUES (?,?,?,?,?,?,?)',
+          [new Date().toISOString(), null, d.kind || 'portfolio_review', d.sentiment || null, d.riskLevel || null, d.message || '', d.suggestion || null]
+        );
+        loadCopilotNotes();
+      } catch (e) { /* ignore */ }
+    } else if (!result.ok) {
+      setCopilotNotice({ type: 'error', text: (result.error && result.error.message) || 'Copilot is unreachable right now.', retryable: result.error && result.error.retryable });
+    }
+  };
+
+  const askMarketTake = async () => {
+    setCopilotBusy(true);
+    setCopilotNotice(null);
+    const result = await sendMessage('market_take', {
+      productId: selectedProductId,
+      market: ticker ? { price: ticker.price, change24h: ticker.price_percentage_change_24h, volume24h: ticker.volume_24h } : null,
+      book: { topBid: book.bids[0], topAsk: book.asks[0] },
+      riskTolerance: prefs.riskTolerance,
+    }, {
+      state: { selectedProductId, ticker, riskTolerance: prefs.riskTolerance },
+      responseSchema: RESPONSE_SCHEMA,
+    });
+    setCopilotBusy(false);
+    if (result.ok && result.data) {
+      const d = result.data;
+      try {
+        await db.exec(
+          'INSERT INTO copilot_notes (created_at, product_id, kind, sentiment, risk_level, message, suggestion) VALUES (?,?,?,?,?,?,?)',
+          [new Date().toISOString(), selectedProductId, d.kind || 'market_take', d.sentiment || null, d.riskLevel || null, d.message || '', d.suggestion || null]
+        );
+        loadCopilotNotes();
+      } catch (e) { /* ignore */ }
+    } else if (!result.ok) {
+      setCopilotNotice({ type: 'error', text: (result.error && result.error.message) || 'Copilot is unreachable right now.', retryable: result.error && result.error.retryable });
+    }
+  };
+
+  // ---- Smart order (TWAP) ---------------------------------------------
+  const twapProductId = twapForm.productId || selectedProductId;
+  const twapIsQuoteSized = twapForm.execStyle === 'MARKET' && twapForm.side === 'BUY';
+  const twapBaseCcy = (twapProductId || '').split('-')[0];
+  const planLocked = !!activePlan && ['checking', 'ready', 'running', 'paused'].includes(activePlan.status);
+
+  const twapProductOptions = useMemo(
+    () => products.map((p) => p.product_id).sort(),
+    [products]
+  );
+
+  /** Patch ONE slice of the active plan, synchronously, returning the patched slice. */
+  const mutateSlice = (planId, index, patch) => {
+    const cur = activePlanRef.current;
+    if (!cur || cur.planId !== planId) return null;
+    let updated = null;
+    const slices = cur.slices.map((s) => (s.index === index ? (updated = { ...s, ...patch }) : s));
+    if (updated) applyPlanUpdate({ ...cur, slices });
+    return updated;
+  };
+
+  const persistTwapSlice = async (planId, s) => {
+    try {
+      await db.exec(
+        'UPDATE twap_slices SET status = ?, limit_price = ?, coinbase_order_id = ?, detail = ?, executed_at = ? WHERE plan_id = ? AND slice_index = ?',
+        [s.status, s.limitPrice, s.coinbaseOrderId, s.detail, s.executedAt, planId, s.index]
+      );
+    } catch (e) { /* journaling is best-effort */ }
+  };
+
+  /** Terminal settle: remaining queued slices are skipped, the plan closes, journal refreshes. */
+  const settleTwapPlan = async (planId, status, skipDetail) => {
+    const endedAt = new Date().toISOString();
+    const cur = activePlanRef.current;
+    if (cur && cur.planId === planId) {
+      const slices = skipDetail
+        ? cur.slices.map((s) => (s.status === 'pending' ? { ...s, status: 'skipped', detail: skipDetail } : s))
+        : cur.slices;
+      applyPlanUpdate({ ...cur, slices, status, endedAt });
+    }
+    try {
+      if (skipDetail) {
+        await db.exec("UPDATE twap_slices SET status = 'skipped', detail = ? WHERE plan_id = ? AND status = 'pending'", [skipDetail, planId]);
+      }
+      await db.exec('UPDATE twap_plans SET status = ?, ended_at = ? WHERE plan_id = ?', [status, endedAt, planId]);
+    } catch (e) { /* ignore */ }
+    loadTwapJournal();
+  };
+
+  /**
+   * The run engine's single step: fire AT MOST ONE due slice. The `firing` guard
+   * serializes slices — the host's confirm dialog can stay open arbitrarily long, and
+   * confirms must never stack. A slice that comes due during that wait fires right
+   * after (late, one at a time, still confirmed) — delays postpone, they never skip.
+   */
+  const fireDueTwapSlice = async () => {
+    const plan = activePlanRef.current;
+    if (!plan || plan.status !== 'running' || twapEngineRef.current.firing) return;
+    const due = plan.slices.find((s) => s.status === 'pending' && s.dueAt && new Date(s.dueAt).getTime() <= Date.now());
+    if (!due) return;
+    twapEngineRef.current.firing = true;
+    try {
+      let s = mutateSlice(plan.planId, due.index, { status: 'sending' });
+      if (s) await persistTwapSlice(plan.planId, s);
+
+      let limitPrice = null;
+      let priceFailed = false;
+      if (plan.execStyle === 'LIMIT') {
+        // Limit slices price at THIS interval's start: a fresh ticker read, floored
+        // to the product's quote increment.
+        const tRes = await connectedFetch.fetch(COINBASE_HOST + '/api/v3/brokerage/market/products/' + encodeURIComponent(plan.productId));
+        const t = (tRes.ok && (!tRes.status || tRes.status < 400)) ? parseBody(tRes.body) : null;
+        const px = t ? safeNum(t.price) : 0;
+        if (px <= 0) {
+          // NO early return: the completion check below must still run, or a plan
+          // whose LAST slice fails pricing would sit "running" forever.
+          s = mutateSlice(plan.planId, due.index, { status: 'error', detail: 'no live price to set the limit — slice not sent', executedAt: new Date().toISOString() });
+          if (s) await persistTwapSlice(plan.planId, s);
+          priceFailed = true;
+        } else {
+          limitPrice = roundToIncrement(px, plan.quoteIncrement);
+        }
+      }
+
+      if (!priceFailed) {
+        const orderConfiguration = plan.execStyle === 'MARKET'
+          ? (plan.side === 'BUY'
+              ? { market_market_ioc: { quote_size: due.size } }
+              : { market_market_ioc: { base_size: due.size } })
+          : { limit_limit_gtc: { base_size: due.size, limit_price: limitPrice, post_only: false } };
+
+        const res = await connectedFetch.fetch(COINBASE_HOST + '/api/v3/brokerage/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            // Derived, not random: resending this slice can never double-fill.
+            client_order_id: due.clientOrderId,
+            product_id: plan.productId,
+            side: plan.side,
+            order_configuration: orderConfiguration,
+          }),
+        });
+
+        const executedAt = new Date().toISOString();
+        if (!res.ok) {
+          s = mutateSlice(plan.planId, due.index, { status: 'error', limitPrice, detail: (res.error && res.error.message) || 'the request did not reach Coinbase', executedAt });
+        } else {
+          const parsed = parseBody(res.body);
+          if (parsed && parsed.success) {
+            const cbId = (parsed.success_response && parsed.success_response.order_id) || parsed.order_id || null;
+            s = mutateSlice(plan.planId, due.index, { status: 'accepted', limitPrice, coinbaseOrderId: cbId, detail: null, executedAt });
+          } else {
+            const em = (parsed && parsed.error_response && (parsed.error_response.message || parsed.error_response.error)) || 'Coinbase rejected the slice';
+            s = mutateSlice(plan.planId, due.index, { status: 'rejected', limitPrice, detail: em, executedAt });
+          }
+        }
+        if (s) await persistTwapSlice(plan.planId, s);
+      }
+    } finally {
+      twapEngineRef.current.firing = false;
+    }
+    const after = activePlanRef.current;
+    if (after && after.planId === plan.planId) {
+      const open = after.slices.some((s2) => s2.status === 'pending' || s2.status === 'sending');
+      if (!open && after.status === 'running') await settleTwapPlan(plan.planId, 'done');
+      else if (after.status !== 'running') loadTwapJournal(); // late outcome after pause/cancel — keep history true
+    }
+  };
+
+  // Latest-ref pattern: the interval always calls THIS render's engine step.
+  const fireDueTwapSliceRef = useRef(null);
+  fireDueTwapSliceRef.current = fireDueTwapSlice;
+
+  useEffect(() => {
+    if (!activePlan || activePlan.status !== 'running') return;
+    const tick = () => { if (fireDueTwapSliceRef.current) fireDueTwapSliceRef.current(); };
+    const interval = setInterval(tick, 1000);
+    const kick = setTimeout(tick, 50); // slice #1 is due at arm time — fire it now, not next second
+    return () => { clearInterval(interval); clearTimeout(kick); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePlan && activePlan.planId, activePlan && activePlan.status]);
+
+  const runTwapSanityCheck = async (plan) => {
+    // Fresh snapshot for the PLAN's product — it need not be the charted one.
+    let market = null;
+    const [pRes, bRes] = await Promise.all([
+      connectedFetch.fetch(COINBASE_HOST + '/api/v3/brokerage/market/products/' + encodeURIComponent(plan.productId)),
+      connectedFetch.fetch(COINBASE_HOST + '/api/v3/brokerage/market/product_book?product_id=' + encodeURIComponent(plan.productId) + '&limit=1'),
+    ]);
+    if (pRes.ok && (!pRes.status || pRes.status < 400)) {
+      const t = parseBody(pRes.body);
+      if (t && t.price != null) market = { price: t.price, change24h: t.price_percentage_change_24h, volume24h: t.volume_24h };
+    }
+    if (market && bRes.ok && (!bRes.status || bRes.status < 400)) {
+      const b = parseBody(bRes.body);
+      const pb = b && b.pricebook;
+      if (pb) {
+        market.topBid = (Array.isArray(pb.bids) && pb.bids[0]) || null;
+        market.topAsk = (Array.isArray(pb.asks) && pb.asks[0]) || null;
+      }
+    }
+    const result = await sendMessage('twap_sanity_check', {
+      plan: {
+        productId: plan.productId, side: plan.side, execStyle: plan.execStyle,
+        totalSize: plan.totalSize, sizeUnit: plan.sizeUnit,
+        durationMin: plan.durationMin, sliceCount: plan.sliceCount, intervalSec: plan.intervalSec,
+        sliceSizes: plan.slices.map((s) => s.size),
+      },
+      market,
+      portfolioUsd: totalPortfolioUsd,
+      riskTolerance: prefs.riskTolerance,
+    }, { responseSchema: RESPONSE_SCHEMA });
+    const verdict = result.ok ? parseTwapVerdict(result.data) : null;
+    applyPlanUpdate((prev) => (prev && prev.planId === plan.planId && prev.status === 'checking')
+      ? { ...prev, status: 'ready', verdict: verdict || { none: true } }
+      : prev);
+    if (verdict && verdict.message) {
+      try {
+        await db.exec(
+          'INSERT INTO copilot_notes (created_at, product_id, kind, sentiment, risk_level, message, suggestion) VALUES (?,?,?,?,?,?,?)',
+          [new Date().toISOString(), plan.productId, 'twap_check',
+           (result.data && result.data.sentiment) || null, (result.data && result.data.riskLevel) || null,
+           verdict.message, verdict.adjustment]
+        );
+        loadCopilotNotes();
+      } catch (e) { /* ignore */ }
+    }
+  };
+
+  const draftTwapPlan = () => {
+    setTwapFormError(null);
+    if (planLocked) return;
+    const prod = products.find((p) => p.product_id === twapProductId);
+    if (!prod) { setTwapFormError('Pick a product first — the list needs the Coinbase connection.'); return; }
+    const total = safeNum(twapForm.totalSize);
+    if (total <= 0) { setTwapFormError('Enter a total size greater than zero.'); return; }
+    const sliceCount = Math.min(TWAP_SLICE_MAX, Math.max(TWAP_SLICE_MIN, Math.round(safeNum(twapForm.sliceCount, 6))));
+    const durationMin = TWAP_DURATIONS.some((d) => d.minutes === safeNum(twapForm.durationMin)) ? safeNum(twapForm.durationMin) : 60;
+    const unit = twapIsQuoteSized ? 'USD' : twapBaseCcy;
+    const increment = twapIsQuoteSized ? (prod.quote_increment || '0.01') : (prod.base_increment || '0.00000001');
+    const minSize = twapIsQuoteSized ? safeNum(prod.quote_min_size, 1) : safeNum(prod.base_min_size);
+    const sizes = splitEqualSlices(total, sliceCount, increment);
+    if (!sizes) { setTwapFormError('That total cannot fill ' + sliceCount + ' slices — raise the total or reduce the slice count.'); return; }
+    if (minSize > 0 && sizes.some((sz) => safeNum(sz) < minSize)) {
+      setTwapFormError('Each slice would be about ' + sizes[sizes.length - 1] + ' ' + unit + ' — below the ' + twapProductId + ' minimum of ' + minSize + '. Raise the total or reduce the slice count.');
+      return;
+    }
+    const planId = crypto.randomUUID();
+    const plan = {
+      planId,
+      createdAt: new Date().toISOString(),
+      productId: twapProductId,
+      side: twapForm.side,
+      execStyle: twapForm.execStyle,
+      totalSize: String(total),
+      sizeUnit: unit,
+      durationMin,
+      sliceCount,
+      intervalSec: Math.round((durationMin * 60) / sliceCount),
+      quoteIncrement: prod.quote_increment || '0.01',
+      status: 'checking',
+      verdict: undefined,
+      startedAt: null,
+      endedAt: null,
+      slices: sizes.map((size, i) => ({
+        index: i, size, status: 'planned', clientOrderId: planId + '-s' + i,
+        dueAt: null, limitPrice: null, coinbaseOrderId: null, detail: null, executedAt: null,
+      })),
+    };
+    setTwapNotice(null);
+    applyPlanUpdate(plan);
+    runTwapSanityCheck(plan);
+  };
+
+  const armTwapPlan = async () => {
+    const plan = activePlanRef.current;
+    if (!plan || plan.status !== 'ready') return;
+    const start = Date.now();
+    const startedAt = new Date(start).toISOString();
+    const slices = plan.slices.map((s, i) => ({ ...s, status: 'pending', dueAt: new Date(start + i * plan.intervalSec * 1000).toISOString() }));
+    const v = plan.verdict && !plan.verdict.none ? plan.verdict : null;
+    try {
+      await db.exec(
+        'INSERT INTO twap_plans (plan_id, created_at, product_id, side, exec_style, total_size, size_unit, duration_min, slice_count, interval_sec, status, verdict_assessment, verdict_risks, verdict_adjustment, started_at, ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [plan.planId, plan.createdAt, plan.productId, plan.side, plan.execStyle, plan.totalSize, plan.sizeUnit,
+         plan.durationMin, plan.sliceCount, plan.intervalSec, 'running',
+         v ? v.assessment : null, v ? JSON.stringify(v.risks) : null, v ? v.adjustment : null, startedAt, null]
+      );
+      for (const s of slices) {
+        await db.exec(
+          'INSERT INTO twap_slices (plan_id, slice_index, due_at, size, status, client_order_id, limit_price, coinbase_order_id, detail, executed_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+          [plan.planId, s.index, s.dueAt, s.size, 'pending', s.clientOrderId, null, null, null, null]
+        );
+      }
+      // Distill, don't accumulate: the journal keeps the newest 20 plans.
+      await db.exec('DELETE FROM twap_slices WHERE plan_id NOT IN (SELECT plan_id FROM twap_plans ORDER BY created_at DESC LIMIT 20)', []);
+      await db.exec('DELETE FROM twap_plans WHERE plan_id NOT IN (SELECT plan_id FROM twap_plans ORDER BY created_at DESC LIMIT 20)', []);
+    } catch (e) { /* journaling is best-effort — the run itself still starts */ }
+    applyPlanUpdate({ ...plan, slices, status: 'running', startedAt });
+    loadTwapJournal();
+  };
+
+  const pauseTwapPlan = async () => {
+    const cur = activePlanRef.current;
+    if (!cur || cur.status !== 'running') return;
+    applyPlanUpdate({ ...cur, status: 'paused' });
+    try { await db.exec("UPDATE twap_plans SET status = 'paused' WHERE plan_id = ?", [cur.planId]); } catch (e) { /* ignore */ }
+  };
+
+  const resumeTwapPlan = async () => {
+    const cur = activePlanRef.current;
+    if (!cur || cur.status !== 'paused') return;
+    const nowIso = new Date().toISOString();
+    // Slices that came due while paused are SKIPPED, never fired late in a burst —
+    // catching up all at once is exactly what time-averaging exists to avoid.
+    const missed = new Set(
+      cur.slices.filter((s) => s.status === 'pending' && s.dueAt && s.dueAt <= nowIso).map((s) => s.index)
+    );
+    const next = applyPlanUpdate({
+      ...cur,
+      status: 'running',
+      slices: cur.slices.map((s) => (missed.has(s.index) ? { ...s, status: 'skipped', detail: 'came due while paused' } : s)),
+    });
+    try {
+      if (missed.size > 0) {
+        await db.exec("UPDATE twap_slices SET status = 'skipped', detail = 'came due while paused' WHERE plan_id = ? AND status = 'pending' AND due_at <= ?", [cur.planId, nowIso]);
+      }
+      await db.exec("UPDATE twap_plans SET status = 'running' WHERE plan_id = ?", [cur.planId]);
+    } catch (e) { /* ignore */ }
+    if (!next.slices.some((s) => s.status === 'pending' || s.status === 'sending')) {
+      await settleTwapPlan(cur.planId, 'done');
+    }
+  };
+
+  const cancelTwapPlan = () => {
+    const cur = activePlanRef.current;
+    if (!cur || (cur.status !== 'running' && cur.status !== 'paused')) return;
+    settleTwapPlan(cur.planId, 'cancelled', 'cancelled before this slice was due');
+  };
+
+  const discardTwapPlan = () => { applyPlanUpdate(null); };
+  const clearFinishedTwapPlan = () => { applyPlanUpdate(null); loadTwapJournal(); };
+
+  if (!isReady) return <div className="connecting">Connecting…</div>;
+
+  const filteredProducts = search.trim()
+    ? products.filter((p) => (p.product_id || '').toUpperCase().includes(search.trim().toUpperCase())).slice(0, 30)
+    : [];
+
+  const change24h = ticker ? safeNum(ticker.price_percentage_change_24h) : 0;
+  const sparkPoints = priceHistoryRef.current[selectedProductId] || [];
+  const maxBidSize = Math.max(1e-9, ...book.bids.map((b) => safeNum(b.size)));
+  const maxAskSize = Math.max(1e-9, ...book.asks.map((a) => safeNum(a.size)));
+
+  const isMarketConnected = !productsError;
+  const isPortfolioConnected = !accountsError;
+
+  const journalRows = twapJournal.filter((p) => !activePlan || p.planId !== activePlan.planId);
+  const twapSettled = activePlan
+    ? activePlan.slices.filter((s) => s.status === 'accepted' || s.status === 'rejected' || s.status === 'error' || s.status === 'skipped').length
+    : 0;
+  const twapNextSlice = activePlan ? activePlan.slices.find((s) => s.status === 'pending') : null;
+
+  return (
+    <div className="shell">
+      <style>{TWAP_CSS}</style>
+      <div className="topbar">
+        <div className="brand">
+          <div className="brand-icon">📈</div>
+          <div className="brand-text">
+            <h1>Coinbase Trade Copilot</h1>
+            <p>Portfolio, live markets &amp; order books, one-click trades &amp; smart orders.</p>
+          </div>
+        </div>
+        <div className="topbar-right">
+          <select className="risk-select" value={prefs.riskTolerance} onChange={(e) => setRiskTolerance(e.target.value)} title="Copilot risk tolerance">
+            <option value="conservative">Conservative</option>
+            <option value="balanced">Balanced</option>
+            <option value="aggressive">Aggressive</option>
+          </select>
+          <div className="conn-dot">
+            <span className={'dot ' + (isPortfolioConnected ? 'ok' : 'bad')}></span>
+            Portfolio {isPortfolioConnected ? 'live' : 'offline'}
+          </div>
+          <div className="conn-dot">
+            <span className={'dot ' + (isMarketConnected ? 'ok' : 'bad')}></span>
+            Market {isMarketConnected ? 'live' : 'offline'}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid">
+        {/* PORTFOLIO PANEL */}
+        <section className="panel">
+          <h2>
+            Portfolio
+            <button className="refresh-btn" onClick={loadAccounts} disabled={accountsLoading}>
+              {accountsLoading ? <span className="spinner" /> : '↻ refresh'}
+            </button>
+          </h2>
+
+          {accountsError ? (
+            <div className="empty-state">
+              <span className="big-emoji">🔌</span>
+              Not connected to Coinbase yet.
+              <div className="connect-hint">
+                Approve the Coinbase connection above the chat to load your real balances here. Everything else in this dashboard keeps working while you do.
+              </div>
+            </div>
+          ) : accounts.length === 0 && !accountsLoading ? (
+            <div className="empty-state">
+              <span className="big-emoji">🪙</span>
+              No balances found on this account yet.
+            </div>
+          ) : (
+            <React.Fragment>
+              <div className="portfolio-total">{fmtUSD(totalPortfolioUsd)}</div>
+              <div className="portfolio-total-label">estimated total value</div>
+              {accounts.map((a) => (
+                <div className="holding-row" key={a.uuid || a.currency}>
+                  <div>
+                    <div className="holding-ccy">{a.currency}</div>
+                    <div className="holding-sub">{a.name || a.currency}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div>{fmtQty(a.available_balance && a.available_balance.value)}</div>
+                    <div className="holding-sub">{a.currency}</div>
+                  </div>
+                </div>
+              ))}
+            </React.Fragment>
+          )}
+
+          <div className="btn-row">
+            <button className="btn secondary" onClick={askPortfolioReview} disabled={copilotBusy || accounts.length === 0}>
+              {copilotBusy ? <span className="spinner" /> : '🤖 Ask copilot to review'}
+            </button>
+          </div>
+
+          <div className="divider"></div>
+          <h2 style={{ marginBottom: 8 }}>Watchlist</h2>
+          {watchlist.length === 0 ? (
+            <div className="muted-small">Add assets from the search box below to build a watchlist.</div>
+          ) : (
+            watchlist.map((id) => (
+              <div key={id} className={'watchlist-item' + (id === selectedProductId ? ' active' : '')} onClick={() => setSelectedProductId(id)}>
+                <span>{id}</span>
+                <span className="rm" onClick={(e) => removeFromWatchlist(id, e)}>✕</span>
+              </div>
+            ))
+          )}
+        </section>
+
+        {/* MARKET PANEL */}
+        <section className="panel">
+          <h2>
+            Market
+            <button className="refresh-btn" onClick={() => loadTickerAndBook(selectedProductId)}>↻ refresh</button>
+          </h2>
+
+          <input
+            className="asset-search"
+            placeholder="Search assets, e.g. ETH-USD"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {search.trim() && (
+            <div className="search-results">
+              {filteredProducts.length === 0 ? (
+                <div className="search-result-row muted-small">No matches.</div>
+              ) : filteredProducts.map((p) => (
+                <div key={p.product_id} className="search-result-row" onClick={() => { setSelectedProductId(p.product_id); addToWatchlist(p.product_id); setSearch(''); }}>
+                  <span>{p.product_id}</span>
+                  <span>{fmtUSD(p.price)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!search.trim() && !watchlist.length && (
+            <div className="btn-row" style={{ marginBottom: 10 }}>
+              {POPULAR_PRODUCTS.map((id) => (
+                <button key={id} className="btn secondary" style={{ fontSize: 11, padding: '6px 10px' }} onClick={() => { setSelectedProductId(id); addToWatchlist(id); }}>
+                  {id}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {tickerError && !ticker ? (
+            <div className="empty-state">
+              <span className="big-emoji">📡</span>
+              Live prices need the Coinbase connection.
+              <div className="connect-hint">Approve the connection above and this card will start updating automatically, about every 4 seconds.</div>
+            </div>
+          ) : (
+            <div className="ticker-card">
+              <div className="ticker-symbol">{selectedProductId}</div>
+              <div className="ticker-price">{ticker ? fmtUSD(ticker.price) : '—'}</div>
+              <div className={'ticker-change ' + (change24h >= 0 ? 'up' : 'down')}>
+                {ticker ? fmtPct(change24h) + ' · 24h' : ''}
+              </div>
+              <div className="sparkline-wrap">
+                <Sparkline points={sparkPoints} up={change24h >= 0} />
+              </div>
+              <div className="ticker-meta">
+                {ticker ? 'vol 24h ' + fmtQty(ticker.volume_24h) + ' ' + (ticker.base_display_symbol || '') : ''}
+                {ticker ? ' · live, updates ~4s' : ''}
+              </div>
+            </div>
+          )}
+
+          <div className="divider"></div>
+          <h2 style={{ marginBottom: 8 }}>Order book</h2>
+          {bookError && book.bids.length === 0 && book.asks.length === 0 ? (
+            <div className="empty-state">
+              <span className="big-emoji">📖</span>
+              Order book needs the Coinbase connection too.
+            </div>
+          ) : (
+            <div className="book-cols">
+              <div className="book-col">
+                <h3>Bids</h3>
+                {book.bids.slice(0, 10).map((b, i) => (
+                  <div key={i} className="book-row bid">
+                    <div className="bar" style={{ width: (safeNum(b.size) / maxBidSize * 100) + '%' }}></div>
+                    <span>{fmtUSD(b.price, { decimals: 2 })}</span>
+                    <span>{fmtQty(b.size)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="book-col">
+                <h3>Asks</h3>
+                {book.asks.slice(0, 10).map((a, i) => (
+                  <div key={i} className="book-row ask">
+                    <div className="bar" style={{ width: (safeNum(a.size) / maxAskSize * 100) + '%' }}></div>
+                    <span>{fmtUSD(a.price, { decimals: 2 })}</span>
+                    <span>{fmtQty(a.size)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="btn-row">
+            <button className="btn secondary" onClick={askMarketTake} disabled={copilotBusy || !ticker}>
+              {copilotBusy ? <span className="spinner" /> : '🤖 Ask for a market take'}
+            </button>
+          </div>
+        </section>
+
+        {/* TRADE PANEL */}
+        <section className="panel">
+          <h2>Trade {selectedProductId}</h2>
+
+          <div className="side-toggle">
+            <button className={'buy' + (orderForm.side === 'BUY' ? ' active' : '')} onClick={() => setOrderForm({ side: 'BUY' })}>Buy</button>
+            <button className={'sell' + (orderForm.side === 'SELL' ? ' active' : '')} onClick={() => setOrderForm({ side: 'SELL' })}>Sell</button>
+          </div>
+          <div className="type-toggle">
+            <button className={orderForm.orderType === 'MARKET' ? 'active' : ''} onClick={() => setOrderForm({ orderType: 'MARKET' })}>Market</button>
+            <button className={orderForm.orderType === 'LIMIT' ? 'active' : ''} onClick={() => setOrderForm({ orderType: 'LIMIT' })}>Limit</button>
+          </div>
+
+          {orderForm.orderType === 'MARKET' && orderForm.side === 'BUY' && (
+            <div className="form-row">
+              <label>Amount to spend (USD)</label>
+              <input type="number" min="0" value={orderForm.quoteSize} onChange={(e) => setOrderForm({ quoteSize: e.target.value })} placeholder="25.00" />
+            </div>
+          )}
+          {orderForm.orderType === 'MARKET' && orderForm.side === 'SELL' && (
+            <div className="form-row">
+              <label>Quantity to sell ({selectedProductId.split('-')[0]})</label>
+              <input type="number" min="0" value={orderForm.baseSize} onChange={(e) => setOrderForm({ baseSize: e.target.value })} placeholder="0.01" />
+            </div>
+          )}
+          {orderForm.orderType === 'LIMIT' && (
+            <React.Fragment>
+              <div className="form-row">
+                <label>Quantity ({selectedProductId.split('-')[0]})</label>
+                <input type="number" min="0" value={orderForm.baseSize} onChange={(e) => setOrderForm({ baseSize: e.target.value })} placeholder="0.01" />
+              </div>
+              <div className="form-row">
+                <label>Limit price (USD)</label>
+                <input type="number" min="0" value={orderForm.limitPrice} onChange={(e) => setOrderForm({ limitPrice: e.target.value })} placeholder={ticker ? String(ticker.price) : '0.00'} />
+              </div>
+            </React.Fragment>
+          )}
+
+          <button className={'btn ' + (orderForm.side === 'BUY' ? 'buy' : 'sell')} style={{ width: '100%' }} onClick={submitOrder} disabled={placingOrder}>
+            {placingOrder ? <span className="spinner" /> : (orderForm.side === 'BUY' ? 'Buy ' : 'Sell ') + selectedProductId.split('-')[0]}
+          </button>
+          {orderNotice && (
+            <div className={'notice ' + (orderNotice.type === 'error' ? 'error' : 'success')}>{orderNotice.text}</div>
+          )}
+          <div className="muted-small" style={{ marginTop: 8 }}>
+            Live trades hit your real Coinbase account. The host will ask you to confirm before anything is sent.
+          </div>
+
+          <div className="divider"></div>
+          <h2 style={{ marginBottom: 8 }}>Recent orders</h2>
+          {ordersLog.length === 0 ? (
+            <div className="muted-small">No orders placed from this dashboard yet.</div>
+          ) : (
+            ordersLog.map((o, i) => (
+              <div className="order-log-row" key={i}>
+                <div className="order-log-top">
+                  <span><span className={'order-log-side ' + (o.side === 'BUY' ? 'buy' : 'sell')}>{o.side}</span> {o.productId}</span>
+                  <span className="order-log-status">{o.status}</span>
+                </div>
+                <div className="muted-small">
+                  {o.orderType === 'MARKET' ? (o.side === 'BUY' ? '$' + o.quoteSize : (o.baseSize || '') + ' units') : (o.baseSize + ' @ $' + o.limitPrice)}
+                  {' · ' + timeAgo(o.createdAt)}
+                </div>
+              </div>
+            ))
+          )}
+        </section>
+
+        {/* SMART ORDER (TWAP) PANEL — 02-twap-extension */}
+        <section className="panel twap-panel">
+          <h2>
+            Smart order · TWAP
+            {activePlan && <span className={'plan-badge p-' + activePlan.status}>{activePlan.status}</span>}
+          </h2>
+          <div className="twap-layout">
+            <div>
+              {products.length === 0 ? (
+                <div className="empty-state">
+                  <span className="big-emoji">⏱️</span>
+                  Smart orders need the product list, which needs the Coinbase connection.
+                  <div className="connect-hint">
+                    Approve the Coinbase connection above the chat, then draft a plan here: one big order split into equal, time-spaced slices — every slice confirmed by you before it is sent.
+                  </div>
+                </div>
+              ) : (
+                <React.Fragment>
+                  <div className="form-row">
+                    <label>Product</label>
+                    <select value={twapProductId} onChange={(e) => setTwapForm({ productId: e.target.value })}>
+                      {!twapProductOptions.includes(twapProductId) && <option value={twapProductId}>{twapProductId}</option>}
+                      {twapProductOptions.map((id) => <option key={id} value={id}>{id}</option>)}
+                    </select>
+                  </div>
+                  <div className="side-toggle">
+                    <button className={'buy' + (twapForm.side === 'BUY' ? ' active' : '')} onClick={() => setTwapForm({ side: 'BUY' })}>Buy</button>
+                    <button className={'sell' + (twapForm.side === 'SELL' ? ' active' : '')} onClick={() => setTwapForm({ side: 'SELL' })}>Sell</button>
+                  </div>
+                  <div className="type-toggle">
+                    <button className={twapForm.execStyle === 'MARKET' ? 'active' : ''} onClick={() => setTwapForm({ execStyle: 'MARKET' })}>Market IOC slices</button>
+                    <button className={twapForm.execStyle === 'LIMIT' ? 'active' : ''} onClick={() => setTwapForm({ execStyle: 'LIMIT' })}>Limit at slice start</button>
+                  </div>
+                  <div className="form-row">
+                    <label>
+                      {twapIsQuoteSized
+                        ? 'Total to spend (USD)'
+                        : 'Total to ' + (twapForm.side === 'BUY' ? 'buy' : 'sell') + ' (' + twapBaseCcy + ')'}
+                    </label>
+                    <input type="number" min="0" value={twapForm.totalSize} onChange={(e) => setTwapForm({ totalSize: e.target.value })} placeholder={twapIsQuoteSized ? '100.00' : '0.05'} />
+                  </div>
+                  <div className="form-row">
+                    <label>Duration</label>
+                    <div className="type-toggle" style={{ marginBottom: 0 }}>
+                      {TWAP_DURATIONS.map((d) => (
+                        <button key={d.minutes} className={safeNum(twapForm.durationMin) === d.minutes ? 'active' : ''} onClick={() => setTwapForm({ durationMin: d.minutes })}>{d.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <label>Slices (4–12)</label>
+                    <input type="number" min="4" max="12" step="1" value={twapForm.sliceCount} onChange={(e) => setTwapForm({ sliceCount: e.target.value })} />
+                  </div>
+                  <button className="btn" style={{ width: '100%' }} onClick={draftTwapPlan} disabled={planLocked}>
+                    {planLocked ? 'A plan is already in motion' : 'Plan it — Ledger checks it first'}
+                  </button>
+                  {twapFormError && <div className="notice error">{twapFormError}</div>}
+                  <div className="twap-note">
+                    The plan is computed here, locally: equal slices at equal intervals, each slice a real order.
+                    Arming it starts a timer in this open app, and the host asks you to confirm every slice before it is sent
+                    — ticking &ldquo;remember for this session&rdquo; on the first confirm lets the rest of the run through without re-asking.
+                    Nothing runs in the background: close the app and the run stops, honestly marked interrupted.
+                  </div>
+                </React.Fragment>
+              )}
+            </div>
+            <div>
+              {twapNotice && <div className={'notice ' + (twapNotice.type || 'info')}>{twapNotice.text}</div>}
+
+              {activePlan ? (
+                <div className="twap-plan-card">
+                  <div className="twap-headline">
+                    {activePlan.side === 'BUY' ? 'Buy' : 'Sell'} {activePlan.totalSize} {activePlan.sizeUnit} of {activePlan.productId}
+                    {activePlan.execStyle === 'MARKET' ? ' · market IOC slices' : ' · limit slices, priced at each interval start'}
+                  </div>
+                  <div className="twap-subline">
+                    {activePlan.sliceCount} slices over {twapDurationLabel(activePlan.durationMin)} — one every {fmtOffset(activePlan.intervalSec)}
+                    {activePlan.startedAt ? ' · armed at ' + fmtClock(activePlan.startedAt) : ''}
+                  </div>
+
+                  {activePlan.status === 'checking' && (
+                    <div className="twap-verdict"><span className="spinner" /> Ledger is reading the plan against the live market…</div>
+                  )}
+                  {activePlan.verdict && !activePlan.verdict.none && (
+                    <div className={'twap-verdict' + (activePlan.verdict.assessment === 'reconsider' ? ' v-reconsider' : activePlan.verdict.assessment === 'workable_with_care' ? ' v-care' : '')}>
+                      <strong>Ledger: {String(activePlan.verdict.assessment).replace(/_/g, ' ')}.</strong> {activePlan.verdict.message}
+                      {activePlan.verdict.risks.length > 0 && (
+                        <ul className="twap-verdict-risks">
+                          {activePlan.verdict.risks.map((r, i) => <li key={i}>{r}</li>)}
+                        </ul>
+                      )}
+                      {activePlan.verdict.adjustment && (
+                        <div style={{ marginTop: 6 }}>Suggested tweak: {activePlan.verdict.adjustment} — your call; nothing is applied automatically.</div>
+                      )}
+                    </div>
+                  )}
+                  {activePlan.verdict && activePlan.verdict.none && (
+                    <div className="twap-verdict">Ledger had no opinion this time — the plan stands exactly as you wrote it.</div>
+                  )}
+
+                  <div className="twap-rail">
+                    <div className="twap-track">
+                      {activePlan.slices.map((s) => (
+                        <div key={s.index} className={'twap-slice s-' + s.status}>
+                          <div className="twap-slice-head">
+                            <span>#{s.index + 1}</span>
+                            <span>{s.dueAt ? fmtClock(s.dueAt) : '+' + fmtOffset(s.index * activePlan.intervalSec)}</span>
+                          </div>
+                          <div className="twap-slice-size">
+                            {s.size} {activePlan.sizeUnit}{s.limitPrice ? ' @ $' + s.limitPrice : ''}
+                          </div>
+                          <span className={'slice-chip s-' + s.status}>{TWAP_SLICE_STATUS_LABEL[s.status] || s.status}</span>
+                          {s.detail && <div className="twap-slice-detail">{s.detail}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {(activePlan.status === 'running' || activePlan.status === 'paused') && (
+                    <div className="twap-progress">
+                      {twapSettled}/{activePlan.sliceCount} slices settled
+                      {activePlan.status === 'running' && twapNextSlice ? ' · next at ' + fmtClock(twapNextSlice.dueAt) : ''}
+                      {activePlan.status === 'paused' ? ' · paused — a slice that comes due while paused is skipped on resume, never fired late' : ''}
+                    </div>
+                  )}
+
+                  <div className="btn-row">
+                    {activePlan.status === 'ready' && (
+                      <button className={'btn ' + (activePlan.side === 'BUY' ? 'buy' : 'sell')} onClick={armTwapPlan}>Arm &amp; run</button>
+                    )}
+                    {(activePlan.status === 'checking' || activePlan.status === 'ready') && (
+                      <button className="btn secondary" onClick={discardTwapPlan}>Discard</button>
+                    )}
+                    {activePlan.status === 'running' && (
+                      <button className="btn secondary" onClick={pauseTwapPlan}>Pause</button>
+                    )}
+                    {activePlan.status === 'paused' && (
+                      <button className="btn" onClick={resumeTwapPlan}>Resume</button>
+                    )}
+                    {(activePlan.status === 'running' || activePlan.status === 'paused') && (
+                      <button className="btn secondary" onClick={cancelTwapPlan}>Cancel rest</button>
+                    )}
+                    {(activePlan.status === 'done' || activePlan.status === 'cancelled' || activePlan.status === 'interrupted') && (
+                      <button className="btn secondary" onClick={clearFinishedTwapPlan}>New plan</button>
+                    )}
+                  </div>
+
+                  {activePlan.status === 'ready' && (
+                    <div className="twap-note">
+                      Arming starts immediately: slice #1 is sent right away, then one every {fmtOffset(activePlan.intervalSec)}.
+                      Each send opens the host&rsquo;s confirm — declining affects only that slice; use Pause or Cancel to stop the rest.
+                      A busy confirm dialog or a backgrounded tab postpones a slice, never skips it.
+                      {activePlan.execStyle === 'LIMIT' ? ' Limit slices can rest unfilled on the book — tidy up leftovers in Coinbase if you change your mind.' : ''}
+                    </div>
+                  )}
+                </div>
+              ) : journalRows.length === 0 ? (
+                <div className="empty-state">
+                  <span className="big-emoji">🧭</span>
+                  No smart orders yet. A TWAP plan splits one big order into equal, time-spaced slices, so you pay closer
+                  to the period&rsquo;s average price instead of one moment&rsquo;s.
+                  <div className="connect-hint">
+                    Ledger can help from the provider chat too — try asking: &ldquo;place the next slice of my plan early&rdquo;. Writes always confirm first, chat included.
+                  </div>
+                </div>
+              ) : null}
+
+              {journalRows.length > 0 && (
+                <React.Fragment>
+                  {activePlan && <div className="divider"></div>}
+                  <h2 style={{ margin: '0 0 8px' }}>Run history</h2>
+                  {journalRows.map((p) => (
+                    <div className="twap-journal-row" key={p.planId}>
+                      <div className="twap-journal-top">
+                        <span>
+                          <span className={'order-log-side ' + (p.side === 'BUY' ? 'buy' : 'sell')}>{p.side}</span> {p.totalSize} {p.sizeUnit} · {p.productId}
+                        </span>
+                        <span className={'plan-badge p-' + p.status}>{p.status}</span>
+                      </div>
+                      <div className="muted-small">
+                        {p.sliceCount} slices / {twapDurationLabel(p.durationMin)} · {p.execStyle === 'MARKET' ? 'market IOC' : 'limit'} · {timeAgo(p.createdAt)}
+                        {p.verdictAssessment ? ' · Ledger: ' + String(p.verdictAssessment).replace(/_/g, ' ') : ''}
+                      </div>
+                      <div className="slice-dots">
+                        {p.sliceStatuses.map((st, i) => (
+                          <span key={i} className={'slice-dot s-' + st} title={'#' + (i + 1) + ' ' + st}></span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </React.Fragment>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* COPILOT PANEL */}
+        <section className="panel copilot-panel">
+          <h2>
+            Copilot notes
+            {isWaiting && <span className="muted-small"><span className="spinner" /> thinking…</span>}
+          </h2>
+          {copilotNotice && (
+            <div className="notice error">{copilotNotice.text}</div>
+          )}
+          {copilotNotes.length === 0 ? (
+            <div className="empty-state">
+              <span className="big-emoji">🤖</span>
+              No notes yet — ask for a portfolio review, a market take, or place a trade to hear from your copilot.
+            </div>
+          ) : (
+            <div className="copilot-feed">
+              {copilotNotes.map((n, i) => (
+                <div className="copilot-note" key={i}>
+                  <div className="copilot-avatar">{CopilotAvatarText()}</div>
+                  <div className="copilot-body">
+                    <div className="copilot-head">
+                      <span className="copilot-name">Ledger</span>
+                      <span className="copilot-time">{timeAgo(n.createdAt)}</span>
+                      {n.productId && <span className="tag">{n.productId}</span>}
+                      {n.sentiment && <span className={'tag sentiment-' + n.sentiment}>{n.sentiment}</span>}
+                      {n.riskLevel && <span className={'tag risk-' + n.riskLevel}>{n.riskLevel} risk</span>}
+                    </div>
+                    <div className="copilot-msg">{n.message}</div>
+                    {n.suggestion && <div className="copilot-suggestion">💡 {n.suggestion}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
+

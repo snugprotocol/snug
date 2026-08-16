@@ -9,10 +9,21 @@
 // `X-Api-Key` to providers that read a query parameter. The user pasted a working key, the
 // wizard said connected, and every request came back unauthorized.
 //
+// RE-POINTED (TASK-20260815-starter-apps-rebuild): the shelf was re-curated.
+// weather-planner's successor is `weather` (same slot, same bare OpenWeather manifest),
+// and the journey below runs against it unchanged in strength. crypto-portfolio has NO
+// query-credential successor — its Coinbase-shaped successor `trade-copilot`
+// authenticates via the registry's pinned CDP JWT Authorization header, so the CoinGecko
+// half of this file's subject is OBSOLETE at the shelf. The registry-level guarantees it
+// exercised (coingecko pins EXACTLY the `x_cg_demo_api_key` query template, substitution
+// reaches a bare borrower, an authored template is refused) remain covered in
+// packages/auth/src/__tests__/registry-query-credentials.test.ts; the cross-contamination
+// suite at the bottom is reworked accordingly.
+//
 // WHY THIS FILE EXISTS BESIDE THE AUTH SUITE — and why it is not a fifth copy of
 // connected-fetch-query-observer's fixture. That suite proves the ENGINE renders a query
 // template, from a hand-written literal spec. Nothing there proves the REGISTRY supplies
-// one for these two providers, or that it survives the trip through install → declared row
+// one for the shipped starter, or that it survives the trip through install → declared row
 // → double admission → the frozen ceiling → the executor's own reader. That trip spans
 // packages (auth's registry, db's admission gate, the playground's install act and deps
 // assembly), so only a playground-altitude test can see it end to end. The seam under test
@@ -52,33 +63,28 @@ function readShippedManifest(folder: string): ConnectionRequirement {
 }
 
 /**
- * The two starters, each with the URL its app.html ACTUALLY calls (verified against the
- * shipped app source, not invented for the test) and the query key its provider reads.
+ * The shipped query-credential starter, with the forecast URL the OpenWeather manifest's
+ * own docsUrl pins (`/data/2.5/forecast`, the 5-day endpoint) and the query key its
+ * provider reads. The URL is pinned to the manifest's declared host + documented
+ * endpoint rather than read out of app source — RE-VERIFIED 2026-08-15 against the
+ * shipped `examples/weather/app.html`: the app calls `/geo/1.0/direct` and the lat/lon
+ * forecast endpoints on the same declared host, so this fixture URL exercises the same
+ * host+query-credential mechanism. (This suite never reads app.html; it drives the
+ * persisted row and the executor.)
  *
- * The app URLs carry the app's OWN parameters and no credential — that is the C1 shape the
- * examples/ AL-09 AC3 lint enforces, and half of what this file asserts survives injection.
+ * The app URL carries the app's OWN parameters and no credential — that is the C1 shape
+ * the examples/ AL-09 AC3 lint enforces, and half of what this file asserts survives
+ * injection.
  */
 const STARTERS = [
   {
-    folder: 'weather-planner',
+    folder: 'weather',
     slot: 'openweather',
     host: 'api.openweathermap.org',
-    // examples/weather-planner/app.html: FORECAST_URL(city)
     appUrl: 'https://api.openweathermap.org/data/2.5/forecast?q=London&units=metric',
     queryKey: 'appid',
     appParams: { q: 'London', units: 'metric' },
     credential: 'ow-test-1f4a29c7e3b05d68a1f2c3b4d5e6f708',
-  },
-  {
-    folder: 'crypto-portfolio',
-    slot: 'coingecko',
-    host: 'api.coingecko.com',
-    // examples/crypto-portfolio/app.html: PRICES_URL
-    appUrl:
-      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,dogecoin&vs_currencies=usd&include_24hr_change=true',
-    queryKey: 'x_cg_demo_api_key',
-    appParams: { ids: 'bitcoin,ethereum,dogecoin', vs_currencies: 'usd', include_24hr_change: 'true' },
-    credential: 'cg-test-9b2d41f6a8c03e75b1d2c3a4b5e6f709',
   },
 ] as const;
 
@@ -107,9 +113,10 @@ beforeEach(async () => {
  */
 async function installAndConnect(
   starter: (typeof STARTERS)[number],
-  opts: { respond?: (url: string) => Response } = {},
+  opts: { respond?: (url: string) => Response; appId?: string; credential?: string } = {},
 ): Promise<{ execute: ReturnType<typeof createConnectedFetch>['execute']; calls: FetchCall[]; appId: string }> {
-  const appId = `app-${starter.folder}`;
+  const appId = opts.appId ?? `app-${starter.folder}`;
+  const credential = opts.credential ?? starter.credential;
   const declaration = readShippedManifest(starter.folder);
 
   // The manifest ships BARE — assert it, because the whole mechanism under test is that
@@ -121,7 +128,7 @@ async function installAndConnect(
   const outcome = await persistConnectionRequirement(db, { appId, requirement: declaration, channel: 'starter' });
   expect(outcome.ok, outcome.ok === false ? `persist refused: ${outcome.reason}` : '').toBe(true);
 
-  db.setSecret(authConnectionCredentialSecretKey(appId, starter.slot, 'api_key'), starter.credential);
+  db.setSecret(authConnectionCredentialSecretKey(appId, starter.slot, 'api_key'), credential);
   db.approveConnection(appId, starter.slot);
   invalidateNetGrants(appId);
 
@@ -242,25 +249,39 @@ for (const starter of STARTERS) {
   });
 }
 
-describe('AC6 — the two starters do not cross-contaminate', () => {
-  it('each app gets ONLY its own provider’s query key, with its own credential', async () => {
-    // Both starters share the `api_key` kind and the same field key. A slot-routing or
-    // credential-lookup defect would be invisible in a single-app test and catastrophic
-    // in production — the wrong user's key on the wrong provider's wire.
-    const weather = await installAndConnect(STARTERS[0]);
-    const crypto = await installAndConnect(STARTERS[1]);
+describe('AC6 — two installs do not cross-contaminate', () => {
+  // REWORKED (TASK-20260815-starter-apps-rebuild). The original drove the TWO shipped
+  // query starters (weather-planner/OpenWeather + crypto-portfolio/CoinGecko) and
+  // asserted neither provider's query key nor credential crossed to the other's wire.
+  // That two-query-starter premise is OBSOLETE: the re-curated shelf ships exactly ONE
+  // query-credential starter (`weather`) — crypto-portfolio's successor `trade-copilot`
+  // authenticates via the registry's pinned CDP JWT Authorization header and cannot sit
+  // in a query table. The provider-level half of the old claim (each registry entry pins
+  // EXACTLY its own query key; an authored template is refused; substitution deep-copies)
+  // is covered in packages/auth/src/__tests__/registry-query-credentials.test.ts.
+  //
+  // What SURVIVES here — and was the catastrophic half — is the lookup keying: the
+  // executor resolves the credential by (appId, slot), so one user's install must never
+  // see another install's key. Asserted across two installs of the SAME shipped starter
+  // with distinct credentials, through the same production path as everything above.
+  it('each install gets ONLY its own credential on the wire', async () => {
+    const first = await installAndConnect(STARTERS[0], { appId: 'app-weather-first' });
+    const second = await installAndConnect(STARTERS[0], {
+      appId: 'app-weather-second',
+      credential: 'ow-test-second-7d3c91b5e2a04f68c1d2e3f4a5b60718',
+    });
 
-    await weather.execute(weather.appId, { url: STARTERS[0].appUrl, method: 'GET' });
-    await crypto.execute(crypto.appId, { url: STARTERS[1].appUrl, method: 'GET' });
+    await first.execute(first.appId, { url: STARTERS[0].appUrl, method: 'GET' });
+    await second.execute(second.appId, { url: STARTERS[0].appUrl, method: 'GET' });
 
-    const weatherUrl = new URL(weather.calls[0]!.url);
-    expect(weatherUrl.searchParams.get('appid')).toBe(STARTERS[0].credential);
-    expect(weatherUrl.searchParams.get('x_cg_demo_api_key'), 'no foreign key may ride along').toBeNull();
-    expect(weather.calls[0]!.url).not.toContain(STARTERS[1].credential);
+    const firstUrl = new URL(first.calls[0]!.url);
+    expect(firstUrl.searchParams.get('appid')).toBe(STARTERS[0].credential);
+    expect(first.calls[0]!.url, 'no foreign credential may ride along').not.toContain(
+      'ow-test-second-7d3c91b5e2a04f68c1d2e3f4a5b60718',
+    );
 
-    const cryptoUrl = new URL(crypto.calls[0]!.url);
-    expect(cryptoUrl.searchParams.get('x_cg_demo_api_key')).toBe(STARTERS[1].credential);
-    expect(cryptoUrl.searchParams.get('appid'), 'no foreign key may ride along').toBeNull();
-    expect(crypto.calls[0]!.url).not.toContain(STARTERS[0].credential);
+    const secondUrl = new URL(second.calls[0]!.url);
+    expect(secondUrl.searchParams.get('appid')).toBe('ow-test-second-7d3c91b5e2a04f68c1d2e3f4a5b60718');
+    expect(second.calls[0]!.url, 'no foreign credential may ride along').not.toContain(STARTERS[0].credential);
   });
 });

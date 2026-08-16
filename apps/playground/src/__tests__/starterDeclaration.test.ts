@@ -31,13 +31,20 @@ import {
 import { loadStarterHtml, STARTER_PREFIX } from '../starter/starterApps.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
-/** Pinned shared literals (task file §Shared literals v2). */
-const DEMO_FOLDER = 'connection-demo';
+/**
+ * Pinned shared literals (task file §Shared literals v2).
+ *
+ * RE-POINTED (TASK-20260815-starter-apps-rebuild): `connection-demo` was removed in the
+ * shelf re-curation; `weather` is the plain-api_key declarer that stands in for it. In
+ * every suite below except the final real-glob one the folder is only a KEY into the
+ * injected fixture map, so the manifest values stay the deliberate fixture values.
+ */
+const DEMO_FOLDER = 'weather';
 const DEMO_SOURCE = `starter:${DEMO_FOLDER}`;
 const DECLARED_HOST = 'api.example.com';
 
 /**
- * The bundled starter HTML this suite pretends `examples/connection-demo/app.html`
+ * The bundled starter HTML this suite pretends `examples/weather/app.html`
  * ships. The resolver reads the real glob in production; tests inject so the assertions
  * pin the RULE (both facts must hold) rather than the current bytes of a fixture file,
  * which would make every future edit to the demo app a red test here.
@@ -139,7 +146,7 @@ describe('T2d — the comparison reads the PINNED factory version, never current
     // The hole: `RunView` executes `current_version` (`library.ts` → `getAppHtml(id)` with
     // no version), while the resolver validated ONLY v1. A whole-DB import can therefore
     // supply v1 = the repo's real bytes (public, free to copy) + `install_source` =
-    // 'starter:connection-demo' + current_version = 2 = attacker code. Both facts held,
+    // 'starter:weather' + current_version = 2 = attacker code. Both facts held,
     // the declaration attached, and the sheet said "this app ships with a declared
     // connection" about code that shipped nothing. The credential brokering is keyed on
     // appId, so the ATTACKER's version is what any approval would have benefited.
@@ -412,13 +419,13 @@ describe('the PRE-INSTALL lookup — what the run view discloses before anything
     // fail for the reason it names.
     //
     // Attempt 1 passed a bare folder name — useless, because without the guard
-    // `'connection-demo'.slice(9)` is `'on-demo'`, which matches nothing, so the function
+    // `'weather'.slice(9)` is `''`, which matches nothing, so the function
     // returns null either way. The guard was never exercised and the test proved nothing.
     //
     // The discriminating input has to be one where the UNGUARDED `slice()` lands exactly
     // on a real folder. `STARTER_PREFIX` is 9 chars, so a 9-char prefix followed by the
     // folder name does it: with the guard this is refused outright; without it, the slice
-    // yields `connection-demo` and the function would answer for an id it has no
+    // yields `weather` and the function would answer for an id it has no
     // authority over. That is the whole point of the guard — an installed app's id must
     // go through the two-fact resolver, never this weaker lookup.
     const spoofed = `..:.:.:.:${DEMO_FOLDER}`;
@@ -444,33 +451,42 @@ describe('the REAL production glob — no fixtures injected (Gate-4 review, MAJO
   // patterns and `folderOf`'s regex — was executed by no committed test at all.
   //
   // The verifier mutated the manifest glob to a misspelled pattern and all 477 playground
-  // tests stayed GREEN. Concretely that ships a build where `connection-demo` resolves to
-  // nothing for every user: no install disclosure, an empty wizard behind the CTA, no
+  // tests stayed GREEN. Concretely that ships a build where the declaring starter resolves
+  // to nothing for every user: no install disclosure, an empty wizard behind the CTA, no
   // Settings row — the exact gap this whole task exists to close, silently reopened.
   //
   // These tests deliberately run WITHOUT the fixture seam, against the real bundled files.
+  //
+  // RE-POINTED at `trade-copilot` (TASK-20260815-starter-apps-rebuild): connection-demo
+  // is gone, and trade-copilot is the declaring starter whose app.html + connection.json
+  // both ship today. Its manifest names the registry-pinned Coinbase brand, so the values
+  // asserted here are the POST-SUBSTITUTION ones — the registry's pinned host list.
+  const REAL_FOLDER = 'trade-copilot';
+  /** `examples/trade-copilot/connection.json` after registry substitution (Coinbase). */
+  const REAL_DECLARED_HOSTS = ['api.coinbase.com'];
+
   beforeEach(() => {
     __resetDeclarationManifestsForTests();
   });
 
-  it('resolves the real examples/connection-demo manifest through the real glob', async () => {
-    const factory = await loadStarterHtml(`${STARTER_PREFIX}connection-demo`);
-    expect(factory, 'the app.html glob must find the demo').toBeDefined();
+  it(`resolves the real examples/${REAL_FOLDER} manifest through the real glob`, async () => {
+    const factory = await loadStarterHtml(`${STARTER_PREFIX}${REAL_FOLDER}`);
+    expect(factory, 'the app.html glob must find the starter').toBeDefined();
 
     const appId = db.installApp({
-      displayName: 'connection demo',
+      displayName: 'trade copilot',
       html: factory!,
-      installSource: DEMO_SOURCE,
+      installSource: `starter:${REAL_FOLDER}`,
     }).appId;
 
     const result = await starterDeclarationFor(db, appId);
     expect(result, 'the production glob + folderOf + parse chain must actually work').not.toBeNull();
-    expect(result?.declaration.declaredApiHosts).toEqual([DECLARED_HOST]);
+    expect(result?.declaration.declaredApiHosts).toEqual(REAL_DECLARED_HOSTS);
   });
 
   it('resolves the real manifest through the PRE-INSTALL lookup too', async () => {
-    const declaration = await starterDeclarationForStarterId(`${STARTER_PREFIX}connection-demo`);
-    expect(declaration?.declaredApiHosts).toEqual([DECLARED_HOST]);
+    const declaration = await starterDeclarationForStarterId(`${STARTER_PREFIX}${REAL_FOLDER}`);
+    expect(declaration?.declaredApiHosts).toEqual(REAL_DECLARED_HOSTS);
   });
 
   it('a real starter that ships NO manifest resolves to null through the real glob', async () => {

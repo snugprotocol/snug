@@ -62,11 +62,21 @@ const readManifest = (app: string): unknown =>
  * without it a green here could mean "substitution works" or "nothing borrows at all".
  */
 const REGISTRY_BACKED = [
-  { app: 'crypto-portfolio', registryKey: 'coingecko', kind: 'api_key', fieldKeys: ['api_key'] },
-  { app: 'weather-planner', registryKey: 'openweather', kind: 'api_key', fieldKeys: ['api_key'] },
-  { app: 'my-repos', registryKey: 'github', kind: 'bearer_token', fieldKeys: ['token'] },
+  // Re-curated shelf (TASK-20260815-starter-apps-rebuild). The CoinGecko row is
+  // OBSOLETE — no shipped starter borrows it any more; the inline Guard-2b probes
+  // below still exercise that registry entry directly. `trade-copilot` AUTHORS its
+  // field list, but the bytes match the registry pin exactly, so admission's
+  // idempotency accepts the borrow and the substituted list is still the pinned one.
+  { app: 'weather', registryKey: 'openweather', kind: 'api_key', fieldKeys: ['api_key'] },
+  { app: 'github', registryKey: 'github', kind: 'bearer_token', fieldKeys: ['token'] },
   {
-    app: 'spotify-party-dj',
+    app: 'trade-copilot',
+    registryKey: 'coinbase',
+    kind: 'api_key',
+    fieldKeys: ['api_key', 'ed25519_private_key'],
+  },
+  {
+    app: 'spotify',
     registryKey: 'spotify',
     kind: 'oauth2_auth_code',
     fieldKeys: ['client_id'],
@@ -136,10 +146,21 @@ describe('P4-AC11 — a registry-backed starter RECEIVES the registry credential
     });
   }
 
-  it('connection-demo (the control) borrows NOTHING and keeps its own single field', () => {
-    // Without this, a green above could mean "substitution works" or "everything borrows
-    // and gets overwritten". This pins that the non-registry starter is untouched.
-    const result = admitShipped('connection-demo');
+  it('a non-registry declarer (the control) borrows NOTHING and keeps its own single field', () => {
+    // MIGRATED from the retired connection-demo starter to an INLINE fixture (the
+    // re-curated shelf ships only registry-borrowing manifests): without this, a green
+    // above could mean "substitution works" or "everything borrows and gets
+    // overwritten". This pins that a non-registry declaration is untouched.
+    const result = admitConnectionRequirement(
+      {
+        slot: 'example',
+        provider: { name: 'Example' },
+        kind: 'api_key',
+        fields: [{ key: 'api_key', label: 'API key', type: 'secret' }],
+        declaredApiHosts: ['api.example.com'],
+      },
+      { channel: 'starter' },
+    );
     expect(result.ok).toBe(true);
     expect(result.borrowed, 'api.example.com is in no registry entry').not.toBe(true);
     const fields = (result.requirement as { fields?: Array<{ key: string }> }).fields;
@@ -148,11 +169,11 @@ describe('P4-AC11 — a registry-backed starter RECEIVES the registry credential
 });
 
 describe('P4-AC11 — a registry-backed OAuth starter RECEIVES the registry endpoints', () => {
-  it('spotify-party-dj: the authorize and token URLs come from the registry, not empty strings', () => {
+  it('spotify: the authorize and token URLs come from the registry, not empty strings', () => {
     // The bare manifest declares no `endpoints`, and the old condition only overwrote a
     // seat the DECLARATION already carried. So the OAuth flow was aimed at
     // `requirement.endpoints?.authorizeUrl ?? ''` — an empty string.
-    const requirement = admitShipped('spotify-party-dj').requirement as {
+    const requirement = admitShipped('spotify').requirement as {
       endpoints?: { authorizeUrl?: string; tokenUrl?: string };
     };
     const registry = WELL_KNOWN_PROVIDERS_REGISTRY['spotify']?.endpoints;
@@ -164,12 +185,12 @@ describe('P4-AC11 — a registry-backed OAuth starter RECEIVES the registry endp
     expect(requirement.endpoints?.tokenUrl).toBe('https://accounts.spotify.com/api/token');
   });
 
-  it('spotify-party-dj: PKCE is substituted — the registration walkthrough promises it', () => {
+  it('spotify: PKCE is substituted — the registration walkthrough promises it', () => {
     // The harvested walkthrough tells the user "this hub signs in with PKCE and never
     // needs [a client secret]". Dropping `pkce` makes the registry's own copy describe a
     // flow the code cannot perform, and silently downgrades the flow the user was told
     // they were getting.
-    const requirement = admitShipped('spotify-party-dj').requirement as { pkce?: boolean };
+    const requirement = admitShipped('spotify').requirement as { pkce?: boolean };
     expect(requirement.pkce).toBe(WELL_KNOWN_PROVIDERS_REGISTRY['spotify']?.pkce);
     expect(requirement.pkce).toBe(true);
   });
@@ -179,7 +200,7 @@ describe('P4-AC11 — a registry-backed OAuth starter RECEIVES the registry endp
     // writing them when the registry HAS none: `deriveConnectionAllowedHosts` unions
     // endpoint hosts into the FROZEN ceiling, so an invented URL silently widens the wall
     // the user approved. coingecko/openweather/coinbase carry no endpoints by design.
-    for (const app of ['crypto-portfolio', 'weather-planner']) {
+    for (const app of ['weather', 'trade-copilot']) {
       const requirement = admitShipped(app).requirement as { endpoints?: unknown; pkce?: unknown };
       expect(requirement.endpoints, `${app} must not sprout OAuth URLs`).toBeUndefined();
       expect(requirement.pkce, `${app} has no flow for PKCE to describe`).toBeUndefined();

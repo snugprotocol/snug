@@ -1,0 +1,1447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rewind</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f6f3ec; --fg: #201b2e; --muted: #6e6883;
+      --card: #fffdf8; --border: #e6e0d3;
+      --accent: #6b3fd4; --accent-soft: #ece4fb; --accent-ink: #fdfbff;
+      --good: #1e7a4f; --danger: #b23a2e; --danger-soft: #f9e4e1;
+      --track: #ece6d9; --tile-ink: #fdfcff; --tile-scrim: rgba(22, 13, 44, 0.62);
+      --skeleton-a: #ece6da; --skeleton-b: #f6f2e9;
+      --shadow: 0 10px 30px rgba(52, 34, 96, 0.10);
+    }
+    :root[data-theme="dark"] {
+      --bg: #14101d; --fg: #ece8f6; --muted: #9c94b4;
+      --card: #1d1729; --border: #322a47;
+      --accent: #a685f0; --accent-soft: #2b2145; --accent-ink: #171025;
+      --good: #4ecf8f; --danger: #e26a5b; --danger-soft: #3c1f1b;
+      --track: #2a2338; --tile-ink: #f6f3ff; --tile-scrim: rgba(10, 6, 20, 0.66);
+      --skeleton-a: #241d33; --skeleton-b: #2c2440;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; font-family: inherit; }
+    .wrap { max-width: 1020px; margin: 0 auto; padding: 20px 16px 48px; }
+    header.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    h1 {
+      font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+      font-size: clamp(2rem, 5vw, 2.7rem); font-weight: 600; letter-spacing: -0.01em;
+      margin: 0; color: var(--fg);
+    }
+    h1 .accent { color: var(--accent); }
+    .tag { color: var(--muted); font-size: 0.95rem; }
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 18px; }
+    .tab {
+      border: 1px solid var(--border); background: var(--card); color: var(--muted);
+      border-radius: 999px; padding: 10px 18px; font-size: 0.92rem; font-weight: 600;
+      transition: border-color 160ms ease-out, background 160ms ease-out, color 160ms ease-out;
+    }
+    .tab.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+    .tab:active { transform: scale(0.98); }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 18px; padding: 18px; box-shadow: var(--shadow); margin-bottom: 16px;
+    }
+    .card h2 {
+      margin: 0 0 12px; font-size: 0.78rem; text-transform: uppercase;
+      letter-spacing: 0.1em; color: var(--muted); font-weight: 700;
+    }
+    .portrait-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+    .greet { font-family: Georgia, serif; font-size: 1.25rem; margin: 0; }
+    .greet .who { color: var(--accent); }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px; background: var(--card); gap: 2px; }
+    .seg button {
+      border: none; background: none; color: var(--muted); border-radius: 999px;
+      padding: 8px 14px; font-size: 0.86rem; font-weight: 600;
+      transition: background 160ms ease-out, color 160ms ease-out;
+    }
+    .seg button.on { background: var(--accent); color: var(--accent-ink); }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-bottom: 16px; }
+    .stat { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: var(--shadow); }
+    .stat .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+    .stat .big { font-size: 2.35rem; font-weight: 800; line-height: 1.05; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+    .stat .big.na { color: var(--muted); font-weight: 600; }
+    .stat .cap { color: var(--muted); font-size: 0.82rem; line-height: 1.45; margin-top: 8px; }
+    .meter { height: 10px; border-radius: 999px; background: var(--track); overflow: hidden; }
+    .meter > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width 400ms ease-out; }
+    .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+    .tile { position: relative; aspect-ratio: 1; border-radius: 16px; overflow: hidden; border: 1px solid var(--border); }
+    .tile .rank {
+      position: absolute; top: 8px; left: 11px; color: var(--tile-ink); opacity: 0.92;
+      font-family: Georgia, serif; font-weight: 700; font-size: 1.15rem;
+    }
+    .tile .label { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 10px 9px; background: linear-gradient(180deg, transparent, var(--tile-scrim)); color: var(--tile-ink); }
+    .tile .name { font-weight: 700; font-size: 0.86rem; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .tile .who { font-size: 0.74rem; opacity: 0.88; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    .artist { text-align: center; min-width: 0; }
+    .face {
+      width: 100%; aspect-ratio: 1; border-radius: 50%; border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--tile-ink); font-family: Georgia, serif; font-weight: 700;
+      font-size: clamp(1.1rem, 3vw, 1.9rem);
+    }
+    .artist .name { margin-top: 8px; font-weight: 700; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .artist .genre { color: var(--muted); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recent-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+    .chip { border: 1px solid var(--border); background: var(--bg); border-radius: 999px; padding: 7px 13px; font-size: 0.8rem; color: var(--muted); }
+    .mag { border-top: 4px solid var(--accent); }
+    .mag .kicker { color: var(--accent); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 800; }
+    .mag h3 { font-family: Georgia, serif; font-size: clamp(1.4rem, 3.4vw, 2rem); margin: 6px 0 10px; line-height: 1.15; }
+    .mag .story { font-family: Georgia, serif; font-size: 1.02rem; line-height: 1.55; margin: 0 0 12px; }
+    .mag ul { margin: 0 0 4px; padding: 0; list-style: none; display: grid; gap: 8px; }
+    .mag li { padding-left: 20px; position: relative; font-size: 0.92rem; line-height: 1.45; }
+    .mag li::before { content: '✦'; position: absolute; left: 0; color: var(--accent); }
+    .mag .stamp { color: var(--muted); font-size: 0.78rem; margin-top: 10px; }
+    .btn {
+      border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+      border-radius: 12px; padding: 11px 20px; font-size: 0.95rem; font-weight: 700;
+      transition: filter 160ms ease-out, transform 160ms ease-out;
+    }
+    .btn:hover { filter: brightness(1.06); }
+    .btn:active { transform: scale(0.98); }
+    .btn:disabled { opacity: 0.55; cursor: default; }
+    .btn.ghost { background: transparent; color: var(--accent); }
+    .notice { border: 1px solid var(--border); background: var(--bg); border-radius: 12px; padding: 10px 14px; color: var(--muted); font-size: 0.9rem; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    .notice.bad { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
+    .skel {
+      background: linear-gradient(100deg, var(--skeleton-a) 40%, var(--skeleton-b) 50%, var(--skeleton-a) 60%);
+      background-size: 200% 100%; animation: shimmer 1.4s ease-in-out infinite;
+      border-radius: 16px; border: 1px solid var(--border);
+    }
+    @keyframes shimmer { 0% { background-position: 120% 0; } 100% { background-position: -80% 0; } }
+    .skel.sq { aspect-ratio: 1; }
+    .skel.round { aspect-ratio: 1; border-radius: 50%; }
+    .skel.line { height: 14px; border-radius: 8px; border: none; margin-bottom: 10px; }
+    .hero { text-align: left; }
+    .hero h3 { font-family: Georgia, serif; font-size: clamp(1.5rem, 4vw, 2.1rem); margin: 4px 0 10px; }
+    .hero p { line-height: 1.55; margin: 0 0 12px; }
+    .hero ul { margin: 0 0 14px; padding-left: 0; list-style: none; display: grid; gap: 8px; }
+    .hero li { padding-left: 22px; position: relative; line-height: 1.45; font-size: 0.94rem; }
+    .hero li::before { content: '◍'; position: absolute; left: 0; color: var(--accent); }
+    .preview-cap { color: var(--muted); font-size: 0.82rem; font-style: italic; margin-top: 10px; }
+    .bars { display: flex; align-items: flex-end; gap: 3px; height: 96px; }
+    .bar-col { flex: 1; display: flex; align-items: flex-end; height: 100%; min-width: 4px; }
+    .bar { width: 100%; border-radius: 4px 4px 2px 2px; background: var(--accent); min-height: 4px; }
+    .trend-cap { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+    .seat-row { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 0.92rem; }
+    .seat-row:last-child { border-bottom: none; }
+    .seat-day { color: var(--muted); font-size: 0.8rem; width: 92px; flex: none; font-variant-numeric: tabular-nums; }
+    .seat-name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .streak { color: var(--accent); font-size: 0.75rem; font-weight: 700; flex: none; }
+    .np-head { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+    .np-art { flex: none; width: 84px; height: 84px; border-radius: 14px; border: 1px solid var(--border); }
+    .np-title { font-family: Georgia, serif; font-size: 1.3rem; font-weight: 700; line-height: 1.2; margin: 0; }
+    .np-sub { color: var(--muted); font-size: 0.9rem; margin: 4px 0 0; }
+    .np-device { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+    .progress { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; margin: 10px 0 6px; }
+    .progress > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+    .times { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+    .transport { display: flex; gap: 14px; justify-content: center; margin: 16px 0 6px; }
+    .t-btn {
+      width: 56px; height: 56px; border-radius: 50%; border: 1px solid var(--border);
+      background: var(--card); color: var(--fg); font-size: 1.15rem;
+      transition: border-color 160ms ease-out, transform 160ms ease-out;
+    }
+    .t-btn:hover { border-color: var(--accent); }
+    .t-btn:active { transform: scale(0.95); }
+    .t-btn:disabled { opacity: 0.5; cursor: default; }
+    .t-btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+    .govern { color: var(--muted); font-size: 0.8rem; text-align: center; line-height: 1.5; margin-top: 10px; }
+    .ask-lede { line-height: 1.6; margin: 0 0 8px; }
+    .lane { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; }
+    .prompt-text { font-family: Georgia, serif; font-size: 1.02rem; line-height: 1.5; margin: 6px 0 10px; }
+    .prompt-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .prompt-why { color: var(--muted); font-size: 0.82rem; flex: 1; min-width: 180px; }
+    .copy-btn { border: 1px solid var(--border); background: var(--bg); color: var(--accent); border-radius: 10px; padding: 8px 16px; font-size: 0.85rem; font-weight: 700; }
+    .copy-btn:hover { border-color: var(--accent); }
+    .foot { color: var(--muted); font-size: 0.8rem; margin-top: 18px; line-height: 1.55; }
+    .connecting { display: flex; align-items: center; justify-content: center; min-height: 60vh; color: var(--muted); font-style: italic; font-family: Georgia, serif; }
+    .dots { display: inline-flex; gap: 4px; }
+    .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.1s ease-out infinite; }
+    .dots i:nth-child(2) { animation-delay: 0.18s; } .dots i:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes blink { 0%, 70%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
+    @media (max-width: 760px) {
+      .tiles { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+      .portrait-head { flex-direction: column; align-items: flex-start; }
+    }
+    @media (max-width: 420px) {
+      .wrap { padding: 14px 10px 36px; }
+      .card { padding: 14px; }
+      .transport { gap: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+// hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+// before any write, and scrubs the response. You never see a token.
+// A connection whose host only the USER knows (a device on their network): address it as
+// snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    const RESPONSE_SCHEMA = {
+      headline: 'string: a punchy 3-8 word magazine headline for this listening period (ALWAYS include)',
+      story: 'string: 2-4 warm, specific sentences about what this listening says, naming real artists or tracks from the stats provided (ALWAYS include)',
+      highlights: 'array of 2-4 short strings, each one concrete observation grounded in the stats, e.g. "Khruangbin held your #1 seat again" (ALWAYS include)',
+    };
+
+    // ============================================================
+    // 6. YOUR APP — Rewind
+    // ============================================================
+    // Complement, never clone: Spotify shows you music; Rewind understands YOUR
+    // listening and remembers what Spotify forgets. All reads and writes travel
+    // through the governed `spotify` connection (declared host api.spotify.com,
+    // OAuth PKCE, scopes pinned by the hub's registry) — the app never sees a
+    // token, and playback writes stop at the host's confirm sheet.
+    //
+    // Scope honesty (the registry pin, ADR-0028): the pinned scope set carries
+    // top-lists + playback but NOT user-read-recently-played. Rewind attempts
+    // the recently-played read ONCE per session, expects the 403, says so in
+    // the UI, and derives its discovery metric from top-list drift instead —
+    // an honest degrade, not a silent one.
+    //
+    // Agent posture (ADR-0011): agent-driven. The "weekly rewind" card is the
+    // model's turn — the APP does the reading and sends compact stats; the
+    // model writes the magazine card. Off-schema replies become a visible
+    // notice with a retry, never a crash and never fabricated content.
+
+    const SPOTIFY = 'https://api.spotify.com';
+
+    const RANGES = [
+      { id: 'short_term', label: 'last 4 weeks' },
+      { id: 'medium_term', label: 'last 6 months' },
+      { id: 'long_term', label: 'all time' },
+    ];
+    const rangeLabel = (id) => (RANGES.find((r) => r.id === id) || RANGES[0]).label;
+
+    // ---------- tiny pure helpers ----------
+
+    /** Parse a governed-response body that may arrive as a JSON string, an object, or empty. */
+    function parseBody(body) {
+      if (body == null) return null;
+      if (typeof body === 'object') return body;
+      if (typeof body === 'string' && body.trim() !== '') {
+        try { return JSON.parse(body); } catch (e) { return null; }
+      }
+      return null;
+    }
+
+    const itemsOf = (data) => (data && Array.isArray(data.items) ? data.items.filter(Boolean) : []);
+
+    /** Deterministic hue from any string — the seed for the CSS-drawn "cover art". */
+    function hashHue(s) {
+      let h = 0;
+      for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) >>> 0;
+      return h % 360;
+    }
+    /**
+     * Gradient tile art. No images by design: hues are data-driven (hashed from the
+     * track/artist identity), so this is content styling, not component theming —
+     * every THEME color still lives in the :root custom properties.
+     */
+    function tileArt(seed) {
+      const h1 = hashHue(seed);
+      const h2 = (h1 + 46) % 360;
+      return { background: 'linear-gradient(135deg, hsl(' + h1 + ', 62%, 52%), hsl(' + h2 + ', 70%, 34%))' };
+    }
+
+    const pct = (x) => Math.round(x * 100);
+    const primaryArtist = (t) => (t && Array.isArray(t.artists) && t.artists[0] ? t.artists[0] : null);
+    const artistNameOf = (t) => { const a = primaryArtist(t); return a && typeof a.name === 'string' ? a.name : ''; };
+    const initialsOf = (name) =>
+      String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
+
+    function localDay() {
+      const d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function fmtMs(ms) {
+      const s = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+      return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    }
+    function safeJson(raw, fallback) {
+      if (typeof raw !== 'string') return fallback;
+      try { const v = JSON.parse(raw); return v == null ? fallback : v; } catch (e) { return fallback; }
+    }
+
+    // ---------- honest failure mapping (401/403/429 are different truths) ----------
+
+    function readFailure(res) {
+      if (!res.ok) {
+        return {
+          kind: 'offline',
+          text: (res.error && res.error.message) || 'the request never left the hub',
+          retryable: !(res.error && res.error.retryable === false),
+        };
+      }
+      if (res.status === 401) {
+        return { kind: 'unconnected', text: 'Spotify is not connected here (or the sign-in expired). Connect it from this app’s connection screen and Rewind fills in.', retryable: true };
+      }
+      if (res.status === 403) {
+        return { kind: 'refused', text: 'Spotify refused the request. A development-mode Spotify app only serves its allowlisted accounts, and its owner needs an active Premium subscription — the connection itself is fine.', retryable: true };
+      }
+      if (res.status === 429) {
+        return { kind: 'ratelimited', text: 'Spotify is rate-limiting this connection — give it a minute, then retry.', retryable: true };
+      }
+      if (res.status >= 400) {
+        return { kind: 'error', text: 'Spotify answered ' + res.status + ' — try again in a moment.', retryable: true };
+      }
+      return null;
+    }
+
+    // ---------- portrait metrics (defined once, journaled with the same meaning) ----------
+
+    /** Rotation depth: the share of the top-50 tracks held by just the top 3 artists. */
+    function rotationDepth(tracks) {
+      if (!Array.isArray(tracks) || tracks.length < 5) return null;
+      const counts = new Map();
+      for (const t of tracks) {
+        const a = primaryArtist(t);
+        if (!a) continue;
+        const key = a.id || a.name;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      if (counts.size === 0) return null;
+      const top3 = [...counts.values()].sort((x, y) => y - x).slice(0, 3).reduce((s, n) => s + n, 0);
+      return top3 / tracks.length;
+    }
+
+    /** Discovery: share of this period's top-20 artists absent from the all-time top 50. */
+    function discoveryVsCanon(artists, canonIds) {
+      if (!Array.isArray(artists) || artists.length === 0 || !(canonIds instanceof Set) || canonIds.size === 0) return null;
+      const windowed = artists.slice(0, 20);
+      const fresh = windowed.filter((a) => a && !canonIds.has(a.id)).length;
+      return fresh / windowed.length;
+    }
+
+    /** Bonus lane when the recently-played scope is actually granted. */
+    function recentMetrics(items, canonIds) {
+      const plays = (Array.isArray(items) ? items : []).map((it) => (it && it.track ? it.track : null)).filter(Boolean);
+      if (plays.length === 0) return null;
+      const uniq = new Set(plays.map((t) => t.id || t.name)).size;
+      let fresh = 0;
+      if (canonIds instanceof Set && canonIds.size > 0) {
+        for (const t of plays) {
+          const a = primaryArtist(t);
+          if (a && !canonIds.has(a.id)) fresh += 1;
+        }
+      }
+      return { count: plays.length, repeatRate: 1 - uniq / plays.length, freshShare: canonIds instanceof Set && canonIds.size > 0 ? fresh / plays.length : null };
+    }
+
+    /** Accept the agent's rewind card ONLY if the whole shape checks out. */
+    function validateRewind(data) {
+      if (!data || typeof data !== 'object') return null;
+      const headline = typeof data.headline === 'string' ? data.headline.trim() : '';
+      const story = typeof data.story === 'string' ? data.story.trim() : '';
+      if (headline === '' || headline.length > 140) return null;
+      if (story === '' || story.length > 900) return null;
+      if (!Array.isArray(data.highlights)) return null;
+      const highlights = data.highlights
+        .filter((h) => typeof h === 'string' && h.trim() !== '')
+        .map((h) => h.trim().slice(0, 220))
+        .slice(0, 4);
+      if (highlights.length === 0) return null;
+      return { headline, story, highlights };
+    }
+
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS rewind_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        day TEXT NOT NULL,
+        top_artists TEXT NOT NULL,
+        top_tracks TEXT NOT NULL,
+        rotation_depth REAL NOT NULL,
+        discovery_ratio REAL,
+        taken_at TEXT NOT NULL
+      )`,
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_rewind_snapshots_day ON rewind_snapshots (day)',
+    ];
+
+    // ---------- shared little components ----------
+
+    function Meter({ value }) {
+      return (
+        <div className="meter" role="img" aria-label={pct(value) + ' percent'}>
+          <span style={{ width: pct(value) + '%' }} />
+        </div>
+      );
+    }
+
+    function StatTile({ label, value, caption }) {
+      return (
+        <div className="stat">
+          <div className="label">{label}</div>
+          {value == null
+            ? <div className="big na">—</div>
+            : <React.Fragment><div className="big">{pct(value)}%</div><Meter value={value} /></React.Fragment>}
+          <div className="cap">{caption}</div>
+        </div>
+      );
+    }
+
+    function TrackTile({ track, rank }) {
+      const artist = artistNameOf(track);
+      return (
+        <div className="tile" style={tileArt((track.id || '') + track.name + artist)} title={track.name + ' — ' + artist}>
+          <span className="rank" aria-hidden="true">{rank}</span>
+          <div className="label">
+            <div className="name">{track.name}</div>
+            <div className="who">{artist}</div>
+          </div>
+        </div>
+      );
+    }
+
+    function ArtistFace({ artist, rank }) {
+      const genre = Array.isArray(artist.genres) && artist.genres[0] ? artist.genres[0] : '';
+      return (
+        <div className="artist" title={'#' + rank + ' ' + artist.name}>
+          <div className="face" style={tileArt((artist.id || '') + artist.name)} aria-hidden="true">{initialsOf(artist.name)}</div>
+          <div className="name">{artist.name}</div>
+          <div className="genre">{genre || ' '}</div>
+        </div>
+      );
+    }
+
+    function SkeletonRow({ n, round }) {
+      return (
+        <div className="tiles" aria-hidden="true">
+          {Array.from({ length: n }, (_, i) => <div key={i} className={'skel ' + (round ? 'round' : 'sq')} />)}
+        </div>
+      );
+    }
+
+    function Notice({ bad, children }) {
+      return <div className={'notice' + (bad ? ' bad' : '')} role="status">{children}</div>;
+    }
+
+    // ---------- surfaces ----------
+
+    function Portrait(props) {
+      const {
+        phase, failure, view, range, onRange, rangeLoading, rangeNote, profile, canonIds,
+        recent, snapshots, lastRewind, rewindNote, onRewind, isWaiting, onRetry,
+      } = props;
+
+      const latestSnap = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+
+      if (phase === 'loading') {
+        return (
+          <div>
+            <div className="stat-grid">
+              <div className="stat"><div className="skel line" style={{ width: '40%' }} /><div className="skel line" style={{ width: '70%' }} /><div className="skel line" style={{ width: '55%' }} /></div>
+              <div className="stat"><div className="skel line" style={{ width: '40%' }} /><div className="skel line" style={{ width: '70%' }} /><div className="skel line" style={{ width: '55%' }} /></div>
+            </div>
+            <section className="card"><h2>top five tracks</h2><SkeletonRow n={5} /></section>
+            <section className="card"><h2>top five artists</h2><SkeletonRow n={5} round /></section>
+          </div>
+        );
+      }
+
+      if (phase === 'unconnected') {
+        return (
+          <div>
+            <section className="card hero" data-testid="connect-hero">
+              <span className="lane">not connected yet</span>
+              <h3>Bring your listening into focus.</h3>
+              <p>
+                Rewind reads your own Spotify data through this hub’s governed <b>spotify</b> connection.
+                The hub signs every request outside the app, the app sees only scrubbed responses,
+                and anything that would change playback stops at a confirm first.
+              </p>
+              <ul>
+                <li><b>Portrait</b> — your top artists and tracks, rotation depth, and discovery, drawn as CSS art.</li>
+                <li><b>Trends</b> — a visit-by-visit journal in your own database: the history Spotify’s API cannot give you.</li>
+                <li><b>Now</b> — see what’s playing and steer it; every control is a confirmed write.</li>
+              </ul>
+              <SkeletonRow n={5} />
+              <p className="preview-cap">A preview of the shape only — your real top five appears once Spotify is connected. No sample data pretends to be you.</p>
+            </section>
+            {latestSnap && <SnapshotPortrait snap={latestSnap} />}
+          </div>
+        );
+      }
+
+      if (phase === 'failed') {
+        return (
+          <div>
+            <Notice bad>
+              <span>{failure ? failure.text : 'Something went wrong.'}</span>
+              {(!failure || failure.retryable) && <button className="btn ghost" onClick={onRetry}>retry</button>}
+            </Notice>
+            {latestSnap
+              ? <SnapshotPortrait snap={latestSnap} />
+              : <p className="foot">Nothing journaled yet, so there is no portrait to fall back on. Once a visit succeeds, Rewind keeps its own copy.</p>}
+          </div>
+        );
+      }
+
+      if (phase === 'empty') {
+        return (
+          <section className="card hero">
+            <h3>Not enough listening yet.</h3>
+            <p>
+              Spotify answered, but this account hasn’t built up enough plays for a portrait —
+              the top-lists need a couple of weeks of listening before they say anything true.
+              Play music, come back, and Rewind starts journaling.
+            </p>
+          </section>
+        );
+      }
+
+      // phase === 'ready'
+      const tracks = view ? view.tracks : [];
+      const artists = view ? view.artists : [];
+      const rot = rotationDepth(tracks);
+      const disc = range === 'long_term' ? null : discoveryVsCanon(artists, canonIds);
+      const who = profile && profile.name ? profile.name : null;
+
+      return (
+        <div>
+          <div className="portrait-head">
+            <p className="greet">{who ? <span><span className="who">{who}</span>{'’s '}</span> : 'your '}{rangeLabel(range)}, understood</p>
+            <div className="seg" role="tablist" aria-label="time range">
+              {RANGES.map((r) => (
+                <button key={r.id} className={r.id === range ? 'on' : ''} aria-pressed={r.id === range} onClick={() => onRange(r.id)}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {rangeNote && <Notice bad><span>{rangeNote}</span></Notice>}
+
+          {rangeLoading ? (
+            <div>
+              <section className="card"><h2>top five tracks</h2><SkeletonRow n={5} /></section>
+              <section className="card"><h2>top five artists</h2><SkeletonRow n={5} round /></section>
+            </div>
+          ) : (
+            <div>
+              <div className="stat-grid">
+                <StatTile
+                  label="rotation depth"
+                  value={rot}
+                  caption={rot == null
+                    ? 'needs at least a handful of top tracks to mean anything.'
+                    : 'of your top 50 tracks come from just 3 artists — how deep the rotation runs.'}
+                />
+                <StatTile
+                  label="discovery"
+                  value={disc}
+                  caption={range === 'long_term'
+                    ? 'your all-time canon is the baseline — pick a shorter lens to see what’s new against it.'
+                    : disc == null
+                      ? 'needs your all-time artist canon to compare against — it hasn’t loaded yet.'
+                      : recent && recent.status === 'unavailable'
+                        ? 'of this period’s top 20 artists are new against your all-time canon. (Play-by-play history needs a scope this connection doesn’t carry, so Rewind measures drift between your top lists instead.)'
+                        : 'of this period’s top 20 artists are new faces against your all-time canon.'}
+                />
+              </div>
+
+              {recent && recent.status === 'ok' && recent.stats && (
+                <div className="recent-chips">
+                  <span className="chip">last {recent.stats.count} plays</span>
+                  <span className="chip">{pct(recent.stats.repeatRate)}% repeats</span>
+                  {recent.stats.freshShare != null && <span className="chip">{pct(recent.stats.freshShare)}% fresh faces</span>}
+                </div>
+              )}
+
+              <section className="card" style={{ marginTop: 16 }}>
+                <h2>top five tracks</h2>
+                {tracks.length === 0
+                  ? <p className="foot">No top tracks in this window yet.</p>
+                  : <div className="tiles">{tracks.slice(0, 5).map((t, i) => <TrackTile key={t.id || i} track={t} rank={i + 1} />)}</div>}
+              </section>
+
+              <section className="card">
+                <h2>top five artists</h2>
+                {artists.length === 0
+                  ? <p className="foot">No top artists in this window yet.</p>
+                  : <div className="tiles">{artists.slice(0, 5).map((a, i) => <ArtistFace key={a.id || i} artist={a} rank={i + 1} />)}</div>}
+              </section>
+
+              <section className="card mag" data-testid="rewind-card">
+                <span className="kicker">the weekly rewind</span>
+                {rewindNote && (
+                  <Notice bad>
+                    <span>{rewindNote.text}</span>
+                    {rewindNote.retryable && <button className="btn ghost" onClick={onRewind} disabled={isWaiting}>try again</button>}
+                  </Notice>
+                )}
+                {isWaiting ? (
+                  <div aria-label="the agent is writing">
+                    <div className="skel line" style={{ width: '55%', height: 26 }} />
+                    <div className="skel line" style={{ width: '95%' }} />
+                    <div className="skel line" style={{ width: '88%' }} />
+                    <div className="skel line" style={{ width: '60%' }} />
+                  </div>
+                ) : lastRewind && lastRewind.card ? (
+                  <div>
+                    <h3>{lastRewind.card.headline}</h3>
+                    <p className="story">{lastRewind.card.story}</p>
+                    <ul>{lastRewind.card.highlights.map((h, i) => <li key={i}>{h}</li>)}</ul>
+                    <p className="stamp">written {new Date(lastRewind.at).toLocaleDateString()} · {rangeLabel(lastRewind.range)}</p>
+                    <button className="btn ghost" onClick={onRewind} style={{ marginTop: 6 }}>write a fresh one</button>
+                  </div>
+                ) : (
+                  <div>
+                    <h3>Your listening, written up.</h3>
+                    <p className="story">
+                      The app gathers the numbers; the agent writes the column — a headline, a short
+                      story, and a few highlights, grounded only in the stats above.
+                    </p>
+                    <button className="btn" onClick={onRewind}>write my rewind</button>
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /** A portrait rebuilt from the app's own journal — honestly labeled as such. */
+    function SnapshotPortrait({ snap }) {
+      return (
+        <section className="card">
+          <h2>your journaled portrait — captured {snap.day}</h2>
+          <p className="foot" style={{ marginTop: 0 }}>
+            Rebuilt from Rewind’s own journal, not from a live Spotify read.
+          </p>
+          <div className="stat-grid">
+            <StatTile label="rotation depth" value={snap.rotation} caption="as journaled that day." />
+            <StatTile label="discovery" value={snap.discovery} caption={snap.discovery == null ? 'not measured that day.' : 'as journaled that day.'} />
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <div className="tiles">
+              {snap.topTracks.slice(0, 5).map((t, i) => (
+                <div key={i} className="tile" style={tileArt((t.id || '') + (t.name || ''))}>
+                  <span className="rank" aria-hidden="true">{i + 1}</span>
+                  <div className="label"><div className="name">{t.name}</div><div className="who">{t.artist}</div></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    function Trends({ snapshots, dbErr }) {
+      if (dbErr) return <Notice bad><span>journal unavailable: {dbErr}</span></Notice>;
+      if (snapshots.length === 0) {
+        return (
+          <section className="card hero">
+            <h3>Trends grow one visit at a time.</h3>
+            <p>
+              Every successful visit journals a compact snapshot — your top artists and tracks,
+              rotation depth, and discovery — into this app’s own database. Spotify’s API only ever
+              shows the present; this page is where your past accumulates. Come back tomorrow and
+              the first bars appear.
+            </p>
+          </section>
+        );
+      }
+      const rows = snapshots.slice(-30);
+      const newestFirst = [...snapshots].reverse().slice(0, 14);
+      // Streaks: consecutive journaled days with the same #1 artist.
+      const streaks = newestFirst.map((s, i) => {
+        const name = s.topArtists[0] ? s.topArtists[0].name : null;
+        let run = 1;
+        for (let j = i + 1; j < newestFirst.length; j++) {
+          const other = newestFirst[j].topArtists[0] ? newestFirst[j].topArtists[0].name : null;
+          if (name && other === name) run += 1; else break;
+        }
+        return run;
+      });
+      return (
+        <div>
+          <section className="card">
+            <h2>discovery over time</h2>
+            <div className="bars">
+              {rows.map((r) => (
+                <div key={r.day} className="bar-col" title={r.day + (r.discovery == null ? ' — not measured' : ' — ' + pct(r.discovery) + '%')}>
+                  <div className="bar" style={{ height: (r.discovery == null ? 4 : Math.max(6, pct(r.discovery))) + '%', opacity: r.discovery == null ? 0.35 : 1 }} />
+                </div>
+              ))}
+            </div>
+            <p className="trend-cap">share of your current top artists that are new against your all-time canon, one bar per journaled day (last {rows.length}).</p>
+          </section>
+          <section className="card">
+            <h2>rotation depth over time</h2>
+            <div className="bars">
+              {rows.map((r) => (
+                <div key={r.day} className="bar-col" title={r.day + ' — ' + pct(r.rotation) + '%'}>
+                  <div className="bar" style={{ height: Math.max(6, pct(r.rotation)) + '%' }} />
+                </div>
+              ))}
+            </div>
+            <p className="trend-cap">how much of your top-50 belonged to just 3 artists, day by day. High bars mean deep obsession; low bars mean a wide table.</p>
+          </section>
+          <section className="card">
+            <h2>the #1 seat</h2>
+            {newestFirst.map((s, i) => (
+              <div key={s.day} className="seat-row">
+                <span className="seat-day">{s.day}</span>
+                <span className="seat-name">{s.topArtists[0] ? s.topArtists[0].name : '—'}</span>
+                {streaks[i] > 1 && <span className="streak">{streaks[i]} days</span>}
+              </div>
+            ))}
+          </section>
+        </div>
+      );
+    }
+
+    // `tick` is unused in the markup on purpose: its prop change is what re-renders the
+    // elapsed-time math once a second while a track plays.
+    function Now({ player, nowNote, ctlBusy, onControl, onRefresh, tick }) {
+      if (player.phase === 'loading') {
+        return (
+          <section className="card">
+            <h2>now playing</h2>
+            <div className="skel line" style={{ width: '50%', height: 22 }} />
+            <div className="skel line" style={{ width: '35%' }} />
+            <div className="skel line" style={{ width: '100%', height: 6 }} />
+          </section>
+        );
+      }
+      if (player.phase === 'error') {
+        return (
+          <section className="card">
+            <h2>now playing</h2>
+            <Notice bad>
+              <span>{player.fail ? player.fail.text : 'Playback state is unavailable.'}</span>
+              <button className="btn ghost" onClick={onRefresh}>retry</button>
+            </Notice>
+          </section>
+        );
+      }
+      if (player.phase === 'idle') {
+        return (
+          <section className="card hero">
+            <h3>Nothing playing right now.</h3>
+            <p>
+              Start playback on any of your Spotify devices — phone, desktop, speaker — and this
+              panel picks it up. Rewind can steer an active session, but Spotify doesn’t let an
+              API start one from silence on its own.
+            </p>
+            <button className="btn ghost" onClick={onRefresh}>check again</button>
+          </section>
+        );
+      }
+      // phase === 'ok'
+      const t = player.track;
+      const elapsed = player.isPlaying
+        ? Math.min(player.durationMs, player.progressMs + (Date.now() - player.fetchedAt))
+        : player.progressMs;
+      const frac = player.durationMs > 0 ? elapsed / player.durationMs : 0;
+      return (
+        <section className="card">
+          <h2>now playing</h2>
+          <div className="np-head">
+            <div className="np-art" style={tileArt((t.id || '') + t.name)} aria-hidden="true" />
+            <div style={{ minWidth: 0 }}>
+              <p className="np-title">{t.name}</p>
+              <p className="np-sub">{t.artist}{t.album ? ' · ' + t.album : ''}</p>
+              {player.device && <p className="np-device">on {player.device}{player.isPlaying ? '' : ' · paused'}</p>}
+            </div>
+          </div>
+          <div className="progress" role="img" aria-label={'progress ' + fmtMs(elapsed) + ' of ' + fmtMs(player.durationMs)}>
+            <span style={{ width: pct(Math.min(1, Math.max(0, frac))) + '%' }} />
+          </div>
+          <div className="times"><span>{fmtMs(elapsed)}</span><span>{fmtMs(player.durationMs)}</span></div>
+          <div className="transport">
+            <button className="t-btn" aria-label="previous track" disabled={ctlBusy !== null} onClick={() => onControl('POST', '/v1/me/player/previous', 'previous')}>⏮</button>
+            <button className="t-btn primary" aria-label={player.isPlaying ? 'pause' : 'play'} disabled={ctlBusy !== null}
+              onClick={() => onControl('PUT', player.isPlaying ? '/v1/me/player/pause' : '/v1/me/player/play', 'playpause')}>
+              {player.isPlaying ? '⏸' : '▶'}
+            </button>
+            <button className="t-btn" aria-label="next track" disabled={ctlBusy !== null} onClick={() => onControl('POST', '/v1/me/player/next', 'next')}>⏭</button>
+          </div>
+          {nowNote && <Notice bad><span>{nowNote}</span></Notice>}
+          <p className="govern">
+            Each control is a governed write: the hub shows you the exact request and nothing
+            reaches Spotify until you approve it. Expect the confirm — that’s the design.
+          </p>
+        </section>
+      );
+    }
+
+    const PROMPTS = [
+      {
+        id: 'rotation',
+        lane: 'top lists · read',
+        text: 'What did my last four weeks on Spotify look like? Name the artists and songs that owned my rotation, and one thing that changed against my all-time favorites.',
+        why: 'The agent reads the same top-lists this portrait uses — quiet, read-only calls.',
+      },
+      {
+        id: 'set',
+        lane: 'top lists · read',
+        text: 'Build me a 15-track set drawn from my heavy-rotation artists — no two tracks in a row by the same artist, and end on something calm.',
+        why: 'The set arrives as a chat reply built from your real top artists — nothing is written to your Spotify.',
+      },
+      {
+        id: 'canon',
+        lane: 'top lists · read',
+        text: 'Compare my last month of listening with my all-time top artists. Who is new, who slipped, and what does the shift say about me?',
+        why: 'Two governed reads (short-term and all-time), compared in prose.',
+      },
+      {
+        id: 'queue',
+        lane: 'playback · governed write',
+        text: 'What’s playing right now? Queue up two more tracks that keep the same mood going.',
+        why: 'Reading playback is quiet; queueing is a write — the hub asks you to confirm each one.',
+      },
+    ];
+
+    function Ask({ copied, onCopy }) {
+      return (
+        <div>
+          <section className="card">
+            <h2>teach the chat your listening</h2>
+            <p className="ask-lede">
+              This app has a chat lane: anything you ask there is answered by the agent, and the hub
+              routes its Spotify calls through the same governed <b>spotify</b> connection this app
+              uses. The agent sees scrubbed responses only — never your token — reads happen
+              quietly, and every write stops at a confirm. These prompts are good first questions;
+              copy one into the app chat.
+            </p>
+          </section>
+          {PROMPTS.map((p) => (
+            <section key={p.id} className="card">
+              <span className="lane">{p.lane}</span>
+              <p className="prompt-text" id={'prompt-' + p.id}>{p.text}</p>
+              <div className="prompt-foot">
+                <span className="prompt-why">{p.why}</span>
+                <button className="copy-btn" onClick={() => onCopy(p.id, p.text)}>
+                  {copied && copied.id === p.id ? (copied.how === 'copied' ? 'copied ✓' : 'selected — press ⌘C') : 'copy'}
+                </button>
+              </div>
+            </section>
+          ))}
+        </div>
+      );
+    }
+
+    // ---------- the app ----------
+
+    const SURFACES = [
+      { id: 'portrait', label: 'Portrait' },
+      { id: 'trends', label: 'Trends' },
+      { id: 'now', label: 'Now' },
+      { id: 'ask', label: 'Ask' },
+    ];
+
+    function App() {
+      const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
+        appId: 'spotify-rewind',
+        displayName: 'Rewind',
+        description: 'Your listening, understood: a portrait of your own Spotify data, a trend journal Spotify forgets, playback control, and a weekly rewind written by the agent.',
+        iconEmoji: '🎧',
+        iconColor: '#6b3fd4',
+      });
+      const db = useAppDB();
+      const spotify = useConnectedFetch();
+
+      const [prefs, setPrefs] = usePersistedState('rewind-prefs', { range: 'short_term' });
+      const [lastRewind, setLastRewind] = usePersistedState('rewind-last-card', null);
+
+      const [surface, setSurface] = useState('portrait');
+      const [phase, setPhase] = useState('loading'); // loading | ready | unconnected | failed | empty
+      const [failure, setFailure] = useState(null);
+      const [views, setViews] = useState({}); // rangeId -> { tracks, artists }
+      const [canonIds, setCanonIds] = useState(null); // Set of all-time top-50 artist ids
+      const [rangeLoading, setRangeLoading] = useState(false);
+      const [profile, setProfile] = useState(null);
+      const [recent, setRecent] = useState({ status: 'idle' }); // idle | ok | unavailable | failed
+      const [snapshots, setSnapshots] = useState([]);
+      const [dbErr, setDbErr] = useState(null);
+      const [rewindNote, setRewindNote] = useState(null);
+      const [rangeNote, setRangeNote] = useState(null);
+      const [player, setPlayer] = useState({ phase: 'loading' });
+      const [nowNote, setNowNote] = useState(null);
+      const [ctlBusy, setCtlBusy] = useState(null);
+      const [copied, setCopied] = useState(null);
+      const [tick, setTick] = useState(0);
+
+      const startedRef = useRef(false);
+      const journaledRef = useRef(false);
+      const loadingRef = useRef(false);
+      const rangeFetchRef = useRef(null);
+
+      // The persisted lens, validated against the known ranges before anything trusts it.
+      const range = prefs && RANGES.some((r) => r.id === prefs.range) ? prefs.range : 'short_term';
+
+      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+      const getJson = useCallback(async (path, opts) => {
+        const res = await spotify.fetch(SPOTIFY + path, opts);
+        const fail = readFailure(res);
+        if (fail) return { fail, status: res.ok ? res.status : 0 };
+        return { data: parseBody(res.body), status: res.status };
+      }, [spotify]);
+
+      // ---- journal (SQL) ----
+
+      const loadSnapshots = useCallback(async () => {
+        const res = await db.exec(
+          'SELECT day, top_artists, top_tracks, rotation_depth, discovery_ratio FROM rewind_snapshots ORDER BY day ASC LIMIT 120', []);
+        setSnapshots(res.rows.map(([day, ta, tt, rot, disc]) => ({
+          day,
+          topArtists: safeJson(ta, []),
+          topTracks: safeJson(tt, []),
+          rotation: Number(rot) || 0,
+          discovery: disc == null ? null : Number(disc),
+        })));
+      }, [db]);
+
+      const journalVisit = useCallback(async (tracks, artists, canon) => {
+        if (journaledRef.current) return;
+        const rot = rotationDepth(tracks);
+        if (rot == null || artists.length === 0) return; // nothing true to journal
+        journaledRef.current = true;
+        const disc = discoveryVsCanon(artists, canon);
+        const day = localDay();
+        try {
+          // One snapshot per day, latest visit wins — a compact journal, not a play log.
+          await db.exec('DELETE FROM rewind_snapshots WHERE day = ?', [day]);
+          await db.exec(
+            'INSERT INTO rewind_snapshots (day, top_artists, top_tracks, rotation_depth, discovery_ratio, taken_at) VALUES (?, ?, ?, ?, ?, ?)',
+            [
+              day,
+              JSON.stringify(artists.slice(0, 5).map((a) => ({ id: a.id || '', name: a.name || '' }))),
+              JSON.stringify(tracks.slice(0, 5).map((t) => ({ id: t.id || '', name: t.name || '', artist: artistNameOf(t) }))),
+              rot,
+              disc,
+              new Date().toISOString(),
+            ]);
+          await loadSnapshots();
+        } catch (e) {
+          setDbErr(String((e && e.message) || e));
+        }
+      }, [db, loadSnapshots]);
+
+      // ---- portrait core load ----
+
+      const loadCore = useCallback(async () => {
+        if (loadingRef.current) return;
+        loadingRef.current = true;
+        setPhase('loading');
+        setFailure(null);
+        const [tShort, aShort, aLong] = await Promise.all([
+          getJson('/v1/me/top/tracks?time_range=short_term&limit=50'),
+          getJson('/v1/me/top/artists?time_range=short_term&limit=50'),
+          getJson('/v1/me/top/artists?time_range=long_term&limit=50'),
+        ]);
+        loadingRef.current = false;
+        const lead = tShort.fail || aShort.fail;
+        if (lead) {
+          setPhase(lead.kind === 'unconnected' ? 'unconnected' : 'failed');
+          setFailure(lead);
+          return;
+        }
+        const tracks = itemsOf(tShort.data);
+        const artists = itemsOf(aShort.data);
+        const canon = aLong.fail ? null : new Set(itemsOf(aLong.data).map((a) => a.id).filter(Boolean));
+        setViews((prev) => ({ ...prev, short_term: { tracks, artists } }));
+        setCanonIds(canon);
+        if (tracks.length === 0 && artists.length === 0) { setPhase('empty'); return; }
+        setPhase('ready');
+        journalVisit(tracks, artists, canon);
+        // Non-blocking niceties: who this portrait belongs to…
+        getJson('/v1/me').then((me) => {
+          if (!me.fail && me.data && typeof me.data.display_name === 'string') setProfile({ name: me.data.display_name });
+        });
+        // …and ONE attempt at recently-played. The registry pin omits its scope, so the
+        // expected answer is 403 — handled as a labeled degrade, never retried in a loop.
+        getJson('/v1/me/player/recently-played?limit=50').then((rp) => {
+          if (rp.fail) {
+            setRecent({ status: rp.fail.kind === 'refused' ? 'unavailable' : 'failed' });
+            return;
+          }
+          const stats = recentMetrics(itemsOf(rp.data), canon);
+          setRecent(stats ? { status: 'ok', stats } : { status: 'failed' });
+        });
+      }, [getJson, journalVisit]);
+
+      useEffect(() => {
+        if (!isReady || startedRef.current) return;
+        startedRef.current = true;
+        (async () => {
+          try {
+            for (const stmt of DDL) await db.exec(stmt, []);
+            await loadSnapshots();
+          } catch (e) {
+            setDbErr(String((e && e.message) || e));
+          }
+          loadCore();
+        })();
+      }, [isReady, db, loadSnapshots, loadCore]);
+
+      // ---- range switching (cached per range) ----
+
+      const ensureRange = useCallback(async (rid) => {
+        if (views[rid] || rangeFetchRef.current === rid) return;
+        rangeFetchRef.current = rid;
+        setRangeLoading(true);
+        const [t, a] = await Promise.all([
+          getJson('/v1/me/top/tracks?time_range=' + rid + '&limit=50'),
+          getJson('/v1/me/top/artists?time_range=' + rid + '&limit=50'),
+        ]);
+        rangeFetchRef.current = null;
+        setRangeLoading(false);
+        const fail = t.fail || a.fail;
+        if (fail) {
+          if (fail.kind === 'unconnected') { setPhase('unconnected'); setFailure(fail); }
+          else setRangeNote('couldn’t load that window — ' + fail.text);
+          return;
+        }
+        setViews((prev) => ({ ...prev, [rid]: { tracks: itemsOf(t.data), artists: itemsOf(a.data) } }));
+      }, [views, getJson]);
+
+      // The persisted lens may hydrate to a range the core load didn't fetch — cover it.
+      useEffect(() => {
+        if (phase !== 'ready' || rangeLoading || views[range]) return;
+        ensureRange(range);
+      }, [phase, range, views, rangeLoading, ensureRange]);
+
+      const onRange = (rid) => {
+        setRangeNote(null);
+        setPrefs((prev) => ({ ...prev, range: rid }));
+        ensureRange(rid);
+      };
+
+      // ---- the agent turn: the weekly rewind ----
+
+      const buildStats = () => {
+        const view = views[range] || { tracks: [], artists: [] };
+        const rot = rotationDepth(view.tracks);
+        const disc = range === 'long_term' ? null : discoveryVsCanon(view.artists, canonIds);
+        const prev = snapshots.length >= 2 ? snapshots[snapshots.length - 2] : null;
+        return {
+          range: rangeLabel(range),
+          topArtists: view.artists.slice(0, 5).map((a, i) => ({ rank: i + 1, name: a.name, genres: (a.genres || []).slice(0, 2) })),
+          topTracks: view.tracks.slice(0, 5).map((t, i) => ({ rank: i + 1, name: t.name, artist: artistNameOf(t) })),
+          rotationDepthPct: rot == null ? null : pct(rot),
+          rotationMeaning: 'share of the top-50 tracks held by the top 3 artists',
+          discoveryPct: disc == null ? null : pct(disc),
+          discoveryMeaning: 'share of this period’s top-20 artists absent from the all-time top 50',
+          recentPlays: recent.status === 'ok' && recent.stats
+            ? { plays: recent.stats.count, repeatTrackPct: pct(recent.stats.repeatRate), freshArtistPct: recent.stats.freshShare == null ? null : pct(recent.stats.freshShare) }
+            : null,
+          nowPlaying: player.phase === 'ok' ? { name: player.track.name, artist: player.track.artist } : null,
+          journal: {
+            visitsJournaled: snapshots.length,
+            previousTopArtist: prev && prev.topArtists[0] ? prev.topArtists[0].name : null,
+          },
+        };
+      };
+
+      const writeRewind = async () => {
+        if (isWaiting || phase !== 'ready') return;
+        setRewindNote(null);
+        const result = await sendMessage(
+          'weekly_rewind',
+          { ask: 'write the rewind card for the stats in state' },
+          { state: buildStats(), responseSchema: RESPONSE_SCHEMA });
+        if (!result.ok) {
+          const err = result.error || {};
+          if (err.code === 'CANCELLED' || err.code === 'SUPERSEDED') return; // stale by design
+          setRewindNote({
+            text: 'the agent couldn’t answer (' + (err.message || err.code || 'no reply') + ').',
+            retryable: err.retryable !== false,
+          });
+          return;
+        }
+        const card = validateRewind(result.data);
+        if (card === null) {
+          // Off-schema is an error state, not content — nothing from it is rendered as truth.
+          setRewindNote({ text: 'the agent answered off-schema, so nothing was rendered from it.', retryable: true });
+          return;
+        }
+        setLastRewind({ card, at: new Date().toISOString(), range });
+      };
+
+      // ---- now playing ----
+
+      const refreshPlayer = useCallback(async () => {
+        const r = await getJson('/v1/me/player');
+        if (r.fail) {
+          setPlayer({ phase: 'error', fail: r.fail });
+          return;
+        }
+        const d = r.data;
+        if (!d || !d.item) { setPlayer({ phase: 'idle' }); return; }
+        setPlayer({
+          phase: 'ok',
+          fetchedAt: Date.now(),
+          isPlaying: !!d.is_playing,
+          progressMs: Number(d.progress_ms) || 0,
+          durationMs: Number(d.item.duration_ms) || 0,
+          device: d.device && typeof d.device.name === 'string' ? d.device.name : null,
+          track: {
+            id: d.item.id || '',
+            name: d.item.name || 'unknown track',
+            artist: Array.isArray(d.item.artists) ? d.item.artists.map((a) => a && a.name).filter(Boolean).join(', ') : '',
+            album: d.item.album && typeof d.item.album.name === 'string' ? d.item.album.name : '',
+          },
+        });
+      }, [getJson]);
+
+      useEffect(() => {
+        if (surface !== 'now' || !isReady) return;
+        refreshPlayer();
+        const poll = setInterval(refreshPlayer, 15000);
+        const ticker = setInterval(() => setTick((n) => n + 1), 1000);
+        return () => { clearInterval(poll); clearInterval(ticker); };
+      }, [surface, isReady, refreshPlayer]);
+
+      const control = async (method, path, which) => {
+        setNowNote(null);
+        setCtlBusy(which);
+        const res = await spotify.fetch(SPOTIFY + path, { method });
+        setCtlBusy(null);
+        if (res.ok && res.status === 404) {
+          setNowNote('Spotify has no active device — start playback on any device, then Rewind can steer it.');
+          return;
+        }
+        const fail = readFailure(res);
+        if (fail) {
+          setNowNote(fail.kind === 'refused'
+            ? 'Spotify refused the control — playback control needs Premium on the listening account.'
+            : fail.text);
+          return;
+        }
+        setTimeout(refreshPlayer, 900); // give Spotify a beat to apply it
+      };
+
+      // ---- ask: copy with an honest fallback ----
+
+      const copyPrompt = async (id, text) => {
+        let done = false;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            done = true;
+          }
+        } catch (e) { done = false; }
+        if (!done) {
+          // Sandboxed iframes may refuse the clipboard — select the text and say so.
+          try {
+            const el = document.getElementById('prompt-' + id);
+            const sel = window.getSelection();
+            const textRange = document.createRange();
+            textRange.selectNodeContents(el);
+            sel.removeAllRanges();
+            sel.addRange(textRange);
+          } catch (e) { /* selection is best-effort */ }
+        }
+        setCopied({ id, how: done ? 'copied' : 'select' });
+      };
+
+      if (!isReady) return <div className="connecting">winding the tape back…</div>;
+
+      return (
+        <div className="wrap">
+          <header className="brand">
+            <h1>Re<span className="accent">wind</span></h1>
+            <span className="tag">your listening, understood</span>
+            {isWaiting && <span className="dots" aria-label="the agent is thinking"><i /><i /><i /></span>}
+          </header>
+          <nav className="tabs" aria-label="surfaces">
+            {SURFACES.map((s) => (
+              <button key={s.id} className={'tab' + (surface === s.id ? ' on' : '')} aria-pressed={surface === s.id} onClick={() => setSurface(s.id)}>
+                {s.label}
+              </button>
+            ))}
+          </nav>
+
+          {dbErr && surface !== 'trends' && <Notice bad><span>journal hiccup: {dbErr}</span></Notice>}
+
+          {surface === 'portrait' && (
+            <Portrait
+              phase={phase} failure={failure} view={views[range]} range={range} onRange={onRange}
+              rangeLoading={rangeLoading} rangeNote={rangeNote} profile={profile} canonIds={canonIds} recent={recent}
+              snapshots={snapshots} lastRewind={lastRewind} rewindNote={rewindNote}
+              onRewind={writeRewind} isWaiting={isWaiting} onRetry={loadCore}
+            />
+          )}
+          {surface === 'trends' && <Trends snapshots={snapshots} dbErr={dbErr} />}
+          {surface === 'now' && (
+            <Now player={player} nowNote={nowNote} ctlBusy={ctlBusy} onControl={control} onRefresh={refreshPlayer} tick={tick} />
+          )}
+          {surface === 'ask' && <Ask copied={copied} onCopy={copyPrompt} />}
+
+          <p className="foot">
+            Rewind is a Snug starter: one file, no backend, no analytics. It reads your Spotify
+            through this hub’s governed connection (it never sees your sign-in), journals to a
+            database you own, and every playback write stops at a confirm.
+          </p>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

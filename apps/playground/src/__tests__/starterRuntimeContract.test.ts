@@ -57,8 +57,11 @@ describe('installStarterRuntimeContract', () => {
   });
 
   it('does nothing when the starter ships no contract (LLM-free starters)', async () => {
+    // RE-POINTED (TASK-20260815-starter-apps-rebuild): pocket-ledger left the shelf;
+    // flying-pig is the LLM-free keeper that stands in. The fixture map carries only
+    // chess, so the property under test — "no bundled contract, no write" — is unchanged.
     const db = await installTestUserDb();
-    const app = db.installApp({ displayName: 'Ledger', html, installSource: 'starter:pocket-ledger' });
+    const app = db.installApp({ displayName: 'Pig', html, installSource: 'starter:flying-pig' });
     __setRuntimeContractFixturesForTests({ chess: JSON.stringify(CHESS_CONTRACT) });
 
     await installStarterRuntimeContract(db, app.appId);

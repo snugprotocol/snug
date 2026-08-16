@@ -57,19 +57,26 @@ import {
  * approve → pair end to end against a faked platform seam, and the Rust half owns the
  * transport. Pinned below so the absence stays deliberate rather than becoming a gap.
  */
-const STARTER_VARIANTS = ['starter-coingecko', 'starter-openweather', 'starter-github', 'starter-spotify'] as const;
+const STARTER_VARIANTS = ['starter-coinbase', 'starter-openweather', 'starter-github', 'starter-spotify'] as const;
 
 /**
  * Each variant paired with the example FOLDER whose shipped manifest it mirrors.
  *
  * The pairing is the thing under test: without it "mirrors the manifests" degrades to
  * "matches a table someone typed next to the assertion", which is what it had degraded to.
+ *
+ * RE-POINTED at the re-curated shelf (TASK-20260815-starter-apps-rebuild): the folders
+ * are now `trade-copilot`, `weather`, `github` and `spotify`. `starter-coingecko` was
+ * MIGRATED to `starter-coinbase`: crypto-portfolio (CoinGecko) was removed from the
+ * shelf and its Coinbase-shaped successor is trade-copilot, so the variant now mirrors
+ * that manifest — the property under test ("every variant mirrors a manifest that
+ * actually ships") is unchanged.
  */
 const VARIANT_FOLDERS = [
-  { variant: 'starter-coingecko', folder: 'crypto-portfolio' },
-  { variant: 'starter-openweather', folder: 'weather-planner' },
-  { variant: 'starter-github', folder: 'my-repos' },
-  { variant: 'starter-spotify', folder: 'spotify-party-dj' },
+  { variant: 'starter-coinbase', folder: 'trade-copilot' },
+  { variant: 'starter-openweather', folder: 'weather' },
+  { variant: 'starter-github', folder: 'github' },
+  { variant: 'starter-spotify', folder: 'spotify' },
 ] as const satisfies ReadonlyArray<{ variant: (typeof STARTER_VARIANTS)[number]; folder: string }>;
 
 interface ShippedManifest {
@@ -184,9 +191,10 @@ describe('P4-AC10 — the starter variants MIRROR the shipped manifests', () => 
   // THE FIX THIS BLOCK CARRIES, stated because the previous version of it was mutation-
   // proven vacuous. It was titled "MIRROR the shipped manifests" and compared the demo
   // table against a `const expected` hardcoded INSIDE the test — `examples/*/connection.json`
-  // was never read. Changing `examples/my-repos/connection.json`'s kind from `bearer_token`
-  // to `api_key` — drifting the shipped manifest away from the variant it supposedly
-  // mirrors — left all 19 root tasks green.
+  // was never read. Changing the shipped GitHub manifest's kind (then
+  // `examples/my-repos/connection.json`, now `examples/github/connection.json`) from
+  // `bearer_token` to `api_key` — drifting the shipped manifest away from the variant it
+  // supposedly mirrors — left all 19 root tasks green.
   //
   // A fixture cannot catch a typo in a manifest that actually ships. That is the harvested
   // AL-09 discipline verbatim, and it is why every assertion below reads DISK.

@@ -83,12 +83,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  * disclosure tests rather than by the absence of a file.
  */
 const MANIFEST_APPS = [
-  'connection-demo',
-  'crypto-portfolio',
-  'weather-planner',
-  'my-repos',
-  'spotify-party-dj',
-  'hue-lights-party',
+  // The gold-standard connected five (TASK-20260815-starter-apps-rebuild, ADR-0031) —
+  // superseding the six P4/auth-spectrum declarers this list previously pinned.
+  'trade-copilot',
+  'spotify',
+  'hue',
+  'weather',
+  'github',
 ];
 
 /** The full set of starter folders SURVEYED for a manifest — all declarers now. */
@@ -96,11 +97,11 @@ const SURVEYED_FOLDERS = [...MANIFEST_APPS];
 
 /** Every starter folder P4 lands, manifest-bearing or not — AC2's shelf half. */
 const P4_STARTER_FOLDERS = [
-  'crypto-portfolio',
-  'weather-planner',
-  'my-repos',
-  'spotify-party-dj',
-  'hue-lights-party',
+  'trade-copilot',
+  'spotify',
+  'hue',
+  'weather',
+  'github',
 ];
 
 const readManifest = (app) => JSON.parse(readFileSync(path.join(HERE, app, 'connection.json'), 'utf8'));
@@ -109,7 +110,7 @@ const readHtml = (app) => readFileSync(path.join(HERE, app, 'app.html'), 'utf8')
 
 // ─────────────────────────────────────────────────────── P4-AC2: the six manifests
 
-test('P4-AC2: exactly six example folders ship a connection.json', () => {
+test('P4-AC2: exactly five example folders ship a connection.json', () => {
   // Pins the COUNT as well as the members. A seventh manifest appearing without a test is
   // a shelf app declaring a connection nobody reviewed; a sixth going missing is a starter
   // that silently stopped declaring.
@@ -121,8 +122,8 @@ test('P4-AC2: exactly six example folders ship a connection.json', () => {
     }
   });
 
-  assert.equal(declaring.length, 6, 'six folders declare a connection');
-  assert.deepEqual(declaring.sort(), [...MANIFEST_APPS].sort(), 'the six declaring folders');
+  assert.equal(declaring.length, 5, 'five folders declare a connection');
+  assert.deepEqual(declaring.sort(), [...MANIFEST_APPS].sort(), 'the five declaring folders');
 });
 
 for (const app of MANIFEST_APPS) {
@@ -166,8 +167,8 @@ for (const app of MANIFEST_APPS) {
  * will be collected — which is what the schema's required-XOR-lanHost rule makes
  * representable, and what the wizard's address step then fills.
  */
-test('AC8: hue-lights-party declares a LAN-class connection with NO pinned host', () => {
-  const manifest = readManifest('hue-lights-party');
+test('AC8: hue declares a LAN-class connection with NO pinned host', () => {
+  const manifest = readManifest('hue');
   assert.equal(manifest.lanHost?.class, 'rfc1918-ipv4-literal', 'the host CLASS the wizard will validate against');
   assert.ok(typeof manifest.lanHost?.label === 'string' && manifest.lanHost.label.length > 0, 'a label the user reads');
   assert.ok(
@@ -188,8 +189,8 @@ test('AC8: hue-lights-party declares a LAN-class connection with NO pinned host'
  * is a failure mode nothing on screen would explain. Omitting them is what makes the
  * registry's pinned values get substituted instead.
  */
-test('AC8: hue-lights-party\'s manifest is BARE — the registry supplies fields, request and pairing', () => {
-  const manifest = readManifest('hue-lights-party');
+test('AC8: hue\'s manifest is BARE — the registry supplies fields, request and pairing', () => {
+  const manifest = readManifest('hue');
   for (const seat of ['fields', 'request', 'testRequest', 'pairing', 'registration', 'endpoints']) {
     assert.ok(!(seat in manifest), `a borrowing manifest must not author "${seat}" — the registry pins it`);
   }

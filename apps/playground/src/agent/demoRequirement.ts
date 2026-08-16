@@ -47,7 +47,7 @@ export type DemoBuildVariant = 'coinbase' | 'bearer' | 'basic' | 'oauth' | 'unde
  * wizard e2e and must keep resolving untouched.
  */
 export type DemoStarterVariant =
-  | 'starter-coingecko'
+  | 'starter-coinbase'
   | 'starter-openweather'
   | 'starter-github'
   | 'starter-spotify';
@@ -55,7 +55,7 @@ export type DemoStarterVariant =
 export type DemoRequirementVariant = DemoBuildVariant | DemoStarterVariant;
 
 const STARTER_VARIANTS = [
-  'starter-coingecko',
+  'starter-coinbase',
   'starter-openweather',
   'starter-github',
   'starter-spotify',
@@ -286,10 +286,15 @@ const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<strin
  * THE STARTER REQUIREMENTS (P4-AC10) — one per shipped, manifest-bearing starter.
  *
  * THEY MIRROR THE SHIPPED MANIFESTS, and that is the whole property being bought. A demo
- * variant emitting a requirement the six manifests do not contain would let the P4 e2e go
- * green against a fictional provider while every real starter stayed broken. The seam's
- * value is that it is the PRODUCTION path with a scripted model, so what it emits has to
- * be the production artifact.
+ * variant emitting a requirement the shipped manifests do not contain would let the P4
+ * e2e go green against a fictional provider while every real starter stayed broken. The
+ * seam's value is that it is the PRODUCTION path with a scripted model, so what it emits
+ * has to be the production artifact.
+ *
+ * RE-CURATED SHELF (TASK-20260815-starter-apps-rebuild): the four folders these mirror
+ * are now `trade-copilot` (Coinbase), `weather` (OpenWeather), `github` (GitHub) and
+ * `spotify` (Spotify). `starter-coingecko` became `starter-coinbase` with that curation —
+ * crypto-portfolio was removed and its Coinbase-shaped successor is trade-copilot.
  *
  * WHY THESE ARE BARE (no `fields`, no `request`) while the BUILD variants above are rich.
  * All four name a registry provider, so `admitConnectionRequirement` fires the
@@ -301,7 +306,10 @@ const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<strin
  * asymmetry is the contract — omit and you RECEIVE the pinned list, author and you are
  * refused. So the registry supplies `fields`/`registration` and the manifest supplies only
  * what it legitimately knows: the slot, the kind, and the host it dials. Verified against
- * the real guard, not assumed.
+ * the real guard, not assumed. (`trade-copilot`'s shipped manifest carries fields that
+ * BYTE-MATCH the registry's pinned Coinbase pair — admission's idempotency accepts a
+ * registry-identical copy — but the variant stays bare like its peers: the mirror is over
+ * slot/kind/provider/hosts, and bare is the shape the borrow contract recommends.)
  *
  * The spectrum is deliberate (AL-09's founding point): api_key, bearer_token, and
  * oauth2_auth_code all appear, so no shape is left unrepresented by a table that collapsed
@@ -311,7 +319,7 @@ const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<strin
  * No Playwright journey drives `?demoreq=starter-*` today — the e2e starter coverage runs
  * through `starters-connect.spec.ts` (the shipped apps' degraded state and Hue's greyed
  * posture) and `connection-declaration.spec.ts` (the full install → CTA → review → approve
- * journey on `connection-demo`). What these variants DO buy is real but narrower: every
+ * journey on `weather`). What these variants DO buy is real but narrower: every
  * one is pinned against the shipped manifest it mirrors, read off disk, and driven through
  * the full production path (schema → admission → template lint) in
  * `demoRequirementStarters.test.ts`. They are ready for an e2e that wants a scripted
@@ -323,11 +331,11 @@ const REQUIREMENTS: Record<Exclude<DemoBuildVariant, 'undeclared'>, Record<strin
  * end to end"; the e2e types its secrets, the requirement never carries one.
  */
 export const DEMO_STARTER_REQUIREMENTS: Record<DemoStarterVariant, ConnectionRequirement> = {
-  'starter-coingecko': {
-    slot: 'coingecko',
-    provider: { name: 'CoinGecko', docsUrl: 'https://docs.coingecko.com/reference/simple-price' },
+  'starter-coinbase': {
+    slot: 'coinbase',
+    provider: { name: 'Coinbase' },
     kind: 'api_key',
-    declaredApiHosts: ['api.coingecko.com'],
+    declaredApiHosts: ['api.coinbase.com'],
   },
   'starter-openweather': {
     slot: 'openweather',
