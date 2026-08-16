@@ -41,6 +41,21 @@ function platformDefaultFetch(input: string, init?: RequestInit): Promise<Respon
 export interface PendingNetConfirm {
   request: NetConfirmRequest;
   resolve(decision: NetConfirmDecision): void;
+  /**
+   * WHERE this confirm renders (TASK-20260815-inline-cards). `'chat'` means a chat-lane
+   * card owns it and the modal dialog must NOT double-render it; absent means the modal
+   * (app-runtime requests, and any caller that never tagged). The tag is set by the
+   * PARKING path from a WeakMap keyed on the executor's own request object — the same
+   * reference-identity trick the abort-deny uses, so no field matching, no ambiguity.
+   */
+  origin?: 'chat';
+}
+
+const confirmOrigins = new WeakMap<NetConfirmRequest, 'chat'>();
+
+/** Tag the NEXT parked confirm for `request` as chat-rendered. Call BEFORE the gate. */
+export function tagConfirmOrigin(request: NetConfirmRequest, origin: 'chat'): void {
+  confirmOrigins.set(request, origin);
 }
 
 /** null when no confirm is open. The confirm dialog renders exactly this — the QUEUE HEAD. */
@@ -64,6 +79,7 @@ function advanceConfirmQueue(): void {
 const confirmGate = createSessionConfirmGate(
   (request) =>
     new Promise<NetConfirmDecision>((resolve) => {
+      const origin = confirmOrigins.get(request);
       const entry: PendingNetConfirm = {
         request,
         resolve: (decision) => {
@@ -73,6 +89,7 @@ const confirmGate = createSessionConfirmGate(
           advanceConfirmQueue();
           resolve(decision);
         },
+        ...(origin !== undefined ? { origin } : {}),
       };
       confirmQueue.push(entry);
       if (confirmQueue.length === 1) advanceConfirmQueue();

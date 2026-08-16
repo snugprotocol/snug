@@ -18,7 +18,10 @@ export function NetConfirmDialog(): ReactElement | null {
     setRemember(false);
   }, [pending?.request.url, pending?.request.method]);
 
-  if (pending === null) return null;
+  // A chat-origin confirm renders as an inline card in the chat rail
+  // (TASK-20260815-inline-cards) — the modal stepping in too would double-prompt the
+  // same decision, and resolving either surface would leave the other dangling.
+  if (pending === null || pending.origin === 'chat') return null;
   const { appId, host, method } = pending.request;
 
   return (

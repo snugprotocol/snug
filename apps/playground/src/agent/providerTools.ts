@@ -36,7 +36,12 @@ import type { UserDb } from '@snugprotocol/db';
 import { getToolPrompt } from '@snugprotocol/knowledge';
 import { NET_METHODS, type NetMethod } from '@snugprotocol/protocol';
 
-import { authShapedFailureStore, connectedFetchDepsFor, denyParkedConfirmByRequest } from '../state/net.js';
+import {
+  authShapedFailureStore,
+  connectedFetchDepsFor,
+  denyParkedConfirmByRequest,
+  tagConfirmOrigin,
+} from '../state/net.js';
 
 export const PROVIDER_REQUEST_TOOL_NAME = 'provider_request';
 
@@ -174,6 +179,10 @@ export function buildProviderTools(options: BuildProviderToolsOptions): AgentToo
           confirmGate: {
             confirm: async (request) => {
               activeConfirm = request;
+              // Chat-origin confirms render as an inline chat card, not the modal
+              // (TASK-20260815-inline-cards); tagging must precede delegation so the
+              // parked entry carries the origin from its first render.
+              tagConfirmOrigin(request, 'chat');
               try {
                 return await deps.confirmGate.confirm(request);
               } finally {
