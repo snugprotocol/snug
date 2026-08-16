@@ -170,3 +170,11 @@ _(running)_
 - State: awaiting umbrella approval; sequenced after child B.
 - Next step: on B's merge — branch, curation-gate commit first (step 1).
 - Open questions: none.
+
+### 2026-08-16 — Claude (Fable 5) — close-session
+- Done: PR #58 merged by owner instruction (2026-08-16). Reserved-word lesson promoted
+  to docs/lessons.md (real-engine DDL rule).
+- State: merged; task complete. Compacts to `done/INDEX.md` per ADR-0027. Owner hardware
+  passes queued in next-steps (Coinbase/TWAP, Moodboard, Rewind, weather, github).
+- Next step: none.
+- Open questions: none.

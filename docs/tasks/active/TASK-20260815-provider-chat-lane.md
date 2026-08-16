@@ -125,3 +125,10 @@ Cross-package: protocol → everything reruns; knowledge → server/playground/d
   I sign this off as meeting the High-tier bar.
 - Next step: second `turbo run test --force` → push → PR → owner review.
 - Open questions: none.
+
+### 2026-08-16 — Claude (Fable 5) — close-session
+- Done: PR #56 merged by owner instruction ("merge all the PRs", 2026-08-16); spec-changelog
+  INTERNAL-DRAFT entry added (chat-intent additions; zero schema bytes) per SPEC_SYNC.
+- State: merged; task complete. This file compacts to `done/INDEX.md` per ADR-0027.
+- Next step: none — hardware verifications live in next-steps.
+- Open questions: none.

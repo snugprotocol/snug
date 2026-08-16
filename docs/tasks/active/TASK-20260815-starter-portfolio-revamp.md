@@ -122,3 +122,11 @@ card surface. Status `proposed` until A merges.
   tests first, fresh-context plan review before implementation.
 - Open questions: none blocking; B's "in-app card" surface deliberately scoped to a KB
   pattern (no new frame) — revisit only if a real app proves the need.
+
+### 2026-08-16 — Claude (Fable 5) — close-session (umbrella)
+- Done: all three children merged (#56 provider lane · #57 inline cards · #58 shelf);
+  ADR-0031 accepted; memory + wiki updated throughout. The owner's mid-task authoring-
+  provenance requirement shipped gate-enforced (AC9).
+- State: umbrella complete; the four task files compact to `done/INDEX.md` (ADR-0027).
+- Next step: owner hardware verifications (next-steps); child B's recorded e2e gap.
+- Open questions: none.
