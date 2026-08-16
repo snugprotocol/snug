@@ -99,6 +99,31 @@ _(running)_
 
 ### 2026-08-15 — Claude (Fable 5) — session
 - Done: spec + plan drafted under the umbrella interview; Trade Copilot located + shape-verified in the owner's DB (read-only). Owner addition folded in same-day: per-starter `authoring/` provenance bundle (prompts + standard-slug wiki docs; trade-copilot's docs seeded from its real `snug_app_docs` rows — vision/requirements/plan/lessons/next-tasks all present in the DB). AC9 + plan steps 2/3 updated.
+
+### 2026-08-15 (build) — Claude (Fable 5) — session
+- Done: branch stacked on child B (same rationale journaled there). Curation landed
+  first (9 removals; APPS 10 / LLM_FREE 2 / MANIFEST 5 with the count pin 6→5; hue pins
+  repointed; pocket-ledger's parseCents section retired with its app; STARTER_LOOKS +
+  README rewritten). **trade-copilot** ported: app-authored code byte-verbatim (52,838
+  chars asserted against the stored row), hooks block re-copied from the current SDK
+  (the original predated the banner — AC4's fidelity claim is scoped to the app-authored
+  tail, journaled here), live requirement minus registry-refused seats as the manifest,
+  REAL wiki docs shipped in authoring/docs. **Plan deviation (journaled):** the four
+  clean-slate apps were authored by parallel agents writing DISJOINT folders in the main
+  tree with git forbidden, not worktrees — the lesson's mechanism (shared git index) is
+  absent with no-git agents, and the validate suite is the integration gate; commits
+  serialized by the orchestrator. Each agent saved its verbatim build brief to
+  authoring/prompts/01-build.md (owner's provenance ask) + vision/requirements/plan
+  docs. All four landed green: Rewind (Spotify; honest scope adaptation — recently-played
+  absent from the ADR-0028 pin → labeled degrade), Moodboard (Hue; symbolic-only,
+  grouped_light as the whole write surface), Should I? (OpenWeather), Standup (GitHub).
+  Examples suite 147/147. Playground repointed by a fifth agent (1102/109 green;
+  CoinGecko query-credential rows + trip-planner/pocket-ledger e2e journeys OBSOLETE
+  with citations; demoRequirement → starter-coinbase). code-map drift fixed.
+- State: TWAP extension agent in flight on trade-copilot; then the design pass.
+- Next step: TWAP → real-browser design pass (AC7 screenshots) → full suites → Gate 5
+  fresh-context review → PR stacked on child B.
+- Open questions: none.
 - State: awaiting umbrella approval; sequenced after child B.
 - Next step: on B's merge — branch, curation-gate commit first (step 1).
 - Open questions: none.
