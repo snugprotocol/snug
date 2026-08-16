@@ -617,7 +617,7 @@ function useConnectedFetch() {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         brief TEXT NOT NULL,
         priorities TEXT NOT NULL,
-        deferrable TEXT NOT NULL,
+        deferred_items TEXT NOT NULL,
         queue_size INTEGER NOT NULL,
         at TEXT NOT NULL
       )`,
@@ -851,7 +851,7 @@ function useConnectedFetch() {
         setBriefing({ data: valid, note: '', at: new Date().toISOString() });
         try {
           await db.exec(
-            'INSERT INTO standup_briefings (brief, priorities, deferrable, queue_size, at) VALUES (?, ?, ?, ?, ?)',
+            'INSERT INTO standup_briefings (brief, priorities, deferred_items, queue_size, at) VALUES (?, ?, ?, ?, ?)',
             [valid.briefing, JSON.stringify(valid.priorities), JSON.stringify(valid.deferrable), compact.length, new Date().toISOString()],
           );
           const h = await db.exec('SELECT brief, queue_size, at FROM standup_briefings ORDER BY id DESC LIMIT 5', []);
