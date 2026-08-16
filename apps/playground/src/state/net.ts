@@ -85,6 +85,22 @@ export function resolveNetConfirm(decision: NetConfirmDecision): void {
 }
 
 /**
+ * Deny ONE parked confirm, identified by its `request` object — REFERENCE equality
+ * (TASK-20260815 Gate-5 MAJOR-1). `createSessionConfirmGate` passes the executor's
+ * request object through to the prompt unchanged, so a caller that observed its own
+ * `confirm(request)` call can later deny exactly that entry — head OR tail — without
+ * touching a sibling confirm that happens to share appId/host/method. Field matching
+ * could never make that distinction; the object identity can. Returns false when the
+ * entry is gone (already resolved) — deny-after-decide is a no-op, never an error.
+ */
+export function denyParkedConfirmByRequest(request: NetConfirmRequest): boolean {
+  const entry = confirmQueue.find((parked) => parked.request === request);
+  if (entry === undefined) return false;
+  entry.resolve({ granted: false });
+  return true;
+}
+
+/**
  * AUTH-SHAPED FAILURE (TASK-20260812-desktop-auth-awareness AC5; ADR-0022 §4). The
  * executor's deps seat reports `(slot, status, detail?)` when the FINAL delivered
  * result of a request it injected credentials into is a 401/403 — the app-visible

@@ -248,6 +248,47 @@ describe('AC6/AC13 — the confirm gate at the chat altitude', () => {
     expect(result.toLowerCase()).toContain('cancel');
   });
 
+  it('Gate-5 MAJOR-1 — abort denies OUR confirm even when queued BEHIND the app frame’s own (and never the sibling)', async () => {
+    // The app frame parks its own confirm FIRST (queue head)…
+    const appFetches: string[] = [];
+    const handler = createNetHandlerFor({
+      fetchImpl: async (url) => {
+        appFetches.push(url);
+        return new Response('ok', { status: 200 });
+      },
+    });
+    const appWrite = handler.handle(APP, {
+      v: 1,
+      type: 'snug:net-request',
+      requestId: 'r-app-head',
+      instanceId: 'ins-1',
+      url: `https://${HOST}/v1/app-own-write`,
+      method: 'POST',
+      body: '{}',
+    });
+    await vi.waitFor(() => expect(netConfirmStore.get()?.request.url).toContain('/v1/app-own-write'));
+
+    // …then the chat turn's provider_write parks BEHIND it.
+    const controller = new AbortController();
+    const { run, fetchCalls } = buildTool({ allowWrites: true, signal: controller.signal });
+    const chatWrite = run({ url: `https://${HOST}/v1/chat-write`, method: 'POST', body: '{}' });
+    // The head is still the app's; ours is in the tail. Give the tool's confirm a beat to park.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(netConfirmStore.get()?.request.url).toContain('/v1/app-own-write');
+
+    controller.abort();
+    const chatResult = await chatWrite;
+    // OUR queued confirm died with the turn — no post-abort execution path remains…
+    expect(chatResult.toLowerCase()).toContain('cancel');
+    expect(fetchCalls).toHaveLength(0);
+    // …and the app frame's confirm was NOT collaterally denied: still parked, approvable.
+    expect(netConfirmStore.get()?.request.url).toContain('/v1/app-own-write');
+    resolveNetConfirm({ granted: true });
+    await expect(appWrite).resolves.toMatchObject({ ok: true, status: 200 });
+    expect(appFetches).toHaveLength(1);
+    expect(netConfirmStore.get()).toBeNull();
+  });
+
   it('a pre-aborted signal short-circuits before any assembly', async () => {
     const controller = new AbortController();
     controller.abort();

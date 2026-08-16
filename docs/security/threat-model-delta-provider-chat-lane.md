@@ -23,9 +23,13 @@ the frozen ceiling), headers (credential-shaped ones stripped), and body.
   from every LLM-bound string.
 - **Private network facts (ADR-0026 §3):** `publicHosts` filters RFC-1918
   unconditionally; LAN rows teach symbolic addressing only; and the RENDERED tool result
-  scrubs every RFC-1918 IPv4 literal (raw octets survive all JSON/URL encodings
-  verbatim) — the executor's body scrub deliberately does not do this for app-bound
-  delivery, so the chat renderer owns it (plan-review F1).
+  scrubs every DOTTED-DECIMAL RFC-1918 IPv4 literal, including leading-zero octets and
+  IPv4-mapped-IPv6 dotted tails — the executor's body scrub deliberately does not do
+  this for app-bound delivery, so the chat renderer owns it (plan-review F1). Stated
+  boundary (Gate-5 MINOR-2): a provider body that re-encodes the address itself
+  (percent-encoded dots, decimal-integer `3232235826`, hex octets) passes through —
+  dotted-decimal is the overwhelmingly common echo shape, and the value at risk is the
+  user's own LAN address; residual, accepted.
 - **Writes:** the executor's confirm gate parks BEFORE any credential read; a turn
   aborted with a parked confirm DENIES it (no post-abort execution); parked confirms are
   a FIFO queue so no resolver is orphaned; the dialog mounts at the app shell so every
@@ -56,7 +60,14 @@ the frozen ceiling), headers (credential-shaped ones stripped), and body.
    encodings (base64 of the key, for instance) is delivered — same boundary as
    app-bound delivery, now with an LLM reader. Unchanged posture, restated here because
    the reader changed.
-5. **Dialog copy attribution (plan-review F11, accepted for this child).** The confirm
+5. **Stored connection metadata is unfenced lane-context text (Gate-5 MINOR-3).**
+   Requirement scope strings render into the provider context outside any untrusted-input
+   fence. Whitespace is collapsed at render (a newline cannot open a fresh "instruction"
+   line), and scopes are registry-pinned for every shipped provider — but the schema
+   admits arbitrary printable text, so an inference-channel requirement carrying an
+   instruction-shaped scope reads as lane guidance. Same confused-deputy class as
+   residual 1, entering via stored metadata; revisit with AL-11.
+6. **Dialog copy attribution (plan-review F11, accepted for this child).** The confirm
    dialog says "this app is asking" for what is actually the user's own chat-composed
    request. Child B's confirm card fixes attribution; until then the host/method/URL
    facts on the dialog are correct and the actor label is imprecise.

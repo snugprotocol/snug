@@ -81,7 +81,12 @@ export function buildProviderContextBlock(db: UserDb, appId: string): string | u
       lines.push(`  Address requests as \`https://<host>/<path>\` using one of: ${fact.publicHosts.join(', ')}.`);
     }
     if (fact.scopes.length > 0) {
-      lines.push(`  Granted scope: ${fact.scopes.join(', ')} — requests outside it will be refused by the provider.`);
+      // Whitespace collapsed (Gate-5 MINOR-3): scope strings are registry-pinned in the
+      // shipped flow, but the schema allows arbitrary printable text and this line sits
+      // OUTSIDE any untrusted-input fence — a newline in a scope must not be able to
+      // open a fresh "instruction" line in the lane context.
+      const scopes = fact.scopes.map((scope) => scope.replace(/\s+/g, ' ').trim()).join(', ');
+      lines.push(`  Granted scope: ${scopes} — requests outside it will be refused by the provider.`);
     }
   }
   lines.push(

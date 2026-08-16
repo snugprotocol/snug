@@ -36,7 +36,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { getToolPrompt } from '@snugprotocol/knowledge';
 import { NET_METHODS, type NetMethod } from '@snugprotocol/protocol';
 
-import { authShapedFailureStore, connectedFetchDepsFor, netConfirmStore } from '../state/net.js';
+import { authShapedFailureStore, connectedFetchDepsFor, denyParkedConfirmByRequest } from '../state/net.js';
 
 export const PROVIDER_REQUEST_TOOL_NAME = 'provider_request';
 
@@ -49,10 +49,12 @@ const DEFAULT_MAX_CALLS = 6;
 const MUTATING: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /**
- * Every RFC-1918 IPv4 literal, in raw, JSON-escaped, or percent-encoded surroundings —
- * the octet pattern itself is what matters; the context around it cannot re-encode the
- * digits (the documented A3 re-encoding boundary applies to credentials, which have
- * richer alphabets — dotted-decimal survives every JSON/URL encoding verbatim).
+ * Every DOTTED-DECIMAL RFC-1918 IPv4 literal — including leading-zero octets and the
+ * dotted tail of an IPv4-mapped IPv6 form. Stated boundary (Gate-5 MINOR-2): a body
+ * that re-encodes the ADDRESS ITSELF — percent-encoded dots (`192%2E168…`), the
+ * decimal-integer form (`3232235826`), hex octets — passes through; dotted-decimal
+ * survives JSON escaping verbatim, which is the overwhelmingly common echo shape
+ * (device config payloads). The residual is recorded in the threat delta.
  */
 const RFC1918_LITERAL =
   /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/g;
@@ -145,25 +147,41 @@ export function buildProviderTools(options: BuildProviderToolsOptions): AgentToo
 
       calls += 1;
       /**
-       * ABORT → DENY OUR PARKED CONFIRM (AC6). Registered per execution, keyed on the
-       * closure appId: the queue's head is only touched when it is OURS, so an
-       * app-runtime confirm for a different app cannot be collaterally denied.
+       * ABORT → DENY THE CONFIRM THIS CALL PARKED (AC6; Gate-5 MAJOR-1). The first
+       * version denied the queue HEAD when it shared our appId — wrong twice over when
+       * our confirm sat QUEUED BEHIND the app frame's own confirm: the app's confirm
+       * was collaterally denied, and OURS survived the abort, approvable into a write
+       * nobody was waiting for. The gate hands the prompt the executor's own `request`
+       * object, so a delegating wrapper can capture exactly which entry is ours and
+       * deny it BY REFERENCE — head or tail, siblings untouched. Delegation keeps the
+       * singleton gate's remember semantics intact (AC13: one gate, one meaning).
        */
+      let activeConfirm: Parameters<typeof denyParkedConfirmByRequest>[0] | null = null;
       const denyParkedConfirm = (): void => {
-        const pending = netConfirmStore.get();
-        if (pending !== null && pending.request.appId === appId) pending.resolve({ granted: false });
+        if (activeConfirm !== null) denyParkedConfirmByRequest(activeConfirm);
       };
       signal?.addEventListener('abort', denyParkedConfirm, { once: true });
       try {
         const db = await getDb();
-        const executor = createConnectedFetch(
-          connectedFetchDepsFor(db, fetchImpl, (slot, status, detail) =>
-            // Same deps-level adaptation as createNetHandlerFor: the executor reports
-            // (slot, status, detail?), the appId is OUR closure — the shipped
-            // AuthRepairBanner is the consumer.
-            authShapedFailureStore.set({ appId, slot, status, ...(detail !== undefined ? { detail } : {}) }),
-          ),
+        const deps = connectedFetchDepsFor(db, fetchImpl, (slot, status, detail) =>
+          // Same deps-level adaptation as createNetHandlerFor: the executor reports
+          // (slot, status, detail?), the appId is OUR closure — the shipped
+          // AuthRepairBanner is the consumer.
+          authShapedFailureStore.set({ appId, slot, status, ...(detail !== undefined ? { detail } : {}) }),
         );
+        const executor = createConnectedFetch({
+          ...deps,
+          confirmGate: {
+            confirm: async (request) => {
+              activeConfirm = request;
+              try {
+                return await deps.confirmGate.confirm(request);
+              } finally {
+                activeConfirm = null;
+              }
+            },
+          },
+        });
         const result = await executor.execute(appId, {
           url: input.url,
           method,

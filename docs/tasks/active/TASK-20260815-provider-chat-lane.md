@@ -25,7 +25,7 @@ users discover the capability.
 **Acceptance criteria** (each becomes at least one test; amended 2026-08-15 per the
 fresh-context plan review — findings F1-F12 tracked in Decisions):
 1. `CHAT_INTENTS` gains `provider_read`/`provider_write`; `chatIntentSchema` parses them; `parseChatIntent` stays fail-closed. Lane assignment becomes an **exhaustive `laneForIntent` map** (`satisfies Record<ChatIntent, ChatLane>`) replacing the predicate else-chain in the router AND `intentContext` — an intent without a lane is a compile error, never a silent answer-lane default (F7).
-2. Classifier goldens: provider-vs-DB disambiguation (app-DB question → `data_read`; provider-account question → `provider_read`; provider mutation → `provider_write`; ambiguous → clarify at low confidence). The prompt-coverage test iterates `CHAT_INTENTS` itself, never a retyped list (fixes the latent `app_question` omission; F6).
+2. Classifier prompt contract (reworded per Gate-5 MINOR-1 — the honest claim): the prompt TEACHES provider-vs-DB disambiguation and the ambiguous→clarify case (few-shot examples + hard-case rules, asserted textually); every example parses through the shipped parser/schema; the coverage loop iterates `CHAT_INTENTS` itself, never a retyped list (fixes the latent `app_question` omission; F6). BEHAVIORAL classification scoring (live model answering the hard cases) is deliberately not asserted here — that is the queued prompt-eval harness's job (next-steps 2026-07-31), same posture as every other prompt in the store.
 3. Provider lane context: approved slots, provider names, **public (non-RFC-1918) host literals**, scope summaries, addressing teaching. **Negative (C1), with a hostile fixture (F10): a stored credential containing `+`/`=`/space, an approved LAN-class row, and declared/revoked/pending rows — no credential value, no `auth:` KV content, no RFC-1918 literal appears in any LLM-bound string, and non-approved rows are absent entirely.**
 4. `provider_request(method, url, headers?, body?)` executes through the shared assembly, pinned by THREE identity assertions (F8): the tool calls `connectedFetchDepsFor` (module-seam spy), the deps carry the singleton `confirmGate` (`net.ts:50`) by identity, and the default transport is `platformDefaultFetch`. `netAppId` is host-assigned (closure), never a tool argument.
 5. Non-approved host → `NET_NOT_APPROVED` fails closed; honest chat rendering + a **code-keyed** CTA observer seat (never message-substring); a **per-turn `provider_request` call cap** bounds retry loops and is the tested mechanism (F9). Multi-host ceiling + symbolic URL → `NET_AMBIGUOUS_CONNECTION` negative test (F2).
@@ -99,4 +99,29 @@ Cross-package: protocol → everything reruns; knowledge → server/playground/d
   forced root run + Gate 5 fresh-context implementation review pending.
 - Next step: root `turbo run test --force` result → Gate 5 adversarial review with C1
   probes + targeted mutation checks → journal sign-off → PR.
+- Open questions: none.
+
+### 2026-08-15 (Gate 5/6) — Claude (Fable 5) — review + close-out
+- Done: first forced root run 21/21 (0 cached). Four guard mutations RED then restored
+  green (scrub, abort-deny, queue, lane wiring). Fresh-context adversarial
+  implementation review ran a 23-probe suite (executor header-strip, symbolic-URL
+  smuggling, scrub encodings, queue lifecycle) — verdict FIX FIRST, two majors:
+  **MAJOR-1** abort denied the queue HEAD by appId, so a chat confirm queued BEHIND the
+  app frame's own survived abort (post-abort-approvable) while the sibling was
+  collaterally denied — fixed by reference-identity deny (`denyParkedConfirmByRequest`,
+  delegating gate wrapper preserves AC13 remember semantics), regression test added and
+  mutation-checked RED against the old behavior. **MAJOR-2** AC12's promised test did
+  not exist — `appShellNetConfirm.test.tsx` now drives a confirm through `<App/>` on
+  /build and resolves it. MINOR-1/2/3: AC2 reworded to the honest claim (behavioral
+  scoring belongs to the queued eval harness); scrub comment + threat delta corrected
+  to dotted-decimal-only with the re-encoding residual stated; scope strings
+  whitespace-collapsed at render + threat-delta residual 5 added. Playground 1086/107
+  green after fixes.
+- State: awaiting second forced root run, then PR.
+- **Self-sign-off (High tier):** plan reviewed fresh-context BEFORE implementation
+  (12 findings resolved), tests-first at every layer with red observed, C1 negatives in
+  place and probed adversarially by a second fresh context, all review findings fixed
+  or honestly recorded, threat delta + ADR-0031 + lessons + next-steps updated in-branch.
+  I sign this off as meeting the High-tier bar.
+- Next step: second `turbo run test --force` → push → PR → owner review.
 - Open questions: none.
