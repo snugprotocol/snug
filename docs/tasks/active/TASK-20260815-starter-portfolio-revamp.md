@@ -54,6 +54,12 @@ match/search actions), **weather** (OpenWeather), **github**. Final shelf: 10 ap
    becomes an inline card in B). ADR-0019's DB propose→approve lane is untouched.
 3. New weather replaces weather-planner; adventure-quest, quiz-me, trivia-night stay.
 4. Structure: three sequenced child tasks/PRs (A → B → C), this file is the umbrella.
+5. (2026-08-15, post-plan addition) Every rebuilt/new starter saves its **authoring
+   provenance** in-repo: the prompts sent to the LLM during dev-time authoring plus the
+   same standard wiki pages the hub generates for user-authored apps at runtime
+   (`snug_app_docs` slugs), colocated at `examples/<folder>/authoring/` — file-per-slug,
+   ingestable 1:1 later. Next-phase use TBD by owner; C only saves them (spec + AC9 in
+   child C).
 
 **Acceptance criteria**: live in the child task files (each criterion becomes a test there).
 

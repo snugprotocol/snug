@@ -40,6 +40,24 @@ trip-planner, my-repos, hue-lights-party, pocket-ledger, weather-planner.
    pinned). Repo pulse + review-queue focus + chat actions (label, issue triage) —
    complement to github.com, not a mirror. Web + desktop.
 
+**Authoring provenance bundle (owner addition, 2026-08-15).** Every rebuilt/new starter
+saves its dev-time authoring record in the codebase, colocated and clearly mapped:
+`examples/<folder>/authoring/` with two parts —
+- `prompts/`: the actual prompts generated and sent to the LLM while authoring the app
+  (numbered per iteration: `01-build.md`, `02-<change>.md`, …) plus `00-assembly.md`
+  pinning which KB template/layers (and repo SHA) rendered the system side;
+- `docs/`: the same standard wiki pages the hub generates for a user-authored app at
+  runtime (`snug_app_docs` slugs: `vision.md`, `requirements.md`, `plan.md`,
+  `lessons.md`, `memory.md`, `next-tasks.md` — write the ones that have real content,
+  matching the app-doc-write tool's doctrine), file-per-slug so a future phase can
+  ingest them 1:1 into `snug_app_docs`.
+For **trade-copilot**, `docs/` is seeded from the owner's REAL rows (vision 680 B,
+requirements 1,324 B, plan 2,312 B, lessons 656 B, next-tasks 392 B in
+`~/Snug/user.sqlite`), then updated alongside the extension work; extension prompts land
+in `prompts/`. Purpose: next-phase leverage (owner will specify); this task only saves
+them, well-formed. Nothing in `authoring/` ships into the app bundle (the shelf glob
+matches only `app.html`).
+
 **Acceptance criteria** (each becomes at least one test; the validate suite IS the test
 bed for most):
 1. `examples/` holds exactly the 10 folders above with `app.html` + `README.md`; `APPS` matches disk (suite gate); `LLM_FREE_APPS` = flying-pig, trivia-night only.
@@ -50,6 +68,11 @@ bed for most):
 6. STARTER_LOOKS entries for all five (desktopOnly: trade-copilot, hue); removed apps' looks deleted; HubView fallback still covers unknown folders.
 7. Design bar verified in a REAL browser both themes at 375px and desktop widths (screenshots in PR; geometry lesson 2026-08-14) — skeletons, ≥44px targets, no hover-only affordances.
 8. `pnpm --filter examples test` + playground + desktop + root forced run green.
+9. Authoring bundle: each of the five new/rebuilt starters ships `authoring/prompts/`
+   (≥ the build prompt + assembly pin) and `authoring/docs/` with valid standard-slug
+   pages; a validate-suite check asserts presence + slug validity for the five and that
+   `authoring/` content never reaches the bundled app (glob scope pinned by test);
+   trade-copilot's seeded docs byte-match its DB rows at extraction time (journaled).
 
 **Out of scope**: live hardware verification against real provider accounts (owner-run,
 next-steps); KB/platform changes beyond what A/B shipped (gaps get recorded, not
@@ -58,8 +81,8 @@ hot-fixed here); localization; mobile-web polish beyond the 375px bar.
 ## Plan
 
 1. Tests/curation first: update `APPS`/`LLM_FREE_APPS`/`MANIFEST_APPS` + folder removals in one commit — suite red until the five new apps exist (the APPS-vs-disk gate enforces the target state).
-2. Extraction: scratchpad script reads `~/Snug/user.sqlite` read-only → `examples/trade-copilot/app.html` + `runtime-contract.json`; verify hooks-block byte-identity (if the owner's copy predates a hooks revision, re-copy the block from `packages/sdk/embedded/snug-hooks.js` and diff only app-authored remainder, journaled). Author `connection.json` (registry borrow: provider name "Coinbase" → pinned fields/request/testRequest arrive by substitution — borrower-authored seats refused, so the manifest stays bare like spotify-party-dj's was).
-3. Build spotify, hue, weather, github from the rendered KB template (20-html-template.md), one at a time, validate-suite green each before the next. If parallel agents are used: worktree isolation mandatory (lesson 2026-08-12), shared literals pinned in this file (folders/slots above), every agent's output re-verified against the validate suite by the orchestrator.
+2. Extraction: scratchpad script reads `~/Snug/user.sqlite` read-only → `examples/trade-copilot/app.html` + `runtime-contract.json` + `authoring/docs/*.md` from its `snug_app_docs` rows (byte-fidelity journaled); verify hooks-block byte-identity (if the owner's copy predates a hooks revision, re-copy the block from `packages/sdk/embedded/snug-hooks.js` and diff only app-authored remainder, journaled). Author `connection.json` (registry borrow: provider name "Coinbase" → pinned fields/request/testRequest arrive by substitution — borrower-authored seats refused, so the manifest stays bare like spotify-party-dj's was).
+3. Build spotify, hue, weather, github from the rendered KB template (20-html-template.md), one at a time, validate-suite green each before the next — saving every authored LLM prompt into `authoring/prompts/` AS the build happens (not reconstructed after) and writing `authoring/docs/` per the app-doc-write doctrine (vision/requirements/plan seeded at first build; lessons/next-tasks as they arise). If parallel agents are used: worktree isolation mandatory (lesson 2026-08-12), shared literals pinned in this file (folders/slots above), every agent's output re-verified against the validate suite by the orchestrator.
 4. Extend trade-copilot past baseline (TWAP planner journaled in app DB; slices via `useConnectedFetch` POSTs — each rides the executor confirm gate; card-driven parameter confirmation via the app-attached chat).
 5. STARTER_LOOKS + desktopOnly flags; remove dead looks.
 6. READMEs (per-app story: what it demos, complement thesis, connection posture) + `examples/README.md` table rewrite (10 apps, updated contract notes if A/B taught new affordances).
@@ -75,7 +98,7 @@ _(running)_
 ## Session journal (append-only, newest last)
 
 ### 2026-08-15 — Claude (Fable 5) — session
-- Done: spec + plan drafted under the umbrella interview; Trade Copilot located + shape-verified in the owner's DB (read-only).
+- Done: spec + plan drafted under the umbrella interview; Trade Copilot located + shape-verified in the owner's DB (read-only). Owner addition folded in same-day: per-starter `authoring/` provenance bundle (prompts + standard-slug wiki docs; trade-copilot's docs seeded from its real `snug_app_docs` rows — vision/requirements/plan/lessons/next-tasks all present in the DB). AC9 + plan steps 2/3 updated.
 - State: awaiting umbrella approval; sequenced after child B.
 - Next step: on B's merge — branch, curation-gate commit first (step 1).
 - Open questions: none.
