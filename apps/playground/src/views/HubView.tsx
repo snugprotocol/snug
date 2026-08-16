@@ -16,26 +16,21 @@ import { EmptyState } from '../ui/EmptyState.js';
 import { Skeleton } from '../ui/Skeleton.js';
 
 const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blurb: string; desktopOnly?: boolean }>> = {
+  // The keepers (owner curation, TASK-20260815-starter-apps-rebuild).
   chess: { emoji: '♞', color: '#8b5cf6', blurb: 'play an opponent with opinions — no server needed' },
   'flying-pig': { emoji: '🐷', color: '#ec4899', blurb: 'tap to keep a pig airborne — pure offline arcade' },
-  'habit-tracker': { emoji: '✅', color: '#22c55e', blurb: 'track streaks in a real sqlite file you can export' },
-  // The five pillar starters (TASK-20260806-starters-pillars, roadmap §5).
   'adventure-quest': { emoji: '🐉', color: '#7c3aed', blurb: 'the agent tells the tale — your pack lives in a real file' },
   'quiz-me': { emoji: '🧠', color: '#0284c7', blurb: 'pick any topic, take a five-question quiz, watch scores climb' },
   'trivia-night': { emoji: '🎉', color: '#d97706', blurb: 'pass one device around — game night with zero setup' },
-  'trip-planner': { emoji: '🧳', color: '#0d9488', blurb: 'dream places, packing and day plans in a file you keep' },
-  'pocket-ledger': { emoji: '💰', color: '#16a34a', blurb: 'money in, money out — honest totals you can export' },
-  // The connected demo (TASK-20260807-connection-reachability).
-  'connection-demo': { emoji: '🔌', color: '#0ea5e9', blurb: 'watch an app reach a real API — and see who approves it' },
-  // The five auth-spectrum starters (HARVESTED from AL-09 / TASK-20260807, roadmap A8b):
-  // one per credential shape, so the connect→approve→inject→scrub path is visible.
-  'crypto-portfolio': { emoji: '🪙', color: '#f59e0b', blurb: 'live coin prices with your own free key — the host holds it' },
-  'weather-planner': { emoji: '🌦️', color: '#3b82f6', blurb: 'plan around real forecasts — connect a weather key you control' },
-  'my-repos': { emoji: '📦', color: '#64748b', blurb: 'your GitHub repos at a glance — a token the app never sees' },
-  'spotify-party-dj': { emoji: '🎧', color: '#10b981', blurb: 'queue the party from your own Spotify — sign in, never share' },
-  // Desktop-labeled (A6 deferred): the Hue bridge lives on your LAN, which a web page
-  // cannot reach — the tile says so instead of offering a connect that cannot work.
-  'hue-lights-party': { emoji: '💡', color: '#e11d48', blurb: 'sync your lights to the party — the bridge lives on your home network', desktopOnly: true },
+  // The gold-standard connected five (TASK-20260815-starter-apps-rebuild, ADR-0031):
+  // each complements its provider's own app rather than cloning it, and each teaches
+  // the provider chat lane. Desktop-only where the transport demands it: Coinbase has
+  // no browser CORS (native fetch carries it), and the Hue bridge lives on your LAN.
+  'trade-copilot': { emoji: '📈', color: '#f59e0b', blurb: 'a copilot grounded in your real Coinbase portfolio — it thinks, you decide', desktopOnly: true },
+  spotify: { emoji: '🎧', color: '#10b981', blurb: 'your listening, understood — portraits and trends Spotify forgets' },
+  hue: { emoji: '🌗', color: '#e11d48', blurb: 'light as mood — the agent is your lighting designer', desktopOnly: true },
+  weather: { emoji: '🌦️', color: '#3b82f6', blurb: 'forecasts turned into decisions — run, ride, water, or wait' },
+  github: { emoji: '🗞️', color: '#64748b', blurb: 'what needs you today, before you ask — your queue as a briefing' },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };

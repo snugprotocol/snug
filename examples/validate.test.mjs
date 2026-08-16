@@ -47,34 +47,29 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
 const EMBEDDED_HOOKS = path.join(REPO_ROOT, 'packages', 'sdk', 'embedded', 'snug-hooks.js');
 const APPS = [
+  // The keepers (owner curation, TASK-20260815-starter-apps-rebuild).
   'chess',
   'flying-pig',
-  'habit-tracker',
-  // The five pillar starters (TASK-20260806-starters-pillars, roadmap §5).
   'adventure-quest',
   'quiz-me',
   'trivia-night',
-  'trip-planner',
-  'pocket-ledger',
-  // The connected demo (TASK-20260807-connection-reachability): the FIRST shipped
-  // example that actually CALLS the governed seam. It is validated exactly like every
-  // other app — no exemption, no skip — which is what made the rule repair above
-  // necessary in the first place.
-  'connection-demo',
-  // The AUTH-SPECTRUM starters (harvested from the parked AL-09 branch by
-  // TASK-20260810-p4-starters). One starter per credential shape, so every rung of the
-  // spectrum has a working, reviewable example rather than a doc paragraph:
-  //   crypto-portfolio → api_key (CoinGecko)      weather-planner  → api_key (OpenWeather)
-  //   my-repos         → bearer_token (GitHub)    spotify-party-dj → oauth2_auth_code
-  // `hue-lights-party` is the LAN-class starter: its manifest declares a `lanHost`
-  // connection (the bridge address is COLLECTED from the user, never shipped), and
-  // since ADR-0026 the app drives the real bridge through connection-relative URLs —
-  // the real-connection pins at the bottom of this file are its dedicated gate.
-  'crypto-portfolio',
-  'weather-planner',
-  'my-repos',
-  'spotify-party-dj',
-  'hue-lights-party',
+  // The gold-standard connected five (TASK-20260815-starter-apps-rebuild, ADR-0031):
+  // each complements its provider's own app, exploits the provider chat lane, and
+  // ships its authoring provenance in `authoring/` (prompts + wiki docs). One per
+  // credential shape, superseding the auth-spectrum demos:
+  //   trade-copilot → api_key + cdp_jwt Ed25519 (Coinbase; ported from the owner's
+  //                   hub-built app — the app-authored code is the original, verbatim)
+  //   spotify       → oauth2_auth_code (PKCE)    weather → api_key (query-injected)
+  //   github        → bearer_token / oauth_app   hue     → LAN-class lanHost
+  // `hue` remains the LAN starter: manifest declares `lanHost` (the bridge address is
+  // COLLECTED from the user, never shipped) and the app drives the bridge through
+  // connection-relative URLs — the real-connection pins at the bottom of this file
+  // are its dedicated gate.
+  'trade-copilot',
+  'spotify',
+  'hue',
+  'weather',
+  'github',
 ];
 
 /**
@@ -84,30 +79,13 @@ const APPS = [
  * Everything not in this set is agent-driven.
  */
 const LLM_FREE_APPS = new Set([
+  // ADR-0011's LLM-free exemplars. The connected five are all agent-driven BY DESIGN
+  // (TASK-20260815, ADR-0031): their wow is live provider data COMPOSED by an agent
+  // that is grounded in it — the provider chat lane and each app's runtime contract
+  // carry that posture, and the strict agent-driven branch of the lint below verifies
+  // a real RESPONSE_SCHEMA plus a shipped runtime-contract.json for every one.
   'flying-pig',
   'trivia-night',
-  'trip-planner',
-  'pocket-ledger',
-  // `connection-demo` is LLM-free ON PURPOSE: it exists to show an app reaching a real
-  // API through the governed seam, and a model in the loop would blur exactly that —
-  // you could not tell whether the body on screen came off the wire or out of a
-  // sentence generator.
-  'connection-demo',
-  // The five auth-spectrum starters (AL-09 plan v4), LLM-free for the SAME reason as
-  // connection-demo and stated in each app's own section-5 comment: the live data IS the
-  // wow. A model in the loop would make it impossible to tell whether the prices, the
-  // forecast, the repo list, or the playlist came off the wire or out of a sentence
-  // generator — which is precisely what these starters exist to demonstrate.
-  //
-  // Registering them here selects the STRICTER branch of the posture lint (RESPONSE_SCHEMA
-  // must be null AND authored code must never call sendMessage), not a lenient one.
-  // Verified against the harvested source before adding: all five set RESPONSE_SCHEMA to
-  // null and make zero authored sendMessage calls.
-  'crypto-portfolio',
-  'weather-planner',
-  'my-repos',
-  'spotify-party-dj',
-  'hue-lights-party',
 ]);
 /**
  * The no-network-APIs rule, as a PAIR of patterns with one home (so the per-app rule
@@ -389,33 +367,6 @@ test('chess sends its board state ONCE, not in both payload and state', () => {
 });
 
 // ── Behavior checks on money arithmetic (adversarial review of AL-08, fix 2) ────────
-// parseCents is extracted from the shipped source and executed — the one place in the
-// portfolio where a parse bug corrupts a BALANCE, so it gets real cases, not a shape
-// check. "1,000" must be a thousands separator, never one dollar.
-test('pocket-ledger: parseCents handles decimal commas, thousands separators, and rejects ambiguity', () => {
-  const html = readFileSync(path.join(HERE, 'pocket-ledger', 'app.html'), 'utf8');
-  const src = /const parseCents = \(raw\) => \{[\s\S]*?\n {4}\};/.exec(html)?.[0];
-  assert.ok(src, 'parseCents found in the app source');
-  const parseCents = new Function(`${src} return parseCents;`)();
-  const cases = [
-    ['12.50', 1250],
-    ['4', 400],
-    ['1,000', 100000], // thousands separator — NOT one dollar
-    ['1,50', 150], // decimal comma
-    ['1,234.56', 123456], // thousands + decimal dot
-    ['1,000,000', 100000000], // repeated well-formed groups, exactly at the $1M sanity cap
-    ['1,234,567', null], // well-formed groups but over the cap — rejected by design
-    ['1,2,3', null], // ambiguous → rejected (the warn path)
-    ['1,0000', null], // malformed grouping → rejected
-    ['0', null],
-    ['', null],
-    ['-5', null],
-  ];
-  for (const [input, expected] of cases) {
-    assert.equal(parseCents(input), expected, `parseCents(${JSON.stringify(input)})`);
-  }
-});
-
 // ---------------------------------------------------------------------------
 // The no-network-APIs rule, tested directly (TASK-20260807-connection-reachability,
 // owner decision (i)). The per-app assertions above prove the SHIPPED apps are clean;
@@ -583,8 +534,8 @@ test('the imported connectionRequirementSchema is the REAL strict contract, not 
  * app's real blocker is the runtime's app-addressing gap (apps are never told the
  * bridge's address), and the copy must name that, not a platform the user may not be on.
  */
-test('hue-lights-party copy is platform-agnostic and names the real runtime gap', () => {
-  const html = readFileSync(path.join(HERE, 'hue-lights-party', 'app.html'), 'utf8');
+test('hue copy is platform-agnostic and names the real runtime gap', () => {
+  const html = readFileSync(path.join(HERE, 'hue', 'app.html'), 'utf8');
 
   assert.ok(
     !/waits for the desktop app/i.test(html),
@@ -605,8 +556,8 @@ test('hue-lights-party copy is platform-agnostic and names the real runtime gap'
  * REAL connection: symbolic addressing, live CLIP v2 data, and code-keyed honest
  * fallbacks. No mocked room or light data may remain anywhere in the file.
  */
-test('hue-lights-party drives the real bridge through connection-relative URLs — no dummy data', () => {
-  const html = readFileSync(path.join(HERE, 'hue-lights-party', 'app.html'), 'utf8');
+test('hue drives the real bridge through connection-relative URLs — no dummy data', () => {
+  const html = readFileSync(path.join(HERE, 'hue', 'app.html'), 'utf8');
 
   // The mount probe doubles as the data fetch (ADR-0026 §4): rooms come from the bridge.
   assert.ok(

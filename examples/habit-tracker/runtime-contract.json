@@ -1,7 +1,0 @@
-{
-  "overview": "A habit tracker. Each request asks a question about the user's own habit data, which the app queries and summarizes for you.",
-  "personaNote": "Answer in one or two encouraging sentences. Never invent a streak or a number the request did not give you.",
-  "stateGuidance": "Each request sends the user's question, the habit schema, today's date, and how many habits exist.",
-  "responseGuidance": "Reply {\"answer\":\"one or two sentences\"}.",
-  "maxOutputTokens": 512
-}
