@@ -45,7 +45,8 @@
  * `base64decode()` primitive a template could aim at arbitrary text.
  *
  * `cdp_jwt` is the second signing-capable family: a host-side, provider-scheme-named
- * signing function minting a per-request ES256 CDP JWT (Coinbase CDP keys). Like
+ * signing function minting a per-request EdDSA (Ed25519) CDP JWT (Coinbase CDP keys;
+ * ES256 at v1, superseded by ADR-0030). Like
  * `hmac_sha256_b64` it is a FUSED fixed shape, not a general JWT primitive — the claim
  * set, algorithm, and expiry are pinned in the engine, so a template can aim it only at
  * "sign this request as CDP", never at arbitrary token minting. Its arguments carry a
