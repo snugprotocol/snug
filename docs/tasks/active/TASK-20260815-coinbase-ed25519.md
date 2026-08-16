@@ -312,3 +312,21 @@ to the flake.
 - Next step: owner review + merge; then AC8 hardware test (procedure in next-steps).
 - Open questions: `kid` format nuance (Plan §3) — resolves at AC8; if the bare key id
   401s, the fix is field-guidance wording only.
+
+### 2026-08-15 — Claude (Fable) — session close (Gate 6)
+- Done: PR #53 opened after Gate-5 (root 21/21 ×2) and the applied AI diff review;
+  branch pushed; owner instructed merge → merging now, then ADR-0027 close-out (INDEX
+  line + task-file deletion via a docs-only PR). Lessons: stale-dist rule added to
+  lessons.md this branch. Process confession for the record: I repeated the journaled
+  2026-08-08 mistake ("commit before any mutation cycle") — flipped the deletion guard
+  for a red-proof with UNCOMMITTED review fixes in the same file and lost them to the
+  restoring `git checkout`; caught immediately (Sheet import broke) and re-applied.
+  The existing lesson stands; the repeat is journaled per its own rule.
+- State: everything committed and pushed; no protocol change → no spec-changelog; docs
+  drift fixed in-branch (architecture, code-map, threat model, spec-draft wording,
+  next-steps, KB).
+- Next step (the ONE): owner runs AC8 on hardware — Ed25519 key in the CDP portal →
+  wizard re-prompt → probe 2xx → Trade Copilot portfolio renders (procedure:
+  docs/next-steps.md; closes the PR-#42 Coinbase verification thread).
+- Open questions: `kid` format nuance only (resolves at AC8; wording-only fix if the
+  bare id 401s).
