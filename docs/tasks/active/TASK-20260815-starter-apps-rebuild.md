@@ -124,6 +124,27 @@ _(running)_
 - Next step: TWAP → real-browser design pass (AC7 screenshots) → full suites → Gate 5
   fresh-context review → PR stacked on child B.
 - Open questions: none.
+
+### 2026-08-15 (close) — Claude (Fable 5) — session
+- Done: **TWAP** landed (increment-exact slicing, render-only agent verdict, per-slice
+  governed POSTs with deterministic client_order_id, pause-skips-never-late,
+  interrupted-on-reopen; its headless-mount review caught the ported app's missing DDL
+  backfill AND a limit-price hang — both fixed). **Design pass (AC7)**: 20 shots
+  (5 apps × 2 themes × 2 widths) via Playwright against the live playground — no
+  horizontal overflow anywhere; caught a REAL bug all mocked checks missed: Standup's
+  `DEFERRABLE` column name is an SQLite reserved word (table never created) → renamed
+  `deferred_items`, lesson recorded in the app bundle; first pass's theme probe was
+  itself wrong (stamped the attribute, not the store — v2 sets the persisted store).
+  Screenshot set delivered to the owner directly. **Auth cross-package repoint**
+  (registry-substitution + pinned-scopes suites; CoinGecko row OBSOLETE with inline
+  probes cited, connection-demo control MIGRATED inline). Known polish item: browse-mode
+  apps render the runner's "no net capability" detail verbatim above their connect
+  cards — dev-toned copy, host-owned string, deferred. next-steps hardware
+  verifications repointed at the new shelf (+ weather/github live passes folded in).
+- State: examples 147/147 · playground 1102/109 · auth 759/37 · root forced 21/21 ×2.
+  Gate-5 fresh-context review in flight.
+- Next step: review findings → fixes → PR (base: child B's branch).
+- Open questions: none.
 - State: awaiting umbrella approval; sequenced after child B.
 - Next step: on B's merge — branch, curation-gate commit first (step 1).
 - Open questions: none.
