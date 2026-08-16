@@ -49,10 +49,34 @@ const hasApp = process.env.SNUG_E2E_HAS_APP === '1';
  * → NET_NOT_APPROVED → CTA → prefilled STRONG review → approve → frozen row.
  */
 
-const FOLDER = 'connection-demo';
-const DECLARED_HOST = 'api.example.com';
-/** The manifest's provider name — `examples/connection-demo/connection.json`. */
-const PROVIDER = 'Example API';
+/**
+ * RE-POINTED (TASK-20260815-starter-apps-rebuild): `connection-demo` left the shelf in
+ * the re-curation; `weather` is the plain-api_key declaring starter that carries this
+ * journey now. Its manifest names the registry-pinned OpenWeather brand, so the values
+ * below are the POST-SUBSTITUTION ones the review actually renders (registry display
+ * name, registry host ceiling, the registry's registration walkthrough and its single
+ * `API key` field — so steps 7 and 8 keep their exact assertions).
+ *
+ * The IN-APP steps are pinned against the shipped `examples/weather/app.html`: the app's
+ * own first governed call is the city geocode search, and on NET_NOT_APPROVED it renders
+ * its honest "waiting for a connection" dead-end. (This spec is env-gated — it could not
+ * be executed for this re-pin, so treat the first integration run as the verifier.)
+ */
+const FOLDER = 'weather';
+const DECLARED_HOST = 'api.openweathermap.org';
+/** The provider name the review renders — the registry's pinned OpenWeather entry. */
+const PROVIDER = 'OpenWeather';
+
+/**
+ * The app's OWN call, driven through its real UI: open the places surface and search for
+ * a city. `searchPlaces` issues the governed geocode fetch, the host refuses at Gate 3
+ * (nothing is approved), and the app flips to its designed unconnected state.
+ */
+async function triggerOwnCall(app: FrameLocator): Promise<void> {
+  await app.getByRole('button', { name: /^places$/i }).click({ timeout: 20_000 });
+  await app.getByLabel(/search for a city/i).fill('London');
+  await app.getByRole('button', { name: /^search$/i }).click();
+}
 
 const appFrame = (page: Page): FrameLocator =>
   page.frameLocator('[data-testid="frame-wrap"] iframe[sandbox="allow-scripts"]');
@@ -81,8 +105,9 @@ test.describe('T8 — a chat-less starter reaches a connection through the CTA (
 
     // 1. The app makes its OWN call. Nothing has been approved, so the host refuses at
     //    Gate 3. This is the app-timed trigger — no chat, no directive, no existing row.
-    await app.getByTestId('call-button').click({ timeout: 20_000 });
-    await expect(app.getByTestId('error-code')).toHaveText('NET_NOT_APPROVED', { timeout: 20_000 });
+    //    The weather app maps NET_NOT_APPROVED to its designed unconnected state.
+    await triggerOwnCall(app);
+    await expect(app.getByText(/waiting for a connection/i)).toBeVisible({ timeout: 20_000 });
 
     // 2. …and the host surfaces the CTA banner. Before this task the user's journey
     //    ended here, because clicking it opened an empty manual review.
@@ -150,8 +175,8 @@ test.describe('T8 — a chat-less starter reaches a connection through the CTA (
     // lists the app as declared-but-not-connected. Before this task that route did not
     // exist and the user really would have been stranded.
     const app = await installDemo(page);
-    await app.getByTestId('call-button').click({ timeout: 20_000 });
-    await expect(app.getByTestId('error-code')).toHaveText('NET_NOT_APPROVED', { timeout: 20_000 });
+    await triggerOwnCall(app);
+    await expect(app.getByText(/waiting for a connection/i)).toBeVisible({ timeout: 20_000 });
 
     const cta = page.getByTestId('net-auth-cta');
     await cta.getByRole('button', { name: /connect this app/i }).click();

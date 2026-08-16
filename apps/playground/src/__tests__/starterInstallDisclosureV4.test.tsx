@@ -44,7 +44,12 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-const DEMO_FOLDER = 'connection-demo';
+// RE-POINTED (TASK-20260815-starter-apps-rebuild): `connection-demo` was removed in the
+// shelf re-curation. This suite renders the REAL read-only starter route, so the folder
+// must exist in the shipped `examples/*/app.html` glob — `trade-copilot` is the declaring
+// starter whose app.html ships today. The MANIFEST is still injected below, so the
+// disclosure copy under test stays the deliberate fixture values.
+const DEMO_FOLDER = 'trade-copilot';
 const DEMO_STARTER = `${STARTER_PREFIX}${DEMO_FOLDER}`;
 const DECLARED_HOST = 'api.example.com';
 const BUNDLED_HTML = '<!doctype html>\n<html><body><script>const app = 1;</script></body></html>\n';
@@ -117,8 +122,8 @@ beforeEach(async () => {
   // stand-in. The two-fact vouch compares the stored app HTML against the bundled
   // starter HTML, so a fixture that disagreed with the loader would fail the vouch for a
   // reason that has nothing to do with what these tests assert (and did, until this line:
-  // the real connection-demo is ~19.9 KB and the stand-in was ~90 bytes). The MANIFEST is
-  // still injected, which is the seat under test.
+  // the real bundled starter app.html is tens of KB and the stand-in was ~90 bytes). The
+  // MANIFEST is still injected, which is the seat under test.
   const bundledHtml = (await loadStarterHtml(DEMO_STARTER)) ?? BUNDLED_HTML;
   __setDeclarationManifestsForTests({
     [DEMO_FOLDER]: { manifest: V4_MANIFEST, html: bundledHtml },

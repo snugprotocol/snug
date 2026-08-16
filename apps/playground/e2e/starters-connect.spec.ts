@@ -21,12 +21,13 @@
 // while failing the doctrine completely. So each app must ALSO render its own working
 // shell.
 //
-// The `weather-planner` row was a real bug on the parked branch and is kept in the table
-// for that reason: it was authored before the pattern settled and keyed its pre-connect
-// state on the error code ALONE, so a cold boot showed "your key stays yours" instead of
-// the thing the user actually has to do. Every other starter already had the no-data-yet
-// clause. Asserting all four uniformly is what makes the AC hold; testing only the three
-// that happened to work is how the gap survived a review.
+// The weather row (then `weather-planner`, now `weather`) was a real bug on the parked
+// branch and is kept in the table for that reason: it was authored before the pattern
+// settled and keyed its pre-connect state on the error code ALONE, so a cold boot showed
+// "your key stays yours" instead of the thing the user actually has to do. Every other
+// starter already had the no-data-yet clause. Asserting all rows uniformly is what makes
+// the AC hold; testing only the ones that happened to work is how the gap survived a
+// review.
 //
 // ── AC9: HUE IS HONESTLY GREYED ────────────────────────────────────────────────────
 // Hue reaches a bridge on the user's own LAN, which a sandboxed web iframe cannot do. The
@@ -84,24 +85,65 @@ test.describe('P4-AC7 / AL-09 AC8 — the degraded pre-connect state is real', (
   test.skip(!hasApp, AWAITS);
 
   /**
-   * Pinned by EXACT testid and EXACT copy. A generic assertion here would let a
-   * placeholder pass, which is the failure this table's `weather-planner` row records.
+   * Pinned by EXACT copy and an EXACT shell locator against the REBUILT apps' shipped
+   * HTML. A generic assertion here would let a placeholder pass, which is the failure
+   * the old table's weather row recorded.
+   *
+   * RE-POINTED AND RE-PINNED (TASK-20260815-starter-apps-rebuild): my-repos → github,
+   * spotify-party-dj → spotify, weather-planner → weather. The rebuilt apps do not ship
+   * the old `preconnect-notice`/shell testids, so each row now pins (1) the app's own
+   * "connect <provider>" copy and (2) a live piece of its pre-connect working shell,
+   * both read from the shipped `examples/<folder>/app.html` (this spec is env-gated —
+   * it could not be executed for this re-pin, so treat the first integration run as the
+   * verifier). The two-assertion shape — honest copy + alive shell — is the AC.
+   *
+   * The crypto-portfolio (CoinGecko) row is MIGRATED, not dropped: its successor
+   * `trade-copilot` (Coinbase) is desktop-only — its web tile is LOCKED exactly like
+   * Hue's, so it cannot be opened by this project at all; its shelf honesty is asserted
+   * tile-level in the desktop-only describe below.
    */
-  const DEGRADED = [
-    { folder: 'crypto-portfolio', copy: /connect CoinGecko/i, shell: 'coin-bitcoin' },
-    { folder: 'my-repos', copy: /connect GitHub/i, shell: 'load-button' },
-    { folder: 'spotify-party-dj', copy: /connect Spotify/i, shell: 'queue-empty' },
-    { folder: 'weather-planner', copy: /connect OpenWeather/i, shell: 'city-london' },
+  const DEGRADED: Array<{
+    folder: string;
+    /** The provider-naming pre-connect copy, and where it renders. */
+    honest: (app: FrameLocator) => Promise<void>;
+    /** A working piece of the app's own shell, alive before any credential exists. */
+    shell: (app: FrameLocator) => ReturnType<FrameLocator['locator']>;
+  }> = [
+    {
+      folder: 'github',
+      // examples/github/app.html: the "🔌 connect github" heading in the connect card.
+      honest: async (app) =>
+        expect(app.getByRole('heading', { name: /connect github/i })).toBeVisible({ timeout: 20_000 }),
+      // The repo-watch input — the sketch queue's shell is interactive pre-connect.
+      shell: (app) => app.getByLabel(/repository to watch/i),
+    },
+    {
+      folder: 'spotify',
+      // examples/spotify/app.html: the connect-hero card names Spotify and the lane.
+      honest: async (app) => {
+        await expect(app.getByTestId('connect-hero')).toContainText(/spotify/i, { timeout: 20_000 });
+        await expect(app.getByTestId('connect-hero')).toContainText(/not connected yet/i);
+      },
+      shell: (app) => app.getByTestId('rewind-card'),
+    },
+    {
+      folder: 'weather',
+      // examples/weather/app.html: the "connect openweather — it's free" steps card.
+      honest: async (app) =>
+        expect(app.getByRole('heading', { name: /connect openweather/i })).toBeVisible({ timeout: 20_000 }),
+      // The city search — places/decisions work before any forecast can load.
+      shell: (app) => app.getByLabel(/search for a city/i),
+    },
   ];
 
-  for (const { folder, copy, shell } of DEGRADED) {
+  for (const { folder, honest, shell } of DEGRADED) {
     test(`${folder} boots into an honest, useful pre-connect state`, async ({ page }) => {
       const app = await openStarterByName(page, folder);
 
       // HONEST: it names the provider it needs, not a shrug.
-      await expect(app.getByTestId('preconnect-notice')).toContainText(copy, { timeout: 20_000 });
+      await honest(app);
       // USEFUL: its own shell is alive before any credential exists.
-      await expect(app.getByTestId(shell)).toBeVisible();
+      await expect(shell(app)).toBeVisible();
     });
   }
 
@@ -110,8 +152,8 @@ test.describe('P4-AC7 / AL-09 AC8 — the degraded pre-connect state is real', (
     // the shelf and pressing a live button. A read-only starter has NO net handler at
     // all, which is a deliberate security property — browsing must reach nothing and
     // write nothing, so Settings stays empty and no declared row appears.
-    const app = await openStarterByName(page, 'weather-planner');
-    await expect(app.getByTestId('city-london')).toBeVisible({ timeout: 20_000 });
+    const app = await openStarterByName(page, 'weather');
+    await expect(app.getByLabel(/search for a city/i)).toBeVisible({ timeout: 20_000 });
 
     await page.goto('/settings');
     await expect(page.getByTestId('connection-declared-row')).toHaveCount(0);
@@ -126,8 +168,9 @@ test.describe('P4-AC7 / AL-09 AC8 — the degraded pre-connect state is real', (
  * behind `SNUG_E2E_HAS_APP`.
  *
  * WHAT CHANGED IN THE WORLD. P3 of this task's predecessor made the Hue tile
- * `desktopOnly`, which LOCKS it on web — `aria-label="open hue lights party"` belongs
- * to a disabled button. So `openStarterByName(page, 'hue-lights-party')` has been
+ * `desktopOnly`, which LOCKS it on web — `aria-label="open hue"` belongs
+ * to a disabled button (the folder is `hue` since TASK-20260815-starter-apps-rebuild;
+ * it was `hue-lights-party`). So `openStarterByName(page, 'hue')` has been
  * unclickable on web since that landed, and the old first test would have failed at
  * its first line rather than at any assertion it was written to make. It is pinned
  * here as the tile-level statement it actually is, at the surface that actually
@@ -147,7 +190,7 @@ test.describe('AC8/AC9 — Hue is honestly labelled on the web', () => {
 
   test('the tile is greyed with the reason named, and offers no connect that cannot work', async ({ page }) => {
     await page.goto('/');
-    const tile = page.locator('[data-testid="starter-tile"][data-starter-name="hue lights party"]');
+    const tile = page.locator('[data-testid="starter-tile"][data-starter-name="hue"]');
     await expect(tile).toBeVisible({ timeout: 20_000 });
 
     // GREYED, NEVER HIDDEN — the AC9 claim, at the surface that renders it.
@@ -182,11 +225,33 @@ test.describe('AC8/AC9 — Hue is honestly labelled on the web', () => {
      * `lanWizardFlow` suite drives collect → approve → pair end to end).
      */
     await page.goto('/');
-    const tile = page.locator('[data-testid="starter-tile"][data-starter-name="hue lights party"]');
+    const tile = page.locator('[data-testid="starter-tile"][data-starter-name="hue"]');
     await expect(tile.locator('.tile-card-button')).toBeDisabled();
     await expect(tile.getByTestId('starter-install')).toHaveCount(0);
 
     await page.goto('/settings');
     await expect(page.getByTestId('connection-declared-row')).toHaveCount(0);
+  });
+
+  test('trade-copilot (Coinbase) is desktop-only too — greyed on the web, with the reason named', async ({ page }) => {
+    /**
+     * MIGRATED from the DEGRADED table's `crypto-portfolio` row
+     * (TASK-20260815-starter-apps-rebuild). The CoinGecko starter left the shelf; its
+     * Coinbase-shaped successor `trade-copilot` cannot present a degraded pre-connect
+     * state on the web at all, because api.coinbase.com answers no browser CORS
+     * preflight — so the tile is `desktopOnly`, the same honest posture as Hue's. The
+     * shelf-honesty property the old row protected ("the app is truthful about what it
+     * is missing before a credential exists") is asserted here at the surface a web
+     * user actually reaches: a greyed tile that names the reason and mints no connect
+     * affordance. The open-and-interact half of the old row lives on the desktop leg,
+     * once a desktop e2e project exists to carry it.
+     */
+    await page.goto('/');
+    const tile = page.locator('[data-testid="starter-tile"][data-starter-name="trade copilot"]');
+    await expect(tile).toBeVisible({ timeout: 20_000 });
+    await expect(tile.getByTestId('desktop-only-badge')).toBeVisible();
+    await expect(tile.getByTestId('desktop-only-badge')).toContainText(/desktop app/i);
+    await expect(tile.locator('.tile-card-button')).toBeDisabled();
+    await expect(tile.getByTestId('starter-install')).toHaveCount(0);
   });
 });

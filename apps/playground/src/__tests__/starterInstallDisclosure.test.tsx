@@ -35,7 +35,12 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-const DEMO_FOLDER = 'connection-demo';
+// RE-POINTED (TASK-20260815-starter-apps-rebuild): `connection-demo` was removed in the
+// shelf re-curation. This suite renders the REAL read-only starter route, so the folder
+// must exist in the shipped `examples/*/app.html` glob — `trade-copilot` is the declaring
+// starter whose app.html ships today. The MANIFEST is still injected below, so the
+// disclosure copy under test stays the deliberate fixture values.
+const DEMO_FOLDER = 'trade-copilot';
 const DEMO_STARTER = `${STARTER_PREFIX}${DEMO_FOLDER}`;
 const DECLARED_HOST = 'api.example.com';
 const BUNDLED_HTML = '<!doctype html>\n<html><body><script>const app = 1;</script></body></html>\n';
