@@ -58,3 +58,23 @@ _(running)_
 - State: awaiting umbrella approval; sequenced after child A.
 - Next step: on A's merge — branch, AC1/AC2 failing tests first.
 - Open questions: in-app card surface deliberately KB-pattern-only (no frame) — owner revisits if a portfolio app proves the need.
+
+### 2026-08-15 (later) — Claude (Fable 5) — session
+- Done: implemented on `feat/TASK-20260815-inline-cards` **stacked on child A's branch**
+  (deviation from "off main after A merges": A is in owner review as PR #56; stacking
+  preserves the A→B→C sequence without self-merging High-tier code — the PR chain
+  retargets as each parent merges). Shipped: `cards.ts` (strict bounded schema,
+  one-per-turn `present_card` tool, `metaToCard` strict rehydrate with
+  phantom-resolution guard), ChatLog choice card + `ProviderConfirmCard` (chat-origin
+  parked confirms render inline; `NetConfirmDialog` yields via WeakMap
+  reference-identity origin tagging — one surface per decision), `selectCardOption`
+  (single-shot, persists, sends the pick as the next USER message — UI-only authority),
+  lane wiring (data/provider/answer; feature untouched per AC7), KB in-app idiom +
+  tool prompt. **Process note (honest):** core implementation landed before the AC1/AC2
+  test files (deviation from strict red-first); compensated with guard MUTATION checks —
+  phantom-resolution guard, dialog chat-origin null, and origin tag each forced RED,
+  restored green.
+- State: playground 1102/109 · knowledge 183 · root forced 21/21 (0 cached). Gate-5
+  fresh-context review in flight.
+- Next step: review findings → fixes → PR (base: child A's branch).
+- Open questions: none.
