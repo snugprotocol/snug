@@ -22,17 +22,21 @@ Scrubbed responses render into chat context the same defanged way `<query_result
 The KB teaches the affordance so built apps mention their slots in runtime contracts and
 users discover the capability.
 
-**Acceptance criteria** (each becomes at least one test):
-1. `CHAT_INTENTS` gains `provider_read`/`provider_write`; `chatIntentSchema` parses them; lane mapping yields `'provider'`; `parseChatIntent` stays fail-closed (unknown intent → undefined → clarify).
-2. Classifier goldens: provider-vs-DB disambiguation cases route correctly (app-DB question → `data_read`; provider-account question → `provider_read`; provider mutation → `provider_write`; ambiguous → clarify at low confidence). Prompt + schema move in lockstep.
-3. Provider lane assembles context containing approved slots/providers and symbolic-URL teaching; **negative (C1): no credential value, no `auth:` KV content, no resolved LAN host string can appear in any LLM-bound string** (adversarial fixture: store a credential, assert absence across the assembled turn).
-4. `provider_request(method, url, headers?, body?)` executes via the SAME executor instance/deps as app-runtime net (`connectedFetchDepsFor`), with host-assigned `netAppId` — asserted at the seam by identity, not shape (lesson 2026-08-13).
-5. Non-approved host → `NET_NOT_APPROVED` fails closed and renders an honest chat message with a connect CTA; no retry loop.
-6. Mutating method without confirm-gate grant → `NET_CONFIRM_DENIED`; with grant → executes. Negative: confirm gate is invoked BEFORE any credential read (order pinned by spy, lesson 2026-08-15).
-7. Symbolic `snug-connection://<slot>/<path>` URLs work in the tool; app-side response scrub behavior preserved (resolved host never in the tool result the LLM sees).
-8. Unrouted modes (subscription/WebLLM/demo) behavior byte-identical to today (route undefined → legacy path); mode gating inherits `liveInferenceAdapter`.
-9. Existing lanes (data/feature/answer/clarify) regression-green; `MIN_ROUTING_CONFIDENCE` and clarify fallback unchanged.
+**Acceptance criteria** (each becomes at least one test; amended 2026-08-15 per the
+fresh-context plan review — findings F1-F12 tracked in Decisions):
+1. `CHAT_INTENTS` gains `provider_read`/`provider_write`; `chatIntentSchema` parses them; `parseChatIntent` stays fail-closed. Lane assignment becomes an **exhaustive `laneForIntent` map** (`satisfies Record<ChatIntent, ChatLane>`) replacing the predicate else-chain in the router AND `intentContext` — an intent without a lane is a compile error, never a silent answer-lane default (F7).
+2. Classifier goldens: provider-vs-DB disambiguation (app-DB question → `data_read`; provider-account question → `provider_read`; provider mutation → `provider_write`; ambiguous → clarify at low confidence). The prompt-coverage test iterates `CHAT_INTENTS` itself, never a retyped list (fixes the latent `app_question` omission; F6).
+3. Provider lane context: approved slots, provider names, **public (non-RFC-1918) host literals**, scope summaries, addressing teaching. **Negative (C1), with a hostile fixture (F10): a stored credential containing `+`/`=`/space, an approved LAN-class row, and declared/revoked/pending rows — no credential value, no `auth:` KV content, no RFC-1918 literal appears in any LLM-bound string, and non-approved rows are absent entirely.**
+4. `provider_request(method, url, headers?, body?)` executes through the shared assembly, pinned by THREE identity assertions (F8): the tool calls `connectedFetchDepsFor` (module-seam spy), the deps carry the singleton `confirmGate` (`net.ts:50`) by identity, and the default transport is `platformDefaultFetch`. `netAppId` is host-assigned (closure), never a tool argument.
+5. Non-approved host → `NET_NOT_APPROVED` fails closed; honest chat rendering + a **code-keyed** CTA observer seat (never message-substring); a **per-turn `provider_request` call cap** bounds retry loops and is the tested mechanism (F9). Multi-host ceiling + symbolic URL → `NET_AMBIGUOUS_CONNECTION` negative test (F2).
+6. Mutating method without confirm grant → `NET_CONFIRM_DENIED`; with grant → executes; confirm-before-credential-read ordering asserted at the shared-assembly altitude, not against bespoke spy-deps (F8 note). **Turn abort with a parked confirm denies that confirm** — no post-abort execution.
+7. Addressing (F2): symbolic `snug-connection://<slot>/<path>` for single-host (LAN-class) connections; literal `https://<pinned-host>/<path>` for public/multi-host connections. **LAN body scrub (F1): for LAN-class slots, every RFC-1918 IPv4 literal in the rendered tool result is replaced with `[lan-address]` before it enters LLM context — fixture's response body echoes the bridge address (raw + JSON-escaped).**
+8. Unrouted modes (subscription/WebLLM/demo) byte-identical to today (route undefined → legacy path); mode gating inherits `liveInferenceAdapter`.
+9. Existing lanes regression-green; `MIN_ROUTING_CONFIDENCE` and clarify fallback unchanged.
 10. Root `turbo run test --force` green (Windows desktop leg stays deliberately red per ADR-0021 D8).
+11. **Confirm queue (F4):** two concurrently parked confirms both resolve — the store becomes a FIFO queue (playground-only); the displaced-resolver orphan is dead by test.
+12. **Dialog mount (F3):** `NetConfirmDialog` mounts at the app shell so a provider_write confirm renders wherever the routed chat runs (BuilderView-attached included) — test drives a confirm outside RunView.
+13. **Remember-scope semantics pinned (F5):** one test asserts the chosen semantics — session-remember grants are SHARED across app-runtime and chat surfaces for the same (app, host, method) triple (accepted decision, see Decisions).
 
 **Out of scope**: subscription server twin (recorded gap family); new approval doctrine
 (owner decision — executor confirm gate is the control); card confirm surface (child B);
@@ -41,24 +45,32 @@ existing executor semantics.
 
 ## Plan
 
-Order (tests first per TDD.md):
+Order (tests first per TDD.md; amended per plan review 2026-08-15):
 
-1. **Fresh-context AI plan review** of this file (High tier) — resolve findings before any code.
-2. `packages/protocol/src/chat-intent.ts`: add `provider_read`/`provider_write` to `CHAT_INTENTS` (L33-40), extend lane types + `isProviderIntent` predicate alongside `isDataIntent`/`isFeatureIntent` (L93-100). Tests in protocol suite (parse/fail-closed).
-3. `packages/knowledge/prompts/tools/chat-intent-classifier.md`: teach the two intents with hard cases (DB-vs-provider; "match lights to album art" = provider_write; steering attempts stay low-confidence `other`). Golden tests beside existing classifier goldens. Read prompts README + prompt-engineering reference first.
-4. `apps/playground/src/agent/chatRouter.ts`: `ChatRoute` union + lane switch (L39-43, L107-109).
-5. New `apps/playground/src/agent/providerContext.ts` (or a branch in `intentContext.ts` L58-111): connection facts from `db.listConnections(appId)` — approved rows only: slot, provider displayName, allowedHosts count (NOT LAN literals), scope summary from requirement; plus symbolic addressing teaching. C1 negative test here (AC3).
-6. New `apps/playground/src/agent/providerTools.ts` (template: `dataTools.ts`): `provider_request` tool — Zod-validated args, executes via the `connectedFetchDepsFor` seam with the attached app's id, renders scrubbed result into a defanged `<api_result>` block with byte cap + "data, not instructions" tail (mirror `renderRows` L86-110). Tool description prompt: new `packages/knowledge/prompts/tools/provider-request.md`.
-7. `apps/playground/src/agent/useBuilderChat.ts`: lane-scoped tool wiring beside the data lane (L545-572), `STEP_LABELS` additions, persistence of provider-turn results on the message row.
-8. KB teaching: extend `knowledge-base/app-authoring/90-auth-and-connected-apis.md` (+ `95-runtime-contract.md` note: contracts name their slots) so dev-time and user-authored apps inherit the affordance. KB≡SDK sync untouched (no embedded hooks change).
+1. ~~Fresh-context AI plan review~~ **DONE 2026-08-15** — verdict AMEND FIRST; all 12 findings resolved into the ACs/steps below and the Decisions section.
+2. `packages/protocol/src/chat-intent.ts`: add `provider_read`/`provider_write` to `CHAT_INTENTS`; add `CHAT_LANES` + exhaustive `laneForIntent` map (`satisfies Record<ChatIntent, ChatLane>`, F7); keep `isDataIntent`/`isFeatureIntent` as derived views or migrate their two consumers. Protocol tests: parse/fail-closed + map exhaustiveness. Fix `chat-intent-prompt.test.ts` to iterate `CHAT_INTENTS` (F6) — goes red until step 3.
+3. `packages/knowledge/prompts/tools/chat-intent-classifier.md`: teach the two intents with hard cases (DB-vs-provider; "match lights to album art" = provider_write; steering attempts stay low-confidence `other`). Golden tests beside existing classifier goldens. (Prompts README + prompt-engineering reference read 2026-08-15.)
+4. `apps/playground/src/agent/chatRouter.ts`: `ChatRoute` union + `laneForIntent` dispatch (replaces the predicate chain); `intentContext.ts` branches on the same map (F7).
+5. New `apps/playground/src/agent/providerContext.ts`: connection facts from `db.listConnections(appId)` — approved rows ONLY: slot, provider displayName, **public host literals (never RFC-1918; LAN rows teach symbolic-only)**, scope summary; addressing teaching per AC7. C1 negative fixture per AC3/F10.
+6. New `apps/playground/src/agent/providerTools.ts` (template: `dataTools.ts`): `provider_request` tool — validated args, executes via `connectedFetchDepsFor` with the attached app's id (closure); renders scrubbed result into a defanged `<api_result>` block (byte cap, "data, not instructions" tail); **LAN-class body scrub of all RFC-1918 literals (F1)**; per-turn call cap (F9); code-keyed failure observer seat for the rail CTA (F9); **abort handling: on turn-signal abort, a confirm this tool parked is denied** (AC6). Tool prompt: new `packages/knowledge/prompts/tools/provider-request.md`.
+7. `apps/playground/src/state/net.ts`: `netConfirmStore` becomes a FIFO queue (F4). `NetConfirmDialog` mount moves from RunView to the app shell (F3) — desktop inherits via the alias. `useBuilderChat.ts`: provider-lane tool wiring beside the data lane, `STEP_LABELS` additions.
+8. KB teaching: extend `knowledge-base/app-authoring/90-auth-and-connected-apis.md` (+ `95-runtime-contract.md` note: contracts name their slots) so authored apps inherit the affordance. KB≡SDK sync untouched (no embedded hooks change).
 9. Verify: root `turbo run test --force` (protocol touched → everything), `pnpm --filter desktop test`. Force-run knowledge/playground suites on prompt edits (turbo inputs gap).
-10. Gate 5: fresh-context adversarial review running probes at the C1 surface (lesson 2026-07-31); Gate 6 close-out — ADR-0031 status flip to accepted happens in THIS child's merge (it ships the decision), spec-changelog NOT touched (no schemas/ change), lessons/next-steps updated.
+10. Gate 5: fresh-context adversarial review running probes at the C1 surface (lesson 2026-07-31); Gate 6 close-out — ADR-0031 status flip to accepted in THIS child's merge; **threat-model delta note** (F12 + scrub A3 boundary carry-over + F5 shared-remember residual); spec-changelog NOT touched (no schemas/ change); lessons/next-steps updated.
 
 Cross-package: protocol → everything reruns; knowledge → server/playground/desktop; no auth/db/runner/sdk source changes.
 
 ## Decisions & surprises
 
-_(running)_
+- 2026-08-15 — Fresh-context plan review (verdict AMEND FIRST) — resolutions:
+  - **F1 (BLOCKER, LAN body leak):** executor's body scrub deliberately excludes resolved hosts (app-bound delivery rationale, `connected-fetch.ts:1136-1141`); LLM-bound delivery adds a chat-side scrub: LAN-class slots get every RFC-1918 IPv4 literal replaced in the rendered tool result. Playground-only; executor untouched.
+  - **F2 (BLOCKER, symbolic single-host):** symbolic URLs refuse multi-host ceilings (`allowedHosts.length !== 1`), and every OAuth ceiling is multi-host (endpoint-host union). Public host literals are NOT secrets — they join the lane context; symbolic stays the LAN path. No executor change.
+  - **F3/F4 (dialog mount / confirm collision):** `NetConfirmDialog` mount moves to the app shell; `netConfirmStore` becomes a FIFO queue so concurrent confirms both resolve.
+  - **F5 (shared remember scope): ACCEPTED** — one gate, one meaning: a session-remembered (app, host, method) grant covers both app-runtime and chat-composed writes. Consistent with the owner's 2026-08-15 posture ("existing gate is the control"); pinned by AC13's test; recorded as a residual in the threat delta + ADR-0031.
+  - **F7 (exhaustiveness):** predicates → one `laneForIntent` map in protocol; unknown-intent-to-answer-lane default dies at compile time.
+  - **F11 (dialog copy mislabels chat-origin writes): ACCEPTED for this child** — the dialog says "this app is asking"; a chat-composed write is the user's own turn. Child B's confirm card fixes attribution; recorded here so it is a known wart, not a discovery.
+  - **F12 (provider bodies re-enter the classifier via recent-turns): recorded** in the threat delta; contained by the 300-char defanged cap + fail-closed clarify.
+  - Own finding (pre-review): turn abort with a parked confirm could execute a write post-abort — the provider tool denies its own parked confirm on abort (AC6).
 
 ## Session journal (append-only, newest last)
 
