@@ -127,6 +127,10 @@ describe('P5/AC7 — the `hue` registry entry (the 11th, and the first LAN-class
   it('carries a provider-AGNOSTIC pairing seat describing the exchange (ADR-0023 D2)', () => {
     const pairing = WELL_KNOWN_PROVIDERS_REGISTRY['hue']?.pairing;
     expect(pairing).toBeDefined();
+    // The seat is a DISCRIMINATED union since ADR-0032 (`device-link` joined it). Hue is
+    // the `exchange` member; narrowing here is what makes the exchange-only reads below
+    // legal, and it states which variant this test is about instead of assuming.
+    if (pairing?.kind !== 'exchange') throw new Error('hue must remain an exchange pairing');
     expect(pairing?.method).toBe('POST');
     expect(pairing?.pathAndQuery).toBe('/api');
     expect(pairing?.body).toEqual({ devicetype: 'snug#hub', generateclientkey: true });
@@ -155,6 +159,7 @@ describe('P5/AC7 — the `hue` registry entry (the 11th, and the first LAN-class
    */
   it('the pairing secretPath actually FINDS the key in a real CLIP v1 response', () => {
     const pairing = WELL_KNOWN_PROVIDERS_REGISTRY['hue']!.pairing!;
+    if (pairing.kind !== 'exchange') throw new Error('hue must remain an exchange pairing');
     // The bridge's real answer shape (developers.meethue.com getting-started).
     const response: unknown = [{ success: { username: 'MINTED-KEY-VALUE', clientkey: 'ENTERTAINMENT' } }];
     let cursor: unknown = response;
@@ -174,6 +179,7 @@ describe('P5/AC7 — the `hue` registry entry (the 11th, and the first LAN-class
     // A path that landed one level up would hand the wizard the whole `success`
     // object and, through it, a second secret the design deliberately does not keep.
     const pairing = WELL_KNOWN_PROVIDERS_REGISTRY['hue']!.pairing!;
+    if (pairing.kind !== 'exchange') throw new Error('hue must remain an exchange pairing');
     expect(pairing.secretPath[pairing.secretPath.length - 1]).toBe('username');
   });
 

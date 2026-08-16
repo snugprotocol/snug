@@ -57,6 +57,12 @@ const KIND_TABLE = {
   // (the user, not the registry) and how the key is MINTED (a pairing exchange), neither
   // of which is a kind.
   hue: 'api_key',
+  // ADDED 2026-08-16 (TASK-20260816-whatsapp-twin, ADR-0032): the 12th entry and the
+  // first `linked_device` one. Unlike hue — where the unusual parts were the host source
+  // and the minting, neither of which is a kind — here the KIND itself is the new thing:
+  // the provider authenticates a DEVICE, and the credential this row governs is a token
+  // for the local helper holding that device session, never the WhatsApp session itself.
+  whatsapp: 'linked_device',
 } as const;
 
 describe('AC1 — every registry entry declares its OWN kind (the table is exhaustive)', () => {

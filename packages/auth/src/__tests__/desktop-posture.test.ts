@@ -222,6 +222,11 @@ describe('desktop postures — browserCallable is a documented fact or ABSENT, n
     // DOCUMENTED fact, not a guess, and it is what the wizard discloses before anything
     // is collected. This is the entry that makes the +1 in this table load-bearing.
     { key: 'hue', value: false },
+    // ADR-0032 (TASK-20260816): the WhatsApp helper listens on a UNIX-DOMAIN SOCKET. A
+    // browser tab cannot open one at all — this is not a CORS or certificate question but
+    // an absence of any reachable transport, which makes `false` the most documented
+    // value in this table. The wizard discloses it before anything is collected.
+    { key: 'whatsapp', value: false },
   ];
 
   for (const { key, value } of BROWSER_CALLABLE) {

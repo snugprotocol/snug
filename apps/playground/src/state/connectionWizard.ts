@@ -1208,7 +1208,19 @@ export function lanPairingExchangeFor(
   // the entry through the brand-adjacent rung, which is how the row got its
   // pinned template — so the wizard must ask the same question the same way, or
   // it would pair using an exchange from an entry the row did not borrow from.
-  return resolveRegistryEntryByName(requirement!.provider.name)?.entry.pairing;
+  const pairing = resolveRegistryEntryByName(requirement!.provider.name)?.entry.pairing;
+  // THE VARIANT NARROWING (ADR-0032). The pairing seat became a discriminated union when
+  // `device-link` joined it, and this function feeds the LAN pairing path — which fires an
+  // uncredentialed POST at a device on the user's network and then REQUIRES a 64-hex TLS
+  // certificate pin. A device-link seat describes something else entirely (start → QR →
+  // poll, over a transport with no certificate), so handing one to that path could only
+  // fail, and would fail deep inside pairing rather than here.
+  //
+  // `isLanRequirement` above already excludes every `linked_device` row, so this is
+  // belt-and-braces — but it is the belt that is CHECKED BY THE COMPILER, and it keeps the
+  // refusal true if some future requirement carries both a lanHost seat and a device-link
+  // provider. Returning undefined is the honest answer: this row has no LAN exchange.
+  return pairing?.kind === 'exchange' ? pairing : undefined;
 }
 
 // ---------------------------------------------------------------------------

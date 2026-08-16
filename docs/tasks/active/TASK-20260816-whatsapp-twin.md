@@ -578,3 +578,32 @@ one" clause is retired as unrepresentable-by-construction, which is the better o
 - Verified: root `turbo run test --force` **21/21 tasks, 0 cached** (protocol 302→310,
   knowledge 183→184; every other count unchanged).
 - Next step: Phase B.0 — the shared sidecar contract constants module (must precede C and D).
+
+### 2026-08-16 — claude — Phase B.0 (the shared sidecar contract)
+- Done: `packages/protocol/src/sidecar-contract.ts` + 19 tests. Routes are method-pinned;
+  `APP_REACHABLE_SIDECAR_ROUTES` is DERIVED from the full table (two hand-written lists
+  could drift invisibly until an app reached a route nobody intended). `/pair/*` and
+  `/session/status` are wizard-only — that subset IS the refusal for the cross-app
+  token-capture attack, and the Rust admission will be generated from it.
+- **A surviving mutant found a real hole in my own guard — the session's best catch.**
+  Deleting the traversal refusal left all 17 tests GREEN. Cause: every traversal fixture I
+  wrote (`/chats/../pair/status`) was already refused by the anchored route matcher, so the
+  fixtures tested the matcher twice and the traversal guard zero times. The dangerous shape
+  is `/chats/../messages` — `..` is a LEGAL single path segment, so it matches
+  `/chats/:jid/messages` exactly and ONLY the traversal guard stands between it and
+  admission. Fixed both sides: fixtures that fail *only* the guard under test, and a guard
+  that DECODES before checking and refuses on the segment primitive, because `%2e%2e`
+  defeats a literal `..` scan (lessons.md 2026-08-11: neutralize the primitive, not one
+  spelling — the attacker picks the spelling). Both mutants now die, each for its own
+  reason; a third mutant pinning the literal-scan version dies on the encoded fixture alone.
+  This is lessons.md 2026-08-04 + 2026-08-13 in one incident: *a refusal's test input must
+  pass every SIBLING refusal and fail only the one under test*, and *when a mutation stays
+  green, suspect the fixture before the mutation*.
+- Verified: root `turbo run test --force` **21/21, 0 cached** (protocol 310 → 329).
+- Next step: Phase B — the `whatsapp-personal` registry entry + the `device-link` pairing
+  variant + gate 8's `linked_device` injection arm.
+- **Gate 6 candidates (two new lessons):** (1) a value injected into a prompt makes every
+  future addition to that value a prompt change — `AUTH_KINDS` reaches the inferrer's system
+  prompt via `render.ts`, so adding a kind silently granted the model a new proposal; (2) an
+  anchored route matcher does NOT imply traversal safety, because `..` is a legal segment —
+  test the guard with a path the matcher admits.
