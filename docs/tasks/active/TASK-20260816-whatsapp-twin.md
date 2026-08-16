@@ -54,9 +54,9 @@ gets the same consistent auth wizard (owner ask, 2026-08-16).
   sidecar's disk store and never transit the hub in any response. What lands in
   `snug_secrets` is a **sidecar access token** minted once at pairing (Hue-parallel:
   exchange → minted secret → header injection). C1 story stays clean.
-- **Loopback host class**: new `lanHost` class `'loopback-ipv4-literal'` (wizard pre-fills
-  `127.0.0.1:8787`, port editable); executor `transportPolicy` gains a desktop-only loopback
-  allowance keyed to that class. Browser profile stays byte-identical.
+- ~~**Loopback host class**: new `lanHost` class `'loopback-ipv4-literal'`; executor
+  `transportPolicy` gains a desktop-only loopback allowance.~~ **WITHDRAWN at Gate 2 —
+  see BLOCKER B1 below.** Replaced by a dedicated Rust command (`sidecar_fetch`).
 - **ToS honesty**: unofficial WhatsApp automation violates WhatsApp ToS; ban risk is real.
   Disclosure is mandatory in the wizard consent copy AND the starter README; the sidecar
   applies human-like send pacing + the ADR-0033 rate cap as mitigation, never evasion.
@@ -162,11 +162,91 @@ dependent suites (2026-08-15 lesson).
 (after owner approval); negative tests enumerated in AC2/AC3/AC5/AC9; whole-surface review
 at close tracing one datum (the sidecar token) end to end; self-sign-off in the journal.
 
-**Sidecar HTTP contract sketch** (loopback :8787, bearer token except pair; all pinned in
+**Sidecar HTTP contract** (loopback :8787, bearer token except pair; all pinned in
 one constants module — 2026-08-03 lesson): `POST /pair/start` · `GET /pair/qr` ·
 `GET /pair/status` (→ token once, on link) · `GET /session/status` (verify seat) ·
-`GET /chats` · `GET /chats/:jid/history?cursor` · `GET /chats/:jid/messages?since` ·
-`POST /chats/:jid/messages`.
+`GET /chats` · `GET /chats/:jid/history?cursor` (see correction below) ·
+`GET /chats/:jid/messages?since` · `POST /chats/:jid/messages`.
+
+**Library verification (2026-08-16, done at Gate 2 — API read from the published tarball,
+not from memory):** `baileys` and `@whiskeysockets/baileys` are the same package; `latest`
+is `7.0.0-rc14`, `legacy` is `6.7.24`. **Pin `7.0.0-rc14`** despite the RC label: the 6.x
+line resolves `libsignal` from a **git URL** (`git+https://github.com/whiskeysockets/libsignal-node.git`),
+which is an unpinnable supply-chain and offline-install hazard for this repo; the 7.x line
+resolves every dep from the registry. Confirmed API surface: `makeWASocket` default export +
+`WASocket` type; `useMultiFileAuthState(folder)` → `{ state, saveCreds }` (THE disk store
+holding session keys inside the sidecar per ADR-0032 §2); `ConnectionState.qr?: string`
+(QR payload for AC4's wizard screen); `sendMessage(jid, content, options)`; events
+`connection.update` · `creds.update` · `messages.upsert` · `messaging-history.set`.
+
+**PLAN CORRECTION (history is push, not pull).** `messaging-history.set` arrives as
+server-pushed CHUNKS carrying `progress`/`isLatest`/`syncType`, and `messaging-history.status`
+signals `'complete' | 'paused'` with an `explicit` flag (completion can be INFERRED by
+timeout, not proven). There is no pullable paged history endpoint to put behind a cursor.
+So the sidecar OWNS an ingest buffer: it subscribes on link, accumulates thread-scoped
+messages to its own store, and `GET /chats/:jid/history?cursor` pages over THAT store,
+returning an explicit `{ complete, explicit, progress }` sync-state alongside the page.
+The app must render honest "history still arriving / partial" states rather than treating
+the first empty page as "no history" — and this is precisely why the export-.txt upload path
+is not a nice-to-have but the reliability backstop (a full analysis must be possible when
+history sync stalls). AC7 gains a row: an inferred-completion (`explicit:false`) sync must
+be disclosed as partial, never as complete.
+
+## BLOCKER B1 (found at Gate 2, before any implementation) — the loopback ceiling is port-blind
+
+**The withdrawn design would have granted every port on loopback, not one sidecar.**
+
+Evidence, read directly:
+- `packages/auth/src/app-host-freeze.ts:33` — `isUrlWithinHosts` matches on
+  `new URL(url).hostname`, which **strips the port**; `isHostAllowed` (`:24-27`) compares
+  normalized hostnames only. The frozen ceiling is **host-granular, with no port component
+  anywhere in it.** So a ceiling containing `127.0.0.1` admits `127.0.0.1:11434` (Ollama),
+  `:5432`, any local admin UI, any other sidecar — the whole loopback surface.
+- `packages/auth/src/net-guards.ts:87-102` — `isForbiddenNetHost` refuses loopback
+  UNCONDITIONALLY and its doc comment names this exact defense: *"an approved ceiling
+  containing `127.0.0.1` is still refused at this gate."* The withdrawn plan punched
+  through a guard installed against precisely this attack, rather than extending an
+  allowance.
+- `packages/auth/src/net-guards.ts:112-116` — loopback's exclusion from the RFC-1918
+  desktop allowance is documented as DELIBERATE.
+- `apps/desktop/src-tauri/src/lanfetch.rs:233-237` — the Rust host-class policy states
+  loopback *"is refused because it is not RFC-1918, and so a future change to this policy
+  must make its own decision about it, not inherit one meant for 'local'."* This task IS
+  that future change; the instruction is to decide explicitly, which is what B1 does.
+
+Note this is the ADR-0023 §1 P0-round-2 failure shape repeating: a host-class fork whose
+admission semantics were not derived before the seat was designed.
+
+**Redesign (replaces the withdrawn bullet; ADR-0032 §4 to be rewritten before Phase A):**
+The sidecar is reached by a **dedicated Tauri command `sidecar_fetch`**, modeled on
+`lan_fetch`'s precedent (enforce in Rust, before a socket opens) — NOT by a general
+loopback allowance in the executor:
+1. **Host+port pinned in Rust**: `127.0.0.1` and the ONE sidecar port, refusing every other
+   port and host — the port granularity the TS ceiling structurally cannot express.
+2. **`isForbiddenNetHost` stays untouched.** No loopback carve-out enters the general
+   executor path, so the browser profile and every non-sidecar app remain byte-identical,
+   and no general-purpose loopback fetch primitive is ever created.
+3. **The route surface is the contract**: the command admits only the enumerated sidecar
+   paths (`/pair/*`, `/session/status`, `/chats*`), so even a compromised app cannot use it
+   as an arbitrary local HTTP client.
+4. **The sidecar token remains the authorization boundary** (ADR-0032 §2), now defense in
+   depth behind the Rust pin rather than the only wall.
+5. Loopback plain-http carries no eavesdropping risk of consequence (the packets never leave
+   the host), so http is acceptable here — but ONLY because reachability is pinned in Rust.
+
+Consequences for the plan: Phase A no longer changes the protocol `lanHost` class union
+(the `linked_device` KIND is still a protocol change, so the tier and spec-sync step stand);
+Phase B no longer touches `net-guards.ts`/`transportPolicy`; Phase G grows the `sidecar_fetch`
+command and its cargo tests. **AC3 is REPLACED**: instead of "http-to-loopback admitted via
+transportPolicy", it becomes "`sidecar_fetch` refuses every host but `127.0.0.1`, every port
+but the pinned one, and every path outside the enumerated contract (negative tests per
+class), while `isForbiddenNetHost` still refuses loopback on the general executor path".
+An open design question for the fresh-context review: whether the app reaches the sidecar
+through the executor at all, or whether `sidecar_fetch` is surfaced as its own platform seam
+— the former keeps the confirm/scrub gates, the latter avoids bending a host-ceiling model
+that cannot express ports. **Leading answer: keep the executor path** (its confirm gate is
+what ADR-0033 arming consults, and its scrub is what protects the LLM reader), with the
+ceiling holding the symbolic host and `sidecar_fetch` enforcing the real pin underneath.
 
 ## Decisions & surprises
 
@@ -177,6 +257,28 @@ one constants module — 2026-08-03 lesson): `POST /pair/start` · `GET /pair/qr
 - 2026-08-16: Mid-session owner additions — registry entry for consistent wizard reuse;
   inline translate; reply-language rule.
 - 2026-08-16: ADR-0032 + ADR-0033 drafted (status: proposed) with this plan.
+- 2026-08-16: **BLOCKER B1** (above) — loopback ceiling is port-blind; design withdrawn and
+  replaced before any code was written. Caught by reading `app-host-freeze.ts` rather than
+  trusting the plan's own claim about the ceiling.
+- 2026-08-16: **B2 — the confirm gate cannot carry ADR-0033's grant as written.**
+  `createSessionConfirmGate` (`packages/auth/src/session-confirm.ts:36-55`) keys grants on
+  `(appId, normalizedHost, method)` in an in-memory `Set`, and its header comment pins
+  "lives in MEMORY only (never persisted — it dies with the page)" as a deliberate property.
+  ADR-0033 needs a grant scoped to a THREAD (chat JID) — a concept the gate has no seat for
+  — that SURVIVES beyond a page session and carries a rate cap + quiet hours. Every armed
+  send is `POST` to the same host, so a `(appId, host, method)` grant cannot distinguish the
+  armed thread from any other write: **remembering one send would authorize all of them.**
+  Resolution (to be ratified by the fresh-context review): do NOT widen the session gate's
+  key. Add a SEPARATE `StandingApprovalGate` consulted before the session gate, keyed on
+  (appId, slot, threadJid, trigger scope), persisted with the connection, enforcing cap +
+  quiet hours + kill switch, and returning "no opinion" for anything outside its frozen
+  scope so the normal confirm still runs. This keeps ADR-0033's "armed is a recorded answer,
+  not a bypass" claim structurally true instead of aspirational, and leaves the session
+  gate's deliberate memory-only property intact. ADR-0033 §3 to be amended with this shape.
+  Note: the executor's confirm gate sees a URL, not a thread — so the standing gate must
+  derive the thread from the request (the JID is in the path/body per the sidecar contract),
+  and that derivation is itself a security seat needing negative tests (a send whose body
+  JID disagrees with its path JID must refuse, never pick one).
 
 ## Session journal (append-only, newest last)
 
