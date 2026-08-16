@@ -366,7 +366,63 @@ test('chess sends its board state ONCE, not in both payload and state', () => {
   assert.match(call, /moveHistory: history\.slice\(-12\)/, 'the state copy of history is bounded');
 });
 
-// ── Behavior checks on money arithmetic (adversarial review of AL-08, fix 2) ────────
+
+// ─────────────────────────────────────────── AC9: authoring provenance (TASK-20260815)
+
+/**
+ * Every CONNECTED starter ships its authoring provenance (owner requirement,
+ * 2026-08-15): the verbatim dev-time build prompts plus the standard wiki slugs the hub
+ * keeps for user-built apps — file-per-slug, 1:1 with `snug_app_docs`, ingestable by a
+ * later phase. The gate asserts presence and slug validity so a sixth connected starter
+ * cannot ship provenance-less, and pins that `authoring/` can never reach the bundled
+ * shelf: the playground glob is DERIVED from the source of truth rather than restated
+ * (lesson 2026-07-31 — for artifacts no local suite executes, parse the producer).
+ */
+const CONNECTED_APPS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github'];
+const STANDARD_DOC_SLUGS = new Set(['vision', 'requirements', 'plan', 'lessons', 'memory', 'next-tasks']);
+
+for (const app of CONNECTED_APPS) {
+  test(`AC9: ${app} ships its authoring provenance bundle`, () => {
+    const prompts = readdirSync(path.join(HERE, app, 'authoring', 'prompts')).filter((f) => f.endsWith('.md'));
+    // At least one numbered prompt (01-… build or 02-… extension); 00-assembly alone is
+    // a pointer, not a prompt record.
+    assert.ok(
+      prompts.some((f) => /^(0[1-9]|[1-9]\d)-.+\.md$/.test(f)),
+      `${app}: authoring/prompts must hold at least one numbered dev-time prompt (found: ${prompts.join(', ')})`,
+    );
+    const docs = readdirSync(path.join(HERE, app, 'authoring', 'docs')).filter((f) => f.endsWith('.md'));
+    const slugs = docs.map((f) => f.replace(/\.md$/, ''));
+    for (const required of ['vision', 'requirements', 'plan']) {
+      assert.ok(slugs.includes(required), `${app}: authoring/docs must include ${required}.md`);
+    }
+    for (const slug of slugs) {
+      assert.ok(
+        STANDARD_DOC_SLUGS.has(slug) || /^[a-z0-9][a-z0-9-]*$/.test(slug),
+        `${app}: authoring/docs/${slug}.md must use a standard or kebab-case slug (snug_app_docs shape)`,
+      );
+      const body = readFileSync(path.join(HERE, app, 'authoring', 'docs', `${slug}.md`), 'utf8');
+      assert.ok(body.trim().length >= 40, `${app}: authoring/docs/${slug}.md must hold real content, not a stub`);
+    }
+  });
+}
+
+test('AC9: the shelf glob can never bundle authoring/ content (derived from the producer)', () => {
+  // Parse the ACTUAL glob literal out of starterApps.ts rather than restating it — a
+  // widened pattern (e.g. `examples/**/*.html`) would silently ship provenance files.
+  const producer = readFileSync(
+    path.join(REPO_ROOT, 'apps', 'playground', 'src', 'starter', 'starterApps.ts'),
+    'utf8',
+  );
+  const globs = [...producer.matchAll(/import\.meta\.glob\(\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.ok(globs.length >= 1, 'starterApps.ts declares its shelf glob');
+  for (const pattern of globs) {
+    assert.ok(
+      pattern.endsWith('/examples/*/app.html'),
+      `shelf glob must match exactly one app.html per folder, never deeper (got ${pattern})`,
+    );
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The no-network-APIs rule, tested directly (TASK-20260807-connection-reachability,
 // owner decision (i)). The per-app assertions above prove the SHIPPED apps are clean;

@@ -145,6 +145,28 @@ _(running)_
   Gate-5 fresh-context review in flight.
 - Next step: review findings → fixes → PR (base: child B's branch).
 - Open questions: none.
+
+### 2026-08-15 (Gate 5 close) — Claude (Fable 5) — review + fixes
+- Done: fresh-context review verdict FIX FIRST (2 MAJOR, 5 MINOR); the review
+  independently RE-VERIFIED the port fidelity (34,351 chars byte-identical below the
+  banner vs the owner's DB), TWAP no-double-fire/pause/cancel safety, all five
+  manifests admitting on the starter channel, and the OBSOLETE/MIGRATED classifications.
+  Fixes: **MAJOR-1** → the AC9 authoring-provenance gate now exists in
+  `validate.test.mjs` (presence + slug validity + stub floor for the five, plus the
+  shelf-glob scope pin DERIVED from `starterApps.ts` source; mutation-checked red on a
+  hidden prompt). **MAJOR-2** → the 20-shot design-pass set copied durably to
+  `~/Snug/design-pass-20260815-starter-shelf/` (6 representative shots also delivered
+  to the owner in-session); the "missing journal entries" half was reviewer staleness —
+  they were committed (38cfc40) after its diff snapshot, including the root-forced
+  result. MINORs: orphaned money-arithmetic banner removed; stale "still being
+  authored" comment re-verified against the shipped weather app; 00-assembly app-id
+  conflation fixed + lessons prose corrected (byte-matching borrow); trade-copilot
+  contract now names the `coinbase` slot literal (597/600 chars). TWAP MINOR (a
+  'sending' slice surviving pause can still commit after its confirm) accepted:
+  every slice rides the per-order confirm gate and the late outcome journals honestly.
+- State: examples 153/153 · playground 1102/109 · final root forced run next.
+- Next step: forced root → push → PR (base: `feat/TASK-20260815-inline-cards`).
+- Open questions: none.
 - State: awaiting umbrella approval; sequenced after child B.
 - Next step: on B's merge — branch, curation-gate commit first (step 1).
 - Open questions: none.

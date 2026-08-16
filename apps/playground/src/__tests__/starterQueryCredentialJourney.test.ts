@@ -65,10 +65,12 @@ function readShippedManifest(folder: string): ConnectionRequirement {
 /**
  * The shipped query-credential starter, with the forecast URL the OpenWeather manifest's
  * own docsUrl pins (`/data/2.5/forecast`, the 5-day endpoint) and the query key its
- * provider reads. The re-curated `examples/weather/app.html` is still being authored, so
- * the URL is pinned to the manifest's declared host + documented endpoint rather than
- * read out of app source — re-verify it against the app when its HTML lands. (This suite
- * never reads app.html; it drives the persisted row and the executor.)
+ * provider reads. The URL is pinned to the manifest's declared host + documented
+ * endpoint rather than read out of app source — RE-VERIFIED 2026-08-15 against the
+ * shipped `examples/weather/app.html`: the app calls `/geo/1.0/direct` and the lat/lon
+ * forecast endpoints on the same declared host, so this fixture URL exercises the same
+ * host+query-credential mechanism. (This suite never reads app.html; it drives the
+ * persisted row and the executor.)
  *
  * The app URL carries the app's OWN parameters and no credential — that is the C1 shape
  * the examples/ AL-09 AC3 lint enforces, and half of what this file asserts survives
