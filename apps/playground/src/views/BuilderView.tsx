@@ -134,6 +134,7 @@ export function BuilderView(): ReactElement {
             activity={chat.activity}
             busy={chat.busy}
             phase={chat.attachedAppId !== undefined ? 'edit' : 'build'}
+            onSelectCardOption={chat.selectCardOption}
             // The directive card's mount — only once an app exists to attach the
             // connection to (the wizard is keyed by appId + slot, and both come from
             // the persisted row rather than from anything the card carries).

@@ -5,12 +5,13 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
-import { netConfirmStore, resolveNetConfirm } from '../state/net.js';
+import { chatConfirmSurfaceStore, netConfirmStore, resolveNetConfirm } from '../state/net.js';
 import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 
 export function NetConfirmDialog(): ReactElement | null {
   const pending = useStore(netConfirmStore);
+  const chatSurfaces = useStore(chatConfirmSurfaceStore);
   const [remember, setRemember] = useState(false);
 
   // Reset the checkbox each time a NEW confirm opens (never carry a prior choice).
@@ -18,7 +19,13 @@ export function NetConfirmDialog(): ReactElement | null {
     setRemember(false);
   }, [pending?.request.url, pending?.request.method]);
 
-  if (pending === null) return null;
+  // A chat-origin confirm renders as an inline card in the chat rail
+  // (TASK-20260815-inline-cards) — the modal stepping in too would double-prompt the
+  // same decision. But the card only exists while a ChatLog is MOUNTED (Gate-5 B
+  // MAJOR-2: rail tabs unmount it), so the modal yields ONLY while a card surface is
+  // actually present; with none, it renders chat-origin confirms too — a parked
+  // decision must always have exactly one live surface.
+  if (pending === null || (pending.origin === 'chat' && chatSurfaces > 0)) return null;
   const { appId, host, method } = pending.request;
 
   return (

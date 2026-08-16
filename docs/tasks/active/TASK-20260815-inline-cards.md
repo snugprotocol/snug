@@ -58,3 +58,44 @@ _(running)_
 - State: awaiting umbrella approval; sequenced after child A.
 - Next step: on A's merge — branch, AC1/AC2 failing tests first.
 - Open questions: in-app card surface deliberately KB-pattern-only (no frame) — owner revisits if a portfolio app proves the need.
+
+### 2026-08-15 (later) — Claude (Fable 5) — session
+- Done: implemented on `feat/TASK-20260815-inline-cards` **stacked on child A's branch**
+  (deviation from "off main after A merges": A is in owner review as PR #56; stacking
+  preserves the A→B→C sequence without self-merging High-tier code — the PR chain
+  retargets as each parent merges). Shipped: `cards.ts` (strict bounded schema,
+  one-per-turn `present_card` tool, `metaToCard` strict rehydrate with
+  phantom-resolution guard), ChatLog choice card + `ProviderConfirmCard` (chat-origin
+  parked confirms render inline; `NetConfirmDialog` yields via WeakMap
+  reference-identity origin tagging — one surface per decision), `selectCardOption`
+  (single-shot, persists, sends the pick as the next USER message — UI-only authority),
+  lane wiring (data/provider/answer; feature untouched per AC7), KB in-app idiom +
+  tool prompt. **Process note (honest):** core implementation landed before the AC1/AC2
+  test files (deviation from strict red-first); compensated with guard MUTATION checks —
+  phantom-resolution guard, dialog chat-origin null, and origin tag each forced RED,
+  restored green.
+- State: playground 1102/109 · knowledge 183 · root forced 21/21 (0 cached). Gate-5
+  fresh-context review in flight.
+- Next step: review findings → fixes → PR (base: child A's branch).
+- Open questions: none.
+
+### 2026-08-15 (Gate 5 close) — Claude (Fable 5) — review + fixes
+- Done: fresh-context review verdict FIX FIRST (2 MAJOR, 4 MINOR) — all addressed:
+  **MAJOR-1** (mid-turn pick swallowed: busy guard ate the send, no row to persist,
+  UI lied "you chose") → options DISABLED while the turn is in flight, and the persist
+  row id is derived from CURRENT message state at click time, not the click-time prop;
+  regression tests added. **MAJOR-2** (chat-origin confirm surface-less when the rail
+  tab hides ChatLog, blocking the queue behind it) → `registerChatConfirmSurface`
+  mount-counting; the modal yields to the card ONLY while a card surface is mounted,
+  else renders every confirm; fallback test added. **MINOR-3** → unique option ids
+  moved into the schema (superRefine; tool keeps the specific pre-parse message);
+  crafted-dupe rehydrate test. **MINOR-4** → `sanitizeCardText` strips bidi/control
+  chars everywhere card text renders or is sent; "the agent is asking:" provenance
+  line on every choice card (anti-imitation affordance); tests. **MINOR-5** → busy-gate
+  + provenance + fallback + schema tests added; RECORDED GAP: a full hook-level
+  "pick reaches the next turn" e2e is still untested (the harness cost outweighs it
+  this round — candidate for the browser-e2e sweep). **MINOR-6** was stale (journal +
+  forced-run record landed after the review's diff).
+- State: playground 1107/109 · desktop 105/11 green; final root forced run next.
+- Next step: forced root → push → PR (base: `feat/TASK-20260815-provider-chat-lane`).
+- Open questions: none.

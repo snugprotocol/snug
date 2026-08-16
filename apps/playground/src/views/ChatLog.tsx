@@ -1,8 +1,12 @@
+import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
 
+import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
+import { netConfirmStore, registerChatConfirmSurface, resolveNetConfirm } from '../state/net.js';
+import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { AuthChoiceCard } from './AuthChoiceCard.js';
@@ -54,6 +58,11 @@ export interface ChatLogProps {
   onApproveDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
   /** Decline it. Declining executes nothing — there is no path from here to the DB. */
   onDeclineDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
+  /**
+   * Resolve an inline choice card (TASK-20260815-inline-cards): the pick becomes the
+   * next user message. Absent ⇒ options render disabled (a surface with no send path).
+   */
+  onSelectCardOption?: (card: ChatCardState, messageId: number, optionId: string) => void;
 }
 
 /** The streamed conversation: user bubbles, streaming agent text with a soft caret,
@@ -69,6 +78,7 @@ export function ChatLog({
   onConnectionConnect,
   onApproveDataWrite,
   onDeclineDataWrite,
+  onSelectCardOption,
 }: ChatLogProps): ReactElement {
   return (
     <div className="chat-log" aria-live="polite">
@@ -174,6 +184,57 @@ export function ChatLog({
               </div>
             </Card>
           ) : null}
+          {/*
+            The INLINE CHOICE CARD (TASK-20260815-inline-cards, ADR-0031 §3). UI-only
+            authority: tapping an option sends a plain user message — nothing here
+            executes anything. Once resolved, options collapse to the recorded pick
+            (single-shot; a card must never offer the same decision twice).
+          */}
+          {message.card !== undefined ? (
+            <Card className="artifact-card chat-choice-card" data-testid="chat-choice-card">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%' }}>
+                {/* The provenance line is the anti-imitation affordance (Gate-5 B
+                    MINOR-4): every model-authored card SAYS it is the agent asking, so
+                    a card styled to read like a host consent surface still opens with
+                    the one line a host surface never carries. Text is sanitized —
+                    bidi/control characters stripped — so display order is the
+                    codepoint order that a pick would send. */}
+                <span className="hint">the agent is asking:</span>
+                {message.card.title !== undefined ? (
+                  <span className="artifact-name">{sanitizeCardText(message.card.title)}</span>
+                ) : null}
+                <span>{sanitizeCardText(message.card.body)}</span>
+                {message.card.resolution === undefined ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                    {message.card.options.map((option) => (
+                      <Button
+                        key={`${message.id}-opt-${option.id}`}
+                        onClick={
+                          onSelectCardOption !== undefined
+                            ? () => onSelectCardOption(message.card!, message.id, option.id)
+                            : undefined
+                        }
+                        // Disabled while the turn is IN FLIGHT (Gate-5 B MAJOR-1): a
+                        // mid-turn pick had no send path (the busy guard swallowed it)
+                        // and no row to persist to — the click window opens when the
+                        // turn settles and both exist.
+                        disabled={onSelectCardOption === undefined || busy}
+                        title={option.description !== undefined ? sanitizeCardText(option.description) : undefined}
+                      >
+                        {sanitizeCardText(option.label)}
+                      </Button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="hint">
+                    {message.card.resolution.kind === 'selected'
+                      ? `you chose: ${sanitizeCardText(message.card.resolution.label)}`
+                      : 'dismissed'}
+                  </span>
+                )}
+              </div>
+            </Card>
+          ) : null}
           {message.artifact !== undefined ? (
             <Card className="artifact-card" data-testid="artifact-card">
               <span aria-hidden="true" style={{ fontSize: '1.5rem' }}>
@@ -195,7 +256,62 @@ export function ChatLog({
         and neither said as much as the LLM inspector already shows — which is where the
         factual record now lives (AC5, D0/Q1).
       */}
+      {/*
+        The PROVIDER WRITE-CONFIRM CARD (TASK-20260815-inline-cards AC5): a chat-origin
+        parked confirm renders HERE instead of the modal (NetConfirmDialog returns null
+        for origin 'chat' — one surface per decision). The card resolves the same parked
+        entry the executor is awaiting; host, method and URL come from the executor's own
+        confirm payload, so what the user reads is what will run.
+      */}
+      <ProviderConfirmCard />
       <StatusLine phase={phase} active={busy} />
     </div>
+  );
+}
+
+function ProviderConfirmCard(): ReactElement | null {
+  const pending = useStore(netConfirmStore);
+  const [remember, setRemember] = useState(false);
+  // Register THIS mount as a live chat confirm surface (Gate-5 B MAJOR-2): while at
+  // least one is mounted the modal yields chat-origin confirms to us; when the rail
+  // tab unmounts the ChatLog, the modal takes over so no parked decision goes surface-less.
+  useEffect(() => registerChatConfirmSurface(), []);
+  if (pending === null || pending.origin !== 'chat') return null;
+  const { host, method, url } = pending.request;
+  return (
+    <Card className="artifact-card" data-testid="provider-confirm-card">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%' }}>
+        <span className="artifact-name">allow this change?</span>
+        <span>
+          Your chat request needs a <strong>{method}</strong> to <strong>{host}</strong>. Your saved credentials are
+          attached by the host — the conversation never sees them.
+        </span>
+        <code style={{ wordBreak: 'break-all' }}>{url}</code>
+        <label className="check-label">
+          <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
+          remember for this session ({method} to {host})
+        </label>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <Button
+            onClick={() => {
+              setRemember(false);
+              resolveNetConfirm({ granted: false });
+            }}
+          >
+            deny
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              const rememberSession = remember;
+              setRemember(false);
+              resolveNetConfirm({ granted: true, rememberSession });
+            }}
+          >
+            allow
+          </Button>
+        </div>
+      </div>
+    </Card>
   );
 }

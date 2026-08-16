@@ -133,6 +133,8 @@ export type ToolPromptName =
   | 'data-propose-write'
   /** TASK-20260815 (ADR-0031 §2): the provider lane's governed request tool. */
   | 'provider-request'
+  /** TASK-20260815 (ADR-0031 §3): the inline choice card any routed lane may present. */
+  | 'present-card'
   /** TASK-20260811 (ADR-0019 D10): targeted edits as a cheaper route to a new version. */
   | 'artifact-edit';
 

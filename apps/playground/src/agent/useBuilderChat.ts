@@ -30,6 +30,7 @@ import { createAppTargetSink } from './artifactSink.js';
 import { needsSynthesizedContract } from './runtimeContractSynthesis.js';
 import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
+import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
 import {
   createDirectBuilder,
   createServerBuilder,
@@ -78,6 +79,12 @@ export interface ChatMessage {
    * card offering "apply" a second time.
    */
   dataWrite?: DataWriteCardState;
+  /**
+   * An inline choice card the model presented via `present_card`
+   * (TASK-20260815-inline-cards, ADR-0031 §3). Resolution is UI-only authority: the
+   * pick becomes the next USER MESSAGE, routed like any other — never a capability.
+   */
+  card?: ChatCardState;
 }
 
 /** A proposal as the chat renders it: the staged change plus how it was resolved. */
@@ -134,6 +141,11 @@ export interface BuilderChat {
   approveDataWrite: (proposal: DataWriteCardState, messageId: number) => void;
   /** Decline it. Executes nothing; the card settles as cancelled. */
   declineDataWrite: (proposal: DataWriteCardState, messageId: number) => void;
+  /**
+   * Resolve a presented inline card (TASK-20260815-inline-cards): persists the pick and
+   * sends it as the next USER message. UI-only authority by construction.
+   */
+  selectCardOption: (card: ChatCardState, messageId: number, optionId: string) => void;
 }
 
 export interface UseBuilderChatOptions {
@@ -170,6 +182,8 @@ interface PersistedMeta {
   dataWrite?: DataWriteCardState;
   /** The auth-option choice seed — inference alternatives must survive a reload (AC7). */
   authChoice?: AuthChoiceSeed;
+  /** A presented (and possibly resolved) inline choice card (TASK-20260815-inline-cards). */
+  card?: ChatCardState;
 }
 
 /**
@@ -258,6 +272,7 @@ const STEP_LABELS: Record<string, string> = {
   data_query: 'querying the app’s data…',
   data_propose_write: 'preparing a data change…',
   provider_request: 'calling the connected service…',
+  present_card: 'asking you to choose…',
 };
 
 const stepLabel = (tool: string): string => STEP_LABELS[tool] ?? `${tool.replace(/_/g, ' ')}…`;
@@ -399,6 +414,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 const directive = metaToDirective(m.meta);
                 const dataWrite = metaToDataWrite(m.meta);
                 const authChoice = metaToAuthChoice(m.meta);
+                const card = metaToCard(m.meta);
                 return {
                   id: ++messageSeq,
                   role: m.role === 'user' ? ('user' as const) : ('agent' as const),
@@ -407,6 +423,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   ...(directive !== undefined && directive.kind === AUTH_WIZARD_DIRECTIVE_KIND ? { directive } : {}),
                   ...(dataWrite !== undefined ? { dataWrite } : {}),
                   ...(authChoice !== undefined ? { authChoice } : {}),
+                  // The DB row id rides along so resolving a REHYDRATED card can persist
+                  // (the view id above is synthetic; the row id is the durable address).
+                  ...(card !== undefined ? { card: { ...card, messageRowId: m.id } } : {}),
                 };
               }),
       );
@@ -450,6 +469,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       // Holds the proposal itself (not just a flag) so turn finalization can persist it
       // onto the assistant message's meta — the card must survive a reload (R-M5).
       const stagedProposal: { current: DataWriteCardState | undefined } = { current: undefined };
+      /** One presented card per turn (TASK-20260815-inline-cards) — same single-seat rule. */
+      const stagedCard: { current: ChatCardState | undefined } = { current: undefined };
       /** Per-turn state for bootstrap pinning (F9) + artifact-card persistence. */
       const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean } = { installedV1: false };
       /** Subscription-mode artifact fetch+write runs detached — awaited before the turn finalizes. */
@@ -553,6 +574,20 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
          * a change, and the narrower set is the cheaper prompt.
          */
         let laneTools: AgentTool[] | undefined;
+        /**
+         * The inline choice card, offered to every ROUTED non-feature lane
+         * (TASK-20260815-inline-cards): asking-as-UI is lane-agnostic, and the feature
+         * lane keeps the untouched builder set (its trust story is versioning, not
+         * cards). UI-only authority — the resolution becomes a plain user message.
+         */
+        const presentCardTool = buildPresentCardTool({
+          onCard: (card) => {
+            if (stagedCard.current !== undefined) return false;
+            stagedCard.current = { ...card };
+            patchMessage(agentId, { card: { ...card } });
+            return true;
+          },
+        });
         if (route?.lane === 'data' && contextTarget !== undefined) {
           const { buildDataTools } = await import('./dataTools.js');
           laneTools = buildDataTools({
@@ -577,6 +612,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               return true;
             },
           });
+          laneTools = [...laneTools, presentCardTool];
         } else if (route?.lane === 'provider' && contextTarget !== undefined) {
           /**
            * THE PROVIDER LANE (TASK-20260815, ADR-0031 §2): one governed tool, the same
@@ -587,15 +623,18 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
            */
           const { buildProviderTools } = await import('./providerTools.js');
           const providerTarget = contextTarget;
-          laneTools = buildProviderTools({
-            appId: providerTarget,
-            getDb: () => Promise.resolve(db),
-            allowWrites: route.intent === 'provider_write',
-            signal: controller.signal,
-            onFailureCode: (code) => options.onProviderNetError?.(providerTarget, code),
-          });
+          laneTools = [
+            ...buildProviderTools({
+              appId: providerTarget,
+              getDb: () => Promise.resolve(db),
+              allowWrites: route.intent === 'provider_write',
+              signal: controller.signal,
+              onFailureCode: (code) => options.onProviderNetError?.(providerTarget, code),
+            }),
+            presentCardTool,
+          ];
         } else if (route?.lane === 'answer') {
-          laneTools = [];
+          laneTools = [presentCardTool];
         }
 
         const result = await agent.send(
@@ -795,6 +834,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               turn.artifact !== undefined ||
               directive !== undefined ||
               stagedProposal.current !== undefined ||
+              stagedCard.current !== undefined ||
               authChoice !== undefined
                 ? {
                     ...(turn.artifact !== undefined
@@ -815,6 +855,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                     // AC7: inference alternatives are not re-derivable after the turn, so
                     // the choice must survive a reload; re-admitted on every read.
                     ...(authChoice !== undefined ? { authChoice } : {}),
+                    // TASK-20260815-inline-cards AC2: the card outlives the React tree;
+                    // re-validated via metaToCard on every read.
+                    ...(stagedCard.current !== undefined ? { card: stagedCard.current } : {}),
                   }
                 : undefined;
             const stored = db.appendChatMessage(threadId, 'assistant', finalText, {
@@ -827,6 +870,12 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               const rowId = stored.id;
               patchMessage(agentId, (m) => ({
                 dataWrite: { ...(m.dataWrite ?? stagedProposal.current!), messageRowId: rowId },
+              }));
+            }
+            if (stagedCard.current !== undefined) {
+              const rowId = stored.id;
+              patchMessage(agentId, (m) => ({
+                card: { ...(m.card ?? stagedCard.current!), messageRowId: rowId },
               }));
             }
           }
@@ -890,6 +939,54 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     void (async () => persistResolution(await getUserDb(), threadId, proposal, resolved))();
   }, [patchMessage]);
 
+  /**
+   * Resolve a presented card (TASK-20260815-inline-cards AC3/AC4). Single-shot: the
+   * synchronous `resolution` check plus the immediate patch close the double-click
+   * window before any await. The pick becomes a PLAIN USER MESSAGE — routed by the
+   * classifier like anything else — which is what keeps cards UI-only authority.
+   */
+  const selectCardOption = useCallback(
+    (card: ChatCardState, messageId: number, optionId: string): void => {
+      if (card.resolution !== undefined) return;
+      const option = card.options.find((entry) => entry.id === optionId);
+      if (option === undefined) return;
+      const resolved: ChatCardState = {
+        ...card,
+        resolution: { kind: 'selected', optionId, label: option.label },
+      };
+      /**
+       * The row id is read from CURRENT message state at click time, never from the
+       * click-time prop (Gate-5 B MAJOR-1 sub-issue): the card renders mid-turn before
+       * its row exists, and finalize patches `messageRowId` in later — a click racing
+       * that patch would otherwise persist nowhere while the send succeeded.
+       */
+      let rowIdAtClick: number | undefined;
+      patchMessage(messageId, (m) => {
+        rowIdAtClick = m.card?.messageRowId ?? card.messageRowId;
+        return {
+          card: {
+            ...(m.card ?? card),
+            ...resolved,
+            ...(rowIdAtClick !== undefined ? { messageRowId: rowIdAtClick } : {}),
+          },
+        };
+      });
+      void (async () => {
+        const db = await getUserDb();
+        if (rowIdAtClick === undefined) return; // pre-persist resolution stays in-memory (best-effort, R-M5 rule)
+        try {
+          const existing = db.listChatMessages(threadId).find((m) => m.id === rowIdAtClick)?.meta;
+          const base = typeof existing === 'object' && existing !== null ? (existing as PersistedMeta) : {};
+          db.updateChatMessageMeta(rowIdAtClick, { ...base, card: { ...resolved, messageRowId: rowIdAtClick } });
+        } catch {
+          // The selection already became the next turn; an unwritable audit field must not throw.
+        }
+      })();
+      send(`I choose: ${sanitizeCardText(option.label)}`);
+    },
+    [patchMessage, send, threadId],
+  );
+
   const stop = useCallback((): void => {
     abortRef.current?.abort();
   }, []);
@@ -909,5 +1006,6 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     stop,
     approveDataWrite,
     declineDataWrite,
+    selectCardOption,
   };
 }

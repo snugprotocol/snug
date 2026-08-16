@@ -75,3 +75,14 @@ Never render a blank void:
 - System font stack (already in the template) — web fonts are off-allowlist.
 - Render the agent's `message` commentary with personality: a styled bubble or status line,
   not a raw string dumped in a corner.
+
+## Inline Choice Moments
+
+When your app's own agent turn needs the user to pick between a few concrete options
+(a difficulty, a playlist, an interpretation), render the choice as a small tappable
+card inside the app — 2–5 buttons with one-line labels, a short question above them,
+and a recorded "you chose X" state once tapped — rather than asking the user to type a
+number or re-describe an option. Model the shape on the host's own chat cards: bounded
+text, mutually exclusive options, single-shot resolution (a resolved choice never
+re-offers its buttons). Keep it honest: a card is for DECISIONS; open-ended questions
+belong in conversational text.

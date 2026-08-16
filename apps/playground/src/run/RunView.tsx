@@ -17,6 +17,7 @@ import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } f
 import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
+import type { ChatCardState } from '../agent/cards.js';
 import { createNetHandlerFor } from '../state/net.js';
 import {
   connectionWizardRevisionStore,
@@ -578,6 +579,7 @@ export default function RunView(): ReactElement {
             }
             onApproveDataWrite={chat.approveDataWrite}
             onDeclineDataWrite={chat.declineDataWrite}
+            onSelectCardOption={chat.selectCardOption}
           />
         </>
       )}
@@ -894,6 +896,7 @@ interface RailChatProps {
   /** The data-write approval card's actions (ADR-0019 D8). */
   onApproveDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
   onDeclineDataWrite?: (proposal: DataWriteCardState, messageId: number) => void;
+  onSelectCardOption?: (card: ChatCardState, messageId: number, optionId: string) => void;
 }
 
 /** Compact chat inside the rail — keep talking to the agent about the app. */
@@ -908,6 +911,7 @@ function RailChat({
   onConnectionConnect,
   onApproveDataWrite,
   onDeclineDataWrite,
+  onSelectCardOption,
 }: RailChatProps): ReactElement {
   const [draft, setDraft] = useState('');
   const submit = (): void => {
@@ -939,6 +943,7 @@ function RailChat({
           busy={busy}
           {...(onApproveDataWrite !== undefined ? { onApproveDataWrite } : {})}
           {...(onDeclineDataWrite !== undefined ? { onDeclineDataWrite } : {})}
+          {...(onSelectCardOption !== undefined ? { onSelectCardOption } : {})}
           phase="edit"
           onDirectiveConnect={onDirectiveConnect}
           onConnectionConnect={onConnectionConnect}
