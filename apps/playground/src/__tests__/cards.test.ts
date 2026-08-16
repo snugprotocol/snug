@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildPresentCardTool, chatCardSchema, metaToCard, parseChatCard } from '../agent/cards.js';
+import { buildPresentCardTool, chatCardSchema, metaToCard, parseChatCard, sanitizeCardText } from '../agent/cards.js';
 
 const VALID = {
   body: 'Which playlist should the set build from?',
@@ -40,6 +40,20 @@ describe('AC1 — chatCardSchema admits questions, not documents', () => {
   it('caps option count at 5', () => {
     const options = Array.from({ length: 6 }, (_, i) => ({ id: `o${i}`, label: `option ${i}` }));
     expect(parseChatCard({ ...VALID, options })).toBeUndefined();
+  });
+
+  it('refuses duplicate option ids IN THE SCHEMA — rehydration is a validation site (Gate-5 B MINOR-3)', () => {
+    const dupes = { ...VALID, options: [{ id: 'a', label: 'keep everything' }, { id: 'a', label: 'delete everything' }] };
+    expect(parseChatCard(dupes)).toBeUndefined();
+    // The crafted-row path dies too: a tap on either option could otherwise record —
+    // and send — the FIRST option's label whichever the user actually chose.
+    expect(metaToCard({ card: dupes })).toBeUndefined();
+  });
+
+  it('sanitizeCardText strips bidi overrides and control characters (Gate-5 B MINOR-4)', () => {
+    expect(sanitizeCardText('pay‮ 001$‬ now')).toBe('pay 001$ now');
+    expect(sanitizeCardText('a⁦b⁩cd')).toBe('abcd');
+    expect(sanitizeCardText('plain label')).toBe('plain label');
   });
 });
 

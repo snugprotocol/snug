@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
 
-import type { ChatCardState } from '../agent/cards.js';
+import { sanitizeCardText, type ChatCardState } from '../agent/cards.js';
 import type { BuildStepView, ChatMessage, DataWriteCardState } from '../agent/useBuilderChat.js';
-import { netConfirmStore, resolveNetConfirm } from '../state/net.js';
+import { netConfirmStore, registerChatConfirmSurface, resolveNetConfirm } from '../state/net.js';
 import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -191,10 +191,19 @@ export function ChatLog({
             (single-shot; a card must never offer the same decision twice).
           */}
           {message.card !== undefined ? (
-            <Card className="artifact-card" data-testid="chat-choice-card">
+            <Card className="artifact-card chat-choice-card" data-testid="chat-choice-card">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', width: '100%' }}>
-                {message.card.title !== undefined ? <span className="artifact-name">{message.card.title}</span> : null}
-                <span>{message.card.body}</span>
+                {/* The provenance line is the anti-imitation affordance (Gate-5 B
+                    MINOR-4): every model-authored card SAYS it is the agent asking, so
+                    a card styled to read like a host consent surface still opens with
+                    the one line a host surface never carries. Text is sanitized —
+                    bidi/control characters stripped — so display order is the
+                    codepoint order that a pick would send. */}
+                <span className="hint">the agent is asking:</span>
+                {message.card.title !== undefined ? (
+                  <span className="artifact-name">{sanitizeCardText(message.card.title)}</span>
+                ) : null}
+                <span>{sanitizeCardText(message.card.body)}</span>
                 {message.card.resolution === undefined ? (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
                     {message.card.options.map((option) => (
@@ -205,17 +214,21 @@ export function ChatLog({
                             ? () => onSelectCardOption(message.card!, message.id, option.id)
                             : undefined
                         }
-                        disabled={onSelectCardOption === undefined}
-                        title={option.description}
+                        // Disabled while the turn is IN FLIGHT (Gate-5 B MAJOR-1): a
+                        // mid-turn pick had no send path (the busy guard swallowed it)
+                        // and no row to persist to — the click window opens when the
+                        // turn settles and both exist.
+                        disabled={onSelectCardOption === undefined || busy}
+                        title={option.description !== undefined ? sanitizeCardText(option.description) : undefined}
                       >
-                        {option.label}
+                        {sanitizeCardText(option.label)}
                       </Button>
                     ))}
                   </div>
                 ) : (
                   <span className="hint">
                     {message.card.resolution.kind === 'selected'
-                      ? `you chose: ${message.card.resolution.label}`
+                      ? `you chose: ${sanitizeCardText(message.card.resolution.label)}`
                       : 'dismissed'}
                   </span>
                 )}
@@ -259,6 +272,10 @@ export function ChatLog({
 function ProviderConfirmCard(): ReactElement | null {
   const pending = useStore(netConfirmStore);
   const [remember, setRemember] = useState(false);
+  // Register THIS mount as a live chat confirm surface (Gate-5 B MAJOR-2): while at
+  // least one is mounted the modal yields chat-origin confirms to us; when the rail
+  // tab unmounts the ChatLog, the modal takes over so no parked decision goes surface-less.
+  useEffect(() => registerChatConfirmSurface(), []);
   if (pending === null || pending.origin !== 'chat') return null;
   const { host, method, url } = pending.request;
   return (

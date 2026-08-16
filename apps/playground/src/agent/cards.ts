@@ -37,8 +37,29 @@ const cardOptionSchema = z.strictObject({
 export const chatCardSchema = z.strictObject({
   title: z.string().min(1).max(80).optional(),
   body: z.string().min(1).max(600),
-  options: z.array(cardOptionSchema).min(2).max(5),
+  options: z
+    .array(cardOptionSchema)
+    .min(2)
+    .max(5)
+    // Unique ids IN THE SCHEMA, not only in the tool (Gate-5 B MINOR-3): rehydration is
+    // a validation site, and a crafted row with two options under one id would let a
+    // tap on either record — and send — the FIRST option's label.
+    .superRefine((options, ctx) => {
+      if (new Set(options.map((option) => option.id)).size !== options.length) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'option ids must be unique' });
+      }
+    }),
 });
+
+/**
+ * Strip bidi/direction overrides and C0/C1 controls from model-authored card text
+ * (Gate-5 B MINOR-4): rendered order must be codepoint order, because the codepoints
+ * are what a pick sends back as the user's message.
+ */
+export function sanitizeCardText(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '');
+}
 
 export type ChatCard = z.infer<typeof chatCardSchema>;
 
@@ -122,13 +143,18 @@ export function buildPresentCardTool(options: BuildCardToolOptions): AgentTool {
       },
     },
     run: async (input) => {
+      // The specific dupe message BEFORE the schema parse (which now also refuses
+      // dupes, MINOR-3): the model gets told exactly what to fix, and the schema
+      // remains the guarantee for every non-tool admission path (rehydration).
+      if (Array.isArray(input.options)) {
+        const rawIds = (input.options as Array<{ id?: unknown }>).map((option) => option?.id);
+        if (new Set(rawIds).size !== rawIds.length) {
+          return 'Error: option ids must be unique within the card.';
+        }
+      }
       const card = parseChatCard(input);
       if (card === undefined) {
         return 'Error: the card was malformed (body ≤600 chars, 2–5 options each with a short id and label). Ask your question as plain text instead.';
-      }
-      const ids = new Set(card.options.map((option) => option.id));
-      if (ids.size !== card.options.length) {
-        return 'Error: option ids must be unique within the card.';
       }
       const staged = options.onCard(card);
       if (staged === false) {

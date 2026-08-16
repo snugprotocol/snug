@@ -30,7 +30,7 @@ import { createAppTargetSink } from './artifactSink.js';
 import { needsSynthesizedContract } from './runtimeContractSynthesis.js';
 import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
-import { buildPresentCardTool, metaToCard, type ChatCardState } from './cards.js';
+import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
 import {
   createDirectBuilder,
   createServerBuilder,
@@ -954,20 +954,35 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         ...card,
         resolution: { kind: 'selected', optionId, label: option.label },
       };
-      patchMessage(messageId, (m) => ({ card: { ...(m.card ?? card), ...resolved } }));
+      /**
+       * The row id is read from CURRENT message state at click time, never from the
+       * click-time prop (Gate-5 B MAJOR-1 sub-issue): the card renders mid-turn before
+       * its row exists, and finalize patches `messageRowId` in later — a click racing
+       * that patch would otherwise persist nowhere while the send succeeded.
+       */
+      let rowIdAtClick: number | undefined;
+      patchMessage(messageId, (m) => {
+        rowIdAtClick = m.card?.messageRowId ?? card.messageRowId;
+        return {
+          card: {
+            ...(m.card ?? card),
+            ...resolved,
+            ...(rowIdAtClick !== undefined ? { messageRowId: rowIdAtClick } : {}),
+          },
+        };
+      });
       void (async () => {
         const db = await getUserDb();
-        const rowId = resolved.messageRowId;
-        if (rowId === undefined) return; // pre-persist resolution stays in-memory (best-effort, R-M5 rule)
+        if (rowIdAtClick === undefined) return; // pre-persist resolution stays in-memory (best-effort, R-M5 rule)
         try {
-          const existing = db.listChatMessages(threadId).find((m) => m.id === rowId)?.meta;
+          const existing = db.listChatMessages(threadId).find((m) => m.id === rowIdAtClick)?.meta;
           const base = typeof existing === 'object' && existing !== null ? (existing as PersistedMeta) : {};
-          db.updateChatMessageMeta(rowId, { ...base, card: resolved });
+          db.updateChatMessageMeta(rowIdAtClick, { ...base, card: { ...resolved, messageRowId: rowIdAtClick } });
         } catch {
           // The selection already became the next turn; an unwritable audit field must not throw.
         }
       })();
-      send(`I choose: ${option.label}`);
+      send(`I choose: ${sanitizeCardText(option.label)}`);
     },
     [patchMessage, send, threadId],
   );

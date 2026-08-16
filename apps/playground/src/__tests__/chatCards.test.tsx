@@ -110,6 +110,22 @@ describe('AC2/AC4 — the inline choice card', () => {
     expect(buttons.length).toBeGreaterThan(0);
     expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
   });
+
+  it('Gate-5 B MAJOR-1 — options are DISABLED while the turn is in flight (a mid-turn pick had no send path)', () => {
+    const picks: unknown[] = [];
+    render(
+      <ChatLog busy messages={[cardMessage(PENDING)]} onSelectCardOption={(...args) => picks.push(args)} />,
+    );
+    const buttons = [...container!.querySelectorAll('[data-testid="chat-choice-card"] button')];
+    expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    act(() => (buttons[0] as HTMLButtonElement).click());
+    expect(picks).toHaveLength(0);
+  });
+
+  it('the card names its author — the anti-imitation provenance line renders on every card (Gate-5 B MINOR-4)', () => {
+    render(<ChatLog messages={[cardMessage(PENDING)]} />);
+    expect(container!.querySelector('[data-testid="chat-choice-card"]')?.textContent).toContain('the agent is asking:');
+  });
 });
 
 describe('AC5 — the provider write-confirm renders as a chat card, not the modal', () => {
@@ -177,6 +193,16 @@ describe('AC5 — the provider write-confirm renders as a chat card, not the mod
     await expect(result).resolves.toContain('<api_result>');
     expect(fetches).toHaveLength(1);
     expect(netConfirmStore.get()).toBeNull();
+  });
+
+  it('Gate-5 B MAJOR-2 — with NO chat surface mounted, the MODAL renders a chat-origin confirm (no surface-less parks)', async () => {
+    const { result } = await parkChatConfirm();
+    // Only the modal is mounted — the rail tab has hidden the ChatLog.
+    render(<NetConfirmDialog />);
+    expect(container!.textContent).toContain('this app wants to make a change');
+    const deny = [...container!.querySelectorAll('button')].find((b) => b.textContent === 'deny')!;
+    act(() => deny.click());
+    await expect(result).resolves.toContain('NET_CONFIRM_DENIED');
   });
 
   it('an APP-origin confirm keeps the modal and never the chat card', async () => {

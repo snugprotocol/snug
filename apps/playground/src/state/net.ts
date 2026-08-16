@@ -58,6 +58,27 @@ export function tagConfirmOrigin(request: NetConfirmRequest, origin: 'chat'): vo
   confirmOrigins.set(request, origin);
 }
 
+/**
+ * How many chat-card confirm surfaces are currently MOUNTED (Gate-5 B MAJOR-2). The
+ * chat card only exists while ChatLog is on screen — RunView renders it per rail tab —
+ * so keying the modal's silence on origin ALONE left a parked chat confirm with no
+ * surface at all (and, because only the queue head renders, everything behind it
+ * invisible too). The modal now yields to the card only while a card surface is
+ * actually mounted; otherwise it renders every confirm, chat-origin included.
+ */
+export const chatConfirmSurfaceStore = createStore<number>(0);
+
+/** Mount/unmount registration for the chat confirm card surface. */
+export function registerChatConfirmSurface(): () => void {
+  chatConfirmSurfaceStore.set(chatConfirmSurfaceStore.get() + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    chatConfirmSurfaceStore.set(Math.max(0, chatConfirmSurfaceStore.get() - 1));
+  };
+}
+
 /** null when no confirm is open. The confirm dialog renders exactly this — the QUEUE HEAD. */
 export const netConfirmStore = createStore<PendingNetConfirm | null>(null);
 
