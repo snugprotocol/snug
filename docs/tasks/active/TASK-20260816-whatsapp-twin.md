@@ -607,3 +607,35 @@ one" clause is retired as unrepresentable-by-construction, which is the better o
   prompt via `render.ts`, so adding a kind silently granted the model a new proposal; (2) an
   anchored route matcher does NOT imply traversal safety, because `..` is a legal segment —
   test the guard with a path the matcher admits.
+
+### 2026-08-16 — claude — Phase B (registry entry + device-link pairing)
+- Done: the `whatsapp` registry entry (the owner's ask — every future user-authored WhatsApp
+  app now inherits one reviewed wizard) and a DISCRIMINATED pairing union. Hue's one-POST
+  exchange cannot express start → QR → poll (the token arrives in a response `secretPath`
+  cannot name), so `kind: 'exchange' | 'device-link'` — and the discriminant is REQUIRED, not
+  defaulted, because a defaulted discriminant makes "nobody decided" and "this is an
+  exchange" the same value. 16 new tests here, 787 total in auth (was 759).
+- **Two real bugs, both caught by a red test rather than by reading:**
+  1. **The brand was unprotected.** Keyed `whatsapp-personal`, the entry was reachable by
+     NEITHER resolution rung — both key on the normalized registry key, and
+     `normalizeProviderKey('WhatsApp')` is `whatsapp`. So the borrow ban never fired for the
+     WhatsApp brand and a declaration wearing the name while aiming the credential at
+     `evil.example` was **admitted**. Renamed to `whatsapp`; pinned by its own regression
+     test asserting both rungs resolve, because the next author will pick a key by
+     aesthetics unless something fails. **This is ADR-0023's P6 amendment repeating in a new
+     entry** — the hue rows hit the identical trap (`'Philips Hue'` → `philipshue`, not the
+     key `hue`). Twice is a pattern: Gate 6 candidate — *a registry key is a resolution
+     input, not a label; pick it by what `normalizeProviderKey(displayName)` returns.*
+  2. **The alias `'WhatsApp'` shadowed its own key** — refused by the self-containment
+     suite, and rightly: an alias that shadows a key silently re-routes a resolution that
+     already worked.
+- Three structural suites fired and were each acknowledged deliberately, never loosened:
+  the kind table (12th entry), `browserCallable` (a unix socket is unreachable from a
+  browser — the most documented `false` in that table), and — the ADR-0032 §4 seam proving
+  itself — `lanPairingExchangeFor` in the wizard, which now NARROWS on the discriminant so a
+  device-link seat can never reach the pinned-TLS path that demands a 64-hex certificate pin.
+  `isLanRequirement` already excluded the row; the narrowing is the belt the compiler checks.
+- Verified: root `turbo run test --force` **21/21, 0 cached**.
+- Next step: Phase C — the sidecar package (`apps/whatsapp-sidecar`), Baileys behind a
+  `WaSocket` seam so the suite runs against a scripted fake; then Phase G's `sidecar_ctl` +
+  `sidecar_fetch` Rust commands, which C/D cannot be exercised without.
