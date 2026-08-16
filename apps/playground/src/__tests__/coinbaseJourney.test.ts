@@ -87,11 +87,11 @@ describe('P3 — the owner journey: undeclared Coinbase build → reviewable api
     expect(
       row.requirement.fields?.map((field) => field.key),
       'the named CDP secrets reach the row (the founding defect was unnamed boxes)',
-    ).toEqual(['api_key', 'private_key']);
+    ).toEqual(['api_key', 'ed25519_private_key']);
     expect(
       row.requirement.request?.headerTemplate,
       'the pinned signing template must PERSIST — a row without it falls to the X-Api-Key kind default',
-    ).toEqual({ Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' });
+    ).toEqual({ Authorization: 'Bearer {{cdp_jwt(api_key, ed25519_private_key)}}' });
     expect(row.requirement.testRequest, 'the pinned probe must persist for the wizard').toEqual({
       method: 'GET',
       pathAndQuery: '/api/v3/brokerage/accounts',

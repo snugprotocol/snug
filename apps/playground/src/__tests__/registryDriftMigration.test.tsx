@@ -9,10 +9,12 @@
 //  - REGISTRY-SEAT drift (field set UNCHANGED, pinned seats absent from the row): re-run
 //    the requirement through registry substitution and RE-PERSIST — no re-crediting
 //    (stored secrets stay valid), approval survives (status never leaves `approved`).
-//  - FIELD-SET drift (the owner's old api_key/api_secret/passphrase Coinbase rows): the
-//    registry's current shape is STAGED, the diff screen disclosed, and approval routes
-//    into the credential half for re-entry — old secrets for dropped fields stay in
-//    storage untouched (but unused; journaled in the task file).
+//  - FIELD-SET drift (the owner's old api_key/api_secret/passphrase Coinbase rows, and
+//    since TASK-20260815 the EC-era api_key/private_key pair): the registry's current
+//    shape is STAGED, the diff screen disclosed, and approval routes into the
+//    credential half for re-entry — and secrets for DROPPED fields are deleted at
+//    re-approval, BEFORE the promotion lands (ADR-0030 §5 — a deliberate inversion of
+//    the earlier "old secrets stay in storage" posture; a dead secret has no reader).
 //
 // FIXTURE HONESTY: the old-shape approved rows are minted through a db opened with the
 // PERMISSIVE default admission gate — exactly what "an older hub admitted this row under
@@ -75,7 +77,7 @@ const productionGate: ConnectionAdmissionGate = (requirement, context) =>
 
 const entry = WELL_KNOWN_PROVIDERS_REGISTRY['coinbase']!;
 
-const CDP_REQUEST = { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' } };
+const CDP_REQUEST = { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, ed25519_private_key)}}' } };
 const CDP_TEST_REQUEST = { method: 'GET', pathAndQuery: '/api/v3/brokerage/accounts' };
 
 /** The registry's CURRENT full shape — what a fresh admission would persist today. */
@@ -107,12 +109,24 @@ const oldTripleShape = (): Record<string, unknown> => ({
   declaredApiHosts: ['api.coinbase.com'],
 });
 
-/** A real P-256 key so the migrated signing template can actually mint in the probe. */
+/** A real Ed25519 key so the migrated signing template can actually mint in the probe. */
+let ED25519_PRIVATE_KEY_PEM = '';
+/** A real EC P-256 key — the LEGACY credential the EC-era drift rows carry (ADR-0030). */
 let EC_PRIVATE_KEY_PEM = '';
 beforeAll(async () => {
-  const pair = await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
-  const pkcs8 = Buffer.from(await webcrypto.subtle.exportKey('pkcs8', pair.privateKey)).toString('base64');
-  EC_PRIVATE_KEY_PEM = `-----BEGIN PRIVATE KEY-----\n${pkcs8.match(/.{1,64}/g)!.join('\n')}\n-----END PRIVATE KEY-----`;
+  const toPem = (der: ArrayBuffer): string => {
+    const body = Buffer.from(der).toString('base64');
+    return `-----BEGIN PRIVATE KEY-----\n${body.match(/.{1,64}/g)!.join('\n')}\n-----END PRIVATE KEY-----`;
+  };
+  // The lib types resolve this overload to a bare CryptoKey — Ed25519 is a keypair
+  // algorithm, so the double cast is a types gap, not a runtime one.
+  const edPair = (await webcrypto.subtle.generateKey({ name: 'Ed25519' }, true, [
+    'sign',
+    'verify',
+  ])) as unknown as CryptoKeyPair;
+  ED25519_PRIVATE_KEY_PEM = toPem(await webcrypto.subtle.exportKey('pkcs8', edPair.privateKey));
+  const ecPair = await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+  EC_PRIVATE_KEY_PEM = toPem(await webcrypto.subtle.exportKey('pkcs8', ecPair.privateKey));
 });
 
 let db: UserDb;
@@ -208,7 +222,7 @@ describe('amendment 3 — REGISTRY-SEAT drift: wizard open re-persists the pinne
     db = await installDbWithLegacyRow(seatlessShape(), {
       secrets: {
         [authConnectionCredentialSecretKey(APP, SLOT, 'api_key')]: KEY_NAME,
-        [authConnectionCredentialSecretKey(APP, SLOT, 'private_key')]: EC_PRIVATE_KEY_PEM,
+        [authConnectionCredentialSecretKey(APP, SLOT, 'ed25519_private_key')]: ED25519_PRIVATE_KEY_PEM,
       },
     });
   }
@@ -226,14 +240,16 @@ describe('amendment 3 — REGISTRY-SEAT drift: wizard open re-persists the pinne
     const after = db.getConnection(APP, SLOT)!;
     expect(after.requirement.request, 'the pinned signing template must now be PERSISTED').toEqual(CDP_REQUEST);
     expect(after.requirement.testRequest, 'the pinned probe must now be PERSISTED').toEqual(CDP_TEST_REQUEST);
-    expect(after.requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+    expect(after.requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
     // Approval SURVIVES — a host-identical seat refresh forces no re-approval.
     expect(after.status).toBe('approved');
     expect(after.pendingRequirement).toBeUndefined();
     expect(after.allowedHosts).toEqual(before.allowedHosts);
     // No re-crediting: the stored secrets are byte-identical.
     expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'))).toBe(KEY_NAME);
-    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'private_key'))).toBe(EC_PRIVATE_KEY_PEM);
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'ed25519_private_key'))).toBe(
+      ED25519_PRIVATE_KEY_PEM,
+    );
   });
 
   it('the probe path USES the migrated seats — testRequest aims the pinned endpoint and the JWT template signs it', async () => {
@@ -298,16 +314,16 @@ describe('amendment 3 — FIELD-SET drift: the old Coinbase triple routes to re-
     expect(row.requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'api_secret', 'passphrase']);
     expect(row.status).toBe('approved');
     // …while the registry's CURRENT shape (seats included) waits as the staged edit.
-    expect(row.pendingRequirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+    expect(row.pendingRequirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
     expect(row.pendingRequirement?.request).toEqual(CDP_REQUEST);
     expect(row.pendingRequirement?.testRequest).toEqual(CDP_TEST_REQUEST);
     // The disclosure renders: the field change is what the user must see before any
     // re-credential ask (the diff screen names both directions).
     expect(container?.querySelector('[data-testid="reapproval-diff"]')).not.toBeNull();
-    expect(container?.textContent).toContain('EC private key (PEM)');
+    expect(container?.textContent).toContain('Ed25519 private key (secret)');
   });
 
-  it('approving the diff routes into the CREDENTIAL HALF (register → credentials), never "done" — old secrets stay in storage', async () => {
+  it('approving the diff routes into the CREDENTIAL HALF (register → credentials), never "done" — dropped-field secrets are DELETED at re-approval (ADR-0030 §5)', async () => {
     await mintOldTripleRow();
     openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
     await renderSheet();
@@ -317,7 +333,7 @@ describe('amendment 3 — FIELD-SET drift: the old Coinbase triple routes to re-
 
     // The promoted requirement is the CDP shape…
     const row = db.getConnection(APP, SLOT)!;
-    expect(row.requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'private_key']);
+    expect(row.requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
     expect(row.requirement.request).toEqual(CDP_REQUEST);
     expect(row.status).toBe('approved');
     expect(row.pendingRequirement).toBeUndefined();
@@ -328,11 +344,84 @@ describe('amendment 3 — FIELD-SET drift: the old Coinbase triple routes to re-
     expect(connectionWizardStepStore.get()).toBe('register');
     await click(/got my credentials/i);
     expect(connectionWizardStepStore.get()).toBe('credentials');
-    expect(container?.querySelector('input[data-field-key="private_key"]'), 're-entry asks for the NEW fields').not.toBeNull();
+    expect(
+      container?.querySelector('input[data-field-key="ed25519_private_key"]'),
+      're-entry asks for the NEW fields',
+    ).not.toBeNull();
 
-    // Old secrets for dropped fields: untouched in storage, unused by the new template.
-    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_secret'))).toBe('old-hmac-secret');
-    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'passphrase'))).toBe('old-passphrase');
+    // Secrets for DROPPED fields are deleted — the ADR-0030 §5 posture inversion of
+    // the earlier "old secrets stay in storage" pin: a dead secret has no reader and
+    // is pure C5 weight. A key that survives BOTH shapes (`api_key`) keeps its value:
+    // deletion is keyed on dropped DECLARED keys, never a blanket wipe.
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_secret'))).toBeUndefined();
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'passphrase'))).toBeUndefined();
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'))).toBe('old-hmac-key');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 AC4 — the EC-era pair (the ES256-era registry shape) re-prompts
+// ---------------------------------------------------------------------------
+
+describe('AC4 — an EC-era api_key/private_key row refuses re-admission, stages, re-prompts, and drops the orphan', () => {
+  /** The exact shape the ES256-era registry persisted (ADR-0022 §5, superseded). */
+  const ecEraShape = (): Record<string, unknown> => ({
+    slot: SLOT,
+    provider: { name: 'Coinbase' },
+    kind: 'api_key',
+    fields: [
+      { key: 'api_key', label: 'API key name (organizations/…/apiKeys/…)', type: 'text' },
+      { key: 'private_key', label: 'EC private key (PEM)', type: 'secret' },
+    ],
+    request: { headerTemplate: { Authorization: 'Bearer {{cdp_jwt(api_key, private_key)}}' } },
+    testRequest: CDP_TEST_REQUEST,
+    declaredApiHosts: ['api.coinbase.com'],
+  });
+
+  const KEY_NAME = 'organizations/test-org/apiKeys/ec-era-key';
+
+  async function mintEcEraRow(): Promise<void> {
+    db = await installDbWithLegacyRow(ecEraShape(), {
+      secrets: {
+        [authConnectionCredentialSecretKey(APP, SLOT, 'api_key')]: KEY_NAME,
+        [authConnectionCredentialSecretKey(APP, SLOT, 'private_key')]: EC_PRIVATE_KEY_PEM,
+      },
+    });
+  }
+
+  it('wizard open STAGES the Ed25519 shape — the field-key rename is what makes the row heal at all', async () => {
+    await mintEcEraRow();
+    openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await renderSheet();
+
+    const row = db.getConnection(APP, SLOT)!;
+    expect(row.requirement.fields?.map((field) => field.key), 'live grant untouched until approval').toEqual([
+      'api_key',
+      'private_key',
+    ]);
+    expect(row.status).toBe('approved');
+    expect(row.pendingRequirement?.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
+    expect(row.pendingRequirement?.request).toEqual(CDP_REQUEST);
+    expect(container?.querySelector('[data-testid="reapproval-diff"]')).not.toBeNull();
+    expect(container?.textContent).toContain('Ed25519 private key (secret)');
+  });
+
+  it('approval walks the credential half and DELETES the orphaned EC secret; the key name survives', async () => {
+    await mintEcEraRow();
+    openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+    await renderSheet();
+
+    await click(/approve these changes/i);
+    await settle();
+
+    const row = db.getConnection(APP, SLOT)!;
+    expect(row.requirement.fields?.map((field) => field.key)).toEqual(['api_key', 'ed25519_private_key']);
+    expect(connectionWizardStepStore.get(), 'never done — no secret backs the new shape yet').toBe('register');
+
+    // The orphaned EC private key is GONE (ADR-0030 §5); `api_key` is declared by both
+    // generations, so the non-secret key name survives for the re-paste screen.
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'private_key'))).toBeUndefined();
+    expect(db.getSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'))).toBe(KEY_NAME);
   });
 });
 
@@ -428,7 +517,7 @@ describe('the done screen probes a coinbase row (the registry now pins testReque
 
     for (const [key, value] of [
       ['api_key', 'organizations/test-org/apiKeys/test-key'],
-      ['private_key', EC_PRIVATE_KEY_PEM],
+      ['ed25519_private_key', ED25519_PRIVATE_KEY_PEM],
     ] as const) {
       const input = container!.querySelector<HTMLInputElement>(`input[data-field-key="${key}"]`);
       expect(input, `the ${key} box must render`).not.toBeNull();
@@ -484,6 +573,139 @@ describe('the done screen probes a coinbase row (the registry now pins testReque
     // again. It must EXCEED the `vi.waitFor` above, or the wait is unreachable and this
     // test dies anonymously at the default 5s (the P3 defect corrected here).
   }, 15_000);
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260815 AC5 + AC6 — the probe chain is TOTAL, and "connected" is earned
+// ---------------------------------------------------------------------------
+
+/** Walk a bare coinbase starter borrow to the done screen with real credentials. */
+async function walkCoinbaseToDone(): Promise<void> {
+  db = await installTestUserDb();
+  db.installApp({ appId: APP, displayName: 'Portfolio', html: '<p>cb</p>' });
+  db.putDeclaredConnection(
+    APP,
+    SLOT,
+    { slot: SLOT, provider: { name: 'Coinbase' }, kind: 'api_key', declaredApiHosts: ['api.coinbase.com'] },
+    'starter',
+  );
+  openConnectionWizard({ appId: APP, slot: SLOT, source: 'settings' });
+  await renderSheet();
+  await click(/approve this connection/i);
+  await click(/got my credentials/i);
+  for (const [key, value] of [
+    ['api_key', 'organizations/test-org/apiKeys/test-key'],
+    ['ed25519_private_key', ED25519_PRIVATE_KEY_PEM],
+  ] as const) {
+    const input = container!.querySelector<HTMLInputElement>(`input[data-field-key="${key}"]`);
+    await act(async () => {
+      input!.value = value;
+      input!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  await click(/save my credentials/i);
+  expect(connectionWizardStepStore.get()).toBe('done');
+}
+
+async function waitForProbeResult(): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      await settle();
+      if (container!.querySelector('[data-testid="connection-test-result"]') === null) {
+        throw new Error('probe outcome not rendered yet');
+      }
+    },
+    { timeout: 8_000, interval: 25 },
+  );
+}
+
+describe('AC5 — an unexpected non-typed throw renders an honest line, never a blank result area', () => {
+  it('store-level: testConnection is TOTAL — a non-Response fetch return becomes {ok:false} naming err.name only', async () => {
+    await walkCoinbaseToDone();
+    // A fetch that "succeeds" with something that is not a Response: the executor's
+    // downstream property reads throw a NON-TYPED TypeError — the exact class of
+    // failure that used to escape as an unhandled rejection and render nothing.
+    const outcome = await testConnection(async () => undefined as unknown as Response);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.message).toMatch(/the test failed unexpectedly \(TypeError\)/);
+      // err.name ONLY — never err.message: below the scrub seat a library message is
+      // arbitrary text and no scrub candidates exist at this altitude (C5).
+      expect(outcome.message).not.toMatch(/undefined|null|property|function/i);
+    }
+  });
+
+  it('component-level: the failure line RENDERS — the blank-result seat is closed', async () => {
+    await walkCoinbaseToDone();
+    vi.stubGlobal('fetch', async () => ({}) as unknown as Response);
+    await click(/test this connection/i);
+    await waitForProbeResult();
+    const result = container!.querySelector('[data-testid="connection-test-result"]')!;
+    expect(result.getAttribute('data-ok')).toBe('false');
+    expect(result.textContent).toMatch(/the test failed unexpectedly/);
+    // The raw runtime error text (err.message) never reaches the DOM.
+    expect(container!.innerHTML).not.toMatch(/is not a function|cannot read/i);
+  }, 15_000);
+});
+
+describe('AC6 — the done screen claims "connected" only after a passing probe (probeable ∧ ¬LAN)', () => {
+  it('before any probe: SAVED copy, no "is connected" claim; a passing probe flips it', async () => {
+    await walkCoinbaseToDone();
+
+    // Saved, not connected: the unverified claim was the second silent path the owner
+    // hit — market data (public) renders in-app while the credentialed half is broken.
+    expect(container!.textContent).toContain('credentials saved');
+    expect(container!.textContent).not.toContain('is connected');
+
+    vi.stubGlobal(
+      'fetch',
+      async () => new Response('{"accounts":[]}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    await click(/test this connection/i);
+    await waitForProbeResult();
+
+    expect(container!.querySelector('[data-testid="connection-test-result"]')!.getAttribute('data-ok')).toBe('true');
+    expect(container!.textContent, 'a PASSING probe earns the connected claim').toContain('is connected');
+  }, 15_000);
+
+  it('a FAILING probe never flips the claim', async () => {
+    await walkCoinbaseToDone();
+    vi.stubGlobal('fetch', async () => new Response('{"error":"unauthorized"}', { status: 401 }));
+    await click(/test this connection/i);
+    await waitForProbeResult();
+    expect(container!.textContent).toContain('credentials saved');
+    expect(container!.textContent).not.toContain('is connected');
+  }, 15_000);
+
+  it('a NON-probeable static row keeps the immediate connected copy (the gate is probeable ∧ ¬LAN)', async () => {
+    // CoinGecko pins fields but deliberately NO testRequest — the honest-absence case
+    // (nothing is invented to probe with). Its done screen keeps today's copy.
+    db = await installTestUserDb();
+    db.installApp({ appId: APP, displayName: 'Prices', html: '<p>cg</p>' });
+    db.putDeclaredConnection(
+      APP,
+      'coingecko',
+      { slot: 'coingecko', provider: { name: 'CoinGecko' }, kind: 'api_key', declaredApiHosts: ['api.coingecko.com'] },
+      'starter',
+    );
+    openConnectionWizard({ appId: APP, slot: 'coingecko', source: 'settings' });
+    await renderSheet();
+    await click(/approve this connection/i);
+    const row = db.getConnection(APP, 'coingecko')!;
+    if (row.requirement.testRequest !== undefined) throw new Error('fixture drifted: coingecko now pins a probe');
+    // Walk whatever credential half the registry pins for it, then assert the done copy.
+    if (connectionWizardStepStore.get() === 'register') await click(/got my credentials/i);
+    const inputs = [...container!.querySelectorAll<HTMLInputElement>('input[data-field-key]')];
+    for (const input of inputs) {
+      await act(async () => {
+        input.value = 'cg-demo-key';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    await click(/save my credentials/i);
+    expect(connectionWizardStepStore.get()).toBe('done');
+    expect(container!.textContent).toContain('is connected');
+  });
 });
 
 // ---------------------------------------------------------------------------
