@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served section-by-section through {{appBuilderToolName}} retrieval; the summary layer's trigger clause sends every external-API build here BEFORE code is written (AL-05 AC5/AC10)
 blast-radius: whether builder-authored apps reach external APIs through the host at all, whether the builder ever tries to place a credential in app code (C1), and whether a declared connection is COMPLETE — a requirement missing a field the provider needs produces an app that cannot authenticate and a user who cannot fix it. Headings are retrieval-load-bearing (AL-05 AC10, ADR-0004): a retrieval test pins that build-time auth queries return the emission teaching in searchKnowledge's top results — renaming or de-keywording headings can silently unserve this file.
-source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb); rewritten for Dynamic Auth v2 (TASK-20260810-p2-pipeline, parent §5 R1/R3 — the full-requirement channel, the skip-rules, the completeness bar); platform-reach copy corrected for the shipped desktop shell + user-typed-LAN rule added (TASK-20260812-desktop-auth-awareness P2, ADR-0021, P0 security amendment 15); pinned-provider copy trued up for the registry's request/testRequest seats + the cdp_jwt helper (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §1). Anthropic prompt-engineering best practices re-read 2026-08-13.
+source: written for Snug v0.2 (AL-05, TASK-20260806-auth-kb); rewritten for Dynamic Auth v2 (TASK-20260810-p2-pipeline, parent §5 R1/R3 — the full-requirement channel, the skip-rules, the completeness bar); platform-reach copy corrected for the shipped desktop shell + user-typed-LAN rule added (TASK-20260812-desktop-auth-awareness P2, ADR-0021, P0 security amendment 15); pinned-provider copy trued up for the registry's request/testRequest seats + the cdp_jwt helper (TASK-20260812-desktop-auth-awareness P3, ADR-0022 §1); cdp_jwt signing family moved to EdDSA/Ed25519 (TASK-20260815-coinbase-ed25519, ADR-0030). Anthropic prompt-engineering best practices re-read 2026-08-13.
 -->
 
 ## Connected APIs: calling an external API with auth, login, and credentials
@@ -195,8 +195,8 @@ You may reference:
   `request.body` — facts about the outgoing request;
 - five helpers: `timestamp`, `base64`, `hmac_sha256`, `hmac_sha256_b64`, and
   `cdp_jwt(api_key_field, private_key_field)` — a provider-specific signer that mints a
-  Coinbase-CDP-style ES256 JWT; use it only for a provider whose docs describe exactly
-  that scheme, and remember Coinbase itself is pinned (declare no template for it).
+  Coinbase-CDP-style EdDSA (Ed25519) JWT; use it only for a provider whose docs describe
+  exactly that scheme, and remember Coinbase itself is pinned (declare no template for it).
 
 A reference to anything else is rejected, and the directive with it — the host will not
 guess what you meant, because a typo'd field name in a signature silently signs the wrong
