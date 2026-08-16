@@ -14,9 +14,10 @@
  */
 
 import type { UserDb } from '@snugprotocol/db';
-import { isDataIntent, isFeatureIntent, type ChatIntent } from '@snugprotocol/protocol';
+import { isFeatureIntent, laneForIntent, type ChatIntent } from '@snugprotocol/protocol';
 
 import { buildAppTurnContext, CONTEXT_CAPS, type AppTurnContext } from './appContext.js';
+import { buildProviderContextBlock } from './providerContext.js';
 
 /** Cap on the DDL shown to a data turn — the same budget the builder context uses. */
 const DATA_SCHEMA_CAP = CONTEXT_CAPS.schema;
@@ -73,6 +74,7 @@ export async function buildIntentTurnContext(
   const app = db.getApp(appId);
   if (app === undefined) return { history };
 
+  const lane = laneForIntent(intent);
   const parts: string[] = ['## The app you are working with'];
   parts.push(
     [
@@ -81,19 +83,31 @@ export async function buildIntentTurnContext(
     ].join('\n'),
   );
 
-  const schema = db.getAppSchema(appId);
-  parts.push(
-    '### The app’s data',
-    schema !== undefined && schema.objects.length > 0
-      ? capText(schema.objects.map((object) => object.ddl).join(';\n'), DATA_SCHEMA_CAP)
-      : '(this app has no data tables yet — none registered)',
-  );
+  if (lane === 'provider') {
+    // Connection FACTS, no DDL (TASK-20260815 AC3): a provider turn talks to the
+    // connected service; the app's table DDL is the data lane's context and would only
+    // invite cross-lane SQL guesswork here. The no-connection case is stated rather
+    // than omitted — silence invites hosts invented from training data.
+    parts.push(
+      buildProviderContextBlock(db, appId) ??
+        'This app has no approved connection — tell the user so, and that they can connect one from the app’s Settings.',
+    );
+  } else {
+    const schema = db.getAppSchema(appId);
+    parts.push(
+      '### The app’s data',
+      schema !== undefined && schema.objects.length > 0
+        ? capText(schema.objects.map((object) => object.ddl).join(';\n'), DATA_SCHEMA_CAP)
+        : '(this app has no data tables yet — none registered)',
+    );
+  }
 
   const docs = db.listAppDocs(appId);
   if (docs.length > 0) {
-    if (isDataIntent(intent)) {
-      // TITLES only. A data answer is grounded in rows, not in the app's design notes,
-      // and doc bodies are the single largest thing a data turn could carry for no gain.
+    if (lane === 'data' || lane === 'provider') {
+      // TITLES only. A data/provider answer is grounded in rows or provider responses,
+      // not the app's design notes — doc bodies are the largest thing such a turn could
+      // carry for no gain.
       parts.push('### Documentation pages (titles only)', docs.map((doc) => doc.title ?? doc.slug).join(', '));
     } else {
       // `app_question`/`other`: the docs ARE the answer surface, so they come in full.

@@ -26,7 +26,6 @@ import {
   openConnectionWizardForNetError,
 } from '../state/connectionWizard.js';
 import { useStore } from '../state/store.js';
-import { NetConfirmDialog } from './NetConfirmDialog.js';
 import { AuthRepairBanner } from './AuthRepairBanner.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
@@ -193,6 +192,11 @@ export default function RunView(): ReactElement {
     ...(isStarterId(id) ? {} : { pinnedAppId: id }),
     onLlmEvent,
     onTurnStart,
+    // Provider-lane failures reuse the SAME repairable-code CTA as app-runtime net
+    // errors (TASK-20260815 AC5) — one mapping, code-keyed, M12 filter included.
+    onProviderNetError: (appId, code) => {
+      if (isConnectionRepairableNetError(code)) setNetAuthError({ appId, code });
+    },
   });
 
   // Thread list for the picker AND the main-thread resolution — refreshed when the turn
@@ -582,7 +586,8 @@ export default function RunView(): ReactElement {
 
   return (
     <div className="run-layout" style={stageStyle}>
-      <NetConfirmDialog />
+      {/* NetConfirmDialog moved to the App shell (TASK-20260815 AC12): the confirm gate's
+          callers now include provider-lane chat turns on other routes. */}
       {/*
         AC5 (ADR-0022 §4): a provider rejecting this app's stored credentials is now
         VISIBLE — additive to the app result (which stays ok:true/401 per contract) and

@@ -36,6 +36,8 @@ Forward-looking rules only, grouped by theme. **The agent reads this when planni
 
 ## Sandbox, credentials & cross-package seams (C1/C2)
 
+- (2026-08-15) Re-pointing an existing delivery surface at a NEW READER re-opens every scrub decision made for the old one — the executor's body scrub deliberately let a device echo its own LAN address because delivery ended inside the sandboxed iframe; LLM-bound delivery exports the same bytes to a third-party API. When a consumer class changes (app→LLM, UI→log, local→synced), re-derive what the scrub protects per reader, and put the new reader's scrub at the new reader's altitude.
+
 - (2026-08-12) A guard expressed as a request OPTION (`redirect`, `signal`, TLS flags) is voided by a new transport by default — tauri's shim never reads `init.redirect`, silently disabling `NET_REDIRECT_BLOCKED` on desktop and forwarding injected credentials through redirects. Read the transport's option-parsing source; test that the option ARRIVES. A seam guarantees shape, never semantics.
 - (2026-08-13) When a lane spans two packages, assert the seam's IDENTITY from the integrating side (`platform.lanFetch toBe lanFetch`) and mutate the seam — deleting the wiring left both packages' suites green, twice, by construction: one owns the implementation, the other owns a stub, nothing owns the wire.
 - (2026-08-13) A new capability/placement seat rides EVERY surface the existing seat rides — schema, lint, admission, executor, scrub, REVIEW COPY, migration — or the task file says why not. `queryTemplate` shipped past the wizard's review screen: a seat that skips consent is admitted for free (ADR-0017's price).

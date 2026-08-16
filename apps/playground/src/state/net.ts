@@ -43,26 +43,61 @@ export interface PendingNetConfirm {
   resolve(decision: NetConfirmDecision): void;
 }
 
-/** null when no confirm is open. The confirm dialog renders exactly this. */
+/** null when no confirm is open. The confirm dialog renders exactly this — the QUEUE HEAD. */
 export const netConfirmStore = createStore<PendingNetConfirm | null>(null);
+
+/**
+ * Parked confirms are a FIFO QUEUE (TASK-20260815 AC11, plan-review F4). The store used
+ * to be a single unconditionally-set slot, so a second concurrent confirm OVERWROTE the
+ * first and orphaned its resolver — that executor call awaited forever. With the chat
+ * rail beside a running app, "the app auto-POSTs while the user's provider_write is
+ * mid-confirm" is ordinary usage, not a race: the dialog renders the head, resolution
+ * shifts the queue, and every parked promise settles.
+ */
+const confirmQueue: PendingNetConfirm[] = [];
+
+function advanceConfirmQueue(): void {
+  netConfirmStore.set(confirmQueue[0] ?? null);
+}
 
 /** The session-remember gate — its `invalidate` is called by the Connections actions. */
 const confirmGate = createSessionConfirmGate(
   (request) =>
     new Promise<NetConfirmDecision>((resolve) => {
-      netConfirmStore.set({
+      const entry: PendingNetConfirm = {
         request,
         resolve: (decision) => {
-          netConfirmStore.set(null);
+          const index = confirmQueue.indexOf(entry);
+          if (index === -1) return; // already resolved (double-click guard) or reset
+          confirmQueue.splice(index, 1);
+          advanceConfirmQueue();
           resolve(decision);
         },
-      });
+      };
+      confirmQueue.push(entry);
+      if (confirmQueue.length === 1) advanceConfirmQueue();
     }),
 );
 
 /** The confirm dialog calls this with the user's decision. */
 export function resolveNetConfirm(decision: NetConfirmDecision): void {
   netConfirmStore.get()?.resolve(decision);
+}
+
+/**
+ * Deny ONE parked confirm, identified by its `request` object — REFERENCE equality
+ * (TASK-20260815 Gate-5 MAJOR-1). `createSessionConfirmGate` passes the executor's
+ * request object through to the prompt unchanged, so a caller that observed its own
+ * `confirm(request)` call can later deny exactly that entry — head OR tail — without
+ * touching a sibling confirm that happens to share appId/host/method. Field matching
+ * could never make that distinction; the object identity can. Returns false when the
+ * entry is gone (already resolved) — deny-after-decide is a no-op, never an error.
+ */
+export function denyParkedConfirmByRequest(request: NetConfirmRequest): boolean {
+  const entry = confirmQueue.find((parked) => parked.request === request);
+  if (entry === undefined) return false;
+  entry.resolve({ granted: false });
+  return true;
 }
 
 /**
@@ -234,10 +269,11 @@ export function createNetHandlerFor(options: CreateNetHandlerOptions = {}): NetH
   };
 }
 
-/** TEST-ONLY: close any open confirm and reset remembered grants. */
+/** TEST-ONLY: close any open confirm (the WHOLE queue) and reset failure state. */
 export function __resetNetStateForTests(): void {
+  confirmQueue.length = 0;
   netConfirmStore.set(null);
   authShapedFailureStore.set(null);
   // A fresh gate is not needed — invalidate-all isn't a public op; grants are per-app and
-  // tests use distinct app ids. Clearing the open confirm is enough between tests.
+  // tests use distinct app ids. Clearing the parked queue is enough between tests.
 }

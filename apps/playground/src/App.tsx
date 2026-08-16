@@ -23,6 +23,7 @@ import { bootUserDb, recoverFresh, retryUserDbBoot, useUserDbStatus } from './st
 import { ConnectionWizardNote } from './connections/ConnectionWizardNote.js';
 import { ConnectionWizardSheet } from './connections/ConnectionWizardSheet.js';
 import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
+import { NetConfirmDialog } from './run/NetConfirmDialog.js';
 import { Button } from './ui/Button.js';
 import { Logo } from './ui/Logo.js';
 import { Skeleton } from './ui/Skeleton.js';
@@ -187,6 +188,11 @@ export function App(): ReactElement {
       {/* Desktop .snug open-with confirm (W2b): app-level for the same reason as the
           wizard — an OS open event can arrive on any route. Renders nothing on web. */}
       <OpenUserFileConfirmDialog />
+      {/* The mutating-request confirm (TASK-20260815 AC12, plan-review F3): app-level
+          because the confirm gate's callers are no longer only RunView's app frame —
+          a provider-lane chat turn can park a confirm from the builder view too, and a
+          mount the route doesn't render is a promise that never settles. */}
+      <NetConfirmDialog />
     </div>
   );
 }

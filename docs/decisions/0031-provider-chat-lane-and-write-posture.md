@@ -1,6 +1,6 @@
 # 0031 — Provider chat lane, inline cards, and the read/write posture reset
 
-- **Status:** proposed (drafted 2026-08-15 at Gate 2 of TASK-20260815-starter-portfolio-revamp; flips to accepted when child A merges)
+- **Status:** accepted (2026-08-15, ships with TASK-20260815-provider-chat-lane — the child A implementation PR; plan-review amendments F1-F12 recorded in that task file; threat surface: `docs/security/threat-model-delta-provider-chat-lane.md`)
 - **Date:** 2026-08-15
 - **Task:** TASK-20260815-starter-portfolio-revamp (umbrella; children provider-chat-lane / inline-cards / starter-apps-rebuild)
 - **Supersedes:** the standing owner decision "Snug crypto starters are read-only" (owner memory, 2026-08-xx; never an ADR). ADR-0016/0019/0022/0026/0028/0030 all stand untouched — this ADR composes them, it does not amend them.

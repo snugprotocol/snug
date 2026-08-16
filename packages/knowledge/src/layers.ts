@@ -131,6 +131,8 @@ export type ToolPromptName =
   /** TASK-20260811 (ADR-0019 D7/D8): the data lane's read and propose-write tools. */
   | 'data-query'
   | 'data-propose-write'
+  /** TASK-20260815 (ADR-0031 §2): the provider lane's governed request tool. */
+  | 'provider-request'
   /** TASK-20260811 (ADR-0019 D10): targeted edits as a cheaper route to a new version. */
   | 'artifact-edit';
 

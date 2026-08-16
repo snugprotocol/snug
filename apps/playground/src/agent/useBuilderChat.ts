@@ -151,6 +151,13 @@ export interface UseBuilderChatOptions {
    * one turn, and retains the largest entries by construction.
    */
   onTurnStart?: () => void;
+  /**
+   * Code-keyed observer for PROVIDER-lane request failures (TASK-20260815 AC5) — the
+   * chat twin of `createNetHandlerFor`'s `onNetError` seat. RunView wires it to the SAME
+   * repairable-code CTA the app runtime uses; codes only, never message substrings (N1),
+   * and the caller applies the same M12 filter (blocked/denied codes surface nothing).
+   */
+  onProviderNetError?: (appId: string, code: string) => void;
 }
 
 /** Persisted message meta shape (owned here; the DB stores it as opaque JSON). */
@@ -248,6 +255,9 @@ const STEP_LABELS: Record<string, string> = {
   schema_apply: 'designing the app’s database…',
   app_doc_write: 'updating the app’s docs…',
   runtime_contract_write: 'noting how the app should think at run time…',
+  data_query: 'querying the app’s data…',
+  data_propose_write: 'preparing a data change…',
+  provider_request: 'calling the connected service…',
 };
 
 const stepLabel = (tool: string): string => STEP_LABELS[tool] ?? `${tool.replace(/_/g, ' ')}…`;
@@ -566,6 +576,23 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               patchMessage(agentId, { dataWrite: proposal });
               return true;
             },
+          });
+        } else if (route?.lane === 'provider' && contextTarget !== undefined) {
+          /**
+           * THE PROVIDER LANE (TASK-20260815, ADR-0031 §2): one governed tool, the same
+           * connected-fetch assembly the app runtime uses. `provider_read` turns get the
+           * tool read-only; `provider_write` unlocks mutating methods, each of which
+           * still parks at the executor's user-confirm gate. The turn's abort signal is
+           * threaded so a cancelled turn denies its own parked confirm (AC6).
+           */
+          const { buildProviderTools } = await import('./providerTools.js');
+          const providerTarget = contextTarget;
+          laneTools = buildProviderTools({
+            appId: providerTarget,
+            getDb: () => Promise.resolve(db),
+            allowWrites: route.intent === 'provider_write',
+            signal: controller.signal,
+            onFailureCode: (code) => options.onProviderNetError?.(providerTarget, code),
           });
         } else if (route?.lane === 'answer') {
           laneTools = [];

@@ -64,9 +64,61 @@ describe('lane dispatch', () => {
     });
   });
 
+  it('routes a provider question to the provider lane (TASK-20260815, ADR-0031 §2)', async () => {
+    expect(await route('{"intent":"provider_read","confidence":0.92}')).toEqual({
+      lane: 'provider',
+      intent: 'provider_read',
+    });
+  });
+
+  it('routes a provider action to the provider lane', async () => {
+    expect(await route('{"intent":"provider_write","confidence":0.9}')).toEqual({
+      lane: 'provider',
+      intent: 'provider_write',
+    });
+  });
+
   it('tolerates a fenced or chatty classification', async () => {
     const routed = await route('Sure!\n```json\n{"intent":"data_read","confidence":0.9}\n```\n');
     expect(routed.lane).toBe('data');
+  });
+
+  it('shows the classifier APPROVED connections only — slot + provider name, never hosts (TASK-20260815)', async () => {
+    const db = await installTestUserDb();
+    const app = db.installApp({ displayName: 'Party Deck', html: HTML });
+    db.putDeclaredConnection(
+      app.appId,
+      'melodine',
+      {
+        slot: 'melodine',
+        kind: 'api_key' as const,
+        provider: { name: 'Melodine Streaming' },
+        fields: [{ key: 'api_key', label: 'API key', type: 'secret' as const }],
+        declaredApiHosts: ['api.melodine.example'],
+      },
+      'inference',
+    );
+    db.approveConnection(app.appId, 'melodine');
+    db.putDeclaredConnection(
+      app.appId,
+      'pending-slot',
+      {
+        slot: 'pending-slot',
+        kind: 'none' as const,
+        provider: { name: 'Declared Only' },
+        declaredApiHosts: ['api.declared.example'],
+      },
+      'inference',
+    );
+    const { adapter, calls } = replyWith('{"intent":"provider_read","confidence":0.9}');
+    await routeChatMessage({ db, appId: app.appId, message: 'top song?', threadId: `app:${app.appId}`, adapter });
+
+    const user = calls[0]?.user ?? '';
+    expect(user).toContain('melodine (Melodine Streaming)');
+    // Approved-only: a declared-but-never-approved connection is not a routing fact.
+    expect(user).not.toContain('Declared Only');
+    // C1 hygiene at the classifier altitude: provider identity travels, hosts do not.
+    expect(user).not.toContain('api.melodine.example');
   });
 });
 

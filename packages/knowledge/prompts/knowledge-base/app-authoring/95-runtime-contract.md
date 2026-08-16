@@ -46,6 +46,11 @@ Write it from the app you just built:
   move, a score, one suggestion). Leave it out when a reply can legitimately run long,
   because the cap truncates rather than summarizes.
 
+For a CONNECTED app, name the connection in the `overview` or `stateGuidance` by its slot
+("the app's `spotify` connection carries the user's listening history") — the host's
+provider chat lane routes user questions about that service, and a contract that names
+the slot grounds those turns in what the app is actually connected to.
+
 ### When to write it again
 
 Re-emit the contract on any edit that changes what the app sends, what it expects back, or

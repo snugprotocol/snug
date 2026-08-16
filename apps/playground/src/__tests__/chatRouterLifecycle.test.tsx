@@ -39,8 +39,21 @@ let db: Awaited<ReturnType<typeof installTestUserDb>>;
 let appId: string;
 
 /** What the stubbed classifier adapter should do on its next call. */
-let classifierBehavior: 'clarify' | 'throw' | 'hang' = 'clarify';
+let classifierBehavior: 'clarify' | 'throw' | 'hang' | 'provider_read' | 'provider_write' = 'clarify';
 let sawSignal: AbortSignal | undefined;
+
+/**
+ * Call-site spy for the provider lane's tool builder (TASK-20260815). The module's own
+ * suite proves the tools; THIS file proves the hook actually builds them for a provider
+ * route with the right write posture — "logic is correct" and "logic runs" are separate
+ * claims (lesson 2026-08-08). Returns [] so the turn proceeds tool-free; the assertion
+ * is the CALL and its arguments, not the turn outcome.
+ */
+const buildProviderToolsSpy = vi.fn<(options: unknown) => unknown[]>(() => []);
+vi.mock('../agent/providerTools.js', () => ({
+  buildProviderTools: (options: unknown) => buildProviderToolsSpy(options),
+  PROVIDER_REQUEST_TOOL_NAME: 'provider_request',
+}));
 
 // NOT spread from importOriginal: the real module resolves a live adapter from the
 // settings ladder, and on the first call in a fresh module graph it answered `ok:false`
@@ -59,6 +72,14 @@ vi.mock('../agent/inferrerAdapter.js', () => {
             return await new Promise((_resolve, reject) => {
               request.signal?.addEventListener('abort', () => reject(new Error('aborted')));
             });
+          }
+          if (classifierBehavior === 'provider_read' || classifierBehavior === 'provider_write') {
+            return {
+              ok: true as const,
+              text: `{"intent":"${classifierBehavior}","confidence":0.9}`,
+              toolCalls: [],
+              stopReason: 'end' as const,
+            };
           }
           return {
             ok: true as const,
@@ -108,6 +129,7 @@ async function settle(): Promise<void> {
 beforeEach(async () => {
   classifierBehavior = 'clarify';
   sawSignal = undefined;
+  buildProviderToolsSpy.mockClear();
   modeStore.set('byok');
   db = await installTestUserDb();
   const app = db.installApp({ displayName: 'Pocket Ledger', html: HTML });
@@ -236,6 +258,36 @@ describe('F-M4a — the classifier takes the turn’s abort signal', () => {
     await settle();
 
     expect(chat().messages.some((m) => m.streaming === true)).toBe(false);
+  });
+});
+
+describe('TASK-20260815 — a provider route WIRES the provider tools with the right posture', () => {
+  it('provider_read builds the tools read-only, bound to the pinned app', async () => {
+    classifierBehavior = 'provider_read';
+    const { chat } = renderChat();
+    await act(async () => {
+      chat().send('which song did I play most last week?');
+    });
+    await settle();
+    expect(buildProviderToolsSpy).toHaveBeenCalledTimes(1);
+    expect(buildProviderToolsSpy.mock.calls[0]?.[0]).toMatchObject({ appId, allowWrites: false });
+  });
+
+  it('provider_write unlocks mutating methods and threads the turn abort signal', async () => {
+    classifierBehavior = 'provider_write';
+    const { chat } = renderChat();
+    await act(async () => {
+      chat().send('make a playlist from my top tracks');
+    });
+    await settle();
+    expect(buildProviderToolsSpy).toHaveBeenCalledTimes(1);
+    const options = buildProviderToolsSpy.mock.calls[0]?.[0] as
+      | { allowWrites?: boolean; signal?: AbortSignal }
+      | undefined;
+    expect(options?.allowWrites).toBe(true);
+    // The abort seam must be THIS turn's signal — it is what lets a cancelled turn deny
+    // its own parked confirm (AC6); an absent signal disables that silently.
+    expect(options?.signal).toBeInstanceOf(AbortSignal);
   });
 });
 

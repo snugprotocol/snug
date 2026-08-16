@@ -217,18 +217,25 @@ export {
   type RuntimeContract,
 } from './runtime-contract.js';
 
-// Intent-routed app chat (TASK-20260811 P0, ADR-0019) — the router's input contract.
+// Intent-routed app chat (TASK-20260811 P0, ADR-0019; provider lane + exhaustive lane
+// map TASK-20260815, ADR-0031) — the router's input contract.
 export {
   CHAT_INTENTS,
   CHAT_INTENT_CLARIFICATION_MAX_CHARS,
   CHAT_INTENT_DATA_LANE,
   CHAT_INTENT_FEATURE_LANE,
+  CHAT_INTENT_PROVIDER_LANE,
+  CHAT_LANES,
+  LANE_FOR_INTENT,
   chatIntentSchema,
   isDataIntent,
   isFeatureIntent,
+  isProviderIntent,
+  laneForIntent,
   parseChatIntent,
   type ChatIntent,
   type ChatIntentClassification,
+  type ChatLane,
 } from './chat-intent.js';
 
 export {

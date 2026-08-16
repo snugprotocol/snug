@@ -180,6 +180,13 @@ export function buildChatIntentClassifierPrompt(input: {
   /** Compact `table(col, col)` lines — names only, never rows. */
   tableSummaries?: readonly string[];
   docTitles?: readonly string[];
+  /**
+   * Compact `slot (Provider Name)` lines for the app's APPROVED connections
+   * (TASK-20260815, provider lane): the classifier cannot tell "most played last week"
+   * (provider data) from a local-table lookup without knowing a connection exists. Slot
+   * and provider display name only — never hosts, never credentials (C1).
+   */
+  connectionSummaries?: readonly string[];
   /** The last few exchanges, oldest first, already trimmed by the caller. */
   recentTurns?: readonly { role: 'user' | 'assistant'; content: string }[];
 }): AuthSpecInferrerPrompt {
@@ -192,10 +199,15 @@ export function buildChatIntentClassifierPrompt(input: {
     input.docTitles !== undefined && input.docTitles.length > 0
       ? input.docTitles.join(', ')
       : '(no documentation pages)';
+  const connections =
+    input.connectionSummaries !== undefined && input.connectionSummaries.length > 0
+      ? input.connectionSummaries.join('; ')
+      : '(no connected services)';
   const lines = [
     `App: ${input.appName ?? '(unnamed app)'}`,
     `Tables: ${tables}`,
     `Docs: ${docs}`,
+    `Connections: ${connections}`,
   ];
   if (input.recentTurns !== undefined && input.recentTurns.length > 0) {
     lines.push(

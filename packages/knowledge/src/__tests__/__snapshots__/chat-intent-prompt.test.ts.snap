@@ -5,6 +5,7 @@ exports[`golden > locks both slots 1`] = `
   "sampleUser": "App: Pocket Ledger
 Tables: expenses(id, label, cents, spent_on)
 Docs: vision, plan
+Connections: melodine (Melodine Streaming)
 
 Recent conversation (oldest first):
 - user: show me last week
@@ -29,14 +30,20 @@ Reply with ONLY a JSON object:
 
 \`intent\` is exactly one of:
 
-- \`data_read\` — a question the app's stored data can answer: totals, trends, lookups,
+- \`data_read\` — a question the app's OWN stored data can answer: totals, trends, lookups,
   comparisons, "what did I spend on food last month", "how many did I finish".
-- \`data_write\` — adding, correcting or removing data: "add a £12 lunch for last Tuesday",
-  "mark habit 3 done today", "delete the duplicate row".
+- \`data_write\` — adding, correcting or removing the app's own data: "add a £12 lunch for
+  last Tuesday", "mark habit 3 done today", "delete the duplicate row".
 - \`schema_change\` — the data's SHAPE must change: a new field to store, a new kind of
   record, "start tracking a category on each expense".
 - \`app_change\` — the app itself should change: a feature, a screen, a fix, a colour, "add
   a chart", "the total is in the wrong place".
+- \`provider_read\` — a question answered by data living at one of the app's CONNECTED
+  services (the Connections list below): account history, listening stats, device state,
+  repos, prices — "which song did I play most last week", "what's my bridge's zone list".
+- \`provider_write\` — an action performed AT a connected service: create, change, delete
+  or control something the service owns — "make the study lamps warm white", "create a
+  playlist from my top tracks", "label that issue as a bug".
 - \`app_question\` — a question about the app rather than a request: "what does this app
   do", "how do I log a repeat".
 - \`other\` — anything else, including greetings and unrelated chat.
@@ -53,6 +60,16 @@ Rules that decide the hard cases:
   Adding a new FIELD to store is \`schema_change\`.
 - A question you could answer by querying the data is \`data_read\`, even if the app has no
   screen for it. The user is not limited to the app's menus.
+- WHERE the data lives decides data-vs-provider: the app's own tables (the Tables list)
+  are the data lanes; the connected service's account, history, devices or catalogue (the
+  Connections list) are the provider lanes. "How many entries did I log" reads the app's
+  table; "what did I listen to most" reads the connected service.
+- Acting on the real world through a connected service — lights, playback, orders,
+  issues, playlists — is \`provider_write\`, even when it is phrased like a feature ask
+  ("match the lights to the album art" acts on the lights, it does not edit the app).
+- When the app has NO connection that could carry the ask, prefer the data lanes or a
+  \`clarification\` over a provider lane — but a message explicitly about a listed
+  connection's service stays a provider intent even if the wording is loose.
 - When the message is ambiguous between a data lane and \`app_change\`, prefer the data lane
   and ask a \`clarification\`. Changing data is reversible and gated by the user's approval;
   rewriting the app is neither.
@@ -85,6 +102,24 @@ A budget app, "the monthly total should be at the top in bold":
 
 \`\`\`json
 {"intent":"app_change","confidence":0.95}
+\`\`\`
+
+A music app connected to Spotify, "which song did I play most last week?":
+
+\`\`\`json
+{"intent":"provider_read","confidence":0.94}
+\`\`\`
+
+A lights app connected to a Hue bridge, "make all the study lamps warm white":
+
+\`\`\`json
+{"intent":"provider_write","confidence":0.92}
+\`\`\`
+
+A habit app, "what does this app actually do?":
+
+\`\`\`json
+{"intent":"app_question","confidence":0.9}
 \`\`\`
 
 A habit app, "drop the gym habit":
