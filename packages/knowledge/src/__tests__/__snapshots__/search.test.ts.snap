@@ -126,6 +126,7 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
       "### An app that would need two or more providers (one connection per app)",
       "### Keyless public APIs (a provider with no credential)",
       "### What the user sees (net requests in the frames timeline)",
+      "### The provider chat lane (what connected apps get for free)",
     ],
   },
   {

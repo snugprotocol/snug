@@ -27,6 +27,7 @@ const withContext = buildChatIntentClassifierPrompt({
   appName: 'Pocket Ledger',
   tableSummaries: ['expenses(id, label, cents, spent_on)'],
   docTitles: ['vision', 'plan'],
+  connectionSummaries: ['melodine (Melodine Streaming)'],
   recentTurns: [
     { role: 'user', content: 'show me last week' },
     { role: 'assistant', content: 'you spent £48.10 last week' },
@@ -42,15 +43,18 @@ function exampleOutputs(): string[] {
 }
 
 describe('the few-shot outputs are a real contract', () => {
-  it('ships examples covering every lane the router can dispatch', () => {
+  it('ships an example for EVERY intent in the enum — derived, never retyped (F6)', () => {
     const intents = exampleOutputs()
       .map((block) => parseChatIntent(block)?.intent)
       .filter((intent): intent is NonNullable<typeof intent> => intent !== undefined);
-    // Every example is usable AND the set is broad: a classifier taught only the easy
-    // lanes routes the hard ones by guesswork.
-    expect(exampleOutputs().length).toBeGreaterThanOrEqual(6);
-    for (const lane of ['data_read', 'data_write', 'schema_change', 'app_change', 'other']) {
-      expect(intents, `an example for ${lane}`).toContain(lane);
+    // Every example is usable AND the coverage loop iterates the ENUM ITSELF: the prior
+    // retyped list silently omitted `app_question`, and a new intent landing in the
+    // schema without prompt teaching would have stayed green — an untaught intent never
+    // routes (fail-closed), which is exactly the failure a coverage test exists to catch
+    // (lesson 2026-07-31: one contract, never two artifacts by convention).
+    expect(exampleOutputs().length).toBeGreaterThanOrEqual(CHAT_INTENTS.length);
+    for (const intent of CHAT_INTENTS) {
+      expect(intents, `an example for ${intent}`).toContain(intent);
     }
   });
 
@@ -102,6 +106,10 @@ describe('slot placement — the untrusted message never becomes an instruction'
     const blockStart = withContext.user.indexOf('<user_message>');
     expect(withContext.user.indexOf('App: Pocket Ledger')).toBeLessThan(blockStart);
     expect(withContext.user.indexOf('expenses(id, label, cents, spent_on)')).toBeLessThan(blockStart);
+    // The connections seat (TASK-20260815) is host-supplied fact, same placement rule.
+    const connectionsAt = withContext.user.indexOf('melodine (Melodine Streaming)');
+    expect(connectionsAt).toBeGreaterThan(-1);
+    expect(connectionsAt).toBeLessThan(blockStart);
   });
 
   it('neutralizes a </user_message> breakout attempt', () => {
@@ -129,9 +137,10 @@ describe('slot placement — the untrusted message never becomes an instruction'
 });
 
 describe('sentinels — an absent fact is stated, never an empty line', () => {
-  it('names the no-data and no-docs cases explicitly', () => {
+  it('names the no-data, no-docs and no-connections cases explicitly', () => {
     expect(rendered.user).toContain('(this app stores no data yet)');
     expect(rendered.user).toContain('(no documentation pages)');
+    expect(rendered.user).toContain('(no connected services)');
     expect(rendered.user).toContain('App: (unnamed app)');
   });
 

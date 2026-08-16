@@ -324,3 +324,24 @@ structure only — request and response bodies and credentials never appear ther
 calls (POST/PUT/PATCH/DELETE) ask the user to confirm before the write goes out (the user
 may remember that grant for the session). Design copy accordingly: the host, not the app,
 is where the user controls and audits network access.
+
+### The provider chat lane (what connected apps get for free)
+
+Every installed app with an approved connection also gets a PROVIDER CHAT LANE from the
+host — it is not something you build, but something you should design around. A user can
+type a request in the chat beside the running app ("which song did I play most last
+week?", "label that issue as a bug") and the host classifies it, composes the concrete
+HTTP request against the connected provider, executes it through the same governed path
+as the app's own `useConnectedFetch` calls (host-injected credentials, approved hosts
+only, user-confirmed writes), and answers in chat.
+
+Design consequences for the app you write:
+
+- Don't build a thin chrome over every endpoint. The lane already covers ad-hoc reads
+  and one-off actions, so spend the app's UI on what a chat cannot be: live views,
+  visualizations, orchestrated flows, opinionated defaults.
+- Suggest the lane. A connected app should teach its users what to ask — a short list of
+  example prompts in an empty state or help panel ("try: which artist did I binge this
+  month?") turns the lane from hidden capability into the app's second surface.
+- The lane and the app share one credential grant and one host ceiling. Nothing the lane
+  does can widen what the user approved for the app, and vice versa.

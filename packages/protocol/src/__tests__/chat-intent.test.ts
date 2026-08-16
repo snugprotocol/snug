@@ -17,22 +17,33 @@ import {
   CHAT_INTENT_CLARIFICATION_MAX_CHARS,
   CHAT_INTENT_DATA_LANE,
   CHAT_INTENT_FEATURE_LANE,
+  CHAT_INTENT_PROVIDER_LANE,
+  CHAT_LANES,
   chatIntentSchema,
   isDataIntent,
   isFeatureIntent,
+  isProviderIntent,
+  laneForIntent,
   parseChatIntent,
 } from '../chat-intent.js';
 
-describe('chatIntentSchema — the six lanes', () => {
+describe('chatIntentSchema — the eight intents', () => {
   it('pins the intent set exactly (persisted/routed literals — never retyped downstream)', () => {
     expect([...CHAT_INTENTS]).toEqual([
       'data_read',
       'data_write',
       'schema_change',
       'app_change',
+      'provider_read',
+      'provider_write',
       'app_question',
       'other',
     ]);
+  });
+
+  it('accepts the provider intents (TASK-20260815, ADR-0031 §2)', () => {
+    expect(chatIntentSchema.parse({ intent: 'provider_read', confidence: 0.9 }).intent).toBe('provider_read');
+    expect(chatIntentSchema.parse({ intent: 'provider_write', confidence: 0.9 }).intent).toBe('provider_write');
   });
 
   it('accepts a well-formed classification', () => {
@@ -100,26 +111,51 @@ describe('parseChatIntent — fail-closed by construction (AC-F2-1)', () => {
   });
 });
 
-describe('lane predicates — one definition, used by the router and the tool-set selection', () => {
-  it('splits the data lane from the feature lane', () => {
+describe('laneForIntent — ONE exhaustive map, no silent default lane (F7, TASK-20260815)', () => {
+  it('assigns every intent a lane — an intent the map forgot cannot exist at runtime', () => {
+    // Exhaustiveness is compile-enforced (`satisfies Record<ChatIntent, ChatLane>`); this
+    // runtime loop is the mutation tripwire: deleting a map entry breaks the build AND
+    // this test, so neither a cast nor a partial map can sneak an intent past routing.
+    for (const intent of CHAT_INTENTS) {
+      expect(CHAT_LANES, intent).toContain(laneForIntent(intent));
+    }
+  });
+
+  it('pins the lane assignment exactly', () => {
+    expect(CHAT_INTENTS.map((intent) => [intent, laneForIntent(intent)])).toEqual([
+      ['data_read', 'data'],
+      ['data_write', 'data'],
+      ['schema_change', 'feature'],
+      ['app_change', 'feature'],
+      ['provider_read', 'provider'],
+      ['provider_write', 'provider'],
+      ['app_question', 'answer'],
+      ['other', 'answer'],
+    ]);
+  });
+
+  it('keeps the lane groupings as derived views of the same map', () => {
     expect([...CHAT_INTENT_DATA_LANE]).toEqual(['data_read', 'data_write']);
     expect([...CHAT_INTENT_FEATURE_LANE]).toEqual(['schema_change', 'app_change']);
+    expect([...CHAT_INTENT_PROVIDER_LANE]).toEqual(['provider_read', 'provider_write']);
 
     expect(isDataIntent('data_read')).toBe(true);
-    expect(isDataIntent('data_write')).toBe(true);
-    expect(isDataIntent('app_change')).toBe(false);
-
-    expect(isFeatureIntent('app_change')).toBe(true);
+    expect(isDataIntent('provider_read')).toBe(false);
     // v1 collapses schema_change into the feature lane execution-wise (owner decision (c));
     // the classification still differs so the copy can differ.
     expect(isFeatureIntent('schema_change')).toBe(true);
-    expect(isFeatureIntent('data_read')).toBe(false);
+    expect(isFeatureIntent('provider_write')).toBe(false);
+    expect(isProviderIntent('provider_read')).toBe(true);
+    expect(isProviderIntent('provider_write')).toBe(true);
+    expect(isProviderIntent('data_write')).toBe(false);
   });
 
-  it('leaves app_question/other in NEITHER lane (tool-free reply path)', () => {
+  it('leaves app_question/other in the tool-free answer lane', () => {
     for (const intent of ['app_question', 'other'] as const) {
+      expect(laneForIntent(intent), intent).toBe('answer');
       expect(isDataIntent(intent), intent).toBe(false);
       expect(isFeatureIntent(intent), intent).toBe(false);
+      expect(isProviderIntent(intent), intent).toBe(false);
     }
   });
 });

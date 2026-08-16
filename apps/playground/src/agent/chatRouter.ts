@@ -20,9 +20,10 @@
 import { runAgentTurn, type AgentAdapter, type AgentTurnEvent } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
 import { buildChatIntentClassifierPrompt } from '@snugprotocol/knowledge';
-import { isDataIntent, isFeatureIntent, parseChatIntent, type ChatIntent } from '@snugprotocol/protocol';
+import { laneForIntent, parseChatIntent, type ChatIntent } from '@snugprotocol/protocol';
 
 import { tableSummaries } from './intentContext.js';
+import { connectionSummaries } from './providerContext.js';
 
 /**
  * Below this, a well-formed classification still clarifies.
@@ -39,6 +40,7 @@ const RECENT_TURNS = 2;
 export type ChatRoute =
   | { lane: 'data'; intent: ChatIntent }
   | { lane: 'feature'; intent: ChatIntent }
+  | { lane: 'provider'; intent: ChatIntent }
   | { lane: 'answer'; intent: ChatIntent }
   | { lane: 'clarify'; question: string; intent?: ChatIntent };
 
@@ -78,6 +80,9 @@ export async function routeChatMessage(input: RouteChatMessageInput): Promise<Ch
       ...(app !== undefined ? { appName: app.displayName } : {}),
       tableSummaries: tableSummaries(db, appId),
       docTitles: docs.map((doc) => doc.title ?? doc.slug),
+      // Approved connections, identity only (TASK-20260815): the classifier cannot tell
+      // provider data from local-table data without knowing a connection exists.
+      connectionSummaries: connectionSummaries(db, appId),
       recentTurns: recent,
     });
 
@@ -104,9 +109,22 @@ export async function routeChatMessage(input: RouteChatMessageInput): Promise<Ch
       return { lane: 'clarify', question: DEFAULT_CLARIFY_QUESTION, intent: classification.intent };
     }
 
-    if (isDataIntent(classification.intent)) return { lane: 'data', intent: classification.intent };
-    if (isFeatureIntent(classification.intent)) return { lane: 'feature', intent: classification.intent };
-    return { lane: 'answer', intent: classification.intent };
+    // ONE exhaustive map decides the lane (plan-review F7): the predicate chain this
+    // replaces fell through to `answer` for any intent it forgot — a silent default in a
+    // design whose doctrine is "there is no default lane". An intent without a map entry
+    // is now a compile error in the protocol package, not a misroute here. The switch is
+    // exhaustive over ChatLane — a NEW lane fails to compile until this dispatch names it.
+    const lane = laneForIntent(classification.intent);
+    switch (lane) {
+      case 'data':
+        return { lane, intent: classification.intent };
+      case 'feature':
+        return { lane, intent: classification.intent };
+      case 'provider':
+        return { lane, intent: classification.intent };
+      case 'answer':
+        return { lane, intent: classification.intent };
+    }
   } catch {
     return { lane: 'clarify', question: DEFAULT_CLARIFY_QUESTION };
   }

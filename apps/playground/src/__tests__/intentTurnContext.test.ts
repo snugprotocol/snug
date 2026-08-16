@@ -37,6 +37,48 @@ const build = async (intent: ChatIntent): Promise<string> => {
   return contextBlock ?? '';
 };
 
+describe('provider intents get connection facts, never the code and never the DDL (TASK-20260815 AC3)', () => {
+  const seedConnection = async (): Promise<{ db: Awaited<ReturnType<typeof installTestUserDb>>; appId: string }> => {
+    const { db, appId } = await seededDb();
+    db.putDeclaredConnection(
+      appId,
+      'melodine',
+      {
+        slot: 'melodine',
+        kind: 'api_key' as const,
+        provider: { name: 'Melodine Streaming' },
+        fields: [{ key: 'api_key', label: 'API key', type: 'secret' as const }],
+        declaredApiHosts: ['api.melodine.example'],
+      },
+      'inference',
+    );
+    db.approveConnection(appId, 'melodine');
+    return { db, appId };
+  };
+
+  for (const intent of ['provider_read', 'provider_write'] as const) {
+    it(`${intent}: carries identity + connection facts + doc TITLES only`, async () => {
+      const { db, appId } = await seedConnection();
+      const { contextBlock } = await buildIntentTurnContext(db, appId, intent, `app:${appId}`);
+      const block = contextBlock ?? '';
+      expect(block).toContain('Pocket Ledger');
+      expect(block).toContain('melodine (Melodine Streaming)');
+      expect(block).toContain('Vision');
+      expect(block).not.toContain('UNIQUE_DOC_BODY_MARKER');
+      expect(block).not.toContain('UNIQUE_APP_CODE_MARKER');
+      // Provider turns talk to the connected service; the app's table DDL is the data
+      // lane's context and would only invite cross-lane SQL guesswork here.
+      expect(block).not.toContain('CREATE TABLE expenses');
+    });
+  }
+
+  it('a provider intent on an app with NO approved connection states that honestly', async () => {
+    const { db, appId } = await seededDb();
+    const { contextBlock } = await buildIntentTurnContext(db, appId, 'provider_read', `app:${appId}`);
+    expect(contextBlock ?? '').toContain('no approved connection');
+  });
+});
+
 describe('data intents get the data, never the code', () => {
   for (const intent of ['data_read', 'data_write'] as const) {
     it(`${intent}: carries the DDL and the app's identity`, async () => {
