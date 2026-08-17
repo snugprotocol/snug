@@ -237,6 +237,25 @@ export function invalidateNetGrants(appId: string): void {
   standingGate.invalidate(appId);
 }
 
+
+/**
+ * Adapt the platform's sidecar seat to the executor's transport shape.
+ *
+ * The executor hands over the INJECTED headers (the minted token among them); the Tauri
+ * command carries them to the helper, which requires the token on every route. The app never
+ * sees any of it — C1 holds here exactly as it does on the network path.
+ */
+async function sidecarAppFetch(
+  method: string,
+  pathAndQuery: string,
+  body?: string,
+  headers?: Record<string, string>,
+): Promise<{ status: number; body: string }> {
+  const seat = getPlatform().sidecarFetch;
+  if (seat === undefined) throw new Error('the WhatsApp helper is only reachable from the desktop app');
+  return seat(method, pathAndQuery, body, headers);
+}
+
 /**
  * The executor deps for ONE app, assembled from the page user DB.
  *
@@ -283,6 +302,12 @@ export function connectedFetchDepsFor(
         })),
     },
     fetchImpl,
+    // THE SIDECAR TRANSPORT (ADR-0032), threaded exactly where `fetchImpl` and `lanFetch`
+    // are, and for the same reason: this is the ONE deps assembly the app runtime and the
+    // wizard probe share, so neither can end up with a different transport for the same
+    // connection. Absent on web — where the executor's own refusal is the honest answer,
+    // since a unix socket is not reachable from a browser tab.
+    ...(getPlatform().sidecarFetch !== undefined ? { sidecarFetch: sidecarAppFetch } : {}),
     // The STANDING gate, not the session gate directly (ADR-0033). It consults the armed
     // grant first and delegates everything outside that frozen scope to `confirmGate`, so
     // the ordinary confirm still runs for every request the user has not armed — including

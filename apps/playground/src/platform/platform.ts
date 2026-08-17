@@ -93,6 +93,8 @@ export interface SnugPlatform {
     method: string,
     pathAndQuery: string,
     body?: string,
+    /** The executor's INJECTED headers — the minted token among them (C1: never the app's). */
+    headers?: Record<string, string>,
   ) => Promise<{ status: number; body: string }>;
   sidecarWizardFetch?: (
     method: string,

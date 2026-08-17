@@ -486,6 +486,10 @@ fn node_version_preflight() -> Result<(), String> {
 
 /// Call the helper over its unix socket.
 ///
+/// `headers` carries the EXECUTOR's injected values — the minted access token among them —
+/// because the helper requires it on every route. The app never sees them: the executor
+/// injects and hands back a scrubbed answer, the same C1 posture as the network path.
+///
 /// Every guard runs in `admit_app_request` BEFORE a socket is opened. `/pair/*` and
 /// `/session/*` are refused here unconditionally — an app that reached them could mint
 /// itself the access token and drive the user's WhatsApp.
@@ -494,6 +498,7 @@ pub async fn sidecar_fetch(
     method: String,
     path_and_query: String,
     body: Option<String>,
+    headers: Option<std::collections::HashMap<String, String>>,
     state: tauri::State<'_, SidecarState>,
 ) -> Result<SidecarResponse, String> {
     let admitted = admit_app_request(&method, &path_and_query).map_err(|refusal| refusal.message())?;
@@ -504,7 +509,7 @@ pub async fn sidecar_fetch(
             None => return Err(SidecarRefusal::NotRunning.message()),
         }
     };
-    send_over_unix_socket(&socket, &admitted, body.as_deref()).await
+    send_over_unix_socket_with_headers(&socket, &admitted, body.as_deref(), None, headers.as_ref()).await
 }
 
 /// The WIZARD's transport: the same socket, the wider table (pairing routes included).
@@ -560,6 +565,16 @@ async fn send_over_unix_socket_with_nonce(
     body: Option<&str>,
     spawn_nonce: Option<&str>,
 ) -> Result<SidecarResponse, String> {
+    send_over_unix_socket_with_headers(socket, request, body, spawn_nonce, None).await
+}
+
+async fn send_over_unix_socket_with_headers(
+    socket: &std::path::Path,
+    request: &AdmittedSidecarRequest,
+    body: Option<&str>,
+    spawn_nonce: Option<&str>,
+    extra_headers: Option<&std::collections::HashMap<String, String>>,
+) -> Result<SidecarResponse, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stream = tokio::net::UnixStream::connect(socket)
         .await
@@ -572,11 +587,30 @@ async fn send_over_unix_socket_with_nonce(
         Some(nonce) => format!("x-snug-spawn-nonce: {nonce}\r\n"),
         None => String::new(),
     };
+    // Injected headers, rendered with CR/LF stripped from both name and value: a header value
+    // carrying a newline could otherwise inject a second header (or a whole second request)
+    // into the stream. The values here come from the host's own credential store, but a
+    // transport that only holds when its input is trusted is one refactor from not holding.
+    let mut injected = String::new();
+    if let Some(map) = extra_headers {
+        let mut names: Vec<&String> = map.keys().collect();
+        names.sort(); // deterministic order — a stable request is a debuggable one
+        for name in names {
+            let clean_name: String = name.chars().filter(|c| *c != '\r' && *c != '\n').collect();
+            if clean_name.is_empty() || clean_name.eq_ignore_ascii_case("content-length") {
+                continue;
+            }
+            let value = map.get(name).map(String::as_str).unwrap_or_default();
+            let clean_value: String = value.chars().filter(|c| *c != '\r' && *c != '\n').collect();
+            injected.push_str(&format!("{clean_name}: {clean_value}\r\n"));
+        }
+    }
     let head = format!(
-        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n",
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\n{}{}Content-Length: {}\r\n\r\n",
         request.method,
         request.path,
         nonce_header,
+        injected,
         payload.len()
     );
     stream

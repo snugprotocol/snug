@@ -255,6 +255,7 @@ export {
   SIDECAR_AUTH_HEADER,
   SIDECAR_ROUTES,
   SIDECAR_SOCKET_BASENAME,
+  SIDECAR_SYMBOLIC_HOST,
   isAppReachableSidecarRoute,
   type SidecarMethod,
   type SidecarRoute,

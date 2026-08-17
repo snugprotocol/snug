@@ -29,6 +29,7 @@ import type {
   ConnectionRequirement,
   ConnectionTestRequest,
 } from '@snugprotocol/protocol';
+import { SIDECAR_SYMBOLIC_HOST } from '@snugprotocol/protocol';
 
 /**
  * A PAIRING EXCHANGE — how a provider MINTS a credential that the user cannot type
@@ -1080,7 +1081,7 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     aliases: ['WhatsApp Personal', 'WhatsApp Web'],
     // A symbolic identity, not a routable name — see the comment above. `.localhost` is
     // reserved by RFC 6761 precisely so it can never be a real public host.
-    apiHosts: ['whatsapp.sidecar.localhost'],
+    apiHosts: [SIDECAR_SYMBOLIC_HOST],
     // A unix socket cannot be reached from a browser tab. Disclose, never dead-end.
     browserCallable: false,
     // One field the user never types: the sidecar token, minted by the link below.

@@ -154,3 +154,19 @@ export const SIDECAR_AUTH_HEADER = 'authorization';
  * at some other socket on the machine. A basename with no separator cannot express one.
  */
 export const SIDECAR_SOCKET_BASENAME = 'whatsapp-sidecar.sock';
+
+/**
+ * The SYMBOLIC host a linked-device connection declares.
+ *
+ * Not routable and never dialled: `.localhost` is reserved by RFC 6761 precisely so it can
+ * never be a real public host, and the helper listens on a unix socket with no TCP endpoint
+ * at all. The name exists so the connection has a stable identity the frozen ceiling can
+ * hold — hosts are the ceiling's unit, and a connection needs one.
+ *
+ * The EXECUTOR matches on this to route a request to the sidecar transport instead of the
+ * network. Declared here rather than in the registry entry alone, because two surfaces now
+ * depend on the same string and a second spelling would send the app's requests to a real
+ * DNS lookup — which is exactly what happened before this constant existed: the app's reads
+ * failed with NET_FETCH_FAILED while the wizard's identical connection worked.
+ */
+export const SIDECAR_SYMBOLIC_HOST = 'whatsapp.sidecar.localhost';

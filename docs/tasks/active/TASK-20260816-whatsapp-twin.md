@@ -1412,3 +1412,40 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
   Both were assertions about the RIGHT subject at the WRONG altitude — return value instead
   of persisted state, copy instead of rendered structure.
 - Verified: playground **1123**; root `turbo run test --force` **23/23, 0 cached**.
+
+### 2026-08-17 — claude — the app could not reach the helper: the executor had no sidecar branch
+
+- **Owner report**: the wizard linked WhatsApp and confirmed connected — then the APP said
+  "the WhatsApp helper is not running". Both statements were true, about different doors.
+- **Cause**: the wizard calls `sidecar_wizard_fetch` (a Tauri command). The app calls
+  `snug-connection://whatsapp/chats`, which goes through the EXECUTOR — and the executor had
+  **no sidecar branch at all**. It resolved the symbolic host and handed
+  `https://whatsapp.sidecar.localhost/chats` to `fetchImpl`, which attempted a real DNS
+  lookup and failed `NET_FETCH_FAILED`. `.localhost` is RFC 6761 reserved and the helper has
+  no TCP endpoint whatsoever, so that request could never have succeeded.
+- **The seam nobody built.** Phase E wrote the app against `snug-connection://`, Phase G wrote
+  `sidecar_fetch`, and nothing connected them — `net.ts` mentioned neither. Sixth defect of
+  this shape in one feature, and again every part was independently green.
+- Fixed as **gate 5a**, decided BEFORE the SSRF guard: `isForbiddenNetHost` refuses
+  `.localhost` correctly and is left untouched, because it exists to stop a NETWORK request
+  reaching a local service — and this host is never dialled. Everything protecting the user
+  has already run by that point (approved row, frozen ceiling, mutating-confirm); what is
+  skipped is only the machinery for choosing a network transport, which has nothing to decide
+  when there is no network.
+- `SIDECAR_SYMBOLIC_HOST` is now a protocol constant, and the registry entry uses it. Two
+  surfaces depending on the same literal string is how the app's requests ended up at a DNS
+  resolver while the wizard's identical connection worked.
+- **C1 holds on the new path by doing the work, not by inheriting it**: this branch skips the
+  network pipeline, so it injects credentials itself (same `resolveInjectedCredentials`),
+  strips app-supplied credential-shaped headers as gate 7 does, and scrubs the response before
+  it reaches the app. A test asserts the minted token rides the request and never the reverse.
+- The absent seat is a NAMED REFUSAL, never `?? deps.fetchImpl` — the `lanFetch` rule, for the
+  same reason: a fallback would send a credentialed request down a transport nobody approved,
+  and on web it would leak the attempt to a DNS resolver.
+- Rust `sidecar_fetch` now carries the injected headers, with CR/LF stripped from every name
+  and value: a header value holding a newline could otherwise inject a second header — or a
+  whole second request — into the stream. The values come from the host's own store today, but
+  a transport that only holds while its input is trusted is one refactor from not holding.
+- Verified: auth 813 → **821** (6 new transport tests, incl. the non-vacuity case that an
+  ordinary host never reaches the sidecar seat); cargo **79**; root `turbo run test --force`
+  **23/23, 0 cached**; desktop binary rebuilt.

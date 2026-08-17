@@ -36,11 +36,13 @@ export async function sidecarFetch(
   method: string,
   pathAndQuery: string,
   body?: string,
+  headers?: Record<string, string>,
 ): Promise<SidecarHttpResponse> {
   return invoke<SidecarHttpResponse>('sidecar_fetch', {
     method,
     pathAndQuery,
     ...(body !== undefined ? { body } : {}),
+    ...(headers !== undefined ? { headers } : {}),
   });
 }
 

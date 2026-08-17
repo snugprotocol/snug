@@ -49,7 +49,7 @@ import {
   type ConnectionRequirement,
   type ConnectionStatus,
   type NetMethod,
-} from '@snugprotocol/protocol';
+  SIDECAR_SYMBOLIC_HOST,} from '@snugprotocol/protocol';
 import { authConnectionCredentialSecretKey, authCredentialSecretKey } from '@snugprotocol/db';
 import { isHostAllowed } from './app-host-freeze.js';
 import { utf8ToBase64 } from './base64url.js';
@@ -153,6 +153,21 @@ interface ConnectedFetchBaseDeps {
    * CLASS, not of a pin happening to exist.
    */
   lanFetch?: LanFetchLike;
+  /**
+   * THE SIDECAR TRANSPORT (ADR-0032) — a locally-spawned helper on a unix socket.
+   *
+   * Desktop-only, and its ABSENCE is a refusal rather than a fallback to `fetchImpl`, for the
+   * same reason `lanFetch` states above: the symbolic host is an IDENTITY the frozen ceiling
+   * can hold, not an address. `.localhost` is RFC 6761 reserved and the helper has no TCP
+   * endpoint at all, so a request that reached the network could only fail — and on a browser
+   * it would leak the attempt to a DNS resolver.
+   */
+  sidecarFetch?: (
+    method: string,
+    pathAndQuery: string,
+    body?: string,
+    headers?: Record<string, string>,
+  ) => Promise<{ status: number; body: string }>;
   confirmGate: NetConfirmGate;
   /** Injectable time source (grant bookkeeping/telemetry); defaults to Date.now. */
   clock?: () => number;
@@ -991,6 +1006,81 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       );
       if (!resolved.ok) return resolved.failure;
       const grant = resolved.grant;
+
+      /**
+       * The sidecar send. Injection happens HERE because this path skips the network
+       * pipeline below — and skipping it must never mean skipping C1: the helper requires
+       * the minted token on every route, and the app must never see it.
+       */
+      async function sendViaSidecar(): Promise<ConnectedFetchResult> {
+        if (deps.sidecarFetch === undefined) {
+          // A refusal, never `?? deps.fetchImpl`. The fallback would send a credentialed
+          // request down a transport nobody approved, and on the web it would hand the
+          // attempt to a DNS resolver.
+          return failure(
+            NET_ERROR_CODES.NET_FETCH_FAILED,
+            'the WhatsApp helper is only reachable from the Snug desktop app',
+            false,
+          );
+        }
+        let injected: InjectedCredentials;
+        try {
+          injected = await resolveInjectedCredentials(
+            appId,
+            grant,
+            { method, url: url.href, ...(input.body !== undefined ? { body: input.body } : {}) },
+            false,
+          );
+        } catch (err) {
+          if (err instanceof SnugAuthError) {
+            return failure(NET_ERROR_CODES.NET_AUTH_FAILED, `${err.message} (${err.code})`);
+          }
+          if (err instanceof AuthTemplateError || err instanceof AuthTemplateLintError) {
+            return failure(NET_ERROR_CODES.NET_AUTH_FAILED, err.message);
+          }
+          throw err;
+        }
+        // App-supplied credential-shaped headers are stripped exactly as gate 7 does; the
+        // injected ones win, and the app never contributes an authorization header.
+        const headers = { ...stripCredentialShapedHeaders(input.headers ?? {}), ...injected.headers };
+        try {
+          const answered = await deps.sidecarFetch(
+            method,
+            `${url.pathname}${url.search}`,
+            input.body,
+            headers,
+          );
+          const scrubbed = scrubAuthValues(answered.body, {
+            ...Object.fromEntries(Object.entries(injected.headers).map(([k, v]) => [`hdr:${k}`, v])),
+          });
+          return {
+            ok: true,
+            status: answered.status,
+            headers: { 'content-type': 'application/json' },
+            body: scrubbed,
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return failure(NET_ERROR_CODES.NET_FETCH_FAILED, `the WhatsApp helper did not answer: ${message}`, true);
+        }
+      }
+
+      // Gate 5a — THE SIDECAR CLASS (ADR-0032), decided BEFORE the SSRF guard.
+      //
+      // `isForbiddenNetHost` refuses `.localhost` — correctly, and that refusal is left
+      // untouched, because it exists to stop a NETWORK request reaching a local service. This
+      // host is never dialled at all: the helper listens on a unix socket, and
+      // `whatsapp.sidecar.localhost` is an IDENTITY the frozen ceiling can hold (hosts are
+      // the ceiling's unit) rather than an address. RFC 6761 reserves `.localhost` precisely
+      // so it can never resolve publicly.
+      //
+      // Everything that protects the USER has already run above: the row is approved, the
+      // host is within the frozen ceiling, and the mutating-confirm gate has answered. What
+      // is skipped below is only the machinery for choosing and hardening a NETWORK
+      // transport, which has nothing to decide when there is no network involved.
+      if (host === SIDECAR_SYMBOLIC_HOST) {
+        return await sendViaSidecar();
+      }
 
       // Gate 5 — SSRF literal guard (defense in depth: runs even for ceiling members).
       // The desktop policy stands this gate down for exactly the RFC-1918 IPv4-literal
