@@ -863,3 +863,65 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
 - **Still owed by the owner, unchanged**: the macOS shell gate has not been re-run on hardware
   since `sidecar_ctl`/`sidecar_fetch` landed — and note that until this repair it *could not*
   have been, since the shell did not build. The Windows leg stays deliberately red (ADR-0021 D8).
+
+### 2026-08-16 — claude — Phase E (the starter app)
+
+- Done: `examples/whatsapp/` — the 11th shelf app and the 6th connected one. `app.html`
+  (single file, hooks block byte-identical by CONSTRUCTION — assembled by `cat`, never
+  transcribed), `connection.json`, `runtime-contract.json`, README, and the `authoring/`
+  bundle (vision / requirements / plan / lessons + the verbatim build prompt). Five surfaces:
+  thread picker with honest sync state, export ingest, Persona Lab (+ forget-thread), Insights,
+  Reply Desk (draft → confirm; arm switch; activity journal), per-message translate, settings.
+- **Tests FIRST**: `examples/whatsapp-analysis.test.mjs` (19 tests) written and confirmed RED
+  before the app existed. It EXTRACTS the two pure functions from the shipped `app.html`
+  between explicit markers and evaluates them — a copy of the functions in the test file would
+  pass forever after the app drifted, which is the failure the seam exists to prevent. The
+  extraction asserts a non-empty slice, so a rename fails loudly instead of testing nothing.
+- **All 19 passed on the first run, which is exactly when this task's own lesson applies.**
+  Mutation-checking found **two tests measuring nothing**, both fixture faults, not code faults:
+  1. The JID-scrub test used a JID as the AUTHOR, so the pseudonym map replaced it by exact
+     name and `JID_PATTERN` was never reached — deleting the regex entirely left it green. The
+     dangerous shape is a JID belonging to someone NOT in the thread, forwarded into a body:
+     no map entry can match it, so the primitive is the only guard. Added that fixture.
+  2. The "stable pseudonyms" test built the map twice from the SAME array, where insertion
+     order is identical either way, so an unsorted map passed. Rewritten to vary arrival
+     order — which is what `sort()` actually defends against (a later history page, a
+     re-analysis) and precisely when a shuffled label would re-attribute one person's
+     psychology to another.
+  Seven mutations now checked; every one dies for its own reason. **This is the third time
+  this task has hit "a fixture that passes for a reason unrelated to the guard it names"**
+  (Phase B.0's traversal fixtures, Phase D's empty-token guard, now these two) — the pattern
+  is stable enough to be worth a Gate 6 entry on its own.
+- **A harness lesson worth keeping**: two "surviving" mutants in the first pass were perl
+  shell-escaping failures — the file was never edited. A mutation harness MUST assert the
+  mutation applied, or "no test failed" reads as "the guard is untested" when it means "the
+  mutation never happened". Rebuilt the harness to fail loudly on a no-op replace.
+- Verified beyond the suites, because a starter that only passes structural gates can still
+  be dead on arrival: **JSX compiles** (esbuild over the extracted babel script) and the
+  **DDL plus every runtime statement executes against real sql.js 1.14.1** — the 2026-08-15
+  `DEFERRABLE` lesson, honoured rather than cited.
+- Registrations, all four: `APPS` + `CONNECTED_APPS` (`validate.test.mjs`), `MANIFEST_APPS` +
+  `P4_STARTER_FOLDERS` (`connection-manifests.test.mjs`), `CONNECTED_FOLDERS`
+  (`starterShelf.test.tsx`), and the `STARTER_LOOKS` row (desktop-only, distinct emoji 🪞).
+  `LLM_FREE_APPS` deliberately NOT touched — Twin is agent-driven.
+- **Fixed a latent lie in a sibling gate**: `connection-manifests.test.mjs` hardcoded
+  `assert.equal(declaring.length, 5)` under a test NAMED "exactly five". That file's own
+  header records an earlier draft whose name promised six while the assertion pinned five;
+  a literal count is how that recurs. Now derived from `MANIFEST_APPS.length`, with the name
+  repointed at what it actually checks.
+- `connection.json` and `runtime-contract.json` validated by PARSING them through the real
+  `connectionRequirementSchema` / `runtimeContractSchema`, not by eye. The contract's
+  `stateGuidance` was 527 bytes against a 500 cap on the first draft — the schema caught it.
+- Verified: `pnpm --filter examples test` **188 passed**; root `turbo run test --force`
+  **23/23, 0 cached**; cargo **64**. Confirmed `examples` really is in the turbo graph
+  (24 dry-run entries) rather than assuming — a package turbo does not know about is a
+  package CI never runs.
+- **Not done in E, deliberately**: the arm switch currently holds armed state in component
+  state only. The HOST-side enforcement — the `StandingApprovalGate` keyed on
+  (appId, slot, threadJid, trigger scope), the rate cap, quiet hours, and thread derivation
+  from the request — is **Phase F**, and ADR-0033 §3 is explicit that armed must be a
+  recorded answer the host enforces, not an app-side boolean. The app surface is built so F
+  wires into it; until F lands, arming is UI only and must not be described as enforced.
+- Next step: **Phase F** (the `StandingApprovalGate` — do NOT widen the session gate, see B2;
+  AC8's four negatives are the load-bearing tests), then **Phase H** (docs close: ADR-0032/0033
+  to accepted, threat delta, code-map rows, spec-changelog, next-steps prune).

@@ -90,6 +90,8 @@ const MANIFEST_APPS = [
   'hue',
   'weather',
   'github',
+  // The sixth: the linked-device starter (TASK-20260816-whatsapp-twin, ADR-0032).
+  'whatsapp',
 ];
 
 /** The full set of starter folders SURVEYED for a manifest — all declarers now. */
@@ -102,6 +104,7 @@ const P4_STARTER_FOLDERS = [
   'hue',
   'weather',
   'github',
+  'whatsapp',
 ];
 
 const readManifest = (app) => JSON.parse(readFileSync(path.join(HERE, app, 'connection.json'), 'utf8'));
@@ -110,10 +113,15 @@ const readHtml = (app) => readFileSync(path.join(HERE, app, 'app.html'), 'utf8')
 
 // ─────────────────────────────────────────────────────── P4-AC2: the six manifests
 
-test('P4-AC2: exactly five example folders ship a connection.json', () => {
-  // Pins the COUNT as well as the members. A seventh manifest appearing without a test is
-  // a shelf app declaring a connection nobody reviewed; a sixth going missing is a starter
-  // that silently stopped declaring.
+test('P4-AC2: every declaring example folder is pinned in MANIFEST_APPS', () => {
+  // Pins the COUNT as well as the members. A manifest appearing without a test is a shelf
+  // app declaring a connection nobody reviewed; one going missing is a starter that
+  // silently stopped declaring.
+  //
+  // The count is read FROM `MANIFEST_APPS` rather than written as a literal (it said
+  // "five" through TASK-20260816-whatsapp-twin's sixth entry). This file's own header
+  // records an earlier draft whose NAME promised six while the assertion pinned five —
+  // a hardcoded count is how that recurs, so the list is now the single source of both.
   const declaring = SURVEYED_FOLDERS.filter((app) => {
     try {
       return statSync(path.join(HERE, app, 'connection.json')).isFile();
@@ -122,8 +130,8 @@ test('P4-AC2: exactly five example folders ship a connection.json', () => {
     }
   });
 
-  assert.equal(declaring.length, 5, 'five folders declare a connection');
-  assert.deepEqual(declaring.sort(), [...MANIFEST_APPS].sort(), 'the five declaring folders');
+  assert.equal(declaring.length, MANIFEST_APPS.length, 'every declaring folder is pinned in MANIFEST_APPS');
+  assert.deepEqual(declaring.sort(), [...MANIFEST_APPS].sort(), 'the declaring folders');
 });
 
 for (const app of MANIFEST_APPS) {
