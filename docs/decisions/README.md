@@ -48,3 +48,7 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0027 — Docs memory is distilled, not accumulated](0027-docs-memory-distilled-not-accumulated.md)
 - [0028 — Registry-pinned OAuth scopes: reviewed registry data, never silent defaults](0028-registry-pinned-scopes.md)
 - [0029 — Console-URL clickability keys on registry-pinned bytes, not row provenance](0029-registry-pinned-url-clickability.md)
+- [0030 — CDP JWT: host-side Ed25519 signing for Coinbase-class providers](0030-cdp-jwt-ed25519.md)
+- [0031 — Provider chat lane, inline cards, and the read/write posture reset](0031-provider-chat-lane-and-write-posture.md)
+- [0032 — Linked-device connections: the `linked_device` kind and the WhatsApp sidecar](0032-linked-device-connections-whatsapp-sidecar.md)
+- [0033 — Armed auto-reply: the first standing, scoped write approval](0033-armed-auto-reply-standing-write-approval.md)

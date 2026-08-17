@@ -43,6 +43,20 @@ describe('D8 — system slot: task, rules, few-shot, output contract (trusted te
     for (const kind of AUTH_KINDS) expect(rendered.system).toContain(kind);
   });
 
+  it('REFUSES the inferrer the linked_device kind (TASK-20260816, ADR-0032)', () => {
+    // Injecting AUTH_KINDS wholesale means every kind added upstream silently becomes a
+    // kind this prompt invites the model to propose. `linked_device` must not be one: it
+    // describes a provider whose session lives in a companion helper the user installed
+    // separately, so an INFERRED linked_device row is a connection that can never work —
+    // there is no helper to reach. It is declarable only by a first-party manifest that
+    // ships alongside that helper.
+    //
+    // The rule is asserted here rather than left to the golden snapshot because a
+    // snapshot records WHAT the prompt says; this records WHY, and fails loudly if a
+    // future edit drops the carve-out while keeping the list injection.
+    expect(rendered.system).toMatch(/never propose `?linked_device`?/i);
+  });
+
   it('carries no unresolved build-time placeholder', () => {
     expect(rendered.system).not.toMatch(/\{\{[A-Za-z0-9_:-]+\}\}/);
     expect(rendered.user).not.toMatch(/\{\{[A-Za-z0-9_:-]+\}\}/);

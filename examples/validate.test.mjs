@@ -70,6 +70,11 @@ const APPS = [
   'hue',
   'weather',
   'github',
+  // The linked-device starter (TASK-20260816-whatsapp-twin, ADR-0032/0033). Sixth
+  // connected app and the first of its credential shape: a locally-spawned helper
+  // reached over a unix socket, not a host — see the ADRs for why the sidecar is a
+  // capability rather than a ceiling entry.
+  'whatsapp',
 ];
 
 /**
@@ -378,7 +383,7 @@ test('chess sends its board state ONCE, not in both payload and state', () => {
  * shelf: the playground glob is DERIVED from the source of truth rather than restated
  * (lesson 2026-07-31 — for artifacts no local suite executes, parse the producer).
  */
-const CONNECTED_APPS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github'];
+const CONNECTED_APPS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github', 'whatsapp'];
 const STANDARD_DOC_SLUGS = new Set(['vision', 'requirements', 'plan', 'lessons', 'memory', 'next-tasks']);
 
 for (const app of CONNECTED_APPS) {

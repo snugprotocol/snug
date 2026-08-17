@@ -1738,3 +1738,23 @@ img.identity-avatar {
   color: var(--ember-bright);
   border-color: var(--ember-deep);
 }
+
+/* The linked-device pairing QR (ADR-0032). A phone camera has to read this off the screen,
+   so it gets a fixed, generous size and — non-negotiably — a WHITE quiet zone regardless of
+   theme: QR contrast is defined dark-on-light, and the dark-theme surface behind an
+   unpadded code is exactly what makes scanners fail. */
+.qr-frame {
+  width: 260px;
+  max-width: 100%;
+  padding: 12px;
+  background: #ffffff;
+  border-radius: 10px;
+  align-self: flex-start;
+  margin: 4px 0 10px;
+}
+.qr-frame svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  shape-rendering: crispEdges; /* keeps module edges hard when the SVG is scaled */
+}

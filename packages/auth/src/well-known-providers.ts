@@ -29,6 +29,7 @@ import type {
   ConnectionRequirement,
   ConnectionTestRequest,
 } from '@snugprotocol/protocol';
+import { SIDECAR_SYMBOLIC_HOST } from '@snugprotocol/protocol';
 
 /**
  * A PAIRING EXCHANGE — how a provider MINTS a credential that the user cannot type
@@ -57,6 +58,16 @@ import type {
  * state — the wizard is the only reader, and it reads exactly `secretPath`.
  */
 export interface WellKnownPairingExchange {
+  /**
+   * The EXCHANGE shape (ADR-0023): one POST, one response, `secretPath` walks to the key.
+   *
+   * REQUIRED and explicit, rather than an optional field defaulting to `'exchange'`. A
+   * union whose members can be told apart only by which OTHER fields happen to be present
+   * is a union that every reader must re-derive; a defaulted discriminant additionally
+   * makes "nobody has decided yet" and "this is an exchange" the same value. One narrowing
+   * read on `kind` answers it everywhere.
+   */
+  kind: 'exchange';
   /** POST only at v1 — a pairing exchange CREATES a credential, so it is never a read. */
   method: 'POST';
   /** Path on the connection's own ceiling host. Leading '/' — never a URL. */
@@ -92,6 +103,58 @@ export interface WellKnownPairingExchange {
     pathAndQuery: string;
   };
 }
+
+/**
+ * A DEVICE LINK — how a provider mints a credential by having the user prove possession of
+ * an already-authenticated device (ADR-0032, TASK-20260816).
+ *
+ * WHY THE EXCHANGE SHAPE ABOVE CANNOT CARRY THIS. Hue's exchange is one POST whose single
+ * response contains the key. A device link is three beats: START a session, render a QR the
+ * user scans with their phone, then POLL until the provider confirms and releases the token.
+ * The minted value therefore arrives in the response of a route that `secretPath` does not
+ * name, and there is no single request to walk. Overloading `secretPath` to sometimes mean
+ * "this response" and sometimes "some other route's response" would make one field mean two
+ * things — so the seat is discriminated instead.
+ *
+ * WHAT THIS SEAT DELIBERATELY CANNOT EXPRESS, inheriting the exchange's discipline: no HOST
+ * (reachability belongs to the transport, never to registry data), no HEADER TEMPLATE (the
+ * pairing routes are uncredentialed by definition — they are what CREATE the credential),
+ * and no arbitrary response handling.
+ *
+ * CUSTODY (C1) is the same and is the point: the token the poll returns goes straight to
+ * `snug_secrets`. The provider's OWN session material — for WhatsApp, the Signal/noise keys
+ * a linked device holds — never crosses this boundary at all; it stays in the helper's disk
+ * store. The host holds a key to the helper, not a key to the user's account.
+ */
+export interface WellKnownDeviceLinkPairing {
+  kind: 'device-link';
+  /** Begins a link session. POST, because it creates server-side state. */
+  startPathAndQuery: string;
+  /** Returns the QR payload the user scans. Rendered by the wizard, never followed. */
+  qrPathAndQuery: string;
+  /** Polled until the provider reports the device linked; releases the token ONCE. */
+  pollPathAndQuery: string;
+  /** How often to poll. A device link waits on a human, so this is seconds, not millis. */
+  pollIntervalMs: number;
+  /**
+   * When to give up. REQUIRED: a QR has a provider-side lifetime and a user may simply
+   * walk away, so an unbounded poll is a wizard that hangs forever on the commonest
+   * non-error outcome — the scan that never happens.
+   */
+  pollTimeoutMs: number;
+  /** Which of the entry's OWN declared `fields` the released token fills. */
+  secretField: string;
+  /** Shown verbatim before the QR — the user needs to know to reach for their phone. */
+  preconditionInstruction: string;
+  /** THE VERIFY READ (ADR-0025), identical in purpose to the exchange's. */
+  verify: {
+    method: 'GET';
+    pathAndQuery: string;
+  };
+}
+
+/** Either pairing shape. Readers narrow on `kind` — never on which fields are present. */
+export type WellKnownPairing = WellKnownPairingExchange | WellKnownDeviceLinkPairing;
 
 /**
  * How a provider's OAuth flow can receive its redirect on the DESKTOP shell
@@ -283,7 +346,7 @@ export interface WellKnownOauthProvider {
    * How this provider's credential is MINTED when the user cannot type it (ADR-0023
    * Decision 2). Entry-level: the exchange belongs to the device, not to a flow.
    */
-  pairing?: WellKnownPairingExchange;
+  pairing?: WellKnownPairing;
   /**
    * The provider's credential FIELD LIST — the seat the static-kind entries needed
    * (TASK-20260810 P4, fold T-M1).
@@ -920,6 +983,9 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // frozen ceiling host, after approval, over the desktop pinned-TLS command in
     // `mode:'pair'`. The minted value goes straight to `snug_secrets`.
     pairing: {
+      // The discriminant, explicit since ADR-0032 added `device-link`. Hue's shape is
+      // otherwise unchanged byte for byte.
+      kind: 'exchange',
       method: 'POST',
       pathAndQuery: '/api',
       body: { devicetype: 'snug#hub', generateclientkey: true },
@@ -965,6 +1031,102 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         'Type that address into the field below and continue.',
         'When Snug asks, press the link button — the big round button on top of the bridge — because that is how the bridge knows it is really you standing next to it.',
         'Continue within 30 seconds of pressing it. The bridge creates the key itself; there is nothing for you to copy or paste.',
+      ],
+    },
+  },
+
+  /**
+   * WhatsApp Personal via a linked device (ADR-0032, TASK-20260816) — the first
+   * `linked_device` entry, and the reason the kind exists.
+   *
+   * WHAT IS ACTUALLY CONNECTED HERE. Not "WhatsApp's API": personal WhatsApp has no public
+   * one. Snug runs a local helper (the sidecar) that links to the user's account exactly the
+   * way WhatsApp Web does — the user scans a QR with their phone — and thereafter holds the
+   * session. The credential THIS ROW governs is the token that lets the hub talk to that
+   * helper. The WhatsApp session material never reaches the hub at all, which is what keeps
+   * C1 honest: compromising everything Snug stores does not yield the user's WhatsApp.
+   *
+   * WHY THE HOST IS SYMBOLIC. The helper listens on a unix socket, not a network address.
+   * The pinned host below exists because a connection row must name a ceiling — it is an
+   * IDENTITY for the connection, resolved by the desktop transport, and it is never dialled
+   * as DNS. This is deliberate: an earlier draft gave the sidecar a loopback address, which
+   * (the ceiling being host-granular, with no port) would have granted every loopback port on
+   * the machine. A name that resolves to nothing cannot be dialled by accident.
+   *
+   * TERMS OF SERVICE, STATED PLAINLY. Automating personal WhatsApp through a linked device
+   * is contrary to WhatsApp's terms, and accounts do get banned for it. That is disclosed in
+   * `instructions` below (which the wizard renders verbatim before anything is collected) and
+   * again in the starter's README. The pacing and rate limits elsewhere in this task are
+   * there to keep automated behaviour humane and low-volume — they are not, and must never be
+   * described as, a way to avoid detection.
+   */
+  // KEY IS `whatsapp`, NOT `whatsapp-personal` — and the distinction is load-bearing, not
+  // cosmetic. BOTH resolution rungs key on the NORMALIZED registry key:
+  // `lookupWellKnownProvider` does `REGISTRY[normalizeProviderKey(name)]`, which strips
+  // non-alphanumerics, and `findBrandAdjacentRegistryKeys` joins name segments and asks
+  // `Object.hasOwn(REGISTRY, run)`. `normalizeProviderKey('WhatsApp')` is `whatsapp`, so a
+  // hyphenated key is reachable by NEITHER — the borrow ban would never fire for the
+  // WhatsApp brand, and a declaration claiming the name while aiming the credential at
+  // another host would be admitted. Caught by a red test, and it is ADR-0023's P6
+  // amendment repeating (hue's rows persist `'Philips Hue'`, which normalizes to
+  // `philipshue`, not the key `hue`). `displayName` carries the human spelling.
+  whatsapp: {
+    displayName: 'WhatsApp',
+    kind: 'linked_device',
+    // Aliases are for spellings the KEY does not already answer. `'WhatsApp'` is NOT one:
+    // it normalizes to `whatsapp`, which IS this entry's key, so listing it would shadow
+    // the exact-hit rung with an alias — refused by the self-containment suite, and rightly
+    // (an alias that shadows a key silently re-routes a resolution that already worked).
+    // The inferrer is separately forbidden from ever PROPOSING this kind.
+    aliases: ['WhatsApp Personal', 'WhatsApp Web'],
+    // A symbolic identity, not a routable name — see the comment above. `.localhost` is
+    // reserved by RFC 6761 precisely so it can never be a real public host.
+    apiHosts: [SIDECAR_SYMBOLIC_HOST],
+    // A unix socket cannot be reached from a browser tab. Disclose, never dead-end.
+    browserCallable: false,
+    // One field the user never types: the sidecar token, minted by the link below.
+    fields: [
+      {
+        key: 'sidecar_token',
+        label: 'Helper access token',
+        type: 'secret',
+        description:
+          'Created for you when you link your phone — Snug and the helper agree on it during setup. There is nothing to look up.',
+      },
+    ],
+    request: {
+      headerTemplate: { authorization: 'Bearer {{sidecar_token}}' },
+    },
+    // No `testRequest`: every read needs the token the link mints, so a probe before
+    // linking can only fail, and after it merely repeats what `verify` already proved.
+    // Same discipline as the hue entry's omission.
+    pairing: {
+      kind: 'device-link',
+      startPathAndQuery: '/pair/start',
+      qrPathAndQuery: '/pair/qr',
+      pollPathAndQuery: '/pair/status',
+      // A human is walking to their phone, so poll politely and give them long enough to
+      // find the menu. WhatsApp rotates the QR on its own schedule; the wizard re-reads
+      // `qrPathAndQuery` each tick rather than assuming the first payload stays valid.
+      pollIntervalMs: 2_000,
+      pollTimeoutMs: 180_000,
+      secretField: 'sidecar_token',
+      preconditionInstruction:
+        'On your phone, open WhatsApp → Settings → Linked devices → Link a device, then scan the code below. This adds Snug as a linked device, exactly like WhatsApp Web — your phone stays in charge and you can unlink it there at any time.',
+      // ADR-0025 verify-before-claim: prove the token against the helper before anything
+      // says "connected".
+      verify: { method: 'GET', pathAndQuery: '/session/status' },
+    },
+    registration: {
+      // No console and no developer account — the "registration" is installing the helper
+      // and scanning a code. Written for someone who has never heard of a sidecar, and
+      // leading with the honest warning rather than burying it.
+      instructions: [
+        'Please read first: linking an automation tool to a personal WhatsApp account is against WhatsApp’s terms of service, and accounts have been banned for it. Only continue if you accept that risk on this account.',
+        'This works in the Snug desktop app only — the helper runs on your own computer and is not reachable from a browser tab.',
+        'Snug starts the helper for you. Nothing is sent anywhere: your WhatsApp session stays on this machine, and Snug itself only ever holds a key to the helper.',
+        'When the code appears, open WhatsApp on your phone → Settings → Linked devices → Link a device, and scan it.',
+        'Keep the desktop app open while you use the app — the linked session lives with the helper, and your phone can unlink it at any time.',
       ],
     },
   },

@@ -732,6 +732,45 @@ export function isLanRequirement(requirement: ConnectionRequirement | undefined)
   return requirement?.lanHost !== undefined;
 }
 
+/**
+ * Is this a LINKED-DEVICE requirement (ADR-0032)? A separate family from the LAN one, and
+ * deliberately not an extension of it.
+ *
+ * WHY NOT `isLanRequirement`. That predicate is `lanHost !== undefined` and nothing more,
+ * and it has 13 call sites — several leading into `runLanPairingAttempt`, which hard-requires
+ * a 64-hex TLS certificate fingerprint before it records anything. A helper reached over a
+ * unix socket has no certificate and never will, so a linked-device row routed there could
+ * only fail, and would fail deep inside pairing rather than anywhere that could explain
+ * itself. The protocol schema refuses `linked_device` + `lanHost` outright, so the two
+ * families are disjoint by construction; this predicate keeps them disjoint HERE, where the
+ * routing decisions are actually taken.
+ *
+ * Keyed on KIND, because kind is what the registry pins and the schema validates. A
+ * predicate keyed on "carries a pairing seat" or "declares one host" would also be true of
+ * rows this flow must never claim.
+ */
+export function isLinkedDeviceRequirement(requirement: ConnectionRequirement | undefined): boolean {
+  return requirement?.kind === 'linked_device';
+}
+
+/**
+ * Can this platform link a device at all? BOTH seats are required — see the seam's own
+ * comment: one starts the helper and carries the spawn nonce, the other talks to it, and a
+ * flow offered on half a seam fails midway. `false` on web is a DISCLOSURE, never a refusal
+ * to render: the row stays intact and readable, exactly as a LAN row does.
+ */
+export function canLinkDevice(): boolean {
+  const platform = getPlatform();
+  return (
+    platform.sidecarCtl !== undefined &&
+    platform.sidecarFetch !== undefined &&
+    // The WIZARD door too, and it is the one the pairing flow actually drives. Checking only
+    // the first two advertised a flow that died at its first step — which is exactly what
+    // shipped, because `sidecarFetch` refuses every pairing route by design.
+    platform.sidecarWizardFetch !== undefined
+  );
+}
+
 /** Has the address been collected yet? A LAN row with no host is pre-collection. */
 export function lanHostCollected(requirement: ConnectionRequirement | undefined): boolean {
   return isLanRequirement(requirement) && (requirement?.declaredApiHosts ?? []).length > 0;
@@ -956,6 +995,181 @@ export async function runLanPairing(): Promise<LanPairingOutcome> {
   // its error — possibly naming the old device — onto the new row's pairing screen.
   if (!outcome.ok && connectionWizardStore.get() === session) lanPairingErrorStore.set(outcome.message);
   return outcome;
+}
+
+/**
+ * THE DEVICE-LINK FLOW (ADR-0032) — begin, then complete. Two calls rather than one because
+ * a human stands between them: the QR must be on screen before there is anything to scan.
+ *
+ * Neither half touches `runLanPairingAttempt` or its pin machinery. This flow's transport is
+ * the shell's sidecar seam, and its proof of success is the ADR-0025 verify read rather than
+ * a captured certificate.
+ */
+export type DeviceLinkStart = { ok: true; qr?: string } | { ok: false; message: string };
+export type DeviceLinkResult = { ok: true; token: string } | { ok: false; message: string };
+
+/** The nonce the pairing routes demand. Held for the life of one wizard pairing, never persisted. */
+let deviceLinkNonce: string | undefined;
+
+/** Read a JSON body defensively — the helper is ours, but this is still a process boundary. */
+function readSidecarJson(body: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Start the helper and get a QR to render.
+ *
+ * An unreachable helper is a NAMED failure, never "still waiting": waiting on something that
+ * will never answer is the wizard hanging forever on a case the user could fix in seconds if
+ * anyone told them about it.
+ */
+export async function beginDeviceLink(): Promise<DeviceLinkStart> {
+  const platform = getPlatform();
+  if (
+    platform.sidecarCtl === undefined ||
+    platform.sidecarFetch === undefined ||
+    platform.sidecarWizardFetch === undefined
+  ) {
+    return { ok: false, message: 'linking WhatsApp needs the desktop app' };
+  }
+  const wizardFetch = platform.sidecarWizardFetch;
+  let nonce: string | undefined;
+  try {
+    const status = await platform.sidecarCtl('start');
+    nonce = status.nonce;
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'the WhatsApp helper could not be started',
+    };
+  }
+  if (nonce === undefined) {
+    return { ok: false, message: 'the WhatsApp helper started without a setup key — try again' };
+  }
+  deviceLinkNonce = nonce;
+  try {
+    await wizardFetch('POST', '/pair/start');
+    const qrResponse = await wizardFetch('GET', '/pair/qr');
+    const qr = readSidecarJson(qrResponse.body)['qr'];
+    return typeof qr === 'string' ? { ok: true, qr } : { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'the WhatsApp helper stopped answering',
+    };
+  }
+}
+
+/**
+ * Poll for the link, then PROVE it before handing back anything to store.
+ *
+ * THE ORDER IS THE PROPERTY (ADR-0025 §1-2, the same discipline the LAN pairing follows): a
+ * mint returning is not evidence the credential works. The verify read runs first, and only
+ * a passing verify produces a token for the caller to persist — so a wizard can never claim
+ * "connected" on the strength of a mint alone.
+ *
+ * A `linked` report carrying NO token is a failure, not a success: recording an empty
+ * credential produces a connection that fails on its first real use, at which point the
+ * cause is far away from here.
+ */
+export async function completeDeviceLink(): Promise<DeviceLinkResult> {
+  const platform = getPlatform();
+  if (platform.sidecarWizardFetch === undefined) {
+    return { ok: false, message: 'linking WhatsApp needs the desktop app' };
+  }
+  const wizardFetch = platform.sidecarWizardFetch;
+  let token: string | undefined;
+  try {
+    const status = await wizardFetch('GET', '/pair/status');
+    const body = readSidecarJson(status.body);
+    if (body['state'] !== 'linked') {
+      return { ok: false, message: 'waiting for the code to be scanned' };
+    }
+    const minted = body['token'];
+    if (typeof minted !== 'string' || minted.length === 0) {
+      return { ok: false, message: 'the helper reported a link but handed back no key — try linking again' };
+    }
+    token = minted;
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'the WhatsApp helper stopped answering',
+    };
+  }
+
+  // THE VERIFY READ, BEFORE the caller is given anything durable to write.
+  try {
+    const verified = await wizardFetch('GET', '/session/status');
+    if (verified.status < 200 || verified.status >= 300) {
+      return {
+        ok: false,
+        message: "we could not confirm the link, so nothing has been saved — try linking again",
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      message: "we could not confirm the link, so nothing has been saved — try linking again",
+    };
+  }
+  deviceLinkNonce = undefined;
+
+  // THE MINT LANDS HERE, not in the caller.
+  //
+  // Returning the token and trusting a UI callback to store it is what shipped, and the
+  // callback only set a local boolean — so the row stayed credential-less and the wizard
+  // fell through to the generic credentials screen, asking the user to type a secret that
+  // only the helper can produce. `runLanPairingAttempt` already had the right shape: the
+  // minted secret and the connection state are written TOGETHER, by the function that did
+  // the proving, so there is no window in which a verified link is not a stored one.
+  const session = connectionWizardStore.get();
+  if (session === null) return { ok: false, message: 'the wizard session changed' };
+  const db = await getUserDb();
+  if (connectionWizardStore.get() !== session) return { ok: false, message: 'the wizard session changed' };
+
+  const requirement = db.getConnection(session.appId, session.slot)?.requirement;
+  const secretField = linkedDeviceSecretField(requirement);
+  if (secretField === undefined) {
+    return { ok: false, message: 'this connection does not declare where to keep the helper key' };
+  }
+
+  db.setSecret(authConnectionCredentialSecretKey(session.appId, session.slot, secretField), token);
+  await slotCredentialStore(db, session.slot).setConnectionState(session.appId, {
+    status: 'connected',
+    // ADR-0025's marker, and the same rule the LAN twin follows: only the verify above may
+    // write it, and it describes the key now in the store — never an earlier one.
+    linkVerifiedAt: Date.now(),
+  });
+  invalidateNetGrants(session.appId);
+  bumpRevision();
+  // AND MOVE THE WIZARD ON, session-scoped like the LAN twin's identical line: an await sits
+  // between the guard above and here, so steering the step store unconditionally would steer
+  // whatever wizard happens to be open now.
+  //
+  // Storing the token without this was the SECOND half of the same bug: `linkNeedsPairing`
+  // goes false the moment the link verifies, and with the step still `credentials` (or
+  // `register`) the branch chain drops the user onto the generic credentials screen — a text
+  // box for a secret only the helper can mint.
+  if (connectionWizardStore.get() === session) connectionWizardStepStore.set('done');
+  return { ok: true, token };
+}
+
+/**
+ * Where a linked-device row keeps its minted key.
+ *
+ * Read from the REQUIREMENT rather than hardcoded, so a second linked-device provider does
+ * not need this function edited — and so a row that declares no secret field fails with a
+ * named message instead of writing to a key nothing injects from.
+ */
+function linkedDeviceSecretField(requirement: ConnectionRequirement | undefined): string | undefined {
+  if (requirement === undefined || !isLinkedDeviceRequirement(requirement)) return undefined;
+  const secret = (requirement.fields ?? []).find((field) => field.type === 'secret');
+  return secret?.key;
 }
 
 async function runLanPairingAttempt(): Promise<LanPairingOutcome> {
@@ -1208,7 +1422,19 @@ export function lanPairingExchangeFor(
   // the entry through the brand-adjacent rung, which is how the row got its
   // pinned template — so the wizard must ask the same question the same way, or
   // it would pair using an exchange from an entry the row did not borrow from.
-  return resolveRegistryEntryByName(requirement!.provider.name)?.entry.pairing;
+  const pairing = resolveRegistryEntryByName(requirement!.provider.name)?.entry.pairing;
+  // THE VARIANT NARROWING (ADR-0032). The pairing seat became a discriminated union when
+  // `device-link` joined it, and this function feeds the LAN pairing path — which fires an
+  // uncredentialed POST at a device on the user's network and then REQUIRES a 64-hex TLS
+  // certificate pin. A device-link seat describes something else entirely (start → QR →
+  // poll, over a transport with no certificate), so handing one to that path could only
+  // fail, and would fail deep inside pairing rather than here.
+  //
+  // `isLanRequirement` above already excludes every `linked_device` row, so this is
+  // belt-and-braces — but it is the belt that is CHECKED BY THE COMPILER, and it keeps the
+  // refusal true if some future requirement carries both a lanHost seat and a device-link
+  // provider. Returning undefined is the honest answer: this row has no LAN exchange.
+  return pairing?.kind === 'exchange' ? pairing : undefined;
 }
 
 // ---------------------------------------------------------------------------

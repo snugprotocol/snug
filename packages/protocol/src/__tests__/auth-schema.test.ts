@@ -77,13 +77,19 @@ const authCodeSpec = {
 // ------------------------------------------------------------------- kinds
 
 describe('AC1 — the five kind literals, pinned verbatim (plan D2)', () => {
-  it('AUTH_KINDS is exactly the five persisted discriminators', () => {
+  it('AUTH_KINDS is exactly the six persisted discriminators', () => {
+    // ORDER AND MEMBERSHIP ARE BOTH PINNED, and this test failing is the intended
+    // tripwire for a kind addition — these are PERSISTED discriminators, so a change here
+    // is a storage-compatibility event, never a refactor. `linked_device` was appended
+    // (never inserted) by TASK-20260816/ADR-0032: appending keeps every existing literal
+    // at its own index, so no stored row's kind can be re-read as a different kind.
     expect([...AUTH_KINDS]).toEqual([
       'api_key',
       'bearer_token',
       'basic_auth',
       'oauth2_client_creds',
       'oauth2_auth_code',
+      'linked_device',
     ]);
   });
 

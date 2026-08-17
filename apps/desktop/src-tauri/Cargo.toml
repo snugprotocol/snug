@@ -39,6 +39,15 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 sha2 = "0.10"
 url = "2"
 futures-util = "0.3"
+# ---- `sidecar_fetch` (ADR-0032 §4) --------------------------------------
+# The unix-socket transport in `sidecar.rs` is PRODUCTION code, not a test
+# helper: `send_over_unix_socket` hand-rolls its HTTP/1.1 exchange so the
+# response cap can be enforced WHILE READING. It therefore needs `net`
+# (UnixStream) and `io-util` (AsyncReadExt/AsyncWriteExt) as real dependencies.
+# These features previously rode in under [dev-dependencies] only, which left
+# `cargo check --lib` — and every release build — unable to compile the crate
+# while `cargo test` was never run to notice.
+tokio = { version = "1", default-features = false, features = ["net", "io-util"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -46,5 +55,9 @@ tempfile = "3"
 # the host-class check refuses loopback, so a 127.0.0.1 stub server cannot reach
 # this path — the verifier is fed a real DER certificate directly instead.
 rcgen = "0.13"
+# The TEST-only half of tokio: `#[tokio::test]` needs the macro and a runtime to
+# drive it. The transport features (`net`, `io-util`) are declared in
+# [dependencies] above, where the production code that uses them lives — cargo
+# unions the two sets, so each section states only why IT needs tokio.
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 http = "1"

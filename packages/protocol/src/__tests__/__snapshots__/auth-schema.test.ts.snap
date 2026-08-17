@@ -8,6 +8,7 @@ exports[`AC1 — auth schemas stay OUT of the published export set (plan D1) > l
     "basic_auth",
     "oauth2_client_creds",
     "oauth2_auth_code",
+    "linked_device",
   ],
   "samples": [
     {

@@ -62,6 +62,20 @@ export {
   type SessionConfirmGate,
 } from './session-confirm.js';
 
+// ADR-0033. Deliberately a SEPARATE gate that WRAPS the one above rather than a widening of
+// it: a `(appId, host, method)` key cannot tell one chat thread from another, and every
+// armed send is a POST to the same host. See standing-approval.ts's header for the rest.
+export {
+  createStandingApprovalGate,
+  type StandingApprovalGate,
+  type StandingApprovalGateDeps,
+  type StandingApprovalStore,
+  type StandingConfirmRequest,
+  type StandingDecision,
+  type StandingGrant,
+  type StandingOutcome,
+} from './standing-approval.js';
+
 export {
   UserDbCredentialStore,
   type AuthConnectionState,

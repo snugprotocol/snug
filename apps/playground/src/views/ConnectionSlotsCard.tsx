@@ -65,6 +65,8 @@ function kindCopy(row: ConnectionRow): string {
       return 'secret token';
     case 'api_key':
       return 'API keys';
+    case 'linked_device':
+      return 'linked device';
     case 'none':
       return 'no credentials';
   }

@@ -58,6 +58,21 @@ export interface AuthConnectionState {
    * of needing a data migration.
    */
   lanVerifiedAt?: number;
+  /**
+   * Epoch ms when the ADR-0025 verify read last PROVED a LINKED-DEVICE credential against
+   * the helper (ADR-0032). The `lanVerifiedAt` twin, for the family that has no TLS pin.
+   *
+   * Its own field rather than a shared one, because the two describe different proofs about
+   * different transports: a LAN row's marker says a pinned certificate answered, this one
+   * says a unix-socket helper accepted the minted key. Collapsing them would let a stale
+   * marker from one family vouch for the other.
+   *
+   * Written by the wizard's verify step and NOTHING else, and only ever describing the key
+   * now in the store. Its absence on a `connected` linked-device row means nothing proved
+   * that link, so the wizard treats pairing as still owed — the same self-repair the LAN
+   * rows get, rather than a data migration.
+   */
+  linkVerifiedAt?: number;
 }
 
 /** The secrets quartet — the structural slice of UserDb the store consumes. */

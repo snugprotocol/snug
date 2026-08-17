@@ -29,8 +29,17 @@ import { z } from 'zod';
 // ------------------------------------------------------------------ constants
 
 /**
- * The five kind literals, pinned verbatim (plan D2). These are PERSISTED
+ * The kind literals, pinned verbatim (plan D2). These are PERSISTED
  * discriminators shared with AL-03/AL-04 — never retype them.
+ *
+ * `linked_device` (ADR-0032, TASK-20260816) is the sixth: a provider that authenticates a
+ * DEVICE rather than a request. The user links a companion device (WhatsApp's QR scan) and
+ * the long-lived provider session — Signal/noise key material — is held by a local sidecar
+ * process, never by the host. What the host stores is a sidecar ACCESS TOKEN minted once at
+ * pairing, so at the injection boundary this kind behaves like `api_key` (one secret field,
+ * one header template) while its provider-side flow is neither a typed key nor an OAuth
+ * redirect. The custody split is the point: C1 holds because the credential the host can
+ * see is not the credential that would let anyone impersonate the user's WhatsApp.
  */
 export const AUTH_KINDS = [
   'api_key',
@@ -38,6 +47,7 @@ export const AUTH_KINDS = [
   'basic_auth',
   'oauth2_client_creds',
   'oauth2_auth_code',
+  'linked_device',
 ] as const;
 
 export type AuthKind = (typeof AUTH_KINDS)[number];

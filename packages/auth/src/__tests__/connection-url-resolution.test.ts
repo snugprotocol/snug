@@ -250,6 +250,39 @@ describe('ADR-0026 §2 — resolution translates, the pipeline gates', () => {
 
 // ----------------------------------------------------- the disclosure boundary
 
+/**
+ * ADR-0033's standing gate keys on the connection SLOT, and the slot only exists on this
+ * symbolic path — an absolute-URL request has none, which is exactly what keeps a standing
+ * grant off the wizard's probe. `confirm-seat-scope.test.ts` pins the absent case; the
+ * present case has to be pinned HERE, because this file owns the symbolic harness. Without
+ * this test a broken `slot` wire would look like "the probe is correctly excluded" — every
+ * negative would stay green while arming silently never matched anything.
+ */
+describe('ADR-0033 — the confirm seat learns the slot on the symbolic path', () => {
+  it('a symbolic mutating request carries its slot AND its body to the confirm gate', async () => {
+    const { executor, confirm } = harness();
+    await executor.execute(APP, {
+      url: 'snug-connection://files/v1.0/me/drive/items',
+      method: 'POST',
+      body: JSON.stringify({ text: 'hi' }),
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm.mock.calls[0]![0]).toMatchObject({
+      slot: 'files',
+      body: JSON.stringify({ text: 'hi' }),
+      method: 'POST',
+    });
+  });
+
+  it('the host handed to the confirm gate is the RESOLVED one, not the symbolic spelling', async () => {
+    // The gate decides about a real destination; `snug-connection` is not a host.
+    const { executor, confirm } = harness();
+    await executor.execute(APP, { url: 'snug-connection://files/v1.0/me/drive/items', method: 'POST', body: '{}' });
+    expect(confirm.mock.calls[0]![0]!.host).not.toContain('snug-connection');
+  });
+});
+
 describe('ADR-0026 §3 — the resolved host never reaches the APP', () => {
   it('on WEB (no transport policy) a symbolic LAN request refuses NET_SSRF_BLOCKED with a HOST-CLEAN message', async () => {
     const { executor } = harness({ desktop: false });

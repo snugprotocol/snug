@@ -16,6 +16,12 @@ mod gate;
 /// (host class, pin, redirect policy, size cap) is enforced here in Rust.
 mod lanfetch;
 mod openfile;
+/// The WhatsApp helper's transport (ADR-0032). Ships in RELEASE for the same reason
+/// `lanfetch` does: it is a production capability whose guards — method, path, traversal,
+/// size cap — are all Rust-side and unconditional. It reaches a UNIX SOCKET this module
+/// names, never a host or a port the webview supplies, so no loopback address ever enters
+/// a connection's frozen ceiling.
+mod sidecar;
 mod userfile;
 
 use openfile::OpenedFiles;
@@ -97,7 +103,14 @@ pub fn run() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(OpenedFiles::default());
+        .manage(OpenedFiles::default())
+        // WITHOUT THIS, both sidecar commands fail at the IPC boundary before their bodies
+        // run: Tauri resolves `tauri::State<'_, SidecarState>` from managed state, and an
+        // unregistered type is an invoke error, not a command error. That is exactly what
+        // shipped — the commands were written, unit-tested and registered in the handler
+        // list, and every one of those signals stayed green while the helper could never be
+        // started. `state_registration_tests` in sidecar.rs now pins it.
+        .manage(sidecar::SidecarState::default());
     // The gate commands exist in DEBUG builds only (P4/AC7). The handler list
     // is duplicated under cfg rather than stubbed: a release binary must not
     // contain the command names even as registered no-ops.
@@ -108,6 +121,9 @@ pub fn run() {
         openfile::read_opened_file,
         exportfile::export_user_bytes,
         lanfetch::lan_fetch,
+        sidecar::sidecar_ctl,
+        sidecar::sidecar_fetch,
+        sidecar::sidecar_wizard_fetch,
         pending_opened_files,
         close_flush_done,
         gate::shell_gate_config,
@@ -124,6 +140,11 @@ pub fn run() {
         // production capability (ADR-0023 D3). Its guards are Rust-side and
         // unconditional; there is no strictness knob to leave off.
         lanfetch::lan_fetch,
+        // Ships in RELEASE for the same reason `lan_fetch` does: a production
+        // capability whose guards are Rust-side and unconditional (ADR-0032).
+        sidecar::sidecar_ctl,
+        sidecar::sidecar_fetch,
+        sidecar::sidecar_wizard_fetch,
         pending_opened_files,
         close_flush_done,
     ]);

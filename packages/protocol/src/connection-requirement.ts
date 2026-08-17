@@ -547,6 +547,51 @@ export const connectionRequirementSchema = z
       }
     }
 
+    // `linked_device` COHERENCE (ADR-0032, TASK-20260816). Stated BEFORE the `none` arm
+    // below because that arm ends in an early return.
+    //
+    // The kind's credential is a sidecar access token MINTED at pairing — like Hue's
+    // application key, the user never types it, but it must still have a named slot for
+    // `snug_secrets` to hold and for the header template to reference. A row with no field
+    // has nothing for pairing to fill and nothing for the executor to inject; it would
+    // parse cleanly and then fail mid-send, after the user armed auto-reply. That is the
+    // worst possible moment to discover an incoherent row, so it fails closed here.
+    //
+    // Endpoints are refused because a device link is not an authorization-code flow: it
+    // never redirects, and `refreshUrl` unions into the DERIVED CEILING
+    // (`deriveConnectionAllowedHosts` below), so tolerating them would let a kind that
+    // cannot use them widen the wall that contains it.
+    //
+    // A `lanHost` seat is refused for the reason ADR-0032 §4 records: `isLanRequirement`
+    // keys on the seat's mere presence, so carrying one would route this row into the LAN
+    // pairing path and its mandatory TLS certificate pin — which a sidecar on a unix socket
+    // can never produce. The sidecar is reached as a capability, not as a host.
+    if (requirement.kind === 'linked_device') {
+      if (requirement.fields === undefined || requirement.fields.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['fields'],
+          message:
+            "kind 'linked_device' stores a minted session token, so it must declare exactly the field that token fills",
+        });
+      }
+      if (requirement.endpoints !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['endpoints'],
+          message: "kind 'linked_device' never redirects, so it must carry no OAuth endpoints",
+        });
+      }
+      if (requirement.lanHost !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['lanHost'],
+          message:
+            "kind 'linked_device' is reached as a capability, not as a network host — it must carry no lanHost seat (ADR-0032)",
+        });
+      }
+    }
+
     // `none` COHERENCE (Q6). A keyless kind that declares credential seats is not a
     // loose shape, it is an incoherent one: there is nothing for the wizard to collect
     // and nothing for the executor to inject, so a half-formed row would reach the

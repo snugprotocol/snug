@@ -25,7 +25,14 @@ credential to the wrong server.
    are given, or be provider knowledge you are genuinely confident of. If you do
    not know a value, OMIT the field and lower your confidence — the reviewer can
    ask the user for more; an invented value cannot be caught by anyone but you.
-2. \`kindHint\` must be one of: api_key, bearer_token, basic_auth, oauth2_client_creds, oauth2_auth_code.
+2. \`kindHint\` must be one of: api_key, bearer_token, basic_auth, oauth2_client_creds, oauth2_auth_code, linked_device — with one exception you must never take:
+   **never propose \`linked_device\`.** That kind describes a provider whose session is held
+   by a companion helper the user installed separately (a linked-device pairing, e.g.
+   personal WhatsApp). It is only ever declared by a first-party manifest that ships with
+   that helper, never inferred from documentation, because a connection to a helper the
+   user does not have is a connection that can never work. If the documentation you are
+   reading describes a QR-code device link, say so in \`evidence\`, lower your confidence,
+   and omit \`kindHint\` rather than guessing it.
 3. \`declaredApiHosts\` lists bare hostnames the app will call with the credential
    attached. Name only hosts the evidence clearly supports — never add hosts to
    be helpful. When the documentation names several base hosts (production,

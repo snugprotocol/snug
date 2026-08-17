@@ -65,7 +65,10 @@ fn pick_home(
         .ok_or_else(|| "no home directory".to_string())
 }
 
-fn snug_dir() -> Result<PathBuf, String> {
+/// `~/Snug`. `pub(crate)` since ADR-0032: the sidecar module places its unix socket in the
+/// same directory, and re-deriving the path there would be a second spelling of a rule this
+/// function already owns (and the one place a Windows-ordering bug already shipped once).
+pub(crate) fn snug_dir() -> Result<PathBuf, String> {
     pick_home(
         std::env::var_os("HOME"),
         std::env::var_os("USERPROFILE"),

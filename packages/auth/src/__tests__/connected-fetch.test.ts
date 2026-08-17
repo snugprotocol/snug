@@ -555,7 +555,19 @@ describe('gate 6 — mutating-method confirm gate (open Q1)', () => {
     const reads = vi.spyOn(quartet, 'getSecret');
     const result = await executor.execute(APP, { url: 'https://api.example.com/items', method: 'POST', body: '{}' });
     expect(result).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_CONFIRM_DENIED });
-    expect(confirm).toHaveBeenCalledWith({ appId: APP, host: 'api.example.com', method: 'POST', url: 'https://api.example.com/items' });
+    // EXACT equality, deliberately kept exact (TASK-20260816-whatsapp-twin): the seat gained
+    // `body` for ADR-0033's standing gate, and `slot` on the symbolic path. Loosening this to
+    // `objectContaining` would stop pinning what the executor hands its confirm gate, which
+    // is a C1-adjacent seat — a future field arriving here unnoticed is exactly what this
+    // assertion exists to prevent. `slot` is absent because this URL is absolute, and that
+    // absence is the property keeping standing grants off the wizard's probe path.
+    expect(confirm).toHaveBeenCalledWith({
+      appId: APP,
+      host: 'api.example.com',
+      method: 'POST',
+      url: 'https://api.example.com/items',
+      body: '{}',
+    });
     expect(calls).toHaveLength(0);
     expect(reads).not.toHaveBeenCalled();
   });

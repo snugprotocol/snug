@@ -1,0 +1,18 @@
+{
+  "slot": "whatsapp",
+  "provider": {
+    "name": "WhatsApp"
+  },
+  "kind": "linked_device",
+  "fields": [
+    {
+      "key": "sidecar_token",
+      "label": "Helper access token",
+      "type": "secret",
+      "description": "Created for you when you link your phone — Snug and the helper agree on it during setup. There is nothing to look up."
+    }
+  ],
+  "declaredApiHosts": [
+    "whatsapp.sidecar.localhost"
+  ]
+}

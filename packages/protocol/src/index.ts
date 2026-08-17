@@ -247,3 +247,16 @@ export {
 
 export { buildJsonSchemas } from './json-schemas.js';
 export { CONNECTION_URL_SCHEME, parseConnectionUrl, type ConnectionUrlParse } from './connection-url.js';
+
+// The sidecar HTTP contract (ADR-0032, internal draft — not a published schema). One home
+// for literals shared by the Node sidecar, the Rust admission, the wizard and the app.
+export {
+  APP_REACHABLE_SIDECAR_ROUTES,
+  SIDECAR_AUTH_HEADER,
+  SIDECAR_ROUTES,
+  SIDECAR_SOCKET_BASENAME,
+  SIDECAR_SYMBOLIC_HOST,
+  isAppReachableSidecarRoute,
+  type SidecarMethod,
+  type SidecarRoute,
+} from './sidecar-contract.js';
