@@ -35,6 +35,25 @@ table and held to it by a source-parsing equivalence test.
 Additive — existing callers are byte-identical — and the ABSENCE of `slot` on the
 absolute-URL path is what structurally keeps a standing approval off the wizard's probe.
 
+**Amended 2026-08-17, after the first end-to-end run on hardware** (this entry was written at
+the docs close and two protocol facts landed after it — recorded rather than back-dated):
+
+* `SIDECAR_SYMBOLIC_HOST` (`sidecar-contract.ts`) — the symbolic host a linked-device
+  connection declares, promoted from a literal in the registry entry. Not routable and never
+  dialled (`.localhost` is RFC 6761 reserved; the helper has no TCP endpoint at all): it is an
+  IDENTITY the frozen ceiling can hold, because hosts are the ceiling's unit. The EXECUTOR
+  matches on it to route to the unix-socket transport instead of the network. It became a
+  shared constant precisely because two surfaces depended on the same string and the second
+  spelling sent the app's reads to a DNS resolver while the wizard's identical connection
+  worked.
+* `AuthConnectionState.linkVerifiedAt` (`packages/auth`, the connection-state KV — not a
+  schema column, ADR-0014 custody) — the ADR-0025 verify marker for the linked-device family.
+  Its own field rather than sharing `lanVerifiedAt`: the two describe different proofs about
+  different transports (a pinned certificate answered vs a unix-socket helper accepted the
+  minted key), and collapsing them would let a stale marker from one family vouch for the
+  other. Its absence on a `connected` row means nothing proved that link, so the wizard treats
+  pairing as still owed — self-repair rather than a data migration.
+
 ## 2026-08-15 — INTERNAL DRAFT, not staged for any push — TASK-20260815-provider-chat-lane (ADR-0031)
 **Excluded from every spec push** (chat-intent stays on ADR-0019's publication line:
 internal draft, OUT of `json-schemas.ts` SOURCES — the guard test pins it). Zero schema

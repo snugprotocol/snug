@@ -1485,3 +1485,25 @@ independently tested and green; not one of these was findable without running th
 end to end on real hardware. That is the Gate 6 headline, and it is worth stating as a rule
 rather than an anecdote: **integration seams need a test that drives the real path, and a
 feature is not done when its parts pass — it is done when someone walks it.**
+
+### 2026-08-17 — claude — SESSION CLOSE (Gate 6)
+
+- **Done this session**: the desktop crate build repair (tokio dev-dep), Phase E (the
+  WhatsApp Twin starter), Phase F part 1 (the `StandingApprovalGate`), Phase H (docs close),
+  Phase C.2 (the helper actually runs), and then **eight integration defects** found by the
+  owner walking the real path on real hardware — each one a seam between independently-tested
+  parts. The macOS shell gate was run and is GREEN, including `ipc-sidecar-fetch-refused` in
+  a real WKWebView.
+- **State**: `feat/TASK-20260816-whatsapp-twin`, 33 commits ahead of `main`, working tree
+  clean. Root `turbo run test --force` **23/23, 0 cached**; cargo **79**; macOS gate green.
+  **Owner has confirmed the full journey works end to end on hardware**: link by QR, thread
+  list, analysis, manual reply.
+- **The eight seam defects, in the order they surfaced** (each hidden by the one before it):
+  unmanaged `SidecarState` → the app/wizard door split → the unscannable QR → the dropped
+  minted token → the un-advanced wizard step → the wedged half-linked session store → nothing
+  starting the helper for an app → the token dying with the process. Every part was unit
+  tested and green throughout.
+- **Next step**: PR → review → merge. Phase F part 2 (the arming surface) and the standing
+  grant's persistence are deferred by owner decision and carried in `next-steps.md`.
+- **Open questions**: none blocking. The arming-surface choice (host-rendered control vs a
+  new protocol frame) is scoped in next-steps with both options and their tradeoff.
