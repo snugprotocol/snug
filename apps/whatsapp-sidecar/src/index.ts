@@ -13,7 +13,7 @@
 
 export { createSidecarServer, type SidecarServer, type SidecarServerDeps } from './server.js';
 export { createRouter, SPAWN_NONCE_HEADER, type SidecarRouter } from './router.js';
-export { createMemoryStore, type SidecarStore } from './store.js';
+export { createMemoryStore, createFileStore, type SidecarStore } from './store.js';
 export { createBaileysWaSocket, toWaMessage } from './baileys-socket.js';
 export type { WaChat, WaHistoryState, WaLinkState, WaMessage, WaSocket } from './wa-socket.js';
 
@@ -22,7 +22,7 @@ import { pathToFileURL } from 'node:url';
 import { createBaileysWaSocket } from './baileys-socket.js';
 import { createRouter } from './router.js';
 import { createSidecarServer, type SidecarServer } from './server.js';
-import { createMemoryStore } from './store.js';
+import { createFileStore } from './store.js';
 import { reportAndExit, runCli } from './cli.js';
 
 export interface StartSidecarOptions {
@@ -42,7 +42,10 @@ export interface StartSidecarOptions {
  */
 export async function startSidecar(options: StartSidecarOptions): Promise<SidecarServer> {
   const socket = await createBaileysWaSocket({ authDir: options.authDir });
-  const store = createMemoryStore();
+  // FILE-backed, not memory: the helper is a spawn-supervised child that restarts on demand,
+  // and a token that died with the process meant every restart invalidated the host's stored
+  // copy. It lives beside the session keys, which already persist.
+  const store = createFileStore(options.authDir);
   const router = createRouter({
     socket,
     store,

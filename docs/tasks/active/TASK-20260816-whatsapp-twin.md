@@ -1449,3 +1449,39 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
 - Verified: auth 813 → **821** (6 new transport tests, incl. the non-vacuity case that an
   ordinary host never reaches the sidecar seat); cargo **79**; root `turbo run test --force`
   **23/23, 0 cached**; desktop binary rebuilt.
+
+### 2026-08-17 — claude — two more, both found by the owner walking the path
+
+**(7) Nothing started the helper for an APP.** `sidecarCtl('start')` had exactly ONE caller in
+the whole codebase — `beginDeviceLink`, in the wizard. So the moment linking finished and the
+wizard closed, the spawn-supervised child every app request depends on was gone: the
+connection stored perfectly, approved perfectly, and unusable. The app's "helper is not
+running" was literally true and said nothing about why.
+- Fixed in the TRANSPORT, which is the right seat to answer "who starts it": an app request
+  IS the evidence the helper is wanted, and `sidecar_ctl start` is idempotent by construction
+  (a second call returns the running instance rather than spawning a rival for the socket).
+  Starting it at boot instead would run a live WhatsApp session for users who never open the
+  app. Three tests, including the ordering one — the helper is up BEFORE anything is asked of
+  it — and a named-error case, because "could not start" and "started but did not answer" are
+  different problems with different fixes.
+
+**(8) The access token died with the process that minted it.** With (7) fixed the helper came
+up and answered — and refused the key. The store was `createMemoryStore` in production, so
+every restart minted a fresh secret while the host still held the one from linking. Because
+the helper stops with the app and restarts on demand, "dies with the process" means "invalid
+the moment anything restarts it": the connection could never have worked past the first
+session.
+- Fixed with `createFileStore`, written 0600 at creation (no window where the credential
+  exists world-readable), keeping the no-overwrite rule ACROSS processes, and reporting no
+  token on a corrupt file rather than wedging — that sends the user back through linking,
+  which works. The session keys already persisted; the token is the same class of fact and
+  now lives beside them.
+- Verified: whatsapp-sidecar 45 → **50**; root `turbo run test --force` **23/23, 0 cached**.
+
+**The count is now eight defects in one feature, every one of them a seam.** Unmanaged state,
+the app/wizard door split, the unscannable QR, the dropped token, the un-advanced step, the
+wedged session store, the unstarted helper, the unpersisted token. Each part was
+independently tested and green; not one of these was findable without running the whole path
+end to end on real hardware. That is the Gate 6 headline, and it is worth stating as a rule
+rather than an anecdote: **integration seams need a test that drives the real path, and a
+feature is not done when its parts pass — it is done when someone walks it.**
