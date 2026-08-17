@@ -309,9 +309,18 @@ describe('the linking screen carries its consent copy where the user acts', () =
     const stored = db.getSecret(dbmod.authConnectionCredentialSecretKey(APP, SLOT, 'sidecar_token'));
     expect(stored, 'the minted token is written to the credential store').toBe('minted-token');
 
-    // And the user is never asked to type it: a box for a secret only the helper can produce
-    // is the bug this test exists for.
-    const body = container?.textContent ?? '';
-    expect(body, 'no "helper access token" input is shown').not.toMatch(/Helper access token/i);
+    // AND THE WIZARD MOVES ON. Storing the token was only half the fix: the step was still
+    // `credentials`, so `linkNeedsPairing` going false dropped the user straight onto the
+    // generic credentials screen — a text box for a secret only the helper can produce.
+    //
+    // Asserted on the STEP and on the absence of a text input, not on the phrase "Helper
+    // access token": that phrase is the field's LABEL, and the first version of this test
+    // passed while the box was on screen because the heading reads differently. A test that
+    // can be satisfied by the wrong screen is not a test of this bug.
+    expect(wizard.connectionWizardStepStore.get(), 'the wizard advances to done').toBe('done');
+    expect(
+      container?.querySelector('input[type="password"], input[type="text"]'),
+      'no credential input is rendered — nothing here is typeable',
+    ).toBeNull();
   });
 });

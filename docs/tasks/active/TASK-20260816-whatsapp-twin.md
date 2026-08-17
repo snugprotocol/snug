@@ -1388,3 +1388,27 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
   retry — so the fix for defect four surfaced defect five. Worth stating plainly: a
   partially-completed flow leaves state behind, and every step that writes durable state owes
   an answer to "what happens when the next step never runs".
+
+### 2026-08-17 — claude — the credentials box again: I fixed HALF the bug and my test agreed
+
+- **Owner report**: after the reset the scan worked, and the wizard asked for the helper
+  access token AGAIN — the thing I had claimed to fix. They were right to push back.
+- **Cause**: storing the token was only half of it. `linkNeedsPairing` goes false the moment
+  the link verifies, but the wizard STEP was still `register`/`credentials`, so the branch
+  chain dropped straight onto the generic `CredentialsScreen`. The LAN twin ends with
+  `connectionWizardStepStore.set('done')` and I did not copy that line — the same "the LAN
+  path already had the right shape" finding as the previous entry, in the same function, one
+  line further down.
+- **Why my own test passed while the bug was live, which is the part worth keeping.** It
+  asserted `expect(body).not.toMatch(/Helper access token/i)` — and that phrase is the field's
+  LABEL, while the credentials screen's heading reads differently. So the assertion was
+  satisfied by a screen that was showing the exact box it was written to forbid. **A negative
+  assertion on copy is only as good as the copy it names**; the fix is to assert the STATE
+  (`step === 'done'`) and the STRUCTURE (no `input` rendered), neither of which the wrong
+  screen can satisfy. Re-pointed accordingly, and both mutants — dropping the `setSecret` and
+  dropping the step advance — now die independently.
+- This is the second time in two days a green test of mine covered a live defect (the earlier
+  one: `linkedDeviceWizard.test.ts` asserting a returned token while nothing stored it).
+  Both were assertions about the RIGHT subject at the WRONG altitude — return value instead
+  of persisted state, copy instead of rendered structure.
+- Verified: playground **1123**; root `turbo run test --force` **23/23, 0 cached**.

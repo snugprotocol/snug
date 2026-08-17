@@ -1147,6 +1147,15 @@ export async function completeDeviceLink(): Promise<DeviceLinkResult> {
   });
   invalidateNetGrants(session.appId);
   bumpRevision();
+  // AND MOVE THE WIZARD ON, session-scoped like the LAN twin's identical line: an await sits
+  // between the guard above and here, so steering the step store unconditionally would steer
+  // whatever wizard happens to be open now.
+  //
+  // Storing the token without this was the SECOND half of the same bug: `linkNeedsPairing`
+  // goes false the moment the link verifies, and with the step still `credentials` (or
+  // `register`) the branch chain drops the user onto the generic credentials screen — a text
+  // box for a secret only the helper can mint.
+  if (connectionWizardStore.get() === session) connectionWizardStepStore.set('done');
   return { ok: true, token };
 }
 
