@@ -201,6 +201,16 @@ importers:
         specifier: ^26.0.0
         version: 26.1.2
 
+  apps/whatsapp-sidecar:
+    dependencies:
+      '@snugprotocol/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^26.0.0
+        version: 26.1.2
+
   examples:
     devDependencies:
       '@snugprotocol/protocol':
