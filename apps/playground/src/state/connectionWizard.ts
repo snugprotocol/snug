@@ -1118,7 +1118,49 @@ export async function completeDeviceLink(): Promise<DeviceLinkResult> {
     };
   }
   deviceLinkNonce = undefined;
+
+  // THE MINT LANDS HERE, not in the caller.
+  //
+  // Returning the token and trusting a UI callback to store it is what shipped, and the
+  // callback only set a local boolean — so the row stayed credential-less and the wizard
+  // fell through to the generic credentials screen, asking the user to type a secret that
+  // only the helper can produce. `runLanPairingAttempt` already had the right shape: the
+  // minted secret and the connection state are written TOGETHER, by the function that did
+  // the proving, so there is no window in which a verified link is not a stored one.
+  const session = connectionWizardStore.get();
+  if (session === null) return { ok: false, message: 'the wizard session changed' };
+  const db = await getUserDb();
+  if (connectionWizardStore.get() !== session) return { ok: false, message: 'the wizard session changed' };
+
+  const requirement = db.getConnection(session.appId, session.slot)?.requirement;
+  const secretField = linkedDeviceSecretField(requirement);
+  if (secretField === undefined) {
+    return { ok: false, message: 'this connection does not declare where to keep the helper key' };
+  }
+
+  db.setSecret(authConnectionCredentialSecretKey(session.appId, session.slot, secretField), token);
+  await slotCredentialStore(db, session.slot).setConnectionState(session.appId, {
+    status: 'connected',
+    // ADR-0025's marker, and the same rule the LAN twin follows: only the verify above may
+    // write it, and it describes the key now in the store — never an earlier one.
+    linkVerifiedAt: Date.now(),
+  });
+  invalidateNetGrants(session.appId);
+  bumpRevision();
   return { ok: true, token };
+}
+
+/**
+ * Where a linked-device row keeps its minted key.
+ *
+ * Read from the REQUIREMENT rather than hardcoded, so a second linked-device provider does
+ * not need this function edited — and so a row that declares no secret field fails with a
+ * named message instead of writing to a key nothing injects from.
+ */
+function linkedDeviceSecretField(requirement: ConnectionRequirement | undefined): string | undefined {
+  if (requirement === undefined || !isLinkedDeviceRequirement(requirement)) return undefined;
+  const secret = (requirement.fields ?? []).find((field) => field.type === 'secret');
+  return secret?.key;
 }
 
 async function runLanPairingAttempt(): Promise<LanPairingOutcome> {

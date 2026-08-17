@@ -238,7 +238,18 @@ describe('runDeviceLinkAttempt — start, poll, verify, then record', () => {
     expect(calls).toContain('GET /session/status');
   });
 
-  it('returns the minted token only after the verify read passes', async () => {
+  /**
+   * NOTE (2026-08-17): this suite drives `completeDeviceLink` WITHOUT a wizard session or a
+   * user DB, so it can prove the ORDER of the network calls and nothing about persistence.
+   * That is a real limit and it is stated rather than papered over: the storing half — the
+   * minted token reaching the credential store, which is what stops the wizard asking the
+   * user to type a secret only the helper can produce — is owned by
+   * `linkedDeviceSheet.test.tsx`, which has a real DB behind it.
+   *
+   * Until that test existed, NOTHING asserted the token was stored, and it was not: the
+   * function returned it and the sheet dropped it on the floor.
+   */
+  it('runs the verify read before it hands back a token', async () => {
     const { platform, calls } = scriptedPlatform({
       'POST /pair/start': [{ status: 200, body: { state: 'waiting' } }],
       'GET /pair/status': [{ status: 200, body: { state: 'linked', token: 'minted-token' } }],
@@ -247,10 +258,12 @@ describe('runDeviceLinkAttempt — start, poll, verify, then record', () => {
     const { setPlatform } = await import('../platform/platform.js');
     setPlatform(platform);
     const { completeDeviceLink } = await import('../state/connectionWizard.js');
-    const result = await completeDeviceLink();
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.token).toBe('minted-token');
-    // THE ORDER IS THE PROPERTY: verify runs BEFORE the caller is handed a token to store.
+    await completeDeviceLink();
+    // THE ORDER IS THE PROPERTY, and it is all this altitude can see: the verify read runs
+    // BEFORE anything durable is written. (The call fails at the persistence step here for
+    // want of a session — see the note above; the ordering assertion is unaffected because
+    // both calls happen before it.)
+    expect(calls).toContain('GET /session/status');
     expect(calls.indexOf('GET /session/status')).toBeGreaterThan(calls.indexOf('GET /pair/status'));
   });
 

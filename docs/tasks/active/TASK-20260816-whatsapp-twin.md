@@ -1318,3 +1318,39 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
 - **Verified by round-trip**: encoded a WhatsApp-shaped payload to a module matrix and decoded
   it back — `decoded matches payload: YES`. The encoder's own claim was not taken on trust.
 - Verified: playground 1121 → **1122**; root `turbo run test --force` **23/23, 0 cached**.
+
+### 2026-08-17 — claude — the wizard asked the user to type the minted token
+
+- **Owner report**: the QR scanned, the phone showed the linked device — **the link works** —
+  and the wizard then asked for a "helper access token". There is nowhere to get one: it is
+  minted by the helper and handed back over the socket. A text box for it is unanswerable.
+- **Cause**: `completeDeviceLink` verified the link and RETURNED the token correctly. **Nothing
+  stored it.** The sheet's `onLinked` callback only set a local React boolean, so the row
+  still had no credential; `linkNeedsPairing` went false, the step was still `credentials`,
+  and the branch chain fell through to the generic `CredentialsScreen`.
+- **The LAN twin already had the right shape and it was not copied.** `runLanPairingAttempt`
+  writes the minted secret and the connection state TOGETHER, inside the function that did
+  the proving, so there is no window where a verified pairing is not a stored one. The
+  device-link path returned a value and trusted a UI callback to finish the job. Persistence
+  moved into `completeDeviceLink` accordingly.
+- **A real ADR-0025 gap found on the way**: there was NO verify marker for linked-device rows.
+  `AuthConnectionState` had `lanVerifiedAt` and nothing for this family, so a reopened wizard
+  could not tell a proven link from an unproven one. Added `linkVerifiedAt` as its own field —
+  not a shared one, because the two markers describe different proofs about different
+  transports (a pinned certificate answered vs a unix-socket helper accepted the minted key),
+  and collapsing them would let a stale marker from one family vouch for the other.
+- `linkedDeviceSecretField` reads the field key from the REQUIREMENT rather than hardcoding
+  `sidecar_token`, so a second linked-device provider needs no edit here and a row declaring
+  no secret field fails by name instead of writing to a key nothing injects from.
+- **A test that was measuring less than its name claimed.** `linkedDeviceWizard.test.ts` drives
+  `completeDeviceLink` with no session and no DB, so it can only see call ORDER — it asserted
+  the returned token and was renamed to say what it actually proves, with the limit stated in
+  the file. The storing half now belongs to `linkedDeviceSheet.test.tsx`, which has a real DB.
+  Until that test existed nothing asserted the token was stored, and it was not.
+- Mutation-checked: deleting the `setSecret` line turns the sheet test red.
+- Verified: playground 1122 → **1123**; root `turbo run test --force` **23/23, 0 cached**;
+  cargo **79**.
+- **Fifth defect in this one flow, and the pattern is now unmistakable**: unmanaged state, the
+  app/wizard door split, the unscannable QR, the dropped token — each surfaced only when a
+  human walked the path, and each sat behind a green suite. Every piece was unit-tested; the
+  SEAMS between them were not. Gate 6 should carry this as the task's headline lesson.

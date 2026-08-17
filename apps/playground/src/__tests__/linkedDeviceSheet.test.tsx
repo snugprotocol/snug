@@ -36,7 +36,7 @@ const bareWhatsapp = {
   declaredApiHosts: ['whatsapp.sidecar.localhost'],
 };
 
-function desktopWithSidecar(): SnugPlatform {
+function desktopWithSidecar(opts: { linked?: boolean } = {}): SnugPlatform {
   return {
     kind: 'desktop',
     capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
@@ -47,6 +47,14 @@ function desktopWithSidecar(): SnugPlatform {
     sidecarWizardFetch: async (_method, pathAndQuery) => {
       if (pathAndQuery === '/pair/qr') {
         return { status: 200, body: JSON.stringify({ state: 'waiting', qr: 'QR-PAYLOAD-XYZ' }) };
+      }
+      // `linked` scripts the SCANNED case: the poll mints a token and the verify read
+      // passes. The default stays 'waiting', which is what the screens-and-copy tests want.
+      if (opts.linked === true && pathAndQuery === '/pair/status') {
+        return { status: 200, body: JSON.stringify({ state: 'linked', token: 'minted-token' }) };
+      }
+      if (opts.linked === true && pathAndQuery === '/session/status') {
+        return { status: 200, body: JSON.stringify({ state: 'linked' }) };
       }
       return { status: 200, body: JSON.stringify({ state: 'waiting' }) };
     },
@@ -250,5 +258,60 @@ describe('the linking screen carries its consent copy where the user acts', () =
 
     // And the raw payload must NOT be dumped as text beside it — that was the bug.
     expect(qr?.textContent ?? '', 'the payload is not printed as a string').not.toContain('2@');
+  });
+
+  /**
+   * THE MINTED TOKEN MUST BE STORED (owner report, 2026-08-17).
+   *
+   * The owner scanned the QR, the phone showed the linked device, and the wizard then asked
+   * them to type a "helper access token" — a value no human has or could obtain: it is minted
+   * by the helper and handed back over the socket.
+   *
+   * `completeDeviceLink` verified the link and RETURNED the token correctly. Nothing stored
+   * it. The sheet's `onLinked` only set a local boolean, so the row still had no credential
+   * and the wizard fell through to the generic credentials screen — a text box for a secret
+   * that cannot be typed. Exactly the failure the LAN screens avoid by minting INTO the store
+   * (`runLanPairingAttempt` writes the secret and the connection state together), which is
+   * the pattern this now follows.
+   */
+  it('stores the minted token and never shows a credentials box for it', async () => {
+    const { db, wizard, Sheet } = await fresh(desktopWithSidecar({ linked: true }));
+    const React = await import('react');
+    await act(async () => {
+      await wizard.openConnectionWizardForApp(APP, 'settings');
+    });
+    await renderNode(React.createElement(Sheet));
+    await act(async () => {
+      await wizard.advanceFromReview();
+    });
+    await settle();
+
+    const startButton = [...document.querySelectorAll('button')].find((b) =>
+      /start linking/i.test(b.textContent ?? ''),
+    );
+    await act(async () => {
+      startButton?.click();
+    });
+    await settle();
+
+    const scanned = [...document.querySelectorAll('button')].find((b) =>
+      /scanned/i.test(b.textContent ?? ''),
+    );
+    expect(scanned, 'the "I\'ve scanned it" control is on screen').toBeDefined();
+    await act(async () => {
+      scanned?.click();
+    });
+    await settle();
+
+    // THE CREDENTIAL LANDED. Read through the same key the executor injects from, so a test
+    // passing here means the connection can actually authenticate.
+    const dbmod = await import('@snugprotocol/db');
+    const stored = db.getSecret(dbmod.authConnectionCredentialSecretKey(APP, SLOT, 'sidecar_token'));
+    expect(stored, 'the minted token is written to the credential store').toBe('minted-token');
+
+    // And the user is never asked to type it: a box for a secret only the helper can produce
+    // is the bug this test exists for.
+    const body = container?.textContent ?? '';
+    expect(body, 'no "helper access token" input is shown').not.toMatch(/Helper access token/i);
   });
 });
