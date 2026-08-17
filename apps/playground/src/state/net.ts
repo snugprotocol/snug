@@ -251,10 +251,30 @@ async function sidecarAppFetch(
   body?: string,
   headers?: Record<string, string>,
 ): Promise<{ status: number; body: string }> {
-  const seat = getPlatform().sidecarFetch;
+  const platform = getPlatform();
+  const seat = platform.sidecarFetch;
   if (seat === undefined) throw new Error('the WhatsApp helper is only reachable from the desktop app');
+
+  // START IT IF IT IS NOT UP.
+  //
+  // The helper is a spawn-supervised child, not a daemon, and until now its ONLY starter was
+  // the wizard's `beginDeviceLink`. So the moment linking finished and the wizard closed, the
+  // process every app request depends on was gone — the connection was perfectly stored and
+  // perfectly unusable.
+  //
+  // The transport is the right place to answer "who starts it": an app request IS the
+  // evidence that the helper is wanted. `sidecar_ctl start` is idempotent by construction (a
+  // second call returns the running instance rather than spawning a rival racing for the same
+  // socket), so calling it per request is cheap and safe. Starting it any earlier — at boot,
+  // say — would run a live WhatsApp session for users who never open the app.
+  if (platform.sidecarCtl !== undefined) {
+    await platform.sidecarCtl('start');
+  }
   return seat(method, pathAndQuery, body, headers);
 }
+
+/** Test seam for the autostart ordering — not part of the app-facing surface. */
+export const __sidecarAppFetchForTests = sidecarAppFetch;
 
 /**
  * The executor deps for ONE app, assembled from the page user DB.
