@@ -1,6 +1,6 @@
 # 0032 — Linked-device connections: the `linked_device` auth kind, loopback sidecar class, and WhatsApp Personal
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260816-whatsapp-twin; accepted at that task's close if the plan survives review)
+- **Status:** accepted (2026-08-17, ships with TASK-20260816-whatsapp-twin; the Gate-2 plan review and a dedicated adversarial review returned five blockers BEFORE implementation, and §4 below is the rewrite that came out of them — the original loopback-class draft was withdrawn as UNSAFE and, as B5 established, literally unstorable. Threat surface: `docs/security/threat-model-delta-whatsapp-sidecar.md`)
 - **Date:** 2026-08-16
 - **Task:** TASK-20260816-whatsapp-twin
 
@@ -37,11 +37,22 @@ user-authored WhatsApp app gets the same wizard (2026-08-16 interview).
    adversarial review returned UNSAFE on the original loopback-class draft; see the task
    file's B1/B3/B5). No `lanHost` class is added and **no loopback host ever enters a frozen
    ceiling**. Reachability is a dedicated Tauri command, `sidecar_fetch`, built on the
-   `lan_fetch` template — enforcing in Rust, before a socket opens: host exactly
-   `127.0.0.1`, port exactly the one `sidecar_ctl` spawned (never webview-supplied), and
-   path within the enumerated contract. `/pair/*` is reachable from the wizard only, never
-   from an app. `isForbiddenNetHost`'s unconditional loopback refusal, `transportPolicy`,
-   and the desktop capability belt are all left untouched.
+   `lan_fetch` template — enforcing in Rust, before a socket opens: METHOD and PATH against
+   the enumerated contract, traversal checked on the DECODED form, and a response cap
+   enforced while reading. `/pair/*` and `/session/*` are reachable from the wizard only,
+   never from an app. `isForbiddenNetHost`'s unconditional loopback refusal,
+   `transportPolicy`, and the desktop capability belt are all left untouched.
+
+   **The transport is a UNIX-DOMAIN SOCKET, not TCP** (owner decision, 2026-08-16, folded in
+   before implementation; the Phase-C "open" item below is thereby closed). The helper
+   listens on `~/Snug/whatsapp-sidecar.sock` at `0600`, created by `sidecar_ctl`. This is
+   strictly stronger than the TCP design AND simpler: there is no port to race for, so port
+   squatting becomes unrepresentable rather than mitigated, and filesystem permissions — not
+   bind order — decide who may connect. Admission needs no host check and no port check
+   because there is no TCP endpoint at all; nothing on the machine's network stack can reach
+   the helper. The spawn nonce survives as defense in depth. Windows: a named pipe with an
+   equivalent DACL is the twin, authored behind the same seam but gated red with the rest of
+   the D8 story (ADR-0021) rather than faked green.
 
    *Why the original draft was wrong, recorded so it is not re-proposed:* the frozen ceiling
    is host-granular with no port dimension (`app-host-freeze.ts:24-27` compares
@@ -78,9 +89,8 @@ user-authored WhatsApp app gets the same wizard (2026-08-16 interview).
   distinct from impersonation — a **third-party-consent residual**: the analysed group
   members never consented and are not Snug users, and under BYOK their messages reach the
   user's configured model provider.
-- Open (Phase C, does not block): a unix-domain socket / named pipe instead of TCP would
-  remove port squatting entirely; the runtime is already desktop-only and spawn-supervised,
-  so nothing requires TCP.
+- ~~Open (Phase C): a unix-domain socket instead of TCP~~ — **DECIDED and shipped** (owner,
+  2026-08-16): UDS, folded into §4 above before any transport code was written.
 - Spec impact stays internal-draft (connection-requirement is outside `schemas/` sources), with
   spec-changelog + staged-draft notes per SPEC_SYNC.
 - The desktop `sidecar_ctl` IPC command joins the C2 gate scope (IPC unreachable from iframes).

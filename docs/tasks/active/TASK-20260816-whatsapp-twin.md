@@ -990,3 +990,50 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
   host surface — the app is the party that benefits from being armed.
 - Next step: owner picks the arming surface, then Phase F part 2 (the chosen surface + the
   activity-journal read-back), then **Phase H**.
+
+### 2026-08-17 — claude — owner decisions + Phase H (docs close)
+
+- **Owner decisions (both recorded, both acted on):**
+  1. **Arming surface DEFERRED to a follow-up.** Twin ships manual Reply only.
+  2. **Standing grants stay IN-MEMORY for v1**, documented as a residual rather than
+     presented as satisfying ADR-0033 §2.
+- **Consequence handled rather than left dangling**: Phase E's arm switch was removed from
+  `examples/whatsapp/app.html`, not merely disabled. A switch that sets a boolean and
+  authorizes nothing is theatre; worse, a control that LOOKS like it granted a standing
+  write approval while the host recorded none tells the user something untrue about what
+  Snug may send in their name. The panel now states what is true — unattended replies are
+  not enabled, here is what will govern them when they are, use `draft a reply` — and the
+  dead `armed`/`setArmed`/`armDisabled` state is gone. App reassembled from source, JSX
+  re-verified, hooks block still byte-identical (the examples gate proves it).
+- Phase H, done:
+  - **ADR-0032 → accepted**, with §4 REWRITTEN to describe what actually shipped: the owner's
+    unix-socket decision had been folded into the task file but §4 still described TCP
+    host+port admission. An accepted ADR describing a design the code does not implement is
+    worse than a proposed one. The Phase-C "open: consider UDS" item is closed as decided.
+  - **ADR-0033 → accepted, with the split stated in the status line itself**: the gate is
+    built and enforced; the arming surface is deferred. Added the in-memory residual and the
+    `slot`/`body` confirm-seat note (the absence of `slot` is what structurally keeps a grant
+    off the wizard's probe — the shared-singleton hazard §3 names, closed by data shape rather
+    than by a check someone could forget).
+  - **Threat delta** `docs/security/threat-model-delta-whatsapp-sidecar.md` — new surface,
+    guards per link, and six accepted-and-unmitigated residuals. The third-party-consent one
+    is called out as the residual a reviewer should weigh most heavily: those people never
+    consented, are not Snug users, and cannot opt out.
+  - **Spec-changelog**: internal-draft entry (zero schema bytes; `connection-requirement` is
+    outside `json-schemas.ts` SOURCES, same line as `lanHost`). Records the `linked_device`
+    kind, the sidecar contract module, and the confirm-seat shape — including that adding a
+    kind changed the inferrer's PROMPT, since `AUTH_KINDS` is injected into it verbatim.
+  - **Code map**: new linked-device capability row; starter row 10 → 11 folders, 5 → 6
+    manifests, examples test count 147 → 188.
+  - **Next-steps**: the arming-surface follow-up added with both options and their tradeoff
+    pre-scoped; the 2026-08-12 BYOK CORS advisory updated (this task built the precedent it
+    anticipated); Twin added to the owner hardware-verification list, ToS warning first.
+  - **Fixed a doc gap found on the way**: `docs/decisions/README.md`'s index stopped at 0029
+    — 0030 and 0031 had never been added either. All four rows added, so the index stops
+    silently under-reporting what exists.
+- Verified: root `turbo run test --force` **23/23, 0 cached**; `cargo check --lib` clean;
+  cargo **64**. Counts at close: protocol 329 · auth 813 · playground 1121 · examples 188 ·
+  whatsapp-sidecar 18 · desktop 124.
+- **Task status: Gate 5 complete for the shipped scope.** What remains is owner-owned, not
+  agent-owned: the macOS hardware gate, the Twin pairing journey, and the deferred arming
+  surface. Recommend `/close-session` next, then the PR.

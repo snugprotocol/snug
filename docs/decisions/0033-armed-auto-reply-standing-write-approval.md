@@ -1,6 +1,14 @@
 # 0033 — Armed auto-reply: the first standing, scoped write approval
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260816-whatsapp-twin; accepted at that task's close if the plan survives review)
+- **Status:** accepted (2026-08-17, ships with TASK-20260816-whatsapp-twin) — **with the gate
+  built and the arming surface deferred.** `createStandingApprovalGate`
+  (`packages/auth/src/standing-approval.ts`) implements and enforces everything below and is
+  wired into the playground's executor; what is NOT shipped is a way for an app to ARM. An
+  app lives in a sandboxed iframe and the frame vocabulary has no seat for a standing
+  approval, so arming would have to be either a new protocol frame (C3 spec-sync) or a
+  host-rendered control. The owner deferred that choice to a follow-up (2026-08-17), and
+  WhatsApp Twin therefore ships manual Reply only, saying so on its own surface rather than
+  offering a switch that authorizes nothing. §3's design is what governs when arming lands.
 - **Date:** 2026-08-16
 - **Task:** TASK-20260816-whatsapp-twin
 
@@ -63,3 +71,13 @@ human approves, the host freezes" needs an answer for approval that happens *ahe
 - Residual (stated in the task's threat delta): mimicked replies are unattended speech in
   the user's name — the activity journal and the tagged-only group default are the honesty
   controls; the social risk is the user's informed choice.
+- **Implementation residual (2026-08-17): the v1 grant store is IN-MEMORY**, so an armed
+  thread does not survive a page reload. §2 wants the grant persisted with the connection.
+  A reload is therefore a disarm — the safe direction to fail, and harmless while arming
+  itself is deferred — but it is not what this ADR specifies and must not be read as done.
+  Persisting it is part of the follow-up that picks the arming surface.
+- **What the gate proved in review, worth keeping**: the confirm seat had to grow optional
+  `slot` and `body` (`NetConfirmRequest`), because a thread is underivable from a URL alone.
+  The ABSENCE of `slot` on the absolute-URL path is what structurally keeps a standing grant
+  off the wizard's probe — the shared-singleton hazard §3 names is closed by the shape of the
+  data rather than by a check that could be forgotten.

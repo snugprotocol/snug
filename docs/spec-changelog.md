@@ -4,6 +4,37 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-17 — INTERNAL DRAFT, not staged for any push — TASK-20260816-whatsapp-twin (ADR-0032/0033)
+**Excluded from every spec push.** `connection-requirement` is outside `json-schemas.ts`
+SOURCES (the same publication line as `lanHost`/ADR-0023), so zero schema bytes changed and
+wire protocol v1 is untouched. No push to `snugprotocol/spec` (needs an explicit ask).
+
+**The `linked_device` auth kind** (ADR-0032 §3). `AUTH_KINDS`
+(`packages/protocol/src/auth-schema.ts`) gains `linked_device` — APPENDED, never inserted,
+so no stored row's kind can be re-read as a different kind — and `CONNECTION_KINDS` inherits
+it by derivation. A coherence arm in the requirement superRefine pins the shape: the kind
+must declare its token field, may carry no OAuth endpoints, and may carry **no `lanHost`
+seat** (a linked-device helper is a capability, not a host — see the ADR for why the
+loopback-class draft was withdrawn as both unsafe and unstorable).
+
+Kinds are a provider-facing vocabulary, so adding one has reach beyond the schema: it
+changed the auth-spec-inferrer's system prompt (`AUTH_KINDS` is injected into it verbatim by
+`render.ts`), which now carries an explicit refusal — the inferrer must never PROPOSE this
+kind, because it needs a companion helper the user installed, so an inferred row would be a
+connection that can never work. Two exhaustive kind switches in user-facing consent copy
+gained honest `linked_device` wording.
+
+**The sidecar HTTP contract** (`packages/protocol/src/sidecar-contract.ts`, new): the closed
+route set, method-pinned, with the app-reachable subset DERIVED from it rather than restated
+— two hand-written lists could drift invisibly until an app reached a route nobody intended.
+`/pair/*` and `/session/*` are wizard-only, and that subset IS the refusal for the cross-app
+token-capture attack. The Rust admission in the desktop shell is generated from the same
+table and held to it by a source-parsing equivalence test.
+
+**Confirm-seat shape** (ADR-0033 §3): `NetConfirmRequest` gains OPTIONAL `slot` and `body`.
+Additive — existing callers are byte-identical — and the ABSENCE of `slot` on the
+absolute-URL path is what structurally keeps a standing approval off the wizard's probe.
+
 ## 2026-08-15 — INTERNAL DRAFT, not staged for any push — TASK-20260815-provider-chat-lane (ADR-0031)
 **Excluded from every spec push** (chat-intent stays on ADR-0019's publication line:
 internal draft, OUT of `json-schemas.ts` SOURCES — the guard test pins it). Zero schema

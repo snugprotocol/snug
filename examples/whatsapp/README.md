@@ -19,10 +19,16 @@ deliberate: the honest answer to "should this app exist" is "only with these".
 authenticates a *device*, not a request. The session lives in a helper process the desktop
 shell spawns and supervises, reached over a unix socket by a purpose-built Rust command
 rather than through the host ceiling, because a locally-spawned helper is a **capability, not
-a host**. Also the first standing, scoped write approval (ADR-0033): arming auto-reply is an
-approval recorded ahead of time, frozen to one thread and one trigger, never a bypass of the
-confirm gate. Plus the usual connected-starter seams: symbolic `snug-connection://` addressing
+a host**. Plus the usual connected-starter seams: symbolic `snug-connection://` addressing
 (ADR-0026), the provider chat lane, and an agent grounded in live data.
+
+**What it does NOT do yet: unattended replies.** Twin drafts, you send. The host-side
+approval gate that unattended sending requires is built and tested (ADR-0033's
+`StandingApprovalGate` — scoped to one thread and one trigger, rate-capped, quiet-hours
+aware, revocable), but an app cannot reach it: arming has to be a standing approval the
+*host* records, and the frames an app may speak have no seat for that. Rather than ship a
+switch that sets a boolean and authorizes nothing, this version says so on the surface and
+offers manual Reply. Picking the arming surface is a follow-up (owner decision, 2026-08-17).
 
 **Complement thesis:** WhatsApp's own app is for *having* the conversation — it is a great
 messenger and Twin does not try to be one. Twin is for *understanding* one: who carries the

@@ -137,7 +137,7 @@
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useEffect, useCallback, useMemo, useRef } = React;
-    
+
     // ============================================================
     // 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
     // ============================================================
@@ -150,17 +150,17 @@
       dbPending: new Map(),  // requestId -> resolve
       netPending: new Map(), // requestId -> resolve
       listeners: new Set(),  // re-render triggers for hooks
-    
+
       post(frame) {
         window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
       },
       notify() { for (const fn of this.listeners) fn(); },
     };
-    
+
     window.addEventListener('message', (event) => {
       const data = event.data;
       if (!data || data.v !== 1) return;
-    
+
       if (data.type === 'snug:host-ready') {
         SnugBridge.instanceId = data.instanceId;
         if (data.theme) SnugBridge.theme = data.theme;
@@ -169,7 +169,7 @@
         SnugBridge.notify();
         return;
       }
-    
+
       if (data.type === 'snug:app-response') {
         const entry = SnugBridge.pending.get(data.requestId);
         if (!entry) return; // unknown or superseded requestId — ignore
@@ -182,7 +182,7 @@
         entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
         return;
       }
-    
+
       if (data.type === 'snug:db-response') {
         const resolve = SnugBridge.dbPending.get(data.requestId);
         if (!resolve) return;
@@ -193,7 +193,7 @@
           : { ok: false, error: data.error });
         return;
       }
-    
+
       if (data.type === 'snug:net-response') {
         const resolve = SnugBridge.netPending.get(data.requestId);
         if (!resolve) return;
@@ -204,7 +204,7 @@
           : { ok: false, error: data.error });
         return;
       }
-    
+
       if (data.type === 'snug:host-event') {
         if (data.event === 'theme-change' && data.data && data.data.theme) {
           SnugBridge.theme = data.data.theme;
@@ -213,7 +213,7 @@
         // Unknown host events MUST be ignored (the protocol is additive).
       }
     });
-    
+
     function snugDbRequest(op, args) {
       return new Promise((resolve) => {
         const requestId = crypto.randomUUID();
@@ -221,7 +221,7 @@
         SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
       });
     }
-    
+
     function snugNetRequest(fields) {
       if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
       return new Promise((resolve) => {
@@ -230,7 +230,7 @@
         SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
       });
     }
-    
+
     // ============================================================
     // 2. useSnugApp (MANDATORY — copy exactly, never edit)
     // ============================================================
@@ -240,7 +240,7 @@
       const [lastResponse, setLastResponse] = useState(null);
       const inFlight = useRef(0);
       const metaRef = useRef(meta);
-    
+
       useEffect(() => {
         const rerender = () => setTick((n) => n + 1);
         SnugBridge.listeners.add(rerender);
@@ -255,7 +255,7 @@
         });
         return () => SnugBridge.listeners.delete(rerender);
       }, []);
-    
+
       const sendMessage = useCallback((action, payload, opts) => {
         if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
         const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
@@ -282,7 +282,7 @@
           });
         });
       }, []);
-    
+
       return {
         isReady: SnugBridge.ready,
         theme: SnugBridge.theme,
@@ -291,7 +291,7 @@
         sendMessage,
       };
     }
-    
+
     // ============================================================
     // 3. usePersistedState (MANDATORY — copy exactly, never edit)
     // Storage is HOST-BROKERED key-value. The sandboxed iframe has a
@@ -303,7 +303,7 @@
       // or the old key's state would overwrite the new key's stored value.
       const [hydratedKey, setHydratedKey] = useState(null);
       const initialRef = useRef(initialValue);
-    
+
       useEffect(() => {
         let cancelled = false;
         const hydrate = async () => {
@@ -333,15 +333,15 @@
         else SnugBridge.listeners.add(onReady);
         return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
       }, [key]);
-    
+
       useEffect(() => {
         if (hydratedKey !== key) return;
         snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
       }, [hydratedKey, key, state]);
-    
+
       return [state, setState];
     }
-    
+
     // ============================================================
     // 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
     // ============================================================
@@ -363,7 +363,7 @@
         },
       }), []);
     }
-    
+
     // ============================================================
     // 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
     // The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
@@ -412,12 +412,12 @@
       text: "string: (kind 'draft') the reply written AS the user; (kind 'translation') the translated text",
       language: "string: (kind 'draft') the language you wrote the draft in",
     };
-    
+
     // ===== ANALYSIS-CORE-BEGIN =====
     // Extracted and tested directly by `examples/whatsapp-analysis.test.mjs`. Everything between
     // these markers is pure: no React, no bridge, no host. Two functions carry consequences that
     // no UI test would catch, so they are exercised against hostile fixtures instead.
-    
+
     /**
      * WhatsApp export line shapes, as WhatsApp actually writes them.
      *
@@ -438,7 +438,7 @@
       new RegExp('^' + BIDI + '\\[(' + DATE + '),\\s*(' + TIME + ')\\]' + BIDI + '\\s*([^:]{1,80}):\\s?([\\s\\S]*)$'),
       new RegExp('^' + BIDI + '(' + DATE + '),\\s*(' + TIME + ')\\s+-\\s+([^:]{1,80}):\\s?([\\s\\S]*)$'),
     ];
-    
+
     /**
      * Lines WhatsApp writes that are NOT messages. Counting these as messages would inflate
      * every per-person statistic and put words in someone's mouth that they never typed.
@@ -460,12 +460,12 @@
       /image omitted|video omitted|audio omitted|sticker omitted|document omitted|GIF omitted/i,
       /^\s*null\s*$/i,
     ];
-    
+
     var isSystemLine = function (text) {
       for (var i = 0; i < SYSTEM_MARKERS.length; i += 1) if (SYSTEM_MARKERS[i].test(text)) return true;
       return false;
     };
-    
+
     /**
      * Parse a WhatsApp `Export chat` .txt into messages.
      *
@@ -481,7 +481,7 @@
       if (typeof raw !== 'string' || raw.length === 0) return out;
       var lines = raw.split(/\r?\n/);
       var current = null;
-    
+
       // A completed message is only pushed once we know no more continuation lines follow.
       var flush = function () {
         if (current === null) return;
@@ -503,12 +503,12 @@
         }
         current = null;
       };
-    
+
       for (var i = 0; i < lines.length; i += 1) {
         var line = lines[i];
         var matched = null;
         for (var p = 0; p < EXPORT_HEADERS.length && matched === null; p += 1) matched = EXPORT_HEADERS[p].exec(line);
-    
+
         if (matched !== null) {
           flush();
           var author = matched[3].trim();
@@ -517,20 +517,20 @@
           current = { author: author, text: body, ts: parseExportStamp(matched[1], matched[2]) };
           continue;
         }
-    
+
         if (current !== null) {
           // A continuation line. Attaching it to its parent is what keeps one multiline message
           // from becoming four, which would silently multiply this person's message count.
           current.text += '\n' + line;
           continue;
         }
-    
+
         if (line.trim().length === 0) continue;
         if (isSystemLine(line)) { out.systemLines += 1; continue; }
         out.unparsedLines += 1;
       }
       flush();
-    
+
       // A header line whose whole body is a system notice ("Messages and calls are…") parses as
       // a message with a system author; count it honestly rather than dropping it silently.
       var kept = [];
@@ -544,7 +544,7 @@
       out.messages = kept;
       return out;
     }
-    
+
     /** Best-effort timestamp. An unparseable stamp yields 0 rather than NaN poisoning every sort. */
     function parseExportStamp(date, time) {
       try {
@@ -574,7 +574,7 @@
         return 0;
       }
     }
-    
+
     /**
      * Anything that identifies a real human being, as a pattern.
      *
@@ -586,7 +586,7 @@
      */
     var JID_PATTERN = /\b[\w.-]+@(?:s\.whatsapp\.net|g\.us|c\.us|lid|broadcast)\b/gi;
     var PHONE_PATTERN = /\+?\d[\d\s().\u00a0-]{6,}\d/g;
-    
+
     /**
      * Build the stable per-thread pseudonym map: real identity -> label.
      *
@@ -616,7 +616,7 @@
       }
       return map;
     }
-    
+
     /**
      * THE NEW-READER SCRUB (AC12 / blocker B4).
      *
@@ -645,7 +645,7 @@
       }
       return out;
     }
-    
+
     /** Replace every identifier in free text: known participants by label, then the primitives. */
     function redactIdentifiers(text, map) {
       var result = text;
@@ -668,11 +668,11 @@
       return result;
     }
     // ===== ANALYSIS-CORE-END =====
-    
+
     // ============================================================
     // 6. YOUR APP — WhatsApp Twin (one thread, read closely, answered in your own voice)
     // ============================================================
-    
+
     // Schema, run once against real sql.js. `persona` holds one row per thread per kind, so a
     // re-analysis replaces rather than accumulates; `translations` is a per-message cache keyed
     // by (thread, message) so a tapped translation is paid for once.
@@ -682,14 +682,14 @@
       'CREATE TABLE IF NOT EXISTS translations (jid TEXT NOT NULL, message_id TEXT NOT NULL, language TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY (jid, message_id, language))',
       'CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, jid TEXT NOT NULL, at TEXT NOT NULL, incoming TEXT, outgoing TEXT NOT NULL, mode TEXT NOT NULL)',
     ];
-    
+
     const parseBody = (body) => {
       if (body == null) return null;
       if (typeof body === 'object') return body;
       if (typeof body === 'string') { try { return JSON.parse(body); } catch (e) { return null; } }
       return null;
     };
-    
+
     // Connection errors, mapped to states the UI can actually explain. A desktop-only connection
     // reached from a browser is the common case and deserves its own words, not "failed".
     const mapNetError = (error) => {
@@ -700,9 +700,9 @@
       if (code === 'HOST_ERROR') return 'loading';
       return 'error';
     };
-    
+
     const LANGUAGES = ['English', 'Hindi', 'Spanish', 'French', 'German', 'Portuguese', 'Arabic', 'Norwegian'];
-    
+
     /** Rough per-message language signal. Script detection only — enough to offer a translation. */
     const looksNonDefault = (text, defaultLanguage) => {
       if (typeof text !== 'string' || text.trim().length === 0) return false;
@@ -710,12 +710,12 @@
       if (defaultLanguage === 'English') return nonLatin;
       return !nonLatin;
     };
-    
+
     const fmtTime = (ts) => {
       if (!ts) return '';
       try { return new Date(ts * 1000).toLocaleString(); } catch (e) { return ''; }
     };
-    
+
     function App() {
       const { isReady, theme, sendMessage } = useSnugApp({
         appId: 'whatsapp-twin',
@@ -726,7 +726,7 @@
       });
       const net = useConnectedFetch();
       const db = useAppDB();
-    
+
       const [ui, setUi] = usePersistedState('whatsapp-twin-ui', {
         tab: 'threads',
         threadJid: null,
@@ -734,7 +734,7 @@
       });
       const tab = ui.tab || 'threads';
       const setTab = (t) => setUi((prev) => ({ ...prev, tab: t }));
-    
+
       const [conn, setConn] = useState('loading');
       const [chats, setChats] = useState([]);
       const [messages, setMessages] = useState([]);
@@ -749,19 +749,18 @@
       const [question, setQuestion] = useState('');
       const [answer, setAnswer] = useState(null);
       const [draft, setDraft] = useState(null);
-      const [armed, setArmed] = useState(false);
       const [activity, setActivity] = useState([]);
       const [translations, setTranslations] = useState({});
-    
+
       useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
-    
+
       const thread = useMemo(
         () => chats.find((c) => c.jid === ui.threadJid) || null,
         [chats, ui.threadJid],
       );
-    
+
       // ---------------------------------------------------------------- data loading
-    
+
       const loadChats = useCallback(async () => {
         const res = await net.fetch('snug-connection://whatsapp/chats');
         if (!res.ok) { setConn(mapNetError(res.error)); return; }
@@ -771,7 +770,7 @@
         setChats((parsed && Array.isArray(parsed.chats) ? parsed.chats : []));
         setConn('ready');
       }, [net]);
-    
+
       const loadThread = useCallback(async (jid) => {
         if (!jid) return;
         setBusy('history');
@@ -784,7 +783,7 @@
           setSync(parsed ? parsed.sync : null);
         } finally { setBusy(''); }
       }, [net]);
-    
+
       const loadPersona = useCallback(async (jid) => {
         try {
           const { rows } = await db.exec('SELECT kind, label, payload FROM persona WHERE jid = ?', [jid]);
@@ -803,14 +802,14 @@
           setVoice(v);
         } catch (e) { setProfiles([]); setDynamics(''); setVoice(null); }
       }, [db]);
-    
+
       const loadActivity = useCallback(async (jid) => {
         try {
           const { rows } = await db.exec('SELECT at, incoming, outgoing, mode FROM activity WHERE jid = ? ORDER BY id DESC LIMIT 40', [jid]);
           setActivity(rows.map((r) => ({ at: r[0], incoming: r[1], outgoing: r[2], mode: r[3] })));
         } catch (e) { setActivity([]); }
       }, [db]);
-    
+
       const loadTranslations = useCallback(async (jid) => {
         try {
           const { rows } = await db.exec('SELECT message_id, text FROM translations WHERE jid = ? AND language = ?', [jid, ui.defaultLanguage]);
@@ -819,7 +818,7 @@
           setTranslations(next);
         } catch (e) { setTranslations({}); }
       }, [db, ui.defaultLanguage]);
-    
+
       useEffect(() => {
         if (!isReady) return;
         let cancelled = false;
@@ -829,7 +828,7 @@
         })();
         return () => { cancelled = true; };
       }, [isReady]); // eslint-disable-line react-hooks/exhaustive-deps
-    
+
       useEffect(() => {
         if (!isReady || !ui.threadJid) return;
         loadThread(ui.threadJid);
@@ -837,9 +836,9 @@
         loadActivity(ui.threadJid);
         loadTranslations(ui.threadJid);
       }, [isReady, ui.threadJid]); // eslint-disable-line react-hooks/exhaustive-deps
-    
+
       // ---------------------------------------------------------------- analysis
-    
+
       // The merge: exported .txt lines plus whatever history sync delivered. Dedup on
       // (author, minute, text) because the two sources describe the same messages differently —
       // one by display name, one by JID — and a duplicated message would double-count its author.
@@ -859,7 +858,7 @@
         merged.sort((a, b) => (a.ts || 0) - (b.ts || 0));
         return merged;
       }, [messages, exportReport]);
-    
+
       const analyse = useCallback(async () => {
         if (!thread || corpus.length === 0) return;
         setBusy('analyse');
@@ -903,7 +902,7 @@
           setTab('persona');
         } finally { setBusy(''); }
       }, [thread, corpus, sendMessage, db, loadPersona]); // eslint-disable-line react-hooks/exhaustive-deps
-    
+
       const stats = useMemo(() => {
         const perAuthor = new Map();
         corpus.forEach((m) => {
@@ -921,7 +920,7 @@
           avgLength: corpus.length ? Math.round(corpus.reduce((n, m) => n + String(m.text || '').length, 0) / corpus.length) : 0,
         };
       }, [corpus]);
-    
+
       const ask = useCallback(async () => {
         const q = question.trim();
         if (q.length === 0 || !thread) return;
@@ -937,9 +936,9 @@
           setAnswer(text.length > 0 ? { text } : { error: 'the model answered off-script — ask again.' });
         } finally { setBusy(''); }
       }, [question, thread, profiles, dynamics, stats, sendMessage]);
-    
+
       // ---------------------------------------------------------------- reply surfaces
-    
+
       const composeDraft = useCallback(async (incoming) => {
         if (!thread) return null;
         const map = buildPseudonymMap({ messages: corpus });
@@ -957,7 +956,7 @@
         if (text.length === 0) return { error: 'the model answered off-script — nothing was drafted.' };
         return { text, language: (result.data && result.data.language) || (voice && voice.language) || ui.defaultLanguage };
       }, [thread, corpus, voice, ui.defaultLanguage, sendMessage]);
-    
+
       const startDraft = useCallback(async () => {
         setBusy('draft');
         setDraft(null);
@@ -967,7 +966,7 @@
           setDraft(result ? Object.assign({ incoming: incoming }, result) : null);
         } finally { setBusy(''); }
       }, [corpus, composeDraft]);
-    
+
       // THE SEND. Every path — manual confirm and armed alike — goes through here, so the
       // journal cannot be bypassed by adding a caller: there is one place that talks to the
       // connection, and it writes the activity row itself.
@@ -992,7 +991,7 @@
         } catch (e) { /* the send happened; a missing journal row must not look like a failed send */ }
         return true;
       }, [thread, net, db, loadActivity]);
-    
+
       const confirmDraft = useCallback(async () => {
         if (!draft || !draft.text) return;
         setBusy('send');
@@ -1001,9 +1000,9 @@
           if (sent) { setDraft(null); setNotice({ tone: 'info', text: 'sent.' }); await loadThread(thread.jid); }
         } finally { setBusy(''); }
       }, [draft, sendReply, loadThread, thread]);
-    
+
       // ---------------------------------------------------------------- translate
-    
+
       const translate = useCallback(async (msg) => {
         if (!thread) return;
         const id = msg.id || String(msg.ts);
@@ -1023,9 +1022,9 @@
           } catch (e) { /* the translation shows; the cache is an optimisation */ }
         } finally { setBusy(''); }
       }, [thread, corpus, ui.defaultLanguage, sendMessage, db]);
-    
+
       // ---------------------------------------------------------------- data dignity
-    
+
       const forgetThread = useCallback(async () => {
         if (!thread) return;
         setBusy('forget');
@@ -1038,14 +1037,13 @@
           await db.exec('DELETE FROM activity WHERE jid = ?', [thread.jid]);
           await db.exec('DELETE FROM threads WHERE jid = ?', [thread.jid]);
           setProfiles([]); setDynamics(''); setVoice(null); setActivity([]); setTranslations({});
-          setArmed(false);
           setExportReport(null);
           setNotice({ tone: 'info', text: 'everything derived from this thread has been deleted.' });
         } catch (e) {
           setNotice({ tone: 'danger', text: 'some of that could not be deleted — try again.' });
         } finally { setBusy(''); }
       }, [thread, db]);
-    
+
       const ingestExport = useCallback(() => {
         const report = parseWhatsAppExport(exportText);
         setExportReport(report);
@@ -1055,32 +1053,30 @@
           setNotice({ tone: 'info', text: report.messages.length + ' messages read from the export.' });
         }
       }, [exportText]);
-    
+
       if (!isReady) return <div className="connecting">warming the mirror…</div>;
-    
-      const armDisabled = !voice || !thread;
-    
+
       return (
         <div className="shell">
           <div className="topbar">
             <h1>WhatsApp Twin</h1>
             <span className="sub">{thread ? (thread.name || thread.jid) : 'one thread, read closely'}</span>
           </div>
-    
+
           <div className="notice warn" style={{ marginTop: 8 }}>
             Linking an automation tool to a personal WhatsApp account is against WhatsApp's terms
             of service, and accounts have been banned for it. Messages you analyse here — including
             other people's — are sent to your configured model provider under your own key.
           </div>
-    
+
           <nav className="tabs" role="tablist" aria-label="Twin surfaces">
             {[['threads', 'threads'], ['persona', 'persona lab'], ['insights', 'insights'], ['reply', 'reply desk'], ['settings', 'settings']].map(([id, label]) => (
               <button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>
             ))}
           </nav>
-    
+
           {notice && <div className={'notice ' + notice.tone} style={{ marginBottom: 12 }}>{notice.text}</div>}
-    
+
           {conn !== 'ready' && conn !== 'loading' && (
             <div className="notice danger" style={{ marginBottom: 12 }}>
               {conn === 'unconnected' && 'this app is not connected to WhatsApp yet — connect it from the connections card.'}
@@ -1090,7 +1086,7 @@
               {conn === 'error' && 'the helper answered with an error.'}
             </div>
           )}
-    
+
           {tab === 'threads' && (
             <section className="surface">
               <div className="panel">
@@ -1119,7 +1115,7 @@
                   ))}
                 </div>
               </div>
-    
+
               {thread && (
                 <div className="panel">
                   <h2>history</h2>
@@ -1135,7 +1131,7 @@
                   <div className="stat"><span>after merge</span><span className="v">{corpus.length}</span></div>
                 </div>
               )}
-    
+
               {thread && (
                 <div className="panel">
                   <h2>add an export (recommended)</h2>
@@ -1159,7 +1155,7 @@
                   </div>
                 </div>
               )}
-    
+
               {thread && (
                 <div className="panel">
                   <div className="spread">
@@ -1176,7 +1172,7 @@
               )}
             </section>
           )}
-    
+
           {tab === 'persona' && (
             <section className="surface">
               {!thread && <div className="panel"><p className="empty">pick a thread first.</p></div>}
@@ -1225,7 +1221,7 @@
               )}
             </section>
           )}
-    
+
           {tab === 'insights' && (
             <section className="surface">
               {!thread && <div className="panel"><p className="empty">pick a thread first.</p></div>}
@@ -1260,7 +1256,7 @@
               )}
             </section>
           )}
-    
+
           {tab === 'reply' && (
             <section className="surface">
               {!thread && <div className="panel"><p className="empty">pick a thread first.</p></div>}
@@ -1294,29 +1290,39 @@
                   )}
                 </div>
               )}
-    
+
               {thread && (
                 <div className="panel">
                   <div className="spread">
                     <h2>auto-reply</h2>
-                    <span className={'chip ' + (armed ? 'on' : 'off')}>{armed ? 'ARMED' : 'off'}</span>
+                    <span className="chip">not available yet</span>
                   </div>
+                  {/*
+                    NO ARM SWITCH HERE, DELIBERATELY (owner decision, 2026-08-17).
+
+                    The host-side approval gate this feature needs is built and enforced
+                    (ADR-0033, `StandingApprovalGate`), but an app cannot reach it: arming has to
+                    be a recorded, scoped approval the HOST holds, and the frame vocabulary an
+                    app can speak has no seat for that. Shipping a switch here would either be
+                    theatre — a control that sets a boolean in this app and authorizes nothing —
+                    or, worse, a control that LOOKS like it granted a standing write approval
+                    while the host never recorded one. Either way the user would be told
+                    something untrue about what Snug may send in their name.
+
+                    So the surface says what is actually true and stops. Manual Reply below is
+                    the shipped path, and it is the honest one anyway: every send is read by the
+                    user first.
+                  */}
                   <p className="hint">
-                    {thread.isGroup
-                      ? 'While armed, Twin replies only to messages that tag you.'
-                      : 'While armed, Twin replies to every new message in this DM.'}
-                    {' '}Arming is a standing approval with a frozen scope: it covers this thread and
-                    this trigger only, and every unattended send is written to the journal below.
-                    Auto-reply runs only while Snug is open.
+                    Unattended replies are not enabled in this version. When they are, arming will
+                    be a standing approval you grant on the connection itself and can see and
+                    revoke there — {thread.isGroup ? 'for this group, only messages that tag you' : 'for this DM, every new message'},
+                    capped, quiet-hours aware, and journaled below. Until then Twin drafts and you
+                    send: use <strong>draft a reply</strong> above.
                   </p>
-                  {armDisabled && <div className="notice warn">analyse the thread first — Twin will not send in a voice it has not learned.</div>}
-                  <div className="row">
-                    <button className="btn primary" onClick={() => setArmed(true)} disabled={armed || armDisabled}>arm auto-reply</button>
-                    <button className="btn danger" onClick={() => setArmed(false)} disabled={!armed}>disarm now</button>
-                  </div>
                 </div>
               )}
-    
+
               {thread && (
                 <div className="panel">
                   <h2>activity journal</h2>
@@ -1333,7 +1339,7 @@
                   </div>
                 </div>
               )}
-    
+
               {thread && messages.length > 0 && (
                 <div className="panel">
                   <h2>recent messages</h2>
@@ -1366,7 +1372,7 @@
               )}
             </section>
           )}
-    
+
           {tab === 'settings' && (
             <section className="surface">
               <div className="panel">
@@ -1396,7 +1402,7 @@
         </div>
       );
     }
-    
+
     ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
 </body>
