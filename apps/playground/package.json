@@ -13,6 +13,7 @@
   "license": "MIT",
   "dependencies": {
     "@mlc-ai/web-llm": "0.2.84",
+    "@paulmillr/qr": "0.3.0",
     "@snugprotocol/adapters": "workspace:*",
     "@snugprotocol/auth": "workspace:*",
     "@snugprotocol/db": "workspace:*",

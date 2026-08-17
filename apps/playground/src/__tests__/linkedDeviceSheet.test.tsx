@@ -203,4 +203,52 @@ describe('the linking screen carries its consent copy where the user acts', () =
     expect(text, 'must say sign-in details never reach Snug').toMatch(/never given to Snug/i);
     expect(text, 'must say the user can unlink from their phone').toMatch(/unlink/i);
   });
+
+  /**
+   * THE QR MUST BE SCANNABLE (owner report, 2026-08-17).
+   *
+   * The first implementation rendered the payload as TEXT in a `<pre>`, with a comment
+   * explaining that "the desktop surface draws it" — a surface that does not exist. The
+   * owner clicked "start linking", saw a long URL, and had nothing to point a phone at.
+   * A pairing flow whose QR cannot be scanned is not a pairing flow.
+   *
+   * These assert the SVG is really there and really encodes something, rather than that some
+   * element exists: an empty or one-module SVG would satisfy a mere presence check while
+   * being just as unscannable as the text was.
+   */
+  it('renders the QR as a scannable SVG, not as a payload string', async () => {
+    const { wizard, Sheet } = await fresh(desktopWithSidecar());
+    const React = await import('react');
+    await act(async () => {
+      await wizard.openConnectionWizardForApp(APP, 'settings');
+    });
+    await renderNode(React.createElement(Sheet));
+    await act(async () => {
+      await wizard.advanceFromReview();
+    });
+    await settle();
+
+    // Click "start linking" — found by its label, since the button carries no testid.
+    const startButton = [...document.querySelectorAll('button')].find((b) =>
+      /start linking/i.test(b.textContent ?? ''),
+    );
+    expect(startButton, 'the start-linking button is on screen').toBeDefined();
+    await act(async () => {
+      startButton?.click();
+    });
+    await settle();
+
+    const qr = testId('linked-device-qr');
+    expect(qr, 'the QR panel is on screen once linking has started').not.toBeNull();
+
+    const svg = qr?.querySelector('svg');
+    expect(svg, 'the QR is drawn as an SVG a camera can read').not.toBeNull();
+    // A real QR for a WhatsApp-sized payload is a large grid. One or two elements would mean
+    // an empty render that still passes a presence check.
+    const modules = svg?.querySelectorAll('rect, path') ?? [];
+    expect(modules.length, 'the SVG carries a real module grid').toBeGreaterThan(1);
+
+    // And the raw payload must NOT be dumped as text beside it — that was the bug.
+    expect(qr?.textContent ?? '', 'the payload is not printed as a string').not.toContain('2@');
+  });
 });

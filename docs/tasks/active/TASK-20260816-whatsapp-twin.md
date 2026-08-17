@@ -1288,3 +1288,33 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
   this task has produced: **a feature assembled from independently-tested parts has not been
   tested until one test drives the whole path** — the sidecar package's own missing entry
   point, the percent-encoded JID, and both of these are the same finding at four altitudes.
+
+### 2026-08-17 — claude — the QR was a payload string, not a QR
+
+- **Owner report**: "start linking" showed a long URL and no scannable code. Correct, and it
+  made the whole flow unusable — a pairing screen whose QR cannot be scanned is not a pairing
+  screen.
+- **Cause**: `LinkedDeviceScreen` rendered the payload as TEXT in a `<pre>`, with a comment
+  claiming the raw value was shown so the component stayed "free of a rendering dependency"
+  and because "the desktop surface draws it". That surface does not exist. **The comment
+  rationalised a placeholder as a design**, which is the most expensive kind of comment: it
+  reads as a decision and stops the next person asking the question. Fourth instance in this
+  task of a comment asserting something about a surface nobody had run.
+- Fixed: inline **SVG**, encoded with `@paulmillr/qr` (zero dependencies; the popular
+  alternative pulls a CLI argument parser and a PNG codec in to draw a grid of squares).
+  Inline rather than an `<img>` because C2 pins `img-src` to `data:`/`blob:` and the CDN
+  allowlist is fixed — and that is the right answer regardless, since posting a live pairing
+  payload to a third-party QR service would hand them the ability to link themselves as the
+  user's device.
+- `encodeQrSvg` never throws: a pairing screen that crashed on an odd payload would take the
+  wizard down mid-flow, so an encode failure degrades to an empty SVG with the retry control
+  still on screen.
+- CSS gives the code a fixed 260px frame with a **white quiet zone in both themes** — QR
+  contrast is defined dark-on-light, and a dark surface behind an unpadded code is precisely
+  what makes scanners fail.
+- Test asserts the SVG exists AND carries a real module grid (>1 element) AND that the raw
+  payload is no longer printed beside it — a bare presence check would pass on an empty SVG,
+  which is exactly as unscannable as the text was.
+- **Verified by round-trip**: encoded a WhatsApp-shaped payload to a module matrix and decoded
+  it back — `decoded matches payload: YES`. The encoder's own claim was not taken on trust.
+- Verified: playground 1121 → **1122**; root `turbo run test --force` **23/23, 0 cached**.

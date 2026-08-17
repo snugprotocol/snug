@@ -102,6 +102,9 @@ importers:
       '@mlc-ai/web-llm':
         specifier: 0.2.84
         version: 0.2.84
+      '@paulmillr/qr':
+        specifier: 0.3.0
+        version: 0.3.0
       '@snugprotocol/adapters':
         specifier: workspace:*
         version: link:../../packages/adapters
@@ -839,6 +842,10 @@ packages:
 
   '@mlc-ai/web-llm@0.2.84':
     resolution: {integrity: sha512-hrOWzK4/nGNmgoRKT8pgVmZZ2oEPpbblIWQOwpqNyvK2dysHw3KVB1gNJOuRcQfKOPhucEhX1NJzXzgMDnwSCQ==}
+
+  '@paulmillr/qr@0.3.0':
+    resolution: {integrity: sha512-3s/cagXuoXTA2gWSfSfJNanNgm2ifmqgoX8WLOs5//3qrIJ3WWHFjqFqCxvYGf46Afwv6PctT9eAOXLDGwp96Q==}
+    deprecated: 'Switch to "qr" (new package name) for security updates: npm install qr'
 
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
@@ -2543,6 +2550,8 @@ snapshots:
   '@mlc-ai/web-llm@0.2.84':
     dependencies:
       loglevel: 1.9.2
+
+  '@paulmillr/qr@0.3.0': {}
 
   '@pinojs/redact@0.4.0': {}
 

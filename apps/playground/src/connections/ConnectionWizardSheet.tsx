@@ -40,6 +40,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 
+import encodeQr from '@paulmillr/qr';
 import { CONNECTION_STATUS, type ConnectionField, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { type ConnectionRow } from '@snugprotocol/db';
 import { lookupWellKnownProvider, resolveRegistryEntryByName } from '@snugprotocol/auth';
@@ -298,6 +299,25 @@ function LinkedDeviceWallScreen({ row, onClose }: { row: ConnectionRow; onClose:
  * the proof before it hands back a token, so a failure here leaves the row exactly as it was
  * rather than half-connected.
  */
+/**
+ * Encode a pairing payload as an SVG QR code.
+ *
+ * `ecc: 'medium'` because a phone camera reads this off a screen at arm's length — plenty of
+ * error correction for a clean display, without inflating the module count for a payload that
+ * is already ~280 characters.
+ *
+ * NEVER THROWS. A pairing screen that crashed on an unexpected payload would take the whole
+ * wizard down at the one moment the user is mid-flow; a visible "could not draw" beats a
+ * blank sheet, and the caller still shows the retry control.
+ */
+function encodeQrSvg(payload: string): string {
+  try {
+    return encodeQr(payload, 'svg', { ecc: 'medium', border: 2 });
+  } catch {
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" aria-hidden="true"></svg>';
+  }
+}
+
 function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: () => void }): ReactElement {
   const provider = row.requirement.provider.name;
   const [qr, setQr] = useState<string | undefined>(undefined);
@@ -354,13 +374,30 @@ function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: (
         <>
           <span className="hint">{instruction}</span>
           {/*
-            The QR payload is rendered as TEXT, not as an image built here: it is a value the
-            helper produced, and the desktop surface draws it. Showing the raw payload keeps
-            this component free of a rendering dependency and keeps the value inspectable.
+            DRAWN AS AN SVG, because a QR the user cannot point a phone at is not a QR.
+
+            This replaced a `<pre>` holding the raw payload, whose comment claimed "the
+            desktop surface draws it" — a surface that never existed. The owner clicked
+            "start linking", got a long URL, and had nothing to scan (2026-08-17).
+
+            Inline SVG rather than an <img>: C2 pins `img-src` to `data:`/`blob:` only and the
+            CDN allowlist is fixed, so a remote QR service is out by construction — which is
+            the right answer anyway, since shipping a live pairing payload to a third party
+            would hand them the ability to link themselves as the user's device.
+
+            `@paulmillr/qr` is a zero-dependency encoder; the alternative on npm pulls in a
+            CLI argument parser and a PNG codec to draw a grid of squares.
           */}
-          <pre className="code" data-testid="linked-device-qr">
-            {qr}
-          </pre>
+          <div
+            className="qr-frame"
+            data-testid="linked-device-qr"
+            aria-label="QR code — scan this with your phone"
+            role="img"
+            // The encoder returns a complete SVG document for a value THIS process just
+            // received from a helper it started. It is not user input and never crosses an
+            // app boundary; `svg` is markup by definition, so there is nothing to escape.
+            dangerouslySetInnerHTML={{ __html: encodeQrSvg(qr) }}
+          />
           <Button variant="primary" disabled={busy} onClick={() => void finish()}>
             {busy ? 'checking…' : "I've scanned it"}
           </Button>
