@@ -1104,3 +1104,63 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
 - Next step: owner decides whether to commission Phase C.2 now or land the PR with the
   helper explicitly marked unimplemented. **Nothing about the pairing journey should be
   described as testable until C.2 exists.**
+
+### 2026-08-17 — claude — Phase C.2: the helper is real and RUNS (owner commissioned it)
+
+- Done: `src/server.ts` (unix-socket HTTP), `src/baileys-socket.ts` (the real `WaSocket`),
+  `src/index.ts` + `src/cli.ts` (entry points), `install-helper.mjs`, and the
+  `baileys@7.0.0-rc14` pin. Sidecar tests 18 → **40**.
+- **API re-verified from the published tarball, not from the earlier journal's claim.**
+  `7.0.0-rc14` resolves `libsignal` from the REGISTRY (`^6.0.0`), which was the whole reason
+  for the pin over the 6.x git-URL line. Confirmed present: `makeWASocket` default export,
+  `useMultiFileAuthState`, `connection.update.qr`, `messages.upsert`,
+  `messaging-history.set`, and — the one this design leans on —
+  `messaging-history.status.explicit`, documented in the .d.ts as *"progress === 100 was
+  received from the server. when false, completion was inferred via timeout"*. Also found
+  `sendMessage` returns `WAMessage | undefined`, so the adapter REFUSES on an undefined
+  return rather than reporting a send that never happened.
+- **THREE bugs that only a running process could reveal.** All three had green suites above
+  them, and all three are the same lesson in different clothes: every layer individually
+  correct, the seam between them never exercised.
+  1. **Percent-encoded JIDs resolved to nothing.** The starter builds
+     `/chats/${encodeURIComponent(jid)}/messages`; the Rust side decodes only to REASON about
+     traversal and deliberately forwards the ORIGINAL path (decoding before forwarding would
+     let `%2f` smuggle a separator); and the router split segments WITHOUT decoding. So the
+     app asked for `a%40s.whatsapp.net`, the router looked that up literally, found nothing,
+     and returned a perfectly well-formed 404. Nothing was red. Fixed in the router (the seat
+     that owes it), decoding PER SEGMENT after splitting so an encoded separator can never
+     introduce a segment, and refusing an undecodable segment rather than falling back to raw
+     bytes. Three tests, one of them the malformed-escape refusal.
+  2. **Socket paths silently truncate.** `sun_path` is ~104 bytes and node does not reject a
+     longer path — it TRUNCATES, binds, and reports success. The first live run created a
+     socket literally named `w`, then failed `chmod` on the intended path. The unit tests
+     could never have caught it: `mkdtemp` paths are short. Now refused up front with a named
+     error. (`~/Snug/whatsapp-sidecar.sock` is 39 bytes, so production had room; the guard is
+     for an unusual HOME or a future relocation.)
+  3. **The installed helper would not start at all** — twice, each for its own reason, and
+     each invisible from inside the workspace. No `package.json` in the target, so node
+     walked up to `~` looking for one; then `protobufjs` missing, because copying pnpm's
+     `node_modules` yields a symlink farm of DIRECT deps only (baileys present, its own deps
+     absent); then `z.url is not a function`, because npm resolved an older zod for the
+     vendored protocol package, which needs v4. The installer now writes a real
+     `package.json`, runs a genuine production `npm install`, pins zod at the protocol
+     package's own range, and vendors the built workspace protocol package.
+- **Verified by running it, not by reasoning about it.** Built, installed to
+  `~/Snug/helpers/whatsapp-sidecar/`, launched with the EXACT command and env `sidecar_ctl`
+  uses (`node …/index.js`, `SNUG_SIDECAR_SOCKET`, `SNUG_SIDECAR_NONCE`), then driven over the
+  real unix socket:
+  - socket created `srw-------` — **0600**, the whole access-control story for a UDS;
+  - `/pair/qr` and `/chats` **401** without credentials, `/pair/*` included;
+  - `POST /pair/start` with the nonce → 200, and `GET /pair/qr` returned a **real 277-char QR
+    payload from WhatsApp's servers over a live WebSocket** — scannable;
+  - `/chats/../pair/status` → 404 (traversal refused);
+  - clean shutdown removes the socket file.
+- The session-key directory is created but EMPTY until someone scans, which is correct: keys
+  are written on link. C1's custody claim is now observable rather than asserted.
+- **Deliberately still not done**: bundling the helper into the app (out of scope by the
+  task's own list; v1 spawns system `node`), so `install:helper` is an owner/dev step and is
+  documented as one.
+- Verified: sidecar **40**; root `turbo run test --force` **23/23, 0 cached**; cargo **64**.
+- **The pairing journey is now runnable.** Owner steps: `pnpm --filter whatsapp-sidecar build
+  && pnpm --filter whatsapp-sidecar install:helper`, then the desktop app → connect the
+  WhatsApp connection → scan → pick a thread → analyse → one manual Reply.

@@ -72,10 +72,31 @@ function bearer(headers: Record<string, string | undefined>): string | undefined
   return match?.[1];
 }
 
-/** Split a path into its segments, query stripped. */
-function segmentsOf(path: string): string[] {
+/**
+ * Split a path into its segments, query stripped, each segment percent-DECODED.
+ *
+ * The decode is load-bearing and was missing until the first end-to-end run: a JID contains
+ * `@`, callers encode it (`encodeURIComponent`), and the Rust admission deliberately forwards
+ * the ORIGINAL path — decoding before forwarding would let `%2f` smuggle a separator past the
+ * route matcher. So this is the seat that owes the decode, and it decodes PER SEGMENT, after
+ * splitting, so an encoded separator can never introduce a new segment.
+ *
+ * A segment that cannot be decoded yields `undefined` for the whole path rather than falling
+ * back to the raw bytes: a value we cannot decode is a value we cannot reason about, and a
+ * thread reachable under a spelling nothing else agrees on is worse than a 404.
+ */
+function segmentsOf(path: string): string[] | undefined {
   const clean = path.split(/[?#]/, 1)[0] ?? '';
-  return clean.split('/').filter((segment) => segment.length > 0);
+  const segments = clean.split('/').filter((segment) => segment.length > 0);
+  const decoded: string[] = [];
+  for (const segment of segments) {
+    try {
+      decoded.push(decodeURIComponent(segment));
+    } catch {
+      return undefined;
+    }
+  }
+  return decoded;
 }
 
 export function createRouter(deps: RouterDeps): SidecarRouter {
@@ -93,6 +114,7 @@ export function createRouter(deps: RouterDeps): SidecarRouter {
   return {
     async handle(request) {
       const segments = segmentsOf(request.path);
+      if (segments === undefined) return json(404, { error: 'no such route' });
       const method = request.method.toUpperCase();
 
       // ---------------------------------------------------------- pairing (wizard only)

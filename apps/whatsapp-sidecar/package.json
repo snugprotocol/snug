@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Snug WhatsApp helper — holds a linked-device session and serves the enumerated sidecar contract over a unix socket (ADR-0032)",
+  "description": "Snug WhatsApp helper \u2014 holds a linked-device session and serves the enumerated sidecar contract over a unix socket (ADR-0032)",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,10 +12,12 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.test.json && vitest run"
+    "test": "tsc -p tsconfig.test.json && vitest run",
+    "install:helper": "node install-helper.mjs"
   },
   "dependencies": {
-    "@snugprotocol/protocol": "workspace:*"
+    "@snugprotocol/protocol": "workspace:*",
+    "baileys": "7.0.0-rc14"
   },
   "devDependencies": {
     "@types/node": "^26.0.0"

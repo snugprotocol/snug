@@ -335,3 +335,72 @@ describe('sending', () => {
     expect(res.status).toBe(409);
   });
 });
+
+/**
+ * PERCENT-ENCODED JIDs (Phase C.2 — found by the first end-to-end run, not by inspection).
+ *
+ * A WhatsApp JID contains `@`, and every caller in the shipped stack percent-encodes it into
+ * the path: the starter builds `/chats/' + encodeURIComponent(jid) + '/messages`. The Rust
+ * admission decodes only to REASON about traversal and deliberately forwards the ORIGINAL
+ * path (decoding before forwarding would let `%2f` smuggle a separator past the matcher), so
+ * this router is the seat that owes the per-segment decode.
+ *
+ * Until it did, every layer was individually correct and tested while the seam between them
+ * was broken: the app asked for `a%40s.whatsapp.net`, the router looked up a thread by that
+ * literal string, found nothing, and answered a perfectly well-formed 404. Nothing was red.
+ * This is what the missing server was hiding — no test in the package had ever driven a real
+ * request end to end, so no test had ever spelled a JID the way a caller actually spells it.
+ */
+describe('a percent-encoded JID resolves to the same thread as its literal form', () => {
+  it('finds the thread when the caller encoded the @', async () => {
+    const d = deps();
+    d.socket.emitLinked();
+    d.socket.seedChat('a@s.whatsapp.net', [{ id: 'm1', from: 'a@s.whatsapp.net', text: 'hi', ts: 1 }]);
+    const router = createRouter(d);
+    d.store.setToken('tok');
+
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats/a%40s.whatsapp.net/messages',
+      headers: { authorization: 'Bearer tok' },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('still finds it when the caller did NOT encode', async () => {
+    // Both spellings must mean the same thread — the Rust layer forwards whatever arrived,
+    // so the router cannot assume one convention.
+    const d = deps();
+    d.socket.emitLinked();
+    d.socket.seedChat('a@s.whatsapp.net', [{ id: 'm1', from: 'a@s.whatsapp.net', text: 'hi', ts: 1 }]);
+    const router = createRouter(d);
+    d.store.setToken('tok');
+
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats/a@s.whatsapp.net/messages',
+      headers: { authorization: 'Bearer tok' },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('a malformed escape is refused, never compared as raw bytes', async () => {
+    // `%zz` cannot be decoded, so the segment has no determinate identity. Falling back to
+    // the raw string would make a thread reachable under a spelling nothing else agrees on.
+    const d = deps();
+    d.socket.emitLinked();
+    d.socket.seedChat('a@s.whatsapp.net', [{ id: 'm1', from: 'a@s.whatsapp.net', text: 'hi', ts: 1 }]);
+    const router = createRouter(d);
+    d.store.setToken('tok');
+
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats/a%zzs.whatsapp.net/messages',
+      headers: { authorization: 'Bearer tok' },
+    });
+
+    expect(res.status).toBe(404);
+  });
+});
