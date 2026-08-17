@@ -714,3 +714,42 @@ one" clause is retired as unrepresentable-by-construction, which is the better o
   verification items, not silent gaps.
 - Next step: **Phase D** — the `linked_device` wizard flow (QR + poll + verify-before-claim,
   its own derived-boolean family beside the LAN one, never extending `isLanRequirement`).
+
+### 2026-08-16 — claude — Phase D (the linked-device wizard flow)
+- Done in two commits (state layer, then sheet). `isLinkedDeviceRequirement` is its OWN
+  predicate keyed on KIND; `canLinkDevice` requires BOTH platform seats; `beginDeviceLink`
+  starts the helper and returns a QR; `completeDeviceLink` polls and then runs the ADR-0025
+  verify read **before** handing back anything to store. Two derived booleans in the sheet
+  (`linkWall`, `linkNeedsPairing`) beside the LAN family's three, plus two screens.
+- **The ordering is the property**: a mint returning is not evidence the credential works,
+  so a wizard can never claim connected on the strength of a mint alone. And an unreachable
+  helper is a NAMED failure rather than "still waiting" — waiting on something that will
+  never answer is the wizard hanging on a case the user could fix in seconds.
+- Consent copy sits on the screen where the user ACTS, not upstream where it gets clicked
+  past: what the link can do (read and send), what Snug never gets (sign-in details), how to
+  undo it (unlink from the phone). Each clause is asserted separately so a copy edit dropping
+  one cannot pass on the strength of the others.
+- **A mutant survived again and taught the same lesson in a new place.** Deleting the
+  empty-token guard left everything green because the fixture had no scripted verify call, so
+  execution fell through to an unscripted call that threw — the test asserted `ok:false` for
+  a reason unrelated to the guard it named. Fixed the FIXTURE (it now passes every sibling
+  refusal and fails only on the guard under test) and added an empty-string sibling case.
+- **Cross-package seam identity test** added from the integrating side, because this is
+  exactly the shape lessons.md 2026-08-13 says ships green twice: desktop owns the
+  implementation, the playground injects fakes, nothing owns the wire. Verified it catches
+  both a cut wire AND a lambda substitution that a structural "is a function" check waves
+  through.
+- **Recorded honestly in the test file**: the "never LAN" sheet test still passes with the
+  linked-device family disabled, because a `linked_device` row has no `lanHost` so the LAN
+  screens are absent either way. It proves what it is named for and no more; the three
+  sibling tests prove the screens are actually reached. Stated so no reader credits it with
+  a guarantee it cannot give.
+- Corrected mid-phase: my first sheet test invented a `__testExports` hatch into production
+  code to reach the private screens. Replaced after reading how the LAN screens are actually
+  tested — render the real sheet, assert by `data-testid`, never reach into module internals.
+- Verified: root `turbo run test --force` **23/23, 0 cached**; playground 1102 → 1121,
+  desktop 120 → 124.
+- Next step: **Phase E** — the starter app (`examples/whatsapp/`): thread picker, Persona Lab,
+  Insights, Reply Desk, inline translate, forget-thread. Then **Phase F** (armed auto-reply
+  via the new `StandingApprovalGate`) and **Phase H** (docs close: ADRs to accepted, threat
+  delta, code-map rows, spec-changelog).
