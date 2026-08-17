@@ -809,3 +809,71 @@ mod spawn_preconditions_tests {
         assert!(helper_entry_refusal(dir.path()).is_none());
     }
 }
+
+#[cfg(test)]
+mod state_registration_tests {
+    //! EVERY command that takes a `tauri::State<T>` needs `T` registered with `.manage()`.
+    //!
+    //! FOUND ON REAL HARDWARE (2026-08-17), after two wrong diagnoses of the same symptom.
+    //! `sidecar_ctl` and `sidecar_fetch` both take `tauri::State<'_, SidecarState>`, and
+    //! `SidecarState` was never managed in `lib.rs` — so Tauri failed the invoke BEFORE the
+    //! command body ran. The wizard reported "the WhatsApp helper could not be started",
+    //! which is what its catch says for any thrown invoke, and every subsequent fix inside
+    //! the command was invisible because the command never executed.
+    //!
+    //! This is the Phase G shape repeating: the commands were written, unit-tested, and
+    //! registered in the handler list — three green signals — while the one wiring step that
+    //! makes them callable was missing, and nothing anywhere asserted it. A command's tests
+    //! prove what it does WHEN CALLED; they say nothing about whether it can be called.
+    //!
+    //! Parses `lib.rs` rather than restating its contents, the same discipline the Rust/TS
+    //! route-table equivalence test uses: a hand-copied expectation drifts silently.
+
+    const LIB_RS: &str = include_str!("lib.rs");
+
+    #[test]
+    fn sidecar_state_is_managed() {
+        assert!(
+            LIB_RS.contains(".manage(sidecar::SidecarState::default())")
+                || LIB_RS.contains(".manage(SidecarState::default())"),
+            "SidecarState must be registered with .manage() or every sidecar_ctl/sidecar_fetch \
+             invoke fails before the command body runs"
+        );
+    }
+
+    #[test]
+    fn every_managed_state_the_sidecar_commands_need_is_registered() {
+        // Non-vacuity: prove this test can SEE the manage calls at all, so a refactor that
+        // renamed or moved them cannot leave the assertion above passing against nothing.
+        assert!(
+            LIB_RS.contains(".manage("),
+            "lib.rs should carry .manage() registrations; if this fails the parse is wrong, \
+             not the code"
+        );
+        // The sibling state, pinned so the two cannot diverge in how they are registered.
+        assert!(LIB_RS.contains("OpenedFiles::default()"), "OpenedFiles stays managed");
+    }
+
+    #[test]
+    fn the_commands_really_do_take_managed_state() {
+        // The reason the test above matters. If these signatures ever stop taking State,
+        // the manage requirement changes and this file should be revisited deliberately.
+        const SELF_SRC: &str = include_str!("sidecar.rs");
+        let ctl = SELF_SRC
+            .split("pub async fn sidecar_ctl")
+            .nth(1)
+            .expect("sidecar_ctl exists");
+        assert!(
+            ctl[..400].contains("tauri::State<'_, SidecarState>"),
+            "sidecar_ctl takes SidecarState — that is why it must be managed"
+        );
+        let fetch = SELF_SRC
+            .split("pub async fn sidecar_fetch")
+            .nth(1)
+            .expect("sidecar_fetch exists");
+        assert!(
+            fetch[..400].contains("tauri::State<'_, SidecarState>"),
+            "sidecar_fetch takes SidecarState — that is why it must be managed"
+        );
+    }
+}

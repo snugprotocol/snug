@@ -1202,3 +1202,45 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
   is the real fix and remains out of scope by the task's own list.
 - Verified: cargo **70**. Owner still needs a Node 20+ that the GUI can see before the
   pairing journey can proceed (their nvm v22 is invisible to the app).
+
+### 2026-08-17 — claude — THE ACTUAL CAUSE: `SidecarState` was never `.manage()`d
+
+- **I diagnosed this symptom wrong twice before finding it, and both wrong answers were
+  plausible enough to act on** — worth recording as its own lesson, because the cost was the
+  owner clicking the same button three times.
+  - Wrong answer 1: the GUI's PATH resolves an old `node` (v18 vs baileys' `>=20`). REAL and
+    worth fixing — the owner's `/usr/local/bin/node` genuinely was v18.18.0 — but not the
+    cause. They symlinked v22 and the error was unchanged.
+  - Wrong answer 2: a stale binary (the app process started 7 seconds before the build
+    finished). Also real, also not the cause; a restart changed nothing.
+  - Both were true observations that happened not to be the failure. **A plausible cause that
+    explains the symptom is not the same as the cause, and the tell was that neither
+    prediction was ever confirmed — I inferred each from evidence and shipped a fix without
+    reproducing the failure itself.**
+- **The cause**: `sidecar_ctl` and `sidecar_fetch` both take `tauri::State<'_, SidecarState>`,
+  and `lib.rs` never registered that type. `.manage(OpenedFiles::default())` was there;
+  `SidecarState` was not. Tauri resolves state at the IPC boundary, so an unregistered type
+  fails the invoke **before the command body runs** — which is why the preflight, the
+  try_wait, and every other in-command fix stayed invisible. The wizard's catch reports
+  "the WhatsApp helper could not be started" for any thrown invoke, so the message was
+  identical no matter what was wrong underneath.
+- **This is Phase G's shape repeating one layer out, and the third time this task has been
+  bitten by it.** The commands were written, unit-tested (8 tests), registered in BOTH handler
+  lists, and covered by the C2 gate — four green signals — while the single wiring step that
+  makes them callable was missing and nothing asserted it. *A command's tests prove what it
+  does when called; they say nothing about whether it can be called.* Compare the Phase G
+  entry's own finding (`decideSidecarFetchRefused` shipped with zero coverage, suite green
+  because the type gate was satisfied) — same class, one level up.
+- Fixed with `.manage(sidecar::SidecarState::default())` plus `state_registration_tests`,
+  which PARSES `lib.rs` (the discipline the Rust/TS route-table equivalence test already
+  uses) and asserts the registration exists, with a non-vacuity check so a refactor cannot
+  leave it passing against nothing, and a third test pinning that both commands really do
+  take managed state — so if that ever changes, this file is revisited deliberately.
+  Mutation-verified: removing the `.manage()` line turns it red.
+- **Why the C2 gate did not catch it**: `ipc-sidecar-fetch-refused` asserts the command is
+  UNREACHABLE from an app iframe. An unregistered command is unreachable from everywhere, so
+  it passed for the wrong reason — a green refusal test cannot distinguish "correctly refused"
+  from "does not work at all". That is the same trap as this task's earlier
+  populated-vs-empty auth store finding, and it argues for a positive-path gate check
+  (main-window invoke succeeds) beside every negative one. Logged as a follow-up.
+- Verified: cargo **70 → 73**; debug binary rebuilt.

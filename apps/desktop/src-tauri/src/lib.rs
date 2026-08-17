@@ -103,7 +103,14 @@ pub fn run() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(OpenedFiles::default());
+        .manage(OpenedFiles::default())
+        // WITHOUT THIS, both sidecar commands fail at the IPC boundary before their bodies
+        // run: Tauri resolves `tauri::State<'_, SidecarState>` from managed state, and an
+        // unregistered type is an invoke error, not a command error. That is exactly what
+        // shipped — the commands were written, unit-tested and registered in the handler
+        // list, and every one of those signals stayed green while the helper could never be
+        // started. `state_registration_tests` in sidecar.rs now pins it.
+        .manage(sidecar::SidecarState::default());
     // The gate commands exist in DEBUG builds only (P4/AC7). The handler list
     // is duplicated under cfg rather than stubbed: a release binary must not
     // contain the command names even as registered no-ops.
