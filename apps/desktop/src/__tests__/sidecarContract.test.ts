@@ -94,3 +94,30 @@ describe('the Rust module holds the guards the design depends on', () => {
     expect(RUST_SOURCE).toMatch(/fn socket_path/);
   });
 });
+
+describe('the shell wrappers name the commands lib.rs registers', () => {
+  const shellSource = readFileSync(fileURLToPath(new URL('../sidecar.ts', import.meta.url)), 'utf8');
+  const libSource = readFileSync(
+    fileURLToPath(new URL('../../src-tauri/src/lib.rs', import.meta.url)),
+    'utf8',
+  );
+
+  it('invokes the command names the Rust side registers', () => {
+    // The far end of the seam wire. A wrapper invoking a name lib.rs does not register
+    // fails only at runtime, in a shell, on a user's machine — there is no compile step
+    // across an IPC boundary to catch it.
+    expect(shellSource).toContain("invoke<SidecarStatus>('sidecar_ctl'");
+    expect(shellSource).toContain("invoke<SidecarHttpResponse>('sidecar_fetch'");
+    expect(libSource).toContain('sidecar::sidecar_ctl');
+    expect(libSource).toContain('sidecar::sidecar_fetch');
+  });
+
+  it('registers the commands in BOTH handler lists — release is not a debug build', () => {
+    // The lists are duplicated under `cfg` rather than stubbed (a release binary must not
+    // carry gate command names at all), so a command added to only one ships working in
+    // development and missing in the product.
+    const registrations = [...libSource.matchAll(/sidecar::sidecar_ctl/g)];
+    expect(registrations.length, 'sidecar_ctl must appear in the debug AND release lists').toBe(2);
+    expect([...libSource.matchAll(/sidecar::sidecar_fetch/g)].length).toBe(2);
+  });
+});

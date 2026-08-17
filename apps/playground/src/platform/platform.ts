@@ -61,6 +61,28 @@ export interface SnugPlatform {
     url: string,
     init: { method: string; body?: string; headers?: Record<string, string> },
   ) => Promise<{ status: number; body: string; pin?: { fingerprint: string; cn: string } }>;
+  /**
+   * THE SIDECAR SEATS (ADR-0032) — the WhatsApp helper's lifecycle and transport. Desktop
+   * only: both resolve to Rust commands, and a browser tab cannot open a unix socket.
+   *
+   * They are TWO seats and the wizard requires BOTH before it offers the flow, because
+   * they answer different questions: `sidecarCtl` starts and reports the helper (and is
+   * the only source of the spawn nonce the pairing routes demand), `sidecarFetch` talks to
+   * it. A capability test satisfied by either alone would advertise a flow that fails
+   * midway — the same reason the LAN seats above are checked as a pair.
+   *
+   * Note what neither seat accepts: a socket path, a host, or a port. The Rust side names
+   * the socket, so no caller here — wizard, app, or otherwise — can point the transport
+   * somewhere else. `sidecarFetch` additionally refuses every route outside the
+   * app-reachable contract IN RUST, which is why the pairing calls below go through
+   * `sidecarCtl`'s nonce rather than through this seat.
+   */
+  sidecarCtl?: (action: 'start' | 'stop' | 'status') => Promise<{ running: boolean; nonce?: string }>;
+  sidecarFetch?: (
+    method: string,
+    pathAndQuery: string,
+    body?: string,
+  ) => Promise<{ status: number; body: string }>;
   /** Userdb + sync-sidecar backend. Web: undefined → detectPersistenceBackend(USERDB_OPFS_DIR). */
   userdbBackend?: PersistenceBackend;
   /** OAuth transport. Web: undefined → popup + BroadcastChannel + `${origin}/oauth/callback`. */

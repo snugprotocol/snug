@@ -33,6 +33,7 @@ import type { SnugPlatform } from '@playground/platform/platform';
 
 import { createTauriFileFs } from './fs.js';
 import { lanFetch, lanPair } from './lan-fetch.js';
+import { sidecarCtl, sidecarFetch } from './sidecar.js';
 import { remapUrl } from './net-remap.js';
 import { createTauriLoopbackListener, openInSystemBrowser } from './oauth.js';
 
@@ -139,6 +140,13 @@ export function createDesktopPlatform(): SnugPlatform {
     // that trusts anything answering at the address. `connectedFetchDepsFor`
     // threads `lanFetch` alone; that asymmetry is pinned by test on both sides.
     lanPair,
+    // THE SIDECAR SEATS (ADR-0032). Both are threaded, and the wizard requires both
+    // before it offers the flow: one starts the helper and carries its spawn nonce, the
+    // other talks to it. Unlike the LAN pair above there is no asymmetry to preserve —
+    // neither seat accepts a socket path, a host or a port, so neither can be aimed
+    // anywhere the Rust side did not choose.
+    sidecarCtl,
+    sidecarFetch,
     // The directory is the Rust command's concern: read_user_file/write_user_file
     // ALREADY scope every name into ~/Snug and REFUSE any name with a path
     // separator (userfile.rs `valid_name`). So the backend's own `${dir}/${file}`

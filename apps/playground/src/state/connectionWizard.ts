@@ -732,6 +732,38 @@ export function isLanRequirement(requirement: ConnectionRequirement | undefined)
   return requirement?.lanHost !== undefined;
 }
 
+/**
+ * Is this a LINKED-DEVICE requirement (ADR-0032)? A separate family from the LAN one, and
+ * deliberately not an extension of it.
+ *
+ * WHY NOT `isLanRequirement`. That predicate is `lanHost !== undefined` and nothing more,
+ * and it has 13 call sites — several leading into `runLanPairingAttempt`, which hard-requires
+ * a 64-hex TLS certificate fingerprint before it records anything. A helper reached over a
+ * unix socket has no certificate and never will, so a linked-device row routed there could
+ * only fail, and would fail deep inside pairing rather than anywhere that could explain
+ * itself. The protocol schema refuses `linked_device` + `lanHost` outright, so the two
+ * families are disjoint by construction; this predicate keeps them disjoint HERE, where the
+ * routing decisions are actually taken.
+ *
+ * Keyed on KIND, because kind is what the registry pins and the schema validates. A
+ * predicate keyed on "carries a pairing seat" or "declares one host" would also be true of
+ * rows this flow must never claim.
+ */
+export function isLinkedDeviceRequirement(requirement: ConnectionRequirement | undefined): boolean {
+  return requirement?.kind === 'linked_device';
+}
+
+/**
+ * Can this platform link a device at all? BOTH seats are required — see the seam's own
+ * comment: one starts the helper and carries the spawn nonce, the other talks to it, and a
+ * flow offered on half a seam fails midway. `false` on web is a DISCLOSURE, never a refusal
+ * to render: the row stays intact and readable, exactly as a LAN row does.
+ */
+export function canLinkDevice(): boolean {
+  const platform = getPlatform();
+  return platform.sidecarCtl !== undefined && platform.sidecarFetch !== undefined;
+}
+
 /** Has the address been collected yet? A LAN row with no host is pre-collection. */
 export function lanHostCollected(requirement: ConnectionRequirement | undefined): boolean {
   return isLanRequirement(requirement) && (requirement?.declaredApiHosts ?? []).length > 0;
@@ -956,6 +988,124 @@ export async function runLanPairing(): Promise<LanPairingOutcome> {
   // its error — possibly naming the old device — onto the new row's pairing screen.
   if (!outcome.ok && connectionWizardStore.get() === session) lanPairingErrorStore.set(outcome.message);
   return outcome;
+}
+
+/**
+ * THE DEVICE-LINK FLOW (ADR-0032) — begin, then complete. Two calls rather than one because
+ * a human stands between them: the QR must be on screen before there is anything to scan.
+ *
+ * Neither half touches `runLanPairingAttempt` or its pin machinery. This flow's transport is
+ * the shell's sidecar seam, and its proof of success is the ADR-0025 verify read rather than
+ * a captured certificate.
+ */
+export type DeviceLinkStart = { ok: true; qr?: string } | { ok: false; message: string };
+export type DeviceLinkResult = { ok: true; token: string } | { ok: false; message: string };
+
+/** The nonce the pairing routes demand. Held for the life of one wizard pairing, never persisted. */
+let deviceLinkNonce: string | undefined;
+
+/** Read a JSON body defensively — the helper is ours, but this is still a process boundary. */
+function readSidecarJson(body: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Start the helper and get a QR to render.
+ *
+ * An unreachable helper is a NAMED failure, never "still waiting": waiting on something that
+ * will never answer is the wizard hanging forever on a case the user could fix in seconds if
+ * anyone told them about it.
+ */
+export async function beginDeviceLink(): Promise<DeviceLinkStart> {
+  const platform = getPlatform();
+  if (platform.sidecarCtl === undefined || platform.sidecarFetch === undefined) {
+    return { ok: false, message: 'linking WhatsApp needs the desktop app' };
+  }
+  let nonce: string | undefined;
+  try {
+    const status = await platform.sidecarCtl('start');
+    nonce = status.nonce;
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'the WhatsApp helper could not be started',
+    };
+  }
+  if (nonce === undefined) {
+    return { ok: false, message: 'the WhatsApp helper started without a setup key — try again' };
+  }
+  deviceLinkNonce = nonce;
+  try {
+    await platform.sidecarFetch('POST', '/pair/start');
+    const qrResponse = await platform.sidecarFetch('GET', '/pair/qr');
+    const qr = readSidecarJson(qrResponse.body)['qr'];
+    return typeof qr === 'string' ? { ok: true, qr } : { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'the WhatsApp helper stopped answering',
+    };
+  }
+}
+
+/**
+ * Poll for the link, then PROVE it before handing back anything to store.
+ *
+ * THE ORDER IS THE PROPERTY (ADR-0025 §1-2, the same discipline the LAN pairing follows): a
+ * mint returning is not evidence the credential works. The verify read runs first, and only
+ * a passing verify produces a token for the caller to persist — so a wizard can never claim
+ * "connected" on the strength of a mint alone.
+ *
+ * A `linked` report carrying NO token is a failure, not a success: recording an empty
+ * credential produces a connection that fails on its first real use, at which point the
+ * cause is far away from here.
+ */
+export async function completeDeviceLink(): Promise<DeviceLinkResult> {
+  const platform = getPlatform();
+  if (platform.sidecarFetch === undefined) {
+    return { ok: false, message: 'linking WhatsApp needs the desktop app' };
+  }
+  let token: string | undefined;
+  try {
+    const status = await platform.sidecarFetch('GET', '/pair/status');
+    const body = readSidecarJson(status.body);
+    if (body['state'] !== 'linked') {
+      return { ok: false, message: 'waiting for the code to be scanned' };
+    }
+    const minted = body['token'];
+    if (typeof minted !== 'string' || minted.length === 0) {
+      return { ok: false, message: 'the helper reported a link but handed back no key — try linking again' };
+    }
+    token = minted;
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'the WhatsApp helper stopped answering',
+    };
+  }
+
+  // THE VERIFY READ, BEFORE the caller is given anything durable to write.
+  try {
+    const verified = await platform.sidecarFetch('GET', '/session/status');
+    if (verified.status < 200 || verified.status >= 300) {
+      return {
+        ok: false,
+        message: "we could not confirm the link, so nothing has been saved — try linking again",
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      message: "we could not confirm the link, so nothing has been saved — try linking again",
+    };
+  }
+  deviceLinkNonce = undefined;
+  return { ok: true, token };
 }
 
 async function runLanPairingAttempt(): Promise<LanPairingOutcome> {
