@@ -201,10 +201,225 @@ pub fn admit_app_request(method: &str, path_and_query: &str) -> Result<AdmittedS
     })
 }
 
-/// Where the helper's socket lives. `~/Snug/<basename>`, chosen HERE and never accepted from
-/// the webview — the same rule the user-file commands follow for their directory.
-pub fn socket_path(home: &std::path::Path, basename: &str) -> PathBuf {
-    home.join("Snug").join(basename)
+/// Where the helper's socket lives, given `~/Snug`. Chosen HERE and never accepted from the
+/// webview — the same rule the user-file commands follow for their directory.
+pub fn socket_path(snug_dir: &std::path::Path, basename: &str) -> PathBuf {
+    snug_dir.join(basename)
+}
+
+// ---------------------------------------------------------------- the commands
+//
+// Both are thin: every decision they make is delegated to the pure functions above, which
+// is what makes the guards testable without a running Tauri app or a real helper process.
+
+/// Shell-owned helper state. The socket path and the spawn nonce are generated HERE and
+/// handed to the child; neither is ever accepted from the webview.
+#[derive(Default)]
+pub struct SidecarState {
+    inner: std::sync::Mutex<Option<RunningSidecar>>,
+}
+
+pub struct RunningSidecar {
+    child: std::process::Child,
+    socket: PathBuf,
+    /// Passed to the child at spawn; the wizard needs it to reach the pairing routes.
+    nonce: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidecarStatus {
+    pub running: bool,
+    /// Present only while running — the wizard's pairing routes require it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+}
+
+/// What crosses back over IPC from a helper call.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidecarResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+/// 256 bits of CSPRNG, hex. The nonce is what stops a process that wins a race to the
+/// socket path from completing pairing and minting itself the user's WhatsApp.
+fn mint_nonce() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Start, stop, or report the helper.
+///
+/// `start` is idempotent: a second call while one is running returns the SAME nonce rather
+/// than spawning a rival that would race for the socket.
+#[tauri::command]
+pub async fn sidecar_ctl(
+    action: String,
+    state: tauri::State<'_, SidecarState>,
+) -> Result<SidecarStatus, String> {
+    let mut guard = state.inner.lock().map_err(|_| "sidecar state is poisoned".to_string())?;
+    match action.as_str() {
+        "status" => Ok(SidecarStatus {
+            running: guard.is_some(),
+            nonce: guard.as_ref().map(|s| s.nonce.clone()),
+        }),
+        "start" => {
+            if let Some(running) = guard.as_ref() {
+                return Ok(SidecarStatus {
+                    running: true,
+                    nonce: Some(running.nonce.clone()),
+                });
+            }
+            // `snug_dir` is the ONE owner of this path rule (userfile.rs) — re-deriving it
+            // here would be a second spelling of a decision that already shipped a
+            // platform-ordering bug once.
+            let dir = crate::userfile::snug_dir()?;
+            std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+            let socket = dir.join(SOCKET_BASENAME);
+            // A stale socket file from a crashed run would make bind fail; removing it is
+            // safe because this path is ours and nothing else may write it.
+            let _ = std::fs::remove_file(&socket);
+            let nonce = mint_nonce();
+            let child = std::process::Command::new("node")
+                .arg("--enable-source-maps")
+                .arg(helper_entry(&dir))
+                .env("SNUG_SIDECAR_SOCKET", &socket)
+                .env("SNUG_SIDECAR_NONCE", &nonce)
+                .spawn()
+                .map_err(|e| format!("could not start the WhatsApp helper: {e}"))?;
+            *guard = Some(RunningSidecar {
+                child,
+                socket,
+                nonce: nonce.clone(),
+            });
+            Ok(SidecarStatus {
+                running: true,
+                nonce: Some(nonce),
+            })
+        }
+        "stop" => {
+            if let Some(mut running) = guard.take() {
+                let _ = running.child.kill();
+                let _ = running.child.wait();
+                let _ = std::fs::remove_file(&running.socket);
+            }
+            Ok(SidecarStatus {
+                running: false,
+                nonce: None,
+            })
+        }
+        other => Err(format!("'{other}' is not a sidecar action")),
+    }
+}
+
+/// The helper's entry point, under `~/Snug/helpers/`. Never supplied by the webview, for
+/// the same reason the socket path is not.
+fn helper_entry(snug_dir: &std::path::Path) -> PathBuf {
+    snug_dir.join("helpers").join("whatsapp-sidecar").join("index.js")
+}
+
+/// The socket file's basename. Mirrors `SIDECAR_SOCKET_BASENAME` in the protocol contract;
+/// the cross-language test pins the two equal.
+pub const SOCKET_BASENAME: &str = "whatsapp-sidecar.sock";
+
+/// Call the helper over its unix socket.
+///
+/// Every guard runs in `admit_app_request` BEFORE a socket is opened. `/pair/*` and
+/// `/session/*` are refused here unconditionally — an app that reached them could mint
+/// itself the access token and drive the user's WhatsApp.
+#[tauri::command]
+pub async fn sidecar_fetch(
+    method: String,
+    path_and_query: String,
+    body: Option<String>,
+    state: tauri::State<'_, SidecarState>,
+) -> Result<SidecarResponse, String> {
+    let admitted = admit_app_request(&method, &path_and_query).map_err(|refusal| refusal.message())?;
+    let socket = {
+        let guard = state.inner.lock().map_err(|_| "sidecar state is poisoned".to_string())?;
+        match guard.as_ref() {
+            Some(running) => running.socket.clone(),
+            None => return Err(SidecarRefusal::NotRunning.message()),
+        }
+    };
+    send_over_unix_socket(&socket, &admitted, body.as_deref()).await
+}
+
+/// The transport itself: a minimal HTTP/1.1 exchange over the unix socket.
+///
+/// Hand-rolled rather than pulled from a client crate because the surface is four routes
+/// and the cap must be enforced WHILE READING — a client that buffers first would defeat
+/// the bound before this code saw a byte.
+async fn send_over_unix_socket(
+    socket: &std::path::Path,
+    request: &AdmittedSidecarRequest,
+    body: Option<&str>,
+) -> Result<SidecarResponse, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::UnixStream::connect(socket)
+        .await
+        .map_err(|e| format!("could not reach the WhatsApp helper: {e}"))?;
+
+    let payload = body.unwrap_or("");
+    let head = format!(
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        request.method,
+        request.path,
+        payload.len()
+    );
+    stream
+        .write_all(head.as_bytes())
+        .await
+        .map_err(|e| format!("could not write to the helper: {e}"))?;
+    if !payload.is_empty() {
+        stream
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|e| format!("could not write to the helper: {e}"))?;
+    }
+
+    // THE CAP, enforced while reading. A helper that answered unboundedly would otherwise
+    // be a memory-exhaustion path straight into the webview.
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|e| format!("could not read from the helper: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        if raw.len() + read > MAX_RESPONSE_BYTES {
+            return Err("the helper's response was too large".into());
+        }
+        raw.extend_from_slice(&chunk[..read]);
+    }
+
+    parse_http_response(&raw)
+}
+
+/// Split an HTTP/1.1 response into its status and body. Deliberately minimal: this speaks to
+/// one process we ship, over a socket only we can name.
+fn parse_http_response(raw: &[u8]) -> Result<SidecarResponse, String> {
+    let text = String::from_utf8_lossy(raw);
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "the helper's response was malformed".to_string())?;
+    let status_line = head.lines().next().unwrap_or_default();
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(|| "the helper's response had no status".to_string())?;
+    Ok(SidecarResponse {
+        status,
+        body: body.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -345,8 +560,49 @@ mod tests {
     }
 
     #[test]
+    fn parses_a_well_formed_http_response() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
+        let parsed = parse_http_response(raw).expect("must parse");
+        assert_eq!(parsed.status, 200);
+        assert_eq!(parsed.body, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn refuses_a_malformed_response_rather_than_guessing() {
+        // No header/body separator, or no status: the helper is ours, so a malformed
+        // answer means something is wrong — reporting it beats inventing a 200.
+        assert!(parse_http_response(b"garbage with no separator").is_err());
+        assert!(parse_http_response(b"NOTHTTP\r\n\r\nbody").is_err());
+    }
+
+    #[test]
+    fn the_not_running_refusal_names_what_the_user_can_do() {
+        // An error a user cannot act on is a bug report waiting to happen; this one says
+        // where to go.
+        let message = SidecarRefusal::NotRunning.message();
+        assert!(message.contains("not running"));
+        assert!(message.contains("connection settings"));
+    }
+
+    #[test]
+    fn every_refusal_message_is_non_empty_and_names_its_subject() {
+        // Each variant exists BECAUSE it is a distinct user-facing story; a variant whose
+        // message dropped its subject would collapse back into an opaque failure.
+        assert!(SidecarRefusal::Method("DELETE".into()).message().contains("DELETE"));
+        assert!(SidecarRefusal::Route("/pair/status".into()).message().contains("/pair/status"));
+        assert!(SidecarRefusal::Traversal("/chats/../x".into()).message().contains("/chats/../x"));
+    }
+
+    #[test]
+    fn the_response_cap_is_the_net_frame_class() {
+        // Pinned so a future edit cannot quietly raise it: the cap is what stops a helper
+        // from being a memory-exhaustion path into the webview.
+        assert_eq!(MAX_RESPONSE_BYTES, 1024 * 1024);
+    }
+
+    #[test]
     fn socket_path_is_under_the_snug_directory() {
-        let path = socket_path(std::path::Path::new("/home/someone"), "whatsapp-sidecar.sock");
+        let path = socket_path(std::path::Path::new("/home/someone/Snug"), SOCKET_BASENAME);
         assert_eq!(
             path,
             PathBuf::from("/home/someone/Snug/whatsapp-sidecar.sock")

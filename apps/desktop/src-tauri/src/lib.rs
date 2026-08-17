@@ -114,6 +114,8 @@ pub fn run() {
         openfile::read_opened_file,
         exportfile::export_user_bytes,
         lanfetch::lan_fetch,
+        sidecar::sidecar_ctl,
+        sidecar::sidecar_fetch,
         pending_opened_files,
         close_flush_done,
         gate::shell_gate_config,
@@ -130,6 +132,10 @@ pub fn run() {
         // production capability (ADR-0023 D3). Its guards are Rust-side and
         // unconditional; there is no strictness knob to leave off.
         lanfetch::lan_fetch,
+        // Ships in RELEASE for the same reason `lan_fetch` does: a production
+        // capability whose guards are Rust-side and unconditional (ADR-0032).
+        sidecar::sidecar_ctl,
+        sidecar::sidecar_fetch,
         pending_opened_files,
         close_flush_done,
     ]);

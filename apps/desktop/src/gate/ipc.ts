@@ -60,6 +60,7 @@ export const IPC_CHECK_IDS = [
   'ipc-chrome-webview-absent',
   'ipc-invoke-refused',
   'ipc-lan-fetch-refused',
+  'ipc-sidecar-fetch-refused',
 ] as const;
 
 /**
@@ -94,6 +95,25 @@ export const IPC_CHECK_IDS = [
  * unanswerable sensor that reports "pass" is the defect.
  */
 export const LAN_FETCH_COMMAND = 'lan_fetch';
+
+/**
+ * `sidecar_fetch` (ADR-0032) gets its OWN row for the same amendment-16 reason
+ * `lan_fetch` does, and the reason is sharper here: an app iframe that reached
+ * this command would be talking to the process holding the user's WhatsApp
+ * LINKED-DEVICE SESSION — able to read every thread and send as the user.
+ * Registration is per-command, so a family-level check cannot see a command
+ * added to the wrong handler list.
+ *
+ * It shares `lan_fetch`'s SENSOR PROBLEM and the same honest answer. The effect
+ * of a dispatched `sidecar_fetch` is a request to a unix socket that does not
+ * exist on a CI runner, so no "did it fire?" listener can sit at the far end.
+ * The observable property is REACH: a keyless call is dropped before dispatch,
+ * while a dispatched one resolves a callback (success or error alike). So a
+ * fired callback proves reach — breakage — and its absence vouches for refusal
+ * only alongside the key-absence checks. Stated, not hidden: this is the weaker
+ * instrument, exactly as the row above.
+ */
+export const SIDECAR_FETCH_COMMAND = 'sidecar_fetch';
 
 /**
  * The sentinel filename the subframe's keyless write targets. Must match
@@ -176,6 +196,12 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
   window['_' + LAN_CB] = function () { lanCallbackFired = true; };
   window['_' + (LAN_CB + 1)] = function () { lanCallbackFired = true; };
 
+  // Its own slot again: reach proven for one command is never credited to another.
+  var sidecarCallbackFired = false;
+  var SIDECAR_CB = 987654341;
+  window['_' + SIDECAR_CB] = function () { sidecarCallbackFired = true; };
+  window['_' + (SIDECAR_CB + 1)] = function () { sidecarCallbackFired = true; };
+
   function keylessInvokeBody() {
     // The main-frame invoke shape (scripts/core.js) MINUS a valid
     // Tauri-Invoke-Key. A WRITE command with a sentinel name, so that an invoke
@@ -207,9 +233,23 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     });
   }
 
+  function keylessSidecarFetchBody() {
+    // A REAL, well-formed sidecar_fetch call — the shape an installed app sends.
+    // Well-formed on purpose: a refusal must not be attributable to a bad
+    // payload. On a runner the socket is absent, so a DISPATCHED call would
+    // resolve the error callback; reaching the dispatcher is the breakage.
+    return JSON.stringify({
+      cmd: '${SIDECAR_FETCH_COMMAND}',
+      callback: SIDECAR_CB,
+      error: SIDECAR_CB + 1,
+      payload: { method: 'GET', pathAndQuery: '/chats' }
+    });
+  }
+
   for (var k = 0; k < transports.length; k++) {
     try { transports[k].handler.postMessage(keylessInvokeBody()); } catch (e3) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessLanFetchBody()); } catch (e4) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessSidecarFetchBody()); } catch (e5) { /* transport rejected the shape */ }
   }
 
   function finishInvoke() {
@@ -221,7 +261,8 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
       probe: {
         transports: reachableNames,
         callbackFired: callbackFired,
-        lanCallbackFired: lanCallbackFired
+        lanCallbackFired: lanCallbackFired,
+        sidecarCallbackFired: sidecarCallbackFired
       }
     }, '*');
   }
@@ -235,6 +276,8 @@ interface ProbeReport {
   callbackFired: boolean;
   /** Per-command (amendment 16): did a keyless `lan_fetch` resolve into the subframe? */
   lanCallbackFired: boolean;
+  /** Per-command: did a keyless `sidecar_fetch` resolve into the subframe? */
+  sidecarCallbackFired: boolean;
 }
 
 /**
@@ -323,6 +366,52 @@ export function decideLanFetchRefused(
   };
 }
 
+/**
+ * THE PER-COMMAND VERDICT for `sidecar_fetch` (ADR-0032), mirroring the one above
+ * because the sensor problem and its honest answer are identical — see
+ * `SIDECAR_FETCH_COMMAND`.
+ *
+ * The stakes differ, which is why it is a separate row rather than a shared one:
+ * reaching this command from app code means reaching the process that holds the
+ * user's WhatsApp linked-device session, i.e. reading every thread and sending as
+ * them. `keyReachable` is a REQUIRED input for the same reason as above — the
+ * callback signal alone cannot tell "refused" from "ran, and the answer went
+ * somewhere this frame cannot see".
+ */
+export function decideSidecarFetchRefused(
+  report: ProbeReport | undefined,
+  keyReachable: boolean,
+): CheckResult {
+  const id = 'ipc-sidecar-fetch-refused';
+  if (report === undefined) {
+    return {
+      id,
+      pass: false,
+      detail: `the sandboxed probe never reported — no ${SIDECAR_FETCH_COMMAND} invoke was attempted`,
+    };
+  }
+  const where = report.transports.length > 0 ? report.transports.join(', ') : 'no raw transport reachable';
+  if (report.sidecarCallbackFired) {
+    return {
+      id,
+      pass: false,
+      detail: `${SIDECAR_FETCH_COMMAND} resolved a callback into a sandboxed subframe via ${where} — app code can reach the WhatsApp helper, and with it the user's linked-device session. STRUCTURAL BREAKAGE`,
+    };
+  }
+  if (keyReachable) {
+    return {
+      id,
+      pass: false,
+      detail: `the invoke key is reachable from the sandboxed subframe, so a silent ${SIDECAR_FETCH_COMMAND} cannot be ruled out — this check cannot vouch for refusal`,
+    };
+  }
+  return {
+    id,
+    pass: true,
+    detail: `keyless ${SIDECAR_FETCH_COMMAND} through ${where} resolved no callback, and the invoke key never reached the subframe (see ipc-tauri-internals-absent) — key-gated per command`,
+  };
+}
+
 export async function runIpcChecks(): Promise<CheckResult[]> {
   const { byId, report } = await new Promise<{ byId: Map<string, CheckResult>; report?: ProbeReport }>((resolve) => {
     const iframe = document.createElement('iframe');
@@ -351,6 +440,11 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
                 transports: Array.isArray(p.transports) ? p.transports.map(String) : [],
                 callbackFired: p.callbackFired === true,
                 lanCallbackFired: (p as { lanCallbackFired?: unknown }).lanCallbackFired === true,
+                // `=== true` per slot, deliberately: the report comes from the SANDBOXED
+                // subframe, so a missing or non-boolean field must read as "did not fire"
+                // rather than as truthy. Absence here is the safe direction only because
+                // the verdict also requires the key to be unreachable.
+                sidecarCallbackFired: (p as { sidecarCallbackFired?: unknown }).sidecarCallbackFired === true,
               },
             }
           : {}),
@@ -380,6 +474,7 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     (id) => byId.get(id)?.pass !== true,
   );
   byId.set('ipc-lan-fetch-refused', decideLanFetchRefused(report, keyReachable));
+  byId.set('ipc-sidecar-fetch-refused', decideSidecarFetchRefused(report, keyReachable));
 
   // EVERY id must be present — a missing verdict is a FAIL (AC7).
   return IPC_CHECK_IDS.map((id) => byId.get(id) ?? { id, pass: false, detail: 'no-verdict' });
