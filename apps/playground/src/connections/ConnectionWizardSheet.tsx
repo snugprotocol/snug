@@ -50,7 +50,11 @@ import {
   advanceFromRegister,
   advanceFromReview,
   cancelConnectionOAuthFlow,
+  beginDeviceLink,
+  canLinkDevice,
   canPairLanDevice,
+  completeDeviceLink,
+  isLinkedDeviceRequirement,
   lanConnectionVerified,
   lanPairingErrorStore,
   closeConnectionWizard,
@@ -256,6 +260,124 @@ function isPrivateNetworkHost(host: string): boolean {
  * cannot pay off, which is the same broken promise the desktop OAuth refusal
  * screen exists to prevent, one platform over.
  */
+/**
+ * THE LINKED-DEVICE WALL (ADR-0032) — the web disclosure for a helper-backed connection.
+ *
+ * Deliberately says WHY rather than "unsupported": the helper is a program on the user's own
+ * computer, and a web page has no way to talk to one. That is a browser boundary, not a
+ * missing feature, and a user told the real reason can act on it.
+ */
+function LinkedDeviceWallScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void }): ReactElement {
+  const provider = row.requirement.provider.name;
+  const linked = row.allowedHosts.length > 0;
+  return (
+    <div className="field" data-testid="linked-device-wall">
+      <label>{provider} runs through a helper on your computer</label>
+      <span className="hint">
+        {linked
+          ? `this connection is set up and stays exactly as you left it — but a web browser can't talk to a program running on your computer, so ${provider} only works in the Snug desktop app.`
+          : `linking ${provider} runs a small helper on your own computer, and a web browser can't start or reach one — that's a browser security boundary, not a missing feature. Set this connection up in the Snug desktop app.`}
+      </span>
+      <Button variant="primary" onClick={onClose}>
+        take me back
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * THE LINKING SCREEN — start the helper, render the QR, poll, verify, record.
+ *
+ * WHAT THE USER IS AGREEING TO, said plainly on the screen where they act rather than buried
+ * in a consent page they clicked past: this links Snug as a device on their WhatsApp account,
+ * it can read and send as them, and their phone can unlink it at any time. The ToS/ban risk
+ * is stated on the review screen's registration steps (the registry entry's `instructions`,
+ * rendered verbatim); this screen carries the operational half.
+ *
+ * NOTHING DURABLE LANDS UNTIL THE VERIFY READ PASSES (ADR-0025). `completeDeviceLink` runs
+ * the proof before it hands back a token, so a failure here leaves the row exactly as it was
+ * rather than half-connected.
+ */
+function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: () => void }): ReactElement {
+  const provider = row.requirement.provider.name;
+  const [qr, setQr] = useState<string | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | undefined>(undefined);
+  const [waiting, setWaiting] = useState(false);
+
+  const instruction =
+    row.requirement.kind === 'linked_device'
+      ? 'On your phone, open WhatsApp → Settings → Linked devices → Link a device, then scan the code below.'
+      : `Follow ${provider}'s device-linking steps, then scan the code below.`;
+
+  const start = async (): Promise<void> => {
+    setBusy(true);
+    setNote(undefined);
+    const started = await beginDeviceLink();
+    setBusy(false);
+    if (!started.ok) {
+      setNote(started.message);
+      return;
+    }
+    setQr(started.qr);
+    setWaiting(true);
+  };
+
+  const finish = async (): Promise<void> => {
+    setBusy(true);
+    const result = await completeDeviceLink();
+    setBusy(false);
+    if (!result.ok) {
+      // The message names what happened AND what to do; "still waiting" is a distinct,
+      // non-alarming case from "we could not confirm the link".
+      setNote(result.message);
+      return;
+    }
+    setWaiting(false);
+    onLinked();
+  };
+
+  return (
+    <div className="field" data-testid="linked-device-link">
+      <label>link {provider} to Snug</label>
+      <span className="hint">
+        This adds Snug as a linked device on your {provider} account — the same way WhatsApp
+        Web works. Snug will be able to read and send messages in the thread you choose, your
+        sign-in details are never given to Snug, and you can unlink it from your phone at any
+        time.
+      </span>
+      {qr === undefined ? (
+        <Button variant="primary" disabled={busy} onClick={() => void start()}>
+          {busy ? 'starting the helper…' : 'start linking'}
+        </Button>
+      ) : (
+        <>
+          <span className="hint">{instruction}</span>
+          {/*
+            The QR payload is rendered as TEXT, not as an image built here: it is a value the
+            helper produced, and the desktop surface draws it. Showing the raw payload keeps
+            this component free of a rendering dependency and keeps the value inspectable.
+          */}
+          <pre className="code" data-testid="linked-device-qr">
+            {qr}
+          </pre>
+          <Button variant="primary" disabled={busy} onClick={() => void finish()}>
+            {busy ? 'checking…' : "I've scanned it"}
+          </Button>
+        </>
+      )}
+      {note !== undefined ? (
+        <span className="hint" role="status" data-testid="linked-device-note">
+          {note}
+        </span>
+      ) : null}
+      {waiting && note === undefined ? (
+        <span className="hint">waiting for the code to be scanned…</span>
+      ) : null}
+    </div>
+  );
+}
+
 function LanDesktopWallScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void }): ReactElement {
   const provider = row.requirement.provider.name;
   const paired = row.allowedHosts.length > 0;
@@ -1479,6 +1601,7 @@ export function ConnectionWizardSheet(): ReactElement | null {
    * store layer's `lanConnectionVerified`; this component only keeps its answer.
    */
   const [lanVerified, setLanVerified] = useState(false);
+  const [linkVerified, setLinkVerified] = useState(false);
   /**
    * The revision whose row the effect below has actually re-read (ADR-0025 §6). The
    * step store moves SYNCHRONOUSLY on a transition while the row refreshes async — and
@@ -1602,6 +1725,28 @@ export function ConnectionWizardSheet(): ReactElement | null {
    */
   const lanNeedsPairing = isLanRow && !lanWall && !lanNeedsHost && step !== 'review' && !lanVerified;
 
+  /**
+   * THE LINKED-DEVICE FAMILY (ADR-0032) — its own two booleans beside the three above, for
+   * the reason the whole phase exists: `isLanRequirement` is `lanHost !== undefined`, and a
+   * linked-device row carries no `lanHost` (the schema refuses the combination), so it
+   * cannot be routed by widening those gates without dragging it into a pairing path that
+   * demands a TLS pin a unix socket can never produce.
+   *
+   * Derived from the ROW and the platform, like every gate in this file, so each stops being
+   * true the moment the fact it describes stops being true.
+   */
+  const isLinkedDeviceRow = row !== undefined && isLinkedDeviceRequirement(row.requirement);
+  /** Web (or a shell without the seats): disclose and stop. Same posture as `lanWall`. */
+  const linkWall = isLinkedDeviceRow && !canLinkDevice();
+  /**
+   * Past the review, pre-PROOF. Keyed on the VERIFIED fact rather than on a step or on key
+   * presence, for ADR-0025's reason: a wizard reopened after a half-finished link must land
+   * back on the linking screen rather than on a done screen claiming a connection nothing
+   * proved. A catch-all placed above the step-keyed branches, so no step value can walk an
+   * unproven row into the credentials or done screens.
+   */
+  const linkNeedsPairing = isLinkedDeviceRow && !linkWall && step !== 'review' && !linkVerified;
+
   if (session === null) return null;
 
   const title = row === undefined ? 'connect' : `connect ${row.requirement.provider.name}`;
@@ -1656,6 +1801,14 @@ export function ConnectionWizardSheet(): ReactElement | null {
         <span className="hint">loading this connection…</span>
       ) : row === undefined ? (
         <MissingRowScreen session={session} onClose={requestClose} />
+      ) : linkWall ? (
+        /*
+          THE LINKED-DEVICE WALL, ahead of everything for the same reason the LAN wall is:
+          a browser tab cannot open a unix socket, so every screen behind this one would
+          ask for work that cannot pay off. Disclosure, never breakage — the row stays
+          intact and a desktop-linked connection opened here still reads as connected.
+        */
+        <LinkedDeviceWallScreen row={row} onClose={requestClose} />
       ) : lanWall ? (
         /*
           THE LAN WEB WALL, ahead of every other screen including the diff.
@@ -1683,6 +1836,13 @@ export function ConnectionWizardSheet(): ReactElement | null {
         <LanHostScreen row={row} onCollected={() => undefined} />
       ) : step === 'review' ? (
         <ReviewScreen row={row} onApprove={() => void advanceFromReview()} />
+      ) : linkNeedsPairing ? (
+        /*
+          LINKING REPLACES THE CREDENTIALS SCREEN, exactly as pairing does for a LAN row:
+          the token is minted by the link, not typed, so the ordinary credentials screen
+          would show a box nothing can fill.
+        */
+        <LinkedDeviceScreen row={row} onLinked={() => setLinkVerified(true)} />
       ) : lanNeedsPairing ? (
         /*
           PAIRING REPLACES THE CREDENTIALS SCREEN for a LAN row, because the
