@@ -670,3 +670,47 @@ one" clause is retired as unrepresentable-by-construction, which is the better o
   Rust, `/pair/*` off the app path) on the `lanfetch.rs` template, plus their cargo tests and
   the C2 IPC-unreachability gate entries. Phase D (wizard) follows, then E (starter app),
   then F (armed auto-reply).
+
+### 2026-08-16 — claude — Phase G (the Rust commands + the C2 gate row)
+- Done, in two commits. **Part 1 — admission**: `sidecar.rs` enforces method + path against
+  the enumerated contract, traversal on the DECODED form, and the 1 MiB cap, all before a
+  socket opens (the `lan_fetch` precedent: the TS caller is not the last word on what the
+  shell will dial). `/pair/*` and `/session/*` are refused outright on the app path.
+  **Part 2 — the commands**: `sidecar_ctl` (spawn/supervise; SOLE writer of the socket path
+  and the 256-bit CSPRNG spawn nonce; `start` idempotent so a second call cannot spawn a
+  rival racing for the socket) and `sidecar_fetch` (dials the unix socket; the HTTP exchange
+  is hand-rolled because the cap must be enforced WHILE READING — a client that buffered
+  first would defeat the bound before this code saw a byte).
+- **The Rust route table is a deliberate restatement** of the TS contract (this crate is
+  across an IPC boundary), so per the codebase's own rule it earned an equivalence test that
+  PARSES the Rust source rather than retyping it — and I verified it catches drift in BOTH
+  directions (Rust admitting a pairing route trips two tests; Rust dropping a route trips
+  one), plus a non-vacuity assertion so a regex matching nothing cannot pass silently.
+- **C2**: `ipc-sidecar-fetch-refused` joins `IPC_CHECK_IDS` with its own callback slot,
+  per the amendment-16 per-command discipline — registration is per-command, so a
+  family-level check cannot see a command added to the wrong handler list, and reaching THIS
+  command from app code means reaching the process holding the user's linked-device session.
+  The gate driver derives expectations from source, so the new check is required on every
+  run automatically (verified by running the driver's own parse). Two isolation tests pin
+  that neither command's refusal can grant the other's verdict.
+- **Two things caught mid-phase, both the kind this task keeps surfacing:**
+  1. `decideSidecarFetchRefused` shipped with **zero coverage** — the suite passed only
+     because the type gate was satisfied. Untested code guarding a credential boundary; now
+     8 tests. *A green suite says nothing about code no test calls.*
+  2. The type gate then caught the untrusted-subframe report normalizer missing the new
+     field, which would have silently defaulted rather than failed.
+  3. A suite reported **"no tests"** rather than failing — jsdom rewrites `import.meta.url`
+     so `fileURLToPath` refused. Fixed with the `@vitest-environment node` pragma the
+     sibling capability suite already documents. *A suite that does not run is not a suite
+     that passes* (lessons.md 2026-08-06, earned again).
+- Reused `userfile::snug_dir` (now `pub(crate)`) rather than re-deriving `~/Snug`: that rule
+  already shipped a Windows-ordering bug once, and a second spelling is how it ships again.
+- Verified: cargo **64 tests** (48 at phase start); root `turbo run test --force` **23/23,
+  0 cached**; desktop 105 → 120.
+- **Not yet done in G, deliberately**: the helper is spawned via system `node` against
+  `~/Snug/helpers/` — packaging/bundling the sidecar is out of scope per the task's own
+  out-of-scope list, and the macOS shell gate has NOT been re-run on hardware (it needs a
+  real shell build; the Windows leg stays deliberately red per ADR-0021 D8). Both are owner
+  verification items, not silent gaps.
+- Next step: **Phase D** — the `linked_device` wizard flow (QR + poll + verify-before-claim,
+  its own derived-boolean family beside the LAN one, never extending `isLanRequirement`).
