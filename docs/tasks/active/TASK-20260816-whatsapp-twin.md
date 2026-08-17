@@ -508,6 +508,9 @@ one" clause is retired as unrepresentable-by-construction, which is the better o
 (protocol 329 · knowledge 184 · runner 110 · server 126 · adapters 124 · db 306 · sdk 41 ·
 auth 787 · desktop 124 · playground 1121 · whatsapp-sidecar 18) plus **cargo 64**.
 Re-run this FIRST in the new session before trusting anything below.
+**(2026-08-16 pickup: doing so found the desktop crate did not COMPILE — `tokio` was a
+dev-dependency used by production code. Repaired; see the last journal entry. Re-run
+`cargo check --lib` too, not only `cargo test`: the test profile hid this.)**
 
 **Done (A, B.0, B, C, G, D)** — the whole connection path, end to end:
 | Phase | What shipped |
@@ -543,9 +546,8 @@ the visible half of the owner's original ask. Then F (armed auto-reply via a NEW
 - No `<form onSubmit>` — the sandbox blocks submission before the event fires.
 
 **Owner decisions still open (both cheap, both block nothing until E starts):**
-- **Starter display name** — "Twin" proposed, not ratified. It lands in the manifest, the
-  shelf and the README, so decide before writing.
-- Whether Phase G may split into its own PR if the chain grows.
+- ~~**Starter display name**~~ — **SETTLED 2026-08-16: "WhatsApp Twin"** (see last journal entry).
+- Whether Phase G may split into its own PR if the chain grows. *(Still open; blocks nothing.)*
 
 **Owner verification owed (no test can cover these):** the macOS shell gate has not been
 re-run on hardware since `sidecar_ctl`/`sidecar_fetch` landed (needs a real shell build; the
@@ -810,3 +812,54 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
   Insights, Reply Desk, inline translate, forget-thread. Then **Phase F** (armed auto-reply
   via the new `StandingApprovalGate`) and **Phase H** (docs close: ADRs to accepted, threat
   delta, code-map rows, spec-changelog).
+
+### 2026-08-16 — claude — pickup: the desktop crate did not build (Phase G repair)
+
+- **The handoff's "re-run this FIRST" instruction earned itself.** Root
+  `turbo run test --force` reproduced exactly (**23/23, 0 cached**, every per-package count
+  matching), but `cargo test` **did not compile**, and neither did `cargo check --lib`:
+  the desktop shell could not be built at all.
+- **Cause**: `send_over_unix_socket` (`sidecar.rs:362-363`) — production library code, well
+  above the `#[cfg(test)]` boundary at `:425` — uses `tokio::io` and `tokio::net::UnixStream`,
+  but Phase G part 2 (`8db0ced`) added `net` + `io-util` to the **`[dev-dependencies]`** tokio
+  line. Right features, wrong section. Under `cargo test` the dev-deps are linked, so the
+  crate compiles; nothing in the repo ever built the lib WITHOUT them, so the gap was
+  invisible from the test leg alone.
+- **Correction to the Phase G journal entry**: it recorded "Verified: cargo **64 tests**".
+  The count is real — after the fix the suite reports exactly 64 — so the tests were genuinely
+  written and genuinely run. What the entry could not have covered is the *build*: a green
+  `cargo test` is not evidence that the crate compiles, because the test profile links a
+  strictly larger dependency set than the release profile. Recorded rather than quietly
+  fixed, per this task's own standing practice.
+  **Gate 6 candidate (new, and a sibling of the ones already banked): `cargo test` passing
+  does not mean the crate builds — dev-dependencies are linked for tests and absent from the
+  release profile, so a production `use` of a dev-only crate is green in CI's test leg and
+  broken in every real build. The check that catches it is `cargo check --lib`.**
+- Fix: `tokio` declared in **`[dependencies]`** with `default-features = false` and only the
+  two features the transport needs (`net`, `io-util`); the `[dev-dependencies]` line keeps
+  `macros` + `rt-multi-thread` for `#[tokio::test]`. Cargo unions the sets, so each section
+  now states only why IT needs tokio, and neither can be deleted without a named failure.
+- **Second, smaller find in the same file — the pattern this task keeps surfacing.**
+  `socket_path` (`:206`) documents itself as the owner of the socket-path rule ("Chosen HERE
+  and never accepted from the webview") and had a test, but **no production caller**:
+  `sidecar_ctl` inlined `dir.join(SOCKET_BASENAME)` at `:282`. So the test proved a rule the
+  shipping path did not execute, and the two agreed only by both happening to be a `join` —
+  a guard indistinguishable from its absence, exactly the Phase B.0 / Phase C shape one layer
+  down. Surfaced by the `dead_code` warning, not by inspection. `sidecar_ctl` now calls
+  `socket_path`, so the existing test covers the real derivation.
+- Verified after both changes: `cargo check --lib` clean (the `dead_code` warning is gone; the
+  remaining snake-case warning is pre-existing in `lanfetch.rs`), `cargo test` **64 passed**,
+  root `turbo run test --force` **23/23, 0 cached**.
+- **Owner decision (2026-08-16): the starter display name is "WhatsApp Twin"** — ratified,
+  replacing the unratified "Twin" proposal. It lands in the manifest, the shelf row and the
+  README when Phase E starts. Rationale: explicit about the provider so the shelf row is
+  unambiguous; the ToS/impersonation disclosure already sits in the wizard consent copy and
+  the README, so brand-adjacency is disclosed rather than implied.
+- State: **STOPPED at owner request** for a proper review of Phase G before Phase E begins.
+  Working tree committed; nothing exists only in this chat.
+- Next step: owner reviews Phase G (`aa26475`, `8db0ced`, plus this repair) → then **Phase E**,
+  the starter app, whose two blocking inputs are now settled (name ratified above; the
+  Phase-G-splits-into-its-own-PR question is still open but blocks nothing).
+- **Still owed by the owner, unchanged**: the macOS shell gate has not been re-run on hardware
+  since `sidecar_ctl`/`sidecar_fetch` landed — and note that until this repair it *could not*
+  have been, since the shell did not build. The Windows leg stays deliberately red (ADR-0021 D8).

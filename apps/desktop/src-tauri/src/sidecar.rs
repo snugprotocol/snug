@@ -279,7 +279,10 @@ pub async fn sidecar_ctl(
             // platform-ordering bug once.
             let dir = crate::userfile::snug_dir()?;
             std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-            let socket = dir.join(SOCKET_BASENAME);
+            // Through `socket_path`, not a second `join`: that function documents itself as
+            // the owner of this rule, and a rule whose only caller is its own test is a
+            // comment the compiler cannot check.
+            let socket = socket_path(&dir, SOCKET_BASENAME);
             // A stale socket file from a crashed run would make bind fail; removing it is
             // safe because this path is ours and nothing else may write it.
             let _ = std::fs::remove_file(&socket);
