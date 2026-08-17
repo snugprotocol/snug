@@ -1354,3 +1354,37 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
   app/wizard door split, the unscannable QR, the dropped token — each surfaced only when a
   human walked the path, and each sat behind a green suite. Every piece was unit-tested; the
   SEAMS between them were not. Gate 6 should carry this as the task's headline lesson.
+
+### 2026-08-17 — claude — the half-linked session store wedged the helper permanently
+
+- **Owner report**: "start linking" now sits at "waiting for the code to be scanned" with NO
+  QR, and the helper logs `Error: Connection Failure` from Baileys' noise handler.
+- **Cause, read off disk rather than guessed**: `~/Snug/whatsapp-session/` held **3,115 files**
+  from the earlier successful scan, and `creds.json` was the worst possible shape —
+  `me` populated (the scan really happened) with `registered: false` (the flow died before
+  completing, because the token was not being stored yet). Baileys loads that store, decides
+  it has a session to RESUME, and never enters pairing; WhatsApp rejects the resume. No QR,
+  no session.
+- **The design flaw is that nothing ever cleared this directory.** Not `startLink`, not
+  `sidecar_ctl`, not the wizard. So a user who got interrupted mid-link — which the earlier
+  token bug guaranteed — was stuck permanently, with no route out from the UI and no
+  documented folder to delete. Reinstalling the helper would not have helped either.
+- Fixed: `startLink` clears the credential store when `shouldResetAuthStore(link)` — i.e.
+  whenever we are NOT already linked. `POST /pair/start` means "I want to link a device", so
+  anything on disk in an unlinked state is by definition not a working session. While LINKED
+  the reset never fires; otherwise reopening the wizard on a healthy connection would unlink
+  the user's phone.
+- **The subtle half**: the in-memory `state` is RELOADED after the reset. Clearing the files
+  while continuing to hand Baileys the credentials already in memory would resume the same
+  dead session and reproduce the wedge exactly — a fix that looked right and changed nothing.
+- `resetAuthStore` never throws: failing to clean up must not be worse than not trying, since
+  an exception would take down `startLink` and leave the user in the very wedge it clears.
+- **Verified against the real incident, not just the unit tests**: seeded a store with the
+  owner's exact shape (`registered:false` + `me` + sync-key files), started the built helper,
+  and got `state=waiting qr=277 chars — RECOVERED` with **zero** "Connection Failure" lines.
+- Verified: whatsapp-sidecar 40 → **45**; root `turbo run test --force` **23/23, 0 cached**.
+- **Note for Gate 6**: this defect was CREATED by the previous one. The dropped token
+  interrupted the flow mid-link, which wrote the half-linked store, which then wedged every
+  retry — so the fix for defect four surfaced defect five. Worth stating plainly: a
+  partially-completed flow leaves state behind, and every step that writes durable state owes
+  an answer to "what happens when the next step never runs".

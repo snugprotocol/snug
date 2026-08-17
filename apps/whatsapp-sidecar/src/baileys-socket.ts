@@ -27,6 +27,8 @@
  * its own replies would be a second brain outside every surface the host reviews.
  */
 
+import { readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -39,6 +41,40 @@ const MAX_MESSAGES_PER_THREAD = 5_000;
 
 /** Human-like send pacing (ADR-0032 §5): mitigation, never evasion. */
 const MIN_SEND_GAP_MS = 1_200;
+
+/**
+ * May `startLink` clear the credential store first?
+ *
+ * Only when we are NOT linked. `POST /pair/start` means "I want to link a device", and if
+ * there is no live session then whatever sits on disk is not a working one — it is at best a
+ * dead session and at worst the half-linked wedge described in `session-reset.test.ts`, where
+ * `me` is present (the scan happened) and `registered` is false (it never finished). Baileys
+ * loads that, tries to RESUME rather than pair, and WhatsApp answers "Connection Failure" —
+ * no QR and no session, permanently, because nothing ever cleared the directory.
+ *
+ * While LINKED this must stay false: reopening the wizard on a working connection would
+ * otherwise unlink the user's phone.
+ */
+export function shouldResetAuthStore(link: WaLinkState): boolean {
+  return link !== 'linked';
+}
+
+/**
+ * Delete every credential file, keeping the directory.
+ *
+ * NEVER THROWS: failing to clean up must not be worse than not trying — an exception here
+ * would take down `startLink` and leave the user in exactly the wedge this clears.
+ */
+export function resetAuthStore(authDir: string): void {
+  try {
+    for (const entry of readdirSync(authDir)) {
+      rmSync(join(authDir, entry), { recursive: true, force: true });
+    }
+  } catch {
+    // Missing directory (first run) or an unreadable one. Both are survivable: a fresh
+    // `useMultiFileAuthState` will create what it needs.
+  }
+}
 
 export interface BaileysSocketDeps {
   /** Folder for `useMultiFileAuthState` — THE store holding session keys, inside the helper. */
@@ -134,7 +170,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   const now = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  const { state, saveCreds } = await useMultiFileAuthState(deps.authDir);
+  let { state, saveCreds } = await useMultiFileAuthState(deps.authDir);
 
   let link: WaLinkState = 'idle';
   let qr: string | undefined;
@@ -238,6 +274,18 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       // Idempotent while one attempt is in flight — a second call must not open a rival
       // socket racing the first for the same session.
       if (sock !== undefined && (link === 'waiting' || link === 'linked')) return;
+
+      // CLEAR A DEAD OR HALF-LINKED STORE BEFORE PAIRING (see `shouldResetAuthStore`). The
+      // in-memory `state` is reloaded too: resetting the files while continuing to hand
+      // Baileys the credentials we just deleted would resume the same dead session and
+      // reproduce the exact wedge this clears.
+      if (shouldResetAuthStore(link)) {
+        resetAuthStore(deps.authDir);
+        const reloaded = await useMultiFileAuthState(deps.authDir);
+        state = reloaded.state;
+        saveCreds = reloaded.saveCreds;
+      }
+
       link = 'waiting';
       connect();
     },
