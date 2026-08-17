@@ -1010,8 +1010,21 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       }
 
       // Gate 6 — mutating methods need the user's confirmation BEFORE credentials move.
+      //
+      // `slot` and `body` ride along for gates that must decide on WHAT is being sent, not
+      // only where (ADR-0033's standing gate derives a chat thread from them). Both are
+      // optional and the session gate ignores them, so this is additive: on the absolute-URL
+      // path — which is how the wizard's probe arrives — `slot` is simply absent, and that
+      // absence is what keeps a standing grant off the probe.
       if (method !== 'GET' && method !== 'HEAD') {
-        const granted = await deps.confirmGate.confirm({ appId, host, method, url: url.href });
+        const granted = await deps.confirmGate.confirm({
+          appId,
+          host,
+          method,
+          url: url.href,
+          ...(symbolic !== undefined ? { slot: symbolic.slot } : {}),
+          ...(body !== undefined ? { body } : {}),
+        });
         if (granted !== true) {
           return failure(NET_ERROR_CODES.NET_CONFIRM_DENIED, `the user declined this ${method} request`);
         }

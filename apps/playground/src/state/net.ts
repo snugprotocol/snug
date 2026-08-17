@@ -11,10 +11,13 @@
 import {
   createConnectedFetch,
   createSessionConfirmGate,
+  createStandingApprovalGate,
   UserDbCredentialStore,
   type ConnectedFetchDeps,
   type NetConfirmDecision,
   type NetConfirmRequest,
+  type StandingApprovalStore,
+  type StandingGrant,
 } from '@snugprotocol/auth';
 import type { NetHandler, NetHandlerResult } from '@snugprotocol/runner';
 import type { NetRequestFrame } from '@snugprotocol/protocol';
@@ -171,9 +174,67 @@ export function dismissAuthShapedFailure(): void {
   authShapedFailureStore.set(null);
 }
 
-/** Drop remembered session grants for an app — called on approve/reapprove/revoke (R3). */
+/**
+ * THE STANDING APPROVAL GATE (ADR-0033), wrapping the session gate rather than replacing it.
+ *
+ * Composition is the design, not a convenience: this gate is the ONLY caller of the session
+ * gate, so "the standing grant is consulted first, and anything outside its frozen scope
+ * falls through to the ordinary confirm" is structural rather than a convention a later edit
+ * could invert. The session gate's own key and its deliberate memory-only property are
+ * untouched — see `standing-approval.ts` and blocker B2 for why widening it was rejected.
+ *
+ * The store is in-memory for v1, which is a REAL limitation and is stated rather than
+ * papered over: an armed thread does not survive a page reload. ADR-0033 §2 wants the grant
+ * persisted with the connection; that lands with the settings-card disclosure, and until it
+ * does, a reload is a disarm — the safe direction to fail.
+ */
+const standingGrants: StandingGrant[] = [];
+const standingStore: StandingApprovalStore = {
+  list: () => standingGrants,
+  save: (grant) => {
+    const index = standingGrants.findIndex((row) => row.appId === grant.appId && row.slot === grant.slot);
+    if (index >= 0) standingGrants[index] = grant;
+    else standingGrants.push(grant);
+  },
+  clear: (appId) => {
+    for (let i = standingGrants.length - 1; i >= 0; i -= 1) {
+      if (standingGrants[i]?.appId === appId) standingGrants.splice(i, 1);
+    }
+  },
+};
+
+const standingGate = createStandingApprovalGate({
+  store: standingStore,
+  inner: confirmGate,
+  now: () => Date.now(),
+});
+
+/** Arm auto-reply for one thread. The app calls this from an explicit user gesture. */
+export function armStandingApproval(grant: StandingGrant): void {
+  standingGate.arm(grant);
+}
+
+/** The kill switch (ADR-0033 §2) — immediate, and the next send is simply not armed. */
+export function disarmStandingApproval(appId: string): void {
+  standingGate.disarm(appId);
+}
+
+/** What is armed, so the UI can disclose it. An approval the user cannot see is not one. */
+export function armedStandingApproval(appId: string): StandingGrant | undefined {
+  return standingGate.armedFor(appId);
+}
+
+/**
+ * Drop remembered session grants for an app — called on approve/reapprove/revoke (R3).
+ *
+ * Clears the STANDING grant too. A standing approval that outlived a connection change would
+ * be an approval for a connection the user just changed — the same reasoning that makes the
+ * session gate invalidate here, applied to a grant that is longer-lived and therefore worse
+ * to leave behind.
+ */
 export function invalidateNetGrants(appId: string): void {
   confirmGate.invalidate(appId);
+  standingGate.invalidate(appId);
 }
 
 /**
@@ -222,7 +283,11 @@ export function connectedFetchDepsFor(
         })),
     },
     fetchImpl,
-    confirmGate,
+    // The STANDING gate, not the session gate directly (ADR-0033). It consults the armed
+    // grant first and delegates everything outside that frozen scope to `confirmGate`, so
+    // the ordinary confirm still runs for every request the user has not armed — including
+    // the wizard's probe, which carries no slot and therefore can never match a grant.
+    confirmGate: standingGate,
     // Decision 6 (TASK-20260812): the LAN rung keys on the platform capability — desktop
     // widens `http://` to explicitly-approved private-range IP literals; the browser
     // profile passes NO seat at all, so the executor's default (https-only) is untouched.

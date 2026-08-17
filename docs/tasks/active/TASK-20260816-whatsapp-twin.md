@@ -925,3 +925,68 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
 - Next step: **Phase F** (the `StandingApprovalGate` — do NOT widen the session gate, see B2;
   AC8's four negatives are the load-bearing tests), then **Phase H** (docs close: ADR-0032/0033
   to accepted, threat delta, code-map rows, spec-changelog, next-steps prune).
+
+### 2026-08-17 — claude — Phase F, part 1 (the host-side standing gate)
+
+- Done: `packages/auth/src/standing-approval.ts` + 22 tests. The gate **WRAPS** the session
+  gate rather than widening it (B2/ADR-0033 §3) — and composition is the property, not a
+  convenience: this gate is the ONLY caller of the session gate, so "consulted first, falls
+  through outside its frozen scope" is structural rather than a convention a later edit could
+  invert. `session-confirm.ts`'s key and its memory-only header are untouched.
+- AC8's four load-bearing negatives all pass, each falling through to the ordinary confirm
+  rather than refusing outright (the refusal to decide is never itself an approval): a
+  different thread, a different app, the wizard probe path, and a non-send route on the armed
+  thread. Plus the ADR-0033 §3 derivation seat: **disagreeing path/body JIDs REFUSE**, never
+  pick one — "trust the path" and "trust the body" are the same vulnerability in two
+  spellings. Rate-cap and quiet-hours refusals are returned as distinct `outcome`s via
+  `decide()`, so an app can tell "you hit your cap" from "the user said no".
+- **A fifth surviving mutant, and the same shape for the fourth time this task.** Deleting
+  the wizard-probe exclusion left every test green: my fixture used the armed request with
+  `slot: undefined`, but the NEXT guard (`grant.slot !== request.slot`) refuses
+  `'whatsapp' !== undefined` anyway — so it tested the slot-match guard twice and the probe
+  exclusion zero times. Fixed by arming a grant that ALSO has no slot, so every sibling guard
+  would admit the request and the probe check is the only thing left standing. All five
+  mutants now die for their own reasons. **This is now four separate instances in one task
+  (B.0 traversal, D empty-token, E ×2, F) — Gate 6 should carry it as a named pattern: a
+  refusal fixture must be constructed to pass every SIBLING refusal first.**
+- **Executor change, minimal and additive**: `NetConfirmRequest` gains OPTIONAL `slot` and
+  `body`. ADR-0033 needs a thread decision, and a thread is underivable from a URL alone.
+  Optional is the design — every existing caller is byte-identical, and the ABSENCE of `slot`
+  on the absolute-URL path is exactly what keeps a standing grant off the wizard's probe.
+  - One existing test broke, correctly: `connected-fetch.test.ts` pinned the confirm request
+    by EXACT equality. I kept it exact (adding `body`) rather than loosening to
+    `objectContaining` — this is a C1-adjacent seat, and a future field arriving unnoticed is
+    precisely what that assertion exists to catch.
+  - Added the symbolic-path positive (`connection-url-resolution.test.ts`), because
+    `confirm-seat-scope.test.ts` only pins the ABSENT case: without it, a cut `slot` wire
+    would read as "the probe is correctly excluded" while arming silently never matched
+    anything. Mutation-verified — cutting the wire kills exactly that test.
+- Wired in the playground: `standingGate` wraps `confirmGate` and is what the executor
+  receives. `invalidateNetGrants` now clears BOTH, so every existing approve/re-approve/revoke
+  call site (10 of them, already in place) clears standing grants for free — a standing
+  approval outliving a connection change would be worse than a session one doing so.
+- **Stated rather than hidden**: the v1 grant store is IN-MEMORY, so an armed thread does not
+  survive a page reload. ADR-0033 §2 wants it persisted with the connection. A reload is
+  therefore a disarm, which is the safe direction to fail, but it is not what the ADR
+  specifies and must not be described as done.
+- Verified: auth 787 → **813**; playground 1121; root `turbo run test --force` **23/23,
+  0 cached**; cargo **64**. Rebuilt auth before trusting the playground (the 2026-08-15
+  dependent-build lesson — the first playground run failed on stale `dist` exactly as it warns).
+- **BLOCKED, needs an owner decision — the app cannot reach the gate.** The arm switch lives
+  inside the sandboxed iframe, and the frame vocabulary (`FRAME_TYPES`,
+  `packages/protocol/src/constants.ts:15-24`) has no frame for arming: an app can send
+  `snug:net-request`, `snug:db-request`, `snug:app-message` and nothing else. So Phase E's
+  switch still holds component state only, and the host gate it should drive is currently
+  reachable only from host code. Closing this needs one of:
+  1. **A new protocol frame** (`snug:standing-request` or similar) — a C3 spec-sync change
+     with its own schema, runner routing, size class and review surface. Most honest, biggest.
+  2. **A host-rendered arm control** (the connections/settings card owns arming, the app only
+     displays state) — no protocol change, and it puts a standing approval on a host surface
+     the app cannot forge, which is arguably where ADR-0033 §2's "disclosed wherever the
+     connection is disclosed" already points.
+  3. **Defer arming to a follow-up task**, shipping Twin with manual Reply only.
+  My recommendation is **(2)**: it needs no protocol change, and a standing write approval
+  granted by a gesture the app itself renders is a weaker guarantee than one granted on a
+  host surface — the app is the party that benefits from being armed.
+- Next step: owner picks the arming surface, then Phase F part 2 (the chosen surface + the
+  activity-journal read-back), then **Phase H**.

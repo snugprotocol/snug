@@ -14,6 +14,22 @@ export interface NetConfirmRequest {
   host: string;
   method: NetMethod;
   url: string;
+  /**
+   * The resolved connection slot, present only when the request was addressed symbolically
+   * (`snug-connection://<slot>/…`). ADR-0033's standing gate needs it, and its ABSENCE is
+   * load-bearing: the wizard's probe reaches the executor by absolute URL and so carries no
+   * slot, which is what keeps a standing grant off the probe path.
+   *
+   * OPTIONAL, deliberately. This gate ignores both new fields entirely — its key stays
+   * `(appId, host, method)` — so every existing caller behaves byte-for-byte as before.
+   */
+  slot?: string;
+  /**
+   * The request body, for gates that must decide on WHAT is being sent rather than only
+   * where. ADR-0033 §3 requires refusing a send whose body JID disagrees with its path JID,
+   * which is underivable from the URL alone.
+   */
+  body?: string;
 }
 
 /** What the UI prompt resolves: the decision plus the remember checkbox state. */
