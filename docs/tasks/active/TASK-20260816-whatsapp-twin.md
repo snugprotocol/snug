@@ -1037,3 +1037,70 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
 - **Task status: Gate 5 complete for the shipped scope.** What remains is owner-owned, not
   agent-owned: the macOS hardware gate, the Twin pairing journey, and the deferred arming
   surface. Recommend `/close-session` next, then the PR.
+
+### 2026-08-17 — claude — macOS shell gate re-run on hardware: GREEN
+
+- **Correction to my own handoff framing.** I had listed the macOS gate as an owner
+  verification. It is not: `pnpm --filter desktop gate` is SELF-DRIVING (`tauri-driver` has
+  no macOS support, so the driver builds the debug shell with
+  `--features tauri/custom-protocol`, launches it, and the webview harness runs every check
+  inside the real WKWebView, writing one JSON verdict). No hardware interaction is needed —
+  only a machine that can build the crate. Ran it here.
+- **Result: GATE GREEN** — 28 checks + 13 journey steps, all present and passing. First run
+  since `sidecar_ctl`/`sidecar_fetch` landed, and it could not have run before the
+  2026-08-16 Cargo repair because the crate did not build.
+- **The verdict this task existed for**, now proven in a real WKWebView rather than jsdom:
+  `ipc-sidecar-fetch-refused` — *"keyless `sidecar_fetch` through `webkit.messageHandlers.ipc`
+  resolved no callback, and the invoke key never reached the subframe — key-gated per
+  command."* Reaching that command from app code means reaching the process holding the
+  user's linked-device session, so this is the C2 half of ADR-0032's custody story. Its
+  sibling `ipc-lan-fetch-refused` also passes, and the two are independent per-command
+  checks (amendment-16 discipline), so neither borrows the other's verdict.
+- Also confirmed green on this run: `ipc-tauri-internals-absent` (the Windows D8 failure
+  mode, correctly absent on macOS), the 14 CSP checks, and both persistence-flush legs.
+- **Still genuinely owner-owned** (no automation can cover them): the Twin pairing journey
+  against a real WhatsApp account — helper spawns, QR renders, phone links,
+  verify-before-claim passes, a thread analyses, one manual Reply is confirmed and delivered
+  — and the ToS/ban risk decision that precedes it. Windows stays deliberately red (D8).
+
+### 2026-08-17 — claude — 🔴 GAP FOUND while preparing the owner's manual test: Phase C is INCOMPLETE
+
+- **The pairing journey cannot be run today, and my previous entries implied it could.**
+  Found by checking what the shell actually spawns (`helper_entry` →
+  `~/Snug/helpers/whatsapp-sidecar/index.js`) against what the package can produce.
+- **What is missing from `apps/whatsapp-sidecar`:**
+  - **No entry point.** `package.json` declares `main: dist/index.js` and a bin
+    `dist/cli.js`; NEITHER `src/index.ts` NOR `src/cli.ts` exists. The manifest names files
+    that were never written — a claim about another artifact, unverified, which is the exact
+    failure lessons.md:69 warns about and which this task already recorded itself committing
+    once (B3).
+  - **No unix-socket server.** Nothing calls `createServer`/`listen`. The router is a pure
+    `handle(request)` function with no transport in front of it, so `sidecar_fetch` has
+    nothing to dial.
+  - **No real `WaSocket` implementation and no `baileys` dependency.** Every reference to
+    `makeWASocket`/`useMultiFileAuthState` is in a COMMENT. The only implementation is the
+    scripted fake in `__tests__`. The plan's own Phase C line names
+    `src/{server,routes,session,store}.ts`; what shipped is `{router,store,wa-socket}.ts` —
+    **`server` and `session` were never written**, and the Phase C journal entry reported the
+    phase complete without noting it.
+- **Why the suites are all still honestly green.** The 18 sidecar tests test the router's
+  REFUSALS against a scripted fake, which is what they claim to do and what they should do.
+  Nothing anywhere asserts that the package produces a runnable process — no test imports an
+  entry point, and the Rust side is tested against its own admission logic, not against a
+  live helper. So this is not a broken test; it is **a hole no test was ever pointed at**,
+  which is precisely the shape the task's own repeated lesson keeps naming (a green suite
+  says nothing about code no test calls — Phase G, `decideSidecarFetchRefused`).
+- **What DOES work and is unaffected** (so the gap is scoped, not total): the protocol kind
+  and contract, the registry entry, the router's refusals, the Rust admission +
+  `sidecar_ctl`/`sidecar_fetch`, the C2 gate row (hardware-verified green today), the wizard
+  flow's state machine and screens, the starter app, and the standing gate. Everything
+  between the webview and the socket is real; what is absent is the process on the far end.
+- **Corrected task status: Phase C is NOT done.** The remaining work is a real Phase C.2:
+  `src/index.ts` (unix-socket HTTP server binding `~/Snug/whatsapp-sidecar.sock` at 0600,
+  parsing the request into the router's shape, honouring the 1 MiB cap), `src/cli.ts`
+  (argv/env nonce + socket path from `sidecar_ctl`), `src/baileys-socket.ts` (the real
+  `WaSocket` behind the seam — this is what the seam was FOR), the `baileys@7.0.0-rc14`
+  dependency, and an install step putting the built helper at `~/Snug/helpers/`.
+- Next step: owner decides whether to commission Phase C.2 now or land the PR with the
+  helper explicitly marked unimplemented. **Nothing about the pairing journey should be
+  described as testable until C.2 exists.**
