@@ -639,3 +639,34 @@ one" clause is retired as unrepresentable-by-construction, which is the better o
 - Next step: Phase C — the sidecar package (`apps/whatsapp-sidecar`), Baileys behind a
   `WaSocket` seam so the suite runs against a scripted fake; then Phase G's `sidecar_ctl` +
   `sidecar_fetch` Rust commands, which C/D cannot be exercised without.
+
+### 2026-08-16 — claude — Phase C (the sidecar package + router)
+- Done: `apps/whatsapp-sidecar` (package, tsconfig pair, tsc-gated `test` script like every
+  other package) with Baileys behind a narrow `WaSocket` seam. 18 tests, all against a
+  scripted fake — no network, no phone, no real account. The seam is not speculative: the
+  7.x line reshapes payloads between release candidates, so an upgrade is one adapter file.
+- The process is **LLM-free by construction** — analysis, persona work, translation and
+  reply composition all stay in the governed host. A sidecar that composed its own replies
+  would be a second brain outside every reviewed surface.
+- Refusals implemented and **each mutation-checked (M1–M4 all die)**: every route needs a
+  credential with `/pair/*` INCLUDED (the original "every non-pair route 401s" would have
+  left the token-releasing route open); no route serializes WhatsApp key material, asserted
+  against a POPULATED real-shaped auth store because an empty one passes for the wrong
+  reason; thread scoping with an honest 404; and the history sync state — including
+  `explicit:false` — rides with every page so an app cannot render an INFERRED completion
+  as the whole record.
+- **A surviving mutant earned a test, for the second time this task.** Removing the store's
+  re-mint guard left all 17 green: the router only calls `setToken` when it already believes
+  no token exists, so the router's check MASKED the store's and that guard was decoration.
+  Driving the store directly separates them. Two guards for one property is fine; a guard no
+  test can distinguish from its absence is a comment. **Gate 6 candidate (generalizes the
+  Phase B.0 catch): when two layers guard one property, at least one test must drive the
+  inner layer directly, or the outer guard makes the inner one untestable.**
+- Verified: root `turbo run test --force` **23/23 tasks, 0 cached** (was 21 — the sidecar's
+  build and test joined the graph; confirmed the package is really in it, since a package
+  turbo does not know about is a package CI never runs).
+- Next step: **Phase G** (taken early, per the plan review's S5) — `sidecar_ctl` (spawn,
+  supervise, own the socket path and nonce) and `sidecar_fetch` (method+path admission in
+  Rust, `/pair/*` off the app path) on the `lanfetch.rs` template, plus their cargo tests and
+  the C2 IPC-unreachability gate entries. Phase D (wizard) follows, then E (starter app),
+  then F (armed auto-reply).
