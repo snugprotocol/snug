@@ -16,6 +16,12 @@ mod gate;
 /// (host class, pin, redirect policy, size cap) is enforced here in Rust.
 mod lanfetch;
 mod openfile;
+/// The WhatsApp helper's transport (ADR-0032). Ships in RELEASE for the same reason
+/// `lanfetch` does: it is a production capability whose guards — method, path, traversal,
+/// size cap — are all Rust-side and unconditional. It reaches a UNIX SOCKET this module
+/// names, never a host or a port the webview supplies, so no loopback address ever enters
+/// a connection's frozen ceiling.
+mod sidecar;
 mod userfile;
 
 use openfile::OpenedFiles;
