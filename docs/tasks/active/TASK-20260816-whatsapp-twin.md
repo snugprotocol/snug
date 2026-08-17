@@ -1164,3 +1164,41 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
 - **The pairing journey is now runnable.** Owner steps: `pnpm --filter whatsapp-sidecar build
   && pnpm --filter whatsapp-sidecar install:helper`, then the desktop app → connect the
   WhatsApp connection → scan → pick a thread → analyse → one manual Reply.
+
+### 2026-08-17 — claude — owner hit "the helper could not be started": the GUI's node is not the shell's
+
+- **Owner report**: clicking "start linking" in the wizard gave *"the WhatsApp helper could
+  not be started"*. Reproduced and root-caused; **two defects, and the second is why the
+  message was worse than useless.**
+- **Cause.** `sidecar_ctl` spawns `Command::new("node")`, which resolves against the PATH the
+  **GUI app** inherits — on macOS a minimal one that does NOT include nvm. The owner's
+  machine resolves that to `/usr/local/bin/node`, a 2023-era **v18.18.0** x86_64 binary owned
+  by root; their nvm (and my terminal, which is why every earlier run worked) has v22.13.1.
+  `baileys` declares `engines.node >= 20`, and its `lru-cache` imports `tracingChannel` from
+  `node:diagnostics_channel`, which v18 does not export — so the helper died on its first
+  import, every time, instantly.
+- **Defect 2, the one that hid it**: `spawn()` reports success the moment the process EXISTS.
+  A child that dies a millisecond later was invisible, so the shell recorded the helper as
+  running and the wizard blamed the spawn. The user was told the helper could not start when
+  it had started fine and then exited — **an error pointing at the wrong thing costs more
+  than no error at all.**
+- **Fixed, tests first (6 new cargo tests, 64 → 70):**
+  - `node_version_preflight` asks the SAME bare `node` the spawn will use (asking a
+    separately-resolved path would vouch for the wrong binary — that IS the bug) and refuses
+    below Node 20 with a message naming the version found, the version needed, and what to do
+    about it. An unparseable version is refused, never assumed new enough.
+  - `helper_entry_refusal` refuses before spawning when the helper is not installed, naming
+    the expected path and the install command. Packaging is out of scope, so "not installed"
+    is an ordinary state that deserves an instruction.
+  - The spawn now waits 600 ms and `try_wait()`s: a child that already exited becomes *"the
+    WhatsApp helper started and then stopped"* plus its last three stderr lines (capped at
+    400 chars, kept off every route).
+  - `MIN_NODE_MAJOR` is pinned by a test against baileys' own `engines.node`, so a future
+    floor rise fails loudly instead of reaching a mystifying import error.
+- **This is the ADR-0032 out-of-scope packaging decision showing its teeth.** v1 deliberately
+  spawns the system `node`; the consequence is that the runtime is whatever the user's GUI
+  PATH finds, which is frequently not what their terminal finds. The preflight makes that
+  legible rather than fatal, but it does not make it go away — bundling a known-good runtime
+  is the real fix and remains out of scope by the task's own list.
+- Verified: cargo **70**. Owner still needs a Node 20+ that the GUI can see before the
+  pairing journey can proceed (their nvm v22 is invisible to the app).

@@ -283,17 +283,52 @@ pub async fn sidecar_ctl(
             // the owner of this rule, and a rule whose only caller is its own test is a
             // comment the compiler cannot check.
             let socket = socket_path(&dir, SOCKET_BASENAME);
+
+            // PREFLIGHT, before anything is spawned (both added 2026-08-17 after the owner
+            // hit "the WhatsApp helper could not be started" on real hardware). A GUI app
+            // inherits a minimal PATH, so the `node` found here is often NOT the one on a
+            // developer's shell PATH — the owner's resolved to v18, and baileys needs 20+.
+            // Checking after the fact is not enough: `spawn` succeeds the instant the process
+            // exists, so a runtime that dies on its first import looks like a clean start.
+            if let Some(refusal) = helper_entry_refusal(&dir) {
+                return Err(refusal);
+            }
+            node_version_preflight()?;
+
             // A stale socket file from a crashed run would make bind fail; removing it is
             // safe because this path is ours and nothing else may write it.
             let _ = std::fs::remove_file(&socket);
             let nonce = mint_nonce();
-            let child = std::process::Command::new("node")
+            let mut child = std::process::Command::new("node")
                 .arg("--enable-source-maps")
                 .arg(helper_entry(&dir))
                 .env("SNUG_SIDECAR_SOCKET", &socket)
                 .env("SNUG_SIDECAR_NONCE", &nonce)
+                .stderr(std::process::Stdio::piped())
                 .spawn()
                 .map_err(|e| format!("could not start the WhatsApp helper: {e}"))?;
+
+            // DID IT SURVIVE? `spawn` only proves the process was created. The helper binds
+            // its socket within milliseconds, so a short wait distinguishes "running" from
+            // "exited immediately" — and the difference matters enormously to the user, who
+            // was previously told the helper could not start when it started and then died.
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            if let Ok(Some(status)) = child.try_wait() {
+                let mut detail = String::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    let _ = stderr.read_to_string(&mut buf);
+                    // The helper's own last words are the most useful thing we have, but they
+                    // are a subprocess's stderr: cap them, and keep them out of any route.
+                    detail = buf.lines().rev().take(3).collect::<Vec<_>>().join(" / ");
+                    detail.truncate(400);
+                }
+                let _ = std::fs::remove_file(&socket);
+                return Err(format!(
+                    "the WhatsApp helper started and then stopped ({status}). {detail}"
+                ));
+            }
             *guard = Some(RunningSidecar {
                 child,
                 socket,
@@ -328,6 +363,85 @@ fn helper_entry(snug_dir: &std::path::Path) -> PathBuf {
 /// The socket file's basename. Mirrors `SIDECAR_SOCKET_BASENAME` in the protocol contract;
 /// the cross-language test pins the two equal.
 pub const SOCKET_BASENAME: &str = "whatsapp-sidecar.sock";
+
+/// The oldest Node the helper can run on — pinned against baileys' own `engines.node`.
+///
+/// Its `lru-cache` dependency imports `tracingChannel` from `node:diagnostics_channel`, which
+/// Node 18 does not export, so an old runtime does not degrade: it dies on the first import.
+const MIN_NODE_MAJOR: u32 = 20;
+
+/// Parse `node --version` output (`v22.13.1`) into its major.
+///
+/// Returns `None` for anything unrecognized, and the CALLER treats `None` as "cannot vouch
+/// for this runtime". Guessing that an unparseable version is new enough is how this bug
+/// would ship a second time.
+fn parse_node_major(output: &str) -> Option<u32> {
+    let trimmed = output.trim().trim_start_matches('v');
+    let major = trimmed.split('.').next()?;
+    if major.is_empty() {
+        return None;
+    }
+    major.parse::<u32>().ok()
+}
+
+fn node_major_is_supported(major: u32) -> bool {
+    major >= MIN_NODE_MAJOR
+}
+
+/// The refusal a too-old runtime earns. Names the version found, the version needed, and the
+/// thing to fix — "could not be started" named none of those, which is why it was useless.
+fn node_version_refusal(found: u32) -> String {
+    format!(
+        "the WhatsApp helper needs Node {MIN_NODE_MAJOR} or newer, but this computer runs \
+         Node {found}. Snug launches the helper with whatever `node` the system provides, \
+         which on macOS is often an older one than your terminal uses. Install Node \
+         {MIN_NODE_MAJOR}+ system-wide (or symlink your newer node into /usr/local/bin) and \
+         try again."
+    )
+}
+
+/// Refuse before spawning when the helper is not installed.
+///
+/// Packaging the helper into the app bundle is deliberately out of scope (v1 spawns the
+/// system `node` against `~/Snug/helpers/`), so a missing helper is an ordinary state that
+/// deserves an instruction rather than a spawn failure whose message names the wrong problem.
+fn helper_entry_refusal(snug_dir: &std::path::Path) -> Option<String> {
+    let entry = helper_entry(snug_dir);
+    if entry.is_file() {
+        return None;
+    }
+    Some(format!(
+        "the WhatsApp helper is not installed — expected it at {}. Build and install it with \
+         `pnpm --filter whatsapp-sidecar build && pnpm --filter whatsapp-sidecar install:helper`.",
+        entry.display()
+    ))
+}
+
+/// Ask the `node` this shell would actually spawn for its version.
+///
+/// Deliberately the SAME bare `node` the spawn uses, not a path we resolved separately: the
+/// whole failure was that the GUI's `node` differs from the developer's, so a preflight that
+/// asked a different binary would vouch for the wrong one.
+fn node_version_preflight() -> Result<(), String> {
+    let output = std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .map_err(|e| {
+            format!(
+                "could not find Node on this computer ({e}). The WhatsApp helper runs on Node \
+                 {MIN_NODE_MAJOR}+; install it and try again."
+            )
+        })?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    match parse_node_major(&text) {
+        Some(major) if node_major_is_supported(major) => Ok(()),
+        Some(major) => Err(node_version_refusal(major)),
+        None => Err(format!(
+            "could not read the version of Node on this computer. The WhatsApp helper runs on \
+             Node {MIN_NODE_MAJOR}+."
+        )),
+    }
+}
 
 /// Call the helper over its unix socket.
 ///
@@ -610,5 +724,88 @@ mod tests {
             path,
             PathBuf::from("/home/someone/Snug/whatsapp-sidecar.sock")
         );
+    }
+}
+
+#[cfg(test)]
+mod spawn_preconditions_tests {
+    use super::*;
+
+    // ---------------------------------------------------------------- node version
+    //
+    // FOUND ON REAL HARDWARE (2026-08-17), not by a test. The owner clicked "start linking"
+    // and got "the WhatsApp helper could not be started". Cause: a macOS GUI app inherits a
+    // minimal PATH, so `Command::new("node")` resolved `/usr/local/bin/node` (v18.18.0) —
+    // NOT the nvm v22 on the developer's shell PATH. Baileys declares `engines.node >= 20`,
+    // and its lru-cache dependency imports `tracingChannel` from `node:diagnostics_channel`,
+    // which v18 does not export. The helper died on its first import.
+    //
+    // TWO defects, and the second is why the message was useless: `spawn()` reports success
+    // as soon as the process EXISTS, so a child that dies a millisecond later is invisible
+    // here. The user was told the helper "could not be started" when it had started fine and
+    // then exited — an error that points at the wrong thing costs more than no error.
+
+    #[test]
+    fn node_version_output_is_parsed_into_a_major() {
+        assert_eq!(parse_node_major("v22.13.1\n"), Some(22));
+        assert_eq!(parse_node_major("v20.0.0"), Some(20));
+        assert_eq!(parse_node_major("v18.18.0\n"), Some(18));
+        // Unparseable output must not read as "new enough" — an unknown version is a version
+        // we cannot vouch for, and guessing high is how this bug ships twice.
+        assert_eq!(parse_node_major("not a version"), None);
+        assert_eq!(parse_node_major(""), None);
+    }
+
+    #[test]
+    fn the_minimum_matches_what_the_helper_actually_needs() {
+        // Pinned against baileys' own `engines.node`. If that floor rises, this fails loudly
+        // rather than letting a too-old runtime through to a mystifying import error.
+        assert_eq!(MIN_NODE_MAJOR, 20);
+    }
+
+    #[test]
+    fn a_too_old_node_is_refused_by_NAME_and_says_what_to_do() {
+        let refusal = node_version_refusal(18);
+        assert!(refusal.contains("18"), "names the version actually found: {refusal}");
+        assert!(refusal.contains("20"), "names the version required: {refusal}");
+        // The message must be actionable. "could not be started" was not.
+        assert!(
+            refusal.to_lowercase().contains("node"),
+            "names the thing to fix: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_new_enough_node_produces_no_refusal() {
+        assert!(node_major_is_supported(20));
+        assert!(node_major_is_supported(22));
+        assert!(!node_major_is_supported(18));
+    }
+
+    // ---------------------------------------------------------------- missing helper
+
+    #[test]
+    fn a_missing_helper_entry_is_named_before_anything_is_spawned() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let refusal = helper_entry_refusal(dir.path()).expect("a missing helper must be refused");
+        assert!(
+            refusal.contains("helper"),
+            "names what is missing: {refusal}"
+        );
+        // The path is named so the owner can see WHERE it was expected — this is a dev/owner
+        // install step (packaging is out of scope), so "install it" needs a location.
+        assert!(
+            refusal.contains("whatsapp-sidecar"),
+            "names the expected location: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_present_helper_entry_passes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entry = helper_entry(dir.path());
+        std::fs::create_dir_all(entry.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&entry, "// helper").expect("write");
+        assert!(helper_entry_refusal(dir.path()).is_none());
     }
 }
