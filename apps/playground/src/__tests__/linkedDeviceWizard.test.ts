@@ -136,6 +136,7 @@ describe('canLinkDevice — the honest capability test', () => {
       desktopPlatform({
         sidecarCtl: async () => ({ running: true, nonce: 'n' }),
         sidecarFetch: async () => ({ status: 200, body: '{}' }),
+        sidecarWizardFetch: async () => ({ status: 200, body: '{}' }),
       }),
     );
     const { canLinkDevice } = await import('../state/connectionWizard.js');
@@ -169,7 +170,14 @@ describe('runDeviceLinkAttempt — start, poll, verify, then record', () => {
       calls,
       platform: desktopPlatform({
         sidecarCtl: async () => ({ running: true, nonce: 'spawn-nonce' }),
+        // The APP door exists on a real desktop too, and `canLinkDevice` requires all three
+        // seats. It is never scripted here: the pairing flow drives the WIZARD door, and a
+        // call landing on this one instead would be the bug (an app-door call to /pair/* is
+        // refused in Rust), so it throws rather than answering.
         sidecarFetch: async (method: string, pathAndQuery: string) => {
+          throw new Error(`the pairing flow must not use the app door: ${method} ${pathAndQuery}`);
+        },
+        sidecarWizardFetch: async (method: string, pathAndQuery: string) => {
           const key = `${method} ${pathAndQuery}`;
           calls.push(key);
           const queue = script[key];
@@ -205,6 +213,7 @@ describe('runDeviceLinkAttempt — start, poll, verify, then record', () => {
           throw new Error('could not start the WhatsApp helper: ENOENT');
         },
         sidecarFetch: async () => ({ status: 200, body: '{}' }),
+        sidecarWizardFetch: async () => ({ status: 200, body: '{}' }),
       }),
     );
     const { beginDeviceLink } = await import('../state/connectionWizard.js');

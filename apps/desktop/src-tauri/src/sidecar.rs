@@ -153,9 +153,50 @@ fn route_matches(pattern: &str, path: &str) -> bool {
         })
 }
 
+/// The WIZARD-reachable routes: the whole enumerated contract, pairing included.
+///
+/// The wizard is the surface that CREATES the credential — start a link, render the QR, poll
+/// for the scan, then prove the minted token (ADR-0025). Apps get `APP_ROUTES` instead, which
+/// deliberately omits every one of these.
+///
+/// The split is enforced by having TWO COMMANDS, not by a parameter: a `{ wizard: true }`
+/// argument would be a claim the caller makes, and an app can make any claim. A separate
+/// command inherits the C2 boundary instead — capabilities are scoped to the "main" window
+/// and app iframes cannot reach the IPC bridge at all, which the in-shell gate asserts
+/// per command. The wizard runs in the main window; an app never does.
+const WIZARD_ROUTES: [(&str, &str); 8] = [
+    ("POST", "/pair/start"),
+    ("GET", "/pair/qr"),
+    ("GET", "/pair/status"),
+    ("GET", "/session/status"),
+    // The app routes too: the wizard reads a thread list to prove the token works, and a
+    // door that admitted only pairing would force a second command for that one read.
+    ("GET", "/chats"),
+    ("GET", "/chats/:jid/history"),
+    ("GET", "/chats/:jid/messages"),
+    ("POST", "/chats/:jid/messages"),
+];
+
 /// EVERY pre-flight guard for an APP request, in one place. Both `sidecar_fetch` and the
 /// tests call THIS — there is no second admission path that could drift from the tested one.
 pub fn admit_app_request(method: &str, path_and_query: &str) -> Result<AdmittedSidecarRequest, SidecarRefusal> {
+    admit_against(method, path_and_query, &APP_ROUTES)
+}
+
+/// The wizard's admission. Same guards, wider table.
+///
+/// Shares `admit_against` rather than repeating the traversal and method checks, because a
+/// second copy of those is how the two doors end up disagreeing about what `%2e%2e` means —
+/// and the weaker one would then be the one worth attacking.
+pub fn admit_wizard_request(method: &str, path_and_query: &str) -> Result<AdmittedSidecarRequest, SidecarRefusal> {
+    admit_against(method, path_and_query, &WIZARD_ROUTES)
+}
+
+fn admit_against(
+    method: &str,
+    path_and_query: &str,
+    routes: &[(&str, &str)],
+) -> Result<AdmittedSidecarRequest, SidecarRefusal> {
     let method_upper = method.to_ascii_uppercase();
     if method_upper != "GET" && method_upper != "POST" {
         return Err(SidecarRefusal::Method(method.to_string()));
@@ -189,7 +230,7 @@ pub fn admit_app_request(method: &str, path_and_query: &str) -> Result<AdmittedS
         return Err(SidecarRefusal::Traversal(path_and_query.to_string()));
     }
 
-    let admitted = APP_ROUTES
+    let admitted = routes
         .iter()
         .any(|(route_method, pattern)| *route_method == method_upper && route_matches(pattern, &path));
     if !admitted {
@@ -466,6 +507,35 @@ pub async fn sidecar_fetch(
     send_over_unix_socket(&socket, &admitted, body.as_deref()).await
 }
 
+/// The WIZARD's transport: the same socket, the wider table (pairing routes included).
+///
+/// A SEPARATE COMMAND, not a flag on the one above. The distinction that matters is "who is
+/// calling", and a parameter is a claim the caller makes — an app could make the same one.
+/// Command identity is not forgeable from an app iframe: capabilities are scoped to the main
+/// window, app iframes cannot reach the IPC bridge, and the in-shell gate asserts that per
+/// command. So the boundary is structural rather than checked.
+///
+/// This command carries the spawn nonce automatically — the wizard proves it is the surface
+/// that started the helper, and the nonce never crosses into the webview's control (it is
+/// read from shell state here, not accepted as a parameter).
+#[tauri::command]
+pub async fn sidecar_wizard_fetch(
+    method: String,
+    path_and_query: String,
+    body: Option<String>,
+    state: tauri::State<'_, SidecarState>,
+) -> Result<SidecarResponse, String> {
+    let admitted = admit_wizard_request(&method, &path_and_query).map_err(|refusal| refusal.message())?;
+    let (socket, nonce) = {
+        let guard = state.inner.lock().map_err(|_| "sidecar state is poisoned".to_string())?;
+        match guard.as_ref() {
+            Some(running) => (running.socket.clone(), running.nonce.clone()),
+            None => return Err(SidecarRefusal::NotRunning.message()),
+        }
+    };
+    send_over_unix_socket_with_nonce(&socket, &admitted, body.as_deref(), Some(&nonce)).await
+}
+
 /// The transport itself: a minimal HTTP/1.1 exchange over the unix socket.
 ///
 /// Hand-rolled rather than pulled from a client crate because the surface is four routes
@@ -476,16 +546,37 @@ async fn send_over_unix_socket(
     request: &AdmittedSidecarRequest,
     body: Option<&str>,
 ) -> Result<SidecarResponse, String> {
+    send_over_unix_socket_with_nonce(socket, request, body, None).await
+}
+
+/// The transport, with the wizard's spawn nonce when the caller is the wizard.
+///
+/// The nonce is read from SHELL STATE by the caller and never accepted from the webview: it
+/// is what proves to the helper that this request came from the process that started it, so a
+/// value the webview could set would prove nothing at all.
+async fn send_over_unix_socket_with_nonce(
+    socket: &std::path::Path,
+    request: &AdmittedSidecarRequest,
+    body: Option<&str>,
+    spawn_nonce: Option<&str>,
+) -> Result<SidecarResponse, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stream = tokio::net::UnixStream::connect(socket)
         .await
         .map_err(|e| format!("could not reach the WhatsApp helper: {e}"))?;
 
     let payload = body.unwrap_or("");
+    // `x-snug-spawn-nonce` — one spelling, shared with the helper's router and pinned by the
+    // cross-language contract test. The helper requires it on every wizard-only route.
+    let nonce_header = match spawn_nonce {
+        Some(nonce) => format!("x-snug-spawn-nonce: {nonce}\r\n"),
+        None => String::new(),
+    };
     let head = format!(
-        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n",
         request.method,
         request.path,
+        nonce_header,
         payload.len()
     );
     stream
@@ -875,5 +966,95 @@ mod state_registration_tests {
             fetch[..400].contains("tauri::State<'_, SidecarState>"),
             "sidecar_fetch takes SidecarState — that is why it must be managed"
         );
+    }
+}
+
+#[cfg(test)]
+mod wizard_admission_tests {
+    //! THE WIZARD'S OWN ADMISSION (added 2026-08-17, after the owner hit
+    //! "the WhatsApp helper stopped answering" at the pairing step).
+    //!
+    //! ADR-0032 §4 says `/pair/*` is "reachable from the wizard only, never from an app".
+    //! Phase G implemented the second half and not the first: there was ONE command,
+    //! `sidecar_fetch`, refusing every pairing route unconditionally — so the wizard, which
+    //! calls the same command, could not start a link either. The refusal was correct and
+    //! total, and totality was the bug.
+    //!
+    //! The fix is a SECOND command rather than a parameter, because the security property
+    //! must not be forgeable by its caller. A `{ wizard: true }` argument would be a claim an
+    //! app could also make; a separate command inherits the C2 boundary instead — app iframes
+    //! cannot reach the IPC bridge at all (capabilities are scoped to the "main" window, and
+    //! the in-shell gate asserts unreachability per command). The wizard runs in the main
+    //! window; an app never does.
+
+    use super::*;
+
+    #[test]
+    fn the_wizard_may_reach_every_pairing_route() {
+        // Exactly the four the wizard drives: start, qr, poll, and the ADR-0025 verify.
+        for (method, path) in [
+            ("POST", "/pair/start"),
+            ("GET", "/pair/qr"),
+            ("GET", "/pair/status"),
+            ("GET", "/session/status"),
+        ] {
+            assert!(
+                admit_wizard_request(method, path).is_ok(),
+                "the wizard must reach {method} {path} — it is the pairing flow"
+            );
+        }
+    }
+
+    #[test]
+    fn the_wizard_may_NOT_reach_arbitrary_paths() {
+        // A wizard command is not a general local HTTP client either. The enumerated
+        // contract still bounds it; only the app/wizard SPLIT differs.
+        for (method, path) in [("GET", "/etc/passwd"), ("POST", "/pair/../chats"), ("GET", "/admin")] {
+            assert!(
+                admit_wizard_request(method, path).is_err(),
+                "{method} {path} is outside the contract and must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn the_wizard_admission_refuses_traversal_on_the_decoded_form() {
+        // `%2e%2e` defeats a literal `..` scan; the app path already refuses this and the
+        // wizard path must not be the weaker twin.
+        assert!(admit_wizard_request("GET", "/pair/%2e%2e/chats").is_err());
+        assert!(admit_wizard_request("GET", "/pair/../chats").is_err());
+    }
+
+    #[test]
+    fn the_APP_admission_still_refuses_every_pairing_route() {
+        // THE PROPERTY THIS SPLIT EXISTS TO PRESERVE. Adding a wizard door must not open the
+        // app's. `/pair/status` releases the access token: an app reaching it could mint
+        // itself a credential and drive the user's WhatsApp (blocker B5).
+        for (method, path) in [
+            ("POST", "/pair/start"),
+            ("GET", "/pair/qr"),
+            ("GET", "/pair/status"),
+            ("GET", "/session/status"),
+        ] {
+            assert!(
+                admit_app_request(method, path).is_err(),
+                "an app must NEVER reach {method} {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_admissions_are_not_the_same_function() {
+        // Non-vacuity: if a refactor ever made these aliases, the test above would pass while
+        // the boundary vanished. One admits a pairing route; the other refuses it.
+        assert!(admit_wizard_request("GET", "/pair/qr").is_ok());
+        assert!(admit_app_request("GET", "/pair/qr").is_err());
+    }
+
+    #[test]
+    fn the_wizard_may_also_reach_the_app_routes() {
+        // The wizard's probe reads a thread list to prove the token works. A wizard door that
+        // admitted ONLY pairing would force a second command for that.
+        assert!(admit_wizard_request("GET", "/chats").is_ok());
     }
 }

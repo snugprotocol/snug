@@ -1244,3 +1244,47 @@ C1 consequence, not an oversight — do not "fix" it by giving the helper a mode
   populated-vs-empty auth store finding, and it argues for a positive-path gate check
   (main-window invoke succeeds) beside every negative one. Logged as a follow-up.
 - Verified: cargo **70 → 73**; debug binary rebuilt.
+
+### 2026-08-17 — claude — "stopped answering": the wizard was calling the APP door
+
+- **Owner report**: after the `.manage()` fix the helper STARTS, then the wizard fails with
+  "the WhatsApp helper stopped answering". Different message, real progress — the command now
+  runs and the failure moved one step later, to the pairing call.
+- **Cause**: ADR-0032 §4 says `/pair/*` is *"reachable from the wizard only, never from an
+  app"*. Phase G implemented the second half and not the first. There was ONE command,
+  `sidecar_fetch`, refusing every pairing route unconditionally — and the wizard called it
+  (`connectionWizard.ts:1044`). **The refusal was correct, total, and therefore also refused
+  the only surface that legitimately needs those routes.** Linking could never start.
+- **The comment on the platform seam asserted the opposite** — that pairing calls "go through
+  `sidecarCtl`'s nonce rather than through this seat" — describing a design nobody had built.
+  This is lessons.md:69 again, and the third time in this task: *a comment's claim about
+  ANOTHER surface is a pointer to verify, never evidence.* Recorded in the seam's own comment
+  rather than quietly deleted.
+- **Fix: a SECOND COMMAND, `sidecar_wizard_fetch`, not a flag.** The distinction that matters
+  is *who is calling*, and a `{ wizard: true }` parameter is a claim the caller makes — an app
+  can make any claim. Command identity is not forgeable from an app iframe: capabilities are
+  scoped to the `"main"` window, app iframes cannot reach the IPC bridge, and the in-shell
+  gate pins that per command. So the boundary is structural rather than checked.
+  - `admit_wizard_request` shares `admit_against` with the app door, so the two cannot drift
+    on traversal or method handling — a second copy of those guards is how one door ends up
+    weaker, and the weaker one is the one worth attacking.
+  - The wizard door attaches the spawn nonce, read from SHELL state, never from the webview.
+  - 6 new cargo tests, and the load-bearing one asserts the app door STILL refuses every
+    pairing route: adding a wizard door must not open the app's (blocker B5's token-capture
+    refusal). Plus a non-vacuity test that the two admissions are not aliases.
+- `canLinkDevice()` now requires all THREE seats. It checked two, so it reported "capable" for
+  a flow that died at its first step — the same partial-seam failure its own sibling test
+  already pinned for `lanFetch`/`lanPair`, in a seam added later and not covered by it.
+- Test fakes updated across two suites: the scripted pairing fixture now answers on the wizard
+  seat, and its app-door seat THROWS — a pairing call landing there is the defect this split
+  exists to prevent, so the fixture fails loudly rather than absorbing it.
+- Verified: cargo **73 → 79**; playground **1121**; root `turbo run test --force` **23/23,
+  0 cached**; debug binary rebuilt.
+- **Three defects in one flow, each hidden by the one in front of it** — unmanaged state, then
+  the app/wizard door split, with the node-version and stale-binary red herrings in between.
+  All four surfaces (protocol contract, Rust admission, Rust commands, wizard state machine)
+  were individually tested and green throughout. Nothing tested them TOGETHER, and the
+  end-to-end path is the only thing that could have. Gate 6 candidate, and the strongest one
+  this task has produced: **a feature assembled from independently-tested parts has not been
+  tested until one test drives the whole path** — the sidecar package's own missing entry
+  point, the percent-encoded JID, and both of these are the same finding at four altitudes.

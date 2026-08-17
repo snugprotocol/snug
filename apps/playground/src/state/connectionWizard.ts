@@ -761,7 +761,14 @@ export function isLinkedDeviceRequirement(requirement: ConnectionRequirement | u
  */
 export function canLinkDevice(): boolean {
   const platform = getPlatform();
-  return platform.sidecarCtl !== undefined && platform.sidecarFetch !== undefined;
+  return (
+    platform.sidecarCtl !== undefined &&
+    platform.sidecarFetch !== undefined &&
+    // The WIZARD door too, and it is the one the pairing flow actually drives. Checking only
+    // the first two advertised a flow that died at its first step — which is exactly what
+    // shipped, because `sidecarFetch` refuses every pairing route by design.
+    platform.sidecarWizardFetch !== undefined
+  );
 }
 
 /** Has the address been collected yet? A LAN row with no host is pre-collection. */
@@ -1023,9 +1030,14 @@ function readSidecarJson(body: string): Record<string, unknown> {
  */
 export async function beginDeviceLink(): Promise<DeviceLinkStart> {
   const platform = getPlatform();
-  if (platform.sidecarCtl === undefined || platform.sidecarFetch === undefined) {
+  if (
+    platform.sidecarCtl === undefined ||
+    platform.sidecarFetch === undefined ||
+    platform.sidecarWizardFetch === undefined
+  ) {
     return { ok: false, message: 'linking WhatsApp needs the desktop app' };
   }
+  const wizardFetch = platform.sidecarWizardFetch;
   let nonce: string | undefined;
   try {
     const status = await platform.sidecarCtl('start');
@@ -1041,8 +1053,8 @@ export async function beginDeviceLink(): Promise<DeviceLinkStart> {
   }
   deviceLinkNonce = nonce;
   try {
-    await platform.sidecarFetch('POST', '/pair/start');
-    const qrResponse = await platform.sidecarFetch('GET', '/pair/qr');
+    await wizardFetch('POST', '/pair/start');
+    const qrResponse = await wizardFetch('GET', '/pair/qr');
     const qr = readSidecarJson(qrResponse.body)['qr'];
     return typeof qr === 'string' ? { ok: true, qr } : { ok: true };
   } catch (err) {
@@ -1067,12 +1079,13 @@ export async function beginDeviceLink(): Promise<DeviceLinkStart> {
  */
 export async function completeDeviceLink(): Promise<DeviceLinkResult> {
   const platform = getPlatform();
-  if (platform.sidecarFetch === undefined) {
+  if (platform.sidecarWizardFetch === undefined) {
     return { ok: false, message: 'linking WhatsApp needs the desktop app' };
   }
+  const wizardFetch = platform.sidecarWizardFetch;
   let token: string | undefined;
   try {
-    const status = await platform.sidecarFetch('GET', '/pair/status');
+    const status = await wizardFetch('GET', '/pair/status');
     const body = readSidecarJson(status.body);
     if (body['state'] !== 'linked') {
       return { ok: false, message: 'waiting for the code to be scanned' };
@@ -1091,7 +1104,7 @@ export async function completeDeviceLink(): Promise<DeviceLinkResult> {
 
   // THE VERIFY READ, BEFORE the caller is given anything durable to write.
   try {
-    const verified = await platform.sidecarFetch('GET', '/session/status');
+    const verified = await wizardFetch('GET', '/session/status');
     if (verified.status < 200 || verified.status >= 300) {
       return {
         ok: false,

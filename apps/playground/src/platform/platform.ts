@@ -71,14 +71,30 @@ export interface SnugPlatform {
    * it. A capability test satisfied by either alone would advertise a flow that fails
    * midway — the same reason the LAN seats above are checked as a pair.
    *
-   * Note what neither seat accepts: a socket path, a host, or a port. The Rust side names
-   * the socket, so no caller here — wizard, app, or otherwise — can point the transport
-   * somewhere else. `sidecarFetch` additionally refuses every route outside the
-   * app-reachable contract IN RUST, which is why the pairing calls below go through
-   * `sidecarCtl`'s nonce rather than through this seat.
+   * Note what none of these seats accepts: a socket path, a host, or a port. The Rust side
+   * names the socket, so no caller here — wizard, app, or otherwise — can point the transport
+   * somewhere else.
+   *
+   * `sidecarFetch` is the APP door and refuses every pairing route in Rust. `sidecarWizardFetch`
+   * is the WIZARD door and admits them, and it is a SEPARATE COMMAND rather than a flag
+   * because the distinction that matters is "who is calling" — a parameter would be a claim
+   * the caller makes, and an app can make any claim. Command identity is not forgeable from
+   * an app iframe: capabilities are scoped to the main window and the in-shell gate asserts
+   * IPC unreachability per command. The wizard seat also carries the spawn nonce, read from
+   * shell state, never from the webview.
+   *
+   * (Until 2026-08-17 this comment claimed the pairing calls went "through `sidecarCtl`'s
+   * nonce rather than through this seat". They did not — the wizard called `sidecarFetch`,
+   * which refused them, so linking could never start. The claim was about a surface nobody
+   * had run.)
    */
   sidecarCtl?: (action: 'start' | 'stop' | 'status') => Promise<{ running: boolean; nonce?: string }>;
   sidecarFetch?: (
+    method: string,
+    pathAndQuery: string,
+    body?: string,
+  ) => Promise<{ status: number; body: string }>;
+  sidecarWizardFetch?: (
     method: string,
     pathAndQuery: string,
     body?: string,

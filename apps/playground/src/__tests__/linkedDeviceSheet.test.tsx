@@ -41,7 +41,10 @@ function desktopWithSidecar(): SnugPlatform {
     kind: 'desktop',
     capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
     sidecarCtl: async () => ({ running: true, nonce: 'spawn-nonce' }),
-    sidecarFetch: async (_method, pathAndQuery) => {
+    // Present because `canLinkDevice` requires all three seats; the pairing screens drive
+    // the wizard door, so a call arriving here would be the defect this split prevents.
+    sidecarFetch: async () => ({ status: 200, body: '{}' }),
+    sidecarWizardFetch: async (_method, pathAndQuery) => {
       if (pathAndQuery === '/pair/qr') {
         return { status: 200, body: JSON.stringify({ state: 'waiting', qr: 'QR-PAYLOAD-XYZ' }) };
       }

@@ -29,8 +29,8 @@ export async function sidecarCtl(action: 'start' | 'stop' | 'status'): Promise<S
 }
 
 /**
- * Call the helper. Rust refuses every route outside the app-reachable contract — including
- * every pairing route — before a socket is opened.
+ * Call the helper as an APP. Rust refuses every route outside the app-reachable contract —
+ * including every pairing route — before a socket is opened.
  */
 export async function sidecarFetch(
   method: string,
@@ -38,6 +38,27 @@ export async function sidecarFetch(
   body?: string,
 ): Promise<SidecarHttpResponse> {
   return invoke<SidecarHttpResponse>('sidecar_fetch', {
+    method,
+    pathAndQuery,
+    ...(body !== undefined ? { body } : {}),
+  });
+}
+
+/**
+ * Call the helper as the WIZARD: the same socket, plus the pairing routes an app may never
+ * reach, with the spawn nonce attached on the Rust side.
+ *
+ * A separate command rather than a flag on `sidecarFetch`, because a flag would be a claim
+ * the caller makes and an app can make any claim. Command identity is not forgeable from an
+ * app iframe — capabilities are main-window scoped and the gate pins IPC unreachability per
+ * command — so the boundary is structural.
+ */
+export async function sidecarWizardFetch(
+  method: string,
+  pathAndQuery: string,
+  body?: string,
+): Promise<SidecarHttpResponse> {
+  return invoke<SidecarHttpResponse>('sidecar_wizard_fetch', {
     method,
     pathAndQuery,
     ...(body !== undefined ? { body } : {}),
