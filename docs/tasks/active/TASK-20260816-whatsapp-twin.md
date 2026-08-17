@@ -499,6 +499,63 @@ one" clause is retired as unrepresentable-by-construction, which is the better o
   and that derivation is itself a security seat needing negative tests (a send whose body
   JID disagrees with its path JID must refuse, never pick one).
 
+## HANDOFF — 2026-08-16, for a fresh session
+
+**Branch** `feat/TASK-20260816-whatsapp-twin` @ `c96e3e1`, 15 commits ahead of `main`
+(`5825fb7`), working tree clean. Nothing exists only in a chat.
+
+**Verified green at handoff**: root `turbo run test --force` → **23/23 tasks, 0 cached**
+(protocol 329 · knowledge 184 · runner 110 · server 126 · adapters 124 · db 306 · sdk 41 ·
+auth 787 · desktop 124 · playground 1121 · whatsapp-sidecar 18) plus **cargo 64**.
+Re-run this FIRST in the new session before trusting anything below.
+
+**Done (A, B.0, B, C, G, D)** — the whole connection path, end to end:
+| Phase | What shipped |
+|---|---|
+| A | `linked_device` kind in `AUTH_KINDS` + schema coherence arm |
+| B.0 | `packages/protocol/src/sidecar-contract.ts` — the shared route contract |
+| B | `whatsapp` registry entry + the `device-link` pairing variant |
+| C | `apps/whatsapp-sidecar` — Baileys behind a `WaSocket` seam |
+| G | `sidecar.rs` (`sidecar_ctl`, `sidecar_fetch`) + `ipc-sidecar-fetch-refused` |
+| D | `isLinkedDeviceRequirement`, `beginDeviceLink`/`completeDeviceLink`, 2 screens |
+
+**Next: Phase E — the starter app** (`examples/whatsapp/`), the largest remaining piece and
+the visible half of the owner's original ask. Then F (armed auto-reply via a NEW
+`StandingApprovalGate` — see B2, do NOT widen the session gate) and H (docs close).
+
+**Read before writing Phase E code** (in this order):
+1. This file's **BLOCKER B1/B3/B4/B5** sections — they record designs already withdrawn.
+   Do not re-propose a loopback host class or a `lanHost` seat for the sidecar.
+2. `docs/decisions/0032` and `0033` (both still **proposed**; H moves them to accepted).
+3. `examples/hue/` and `examples/trade-copilot/` as the shape to match: `app.html`,
+   `connection.json`, `runtime-contract.json`, `authoring/` bundle.
+4. The prompt-engineering reference memory before authoring any analysis prompt.
+5. `/private/tmp/.../scratchpad/export-formats.md` is GONE with the session — its content is
+   folded into **AC13**, which is the spec for the export parser.
+
+**Phase E gotchas already known:**
+- `examples/validate.test.mjs` enforces THREE list edits (`APPS`, `CONNECTED_APPS`,
+  `LLM_FREE_APPS`) plus a README per folder and an `authoring/` bundle (A9).
+- The app's DDL must execute against **real sql.js once** before it ships — a mocked bridge
+  accepts identifiers the real engine refuses (lessons.md 2026-08-15, the `DEFERRABLE` case).
+- **AC12 is not optional**: pseudonymize phone numbers/JIDs before any LLM turn, with a
+  negative test driving a real-shaped export. Third parties never consented.
+- No `<form onSubmit>` — the sandbox blocks submission before the event fires.
+
+**Owner decisions still open (both cheap, both block nothing until E starts):**
+- **Starter display name** — "Twin" proposed, not ratified. It lands in the manifest, the
+  shelf and the README, so decide before writing.
+- Whether Phase G may split into its own PR if the chain grows.
+
+**Owner verification owed (no test can cover these):** the macOS shell gate has not been
+re-run on hardware since `sidecar_ctl`/`sidecar_fetch` landed (needs a real shell build; the
+Windows leg stays deliberately red per ADR-0021 D8), and the sidecar is spawned via system
+`node` against `~/Snug/helpers/` — packaging is deliberately out of scope.
+
+**Standing constraint to re-state to any new session:** auto-reply runs only while the
+desktop app is open, because the sidecar is deliberately LLM-free (ADR-0032 §1). That is a
+C1 consequence, not an oversight — do not "fix" it by giving the helper a model key.
+
 ## Session journal (append-only, newest last)
 
 ### 2026-08-16 — claude — session
