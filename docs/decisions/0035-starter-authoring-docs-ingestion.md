@@ -1,7 +1,10 @@
 # 0035 — Starter authoring docs become the installed app's wiki seed
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260817-telepath; accept/reject with that task's
-  plan approval)
+- **Status:** **accepted** (2026-08-17, owner-approved at Gate 2 and shipped with
+  TASK-20260817-telepath). §1's "own module" requirement came from the Gate-2 review: the
+  AC9 shape pin asserts every glob in `starterApps.ts` is app-html-shaped, so a second glob
+  there would have failed the existing test — the new channel lives in `starterDocs.ts` with
+  its own dedicated pin.
 - **Date:** 2026-08-17
 - **Task:** TASK-20260817-telepath
 

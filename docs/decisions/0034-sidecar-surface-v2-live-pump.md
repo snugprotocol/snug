@@ -1,7 +1,12 @@
 # 0034 — Sidecar surface v2: event long-poll, media reads, and the host live pump
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260817-telepath; accept/reject with that task's
-  plan approval)
+- **Status:** **accepted** (2026-08-17, owner-approved at Gate 2 and shipped with
+  TASK-20260817-telepath). The Gate-2 fresh-context review returned three blockers before any
+  code was written, and §1/§2 below are the rewrite that came out of them — above all the
+  reduction of pushed events from CONTENT to HINTS, forced by two verified facts about the
+  frame layer (256 KB class + silent oversize drop; no `instanceId` on host-event frames).
+  Threat surface: the surface-v2 addendum in
+  `docs/security/threat-model-delta-whatsapp-sidecar.md`.
 - **Date:** 2026-08-17
 - **Task:** TASK-20260817-telepath
 
