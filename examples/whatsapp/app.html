@@ -3,134 +3,199 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WhatsApp Twin</title>
+  <title>Telepath</title>
   <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <style>
     :root {
-      --bg: #f4f6f4;
+      --bg: #f2f4f3;
       --surface: #ffffff;
-      --surface-2: #eef2ee;
-      --ink: #101a12;
-      --ink-soft: #5a6b5e;
-      --line: #d8e0d9;
-      --accent: #1f8a5c;
-      --accent-soft: #e3f3ea;
+      --surface-2: #eef1ef;
+      --ink: #0f1a14;
+      --ink-soft: #5b6b61;
+      --line: #dbe2dc;
+      --accent: #0f7d61;
+      --accent-soft: #e0f2eb;
       --warn: #9a5a12;
       --warn-soft: #fdf1de;
       --danger: #a32b28;
       --danger-soft: #fbe9e8;
-      --me: #d7f2e2;
+      --me-bubble: #d6f3e4;
+      --them-bubble: #ffffff;
+      --chat-bg: #e9edea;
+      --badge: #17a06b;
       --radius: 14px;
-      --shadow: 0 1px 2px rgba(16, 26, 18, 0.06), 0 8px 24px rgba(16, 26, 18, 0.05);
+      --shadow: 0 1px 2px rgba(15, 26, 20, 0.06), 0 8px 24px rgba(15, 26, 20, 0.05);
+      /* dataviz reference palette (validated, adjacent pairlist, light surface) */
+      --series-1: #2a78d6;
+      --series-2: #eb6834;
+      --series-3: #1baf7a;
+      --series-4: #eda100;
+      --series-5: #e87ba4;
+      --series-other: #9aa5a0;
+      --viz-grid: rgba(15, 26, 20, 0.08);
     }
     :root[data-theme="dark"] {
-      --bg: #0e1411;
-      --surface: #161d19;
-      --surface-2: #1d2622;
-      --ink: #e8efe9;
-      --ink-soft: #9aa89e;
-      --line: #2a352f;
-      --accent: #4ecb8d;
-      --accent-soft: #163023;
+      --bg: #0d1310;
+      --surface: #151c18;
+      --surface-2: #1b2420;
+      --ink: #e7efe9;
+      --ink-soft: #96a69b;
+      --line: #29342e;
+      --accent: #3ec89a;
+      --accent-soft: #143126;
       --warn: #e8b871;
       --warn-soft: #33280f;
       --danger: #f08e8a;
       --danger-soft: #3a1c1b;
-      --me: #1c3a2b;
+      --me-bubble: #1a3a2c;
+      --them-bubble: #1d2621;
+      --chat-bg: #10171308;
+      --badge: #2fbd83;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.3);
+      /* the same eight hues stepped for the dark surface (dataviz reference palette) */
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --series-other: #5d6a64;
+      --viz-grid: rgba(231, 239, 233, 0.1);
     }
     * { box-sizing: border-box; }
+    html, body, #root { height: 100%; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--ink);
-      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       -webkit-font-smoothing: antialiased;
+      overflow: hidden;
     }
-    .shell { max-width: 940px; margin: 0 auto; padding: 20px 16px 64px; }
-    .topbar { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
-    .topbar h1 { font-size: 21px; margin: 0; letter-spacing: -0.01em; }
-    .topbar .sub { color: var(--ink-soft); font-size: 13px; }
-    .connecting { padding: 48px 16px; text-align: center; color: var(--ink-soft); }
-
-    .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 16px; }
-    .tab {
-      min-width: 44px; min-height: 44px; padding: 0 14px;
-      border: 1px solid var(--line); border-radius: 999px;
-      background: var(--surface); color: var(--ink-soft);
-      font: inherit; font-size: 13px; cursor: pointer;
-    }
-    .tab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
-
-    .surface { display: grid; gap: 14px; }
-    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
-    .panel h2 { margin: 0 0 4px; font-size: 15px; letter-spacing: -0.01em; }
-    .panel .hint { margin: 0 0 12px; color: var(--ink-soft); font-size: 13px; }
-
-    button { min-width: 44px; min-height: 44px; font: inherit; cursor: pointer; }
+    button { min-width: 40px; min-height: 40px; font: inherit; cursor: pointer; }
     .btn {
-      padding: 0 16px; border-radius: 10px; border: 1px solid var(--line);
+      padding: 0 14px; border-radius: 10px; border: 1px solid var(--line);
       background: var(--surface-2); color: var(--ink);
     }
     .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-    .btn.danger { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn.small { min-height: 34px; padding: 0 10px; font-size: 13px; }
-
-    input[type="text"], input[type="search"], textarea, select {
-      width: 100%; padding: 10px 12px; border-radius: 10px;
-      border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font: inherit;
+    .icon-btn {
+      width: 40px; height: 40px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+      border: none; border-radius: 999px; background: transparent; color: var(--accent); font-size: 19px;
     }
-    textarea { min-height: 84px; resize: vertical; }
-    label.field { display: block; margin-bottom: 10px; }
-    label.field span { display: block; font-size: 12px; color: var(--ink-soft); margin-bottom: 4px; }
+    .icon-btn:hover { background: var(--accent-soft); }
+    .icon-btn:disabled { opacity: 0.45; }
 
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .spread { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .frame { display: flex; height: 100%; }
 
-    .notice { border-radius: 10px; padding: 10px 12px; font-size: 13px; border: 1px solid; }
-    .notice.warn { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
-    .notice.danger { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
-    .notice.info { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-
-    .threads { display: grid; gap: 8px; }
-    .thread {
-      display: flex; justify-content: space-between; align-items: center; gap: 10px;
-      width: 100%; text-align: left; padding: 10px 12px;
-      border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); color: var(--ink);
+    /* ---------------- chat list (the left pane / the landing page) ---------------- */
+    .list-pane {
+      width: 100%; max-width: 100%; display: flex; flex-direction: column;
+      background: var(--surface); border-right: 1px solid var(--line);
     }
-    .thread[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
-    .thread .name { font-weight: 600; font-size: 14px; }
-    .thread .meta { color: var(--ink-soft); font-size: 12px; }
+    @media (min-width: 760px) { .list-pane { width: 340px; min-width: 300px; } }
+    .list-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px 8px;
+    }
+    .list-head h1 { margin: 0; font-size: 22px; letter-spacing: -0.02em; }
+    .list-head .brand-sub { color: var(--ink-soft); font-size: 12px; }
+    .chatlist { flex: 1; overflow-y: auto; }
+    .chat-row {
+      display: flex; gap: 12px; width: 100%; padding: 10px 14px; border: none; text-align: left;
+      background: transparent; color: inherit; align-items: center; border-bottom: 1px solid var(--line);
+    }
+    .chat-row:hover { background: var(--surface-2); }
+    .chat-row[aria-current="true"] { background: var(--accent-soft); }
+    .chat-row .mid { flex: 1; min-width: 0; }
+    .chat-row .name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-row .preview { color: var(--ink-soft); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+    .chat-row .side { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+    .chat-row .when { color: var(--ink-soft); font-size: 11px; }
+    .chat-row[data-unread="true"] .when { color: var(--badge); font-weight: 600; }
+    .unread-badge {
+      min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--badge);
+      color: #fff; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .avatar {
+      width: 46px; height: 46px; border-radius: 50%; flex: none; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: 17px;
+    }
+    .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
-    .chip { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; background: var(--surface-2); color: var(--ink-soft); border: 1px solid var(--line); }
-    .chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-    .chip.off { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+    /* ---------------- thread pane ---------------- */
+    .thread-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--chat-bg); }
+    .thread-head {
+      display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+      background: var(--surface); border-bottom: 1px solid var(--line);
+    }
+    .thread-head .avatar { width: 38px; height: 38px; font-size: 14px; }
+    .thread-head .who { flex: 1; min-width: 0; }
+    .thread-head .who .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .thread-head .who .sub { color: var(--ink-soft); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .back-btn { display: inline-flex; }
+    @media (min-width: 760px) { .back-btn { display: none; } }
 
-    .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
-    .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--surface-2); }
-    .card h3 { margin: 0 0 6px; font-size: 13px; }
-    .card p { margin: 0; font-size: 13px; color: var(--ink-soft); }
-    .traits { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+    .thread-tabs { display: flex; gap: 4px; padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+    .thread-tab {
+      min-height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid transparent;
+      background: transparent; color: var(--ink-soft); font-size: 13px;
+    }
+    .thread-tab[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
 
-    .stat { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
-    .stat:last-child { border-bottom: 0; }
-    .stat .v { font-weight: 600; }
+    .msgs { flex: 1; overflow-y: auto; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 3px; }
+    .day-sep { align-self: center; margin: 10px 0 6px; padding: 3px 12px; border-radius: 999px; background: var(--surface); color: var(--ink-soft); font-size: 11px; box-shadow: var(--shadow); }
+    .bubble {
+      max-width: min(76%, 560px); padding: 7px 11px 5px; border-radius: 12px; box-shadow: var(--shadow);
+      background: var(--them-bubble); align-self: flex-start; overflow-wrap: break-word;
+    }
+    .bubble.me { background: var(--me-bubble); align-self: flex-end; }
+    .bubble .sender { font-size: 12px; font-weight: 700; margin-bottom: 1px; }
+    .bubble .body { white-space: pre-wrap; }
+    .bubble .stamp { display: block; text-align: right; color: var(--ink-soft); font-size: 10px; margin-top: 2px; }
+    .bubble .thumb { display: block; border: none; background: none; padding: 0; margin: 2px 0 4px; cursor: zoom-in; }
+    .bubble .thumb img { max-width: 260px; max-height: 260px; border-radius: 8px; display: block; }
+    .media-note { color: var(--ink-soft); font-size: 12px; font-style: italic; }
 
-    .msgs { display: grid; gap: 8px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
-    .msg { border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; background: var(--surface-2); }
-    .msg.mine { background: var(--me); }
-    .msg .who { font-size: 11px; color: var(--ink-soft); margin-bottom: 3px; display: flex; justify-content: space-between; gap: 8px; }
-    .msg .body { font-size: 14px; white-space: pre-wrap; word-break: break-word; }
-    .msg .translated { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--line); font-size: 13px; color: var(--ink-soft); white-space: pre-wrap; }
+    .composer { display: flex; align-items: flex-end; gap: 8px; padding: 8px 12px 10px; background: var(--surface); border-top: 1px solid var(--line); }
+    .composer textarea {
+      flex: 1; resize: none; min-height: 40px; max-height: 130px; padding: 9px 12px;
+      border-radius: 18px; border: 1px solid var(--line); background: var(--surface-2);
+      color: var(--ink); font: inherit;
+    }
+    .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-    .skeleton { height: 14px; border-radius: 6px; background: var(--surface-2); margin: 7px 0; }
-    .journal { display: grid; gap: 6px; font-size: 12px; }
-    .journal .entry { border-left: 3px solid var(--accent); padding: 5px 9px; background: var(--surface-2); border-radius: 0 8px 8px 0; }
-    .empty { color: var(--ink-soft); font-size: 13px; padding: 8px 0; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    /* ---------------- insights + charts ---------------- */
+    .tab-scroll { flex: 1; overflow-y: auto; padding: 14px; }
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px; }
+    .panel h3 { margin: 0 0 4px; font-size: 15px; }
+    .panel .hint { margin: 0 0 10px; color: var(--ink-soft); font-size: 12.5px; }
+    .person { border-top: 1px solid var(--line); padding: 10px 0; }
+    .person:first-of-type { border-top: none; }
+    .person .p-name { font-weight: 700; }
+    .person .p-summary { margin: 3px 0 6px; }
+    .trait { display: inline-block; margin: 0 6px 6px 0; padding: 2px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); font-size: 12px; color: var(--ink-soft); }
+    .headline { font-size: 15px; font-weight: 600; color: var(--accent); }
+    .chart-box { position: relative; height: 240px; }
+    .chart-box.tall { height: 280px; }
+    .num-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .num-table th, .num-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+    .num-table td.n { text-align: right; font-variant-numeric: tabular-nums; }
+    .linklike { border: none; background: none; color: var(--accent); font-size: 12.5px; padding: 4px 0; min-height: 28px; min-width: 0; }
+
+    /* ---------------- overlays & states ---------------- */
+    .center-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; color: var(--ink-soft); }
+    .center-state .big { font-size: 40px; }
+    .center-state .title { color: var(--ink); font-weight: 600; font-size: 16px; }
+    .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.82); display: flex; align-items: center; justify-content: center; z-index: 30; cursor: zoom-out; border: none; padding: 20px; width: 100%; }
+    .lightbox img { max-width: 92vw; max-height: 88vh; border-radius: 10px; }
+    .tos-note { padding: 6px 14px 10px; color: var(--ink-soft); font-size: 11px; border-top: 1px solid var(--line); background: var(--surface); }
+    .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 999px; font-size: 13px; z-index: 40; box-shadow: var(--shadow); }
+    .spin { display: inline-block; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -389,14 +454,16 @@
     // ============================================================
     // 5. RESPONSE SCHEMA — describe the JSON the agent must return
     // ============================================================
-    // Four actions share one schema object: the model is told which shape to use by the action
-    // it was called with, and every reply is validated locally before it touches state. A model
-    // reply is untrusted input — here more than usual, because a "profile" is about real people.
+    // Three actions share one schema object: the model is told which shape to use by the
+    // action it was called with, and every reply is validated locally before it touches
+    // state. A model reply is untrusted input — here more than usual, because a "profile"
+    // is about real people.
     const RESPONSE_SCHEMA = {
-      kind: "string: 'profile' | 'answer' | 'draft' | 'translation' — which action you are answering",
+      kind: "string: 'profile' | 'draft' — which action you are answering",
+      headline: "string: (kind 'profile') one sentence on what stands out — or what CHANGED, when a prior analysis was given",
       people: [
         {
-          label: "string: EXACTLY one of the labels from state.messages (P1, P2, … or YOU) — never a real name",
+          label: "string: EXACTLY one of the labels from the transcript (P1, P2, … or YOU) — never a real name",
           summary: 'string: two or three sentences on how this person shows up in the thread',
           traits: ['string: two to five short observed habits, e.g. "answers within minutes"'],
         },
@@ -408,242 +475,68 @@
         emoji: ['string: emoji YOU actually use, most frequent first (may be empty)'],
         language: 'string: the language YOU usually reply in for this thread, e.g. "English"',
       },
-      message: "string: (kind 'answer') the answer, grounded ONLY in the rows you were given",
-      text: "string: (kind 'draft') the reply written AS the user; (kind 'translation') the translated text",
+      text: "string: (kind 'draft') the reply written AS the user, in their register and length",
       language: "string: (kind 'draft') the language you wrote the draft in",
     };
 
     // ===== ANALYSIS-CORE-BEGIN =====
-    // Extracted and tested directly by `examples/whatsapp-analysis.test.mjs`. Everything between
-    // these markers is pure: no React, no bridge, no host. Two functions carry consequences that
-    // no UI test would catch, so they are exercised against hostile fixtures instead.
-
-    /**
-     * WhatsApp export line shapes, as WhatsApp actually writes them.
-     *
-     * Anchored at the START of a line and required to end in the `Author: ` separator, because
-     * the ONLY reliable way to tell a new message from a continuation line is a well-formed
-     * header — a body line can contain anything, including something timestamp-shaped.
-     *
-     * `[\u200e\u200f\u202a-\u202e]*` leads every pattern: WhatsApp's iOS export writes bidi
-     * control characters before the bracket and a narrow no-break space (U+202F) before AM/PM.
-     * They are invisible in every editor, so a parser anchored on a literal '[' silently matches
-     * NOTHING and reports an empty export — the user sees "no messages" and never learns why.
-     */
-    var BIDI = '[\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]*';
-    var DATE = '\\d{1,4}[./-]\\d{1,2}[./-]\\d{2,4}';
-    var TIME = '\\d{1,2}:\\d{2}(?::\\d{2})?(?:[\\s\\u202f\\u00a0]*[APap]\\.?[Mm]\\.?)?';
-    // iOS: [12/03/2025, 21:04:11] Author: body      Android: 12/03/2025, 21:04 - Author: body
-    var EXPORT_HEADERS = [
-      new RegExp('^' + BIDI + '\\[(' + DATE + '),\\s*(' + TIME + ')\\]' + BIDI + '\\s*([^:]{1,80}):\\s?([\\s\\S]*)$'),
-      new RegExp('^' + BIDI + '(' + DATE + '),\\s*(' + TIME + ')\\s+-\\s+([^:]{1,80}):\\s?([\\s\\S]*)$'),
-    ];
-
-    /**
-     * Lines WhatsApp writes that are NOT messages. Counting these as messages would inflate
-     * every per-person statistic and put words in someone's mouth that they never typed.
-     */
-    var SYSTEM_MARKERS = [
-      /end-to-end encrypted/i,
-      /^\s*Messages and calls are/i,
-      /created group/i,
-      /added you$/i,
-      /joined using this group's invite link/i,
-      /changed the subject to/i,
-      /changed this group's icon/i,
-      /left$/i,
-      /removed /i,
-      /security code changed/i,
-      /You deleted this message/i,
-      /^\s*This message was deleted\s*$/i,
-      /<Media omitted>/i,
-      /image omitted|video omitted|audio omitted|sticker omitted|document omitted|GIF omitted/i,
-      /^\s*null\s*$/i,
-    ];
-
-    var isSystemLine = function (text) {
-      for (var i = 0; i < SYSTEM_MARKERS.length; i += 1) if (SYSTEM_MARKERS[i].test(text)) return true;
-      return false;
-    };
-
-    /**
-     * Parse a WhatsApp `Export chat` .txt into messages.
-     *
-     * THE RELIABILITY BACKSTOP. History sync is pushed by WhatsApp in chunks and its completion
-     * is sometimes only INFERRED (see `WaHistoryState.explicit`), so a full analysis must remain
-     * possible when sync stalls. This path is how that happens — it is not a nice-to-have.
-     *
-     * Never throws: the user WILL upload the wrong file eventually, and an exception here would
-     * take the whole app down instead of saying "that doesn't look like an export".
-     */
-    function parseWhatsAppExport(raw) {
-      var out = { messages: [], authors: new Set(), systemLines: 0, skipped: 0, unparsedLines: 0 };
-      if (typeof raw !== 'string' || raw.length === 0) return out;
-      var lines = raw.split(/\r?\n/);
-      var current = null;
-
-      // A completed message is only pushed once we know no more continuation lines follow.
-      var flush = function () {
-        if (current === null) return;
-        var text = current.text.replace(/\s+$/, '');
-        if (text.length === 0 || isSystemLine(text)) {
-          out.skipped += 1;
-        } else {
-          out.messages.push({
-            author: current.author,
-            // An export line carries a DISPLAY NAME and nothing else. Inventing a JID here would
-            // let two different people who share a display name merge into one profile — one
-            // person's words, and psychology, attributed to another.
-            authorJid: undefined,
-            source: 'export',
-            text: text,
-            ts: current.ts,
-          });
-          out.authors.add(current.author);
-        }
-        current = null;
-      };
-
-      for (var i = 0; i < lines.length; i += 1) {
-        var line = lines[i];
-        var matched = null;
-        for (var p = 0; p < EXPORT_HEADERS.length && matched === null; p += 1) matched = EXPORT_HEADERS[p].exec(line);
-
-        if (matched !== null) {
-          flush();
-          var author = matched[3].trim();
-          var body = matched[4];
-          if (isSystemLine(line) && author.length === 0) { out.systemLines += 1; continue; }
-          current = { author: author, text: body, ts: parseExportStamp(matched[1], matched[2]) };
-          continue;
-        }
-
-        if (current !== null) {
-          // A continuation line. Attaching it to its parent is what keeps one multiline message
-          // from becoming four, which would silently multiply this person's message count.
-          current.text += '\n' + line;
-          continue;
-        }
-
-        if (line.trim().length === 0) continue;
-        if (isSystemLine(line)) { out.systemLines += 1; continue; }
-        out.unparsedLines += 1;
-      }
-      flush();
-
-      // A header line whose whole body is a system notice ("Messages and calls are…") parses as
-      // a message with a system author; count it honestly rather than dropping it silently.
-      var kept = [];
-      for (var m = 0; m < out.messages.length; m += 1) {
-        if (isSystemLine(out.messages[m].text)) { out.systemLines += 1; continue; }
-        kept.push(out.messages[m]);
-      }
-      if (kept.length !== out.messages.length) {
-        out.authors = new Set(kept.map(function (msg) { return msg.author; }));
-      }
-      out.messages = kept;
-      return out;
-    }
-
-    /** Best-effort timestamp. An unparseable stamp yields 0 rather than NaN poisoning every sort. */
-    function parseExportStamp(date, time) {
-      try {
-        var parts = String(date).split(/[./-]/);
-        if (parts.length !== 3) return 0;
-        var a = parseInt(parts[0], 10);
-        var b = parseInt(parts[1], 10);
-        var c = parseInt(parts[2], 10);
-        if (!isFinite(a) || !isFinite(b) || !isFinite(c)) return 0;
-        var year = c < 100 ? 2000 + c : c;
-        var day = a;
-        var month = b;
-        // A first field above 12 can only be a day; otherwise assume the export's own locale is
-        // day-first, which is WhatsApp's default outside the US. Only ordering depends on this.
-        if (a > 12 && b <= 12) { day = a; month = b; } else if (b > 12) { day = b; month = a; }
-        var t = String(time).toLowerCase();
-        var hm = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(t);
-        if (hm === null) return 0;
-        var hour = parseInt(hm[1], 10);
-        var min = parseInt(hm[2], 10);
-        var sec = hm[3] ? parseInt(hm[3], 10) : 0;
-        if (/p\.?m/.test(t) && hour < 12) hour += 12;
-        if (/a\.?m/.test(t) && hour === 12) hour = 0;
-        var ms = Date.UTC(year, month - 1, day, hour, min, sec);
-        return isFinite(ms) ? Math.floor(ms / 1000) : 0;
-      } catch (e) {
-        return 0;
-      }
-    }
+    // Extracted and tested directly by `examples/whatsapp-analysis.test.mjs`. Everything
+    // between these markers is pure: no React, no bridge, no host. These functions carry
+    // the privacy boundary and every statistic a chart draws, and their failure modes are
+    // silent — so they are exercised against hostile fixtures instead of trusted.
 
     /**
      * Anything that identifies a real human being, as a pattern.
      *
-     * Phone numbers are matched on the PRIMITIVE — a run of digits long enough to be dialable,
-     * however it is spaced, dotted, dashed or bracketed — rather than on one spelling. The
-     * attacker here is not adversarial, it is FORMATTING: '+91 98765 43210', '+919876543210'
-     * and '(555) 123-4567' are the same fact, and a scrub that catches one spelling and misses
-     * the others has not protected anybody (lessons.md 2026-08-11: neutralize the primitive).
+     * Phone numbers are matched on the PRIMITIVE — a run of digits long enough to be
+     * dialable, however it is spaced, dotted, dashed or bracketed — rather than on one
+     * spelling. The attacker here is not adversarial, it is FORMATTING: '+91 98765 43210'
+     * and '(555) 123-4567' are the same fact, and a scrub that catches one spelling and
+     * misses the others has not protected anybody.
      */
     var JID_PATTERN = /\b[\w.-]+@(?:s\.whatsapp\.net|g\.us|c\.us|lid|broadcast)\b/gi;
-    var PHONE_PATTERN = /\+?\d[\d\s().\u00a0-]{6,}\d/g;
+    var PHONE_PATTERN = /\+?\d[\d\s(). -]{6,}\d/g;
 
     /**
-     * Build the stable per-thread pseudonym map: real identity -> label.
-     *
-     * STABLE because the model is asked to reason about relationships ("who answers whom"), and
-     * labels that shuffled between turns would make that impossible AND leak information as the
-     * same person appeared under new names. Sorted, so the order the messages happened to arrive
-     * in cannot change anybody's label.
+     * Extend the PERSISTED pseudonym map: prior labels survive verbatim, new people take
+     * the next free number. Stability is the property everything else leans on — a stored
+     * profile keyed to P2 must keep meaning the same human being across every incremental
+     * re-analysis, or the analysis quietly reassigns personalities between real people.
+     * Each person maps by BOTH jid and display name, so either spelling scrubs to one label.
      */
-    function buildPseudonymMap(parsed) {
+    function extendPseudonymMap(priorEntries, people) {
       var map = new Map();
-      var authors = [];
-      var seen = new Set();
-      var list = (parsed && parsed.messages) || [];
-      for (var i = 0; i < list.length; i += 1) {
-        var msg = list[i];
-        var identity = msg.authorJid || msg.author;
-        if (identity === undefined || identity === null) continue;
-        if (msg.fromMe === true) { map.set(identity, 'YOU'); seen.add(identity); continue; }
-        if (!seen.has(identity)) { seen.add(identity); authors.push(identity); }
+      var maxN = 0;
+      if (priorEntries) {
+        var entries = Array.from(priorEntries instanceof Map ? priorEntries.entries() : priorEntries);
+        for (var i = 0; i < entries.length; i += 1) {
+          map.set(entries[i][0], entries[i][1]);
+          var m = /^P(\d+)$/.exec(entries[i][1]);
+          if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
+        }
       }
-      authors.sort();
-      var n = 0;
-      for (var a = 0; a < authors.length; a += 1) {
-        if (map.has(authors[a])) continue;
-        n += 1;
-        map.set(authors[a], 'P' + n);
+      var list = people || [];
+      var pending = [];
+      for (var p = 0; p < list.length; p += 1) {
+        var person = list[p];
+        if (!person || (person.jid === undefined && person.name === undefined)) continue;
+        var known =
+          (person.jid !== undefined ? map.get(person.jid) : undefined) ||
+          (person.name !== undefined ? map.get(person.name) : undefined);
+        var label = person.isMe === true ? 'YOU' : known;
+        if (label === undefined) { pending.push(person); continue; }
+        if (person.jid !== undefined) map.set(person.jid, label);
+        if (person.name !== undefined && String(person.name).length >= 3) map.set(person.name, label);
+      }
+      // New arrivals mint in sorted order, so the batch's arrival order cannot pick labels.
+      pending.sort(function (a, b) { return String(a.jid || a.name) < String(b.jid || b.name) ? -1 : 1; });
+      for (var q = 0; q < pending.length; q += 1) {
+        maxN += 1;
+        var fresh = 'P' + maxN;
+        if (pending[q].jid !== undefined) map.set(pending[q].jid, fresh);
+        if (pending[q].name !== undefined && String(pending[q].name).length >= 3) map.set(pending[q].name, fresh);
       }
       return map;
-    }
-
-    /**
-     * THE NEW-READER SCRUB (AC12 / blocker B4).
-     *
-     * Twin sends other people's private messages to a third-party model provider under the
-     * user's own key. Those people never consented and are not Snug users. `scrubAuthValues`
-     * does not help: it scrubs injected CREDENTIALS on the way INTO the iframe — a different
-     * reader, at a different altitude. So the scrub is re-derived here for THIS reader.
-     *
-     * Applied to the BODY as well as the author seat, because a phone number shared in a message
-     * is the common case and scrubbing only the author field would protect nothing that matters.
-     */
-    function pseudonymizeForLlm(messages, map) {
-      var list = messages || [];
-      var out = [];
-      for (var i = 0; i < list.length; i += 1) {
-        var msg = list[i];
-        var identity = msg.authorJid || msg.author;
-        var label = map.get(identity);
-        if (label === undefined) label = msg.fromMe === true ? 'YOU' : 'P?';
-        out.push({
-          author: label,
-          text: redactIdentifiers(String(msg.text === undefined || msg.text === null ? '' : msg.text), map),
-          ts: typeof msg.ts === 'number' ? msg.ts : 0,
-          fromMe: msg.fromMe === true,
-        });
-      }
-      return out;
     }
 
     /** Replace every identifier in free text: known participants by label, then the primitives. */
@@ -661,25 +554,244 @@
       result = result.replace(JID_PATTERN, '[contact]');
       result = result.replace(PHONE_PATTERN, function (hit) {
         var digits = hit.replace(/\D/g, '');
-        // Short digit runs are quantities, prices and times — redacting them would gut the text
-        // the analysis exists to read. Seven digits is the shortest dialable number.
+        // Short digit runs are quantities, prices and times — redacting them would gut the
+        // text the analysis exists to read. Seven digits is the shortest dialable number.
         return digits.length >= 7 ? '[number]' : hit;
       });
       return result;
     }
+
+    /**
+     * THE NEW-READER SCRUB (carried from the POC's AC12). Telepath sends other people's
+     * private messages to a third-party model provider under the user's own key. Those
+     * people never consented and are not Snug users. Applied to the BODY as well as the
+     * author seat, because a phone number shared in a message is the common case and
+     * scrubbing only the author field would protect nothing that matters.
+     */
+    function pseudonymizeForLlm(messages, map) {
+      var list = messages || [];
+      var out = [];
+      for (var i = 0; i < list.length; i += 1) {
+        var msg = list[i];
+        var identity = msg.from !== undefined ? msg.from : (msg.authorJid || msg.author);
+        var label = map ? map.get(identity) : undefined;
+        if (label === undefined) label = msg.fromMe === true ? 'YOU' : 'P?';
+        out.push({
+          author: label,
+          text: redactIdentifiers(String(msg.text === undefined || msg.text === null ? '' : msg.text), map),
+          ts: typeof msg.ts === 'number' ? msg.ts : 0,
+          fromMe: msg.fromMe === true,
+        });
+      }
+      return out;
+    }
+
+    /**
+     * THE REVERSE MAP, at render time only. The model speaks in labels; the user reads
+     * names they already have. Whole-label word-boundary replacement — P12 must round-trip
+     * as P12's person, never as P1's name with a stray digit — and an unknown label stays
+     * visible rather than being guessed at.
+     */
+    function deanonymizeText(text, map) {
+      var reverse = new Map();
+      if (map) {
+        map.forEach(function (label, identity) {
+          if (label === 'YOU') return;
+          var current = reverse.get(label);
+          var isName = !/@/.test(String(identity));
+          if (current === undefined || (isName && /@/.test(String(current)))) reverse.set(label, String(identity));
+        });
+      }
+      return String(text).replace(/\b(YOU|P\d+)\b/g, function (label) {
+        if (label === 'YOU') return 'You';
+        var name = reverse.get(label);
+        return name === undefined ? label : name;
+      });
+    }
+
+    /**
+     * How to render an identity we have NO name for.
+     *
+     * A jid comes in two spellings and only ONE of them is a phone number:
+     * `919876543210@s.whatsapp.net` is dialable, while `77771@lid` is an INTERNAL
+     * WhatsApp address that belongs to nobody. The first version printed '+' + digits for
+     * both, so unknown contacts appeared under confident, WRONG phone numbers — worse than
+     * showing nothing, because a plausible number invites the user to trust it
+     * (owner-reported, 2026-08-17).
+     */
+    function fallbackLabel(jid) {
+      var raw = String(jid === undefined || jid === null ? '' : jid);
+      var at = raw.indexOf('@');
+      var local = at >= 0 ? raw.slice(0, at) : raw;
+      var domain = at >= 0 ? raw.slice(at + 1) : '';
+      if (local.length === 0) return 'Unknown';
+      // Only the phone-number address space may be rendered as a number.
+      if (domain === 's.whatsapp.net' || domain === 'c.us' || domain === '') {
+        return /^\d{6,}$/.test(local) ? '+' + local : local;
+      }
+      if (domain === 'g.us') return 'Group';
+      // A LID (or anything else unrecognised) is not a number and must not look like one.
+      return 'Unknown contact';
+    }
+
+    /**
+     * The USER's measured emoji habits — most frequent first. Nobody else's rows count.
+     * One token = one pictograph plus its own modifiers (skin tone, VS16), extended ONLY
+     * through a ZWJ — adjacent separate emoji must never glue into one token, or '😂😂'
+     * counts as a single unheard-of emoji instead of the user's favourite twice.
+     */
+    var EMOJI_PATTERN = /\p{Extended_Pictographic}(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}])*(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}])*)*/gu;
+    function emojiFrequency(messages) {
+      var counts = new Map();
+      var list = messages || [];
+      for (var i = 0; i < list.length; i += 1) {
+        if (list[i].fromMe !== true) continue;
+        var hits = String(list[i].text || '').match(EMOJI_PATTERN) || [];
+        for (var h = 0; h < hits.length; h += 1) counts.set(hits[h], (counts.get(hits[h]) || 0) + 1);
+      }
+      return Array.from(counts.entries())
+        .map(function (entry) { return { emoji: entry[0], count: entry[1] }; })
+        .sort(function (a, b) { return b.count - a.count || (a.emoji < b.emoji ? -1 : 1); });
+    }
+
+    /**
+     * The LLM-bound analysis request, byte-budgeted. `snug:app-message` frames ride a
+     * 256 KB class, so full history reaches the DATABASE (charts read all of it) while the
+     * prompt gets a bounded recent window, trimmed from the OLDEST side, with the
+     * truncation DISCLOSED rather than silent. Rows pass through the scrub here — the
+     * budget path must never become a scrub bypass.
+     */
+    function buildAnalysisRequest(opts) {
+      var rows = pseudonymizeForLlm(opts.messages || [], opts.map);
+      var budget = typeof opts.byteBudget === 'number' ? opts.byteBudget : 150000;
+      var transcript = rows;
+      var truncated = false;
+      while (transcript.length > 1 && JSON.stringify(transcript).length > budget) {
+        var drop = Math.max(1, Math.floor(transcript.length * 0.1));
+        transcript = transcript.slice(drop);
+        truncated = true;
+      }
+      var request = { transcript: transcript, truncated: truncated };
+      if (opts.priorAnalysis !== undefined && opts.priorAnalysis !== null) request.prior = opts.priorAnalysis;
+      return request;
+    }
+
+    /** Merge live-refetched rows into what we hold: dedupe by id, keep time order. */
+    function mergeMessages(existing, incoming) {
+      var seen = new Set();
+      var out = [];
+      var all = (existing || []).concat(incoming || []);
+      for (var i = 0; i < all.length; i += 1) {
+        var id = all[i].id;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(all[i]);
+      }
+      out.sort(function (a, b) { return a.ts - b.ts || (String(a.id) < String(b.id) ? -1 : 1); });
+      return out;
+    }
+
+    var authorOf = function (msg) { return msg.from !== undefined ? msg.from : (msg.authorJid || msg.author); };
+
+    /** Message count and share per author — the part-to-whole chart's rows. */
+    function statsByParticipant(messages) {
+      var counts = new Map();
+      var list = messages || [];
+      for (var i = 0; i < list.length; i += 1) {
+        var author = authorOf(list[i]);
+        counts.set(author, (counts.get(author) || 0) + 1);
+      }
+      var total = list.length > 0 ? list.length : 1;
+      return Array.from(counts.entries())
+        .map(function (entry) { return { author: entry[0], count: entry[1], share: entry[1] / total }; })
+        .sort(function (a, b) { return b.count - a.count; });
+    }
+
+    /**
+     * Hour-of-day and weekday activity, Monday-first, in the CALLER's timezone via an
+     * explicit offset (minutes east of UTC). Explicit because a chart of "when this group
+     * talks" drawn in the wrong timezone is confidently wrong for every bucket.
+     */
+    function activityBuckets(messages, offsetMinutes) {
+      var hours = new Array(24).fill(0);
+      var weekdays = new Array(7).fill(0);
+      var perAuthor = new Map();
+      var offset = typeof offsetMinutes === 'number' ? offsetMinutes : 0;
+      var list = messages || [];
+      for (var i = 0; i < list.length; i += 1) {
+        var shifted = new Date((list[i].ts + offset * 60) * 1000);
+        var hour = shifted.getUTCHours();
+        var weekday = (shifted.getUTCDay() + 6) % 7; // Monday-first
+        hours[hour] += 1;
+        weekdays[weekday] += 1;
+        var author = authorOf(list[i]);
+        var slot = perAuthor.get(author);
+        if (slot === undefined) { slot = { count: 0, hours: new Array(24).fill(0) }; perAuthor.set(author, slot); }
+        slot.count += 1;
+        slot.hours[hour] += 1;
+      }
+      return { hours: hours, weekdays: weekdays, perAuthor: perAuthor };
+    }
+
+    /**
+     * Median response time per author. A response is a message behind a SPEAKER CHANGE —
+     * a monologue continuation is not one — and gaps beyond 24h are dropped as stale: a
+     * reply to yesterday measures availability, not conversation tempo.
+     */
+    function responseStats(messages) {
+      var CAP_SECONDS = 24 * 3600;
+      var gaps = new Map();
+      var list = (messages || []).slice().sort(function (a, b) { return a.ts - b.ts; });
+      for (var i = 1; i < list.length; i += 1) {
+        var prevAuthor = authorOf(list[i - 1]);
+        var curAuthor = authorOf(list[i]);
+        if (prevAuthor === curAuthor) continue;
+        var gap = list[i].ts - list[i - 1].ts;
+        if (gap <= 0 || gap > CAP_SECONDS) continue;
+        if (!gaps.has(curAuthor)) gaps.set(curAuthor, []);
+        gaps.get(curAuthor).push(gap);
+      }
+      return Array.from(gaps.entries())
+        .map(function (entry) {
+          var sorted = entry[1].slice().sort(function (a, b) { return a - b; });
+          var mid = sorted.length >> 1;
+          var median = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+          return { author: entry[0], responses: sorted.length, medianMinutes: Math.round(median / 60) };
+        })
+        .sort(function (a, b) { return a.medianMinutes - b.medianMinutes; });
+    }
+
+    /** Month buckets for the volume trend, oldest first. */
+    function messagesByMonth(messages) {
+      var counts = new Map();
+      var list = messages || [];
+      for (var i = 0; i < list.length; i += 1) {
+        var date = new Date(list[i].ts * 1000);
+        var key = date.getUTCFullYear() + '-' + String(date.getUTCMonth() + 1).padStart(2, '0');
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      return Array.from(counts.entries())
+        .map(function (entry) { return { month: entry[0], count: entry[1] }; })
+        .sort(function (a, b) { return a.month < b.month ? -1 : 1; });
+    }
     // ===== ANALYSIS-CORE-END =====
 
     // ============================================================
-    // 6. YOUR APP — WhatsApp Twin (one thread, read closely, answered in your own voice)
+    // 6. YOUR APP — Telepath (your chats, live, with insight on tap)
     // ============================================================
 
-    // Schema, run once against real sql.js. `persona` holds one row per thread per kind, so a
-    // re-analysis replaces rather than accumulates; `translations` is a per-message cache keyed
-    // by (thread, message) so a tapped translation is paid for once.
+    const SLOT = 'snug-connection://whatsapp';
+    const KV_KEY = 'telepath-ui';
+
+    // The LLM payload budget: comfortably inside the 256 KB app-message frame class once
+    // action/state framing and the prior analysis ride along.
+    const LLM_BYTE_BUDGET = 150000;
+
     const DDL = [
-      'CREATE TABLE IF NOT EXISTS threads (jid TEXT PRIMARY KEY, name TEXT NOT NULL, is_group INTEGER NOT NULL, analysed_at TEXT)',
-      'CREATE TABLE IF NOT EXISTS persona (jid TEXT NOT NULL, kind TEXT NOT NULL, label TEXT, payload TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (jid, kind, label))',
-      'CREATE TABLE IF NOT EXISTS translations (jid TEXT NOT NULL, message_id TEXT NOT NULL, language TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY (jid, message_id, language))',
+      'CREATE TABLE IF NOT EXISTS threads (jid TEXT PRIMARY KEY, name TEXT NOT NULL, is_group INTEGER NOT NULL, last_activity_ts INTEGER, analysed_at TEXT, analysis_watermark_ts INTEGER)',
+      'CREATE TABLE IF NOT EXISTS messages (jid TEXT NOT NULL, id TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL, ts INTEGER NOT NULL, from_me INTEGER NOT NULL, kind TEXT, PRIMARY KEY (jid, id))',
+      'CREATE TABLE IF NOT EXISTS pseudonyms (jid TEXT NOT NULL, identity TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY (jid, identity))',
+      'CREATE TABLE IF NOT EXISTS analyses (jid TEXT NOT NULL, run_at TEXT NOT NULL, watermark_ts INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (jid, run_at))',
       'CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, jid TEXT NOT NULL, at TEXT NOT NULL, incoming TEXT, outgoing TEXT NOT NULL, mode TEXT NOT NULL)',
     ];
 
@@ -690,714 +802,977 @@
       return null;
     };
 
-    // Connection errors, mapped to states the UI can actually explain. A desktop-only connection
-    // reached from a browser is the common case and deserves its own words, not "failed".
-    const mapNetError = (error) => {
-      const code = error && error.code;
-      if (code === 'NET_NOT_APPROVED') return 'unconnected';
-      if (code === 'NET_AMBIGUOUS_CONNECTION') return 'ambiguous';
-      if (code === 'NET_FETCH_FAILED' || code === 'NET_SSRF_BLOCKED') return 'unreachable';
-      if (code === 'HOST_ERROR') return 'loading';
-      return 'error';
-    };
+    // ===== LIVE-DOORBELL-BEGIN =====
+    // Extracted and tested by `examples/whatsapp-analysis.test.mjs` against the EXACT frame
+    // shape the runner's notifyEvent posts — the seam eight-seams defect #3 existed to name.
+    //
+    // The host pump (ADR-0034) rings `connection-event` with LEAN HINTS ({jid, kind, ts} —
+    // no content). A hint is an invalidation, never a delivery: every UI change flows from
+    // a governed refetch, so a stale or malformed event can at worst cost one redundant
+    // read of our own data. Shape-gated hard; everything else the channel might carry is
+    // ignored (the protocol is additive). This listener lives OUTSIDE the byte-locked hooks
+    // block, so it must never touch SnugBridge internals — it keeps its own subscriber set.
+    var liveListeners = new Set();
+    window.addEventListener('message', function (event) {
+      var data = event.data;
+      if (!data || data.v !== 1 || data.type !== 'snug:host-event' || data.event !== 'connection-event') return;
+      var payload = data.data;
+      if (!payload || payload.slot !== 'whatsapp') return;
+      var jids = new Set();
+      var resync = payload.resync === true;
+      if (Array.isArray(payload.hints)) {
+        for (var i = 0; i < payload.hints.length; i += 1) {
+          var hint = payload.hints[i];
+          if (hint && typeof hint.jid === 'string') jids.add(hint.jid);
+        }
+      }
+      liveListeners.forEach(function (fn) { fn({ jids: jids, resync: resync }); });
+    });
+    // ===== LIVE-DOORBELL-END =====
 
-    const LANGUAGES = ['English', 'Hindi', 'Spanish', 'French', 'German', 'Portuguese', 'Arabic', 'Norwegian'];
-
-    /** Rough per-message language signal. Script detection only — enough to offer a translation. */
-    const looksNonDefault = (text, defaultLanguage) => {
-      if (typeof text !== 'string' || text.trim().length === 0) return false;
-      const nonLatin = /[؀-ۿऀ-ॿ一-鿿぀-ヿЀ-ӿ가-힯]/.test(text);
-      if (defaultLanguage === 'English') return nonLatin;
-      return !nonLatin;
-    };
-
-    const fmtTime = (ts) => {
+    // ---- time formatting (list + thread), WhatsApp-style
+    const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    function fmtClock(ts) {
+      const d = new Date(ts * 1000);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+    function dayKey(ts) {
+      const d = new Date(ts * 1000);
+      return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+    }
+    function fmtListTime(ts, nowTs) {
       if (!ts) return '';
-      try { return new Date(ts * 1000).toLocaleString(); } catch (e) { return ''; }
-    };
+      if (dayKey(ts) === dayKey(nowTs)) return fmtClock(ts);
+      if (dayKey(ts) === dayKey(nowTs - 86400)) return 'Yesterday';
+      const d = new Date(ts * 1000);
+      if (nowTs - ts < 6 * 86400) return WEEKDAY_SHORT[(d.getDay() + 6) % 7];
+      return d.getDate() + '/' + (d.getMonth() + 1) + '/' + String(d.getFullYear()).slice(2);
+    }
+    function fmtDayLabel(ts, nowTs) {
+      if (dayKey(ts) === dayKey(nowTs)) return 'Today';
+      if (dayKey(ts) === dayKey(nowTs - 86400)) return 'Yesterday';
+      const d = new Date(ts * 1000);
+      return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    const AVATAR_HUES = [16, 96, 152, 200, 262, 310, 348, 42];
+    function avatarHue(key) {
+      let h = 0;
+      for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+      return AVATAR_HUES[h % AVATAR_HUES.length];
+    }
+    function initialsOf(name) {
+      const words = String(name || '?').trim().split(/\s+/).slice(0, 2);
+      return words.map((w) => (w[0] || '').toUpperCase()).join('') || '?';
+    }
+
+    // Avatar bytes, cached per jid for the session with in-flight dedupe — a chat list of
+    // forty rows must not fire forty duplicate reads on every re-render.
+    const avatarCache = new Map(); // jid -> dataUrl | null | Promise
+    function useAvatar(api, jid) {
+      const [url, setUrl] = useState(() => (typeof avatarCache.get(jid) === 'string' ? avatarCache.get(jid) : null));
+      useEffect(() => {
+        let cancelled = false;
+        const cached = avatarCache.get(jid);
+        if (typeof cached === 'string') { setUrl(cached); return undefined; }
+        if (cached === null) { setUrl(null); return undefined; }
+        const load = cached instanceof Promise ? cached : (async () => {
+          const res = await api.fetch(`${SLOT}/chats/${encodeURIComponent(jid)}/picture`);
+          const body = res.ok && res.status === 200 ? parseBody(res.body) : null;
+          return body && typeof body.base64 === 'string' ? `data:${body.mime || 'image/jpeg'};base64,${body.base64}` : null;
+        })();
+        avatarCache.set(jid, load);
+        load.then((result) => {
+          // A MISS is not cached as a permanent fact: the helper answers undefined both for
+          // "this contact has no picture" and for "that fetch failed", and treating a
+          // transient failure as permanent means one hiccup costs every avatar until the
+          // app is reopened. A hit caches; a miss simply clears the in-flight slot so a
+          // later render can try again.
+          if (result === null) avatarCache.delete(jid);
+          else avatarCache.set(jid, result);
+          if (!cancelled) setUrl(result);
+        });
+        return () => { cancelled = true; };
+      }, [api, jid]);
+      return url;
+    }
+
+    function Avatar({ api, jid, name, size }) {
+      const url = useAvatar(api, jid);
+      const style = url
+        ? undefined
+        : { background: `hsl(${avatarHue(jid)} 45% 52%)` };
+      return (
+        <div className="avatar" style={{ ...(style || {}), ...(size ? { width: size, height: size, fontSize: size * 0.38 } : {}) }} aria-hidden="true">
+          {url ? <img src={url} alt="" /> : initialsOf(name)}
+        </div>
+      );
+    }
+
+    // ---- sidecar reads/writes, all through the governed seam
+    function makeSidecarApi(api) {
+      return {
+        async chats() {
+          const res = await api.fetch(`${SLOT}/chats`);
+          if (!res.ok) return { error: res.error };
+          if (res.status !== 200) return { error: { message: `helper answered ${res.status}` } };
+          const body = parseBody(res.body);
+          return { chats: (body && Array.isArray(body.chats) ? body.chats : []), sync: body && body.sync };
+        },
+        async history(jid) {
+          const res = await api.fetch(`${SLOT}/chats/${encodeURIComponent(jid)}/history`);
+          if (!res.ok || res.status !== 200) return { messages: [], sync: null };
+          const body = parseBody(res.body);
+          return { messages: (body && body.messages) || [], sync: body && body.sync };
+        },
+        async since(jid, ts) {
+          const res = await api.fetch(`${SLOT}/chats/${encodeURIComponent(jid)}/messages${ts ? `?since=${ts}` : ''}`);
+          if (!res.ok || res.status !== 200) return { messages: [] };
+          const body = parseBody(res.body);
+          return { messages: (body && body.messages) || [] };
+        },
+        async send(jid, text) {
+          const res = await api.fetch(`${SLOT}/chats/${encodeURIComponent(jid)}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({ text }),
+          });
+          if (!res.ok) return { error: (res.error && res.error.message) || 'the send was not delivered' };
+          if (res.status !== 200) return { error: `the helper answered ${res.status}` };
+          const body = parseBody(res.body);
+          return { id: body && body.id };
+        },
+        async media(jid, mediaId) {
+          const res = await api.fetch(`${SLOT}/chats/${encodeURIComponent(jid)}/media/${encodeURIComponent(mediaId)}`);
+          if (!res.ok || res.status !== 200) return null;
+          return parseBody(res.body);
+        },
+      };
+    }
+
+    // ---------------------------------------------------------------- the app
 
     function App() {
-      const { isReady, theme, sendMessage } = useSnugApp({
-        appId: 'whatsapp-twin',
-        displayName: 'WhatsApp Twin',
-        description: 'Link your personal WhatsApp, pick one thread, and study it: who everyone is, how the group behaves, and replies drafted in your own voice.',
-        iconEmoji: '🪞',
-        iconColor: '#1f8a5c',
+      const { isReady, theme, isWaiting, sendMessage } = useSnugApp({
+        appId: 'telepath',
+        displayName: 'Telepath',
+        description: 'Your WhatsApp, live — with an analyst who knows the room and drafts in your voice.',
+        iconEmoji: '🔮',
+        iconColor: '#0f7d61',
       });
-      const net = useConnectedFetch();
       const db = useAppDB();
+      const api = useConnectedFetch();
+      const sidecar = useMemo(() => makeSidecarApi(api), [api]);
 
-      const [ui, setUi] = usePersistedState('whatsapp-twin-ui', {
-        tab: 'threads',
-        threadJid: null,
-        defaultLanguage: 'English',
-      });
-      const tab = ui.tab || 'threads';
-      const setTab = (t) => setUi((prev) => ({ ...prev, tab: t }));
-
-      const [conn, setConn] = useState('loading');
+      const [ui, setUi] = usePersistedState(KV_KEY, { openJid: null, tab: 'chat', readAt: {} });
+      const [schemaReady, setSchemaReady] = useState(false);
+      const [helper, setHelper] = useState({ phase: 'starting' }); // starting | up | down
       const [chats, setChats] = useState([]);
-      const [messages, setMessages] = useState([]);
-      const [sync, setSync] = useState(null);
-      const [profiles, setProfiles] = useState([]);
-      const [dynamics, setDynamics] = useState('');
-      const [voice, setVoice] = useState(null);
-      const [busy, setBusy] = useState('');
-      const [notice, setNotice] = useState(null);
-      const [exportText, setExportText] = useState('');
-      const [exportReport, setExportReport] = useState(null);
-      const [question, setQuestion] = useState('');
-      const [answer, setAnswer] = useState(null);
-      const [draft, setDraft] = useState(null);
-      const [activity, setActivity] = useState([]);
-      const [translations, setTranslations] = useState({});
+      const [thread, setThread] = useState({ jid: null, messages: [], sync: null, loading: false });
+      const [draftText, setDraftText] = useState('');
+      const [drafting, setDrafting] = useState(false);
+      const [sending, setSending] = useState(false);
+      const [analysing, setAnalysing] = useState(false);
+      const [analysis, setAnalysis] = useState(null); // { payload, runAt, watermarkTs, nameMap }
+      const [toast, setToast] = useState(null);
+      const [lightbox, setLightbox] = useState(null); // dataUrl
+      const msgsEndRef = useRef(null);
+      const openJidRef = useRef(null);
+      openJidRef.current = ui.openJid;
 
-      useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+      useEffect(() => { document.documentElement.setAttribute('data-theme', theme); }, [theme]);
 
-      const thread = useMemo(
-        () => chats.find((c) => c.jid === ui.threadJid) || null,
-        [chats, ui.threadJid],
-      );
+      const say = useCallback((text) => {
+        setToast(text);
+        window.setTimeout(() => setToast((current) => (current === text ? null : current)), 3200);
+      }, []);
 
-      // ---------------------------------------------------------------- data loading
-
-      const loadChats = useCallback(async () => {
-        const res = await net.fetch('snug-connection://whatsapp/chats');
-        if (!res.ok) { setConn(mapNetError(res.error)); return; }
-        if (res.status === 401 || res.status === 403) { setConn('rejected'); return; }
-        if (res.status >= 400) { setConn('error'); return; }
-        const parsed = parseBody(res.body);
-        setChats((parsed && Array.isArray(parsed.chats) ? parsed.chats : []));
-        setConn('ready');
-      }, [net]);
-
-      const loadThread = useCallback(async (jid) => {
-        if (!jid) return;
-        setBusy('history');
-        try {
-          const res = await net.fetch('snug-connection://whatsapp/chats/' + encodeURIComponent(jid) + '/history');
-          if (!res.ok) { setConn(mapNetError(res.error)); return; }
-          if (res.status >= 400) { setNotice({ tone: 'warn', text: 'that thread could not be read (status ' + res.status + ').' }); return; }
-          const parsed = parseBody(res.body);
-          setMessages(parsed && Array.isArray(parsed.messages) ? parsed.messages : []);
-          setSync(parsed ? parsed.sync : null);
-        } finally { setBusy(''); }
-      }, [net]);
-
-      const loadPersona = useCallback(async (jid) => {
-        try {
-          const { rows } = await db.exec('SELECT kind, label, payload FROM persona WHERE jid = ?', [jid]);
-          const people = [];
-          let dyn = '';
-          let v = null;
-          rows.forEach((r) => {
-            let payload = null;
-            try { payload = JSON.parse(r[2]); } catch (e) { return; }
-            if (r[0] === 'person') people.push(Object.assign({ label: r[1] }, payload));
-            else if (r[0] === 'dynamics') dyn = payload.text || '';
-            else if (r[0] === 'voice') v = payload;
-          });
-          setProfiles(people);
-          setDynamics(dyn);
-          setVoice(v);
-        } catch (e) { setProfiles([]); setDynamics(''); setVoice(null); }
-      }, [db]);
-
-      const loadActivity = useCallback(async (jid) => {
-        try {
-          const { rows } = await db.exec('SELECT at, incoming, outgoing, mode FROM activity WHERE jid = ? ORDER BY id DESC LIMIT 40', [jid]);
-          setActivity(rows.map((r) => ({ at: r[0], incoming: r[1], outgoing: r[2], mode: r[3] })));
-        } catch (e) { setActivity([]); }
-      }, [db]);
-
-      const loadTranslations = useCallback(async (jid) => {
-        try {
-          const { rows } = await db.exec('SELECT message_id, text FROM translations WHERE jid = ? AND language = ?', [jid, ui.defaultLanguage]);
-          const next = {};
-          rows.forEach((r) => { next[r[0]] = r[1]; });
-          setTranslations(next);
-        } catch (e) { setTranslations({}); }
-      }, [db, ui.defaultLanguage]);
-
+      // Schema once, before any query.
       useEffect(() => {
         if (!isReady) return;
         let cancelled = false;
         (async () => {
-          try { for (const stmt of DDL) await db.exec(stmt, []); } catch (e) { /* schema is best-effort; reads degrade to empty */ }
-          if (!cancelled) await loadChats();
-        })();
+          for (const stmt of DDL) await db.exec(stmt);
+          if (!cancelled) setSchemaReady(true);
+        })().catch(() => say('the app database could not be prepared'));
         return () => { cancelled = true; };
-      }, [isReady]); // eslint-disable-line react-hooks/exhaustive-deps
+      }, [isReady, db, say]);
 
-      useEffect(() => {
-        if (!isReady || !ui.threadJid) return;
-        loadThread(ui.threadJid);
-        loadPersona(ui.threadJid);
-        loadActivity(ui.threadJid);
-        loadTranslations(ui.threadJid);
-      }, [isReady, ui.threadJid]); // eslint-disable-line react-hooks/exhaustive-deps
-
-      // ---------------------------------------------------------------- analysis
-
-      // The merge: exported .txt lines plus whatever history sync delivered. Dedup on
-      // (author, minute, text) because the two sources describe the same messages differently —
-      // one by display name, one by JID — and a duplicated message would double-count its author.
-      const corpus = useMemo(() => {
-        const live = messages.map((m) => ({
-          author: m.from, authorJid: m.from, text: m.text, ts: m.ts, fromMe: m.fromMe === true, source: 'live',
-        }));
-        const exported = exportReport ? exportReport.messages : [];
-        const seen = new Set();
-        const merged = [];
-        live.concat(exported).forEach((m) => {
-          const key = String(m.text).trim() + '|' + Math.floor((m.ts || 0) / 60);
-          if (seen.has(key)) return;
-          seen.add(key);
-          merged.push(m);
-        });
-        merged.sort((a, b) => (a.ts || 0) - (b.ts || 0));
-        return merged;
-      }, [messages, exportReport]);
-
-      const analyse = useCallback(async () => {
-        if (!thread || corpus.length === 0) return;
-        setBusy('analyse');
-        setNotice(null);
-        try {
-          // AC12: pseudonymise BEFORE the turn. Real names, numbers and JIDs never leave here.
-          const map = buildPseudonymMap({ messages: corpus });
-          const scrubbed = pseudonymizeForLlm(corpus.slice(-400), map);
-          const result = await sendMessage('profile_thread', { threadKind: thread.isGroup ? 'group' : 'dm' }, {
-            state: { messages: scrubbed },
-            responseSchema: RESPONSE_SCHEMA,
-          });
-          if (!result.ok) {
-            setNotice({ tone: 'warn', text: (result.error && result.error.message) || 'the analysis did not come back — try again.' });
-            return;
-          }
-          const data = result.data || {};
-          const people = Array.isArray(data.people) ? data.people.filter((p) => p && typeof p.label === 'string') : [];
-          if (people.length === 0 && !data.voice) {
-            setNotice({ tone: 'warn', text: 'the model answered off-script, so nothing was saved — try again.' });
-            return;
-          }
-          const now = new Date().toISOString();
-          try {
-            await db.exec('DELETE FROM persona WHERE jid = ?', [thread.jid]);
-            for (const person of people) {
-              await db.exec(
-                'INSERT INTO persona (jid, kind, label, payload, created_at) VALUES (?, ?, ?, ?, ?)',
-                [thread.jid, 'person', person.label, JSON.stringify({ summary: person.summary || '', traits: Array.isArray(person.traits) ? person.traits : [] }), now],
-              );
-            }
-            if (typeof data.dynamics === 'string' && data.dynamics.length > 0) {
-              await db.exec('INSERT INTO persona (jid, kind, label, payload, created_at) VALUES (?, ?, ?, ?, ?)', [thread.jid, 'dynamics', '-', JSON.stringify({ text: data.dynamics }), now]);
-            }
-            if (data.voice && typeof data.voice === 'object') {
-              await db.exec('INSERT INTO persona (jid, kind, label, payload, created_at) VALUES (?, ?, ?, ?, ?)', [thread.jid, 'voice', '-', JSON.stringify(data.voice), now]);
-            }
-            await db.exec('INSERT OR REPLACE INTO threads (jid, name, is_group, analysed_at) VALUES (?, ?, ?, ?)', [thread.jid, thread.name || thread.jid, thread.isGroup ? 1 : 0, now]);
-          } catch (e) { setNotice({ tone: 'warn', text: 'the analysis came back but could not be saved.' }); }
-          await loadPersona(thread.jid);
-          setTab('persona');
-        } finally { setBusy(''); }
-      }, [thread, corpus, sendMessage, db, loadPersona]); // eslint-disable-line react-hooks/exhaustive-deps
-
-      const stats = useMemo(() => {
-        const perAuthor = new Map();
-        corpus.forEach((m) => {
-          const key = m.fromMe ? 'you' : (m.authorJid || m.author);
-          const row = perAuthor.get(key) || { count: 0, chars: 0 };
-          row.count += 1;
-          row.chars += String(m.text || '').length;
-          perAuthor.set(key, row);
-        });
-        const busiest = [...perAuthor.entries()].sort((a, b) => b[1].count - a[1].count)[0];
-        return {
-          total: corpus.length,
-          people: perAuthor.size,
-          busiest: busiest ? busiest[1].count : 0,
-          avgLength: corpus.length ? Math.round(corpus.reduce((n, m) => n + String(m.text || '').length, 0) / corpus.length) : 0,
-        };
-      }, [corpus]);
-
-      const ask = useCallback(async () => {
-        const q = question.trim();
-        if (q.length === 0 || !thread) return;
-        setBusy('ask');
-        setAnswer(null);
-        try {
-          const result = await sendMessage('answer_question', { question: q }, {
-            state: { profiles: profiles, dynamics: dynamics, stats: stats },
-            responseSchema: RESPONSE_SCHEMA,
-          });
-          if (!result.ok) { setAnswer({ error: (result.error && result.error.message) || 'no answer came back.' }); return; }
-          const text = result.data && typeof result.data.message === 'string' ? result.data.message : '';
-          setAnswer(text.length > 0 ? { text } : { error: 'the model answered off-script — ask again.' });
-        } finally { setBusy(''); }
-      }, [question, thread, profiles, dynamics, stats, sendMessage]);
-
-      // ---------------------------------------------------------------- reply surfaces
-
-      const composeDraft = useCallback(async (incoming) => {
-        if (!thread) return null;
-        const map = buildPseudonymMap({ messages: corpus });
-        const result = await sendMessage('draft_reply', {
-          incoming: incoming ? redactIdentifiers(String(incoming.text || ''), map) : '',
-        }, {
-          state: {
-            voice: voice || { tone: 'neutral', typicalLength: 'short', emoji: [], language: ui.defaultLanguage },
-            recent: pseudonymizeForLlm(corpus.slice(-30), map),
-          },
-          responseSchema: RESPONSE_SCHEMA,
-        });
-        if (!result.ok) return { error: (result.error && result.error.message) || 'no draft came back.' };
-        const text = result.data && typeof result.data.text === 'string' ? result.data.text.trim() : '';
-        if (text.length === 0) return { error: 'the model answered off-script — nothing was drafted.' };
-        return { text, language: (result.data && result.data.language) || (voice && voice.language) || ui.defaultLanguage };
-      }, [thread, corpus, voice, ui.defaultLanguage, sendMessage]);
-
-      const startDraft = useCallback(async () => {
-        setBusy('draft');
-        setDraft(null);
-        try {
-          const incoming = [...corpus].reverse().find((m) => !m.fromMe) || null;
-          const result = await composeDraft(incoming);
-          setDraft(result ? Object.assign({ incoming: incoming }, result) : null);
-        } finally { setBusy(''); }
-      }, [corpus, composeDraft]);
-
-      // THE SEND. Every path — manual confirm and armed alike — goes through here, so the
-      // journal cannot be bypassed by adding a caller: there is one place that talks to the
-      // connection, and it writes the activity row itself.
-      const sendReply = useCallback(async (text, mode, incoming) => {
-        if (!thread) return false;
-        const res = await net.fetch('snug-connection://whatsapp/chats/' + encodeURIComponent(thread.jid) + '/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
-        });
-        if (!res.ok) {
-          setNotice({ tone: 'danger', text: mapNetError(res.error) === 'unconnected' ? 'that send was not approved.' : 'the message could not be sent.' });
+      // ---- chat list: the mount read IS the helper starter (the transport auto-starts
+      // the sidecar on any governed request), and its failure is the status screen.
+      const refreshChats = useCallback(async () => {
+        const result = await sidecar.chats();
+        if (result.error) {
+          setHelper({ phase: 'down', detail: result.error.message || 'the helper is not reachable' });
           return false;
         }
-        if (res.status >= 400) { setNotice({ tone: 'danger', text: 'WhatsApp refused that message (status ' + res.status + ').' }); return false; }
-        try {
-          await db.exec(
-            'INSERT INTO activity (jid, at, incoming, outgoing, mode) VALUES (?, ?, ?, ?, ?)',
-            [thread.jid, new Date().toISOString(), incoming ? String(incoming.text || '').slice(0, 400) : null, String(text).slice(0, 400), mode],
-          );
-          await loadActivity(thread.jid);
-        } catch (e) { /* the send happened; a missing journal row must not look like a failed send */ }
+        setHelper({ phase: 'up', ...(result.sync ? { sync: result.sync } : {}) });
+        const sorted = result.chats.slice().sort((a, b) => (b.lastActivityTs || 0) - (a.lastActivityTs || 0));
+        setChats(sorted);
         return true;
-      }, [thread, net, db, loadActivity]);
+      }, [sidecar]);
 
-      const confirmDraft = useCallback(async () => {
-        if (!draft || !draft.text) return;
-        setBusy('send');
-        try {
-          const sent = await sendReply(draft.text, 'manual', draft.incoming);
-          if (sent) { setDraft(null); setNotice({ tone: 'info', text: 'sent.' }); await loadThread(thread.jid); }
-        } finally { setBusy(''); }
-      }, [draft, sendReply, loadThread, thread]);
+      useEffect(() => {
+        if (!isReady || !schemaReady) return;
+        void refreshChats();
+      }, [isReady, schemaReady, refreshChats]);
 
-      // ---------------------------------------------------------------- translate
+      // ---- open thread: render the local cache instantly, then refetch and merge.
+      const loadThread = useCallback(async (jid) => {
+        setThread((prev) => ({ ...prev, jid, loading: true }));
+        const local = await db.exec(
+          'SELECT id, author, text, ts, from_me, kind FROM messages WHERE jid = ? ORDER BY ts ASC',
+          [jid],
+        );
+        const cached = local.rows.map((row) => ({
+          id: row[0], from: row[1], text: row[2], ts: row[3], fromMe: row[4] === 1,
+          ...(row[5] ? { kind: row[5] } : {}),
+        }));
+        setThread({ jid, messages: cached, sync: null, loading: cached.length === 0 });
+        const fresh = await sidecar.history(jid);
+        const merged = mergeMessages(cached, fresh.messages);
+        setThread({ jid, messages: merged, sync: fresh.sync, loading: false });
+        await persistMessages(jid, fresh.messages);
+      }, [db, sidecar]);
 
-      const translate = useCallback(async (msg) => {
-        if (!thread) return;
-        const id = msg.id || String(msg.ts);
-        setBusy('translate:' + id);
-        try {
-          const map = buildPseudonymMap({ messages: corpus });
-          const result = await sendMessage('translate', {
-            text: redactIdentifiers(String(msg.text || ''), map),
-            targetLanguage: ui.defaultLanguage,
-          }, { responseSchema: RESPONSE_SCHEMA });
-          if (!result.ok) { setNotice({ tone: 'warn', text: 'that translation did not come back.' }); return; }
-          const text = result.data && typeof result.data.text === 'string' ? result.data.text : '';
-          if (text.length === 0) { setNotice({ tone: 'warn', text: 'the model answered off-script — nothing was translated.' }); return; }
-          setTranslations((prev) => Object.assign({}, prev, { [id]: text }));
-          try {
-            await db.exec('INSERT OR REPLACE INTO translations (jid, message_id, language, text) VALUES (?, ?, ?, ?)', [thread.jid, id, ui.defaultLanguage, text]);
-          } catch (e) { /* the translation shows; the cache is an optimisation */ }
-        } finally { setBusy(''); }
-      }, [thread, corpus, ui.defaultLanguage, sendMessage, db]);
-
-      // ---------------------------------------------------------------- data dignity
-
-      const forgetThread = useCallback(async () => {
-        if (!thread) return;
-        setBusy('forget');
-        try {
-          // Cascades across every table that holds anything derived from this thread. A
-          // "forget" that left the profiles behind would be a lie told to someone who asked
-          // for their data to be gone.
-          await db.exec('DELETE FROM persona WHERE jid = ?', [thread.jid]);
-          await db.exec('DELETE FROM translations WHERE jid = ?', [thread.jid]);
-          await db.exec('DELETE FROM activity WHERE jid = ?', [thread.jid]);
-          await db.exec('DELETE FROM threads WHERE jid = ?', [thread.jid]);
-          setProfiles([]); setDynamics(''); setVoice(null); setActivity([]); setTranslations({});
-          setExportReport(null);
-          setNotice({ tone: 'info', text: 'everything derived from this thread has been deleted.' });
-        } catch (e) {
-          setNotice({ tone: 'danger', text: 'some of that could not be deleted — try again.' });
-        } finally { setBusy(''); }
-      }, [thread, db]);
-
-      const ingestExport = useCallback(() => {
-        const report = parseWhatsAppExport(exportText);
-        setExportReport(report);
-        if (report.messages.length === 0) {
-          setNotice({ tone: 'warn', text: 'no messages were found in that text — is it a WhatsApp "Export chat" file?' });
-        } else {
-          setNotice({ tone: 'info', text: report.messages.length + ' messages read from the export.' });
+      const persistMessages = useCallback(async (jid, rows) => {
+        for (const row of rows) {
+          await db.exec(
+            'INSERT OR IGNORE INTO messages (jid, id, author, text, ts, from_me, kind) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [jid, row.id, row.from || '', String(row.text || ''), row.ts || 0, row.fromMe === true ? 1 : 0, row.kind || null],
+          );
         }
-      }, [exportText]);
+      }, [db]);
 
-      if (!isReady) return <div className="connecting">warming the mirror…</div>;
+      const openThread = useCallback((jid) => {
+        const row = chats.find((c) => c.jid === jid);
+        setUi((prev) => ({
+          ...prev,
+          openJid: jid,
+          tab: 'chat',
+          // The badge clear is LOCAL display state — nothing is sent to WhatsApp, no read
+          // receipt exists on this path at all.
+          readAt: { ...prev.readAt, [jid]: (row && row.lastActivityTs) || Math.floor(Date.now() / 1000) },
+        }));
+        setAnalysis(null);
+        void loadThread(jid);
+      }, [chats, setUi, loadThread]);
+
+      // ---- the doorbell: a hint means REFETCH (list always; open thread when named).
+      useEffect(() => {
+        if (!isReady || !schemaReady) return undefined;
+        const onLive = ({ jids, resync }) => {
+          void refreshChats();
+          const openJid = openJidRef.current;
+          if (openJid && (resync || jids.has(openJid))) {
+            setThread((prev) => {
+              const maxTs = prev.messages.reduce((max, row) => Math.max(max, row.ts || 0), 0);
+              void (async () => {
+                const fresh = await sidecar.since(openJid, Math.max(0, maxTs - 60));
+                if (openJidRef.current !== openJid) return;
+                setThread((current) => (current.jid === openJid
+                  ? { ...current, messages: mergeMessages(current.messages, fresh.messages) }
+                  : current));
+                await persistMessages(openJid, fresh.messages);
+                setUi((prevUi) => ({
+                  ...prevUi,
+                  readAt: { ...prevUi.readAt, [openJid]: Math.floor(Date.now() / 1000) },
+                }));
+              })();
+              return prev;
+            });
+          }
+        };
+        liveListeners.add(onLive);
+        return () => liveListeners.delete(onLive);
+      }, [isReady, schemaReady, refreshChats, sidecar, persistMessages, setUi]);
+
+      // Keep the newest message in view.
+      useEffect(() => {
+        if (ui.tab === 'chat') msgsEndRef.current?.scrollIntoView({ block: 'end' });
+      }, [thread.messages, ui.tab, ui.openJid]);
+
+      // ---- participants of the open thread, with display names (for the map and the UI).
+      const openChat = chats.find((c) => c.jid === ui.openJid) || null;
+      const nameByJid = useMemo(() => {
+        const names = new Map();
+        for (const chat of chats) {
+          if (!chat.isGroup) names.set(chat.jid, chat.name);
+          for (const part of chat.participants || []) {
+            if (part.name && !names.has(part.jid)) names.set(part.jid, part.name);
+          }
+        }
+        return names;
+      }, [chats]);
+      const displayName = useCallback((jid, fromMe) => {
+        if (fromMe) return 'You';
+        const known = nameByJid.get(jid);
+        if (known) return known;
+        return fallbackLabel(jid);
+      }, [nameByJid]);
+
+      // ---- the pseudonym map for the open thread: persisted, extended, never shuffled.
+      const loadMapEntries = useCallback(async (jid) => {
+        const rows = await db.exec('SELECT identity, label FROM pseudonyms WHERE jid = ?', [jid]);
+        return rows.rows.map((row) => [row[0], row[1]]);
+      }, [db]);
+
+      const persistMap = useCallback(async (jid, map) => {
+        for (const [identity, label] of map.entries()) {
+          await db.exec('INSERT OR REPLACE INTO pseudonyms (jid, identity, label) VALUES (?, ?, ?)', [jid, identity, label]);
+        }
+      }, [db]);
+
+      const mapForThread = useCallback(async (jid, messages) => {
+        const prior = await loadMapEntries(jid);
+        const people = [];
+        const seen = new Set();
+        for (const row of messages) {
+          const identity = row.from;
+          if (!identity || seen.has(identity)) continue;
+          seen.add(identity);
+          people.push({ jid: identity, name: nameByJid.get(identity), isMe: row.fromMe === true });
+        }
+        const chat = chats.find((c) => c.jid === jid);
+        for (const part of (chat && chat.participants) || []) {
+          if (seen.has(part.jid)) continue;
+          seen.add(part.jid);
+          people.push({ jid: part.jid, name: part.name });
+        }
+        const map = extendPseudonymMap(prior, people);
+        await persistMap(jid, map);
+        return map;
+      }, [loadMapEntries, persistMap, nameByJid, chats]);
+
+      // ---- ANALYZE: first run = implicit full export → watermark → full profile;
+      // after that = prior analysis + only the delta since the watermark.
+      const runAnalysis = useCallback(async () => {
+        const jid = ui.openJid;
+        if (!jid || analysing) return;
+        setAnalysing(true);
+        try {
+          // 1. The implicit export: full history from the helper, into the DB. Charts and
+          //    future deltas read from here — the prompt gets a budgeted window.
+          const fresh = await sidecar.history(jid);
+          await persistMessages(jid, fresh.messages);
+          const all = await db.exec('SELECT id, author, text, ts, from_me FROM messages WHERE jid = ? ORDER BY ts ASC', [jid]);
+          const rows = all.rows.map((row) => ({ id: row[0], from: row[1], text: row[2], ts: row[3], fromMe: row[4] === 1 }));
+          if (rows.length === 0) { say('nothing to analyse yet'); return; }
+          const watermark = rows.reduce((max, row) => Math.max(max, row.ts || 0), 0);
+          const map = await mapForThread(jid, rows);
+
+          // 2. Prior run, if any — the incremental path sends it plus the delta only.
+          const priorRow = await db.exec(
+            'SELECT payload, watermark_ts FROM analyses WHERE jid = ? ORDER BY run_at DESC LIMIT 1', [jid],
+          );
+          const prior = priorRow.rows.length > 0 ? JSON.parse(priorRow.rows[0][0]) : null;
+          const priorWatermark = priorRow.rows.length > 0 ? priorRow.rows[0][1] : 0;
+          const delta = prior ? rows.filter((row) => (row.ts || 0) > priorWatermark) : rows;
+          if (prior && delta.length === 0) { say('nothing new since the last analysis'); return; }
+
+          const request = buildAnalysisRequest({
+            messages: delta,
+            map,
+            priorAnalysis: prior || undefined,
+            byteBudget: LLM_BYTE_BUDGET,
+          });
+          const stats = statsByParticipant(pseudonymizeForLlm(rows, map)).slice(0, 12);
+          const action = prior ? 'reanalyse_thread' : 'profile_thread';
+          const result = await sendMessage(action, { isGroup: openChat ? openChat.isGroup : jid.endsWith('@g.us') }, {
+            state: {
+              transcript: request.transcript,
+              transcriptTruncated: request.truncated,
+              ...(request.prior !== undefined ? { previousAnalysis: request.prior } : {}),
+              messageStats: stats,
+              sync: fresh.sync || undefined,
+            },
+            responseSchema: RESPONSE_SCHEMA,
+          });
+          if (!result.ok) { say(result.error && result.error.message ? result.error.message : 'the analysis failed'); return; }
+          const payload = result.data;
+          // Untrusted input: validate the shape locally before it touches the database.
+          if (!payload || payload.kind !== 'profile' || !Array.isArray(payload.people)) {
+            say('the model answered off-script — nothing was saved');
+            return;
+          }
+          const runAt = new Date().toISOString();
+          // Stored PSEUDONYMIZED, exactly as returned — names come back at render time.
+          await db.exec('INSERT OR REPLACE INTO analyses (jid, run_at, watermark_ts, payload) VALUES (?, ?, ?, ?)',
+            [jid, runAt, watermark, JSON.stringify(payload)]);
+          await db.exec(
+            'INSERT INTO threads (jid, name, is_group, last_activity_ts, analysed_at, analysis_watermark_ts) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(jid) DO UPDATE SET analysed_at = excluded.analysed_at, analysis_watermark_ts = excluded.analysis_watermark_ts, name = excluded.name',
+            [jid, (openChat && openChat.name) || jid, openChat && openChat.isGroup ? 1 : 0, watermark, runAt, watermark],
+          );
+          setAnalysis({ payload, runAt, watermarkTs: watermark, map });
+          setUi((prev) => ({ ...prev, tab: 'insights' }));
+        } catch (err) {
+          say('the analysis hit an error — nothing was saved');
+        } finally {
+          setAnalysing(false);
+        }
+      }, [ui.openJid, analysing, sidecar, persistMessages, db, mapForThread, sendMessage, openChat, say, setUi]);
+
+      // Load the stored analysis when a thread opens (so Insights shows the last run).
+      useEffect(() => {
+        const jid = ui.openJid;
+        if (!jid || !schemaReady) return;
+        let cancelled = false;
+        (async () => {
+          const row = await db.exec('SELECT payload, run_at, watermark_ts FROM analyses WHERE jid = ? ORDER BY run_at DESC LIMIT 1', [jid]);
+          if (cancelled || row.rows.length === 0) { if (!cancelled) setAnalysis(null); return; }
+          const entries = await loadMapEntries(jid);
+          if (cancelled) return;
+          setAnalysis({
+            payload: JSON.parse(row.rows[0][0]),
+            runAt: row.rows[0][1],
+            watermarkTs: row.rows[0][2],
+            map: new Map(entries),
+          });
+        })().catch(() => {});
+        return () => { cancelled = true; };
+      }, [ui.openJid, schemaReady, db, loadMapEntries]);
+
+      // ---- DRAFT: the ✨ button — a reply in the user's own register and emoji habits.
+      const runDraft = useCallback(async () => {
+        const jid = ui.openJid;
+        if (!jid || drafting || thread.messages.length === 0) return;
+        setDrafting(true);
+        try {
+          const map = await mapForThread(jid, thread.messages);
+          const recent = pseudonymizeForLlm(thread.messages.slice(-60), map);
+          const mine = await db.exec('SELECT text, ts, from_me FROM messages WHERE jid = ? AND from_me = 1 ORDER BY ts DESC LIMIT 200', [jid]);
+          const myRows = mine.rows.map((row) => ({ text: row[0], ts: row[1], fromMe: true }));
+          const emoji = emojiFrequency(myRows).slice(0, 10);
+          const voice = analysis && analysis.payload && analysis.payload.voice ? analysis.payload.voice : undefined;
+          const samples = pseudonymizeForLlm(myRows.slice(0, 30), map).map((row) => row.text).filter((t) => t.length > 0);
+          const result = await sendMessage('draft_reply', {}, {
+            state: {
+              recentTranscript: recent,
+              myRecentMessages: samples,
+              myEmojiHabits: emoji,
+              ...(voice !== undefined ? { voice } : {}),
+              ...(draftText.trim().length > 0 ? { userHint: draftText.trim() } : {}),
+            },
+            responseSchema: RESPONSE_SCHEMA,
+          });
+          if (!result.ok) { say(result.error && result.error.message ? result.error.message : 'the draft failed'); return; }
+          const payload = result.data;
+          if (!payload || payload.kind !== 'draft' || typeof payload.text !== 'string') {
+            say('the model answered off-script');
+            return;
+          }
+          // Into the composer, editable — NEVER auto-sent. Sending stays the user's tap.
+          setDraftText(deanonymizeText(payload.text, map));
+        } finally {
+          setDrafting(false);
+        }
+      }, [ui.openJid, drafting, thread.messages, mapForThread, db, analysis, sendMessage, draftText, say]);
+
+      // ---- SEND, through the one chokepoint (journaled; the host raises its confirm).
+      const runSend = useCallback(async () => {
+        const jid = ui.openJid;
+        const text = draftText.trim();
+        if (!jid || sending || text.length === 0) return;
+        setSending(true);
+        try {
+          const result = await sidecar.send(jid, text);
+          if (result.error) { say(result.error); return; }
+          const nowTs = Math.floor(Date.now() / 1000);
+          const optimistic = { id: result.id || `local-${nowTs}-${Math.random().toString(36).slice(2)}`, from: 'me', text, ts: nowTs, fromMe: true };
+          setThread((prev) => (prev.jid === jid ? { ...prev, messages: mergeMessages(prev.messages, [optimistic]) } : prev));
+          await persistMessages(jid, [optimistic]);
+          await db.exec('INSERT INTO activity (jid, at, incoming, outgoing, mode) VALUES (?, ?, ?, ?, ?)',
+            [jid, new Date().toISOString(), null, text, 'manual']);
+          setDraftText('');
+        } finally {
+          setSending(false);
+        }
+      }, [ui.openJid, draftText, sending, sidecar, persistMessages, db, say]);
+
+      // ---- media on tap: thumbnail rides the message row; the full image is one governed
+      // read away, size-capped, never stored.
+      const openMedia = useCallback(async (jid, row) => {
+        if (row.thumbnailBase64 && !row.mediaId) { setLightbox(`data:image/jpeg;base64,${row.thumbnailBase64}`); return; }
+        const media = await sidecar.media(jid, row.mediaId || row.id);
+        if (media && typeof media.base64 === 'string') {
+          setLightbox(`data:${media.mime || 'image/jpeg'};base64,${media.base64}`);
+        } else if (media && media.tooLarge === true) {
+          say('this photo is larger than the transport allows — showing the preview');
+          if (media.thumbnailBase64 || row.thumbnailBase64) setLightbox(`data:image/jpeg;base64,${media.thumbnailBase64 || row.thumbnailBase64}`);
+        } else if (row.thumbnailBase64) {
+          setLightbox(`data:image/jpeg;base64,${row.thumbnailBase64}`);
+        } else {
+          say('this photo is no longer fetchable');
+        }
+      }, [sidecar, say]);
+
+      // ---------------------------------------------------------- render
+
+      if (!isReady) {
+        return <div className="center-state" style={{ height: '100%' }}><div className="spin big">◌</div><div>connecting to Snug…</div></div>;
+      }
+
+      const badgeFor = (chat) => {
+        const readTs = ui.readAt[chat.jid] || 0;
+        if (chat.jid === ui.openJid) return 0;
+        if ((chat.lastActivityTs || 0) <= readTs) return 0;
+        return chat.unreadCount || 0;
+      };
+      const nowTs = Math.floor(Date.now() / 1000);
+
+      const listPane = (
+        <section className="list-pane" aria-label="chats">
+          <div className="list-head">
+            <div>
+              <h1>Telepath</h1>
+              <div className="brand-sub">your WhatsApp, with insight on tap</div>
+            </div>
+            <button className="icon-btn" title="refresh" aria-label="refresh chats" onClick={() => void refreshChats()}>↻</button>
+          </div>
+          <div className="chatlist">
+            {helper.phase === 'down' && (
+              <div className="center-state">
+                <div className="big">📵</div>
+                <div className="title">the WhatsApp helper is not reachable</div>
+                <div style={{ fontSize: 13 }}>{helper.detail}</div>
+                <button className="btn primary" onClick={() => void refreshChats()}>try again</button>
+                <div style={{ fontSize: 12 }}>trying again also starts the helper if it is installed</div>
+              </div>
+            )}
+            {helper.phase === 'starting' && <div className="center-state"><div className="spin big">◌</div><div>starting the helper…</div></div>}
+            {helper.phase === 'up' && chats.length === 0 && (
+              helper.sync && helper.sync.needsRelink ? (
+                // NOT "still syncing": the helper has told us this session was scanned but
+                // never finished registering, so sync will never begin. Saying "syncing"
+                // here is a lie the user cannot see through (owner-reported 2026-08-17).
+                <div className="center-state">
+                  <div className="big">🔗</div>
+                  <div className="title">this device needs linking again</div>
+                  <div>the last link was interrupted before it finished, so WhatsApp never started sending your history</div>
+                  <div style={{ fontSize: 13 }}>open the WhatsApp connection in Snug's settings and scan the QR again — your messages are safe on your phone</div>
+                </div>
+              ) : (
+                <div className="center-state"><div className="big">💬</div><div>no chats yet — history is still syncing from your phone</div></div>
+              )
+            )}
+            {helper.phase === 'up' && chats.map((chat) => {
+              const badge = badgeFor(chat);
+              return (
+                <button key={chat.jid} className="chat-row" aria-current={chat.jid === ui.openJid} data-unread={badge > 0} onClick={() => openThread(chat.jid)}>
+                  <Avatar api={api} jid={chat.jid} name={chat.name} />
+                  <span className="mid">
+                    <span className="name">{chat.name}</span>
+                    <span className="preview">
+                      {chat.lastMessage
+                        ? `${chat.lastMessage.fromMe ? 'You: ' : ''}${chat.lastMessage.kind === 'image' ? '📷 Photo' + (chat.lastMessage.text ? ' · ' + chat.lastMessage.text : '') : chat.lastMessage.text}`
+                        : (chat.isGroup ? 'group' : 'chat')}
+                    </span>
+                  </span>
+                  <span className="side">
+                    <span className="when">{fmtListTime(chat.lastActivityTs, nowTs)}</span>
+                    {badge > 0 && <span className="unread-badge">{badge > 99 ? '99+' : badge}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="tos-note">
+            Linking automation to a personal WhatsApp account is against WhatsApp's terms and accounts have been banned.
+            Analysis leaves for your configured model provider with names, numbers and contact ids replaced by neutral labels.
+          </div>
+        </section>
+      );
+
+      const openMessages = thread.jid === ui.openJid ? thread.messages : [];
+      let lastDay = '';
+
+      const threadPane = !ui.openJid ? (
+        <section className="thread-pane center-state" aria-label="no chat open">
+          <div className="big">🔮</div>
+          <div className="title">Telepath</div>
+          <div>pick a conversation — read it live, analyse it, answer in your own voice</div>
+        </section>
+      ) : (
+        <section className="thread-pane" aria-label={`conversation with ${openChat ? openChat.name : ui.openJid}`}>
+          <div className="thread-head">
+            <button className="icon-btn back-btn" aria-label="back to chats" onClick={() => setUi((prev) => ({ ...prev, openJid: null }))}>‹</button>
+            <Avatar api={api} jid={ui.openJid} name={openChat ? openChat.name : '?'} size={38} />
+            <div className="who">
+              <div className="name">{openChat ? openChat.name : ui.openJid}</div>
+              <div className="sub">
+                {openChat && openChat.isGroup
+                  ? `${(openChat.participants || []).length || 'group'} participants`
+                  : 'direct chat'}
+                {thread.sync && !thread.sync.complete ? ' · history still syncing' : ''}
+                {thread.sync && thread.sync.complete && !thread.sync.explicit ? ' · history coverage inferred' : ''}
+              </div>
+            </div>
+            <button
+              className="icon-btn"
+              title={analysis ? 'reanalyse (delta only)' : 'analyse this conversation'}
+              aria-label="analyse this conversation"
+              disabled={analysing}
+              onClick={() => void runAnalysis()}
+            >{analysing ? <span className="spin">◌</span> : '🧠'}</button>
+          </div>
+
+          <div className="thread-tabs" role="tablist">
+            {['chat', 'insights', 'charts'].map((tab) => (
+              <button key={tab} role="tab" aria-selected={ui.tab === tab} className="thread-tab" onClick={() => setUi((prev) => ({ ...prev, tab }))}>
+                {tab === 'chat' ? 'Chat' : tab === 'insights' ? 'Insights' : 'Charts'}
+              </button>
+            ))}
+          </div>
+
+          {ui.tab === 'chat' && (
+            <React.Fragment>
+              <div className="msgs">
+                {thread.loading && openMessages.length === 0 && <div className="center-state"><div className="spin big">◌</div></div>}
+                {openMessages.map((row) => {
+                  const day = dayKey(row.ts);
+                  const sep = day !== lastDay ? <div className="day-sep" key={`sep-${row.id}`}>{fmtDayLabel(row.ts, nowTs)}</div> : null;
+                  lastDay = day;
+                  return (
+                    <React.Fragment key={row.id}>
+                      {sep}
+                      <div className={`bubble${row.fromMe ? ' me' : ''}`}>
+                        {openChat && openChat.isGroup && !row.fromMe && (
+                          <div className="sender" style={{ color: `hsl(${avatarHue(row.from || '')} 55% 42%)` }}>{displayName(row.from, false)}</div>
+                        )}
+                        {row.kind === 'image' && (
+                          row.thumbnailBase64 ? (
+                            <button className="thumb" aria-label="open photo" onClick={() => void openMedia(ui.openJid, row)}>
+                              <img src={`data:image/jpeg;base64,${row.thumbnailBase64}`} alt={row.text || 'photo'} />
+                            </button>
+                          ) : (
+                            <button className="linklike" onClick={() => void openMedia(ui.openJid, row)}>📷 Photo — tap to load</button>
+                          )
+                        )}
+                        {row.text && <div className="body">{row.text}</div>}
+                        {row.kind === 'image' && !row.text && !row.thumbnailBase64 && <div className="media-note">photo</div>}
+                        <span className="stamp">{fmtClock(row.ts)}</span>
+                      </div>
+                    </React.Fragment>
+                  );
+                })}
+                <div ref={msgsEndRef} />
+              </div>
+              <div className="composer">
+                <button
+                  className="icon-btn"
+                  title="draft a reply in my voice"
+                  aria-label="draft a reply with AI"
+                  disabled={drafting || isWaiting || openMessages.length === 0}
+                  onClick={() => void runDraft()}
+                >{drafting ? <span className="spin">◌</span> : '✨'}</button>
+                <textarea
+                  rows={1}
+                  placeholder="Message — or tap ✨ for a draft in your voice"
+                  value={draftText}
+                  onChange={(e) => setDraftText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void runSend(); } }}
+                />
+                <button className="icon-btn" title="send" aria-label="send message" disabled={sending || draftText.trim().length === 0} onClick={() => void runSend()}>
+                  {sending ? <span className="spin">◌</span> : '➤'}
+                </button>
+              </div>
+            </React.Fragment>
+          )}
+
+          {ui.tab === 'insights' && (
+            <InsightsTab analysis={analysis} analysing={analysing} onAnalyse={() => void runAnalysis()} displayName={displayName} />
+          )}
+
+          {ui.tab === 'charts' && (
+            <ChartsTab db={db} jid={ui.openJid} theme={theme} displayName={displayName} schemaReady={schemaReady} messages={openMessages} />
+          )}
+        </section>
+      );
 
       return (
-        <div className="shell">
-          <div className="topbar">
-            <h1>WhatsApp Twin</h1>
-            <span className="sub">{thread ? (thread.name || thread.jid) : 'one thread, read closely'}</span>
-          </div>
+        <div className="frame">
+          <style>{`@media (max-width: 759px) { .list-pane { display: ${ui.openJid ? 'none' : 'flex'}; } .thread-pane { display: ${ui.openJid ? 'flex' : 'none'}; } }`}</style>
+          {listPane}
+          {threadPane}
+          {lightbox && (
+            <button className="lightbox" aria-label="close photo" onClick={() => setLightbox(null)}>
+              <img src={lightbox} alt="photo" />
+            </button>
+          )}
+          {toast && <div className="toast" role="status">{toast}</div>}
+        </div>
+      );
+    }
 
-          <div className="notice warn" style={{ marginTop: 8 }}>
-            Linking an automation tool to a personal WhatsApp account is against WhatsApp's terms
-            of service, and accounts have been banned for it. Messages you analyse here — including
-            other people's — are sent to your configured model provider under your own key.
-          </div>
+    // ---------------------------------------------------------------- insights
 
-          <nav className="tabs" role="tablist" aria-label="Twin surfaces">
-            {[['threads', 'threads'], ['persona', 'persona lab'], ['insights', 'insights'], ['reply', 'reply desk'], ['settings', 'settings']].map(([id, label]) => (
-              <button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>
+    function InsightsTab({ analysis, analysing, onAnalyse, displayName }) {
+      if (!analysis) {
+        return (
+          <div className="tab-scroll">
+            <div className="center-state">
+              <div className="big">🧠</div>
+              <div className="title">no analysis yet</div>
+              <div>the first run reads the whole conversation; later runs only what's new since</div>
+              <button className="btn primary" disabled={analysing} onClick={onAnalyse}>{analysing ? 'analysing…' : 'analyse this conversation'}</button>
+            </div>
+          </div>
+        );
+      }
+      const { payload, map, runAt } = analysis;
+      const named = (text) => deanonymizeText(String(text || ''), map);
+      // The label→person resolution for headings: prefer what the reverse map knows.
+      return (
+        <div className="tab-scroll">
+          {payload.headline && <div className="panel"><div className="headline">{named(payload.headline)}</div>
+            <p className="hint" style={{ marginTop: 6 }}>analysed {new Date(runAt).toLocaleString()} · names restored locally — the model only ever saw neutral labels</p>
+          </div>}
+          <div className="panel">
+            <h3>the people</h3>
+            {(payload.people || []).map((person) => (
+              <div className="person" key={person.label}>
+                <div className="p-name">{named(person.label)}</div>
+                <div className="p-summary">{named(person.summary)}</div>
+                <div>{(person.traits || []).map((trait, i) => <span className="trait" key={i}>{named(trait)}</span>)}</div>
+              </div>
             ))}
-          </nav>
-
-          {notice && <div className={'notice ' + notice.tone} style={{ marginBottom: 12 }}>{notice.text}</div>}
-
-          {conn !== 'ready' && conn !== 'loading' && (
-            <div className="notice danger" style={{ marginBottom: 12 }}>
-              {conn === 'unconnected' && 'this app is not connected to WhatsApp yet — connect it from the connections card.'}
-              {conn === 'unreachable' && 'the WhatsApp helper is not running. Twin works in the Snug desktop app, with the helper started.'}
-              {conn === 'rejected' && 'the helper refused that key — re-link the connection.'}
-              {conn === 'ambiguous' && 'more than one connection matches — pick one in settings.'}
-              {conn === 'error' && 'the helper answered with an error.'}
+          </div>
+          {payload.dynamics && (
+            <div className="panel">
+              <h3>the room</h3>
+              <p style={{ margin: 0 }}>{named(payload.dynamics)}</p>
             </div>
           )}
+          {payload.voice && (
+            <div className="panel">
+              <h3>your voice here</h3>
+              <p style={{ margin: '0 0 6px' }}>{named(payload.voice.tone || '')}</p>
+              <p className="hint" style={{ margin: 0 }}>
+                typical length: {payload.voice.typicalLength || '—'} · language: {payload.voice.language || '—'}
+                {Array.isArray(payload.voice.emoji) && payload.voice.emoji.length > 0 ? ` · your emoji: ${payload.voice.emoji.join(' ')}` : ''}
+              </p>
+            </div>
+          )}
+        </div>
+      );
+    }
 
-          {tab === 'threads' && (
-            <section className="surface">
-              <div className="panel">
-                <div className="spread">
-                  <h2>pick one thread</h2>
-                  <button className="btn small" onClick={loadChats}>refresh</button>
-                </div>
-                <p className="hint">Twin studies a single conversation at a time — a group or a DM.</p>
-                {conn === 'loading' && <div><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /></div>}
-                {conn === 'ready' && chats.length === 0 && <p className="empty">no conversations yet — the helper may still be syncing.</p>}
-                <div className="threads">
-                  {chats.map((c) => (
-                    <button
-                      key={c.jid}
-                      className="thread"
-                      aria-pressed={ui.threadJid === c.jid}
-                      onClick={() => setUi((prev) => ({ ...prev, threadJid: c.jid }))}
-                    >
-                      <span>
-                        <span className="name">{c.name || c.jid}</span>
-                        <br />
-                        <span className="meta">{c.isGroup ? 'group' : 'direct message'}{c.participants ? ' · ' + c.participants.length + ' people' : ''}</span>
-                      </span>
-                      {ui.threadJid === c.jid && <span className="chip on">selected</span>}
-                    </button>
+    // ---------------------------------------------------------------- charts
+
+    const seriesColor = (n) => getComputedStyle(document.documentElement).getPropertyValue(`--series-${n}`).trim();
+    const otherColor = () => getComputedStyle(document.documentElement).getPropertyValue('--series-other').trim();
+    const inkSoft = () => getComputedStyle(document.documentElement).getPropertyValue('--ink-soft').trim();
+    const gridColor = () => getComputedStyle(document.documentElement).getPropertyValue('--viz-grid').trim();
+
+    function useChart(canvasRef, buildConfig, deps) {
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas || typeof Chart === 'undefined') return undefined;
+        const config = buildConfig();
+        if (!config) return undefined;
+        const chart = new Chart(canvas, config);
+        return () => chart.destroy();
+        // eslint-style exhaustive deps are not available in-file; deps are threaded by hand.
+      }, deps); // eslint-disable-line
+    }
+
+    function ChartsTab({ db, jid, theme, displayName, schemaReady, messages }) {
+      const [rows, setRows] = useState(null);
+      const [showNumbers, setShowNumbers] = useState(false);
+
+      useEffect(() => {
+        if (!schemaReady || !jid) return;
+        let cancelled = false;
+        (async () => {
+          const local = await db.exec('SELECT id, author, text, ts, from_me FROM messages WHERE jid = ? ORDER BY ts ASC', [jid]);
+          if (cancelled) return;
+          const stored = local.rows.map((row) => ({ id: row[0], from: row[1], text: row[2], ts: row[3], fromMe: row[4] === 1 }));
+          // The freshest picture: whatever the open thread already holds, merged in.
+          setRows(mergeMessages(stored, messages));
+        })().catch(() => setRows([]));
+        return () => { cancelled = true; };
+      }, [schemaReady, jid, db, messages]);
+
+      const model = useMemo(() => {
+        if (!rows || rows.length === 0) return null;
+        const offset = -new Date().getTimezoneOffset() * -1; // minutes EAST of utc
+        const tzOffset = -new Date().getTimezoneOffset();
+        const stats = statsByParticipant(rows);
+        const top = stats.slice(0, 5);
+        const rest = stats.slice(5);
+        const buckets = activityBuckets(rows, tzOffset);
+        const responses = responseStats(rows).slice(0, 8);
+        const emoji = emojiFrequency(rows).slice(0, 8);
+        const months = messagesByMonth(rows);
+        return { stats, top, rest, buckets, responses, emoji, months, total: rows.length, offset };
+      }, [rows]);
+
+      const doughnutRef = useRef(null);
+      const hoursRef = useRef(null);
+      const weekdayRef = useRef(null);
+      const responseRef = useRef(null);
+      const emojiRef = useRef(null);
+      const trendRef = useRef(null);
+
+      const labelFor = (author, fromMeAuthors) => displayName(author, rows && rows.some((r) => r.from === author && r.fromMe));
+
+      // Fixed slot order (never cycled): top participants take slots 1..5, the fold is gray.
+      useChart(doughnutRef, () => model && {
+        type: 'doughnut',
+        data: {
+          labels: model.top.map((s) => labelFor(s.author)).concat(model.rest.length > 0 ? ['Other'] : []),
+          datasets: [{
+            data: model.top.map((s) => s.count).concat(model.rest.length > 0 ? [model.rest.reduce((a, s) => a + s.count, 0)] : []),
+            backgroundColor: model.top.map((_, i) => seriesColor(i + 1)).concat(model.rest.length > 0 ? [otherColor()] : []),
+            borderWidth: 2,
+            borderColor: getComputedStyle(document.documentElement).getPropertyValue('--surface').trim(),
+          }],
+        },
+        options: {
+          maintainAspectRatio: false, cutout: '55%',
+          plugins: { legend: { position: 'right', labels: { color: inkSoft(), boxWidth: 12 } } },
+        },
+      }, [model, theme]);
+
+      useChart(hoursRef, () => {
+        if (!model) return null;
+        const topAuthors = model.top.slice(0, 3);
+        return {
+          type: 'line',
+          data: {
+            labels: Array.from({ length: 24 }, (_, h) => `${h}:00`),
+            datasets: [
+              { label: 'everyone', data: model.buckets.hours, borderColor: inkSoft(), backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+              ...topAuthors.map((s, i) => ({
+                label: labelFor(s.author),
+                data: (model.buckets.perAuthor.get(s.author) || { hours: [] }).hours,
+                borderColor: seriesColor(i + 1), backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, tension: 0.3,
+              })),
+            ],
+          },
+          options: {
+            maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { labels: { color: inkSoft(), boxWidth: 12 } } },
+            scales: {
+              x: { ticks: { color: inkSoft(), maxTicksLimit: 8 }, grid: { color: gridColor() } },
+              y: { ticks: { color: inkSoft() }, grid: { color: gridColor() }, beginAtZero: true },
+            },
+          },
+        };
+      }, [model, theme]);
+
+      useChart(weekdayRef, () => model && {
+        type: 'bar',
+        data: {
+          labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+          datasets: [{ label: 'messages', data: model.buckets.weekdays, backgroundColor: seriesColor(1), borderRadius: 4, maxBarThickness: 34 }],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: inkSoft() }, grid: { display: false } },
+            y: { ticks: { color: inkSoft() }, grid: { color: gridColor() }, beginAtZero: true },
+          },
+        },
+      }, [model, theme]);
+
+      useChart(responseRef, () => model && model.responses.length > 0 && {
+        type: 'bar',
+        data: {
+          labels: model.responses.map((s) => labelFor(s.author)),
+          datasets: [{ label: 'median minutes to respond', data: model.responses.map((s) => s.medianMinutes), backgroundColor: seriesColor(3), borderRadius: 4, maxBarThickness: 22 }],
+        },
+        options: {
+          indexAxis: 'y', maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: inkSoft() }, grid: { color: gridColor() }, beginAtZero: true },
+            y: { ticks: { color: inkSoft() }, grid: { display: false } },
+          },
+        },
+      }, [model, theme]);
+
+      useChart(emojiRef, () => model && model.emoji.length > 0 && {
+        type: 'bar',
+        data: {
+          labels: model.emoji.map((e) => e.emoji),
+          datasets: [{ label: 'your emoji', data: model.emoji.map((e) => e.count), backgroundColor: seriesColor(5), borderRadius: 4, maxBarThickness: 26 }],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: inkSoft(), font: { size: 16 } }, grid: { display: false } },
+            y: { ticks: { color: inkSoft() }, grid: { color: gridColor() }, beginAtZero: true },
+          },
+        },
+      }, [model, theme]);
+
+      useChart(trendRef, () => model && model.months.length > 1 && {
+        type: 'line',
+        data: {
+          labels: model.months.map((m) => m.month),
+          datasets: [{ label: 'messages per month', data: model.months.map((m) => m.count), borderColor: seriesColor(1), backgroundColor: 'transparent', borderWidth: 2, pointRadius: 2, tension: 0.25 }],
+        },
+        options: {
+          maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: inkSoft(), maxTicksLimit: 10 }, grid: { color: gridColor() } },
+            y: { ticks: { color: inkSoft() }, grid: { color: gridColor() }, beginAtZero: true },
+          },
+        },
+      }, [model, theme]);
+
+      if (!model) {
+        return <div className="tab-scroll"><div className="center-state"><div className="big">📊</div><div>open the chat first — charts draw from the messages this app has seen</div></div></div>;
+      }
+
+      return (
+        <div className="tab-scroll">
+          <div className="panel">
+            <h3>who carries the conversation</h3>
+            <p className="hint">{model.total.toLocaleString()} messages counted locally — nothing here left your machine</p>
+            <div className="chart-box"><canvas ref={doughnutRef} role="img" aria-label="share of messages per participant" /></div>
+            <button className="linklike" onClick={() => setShowNumbers((v) => !v)}>{showNumbers ? 'hide the numbers' : 'show the numbers'}</button>
+            {showNumbers && (
+              <table className="num-table">
+                <thead><tr><th>who</th><th className="n">messages</th><th className="n">share</th></tr></thead>
+                <tbody>
+                  {model.stats.map((s) => (
+                    <tr key={s.author}><td>{labelFor(s.author)}</td><td className="n">{s.count}</td><td className="n">{(s.share * 100).toFixed(1)}%</td></tr>
                   ))}
-                </div>
-              </div>
-
-              {thread && (
-                <div className="panel">
-                  <h2>history</h2>
-                  {sync && (
-                    <p className="hint">
-                      {sync.complete && sync.explicit && 'WhatsApp confirms this is the full history it will send.'}
-                      {sync.complete && !sync.explicit && 'History looks complete, but WhatsApp never confirmed it — treat this as PARTIAL. Paste an export below for the full picture.'}
-                      {!sync.complete && ('history is still arriving (' + Math.round((sync.progress || 0)) + '%) — analysis now would read a partial thread.')}
-                    </p>
-                  )}
-                  <div className="stat"><span>messages loaded</span><span className="v">{messages.length}</span></div>
-                  {exportReport && <div className="stat"><span>from your export</span><span className="v">{exportReport.messages.length}</span></div>}
-                  <div className="stat"><span>after merge</span><span className="v">{corpus.length}</span></div>
-                </div>
-              )}
-
-              {thread && (
-                <div className="panel">
-                  <h2>add an export (recommended)</h2>
-                  <p className="hint">
-                    On your phone: the chat → menu → More → Export chat → Without media. Paste the
-                    .txt here. This is the reliable path — history sync can stall or arrive partial.
-                  </p>
-                  <textarea
-                    value={exportText}
-                    onChange={(e) => setExportText(e.target.value)}
-                    placeholder="[12/03/2025, 21:04:11] Priya: paste the exported chat here…"
-                  />
-                  <div className="row" style={{ marginTop: 8 }}>
-                    <button className="btn" onClick={ingestExport} disabled={exportText.trim().length === 0}>read the export</button>
-                    {exportReport && (
-                      <span className="meta">
-                        {exportReport.messages.length} messages · {exportReport.systemLines} system lines skipped
-                        {exportReport.unparsedLines > 0 ? ' · ' + exportReport.unparsedLines + ' lines not understood' : ''}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {thread && (
-                <div className="panel">
-                  <div className="spread">
-                    <h2>analyse this thread</h2>
-                    <button className="btn primary" onClick={analyse} disabled={busy === 'analyse' || corpus.length === 0}>
-                      {busy === 'analyse' ? 'reading…' : 'analyse'}
-                    </button>
-                  </div>
-                  <p className="hint">
-                    Participants are replaced with labels (P1, P2 …) before anything is sent to the
-                    model — no names, numbers or WhatsApp IDs leave this machine.
-                  </p>
-                </div>
-              )}
-            </section>
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="panel">
+            <h3>when this chat is alive</h3>
+            <p className="hint">messages by hour of day, in your timezone — everyone, plus the three most active voices</p>
+            <div className="chart-box tall"><canvas ref={hoursRef} role="img" aria-label="messages by hour of day" /></div>
+          </div>
+          <div className="panel">
+            <h3>the week's rhythm</h3>
+            <div className="chart-box"><canvas ref={weekdayRef} role="img" aria-label="messages by weekday" /></div>
+          </div>
+          {model.responses.length > 0 && (
+            <div className="panel">
+              <h3>who answers fastest</h3>
+              <p className="hint">median minutes from someone else's message to this person's reply (same-day replies only)</p>
+              <div className="chart-box"><canvas ref={responseRef} role="img" aria-label="median response minutes per participant" /></div>
+            </div>
           )}
-
-          {tab === 'persona' && (
-            <section className="surface">
-              {!thread && <div className="panel"><p className="empty">pick a thread first.</p></div>}
-              {thread && voice && (
-                <div className="panel">
-                  <h2>your voice in this thread</h2>
-                  <p className="hint">This is the profile a drafted reply imitates.</p>
-                  <div className="stat"><span>tone</span><span className="v">{voice.tone || '—'}</span></div>
-                  <div className="stat"><span>typical length</span><span className="v">{voice.typicalLength || '—'}</span></div>
-                  <div className="stat"><span>replies in</span><span className="v">{voice.language || '—'}</span></div>
-                  {Array.isArray(voice.emoji) && voice.emoji.length > 0 && (
-                    <div className="stat"><span>signature</span><span className="v">{voice.emoji.join(' ')}</span></div>
-                  )}
-                </div>
-              )}
-              {thread && profiles.length > 0 && (
-                <div className="panel">
-                  <h2>the people here</h2>
-                  <p className="hint">Built from this thread's messages only — labels, never names.</p>
-                  <div className="cards">
-                    {profiles.map((p) => (
-                      <div className="card" key={p.label}>
-                        <h3>{p.label}</h3>
-                        <p>{p.summary}</p>
-                        <div className="traits">{(p.traits || []).map((t, i) => <span className="chip" key={i}>{t}</span>)}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {thread && dynamics && (
-                <div className="panel"><h2>how this group behaves</h2><p className="hint" style={{ margin: 0 }}>{dynamics}</p></div>
-              )}
-              {thread && profiles.length === 0 && !voice && (
-                <div className="panel"><p className="empty">nothing analysed yet — run the analysis from the threads tab.</p></div>
-              )}
-              {thread && (
-                <div className="panel">
-                  <h2>forget this thread</h2>
-                  <p className="hint">
-                    Deletes every profile, translation and activity row derived from this
-                    conversation. The people in it never agreed to be studied.
-                  </p>
-                  <button className="btn danger" onClick={forgetThread} disabled={busy === 'forget'}>delete everything for this thread</button>
-                </div>
-              )}
-            </section>
+          {model.emoji.length > 0 && (
+            <div className="panel">
+              <h3>your emoji signature</h3>
+              <div className="chart-box"><canvas ref={emojiRef} role="img" aria-label="your most used emoji" /></div>
+            </div>
           )}
-
-          {tab === 'insights' && (
-            <section className="surface">
-              {!thread && <div className="panel"><p className="empty">pick a thread first.</p></div>}
-              {thread && (
-                <div className="panel">
-                  <h2>the shape of this thread</h2>
-                  <div className="stat"><span>messages analysed</span><span className="v">{stats.total}</span></div>
-                  <div className="stat"><span>people</span><span className="v">{stats.people}</span></div>
-                  <div className="stat"><span>busiest person's messages</span><span className="v">{stats.busiest}</span></div>
-                  <div className="stat"><span>average message length</span><span className="v">{stats.avgLength} chars</span></div>
-                </div>
-              )}
-              {thread && (
-                <div className="panel">
-                  <h2>ask about this thread</h2>
-                  <p className="hint">Answered from the saved analysis — try "who is the funniest?" or "who goes quiet when things get tense?"</p>
-                  <input
-                    type="text"
-                    value={question}
-                    onChange={(e) => setQuestion(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') ask(); }}
-                    placeholder="who carries the conversation?"
-                  />
-                  <div className="row" style={{ marginTop: 8 }}>
-                    <button className="btn" onClick={ask} disabled={busy === 'ask' || question.trim().length === 0 || profiles.length === 0}>ask</button>
-                    {profiles.length === 0 && <span className="meta">analyse the thread first.</span>}
-                  </div>
-                  {busy === 'ask' && <div className="skeleton" style={{ marginTop: 12 }} />}
-                  {answer && answer.text && <p className="hint" style={{ marginTop: 12, marginBottom: 0 }}>{answer.text}</p>}
-                  {answer && answer.error && <div className="notice warn" style={{ marginTop: 12 }}>{answer.error}</div>}
-                </div>
-              )}
-            </section>
-          )}
-
-          {tab === 'reply' && (
-            <section className="surface">
-              {!thread && <div className="panel"><p className="empty">pick a thread first.</p></div>}
-              {thread && (
-                <div className="panel">
-                  <div className="spread">
-                    <h2>reply as you</h2>
-                    <button className="btn primary" onClick={startDraft} disabled={busy === 'draft' || corpus.length === 0}>
-                      {busy === 'draft' ? 'writing…' : 'draft a reply'}
-                    </button>
-                  </div>
-                  <p className="hint">
-                    A draft is never sent on its own — you read it and press send.
-                    {voice && voice.language ? ' Drafts are written in ' + voice.language + ', the language you usually reply in here.' : ''}
-                  </p>
-                  {draft && draft.error && <div className="notice warn">{draft.error}</div>}
-                  {draft && draft.text && (
-                    <div>
-                      {draft.incoming && (
-                        <div className="msg"><div className="who"><span>replying to</span></div><div className="body">{draft.incoming.text}</div></div>
-                      )}
-                      <div className="msg mine" style={{ marginTop: 8 }}>
-                        <div className="who"><span>your draft{draft.language ? ' · ' + draft.language : ''}</span></div>
-                        <div className="body">{draft.text}</div>
-                      </div>
-                      <div className="row" style={{ marginTop: 10 }}>
-                        <button className="btn primary" onClick={confirmDraft} disabled={busy === 'send'}>send it</button>
-                        <button className="btn" onClick={() => setDraft(null)}>discard</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {thread && (
-                <div className="panel">
-                  <div className="spread">
-                    <h2>auto-reply</h2>
-                    <span className="chip">not available yet</span>
-                  </div>
-                  {/*
-                    NO ARM SWITCH HERE, DELIBERATELY (owner decision, 2026-08-17).
-
-                    The host-side approval gate this feature needs is built and enforced
-                    (ADR-0033, `StandingApprovalGate`), but an app cannot reach it: arming has to
-                    be a recorded, scoped approval the HOST holds, and the frame vocabulary an
-                    app can speak has no seat for that. Shipping a switch here would either be
-                    theatre — a control that sets a boolean in this app and authorizes nothing —
-                    or, worse, a control that LOOKS like it granted a standing write approval
-                    while the host never recorded one. Either way the user would be told
-                    something untrue about what Snug may send in their name.
-
-                    So the surface says what is actually true and stops. Manual Reply below is
-                    the shipped path, and it is the honest one anyway: every send is read by the
-                    user first.
-                  */}
-                  <p className="hint">
-                    Unattended replies are not enabled in this version. When they are, arming will
-                    be a standing approval you grant on the connection itself and can see and
-                    revoke there — {thread.isGroup ? 'for this group, only messages that tag you' : 'for this DM, every new message'},
-                    capped, quiet-hours aware, and journaled below. Until then Twin drafts and you
-                    send: use <strong>draft a reply</strong> above.
-                  </p>
-                </div>
-              )}
-
-              {thread && (
-                <div className="panel">
-                  <h2>activity journal</h2>
-                  <p className="hint">Every message Twin has sent for you, unattended or confirmed.</p>
-                  {activity.length === 0 && <p className="empty">nothing sent yet.</p>}
-                  <div className="journal">
-                    {activity.map((a, i) => (
-                      <div className="entry" key={i}>
-                        <div className="mono">{a.at} · {a.mode}</div>
-                        {a.incoming && <div>in: {a.incoming}</div>}
-                        <div>out: {a.outgoing}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {thread && messages.length > 0 && (
-                <div className="panel">
-                  <h2>recent messages</h2>
-                  <p className="hint">Messages not in {ui.defaultLanguage} offer a translation.</p>
-                  <div className="msgs">
-                    {messages.slice(-40).map((m) => {
-                      const id = m.id || String(m.ts);
-                      const canTranslate = looksNonDefault(m.text, ui.defaultLanguage);
-                      return (
-                        <div className={'msg' + (m.fromMe ? ' mine' : '')} key={id}>
-                          <div className="who">
-                            <span>{m.fromMe ? 'you' : (m.from || 'them')} · {fmtTime(m.ts)}</span>
-                            {canTranslate && !translations[id] && (
-                              <button
-                                className="btn small"
-                                data-testid={'translate-' + id}
-                                onClick={() => translate(m)}
-                                disabled={busy === 'translate:' + id}
-                                aria-label="translate this message"
-                              >{busy === 'translate:' + id ? '…' : 'translate'}</button>
-                            )}
-                          </div>
-                          <div className="body">{m.text}</div>
-                          {translations[id] && <div className="translated">{translations[id]}</div>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </section>
-          )}
-
-          {tab === 'settings' && (
-            <section className="surface">
-              <div className="panel">
-                <h2>language</h2>
-                <p className="hint">
-                  Messages in another language offer a translation into this one. Your replies are
-                  written in the language you usually use in the thread, which may differ.
-                </p>
-                <label className="field">
-                  <span>default language</span>
-                  <select value={ui.defaultLanguage} onChange={(e) => setUi((prev) => ({ ...prev, defaultLanguage: e.target.value }))}>
-                    {LANGUAGES.map((l) => <option key={l} value={l}>{l}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="panel">
-                <h2>what leaves this machine</h2>
-                <p className="hint" style={{ margin: 0 }}>
-                  Message text is sent to your configured model provider, under your own key, with
-                  participant names, phone numbers and WhatsApp IDs replaced by labels first. Your
-                  WhatsApp session keys stay in the helper on this computer and are never sent
-                  anywhere — Snug only ever holds a key to the helper.
-                </p>
-              </div>
-            </section>
+          {model.months.length > 1 && (
+            <div className="panel">
+              <h3>the long arc</h3>
+              <div className="chart-box"><canvas ref={trendRef} role="img" aria-label="messages per month over time" /></div>
+            </div>
           )}
         </div>
       );

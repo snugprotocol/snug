@@ -94,3 +94,51 @@ confirm seat (below); `isForbiddenNetHost`, `isPrivateRfc1918Ipv4Literal` and
   is out of scope for this task and documented as a requirement.
 - **In-memory standing grants.** An armed thread would not survive a page reload. Harmless
   while arming is deferred; it must be closed when the arming surface lands.
+
+---
+
+## Addendum — surface v2 and the live pump (TASK-20260817-telepath, ADR-0034)
+
+Telepath widened the app-reachable sidecar surface by three GET routes and added a host
+component that reads on an app's behalf. What that changes, and what it deliberately does not:
+
+- **The hint stream is a doorbell, not a delivery.** `GET /events` long-polls a bounded ring
+  of `{seq, jid, kind, ts}` rows — no message bodies, no thumbnails, no names. Two facts
+  forced that shape and both are load-bearing: host-event frames ride the ordinary 256 KB
+  frame class and the runner's `post()` drops an oversized frame **silently**, so
+  content-bearing batches could vanish with no error anywhere; and host-event frames carry
+  no `instanceId`, so an app-side listener cannot distinguish a stale sender. With hints, a
+  stale or malformed event costs at most one redundant *governed* refetch of the app's own
+  data and can never inject state. The pump rebuilds every row field-by-field, so a
+  compromised helper cannot smuggle extra keys into the frame (pinned by a serialized-payload
+  negative test).
+- **The pump is not a new authority.** It reads through the SAME `connectedFetchDepsFor`
+  assembly as every app net-request and the wizard probe — same credential injection, same
+  gates, same executor. It runs only for an app whose connection is **approved** and whose
+  frozen ceiling carries the sidecar's symbolic host, and only while RunView has that app
+  mounted. C1 is untouched: the app never sees a token, an address, or the socket.
+- **Media crosses as capped base64.** `/chats/:jid/media/:id` and `/chats/:jid/picture`
+  return JSON under the existing 1 MiB while-reading Rust cap; the helper refuses oversized
+  media with a structured `{tooLarge:true}` plus the thumbnail rather than truncating (a
+  truncated image is a corrupt file wearing a 200). Image bytes render from `data:` URIs,
+  are cached in memory only, are never written to the app DB, and **never enter an LLM
+  payload**.
+- **A new third-party-data path, bounded.** Photos other people sent now reach the app frame
+  as user-visible pixels. This is data the user already sees in WhatsApp, it stays on the
+  machine, and it is excluded from every model turn — but it is a wider local surface than
+  the text-only POC, and worth stating rather than discovering.
+- **The `:id` placeholder inherits the traversal discipline.** Both the TypeScript predicate
+  and the Rust admission refuse `..`-shaped values on the DECODED form; the cargo and vitest
+  suites carry negatives for the new segment specifically (a pattern-only guard admits
+  `/chats/1@g.us/media/..`, which is exactly the surviving-mutant case the `:jid` work found).
+- **Unread counts are the sidecar's own.** Baileys reports unread only as a sync snapshot, so
+  the helper maintains the running count itself; the app's badge clear is local display state
+  and **no read receipt is ever sent** to WhatsApp on the user's behalf.
+- **The C2 gate gained a positive twin.** `ipc-sidecar-fetch-refused` once passed while the
+  command was UNREGISTERED — an unreachable-from-everywhere command satisfies an
+  unreachability check perfectly. `ipc-sidecar-fetch-dispatchable` now proves the main window
+  *can* dispatch it, so the refusal check vouches for something.
+- **Unchanged residuals.** Third-party consent (pseudonymised messages still reach the user's
+  configured provider under BYOK), ToS/ban risk, local-process trust, the pairing window,
+  Windows-red, and helper packaging all stand exactly as above. Auto-reply remains unshipped:
+  the standing-approval gate is untouched by this task and nothing in Telepath can arm it.

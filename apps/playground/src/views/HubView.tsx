@@ -15,7 +15,19 @@ import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Skeleton } from '../ui/Skeleton.js';
 
-const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blurb: string; desktopOnly?: boolean }>> = {
+/**
+ * The shelf's per-starter presentation, keyed by FOLDER — which stays the identity
+ * (`install_source`, the desktopOnly gate and the tile's `data-starter-name` all key on
+ * it). `name` is the optional display name the tile shows: `listStarterApps()` derives
+ * its label from the folder, so without this the shelf read "whatsapp" for Telepath,
+ * "spotify" for Rewind, "hue" for Moodboard. That is not a cosmetic gap — after the
+ * WhatsApp starter was rebuilt into Telepath the shelf looked completely unchanged, which
+ * is indistinguishable from "the rebuild did not land" (owner-reported, 2026-08-17).
+ * A folder with no `name` falls back to the folder, which is honest rather than guessed.
+ */
+const STARTER_LOOKS: Readonly<
+  Record<string, { emoji: string; color: string; blurb: string; desktopOnly?: boolean; name?: string }>
+> = {
   // The keepers (owner curation, TASK-20260815-starter-apps-rebuild).
   chess: { emoji: '♞', color: '#8b5cf6', blurb: 'play an opponent with opinions — no server needed' },
   'flying-pig': { emoji: '🐷', color: '#ec4899', blurb: 'tap to keep a pig airborne — pure offline arcade' },
@@ -26,15 +38,15 @@ const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blu
   // each complements its provider's own app rather than cloning it, and each teaches
   // the provider chat lane. Desktop-only where the transport demands it: Coinbase has
   // no browser CORS (native fetch carries it), and the Hue bridge lives on your LAN.
-  'trade-copilot': { emoji: '📈', color: '#f59e0b', blurb: 'a copilot grounded in your real Coinbase portfolio — it thinks, you decide', desktopOnly: true },
-  spotify: { emoji: '🎧', color: '#10b981', blurb: 'your listening, understood — portraits and trends Spotify forgets' },
-  hue: { emoji: '🌗', color: '#e11d48', blurb: 'light as mood — the agent is your lighting designer', desktopOnly: true },
-  weather: { emoji: '🌦️', color: '#3b82f6', blurb: 'forecasts turned into decisions — run, ride, water, or wait' },
-  github: { emoji: '🗞️', color: '#64748b', blurb: 'what needs you today, before you ask — your queue as a briefing' },
-  // The linked-device starter (TASK-20260816-whatsapp-twin, ADR-0032/0033). Desktop-only
-  // for a stronger reason than the other two: the session lives in a helper process this
-  // shell spawns, reached over a unix socket that no browser tab can open.
-  whatsapp: { emoji: '🪞', color: '#1f8a5c', blurb: 'one thread, read closely — and replies drafted in your own voice', desktopOnly: true },
+  'trade-copilot': { name: 'Trade Copilot', emoji: '📈', color: '#f59e0b', blurb: 'a copilot grounded in your real Coinbase portfolio — it thinks, you decide', desktopOnly: true },
+  spotify: { name: 'Rewind', emoji: '🎧', color: '#10b981', blurb: 'your listening, understood — portraits and trends Spotify forgets' },
+  hue: { name: 'Moodboard', emoji: '🌗', color: '#e11d48', blurb: 'light as mood — the agent is your lighting designer', desktopOnly: true },
+  weather: { name: 'Should I?', emoji: '🌦️', color: '#3b82f6', blurb: 'forecasts turned into decisions — run, ride, water, or wait' },
+  github: { name: 'Standup', emoji: '🗞️', color: '#64748b', blurb: 'what needs you today, before you ask — your queue as a briefing' },
+  // The linked-device starter (Telepath, TASK-20260817 rebuild of the Twin; ADR-0032/0034).
+  // Desktop-only for a stronger reason than the other two: the session lives in a helper
+  // process this shell spawns, reached over a unix socket that no browser tab can open.
+  whatsapp: { name: 'Telepath', emoji: '🔮', color: '#0f7d61', blurb: 'your WhatsApp, live — with an analyst who knows the room and drafts in your voice', desktopOnly: true },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };
@@ -270,6 +282,10 @@ function HubHome(): ReactElement {
             const look =
               STARTER_LOOKS[starter.name.replace(/ /g, '-')] ??
               ({ emoji: '⬡', color: 'var(--ember)', blurb: 'curated example — runs without a server' } as const);
+            // What the USER reads. `starter.name` is the folder (the identity every
+            // downstream rule keys on); the look's optional `name` is what the app calls
+            // itself. Falling back to the folder keeps an unnamed starter honest.
+            const label = look.name ?? starter.name;
             const style = { '--tile-color': look.color } as CSSProperties;
             const source = starterInstallSource(starter.id);
             const installed = installedBySource.has(source);
@@ -328,19 +344,19 @@ function HubHome(): ReactElement {
                   // An explicit name: the card's own text is the blurb, which reads as
                   // a description rather than an action. "open chess" says what the
                   // control DOES, which is what a screen reader (and the E2E) needs.
-                  aria-label={`open ${starter.name}`}
+                  aria-label={`open ${label}`}
                   title={
                     locked
-                      ? `${starter.name} needs the free desktop app — a web page cannot reach your home network`
+                      ? `${label} needs the free desktop app — a web page cannot reach your home network`
                       : installed
-                        ? `open your copy of ${starter.name}`
-                        : `open ${starter.name} — it stays read-only until you install it`
+                        ? `open your copy of ${label}`
+                        : `open ${label} — it stays read-only until you install it`
                   }
                 >
                   <span className="tile-emoji" aria-hidden="true">
                     {look.emoji}
                   </span>
-                  <span className="tile-name">{starter.name}</span>
+                  <span className="tile-name">{label}</span>
                   <span className="tile-sub">
                     {installed
                       ? `${look.blurb} — already in your snug file, opens your copy`

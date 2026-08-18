@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   decideInvokeRefused,
   decideLanFetchRefused,
+  decideSidecarFetchDispatchable,
   decideSidecarFetchRefused,
   IPC_CHECK_IDS,
   LAN_FETCH_COMMAND,
@@ -195,5 +196,38 @@ describe('decideSidecarFetchRefused — sidecar_fetch specifically (ADR-0032)', 
 
   it('the command name matches the one lib.rs registers', () => {
     expect(SIDECAR_FETCH_COMMAND).toBe('sidecar_fetch');
+  });
+});
+
+describe('decideSidecarFetchDispatchable — the POSITIVE twin (next-steps 2026-08-17 §1)', () => {
+  // WHY THIS EXISTS: `ipc-sidecar-fetch-refused` PASSED while the command was
+  // UNREGISTERED (eight-seam defect #1) — an unreachable-from-everywhere command
+  // satisfies an unreachability check. So every negative IPC check wants a twin
+  // proving the MAIN window can dispatch the command at all.
+
+  it('passes when the invoke RESOLVES — the helper answered, so dispatch happened', () => {
+    expect(decideSidecarFetchDispatchable({ resolved: true, detail: 'resolved' }).pass).toBe(true);
+  });
+
+  it('passes when the command BODY refuses (helper not running) — refusal proves dispatch', () => {
+    const result = decideSidecarFetchDispatchable({
+      resolved: false,
+      detail: 'the WhatsApp helper is not running — open the connection settings to start it',
+    });
+    expect(result.pass).toBe(true);
+  });
+
+  it('FAILS on the unregistered-command shape — the exact defect this twin exists for', () => {
+    for (const detail of [
+      'Command sidecar_fetch not found',
+      'sidecar_fetch not allowed. Command not found',
+      'unknown command sidecar_fetch',
+    ]) {
+      expect(decideSidecarFetchDispatchable({ resolved: false, detail }).pass, detail).toBe(false);
+    }
+  });
+
+  it('is one of the REQUIRED check ids — the derive-based driver expects it', () => {
+    expect(IPC_CHECK_IDS).toContain('ipc-sidecar-fetch-dispatchable');
   });
 });

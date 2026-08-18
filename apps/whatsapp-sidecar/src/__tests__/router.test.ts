@@ -404,3 +404,213 @@ describe('a percent-encoded JID resolves to the same thread as its literal form'
     expect(res.status).toBe(404);
   });
 });
+
+// ============================== surface v2 (ADR-0034, TASK-20260817-telepath) ==============================
+
+describe('/events — the long-poll hint stream', () => {
+  it('requires the bearer token IDENTICALLY to /chats — a new route is not a side door', async () => {
+    // Review F6: a long-poll route is exactly where an implementer might carve an auth
+    // shortcut "for polling efficiency". It gets none.
+    const { router } = await linked();
+    expect((await router.handle({ method: 'GET', path: '/events', headers: {} })).status).toBe(401);
+    expect(
+      (await router.handle({ method: 'GET', path: '/events', headers: { authorization: 'Bearer wrong' } }))
+        .status,
+    ).toBe(401);
+    // The spawn nonce is the WIZARD's credential; the hint stream is app surface.
+    expect(
+      (await router.handle({ method: 'GET', path: '/events', headers: { 'x-snug-spawn-nonce': NONCE } }))
+        .status,
+    ).toBe(401);
+  });
+
+  it('returns immediately with hints newer than the cursor', async () => {
+    const { router, deps: d, token } = await linked();
+    const auth = { authorization: `Bearer ${token}` };
+    const first = await router.handle({ method: 'GET', path: '/events', headers: auth });
+    const cursor = (first.body as { nextCursor: number }).nextCursor;
+    d.socket.emitLiveMessage('a@s.whatsapp.net', { id: 'm1', from: 'a@s.whatsapp.net', text: 'ping', ts: 42 });
+    const res = await router.handle({ method: 'GET', path: `/events?cursor=${cursor}`, headers: auth });
+    expect(res.status).toBe(200);
+    const body = res.body as { hints: Array<Record<string, unknown>>; nextCursor: number; resync: boolean };
+    expect(body.hints).toHaveLength(1);
+    expect(body.hints[0]).toMatchObject({ jid: 'a@s.whatsapp.net', kind: 'message', ts: 42 });
+    expect(body.nextCursor).toBeGreaterThan(cursor);
+    expect(body.resync).toBe(false);
+  });
+
+  it('HOLDS an up-to-date cursor until a hint arrives, then answers with it', async () => {
+    const { router, deps: d, token } = await linked({ ...deps(), eventHoldMs: 5_000 } as never);
+    const auth = { authorization: `Bearer ${token}` };
+    const cursor = ((await router.handle({ method: 'GET', path: '/events', headers: auth })).body as {
+      nextCursor: number;
+    }).nextCursor;
+    const held = router.handle({ method: 'GET', path: `/events?cursor=${cursor}`, headers: auth });
+    d.socket.emitLiveMessage('a@s.whatsapp.net', { id: 'm2', from: 'a@s.whatsapp.net', text: 'now', ts: 43 });
+    // Resolving with the hint is the assertion — a hold that ran its full 5 s would trip
+    // the suite timeout, and a hold that answered EMPTY would fail the length check.
+    const res = await held;
+    expect((res.body as { hints: unknown[] }).hints).toHaveLength(1);
+  });
+
+  it('answers EMPTY at the hold timeout — a hold, never a hang', async () => {
+    const { router, token } = await linked({ ...deps(), eventHoldMs: 20 });
+    const auth = { authorization: `Bearer ${token}` };
+    const cursor = ((await router.handle({ method: 'GET', path: '/events', headers: auth })).body as {
+      nextCursor: number;
+    }).nextCursor;
+    const res = await router.handle({ method: 'GET', path: `/events?cursor=${cursor}`, headers: auth });
+    expect(res.status).toBe(200);
+    const body = res.body as { hints: unknown[]; nextCursor: number };
+    expect(body.hints).toEqual([]);
+    expect(body.nextCursor).toBe(cursor);
+  });
+
+  it('refuses a cursor that is not a whole number — a value we cannot reason about', async () => {
+    const { router, token } = await linked();
+    const auth = { authorization: `Bearer ${token}` };
+    for (const cursor of ['abc', '-1', '1.5', '1e3', '']) {
+      const res = await router.handle({ method: 'GET', path: `/events?cursor=${cursor}`, headers: auth });
+      expect(res.status, `cursor ${JSON.stringify(cursor)}`).toBe(400);
+    }
+  });
+
+  it('carries NO message content in any hint — the doorbell is not the delivery', async () => {
+    // The pump forwards these into the app frame over the 256 KB frame class, and the
+    // host's post() drops oversized frames SILENTLY — so content here is a delivery bug
+    // AND a privacy widening. The shape is the guarantee.
+    const { router, deps: d, token } = await linked();
+    const auth = { authorization: `Bearer ${token}` };
+    const cursor = ((await router.handle({ method: 'GET', path: '/events', headers: auth })).body as {
+      nextCursor: number;
+    }).nextCursor;
+    d.socket.emitLiveMessage('a@s.whatsapp.net', {
+      id: 'm3',
+      from: 'a@s.whatsapp.net',
+      text: 'THE SECRET BODY',
+      ts: 44,
+    });
+    const res = await router.handle({ method: 'GET', path: `/events?cursor=${cursor}`, headers: auth });
+    expect(JSON.stringify(res.body)).not.toContain('SECRET');
+    for (const hint of (res.body as { hints: Array<Record<string, unknown>> }).hints) {
+      expect(Object.keys(hint).sort()).toEqual(['jid', 'kind', 'seq', 'ts']);
+    }
+  });
+});
+
+describe('/chats/:jid/media/:id and /chats/:jid/picture — the image reads', () => {
+  it('requires the bearer token on both', async () => {
+    const { router } = await linked();
+    expect((await router.handle({ method: 'GET', path: '/chats/a@g.us/media/IMG1', headers: {} })).status).toBe(401);
+    expect((await router.handle({ method: 'GET', path: '/chats/a@g.us/picture', headers: {} })).status).toBe(401);
+  });
+
+  it('serves media the adapter holds, and 404s what it does not', async () => {
+    const { router, deps: d, token } = await linked();
+    const auth = { authorization: `Bearer ${token}` };
+    d.socket.setMedia('a@g.us', 'IMG1', { mime: 'image/jpeg', base64: 'AQID' });
+    const hit = await router.handle({ method: 'GET', path: '/chats/a@g.us/media/IMG1', headers: auth });
+    expect(hit.status).toBe(200);
+    expect(hit.body).toEqual({ mime: 'image/jpeg', base64: 'AQID' });
+    const miss = await router.handle({ method: 'GET', path: '/chats/a@g.us/media/NOPE', headers: auth });
+    expect(miss.status).toBe(404);
+  });
+
+  it('relays a structured too-large refusal VERBATIM — refuse, never truncate', async () => {
+    const { router, deps: d, token } = await linked();
+    d.socket.setMedia('a@g.us', 'BIG1', { tooLarge: true, thumbnailBase64: 'AQID' });
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats/a@g.us/media/BIG1',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ tooLarge: true, thumbnailBase64: 'AQID' });
+  });
+
+  it('serves the avatar the adapter holds, and 404s a jid without one', async () => {
+    const { router, deps: d, token } = await linked();
+    const auth = { authorization: `Bearer ${token}` };
+    d.socket.setPicture('a@g.us', { mime: 'image/jpeg', base64: 'AQID' });
+    const hit = await router.handle({ method: 'GET', path: '/chats/a@g.us/picture', headers: auth });
+    expect(hit.status).toBe(200);
+    expect(hit.body).toEqual({ mime: 'image/jpeg', base64: 'AQID' });
+    const miss = await router.handle({ method: 'GET', path: '/chats/b@g.us/picture', headers: auth });
+    expect(miss.status).toBe(404);
+  });
+
+  it('refuses POST to both — the contract is method-pinned here too', async () => {
+    const { router, deps: d, token } = await linked();
+    const auth = { authorization: `Bearer ${token}` };
+    d.socket.setMedia('a@g.us', 'IMG1', { mime: 'image/jpeg', base64: 'AQID' });
+    expect((await router.handle({ method: 'POST', path: '/chats/a@g.us/media/IMG1', headers: auth })).status).toBe(404);
+    expect((await router.handle({ method: 'POST', path: '/chats/a@g.us/picture', headers: auth })).status).toBe(404);
+  });
+});
+
+describe('/chats — the v2 list metadata', () => {
+  it('carries unreadCount, lastMessage and lastActivityTs when the adapter knows them', async () => {
+    const { router, deps: d, token } = await linked();
+    d.socket.seedChat('a@g.us', [{ id: 'm1', from: 'x@s.whatsapp.net', text: 'newest', ts: 90 }], {
+      name: 'The Group',
+      unreadCount: 3,
+      lastMessage: { text: 'newest', ts: 90 },
+      lastActivityTs: 90,
+    });
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const chats = (res.body as { chats: Array<Record<string, unknown>> }).chats;
+    expect(chats[0]).toMatchObject({ jid: 'a@g.us', unreadCount: 3, lastActivityTs: 90 });
+    expect(chats[0]!.lastMessage).toMatchObject({ text: 'newest', ts: 90 });
+  });
+});
+
+describe('the wedge is REPORTED, not disguised as a slow sync', () => {
+  // OWNER-REPORTED 2026-08-17: a half-linked session made the app say "history is still
+  // syncing from your phone" forever, because nothing distinguished "not started" from
+  // "will never start". The sync state already rides every history/messages response, so
+  // the fact travels on it rather than through a new route.
+  it('carries needsRelink on the sync state when the store is wedged', async () => {
+    const d = deps();
+    d.socket.emitLinked();
+    d.socket.seedChat('a@s.whatsapp.net', [{ id: 'm1', from: 'a@s.whatsapp.net', text: 'hi', ts: 1 }]);
+    d.socket.setHistoryState({ complete: false, explicit: false, progress: 0, needsRelink: true });
+    const router = createRouter(d);
+    d.store.setToken('tok');
+
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats/a@s.whatsapp.net/history',
+      headers: { authorization: 'Bearer tok' },
+    });
+
+    expect((res.body as { sync: { needsRelink?: boolean } }).sync.needsRelink).toBe(true);
+  });
+
+  it('leaves needsRelink absent on a healthy session — the flag is a claim, not a default', async () => {
+    const { router, deps: d, token } = await linked();
+    d.socket.seedChat('a@s.whatsapp.net', [{ id: 'm1', from: 'a@s.whatsapp.net', text: 'hi', ts: 1 }]);
+    d.socket.setHistoryState({ complete: true, explicit: true, progress: 100 });
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats/a@s.whatsapp.net/history',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect((res.body as { sync: Record<string, unknown> }).sync).not.toHaveProperty('needsRelink');
+  });
+});
+
+describe('GET /chats carries the sync state', () => {
+  it('so an EMPTY list can say why it is empty', async () => {
+    // The seam this closes: the list route is the first thing the app calls and the one
+    // place an empty answer is ambiguous. Without sync here the app had to guess.
+    const { router, deps: d, token } = await linked();
+    d.socket.setHistoryState({ complete: false, explicit: false, progress: 0, needsRelink: true });
+    const res = await router.handle({ method: 'GET', path: '/chats', headers: { authorization: `Bearer ${token}` } });
+    expect((res.body as { chats: unknown[] }).chats).toEqual([]);
+    expect((res.body as { sync: { needsRelink?: boolean } }).sync.needsRelink).toBe(true);
+  });
+});

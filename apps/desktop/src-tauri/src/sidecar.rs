@@ -49,11 +49,16 @@ use std::path::PathBuf;
 /// The equivalence is pinned by a cross-language test (`sidecarContract.test.ts` reads this
 /// file), so a drift fails loudly rather than becoming two guards that quietly disagree
 /// about which routes an app may reach.
-const APP_ROUTES: [(&str, &str); 4] = [
+const APP_ROUTES: [(&str, &str); 7] = [
     ("GET", "/chats"),
     ("GET", "/chats/:jid/history"),
     ("GET", "/chats/:jid/messages"),
     ("POST", "/chats/:jid/messages"),
+    // Surface v2 (ADR-0034, TASK-20260817-telepath): the hint long-poll and the image
+    // reads. All GET; media and picture ride the same 1 MiB while-reading response cap.
+    ("GET", "/events"),
+    ("GET", "/chats/:jid/media/:id"),
+    ("GET", "/chats/:jid/picture"),
 ];
 
 /// Response bytes accepted from the helper before the read is abandoned. Matches the net
@@ -128,7 +133,9 @@ fn decode_path(path: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// Does `path` match `pattern`, where `:jid` stands for exactly one non-empty segment?
+/// Does `path` match `pattern`, where any `:param` segment (`:jid`, `:id`) stands for
+/// exactly one non-empty segment? The traversal guard, not the segment pattern, is what
+/// refuses `..`-shaped values — same division of labor as the TypeScript twin.
 fn route_matches(pattern: &str, path: &str) -> bool {
     let pattern_segments: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
     let path_segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -145,7 +152,7 @@ fn route_matches(pattern: &str, path: &str) -> bool {
         .iter()
         .zip(path_segments.iter())
         .all(|(pattern_segment, path_segment)| {
-            if *pattern_segment == ":jid" {
+            if pattern_segment.starts_with(':') {
                 !path_segment.is_empty()
             } else {
                 pattern_segment == path_segment
@@ -164,7 +171,7 @@ fn route_matches(pattern: &str, path: &str) -> bool {
 /// command inherits the C2 boundary instead — capabilities are scoped to the "main" window
 /// and app iframes cannot reach the IPC bridge at all, which the in-shell gate asserts
 /// per command. The wizard runs in the main window; an app never does.
-const WIZARD_ROUTES: [(&str, &str); 8] = [
+const WIZARD_ROUTES: [(&str, &str); 11] = [
     ("POST", "/pair/start"),
     ("GET", "/pair/qr"),
     ("GET", "/pair/status"),
@@ -175,6 +182,9 @@ const WIZARD_ROUTES: [(&str, &str); 8] = [
     ("GET", "/chats/:jid/history"),
     ("GET", "/chats/:jid/messages"),
     ("POST", "/chats/:jid/messages"),
+    ("GET", "/events"),
+    ("GET", "/chats/:jid/media/:id"),
+    ("GET", "/chats/:jid/picture"),
 ];
 
 /// EVERY pre-flight guard for an APP request, in one place. Both `sidecar_fetch` and the
@@ -541,20 +551,11 @@ pub async fn sidecar_wizard_fetch(
     send_over_unix_socket_with_nonce(&socket, &admitted, body.as_deref(), Some(&nonce)).await
 }
 
-/// The transport itself: a minimal HTTP/1.1 exchange over the unix socket.
-///
-/// Hand-rolled rather than pulled from a client crate because the surface is four routes
-/// and the cap must be enforced WHILE READING — a client that buffers first would defeat
-/// the bound before this code saw a byte.
-async fn send_over_unix_socket(
-    socket: &std::path::Path,
-    request: &AdmittedSidecarRequest,
-    body: Option<&str>,
-) -> Result<SidecarResponse, String> {
-    send_over_unix_socket_with_nonce(socket, request, body, None).await
-}
-
 /// The transport, with the wizard's spawn nonce when the caller is the wizard.
+///
+/// Hand-rolled rather than pulled from a client crate because the surface is a handful of
+/// routes and the cap must be enforced WHILE READING — a client that buffers first would
+/// defeat the bound before this code saw a byte.
 ///
 /// The nonce is read from SHELL STATE by the caller and never accepted from the webview: it
 /// is what proves to the helper that this request came from the process that started it, so a
@@ -669,16 +670,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn admits_exactly_the_four_app_routes() {
+    fn admits_exactly_the_seven_app_routes() {
         for (method, path) in [
             ("GET", "/chats"),
             ("GET", "/chats/123@g.us/history"),
             ("GET", "/chats/123@g.us/messages"),
             ("POST", "/chats/123@g.us/messages"),
+            ("GET", "/events"),
+            ("GET", "/events?cursor=42"),
+            ("GET", "/chats/123@g.us/media/3EB0C127A2"),
+            ("GET", "/chats/123@g.us/picture"),
         ] {
             assert!(
                 admit_app_request(method, path).is_ok(),
                 "{method} {path} must be admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn surface_v2_routes_stay_method_pinned_and_shape_pinned() {
+        // The hint stream is read-only from every consumer, and the image reads are reads.
+        for (method, path) in [
+            ("POST", "/events"),
+            ("POST", "/chats/1@g.us/media/IMG1"),
+            ("POST", "/chats/1@g.us/picture"),
+            ("GET", "/events/anything"),
+            ("GET", "/chats/1@g.us/media"),
+            ("GET", "/chats/1@g.us/media/a/b"),
+        ] {
+            assert!(
+                matches!(admit_app_request(method, path), Err(SidecarRefusal::Route(_))),
+                "{method} {path} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_traversal_through_the_id_segment() {
+        // The new `:id` placeholder inherits the :jid lesson verbatim: `..` is a legal
+        // single segment, so `/chats/1@g.us/media/..` MATCHES the pattern and only the
+        // traversal guard stands between it and a socket.
+        for path in [
+            "/chats/1@g.us/media/..",
+            "/chats/1@g.us/media/%2e%2e",
+            "/chats/../media/x",
+            "/chats/1@g.us/media/..%2fpicture",
+        ] {
+            assert!(
+                matches!(admit_app_request("GET", path), Err(SidecarRefusal::Traversal(_))),
+                "{path} must be refused as traversal"
             );
         }
     }

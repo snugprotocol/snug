@@ -173,6 +173,46 @@ column). The platform seam gained TWO seats, and their asymmetry is the guard:
 accept-and-capture does not exist. Threat surface:
 `docs/security/threat-model-delta-desktop-auth.md`.
 
+## Linked-device helpers and the host live pump (ADR-0032 / ADR-0034)
+
+Some providers authenticate a DEVICE, not a request. Personal WhatsApp links a companion
+device by QR scan and then keeps a live session that neither the sandboxed iframe (C2) nor
+the request/response connected-fetch executor can host. That session lives in a local helper
+process — `apps/whatsapp-sidecar` (Node + Baileys) — which is a **capability, not a host**:
+it listens on a unix socket (`~/Snug/whatsapp-sidecar.sock`, 0600) that only the Rust side
+can name, and is reached by purpose-built commands (`sidecar_ctl`, `sidecar_fetch`, and the
+wizard-only `sidecar_wizard_fetch`), never by widening the frozen connection ceiling. The
+helper is LLM-free by construction: every analysis or compose turn runs in the governed host.
+
+**Reads flow app → bridge → executor → Rust → socket.** The app addresses
+`snug-connection://<slot>/<path>`; the executor resolves the symbolic host
+(`whatsapp.sidecar.localhost` — RFC 6761 reserved, never dialled) to the sidecar transport,
+injects the minted helper token, and applies the same gates as any other connected request.
+The app holds no token, no address, and no socket path.
+
+**Live updates are a HOST PUMP forwarding invalidations** (ADR-0034). While RunView has an
+app mounted whose connection is approved with the symbolic host in its frozen ceiling,
+`state/sidecarLive.ts` long-polls the helper's `GET /events` **through that same executor
+assembly** and forwards lean hints (`{seq, jid, kind, ts}`) into the frame via
+`RunnerHost.notifyEvent('connection-event', …)`. Two verified facts force the hint shape and
+are worth restating because they generalize to any future push channel: `hostEvent` frames
+ride the ordinary `MAX_FRAME_BYTES` (256 KB) class and the runner's `post()` drops an
+oversized frame **silently**, so content-bearing batches could vanish undetectably; and
+`hostEvent` frames carry no `instanceId`, so a hand-rolled app listener cannot distinguish a
+stale sender. With hints, the frame cannot outgrow its class and a stale event costs at most
+one redundant *governed* refetch — it can never inject state. The pump is epoch-tokened
+against StrictMode's double-mount, and no new iframe capability exists: the app still cannot
+open a connection, only hear a doorbell on the channel that already existed.
+
+**Honesty seats travel with the data.** History sync is PUSHED in chunks and its completion
+is sometimes only INFERRED (`explicit:false`), and a session that was scanned but never
+registered is WEDGED — indistinguishable from a slow first sync unless it is named. Both
+ride `WaHistoryState` on every read, `needsRelink` included, and `GET /chats` carries that
+state too because an empty list is precisely where the ambiguity bites.
+
+Threat surface: `docs/security/threat-model-delta-whatsapp-sidecar.md` (+ its surface-v2
+addendum). Desktop-only by construction — a browser tab cannot open a unix socket.
+
 ## Dependency graph (who depends on whom → whose tests also run)
 
 - `protocol` ← `runner`, `sdk`, `server`, `adapters`, `db`, `knowledge`, `playground` (change protocol → run everything)

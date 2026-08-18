@@ -1,4 +1,4 @@
-// The WhatsApp Twin starter's two load-bearing pure functions, tested directly.
+// Telepath's load-bearing pure core, tested directly (TASK-20260817-telepath, ADR-0034).
 //
 // Run through the workspace, with the other example gates:
 //
@@ -6,31 +6,27 @@
 //
 // WHY THIS FILE EXISTS AT ALL. `validate.test.mjs` checks the *shape* of every starter —
 // single-file, hooks byte-identical, no direct network, honest LLM posture. It cannot check
-// whether a parser parses. Twin ships two functions whose failure modes are silent and
-// expensive, so they are extracted from `app.html` and driven against fixtures here:
+// whether the privacy boundary holds or the statistics count. Telepath ships functions whose
+// failure modes are silent and expensive, so they are extracted from `app.html` and driven
+// against hostile fixtures here:
 //
-//   1. `parseWhatsAppExport` (AC13) — every per-person statistic, every persona profile and
-//      every mimic reply is computed FROM its output. A parser that splits one multiline
-//      message into four does not crash; it quietly reports that someone sends four times as
-//      many messages as they do, and the psychologist-grade profile downstream is confidently
-//      wrong. The fixtures below are therefore hostile to the MECHANISM (bidi controls, a
-//      body containing a timestamp-shaped line, locale-dotted dates), not merely to the
-//      happy path.
-//   2. `pseudonymizeForLlm` (AC12/B4) — the new-reader scrub. Twin sends OTHER PEOPLE's
-//      private messages to a third-party model provider under the user's own key. Those
-//      people never consented and are not Snug users. `scrubAuthValues` does not cover this:
-//      it scrubs injected CREDENTIALS on the way INTO the iframe, a different reader at a
-//      different altitude (lessons.md:40 — when the consumer class changes, re-derive the
-//      scrub per reader).
+//   1. THE PSEUDONYM ROUND-TRIP (the POC's AC12, now bidirectional). Telepath shows real
+//      names in the UI — the user already has them — and sends the model ONLY stable labels
+//      (YOU, P1, P2 …), scrubbing JIDs and phone numbers from author seats AND bodies. The
+//      map PERSISTS, so labels stay stable across incremental re-analyses; the reverse map
+//      puts real names back at render time. Each direction failing is silent: a leaked
+//      number reaches a model provider third parties never consented to; a wrong reverse
+//      mapping attributes a psychological profile to the wrong human being.
+//   2. THE REQUEST BUILDER. `snug:app-message` frames ride a 256 KB class, so the analysis
+//      payload is byte-budgeted: full history reaches the DB and the charts, a bounded
+//      recent window reaches the model, and the truncation is DISCLOSED, never silent.
+//   3. THE AGGREGATORS. Every chart is computed locally from these rows; an aggregator that
+//      double-counts or drops a bucket renders a confident, wrong picture of real people.
 //
-// THE EXTRACTION SEAM. Both functions live inside the single-file `app.html` (the format is
-// the product — a starter is one file a user can read end to end). To test them we slice the
-// authored region out of the babel script and evaluate just those two declarations. That is
-// deliberately a REAL evaluation of the shipped source: a copy of the functions in this file
-// would pass forever after `app.html` drifted, which is the failure this seam exists to
-// prevent. The slice is asserted non-empty below, so a rename that breaks extraction fails
-// loudly rather than silently testing nothing (lessons.md 2026-08-06: a suite that does not
-// run is not a suite that passes).
+// THE EXTRACTION SEAM. The functions live inside the single-file `app.html` (the format is
+// the product). The authored region between explicit markers is sliced out of the babel
+// script and evaluated — a REAL evaluation of the shipped source, never a copy that could
+// drift. The slice is asserted non-empty so a marker rename fails loudly.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -40,13 +36,6 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_HTML = path.join(HERE, 'whatsapp', 'app.html');
 
-/**
- * Pull the named function declarations out of the shipped app and evaluate them.
- *
- * Extraction is by explicit begin/end markers rather than a brace-counting parse: a regex
- * that tried to find the end of a function body would be a second, worse JS parser living in
- * a test file, and it would break on the first nested brace in a template literal.
- */
 function loadAnalysisModule() {
   const html = readFileSync(APP_HTML, 'utf8');
   const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1] ?? '';
@@ -60,209 +49,388 @@ function loadAnalysisModule() {
   assert.ok(end > start, 'app.html carries the ANALYSIS-CORE-END marker after the begin marker');
 
   const source = script.slice(start + BEGIN.length, end);
-  // Non-vacuity: an empty slice would make every assertion below pass against nothing.
   assert.ok(source.trim().length > 200, 'the extracted analysis core is substantial, not an empty slice');
 
-  const factory = new Function(`${source}\nreturn { parseWhatsAppExport, pseudonymizeForLlm, buildPseudonymMap };`);
+  const factory = new Function(
+    `${source}\nreturn { extendPseudonymMap, pseudonymizeForLlm, redactIdentifiers, deanonymizeText, emojiFrequency, fallbackLabel, buildAnalysisRequest, mergeMessages, statsByParticipant, activityBuckets, responseStats, messagesByMonth };`,
+  );
   return factory();
 }
 
-const { parseWhatsAppExport, pseudonymizeForLlm, buildPseudonymMap } = loadAnalysisModule();
+const {
+  extendPseudonymMap,
+  pseudonymizeForLlm,
+  redactIdentifiers,
+  deanonymizeText,
+  emojiFrequency,
+  fallbackLabel,
+  buildAnalysisRequest,
+  mergeMessages,
+  statsByParticipant,
+  activityBuckets,
+  responseStats,
+  messagesByMonth,
+} = loadAnalysisModule();
 
-// ---------------------------------------------------------------------------------------
-// AC13 — export parser, fixtures hostile to the mechanism
-// ---------------------------------------------------------------------------------------
+const msg = (id, from, text, ts, extra = {}) => ({ id, from, text, ts, ...extra });
 
-test('parses the iOS bracketed shape', () => {
-  const out = parseWhatsAppExport('[12/03/2025, 21:04:11] Priya: on my way\n[12/03/2025, 21:05:02] Sam: cool');
-  assert.equal(out.messages.length, 2);
-  assert.equal(out.messages[0].author, 'Priya');
-  assert.equal(out.messages[0].text, 'on my way');
-  assert.equal(out.messages[1].author, 'Sam');
+// ---------------------------------------------------------------- the pseudonym map
+
+test('the map is STABLE and MONOTONIC: prior labels survive, new people extend past them', () => {
+  const prior = extendPseudonymMap(undefined, [
+    { jid: '111@s.whatsapp.net', name: 'Asha Rao' },
+    { jid: '222@s.whatsapp.net', name: 'Bo Chen' },
+  ]);
+  assert.equal(prior.get('111@s.whatsapp.net'), 'P1');
+  assert.equal(prior.get('222@s.whatsapp.net'), 'P2');
+
+  // An incremental re-analysis re-extends with the SAME people plus one new arrival:
+  // nobody's label moves, and the newcomer takes the next number — a shuffled label
+  // would silently reassign a stored profile to a different human being.
+  const extended = extendPseudonymMap(Array.from(prior.entries()), [
+    { jid: '333@s.whatsapp.net', name: 'Zed' },
+    { jid: '111@s.whatsapp.net', name: 'Asha Rao' },
+  ]);
+  assert.equal(extended.get('111@s.whatsapp.net'), 'P1');
+  assert.equal(extended.get('222@s.whatsapp.net'), 'P2');
+  assert.equal(extended.get('333@s.whatsapp.net'), 'P3');
 });
 
-test('parses the Android dashed shape', () => {
-  const out = parseWhatsAppExport('12/03/2025, 21:04 - Priya: on my way\n12/03/2025, 21:05 - Sam: cool');
-  assert.equal(out.messages.length, 2);
-  assert.equal(out.messages[0].author, 'Priya');
-  assert.equal(out.messages[1].text, 'cool');
+test('a person maps by BOTH jid and display name — one label, two spellings', () => {
+  const map = extendPseudonymMap(undefined, [{ jid: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+  assert.equal(map.get('111@s.whatsapp.net'), 'P1');
+  assert.equal(map.get('Asha Rao'), 'P1');
 });
 
-test('parses the US 12-hour shape', () => {
-  const out = parseWhatsAppExport('3/12/25, 9:04 PM - Priya: evening\n3/12/25, 9:05 PM - Sam: hi');
-  assert.equal(out.messages.length, 2);
-  assert.equal(out.messages[0].author, 'Priya');
-  assert.equal(out.messages[0].text, 'evening');
+test('the account owner is YOU, never a P-label', () => {
+  const map = extendPseudonymMap(undefined, [
+    { jid: 'me@s.whatsapp.net', name: 'Jeetu', isMe: true },
+    { jid: '111@s.whatsapp.net', name: 'Asha Rao' },
+  ]);
+  assert.equal(map.get('me@s.whatsapp.net'), 'YOU');
+  assert.equal(map.get('Jeetu'), 'YOU');
+  assert.equal(map.get('111@s.whatsapp.net'), 'P1');
 });
 
-test('parses the dot-separated locale shape', () => {
-  const out = parseWhatsAppExport('12.03.2025, 21:04 - Priya: hallo\n12.03.2025, 21:05 - Sam: hei');
-  assert.equal(out.messages.length, 2);
-  assert.equal(out.messages[0].author, 'Priya');
-});
+// ---------------------------------------------------------------- the scrub (LLM-bound)
 
-test('parses lines carrying bidi control characters (U+200E / U+202F)', () => {
-  // WhatsApp's own iOS export writes LRM before the bracket and NNBSP before AM/PM. A parser
-  // that anchors on a literal '[' sees a non-matching line and drops the entire export.
-  const out = parseWhatsAppExport('‎[12/03/2025, 9:04:11 PM] Priya: with marks\n‎[12/03/2025, 9:05:02 PM] Sam: also');
-  assert.equal(out.messages.length, 2);
-  assert.equal(out.messages[0].author, 'Priya');
-  assert.equal(out.messages[0].text, 'with marks');
-});
-
-test('a multiline body attaches to its parent message rather than splitting', () => {
-  // THE BUG THAT SILENTLY CORRUPTS EVERY PER-PERSON STATISTIC. Four continuation lines
-  // becoming four messages would triple Priya's apparent message count and flatten her
-  // apparent message length — and nothing would ever error.
-  const out = parseWhatsAppExport(
-    '[12/03/2025, 21:04:11] Priya: first line\nsecond line\nthird line\n[12/03/2025, 21:06:00] Sam: reply',
+test('a phone number in a message BODY never reaches the model, whatever its spelling', () => {
+  const map = extendPseudonymMap(undefined, [{ jid: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+  const rows = pseudonymizeForLlm(
+    [
+      msg('m1', '111@s.whatsapp.net', 'call me on +91 98765 43210 tonight', 100),
+      msg('m2', '111@s.whatsapp.net', 'or (555) 123-4567 after five', 200),
+    ],
+    map,
   );
-  assert.equal(out.messages.length, 2, 'continuation lines do not become their own messages');
-  assert.equal(out.messages[0].text, 'first line\nsecond line\nthird line');
-  assert.equal(out.messages[1].author, 'Sam');
+  const wire = JSON.stringify(rows);
+  assert.ok(!wire.includes('98765'), 'spaced international number scrubbed');
+  assert.ok(!wire.includes('123-4567'), 'bracketed US number scrubbed');
+  assert.ok(wire.includes('[number]'));
 });
 
-test('a body CONTAINING a timestamp-shaped line stays one message', () => {
-  // Someone quoting a schedule into chat. The continuation line looks like a header to a
-  // naive line-by-line scan, so the quote is torn into a separate message attributed to
-  // nobody — or worse, to a fabricated author.
-  const out = parseWhatsAppExport(
-    '[12/03/2025, 21:04:11] Priya: the plan is\n[12/03/2025, 21:04:11] Sam: this is quoted text, not a real header\nstill me',
+test('a JID appearing ONLY in a body is scrubbed by the pattern, not just the map', () => {
+  // The dangerous case: a forwarded contact belonging to someone NOT in this thread —
+  // no map entry exists for them, so only the primitive stands.
+  const map = extendPseudonymMap(undefined, [{ jid: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+  const rows = pseudonymizeForLlm([msg('m1', '111@s.whatsapp.net', 'ping 999888777@s.whatsapp.net about it', 100)], map);
+  assert.ok(!JSON.stringify(rows).includes('999888777'));
+});
+
+test('a participant NAME inside a body becomes their label — the map covers prose too', () => {
+  const map = extendPseudonymMap(undefined, [
+    { jid: '111@s.whatsapp.net', name: 'Asha Rao' },
+    { jid: '222@s.whatsapp.net', name: 'Bo Chen' },
+  ]);
+  const rows = pseudonymizeForLlm([msg('m1', '222@s.whatsapp.net', 'Asha Rao said she is late', 100)], map);
+  assert.ok(!JSON.stringify(rows).includes('Asha'));
+  assert.ok(rows[0].text.includes('P1'));
+});
+
+test('the author seat carries the label, never the jid or name', () => {
+  const map = extendPseudonymMap(undefined, [{ jid: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+  const rows = pseudonymizeForLlm(
+    [msg('m1', '111@s.whatsapp.net', 'hi', 100), msg('m2', 'me@x', 'yo', 200, { fromMe: true })],
+    map,
   );
-  assert.equal(out.messages.length, 2, 'a quoted timestamp line is still parsed as a header when well-formed');
-  assert.equal(out.messages[1].author, 'Sam');
-  assert.equal(out.messages[1].text, 'this is quoted text, not a real header\nstill me');
+  assert.equal(rows[0].author, 'P1');
+  assert.equal(rows[1].author, 'YOU');
 });
 
-test('system lines never become messages', () => {
-  const out = parseWhatsAppExport(
-    '[12/03/2025, 21:00:00] Messages and calls are end-to-end encrypted. No one outside of this chat can read them.\n'
-      + '[12/03/2025, 21:04:11] Priya: real message',
-  );
-  assert.equal(out.messages.length, 1, 'the encryption notice is not a message');
-  assert.equal(out.messages[0].author, 'Priya');
-  assert.equal(out.systemLines, 1);
+test('the scrub does not over-redact ordinary text — quantities and short numbers survive', () => {
+  const out = redactIdentifiers('meet at 7, it costs 250, room 1204', new Map());
+  assert.equal(out, 'meet at 7, it costs 250, room 1204');
 });
 
-test('media-omitted lines and deletion tombstones never become messages', () => {
-  const out = parseWhatsAppExport(
-    '[12/03/2025, 21:04:11] Priya: <Media omitted>\n'
-      + '[12/03/2025, 21:05:00] Sam: This message was deleted\n'
-      + '[12/03/2025, 21:06:00] Priya: actual words',
-  );
-  assert.equal(out.messages.length, 1, 'only the real message survives');
-  assert.equal(out.messages[0].text, 'actual words');
-  assert.equal(out.skipped, 2);
+// ---------------------------------------------------------------- the reverse map (render-time)
+
+test('deanonymizeText puts real names back, whole-word, preferring display names', () => {
+  const map = extendPseudonymMap(undefined, [
+    { jid: '111@s.whatsapp.net', name: 'Asha Rao' },
+    { jid: '222@s.whatsapp.net' }, // no display name known — the jid is the honest fallback
+  ]);
+  const out = deanonymizeText('P1 answers fast. P2 goes quiet when YOU joke.', map);
+  assert.ok(out.includes('Asha Rao answers fast'));
+  assert.ok(out.includes('222@s.whatsapp.net goes quiet'));
+  assert.ok(out.includes('You joke'), 'YOU renders as You');
 });
 
-test('a DM export and a group export are both parsed, and group participants are collected', () => {
-  const group = parseWhatsAppExport(
-    '[12/03/2025, 21:04:11] Priya: a\n[12/03/2025, 21:05:00] Sam: b\n[12/03/2025, 21:06:00] Ravi: c',
-  );
-  assert.deepEqual([...group.authors].sort(), ['Priya', 'Ravi', 'Sam']);
+test('deanonymizeText never mangles a longer label with a shorter one — P12 is not P1+"2"', () => {
+  const entries = [];
+  for (let i = 0; i < 12; i += 1) entries.push({ jid: `${i}@s.whatsapp.net`, name: `Person ${i + 1}` });
+  const map = extendPseudonymMap(undefined, entries);
+  // Label assignment order is the map's own business; the property under test is that the
+  // TWO-DIGIT label round-trips as itself, never as the one-digit label plus a stray "2".
+  const nameOf = (label) =>
+    Array.from(map.entries()).find(([identity, l]) => l === label && !identity.includes('@'))?.[0];
+  const out = deanonymizeText('P12 spoke after P1.', map);
+  assert.ok(out.includes(`${nameOf('P12')} spoke`), `got: ${out}`);
+  assert.ok(out.includes(`after ${nameOf('P1')}.`), `got: ${out}`);
+  assert.ok(!out.includes(`${nameOf('P1')}2 spoke`), 'P12 must never render as P1’s name + "2"');
 });
 
-test('an unparseable blob yields zero messages rather than throwing', () => {
-  // The user uploads the wrong file. A parser that throws takes the whole app down with it.
-  const out = parseWhatsAppExport('this is not a whatsapp export at all\njust some prose');
-  assert.equal(out.messages.length, 0);
-  assert.ok(out.unparsedLines >= 2, 'the unparsed lines are counted and can be disclosed');
+test('deanonymizeText leaves unknown labels visible rather than guessing', () => {
+  const map = extendPseudonymMap(undefined, [{ jid: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+  assert.equal(deanonymizeText('P7 was here', map), 'P7 was here');
 });
 
-test('export-derived and live-derived identities are never silently merged', () => {
-  // Export lines carry a DISPLAY NAME; the live socket carries a JID. Two participants
-  // sharing a display name are two people, and merging them would attribute one person's
-  // words — and psychology — to another.
-  const out = parseWhatsAppExport('[12/03/2025, 21:04:11] Priya: a\n[12/03/2025, 21:05:00] Priya: b');
-  assert.equal(out.messages[0].source, 'export');
-  assert.equal(out.messages[0].authorJid, undefined, 'an export line never invents a JID');
-});
+// ---------------------------------------------------------------- emoji habits
 
-// ---------------------------------------------------------------------------------------
-// AC12 / BLOCKER B4 — the new-reader scrub
-// ---------------------------------------------------------------------------------------
-
-test('a phone number in a real-shaped export never appears in the LLM-bound payload', () => {
-  // THE LOAD-BEARING NEGATIVE. Driven through the real parser, not a hand-built object, so
-  // it exercises the path the app actually takes.
-  const raw = '[12/03/2025, 21:04:11] +91 98765 43210: call me on +91 98765 43210\n'
-    + '[12/03/2025, 21:05:00] Priya: ok';
-  const parsed = parseWhatsAppExport(raw);
-  const map = buildPseudonymMap(parsed);
-  const payload = pseudonymizeForLlm(parsed.messages, map);
-  const serialized = JSON.stringify(payload);
-
-  assert.doesNotMatch(serialized, /98765/, 'no fragment of the phone number survives');
-  assert.doesNotMatch(serialized, /\+91/, 'no dialing prefix survives');
-  assert.ok(serialized.length > 0, 'the payload is not empty — the scrub redacts, it does not delete');
-});
-
-test('a JID never appears in the LLM-bound payload', () => {
-  const messages = [
-    { author: '919876543210@s.whatsapp.net', authorJid: '919876543210@s.whatsapp.net', text: 'hi', ts: 1, source: 'live' },
+test('emojiFrequency measures the USER’s emoji, most frequent first — nobody else’s', () => {
+  const rows = [
+    msg('m1', 'me', 'love it 😂😂🙏', 1, { fromMe: true }),
+    msg('m2', 'me', 'again 😂', 2, { fromMe: true }),
+    msg('m3', '111@s.whatsapp.net', 'their emoji 🎉🎉🎉🎉 must not count', 3),
   ];
-  const map = buildPseudonymMap({ messages, authors: new Set(['919876543210@s.whatsapp.net']) });
-  const serialized = JSON.stringify(pseudonymizeForLlm(messages, map));
-  assert.doesNotMatch(serialized, /@s\.whatsapp\.net/, 'no JID domain survives');
-  assert.doesNotMatch(serialized, /919876543210/, 'no JID user part survives');
+  const freq = emojiFrequency(rows);
+  assert.deepEqual(freq[0], { emoji: '😂', count: 3 });
+  assert.deepEqual(freq[1], { emoji: '🙏', count: 1 });
+  assert.ok(!freq.some((row) => row.emoji === '🎉'));
 });
 
-test('a JID appearing only in a message BODY is scrubbed by the pattern, not by the name map', () => {
-  // FIXTURE NOTE, and the reason this test exists beside the one above. In that test the JID
-  // is the AUTHOR, so the pseudonym map replaces it by exact name and `JID_PATTERN` is never
-  // reached — deleting the pattern entirely leaves that test green. It measures the map, not
-  // the pattern. The dangerous shape is a JID belonging to SOMEONE NOT IN THIS THREAD,
-  // forwarded into the body: no map entry can match it, so the primitive is the only thing
-  // standing between it and the model. (lessons.md 2026-08-04: a refusal's fixture must pass
-  // every sibling refusal and fail only on the guard under test.)
-  const messages = [{ author: 'Priya', text: 'here is his contact 447700900999@s.whatsapp.net', ts: 1, source: 'live' }];
-  const map = buildPseudonymMap({ messages, authors: new Set(['Priya']) });
-  const serialized = JSON.stringify(pseudonymizeForLlm(messages, map));
-  assert.doesNotMatch(serialized, /@s\.whatsapp\.net/, 'the JID domain is scrubbed from the body');
-  assert.doesNotMatch(serialized, /447700900999/, 'the JID user part is scrubbed from the body');
+test('emojiFrequency returns empty for emoji-free senders, and never counts digits or ascii', () => {
+  assert.deepEqual(emojiFrequency([msg('m1', 'me', 'plain text 123 :) x', 1, { fromMe: true })]), []);
 });
 
-test('a phone number written INSIDE a message body is scrubbed, not just the author field', () => {
-  // Scrubbing only the author seat would leave the body — where numbers are actually
-  // shared — untouched. The reader is the LLM, and it reads the body.
-  const messages = [{ author: 'Priya', text: 'my new number is +44 7700 900123, save it', ts: 1, source: 'export' }];
-  const map = buildPseudonymMap({ messages, authors: new Set(['Priya']) });
-  const serialized = JSON.stringify(pseudonymizeForLlm(messages, map));
-  assert.doesNotMatch(serialized, /7700\s*900123/, 'an in-body number is scrubbed');
-  assert.doesNotMatch(serialized, /\+44/, 'an in-body dialing prefix is scrubbed');
+// ---------------------------------------------------------------- the request builder
+
+test('under budget: every row rides, truncation false, prior analysis included when given', () => {
+  const map = extendPseudonymMap(undefined, [{ jid: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+  const rows = [msg('m1', '111@s.whatsapp.net', 'hello', 100), msg('m2', 'me', 'hi', 200, { fromMe: true })];
+  const request = buildAnalysisRequest({ messages: rows, map, priorAnalysis: { kind: 'profile', people: [] }, byteBudget: 50_000 });
+  assert.equal(request.transcript.length, 2);
+  assert.equal(request.truncated, false);
+  assert.deepEqual(request.prior, { kind: 'profile', people: [] });
 });
 
-test('pseudonyms are STABLE per thread — arrival order cannot change anyone\'s label', () => {
-  // FIXTURE NOTE: building the map twice from the SAME array proves nothing — insertion
-  // order is identical either way, so an unsorted map passes it (verified: deleting the
-  // sort left that version green). What `sort()` actually defends against is the SAME
-  // people arriving in a DIFFERENT order — a later history page, a re-analysis after new
-  // messages — which is exactly when a shuffled label would silently re-attribute one
-  // person's psychology to another.
-  const early = parseWhatsAppExport('[12/03/2025, 21:04:11] Priya: a\n[12/03/2025, 21:05:00] Sam: b');
-  const reordered = parseWhatsAppExport('[12/03/2025, 21:04:11] Sam: b\n[12/03/2025, 21:05:00] Priya: a');
-
-  const labelFor = (parsed, author) => {
-    const map = buildPseudonymMap(parsed);
-    return map.get(author);
-  };
-  assert.equal(labelFor(early, 'Priya'), labelFor(reordered, 'Priya'), 'Priya keeps her label');
-  assert.equal(labelFor(early, 'Sam'), labelFor(reordered, 'Sam'), 'Sam keeps his label');
-  assert.notEqual(labelFor(early, 'Priya'), labelFor(early, 'Sam'), 'two people get two different labels');
+test('over budget: the OLDEST rows fall away, the newest stay, and the truncation is disclosed', () => {
+  const map = extendPseudonymMap(undefined, [{ jid: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+  const rows = [];
+  for (let i = 0; i < 400; i += 1) {
+    rows.push(msg(`m${i}`, '111@s.whatsapp.net', `message number ${i} with some padding text to carry bytes`, i));
+  }
+  const budget = 8_000;
+  const request = buildAnalysisRequest({ messages: rows, map, byteBudget: budget });
+  assert.equal(request.truncated, true);
+  assert.ok(request.transcript.length > 0);
+  assert.ok(request.transcript.length < 400);
+  // Newest kept: the LAST source row survives; the first does not.
+  const wire = JSON.stringify(request.transcript);
+  assert.ok(wire.includes('message number 399'));
+  assert.ok(!wire.includes('"message number 0 '));
+  assert.ok(wire.length <= budget, `serialized transcript ${wire.length} <= ${budget}`);
 });
 
-test('pseudonyms are DISTINCT per person — two people never collapse to one label', () => {
-  const parsed = parseWhatsAppExport(
-    '[12/03/2025, 21:04:11] Priya: a\n[12/03/2025, 21:05:00] Sam: b\n[12/03/2025, 21:06:00] Ravi: c',
+test('the request builder ships ONLY pseudonymized rows — the budget path is not a scrub bypass', () => {
+  const map = extendPseudonymMap(undefined, [{ jid: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+  const rows = [msg('m1', '111@s.whatsapp.net', 'reach me at +91 98765 43210', 100)];
+  const request = buildAnalysisRequest({ messages: rows, map, byteBudget: 50_000 });
+  const wire = JSON.stringify(request);
+  assert.ok(!wire.includes('98765'));
+  assert.ok(!wire.includes('Asha'));
+  assert.ok(!wire.includes('111@s.whatsapp.net'));
+});
+
+// ---------------------------------------------------------------- the merge reducer
+
+test('mergeMessages dedupes by id and keeps time order — hint refetches overlap by design', () => {
+  const existing = [msg('m1', 'a', 'one', 100), msg('m2', 'b', 'two', 200)];
+  const incoming = [msg('m2', 'b', 'two', 200), msg('m3', 'a', 'three', 150)];
+  const merged = mergeMessages(existing, incoming);
+  assert.deepEqual(merged.map((row) => row.id), ['m1', 'm3', 'm2']);
+});
+
+// ---------------------------------------------------------------- the aggregators
+
+test('statsByParticipant counts and shares per author', () => {
+  const rows = [
+    msg('m1', 'a', 'x', 1),
+    msg('m2', 'a', 'y', 2),
+    msg('m3', 'b', 'z', 3),
+    msg('m4', 'me', 'w', 4, { fromMe: true }),
+  ];
+  const stats = statsByParticipant(rows);
+  const a = stats.find((row) => row.author === 'a');
+  assert.equal(a.count, 2);
+  assert.ok(Math.abs(a.share - 0.5) < 1e-9);
+  assert.equal(stats.find((row) => row.author === 'me').count, 1);
+});
+
+test('activityBuckets respects the timezone offset — 23:30 UTC is next-day 00:30 at +60', () => {
+  // 2026-08-17 (a Monday) 23:30 UTC.
+  const monday2330utc = Date.UTC(2026, 7, 17, 23, 30, 0) / 1000;
+  const utc = activityBuckets([msg('m1', 'a', 'x', monday2330utc)], 0);
+  assert.equal(utc.hours[23], 1);
+  assert.equal(utc.weekdays[0], 1, 'Monday-first indexing: Monday is bucket 0');
+
+  const shifted = activityBuckets([msg('m1', 'a', 'x', monday2330utc)], 60);
+  assert.equal(shifted.hours[0], 1);
+  assert.equal(shifted.weekdays[1], 1, 'crossed midnight into Tuesday');
+});
+
+test('activityBuckets tracks per-author hour profiles', () => {
+  const nineAm = Date.UTC(2026, 7, 17, 9, 0, 0) / 1000;
+  const buckets = activityBuckets(
+    [msg('m1', 'a', 'x', nineAm), msg('m2', 'a', 'y', nineAm + 60), msg('m3', 'b', 'z', nineAm)],
+    0,
   );
-  const payload = pseudonymizeForLlm(parsed.messages, buildPseudonymMap(parsed));
-  assert.equal(new Set(payload.map((m) => m.author)).size, 3, 'three people, three labels');
+  assert.equal(buckets.perAuthor.get('a').hours[9], 2);
+  assert.equal(buckets.perAuthor.get('b').hours[9], 1);
 });
 
-test('the scrub preserves the message text that is not identifying', () => {
-  // A scrub that redacted everything would pass every negative above and make the app
-  // useless. This is the sibling assertion that keeps the negatives honest.
-  const parsed = parseWhatsAppExport('[12/03/2025, 21:04:11] Priya: the tone here matters a lot');
-  const payload = pseudonymizeForLlm(parsed.messages, buildPseudonymMap(parsed));
-  assert.match(payload[0].text, /the tone here matters a lot/);
+test('responseStats measures the median gap behind a SPEAKER CHANGE, ignoring monologues and stale gaps', () => {
+  const rows = [
+    msg('m1', 'a', 'q1', 1_000),
+    msg('m2', 'b', 'a1', 1_000 + 300), // b answers a in 5 min
+    msg('m3', 'b', 'a1b', 1_000 + 400), // monologue continuation — NOT a response
+    msg('m4', 'a', 'q2', 1_000 + 400 + 900), // a answers b in 15 min
+    msg('m5', 'b', 'late', 1_000 + 400 + 900 + 90_000), // >24h after m4 — ignored
+    msg('m6', 'a', 'q3', 1_000 + 400 + 900 + 90_000 + 90_000), // >24h after m5 — ignored too
+    msg('m7', 'b', 'a3', 1_000 + 400 + 900 + 90_000 + 90_000 + 540), // b answers in 9 min
+  ];
+  const stats = responseStats(rows);
+  const b = stats.find((row) => row.author === 'b');
+  // b's response gaps: 5 min and 9 min → median 7 min.
+  assert.equal(b.medianMinutes, 7);
+  const a = stats.find((row) => row.author === 'a');
+  assert.equal(a.medianMinutes, 15);
+});
+
+test('messagesByMonth buckets a trend the chart can draw', () => {
+  const jan = Date.UTC(2026, 0, 10) / 1000;
+  const feb = Date.UTC(2026, 1, 10) / 1000;
+  const buckets = messagesByMonth([msg('m1', 'a', 'x', jan), msg('m2', 'a', 'y', jan + 60), msg('m3', 'b', 'z', feb)]);
+  assert.deepEqual(buckets, [
+    { month: '2026-01', count: 2 },
+    { month: '2026-02', count: 1 },
+  ]);
+});
+
+// ---------------------------------------------------------------- the live doorbell
+//
+// THE BRIDGE-ALTITUDE SEAM TEST (plan review F9; eight-seams defect #3's shape). The host
+// pump forwards hints via `RunnerHost.notifyEvent('connection-event', …)`, which posts
+// `{v: 1, type: 'snug:host-event', event, data}` into the frame. The app's listener is
+// extracted VERBATIM from app.html and driven with frames built from the PROTOCOL'S OWN
+// constants — so if either side respells the frame, this test reds instead of the doorbell
+// going silently deaf on hardware.
+import { FRAME_TYPES, PROTOCOL_VERSION } from '@snugprotocol/protocol';
+
+function loadDoorbell() {
+  const html = readFileSync(APP_HTML, 'utf8');
+  const script = /<script type="text\/babel">\n([\s\S]*?)\n\s*<\/script>/.exec(html)?.[1] ?? '';
+  const BEGIN = '// ===== LIVE-DOORBELL-BEGIN =====';
+  const END = '// ===== LIVE-DOORBELL-END =====';
+  const start = script.indexOf(BEGIN);
+  const end = script.indexOf(END);
+  assert.ok(start >= 0 && end > start, 'app.html carries the LIVE-DOORBELL markers');
+  const source = script.slice(start + BEGIN.length, end);
+  assert.ok(source.trim().length > 100, 'the extracted doorbell is substantial');
+
+  let handler;
+  const windowStub = {
+    addEventListener: (type, fn) => {
+      assert.equal(type, 'message');
+      handler = fn;
+    },
+  };
+  const factory = new Function('window', `${source}\nreturn { liveListeners };`);
+  const { liveListeners } = factory(windowStub);
+  assert.ok(typeof handler === 'function', 'the doorbell registered a message listener');
+  return { handler, liveListeners };
+}
+
+/** The frame exactly as packages/runner's notifyEvent constructs it. */
+const hostEventFrame = (event, data) => ({
+  data: { v: PROTOCOL_VERSION, type: FRAME_TYPES.hostEvent, event, ...(data !== undefined ? { data } : {}) },
+});
+
+test('doorbell: a pump hint batch reaches subscribers as jids + resync, nothing else', () => {
+  const { handler, liveListeners } = loadDoorbell();
+  const received = [];
+  liveListeners.add((payload) => received.push(payload));
+  handler(hostEventFrame('connection-event', {
+    slot: 'whatsapp',
+    hints: [
+      { seq: 1, jid: 'a@g.us', kind: 'message', ts: 10 },
+      { seq: 2, jid: 'b@s.whatsapp.net', kind: 'chat-update', ts: 11 },
+    ],
+  }));
+  assert.equal(received.length, 1);
+  assert.deepEqual(Array.from(received[0].jids).sort(), ['a@g.us', 'b@s.whatsapp.net']);
+  assert.equal(received[0].resync, false);
+  assert.deepEqual(Object.keys(received[0]).sort(), ['jids', 'resync'], 'a hint is an invalidation, never a delivery');
+});
+
+test('doorbell: resync arrives as its own signal', () => {
+  const { handler, liveListeners } = loadDoorbell();
+  const received = [];
+  liveListeners.add((payload) => received.push(payload));
+  handler(hostEventFrame('connection-event', { slot: 'whatsapp', resync: true }));
+  assert.equal(received.length, 1);
+  assert.equal(received[0].resync, true);
+});
+
+test('doorbell: everything off-shape is ignored — wrong slot, wrong event, wrong version, junk hints', () => {
+  const { handler, liveListeners } = loadDoorbell();
+  const received = [];
+  liveListeners.add((payload) => received.push(payload));
+  handler(hostEventFrame('connection-event', { slot: 'spotify', hints: [{ jid: 'a@g.us' }] }));
+  handler(hostEventFrame('theme-change', { theme: 'dark' }));
+  handler({ data: { v: 99, type: FRAME_TYPES.hostEvent, event: 'connection-event', data: { slot: 'whatsapp' } } });
+  handler({ data: null });
+  assert.equal(received.length, 0);
+  // Junk hint rows contribute no jids but never throw.
+  handler(hostEventFrame('connection-event', { slot: 'whatsapp', hints: [null, 7, { jid: 42 }, { jid: 'ok@g.us' }] }));
+  assert.equal(received.length, 1);
+  assert.deepEqual(Array.from(received[0].jids), ['ok@g.us']);
+});
+
+// ---------------------------------------------------------------- unknown-identity labels
+//
+// OWNER-REPORTED (2026-08-17): unknown contacts rendered as "+77771" — digits taken from a
+// LID, which is an INTERNAL WhatsApp address belonging to nobody. A confident wrong number
+// is worse than an honest blank, because the user has no way to know it is fiction.
+
+test('fallbackLabel renders a real phone jid as a number', () => {
+  assert.equal(fallbackLabel('919876543210@s.whatsapp.net'), '+919876543210');
+  assert.equal(fallbackLabel('919876543210@c.us'), '+919876543210');
+});
+
+test('fallbackLabel NEVER renders a LID as a phone number', () => {
+  assert.equal(fallbackLabel('77771@lid'), 'Unknown contact');
+  assert.equal(fallbackLabel('123456789@lid'), 'Unknown contact');
+});
+
+test('fallbackLabel handles groups, empties and unrecognised address spaces honestly', () => {
+  assert.equal(fallbackLabel('123-456@g.us'), 'Group');
+  assert.equal(fallbackLabel(''), 'Unknown');
+  assert.equal(fallbackLabel(undefined), 'Unknown');
+  assert.equal(fallbackLabel('someone@broadcast'), 'Unknown contact');
+});
+
+test('fallbackLabel does not put a + on a non-numeric local part', () => {
+  // A short or non-numeric local part is not a dialable number either.
+  assert.equal(fallbackLabel('status@s.whatsapp.net'), 'status');
+  assert.equal(fallbackLabel('123@s.whatsapp.net'), '123');
 });

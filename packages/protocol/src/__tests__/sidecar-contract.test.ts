@@ -40,6 +40,10 @@ describe('the route table is a closed, method-pinned set', () => {
         'GET /chats/:jid/history',
         'GET /chats/:jid/messages',
         'POST /chats/:jid/messages',
+        // --- surface v2 (ADR-0034, TASK-20260817-telepath) ---
+        'GET /events',
+        'GET /chats/:jid/media/:id',
+        'GET /chats/:jid/picture',
         'GET /pair/qr',
         'POST /pair/start',
         'GET /pair/status',
@@ -74,9 +78,17 @@ describe('pairing routes are never app-reachable (the token-capture refusal)', (
     }
   });
 
-  it('exposes exactly the four thread routes to apps', () => {
+  it('exposes exactly the seven app routes — four thread + three surface-v2', () => {
     expect(APP_REACHABLE_SIDECAR_ROUTES.map((route) => `${route.method} ${route.path}`).sort()).toEqual(
-      ['GET /chats', 'GET /chats/:jid/history', 'GET /chats/:jid/messages', 'POST /chats/:jid/messages'].sort(),
+      [
+        'GET /chats',
+        'GET /chats/:jid/history',
+        'GET /chats/:jid/messages',
+        'POST /chats/:jid/messages',
+        'GET /events',
+        'GET /chats/:jid/media/:id',
+        'GET /chats/:jid/picture',
+      ].sort(),
     );
   });
 
@@ -165,6 +177,45 @@ describe('isAppReachableSidecarRoute — the predicate the Rust admission mirror
     // `?since=` and `?cursor=` are contract parameters; they must not widen the match.
     expect(isAppReachableSidecarRoute('GET', '/chats/1@g.us/messages?since=42')).toBe(true);
     expect(isAppReachableSidecarRoute('GET', '/pair/status?x=1')).toBe(false);
+  });
+
+  // ---- surface v2 (ADR-0034, TASK-20260817-telepath) ----
+
+  it('admits the event long-poll by GET only', () => {
+    expect(isAppReachableSidecarRoute('GET', '/events')).toBe(true);
+    expect(isAppReachableSidecarRoute('GET', '/events?cursor=7')).toBe(true);
+    // The hint buffer is read-only from every consumer; a POST is not a slower GET.
+    expect(isAppReachableSidecarRoute('POST', '/events')).toBe(false);
+    expect(isAppReachableSidecarRoute('GET', '/events/anything')).toBe(false);
+  });
+
+  it('admits a media read with concrete jid AND id, by GET only', () => {
+    expect(isAppReachableSidecarRoute('GET', '/chats/1@g.us/media/3EB0C127A2')).toBe(true);
+    expect(isAppReachableSidecarRoute('POST', '/chats/1@g.us/media/3EB0C127A2')).toBe(false);
+  });
+
+  it('refuses traversal through the :id segment — the new segment inherits the old discipline', () => {
+    // Same shape as the :jid mutation lesson: `..` is a legal single segment, so
+    // `/chats/1@g.us/media/..` MATCHES the pattern and only the traversal refusal stands.
+    for (const path of [
+      '/chats/1@g.us/media/..',
+      '/chats/1@g.us/media/%2e%2e',
+      '/chats/../media/x',
+      '/chats/1@g.us/media/..%2fpicture',
+    ]) {
+      expect(isAppReachableSidecarRoute('GET', path), `path ${JSON.stringify(path)}`).toBe(false);
+    }
+  });
+
+  it('refuses a media id segment that is empty or spans segments', () => {
+    expect(isAppReachableSidecarRoute('GET', '/chats/1@g.us/media/')).toBe(false);
+    expect(isAppReachableSidecarRoute('GET', '/chats/1@g.us/media/a/b')).toBe(false);
+  });
+
+  it('admits the avatar read with a concrete jid, by GET only', () => {
+    expect(isAppReachableSidecarRoute('GET', '/chats/1@g.us/picture')).toBe(true);
+    expect(isAppReachableSidecarRoute('POST', '/chats/1@g.us/picture')).toBe(false);
+    expect(isAppReachableSidecarRoute('GET', '/chats//picture')).toBe(false);
   });
 });
 

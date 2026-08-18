@@ -302,7 +302,31 @@ for (const app of APPS) {
       const dom = new JSDOM(html); // scripts NOT executed — parse only
       const doc = dom.window.document;
       assert.ok(doc.getElementById('root'), 'jsdom: #root exists');
-      assert.equal(doc.querySelectorAll('script[src]').length, 3, 'jsdom: exactly the three CDN UMD scripts');
+      // The three RUNTIME scripts are mandatory and exact; past them, an app may load
+      // ONLY builds from the KB's known-good table (80-cdn-compatibility.md) — pinned
+      // here as patterns so "on the CDN allowlist" can never quietly become "any script
+      // the CDN hosts" (TASK-20260817-telepath widened this from exactly-three when
+      // Telepath's charts brought in Chart.js 4, the first KB-blessed extra).
+      const scripts = [...doc.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
+      for (const required of [
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/react@18\//,
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/react-dom@18\//,
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/@babel\/standalone@7\//,
+      ]) {
+        assert.ok(scripts.some((src) => required.test(src)), `jsdom: runtime script ${required} present`);
+      }
+      const KNOWN_GOOD_EXTRA_CDN_SCRIPTS = [
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/chart\.js@4\//,
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/d3@7\//,
+      ];
+      const extras = scripts.filter((src) =>
+        !/^https:\/\/cdn\.jsdelivr\.net\/npm\/(react@18|react-dom@18|@babel\/standalone@7)\//.test(src));
+      for (const extra of extras) {
+        assert.ok(
+          KNOWN_GOOD_EXTRA_CDN_SCRIPTS.some((pattern) => pattern.test(extra)),
+          `jsdom: extra script ${extra} is a KB known-good pinned build`,
+        );
+      }
       assert.equal(doc.querySelectorAll('script[type="text/babel"]').length, 1, 'jsdom: exactly one babel script');
       assert.ok(doc.querySelector('style'), 'jsdom: inline styles present');
     }
@@ -426,6 +450,23 @@ test('AC9: the shelf glob can never bundle authoring/ content (derived from the 
       `shelf glob must match exactly one app.html per folder, never deeper (got ${pattern})`,
     );
   }
+});
+
+test('ADR-0035: the doc-ingestion glob reaches authoring/{docs,prompts} and nothing else', () => {
+  // The SIBLING of the pin above, and deliberately a separate assertion rather than a
+  // loosening of it. ADR-0035 reverses "provenance never ships" — but only through ONE
+  // named channel, whose shape is pinned here so it can never widen into "bundle whatever
+  // sits under the starter folder". The producer is parsed, never restated.
+  const producer = readFileSync(
+    path.join(REPO_ROOT, 'apps', 'playground', 'src', 'starter', 'starterDocs.ts'),
+    'utf8',
+  );
+  const globs = [...producer.matchAll(/import\.meta\.glob\(\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(globs.length, 1, 'starterDocs.ts declares exactly one glob');
+  assert.ok(
+    globs[0].endsWith('/examples/*/authoring/{docs,prompts}/*.md'),
+    `doc-ingestion glob must match only authoring docs and prompts (got ${globs[0]})`,
+  );
 });
 
 // ---------------------------------------------------------------------------

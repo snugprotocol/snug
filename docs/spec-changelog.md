@@ -4,6 +4,36 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-17 — INTERNAL DRAFT, not staged for any push — TASK-20260817-telepath (ADR-0034)
+**Excluded from every spec push.** `sidecar-contract.ts` stays outside `json-schemas.ts`
+SOURCES (the publication line ADR-0032 set); zero schema bytes changed, wire protocol v1
+untouched. No push to `snugprotocol/spec` (needs an explicit ask).
+
+**Sidecar surface v2** — three routes join the closed set, all app-reachable, all GET:
+`/events` (long-poll over a bounded ring of lean hints — `{jid, kind, ts}`, no message
+bodies; `?cursor=` is a contract parameter like `?since=`), `/chats/:jid/media/:id`
+(base64 image JSON under the existing 1 MiB while-reading cap — the sidecar REFUSES
+oversized media with a structured answer, never truncates), and `/chats/:jid/picture`
+(preview-size avatar bytes, fetched by the helper itself). The `:id` placeholder joins
+`:jid` under the same single-non-empty-segment rule, with the traversal guard — not the
+segment pattern — refusing `..`-shaped values (the surviving-mutant lesson carried over).
+Wizard-only prefixes and their derivation are untouched: the app subset remains derived,
+never retyped, and the Rust admission mirror is held equal by the existing source-parsing
+equivalence test.
+
+**Amended 2026-08-17, after the owner's hardware walk** (recorded rather than back-dated —
+these landed after the entry above was written, in the same task):
+`WaHistoryState` (the sidecar's sync state, carried on `/session/status`, `/chats/:jid/history`
+and `/chats/:jid/messages`) gains an OPTIONAL `needsRelink` seat, and **`GET /chats` now
+carries that sync state too**. Additive on both counts — a consumer that ignores the seat
+behaves exactly as before, and the flag is present only when true, so it is a claim rather
+than a default. The reason it is a protocol-adjacent fact and not app detail: a half-linked
+session (scanned, never registered) renders identically to a slow first sync, and the list
+route is the one place an EMPTY answer is ambiguous. `WaChat` also gained optional
+`unreadCount`/`lastMessage`/`lastActivityTs` and `WaMessage` optional
+`kind`/`thumbnailBase64`/`mediaId` (both in the same additive shape, both covered by the
+sidecar suites).
+
 ## 2026-08-17 — INTERNAL DRAFT, not staged for any push — TASK-20260816-whatsapp-twin (ADR-0032/0033)
 **Excluded from every spec push.** `connection-requirement` is outside `json-schemas.ts`
 SOURCES (the same publication line as `lanHost`/ADR-0023), so zero schema bytes changed and

@@ -20,7 +20,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, existsSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { resetAuthStore, shouldResetAuthStore } from '../baileys-socket.js';
+import { isHalfLinkedStore, resetAuthStore, shouldResetAuthStore } from '../baileys-socket.js';
 
 let dir: string;
 
@@ -86,5 +86,51 @@ describe('resetAuthStore', () => {
       throw new Error('EACCES');
     });
     expect(() => resetAuthStore(dir)).not.toThrow();
+  });
+});
+
+// ============================ detecting the wedge ============================
+//
+// OWNER-REPORTED (2026-08-17): after a helper restart the app showed "no chats yet —
+// history is still syncing from your phone" indefinitely. The session was half-linked
+// (`registered: false` WITH a saved `me`), so Baileys tried to RESUME a registration that
+// never finished, WhatsApp refused, and history sync never began.
+//
+// `shouldResetAuthStore` already clears this — but only on a pairing attempt. Until the
+// user happens to re-pair, a wedged session is INDISTINGUISHABLE from a slow first sync,
+// which is what made a 30-second fix cost an evening. The state is cheaply detectable on
+// disk, so the helper reports it and the app can say "re-link" instead of "still syncing".
+
+describe('isHalfLinkedStore — the wedge, named', () => {
+  it('is TRUE for the wedge: a scan happened but registration never finished', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'snug-wedge-'));
+    writeFileSync(path.join(dir, 'creds.json'), JSON.stringify({ registered: false, me: { id: '1@s.whatsapp.net' } }));
+    expect(isHalfLinkedStore(dir)).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is FALSE for a healthy registered session', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'snug-ok-'));
+    writeFileSync(path.join(dir, 'creds.json'), JSON.stringify({ registered: true, me: { id: '1@s.whatsapp.net' } }));
+    expect(isHalfLinkedStore(dir)).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is FALSE for a never-paired store — that is a first run, not a wedge', () => {
+    // The distinction that matters: no `me` means nobody has scanned anything yet, and
+    // telling that user to "re-link" would be nonsense.
+    const dir = mkdtempSync(path.join(tmpdir(), 'snug-fresh-'));
+    writeFileSync(path.join(dir, 'creds.json'), JSON.stringify({ registered: false }));
+    expect(isHalfLinkedStore(dir)).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is FALSE when there is no store at all, and never throws on junk', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'snug-junk-'));
+    expect(isHalfLinkedStore(dir)).toBe(false); // no creds.json
+    writeFileSync(path.join(dir, 'creds.json'), 'not json at all');
+    expect(isHalfLinkedStore(dir)).toBe(false); // unreadable is not a claim
+    expect(isHalfLinkedStore(path.join(dir, 'nope'))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
