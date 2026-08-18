@@ -204,7 +204,10 @@ export function createRouter(deps: RouterDeps): SidecarRouter {
         if (!appAuthorized(request)) return json(401, { error: 'unauthorized' });
 
         if (segments.length === 1 && method === 'GET') {
-          return json(200, { chats: socket.listChats() });
+          // The sync state rides the LIST too, not just the per-thread reads: an empty
+          // list is exactly where a consumer must tell "still arriving" from "this session
+          // is wedged and will never arrive" (owner-reported 2026-08-17).
+          return json(200, { chats: socket.listChats(), sync: socket.historyState() });
         }
 
         const jid = segments[1];

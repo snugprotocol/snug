@@ -917,7 +917,7 @@
           if (!res.ok) return { error: res.error };
           if (res.status !== 200) return { error: { message: `helper answered ${res.status}` } };
           const body = parseBody(res.body);
-          return { chats: (body && Array.isArray(body.chats) ? body.chats : []) };
+          return { chats: (body && Array.isArray(body.chats) ? body.chats : []), sync: body && body.sync };
         },
         async history(jid) {
           const res = await api.fetch(`${SLOT}/chats/${encodeURIComponent(jid)}/history`);
@@ -1005,7 +1005,7 @@
           setHelper({ phase: 'down', detail: result.error.message || 'the helper is not reachable' });
           return false;
         }
-        setHelper({ phase: 'up' });
+        setHelper({ phase: 'up', ...(result.sync ? { sync: result.sync } : {}) });
         const sorted = result.chats.slice().sort((a, b) => (b.lastActivityTs || 0) - (a.lastActivityTs || 0));
         setChats(sorted);
         return true;
@@ -1340,7 +1340,19 @@
             )}
             {helper.phase === 'starting' && <div className="center-state"><div className="spin big">◌</div><div>starting the helper…</div></div>}
             {helper.phase === 'up' && chats.length === 0 && (
-              <div className="center-state"><div className="big">💬</div><div>no chats yet — history is still syncing from your phone</div></div>
+              helper.sync && helper.sync.needsRelink ? (
+                // NOT "still syncing": the helper has told us this session was scanned but
+                // never finished registering, so sync will never begin. Saying "syncing"
+                // here is a lie the user cannot see through (owner-reported 2026-08-17).
+                <div className="center-state">
+                  <div className="big">🔗</div>
+                  <div className="title">this device needs linking again</div>
+                  <div>the last link was interrupted before it finished, so WhatsApp never started sending your history</div>
+                  <div style={{ fontSize: 13 }}>open the WhatsApp connection in Snug's settings and scan the QR again — your messages are safe on your phone</div>
+                </div>
+              ) : (
+                <div className="center-state"><div className="big">💬</div><div>no chats yet — history is still syncing from your phone</div></div>
+              )
             )}
             {helper.phase === 'up' && chats.map((chat) => {
               const badge = badgeFor(chat);

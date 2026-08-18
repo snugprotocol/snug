@@ -86,6 +86,12 @@ export interface WaHistoryState {
   complete: boolean;
   explicit: boolean;
   progress: number;
+  /**
+   * The session is WEDGED — scanned but never registered — so history sync will never
+   * begin and "still syncing" would be a lie the user cannot see through. Present only
+   * when true: the flag is a claim, never a default (owner-reported 2026-08-17).
+   */
+  needsRelink?: boolean;
 }
 
 export type WaLinkState = 'idle' | 'waiting' | 'linked' | 'closed';

@@ -567,3 +567,50 @@ describe('/chats — the v2 list metadata', () => {
     expect(chats[0]!.lastMessage).toMatchObject({ text: 'newest', ts: 90 });
   });
 });
+
+describe('the wedge is REPORTED, not disguised as a slow sync', () => {
+  // OWNER-REPORTED 2026-08-17: a half-linked session made the app say "history is still
+  // syncing from your phone" forever, because nothing distinguished "not started" from
+  // "will never start". The sync state already rides every history/messages response, so
+  // the fact travels on it rather than through a new route.
+  it('carries needsRelink on the sync state when the store is wedged', async () => {
+    const d = deps();
+    d.socket.emitLinked();
+    d.socket.seedChat('a@s.whatsapp.net', [{ id: 'm1', from: 'a@s.whatsapp.net', text: 'hi', ts: 1 }]);
+    d.socket.setHistoryState({ complete: false, explicit: false, progress: 0, needsRelink: true });
+    const router = createRouter(d);
+    d.store.setToken('tok');
+
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats/a@s.whatsapp.net/history',
+      headers: { authorization: 'Bearer tok' },
+    });
+
+    expect((res.body as { sync: { needsRelink?: boolean } }).sync.needsRelink).toBe(true);
+  });
+
+  it('leaves needsRelink absent on a healthy session — the flag is a claim, not a default', async () => {
+    const { router, deps: d, token } = await linked();
+    d.socket.seedChat('a@s.whatsapp.net', [{ id: 'm1', from: 'a@s.whatsapp.net', text: 'hi', ts: 1 }]);
+    d.socket.setHistoryState({ complete: true, explicit: true, progress: 100 });
+    const res = await router.handle({
+      method: 'GET',
+      path: '/chats/a@s.whatsapp.net/history',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect((res.body as { sync: Record<string, unknown> }).sync).not.toHaveProperty('needsRelink');
+  });
+});
+
+describe('GET /chats carries the sync state', () => {
+  it('so an EMPTY list can say why it is empty', async () => {
+    // The seam this closes: the list route is the first thing the app calls and the one
+    // place an empty answer is ambiguous. Without sync here the app had to guess.
+    const { router, deps: d, token } = await linked();
+    d.socket.setHistoryState({ complete: false, explicit: false, progress: 0, needsRelink: true });
+    const res = await router.handle({ method: 'GET', path: '/chats', headers: { authorization: `Bearer ${token}` } });
+    expect((res.body as { chats: unknown[] }).chats).toEqual([]);
+    expect((res.body as { sync: { needsRelink?: boolean } }).sync.needsRelink).toBe(true);
+  });
+});

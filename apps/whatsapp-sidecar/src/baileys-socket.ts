@@ -27,7 +27,7 @@
  * its own replies would be a second brain outside every surface the host reviews.
  */
 
-import { readdirSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import makeWASocket, {
   DisconnectReason,
@@ -71,6 +71,30 @@ const EVENT_BUFFER_SIZE = 512;
  */
 export function shouldResetAuthStore(link: WaLinkState): boolean {
   return link !== 'linked';
+}
+
+/**
+ * Is the store WEDGED — scanned but never registered?
+ *
+ * `registered: false` WITH a saved `me` means the QR was scanned and the handshake never
+ * completed. Baileys loads that and tries to RESUME rather than pair; WhatsApp refuses, and
+ * history sync never begins. `shouldResetAuthStore` already clears it — but only when the
+ * user happens to re-pair, so until then the state is INDISTINGUISHABLE from a slow first
+ * sync. That ambiguity is the defect this function exists to remove (owner-reported
+ * 2026-08-17: "no chats yet — history is still syncing" forever, after a helper restart).
+ *
+ * Absent `me` is a FIRST RUN, not a wedge — telling that user to "re-link" would be
+ * nonsense. An unreadable or missing store makes no claim at all and answers false: a
+ * value we cannot read is not evidence of a fault.
+ */
+export function isHalfLinkedStore(authDir: string): boolean {
+  try {
+    const raw = readFileSync(join(authDir, 'creds.json'), 'utf8');
+    const creds = JSON.parse(raw) as { registered?: unknown; me?: unknown };
+    return creds.registered !== true && creds.me !== undefined && creds.me !== null;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -427,7 +451,16 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     },
     history: (jid) => store.history(jid),
     messagesSince: (jid, since) => store.messagesSince(jid, since),
-    historyState: () => history,
+    historyState: () => {
+      // The wedge is checked on READ, from disk, because it can only change through a
+      // pairing attempt (which rewrites the store) — and reading it here means every
+      // history and messages response carries the fact, with no extra route and no
+      // background poll. Cheap: one small file, only while unlinked or empty.
+      if (!history.complete && isHalfLinkedStore(deps.authDir)) {
+        return { ...history, needsRelink: true };
+      }
+      return history;
+    },
 
     eventsSince: (cursor) => events.since(cursor),
     waitForEvents: (cursor, timeoutMs) => events.wait(cursor, timeoutMs),
