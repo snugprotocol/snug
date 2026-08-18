@@ -205,10 +205,22 @@ against StrictMode's double-mount, and no new iframe capability exists: the app 
 open a connection, only hear a doorbell on the channel that already existed.
 
 **Honesty seats travel with the data.** History sync is PUSHED in chunks and its completion
-is sometimes only INFERRED (`explicit:false`), and a session that was scanned but never
-registered is WEDGED — indistinguishable from a slow first sync unless it is named. Both
-ride `WaHistoryState` on every read, `needsRelink` included, and `GET /chats` carries that
-state too because an empty list is precisely where the ambiguity bites.
+is sometimes only INFERRED (`explicit:false`), and a scan that started an identity but never
+completed pairing is WEDGED — indistinguishable from a slow first sync unless it is named.
+Both ride `WaHistoryState` on every read, `needsRelink` included, and `GET /chats` carries
+that state too because an empty list is precisely where the ambiguity bites.
+
+**The wedge predicate reads session MATERIAL, never `creds.registered`** (TASK-20260818).
+That flag is set by a single site in Baileys — the phone-number-code pairing flow — so a
+QR-paired session, which is the only kind this helper creates, keeps it `false` permanently.
+Reading it as "broken" fired on every healthy session, and because the remedy it triggers is
+destructive (re-pairing clears the auth store) it deleted working sessions in a loop. The
+predicate now asks what a session needs to RESUME — `account` plus a non-empty
+`signalIdentities` — which is the same answer for both pairing flows.
+
+**The helper is reaped on exit** (`RunEvent::Exit` → `sidecar::shutdown`, TASK-20260818).
+Spawning without reaping orphaned the child on every quit, so the next launch raced a rival
+against the same auth store — a second, independent path to the same wedge.
 
 Threat surface: `docs/security/threat-model-delta-whatsapp-sidecar.md` (+ its surface-v2
 addendum). Desktop-only by construction — a browser tab cannot open a unix socket.
