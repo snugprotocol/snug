@@ -52,7 +52,7 @@ function loadAnalysisModule() {
   assert.ok(source.trim().length > 200, 'the extracted analysis core is substantial, not an empty slice');
 
   const factory = new Function(
-    `${source}\nreturn { extendPseudonymMap, pseudonymizeForLlm, redactIdentifiers, deanonymizeText, emojiFrequency, buildAnalysisRequest, mergeMessages, statsByParticipant, activityBuckets, responseStats, messagesByMonth };`,
+    `${source}\nreturn { extendPseudonymMap, pseudonymizeForLlm, redactIdentifiers, deanonymizeText, emojiFrequency, fallbackLabel, buildAnalysisRequest, mergeMessages, statsByParticipant, activityBuckets, responseStats, messagesByMonth };`,
   );
   return factory();
 }
@@ -63,6 +63,7 @@ const {
   redactIdentifiers,
   deanonymizeText,
   emojiFrequency,
+  fallbackLabel,
   buildAnalysisRequest,
   mergeMessages,
   statsByParticipant,
@@ -403,4 +404,33 @@ test('doorbell: everything off-shape is ignored — wrong slot, wrong event, wro
   handler(hostEventFrame('connection-event', { slot: 'whatsapp', hints: [null, 7, { jid: 42 }, { jid: 'ok@g.us' }] }));
   assert.equal(received.length, 1);
   assert.deepEqual(Array.from(received[0].jids), ['ok@g.us']);
+});
+
+// ---------------------------------------------------------------- unknown-identity labels
+//
+// OWNER-REPORTED (2026-08-17): unknown contacts rendered as "+77771" — digits taken from a
+// LID, which is an INTERNAL WhatsApp address belonging to nobody. A confident wrong number
+// is worse than an honest blank, because the user has no way to know it is fiction.
+
+test('fallbackLabel renders a real phone jid as a number', () => {
+  assert.equal(fallbackLabel('919876543210@s.whatsapp.net'), '+919876543210');
+  assert.equal(fallbackLabel('919876543210@c.us'), '+919876543210');
+});
+
+test('fallbackLabel NEVER renders a LID as a phone number', () => {
+  assert.equal(fallbackLabel('77771@lid'), 'Unknown contact');
+  assert.equal(fallbackLabel('123456789@lid'), 'Unknown contact');
+});
+
+test('fallbackLabel handles groups, empties and unrecognised address spaces honestly', () => {
+  assert.equal(fallbackLabel('123-456@g.us'), 'Group');
+  assert.equal(fallbackLabel(''), 'Unknown');
+  assert.equal(fallbackLabel(undefined), 'Unknown');
+  assert.equal(fallbackLabel('someone@broadcast'), 'Unknown contact');
+});
+
+test('fallbackLabel does not put a + on a non-numeric local part', () => {
+  // A short or non-numeric local part is not a dialable number either.
+  assert.equal(fallbackLabel('status@s.whatsapp.net'), 'status');
+  assert.equal(fallbackLabel('123@s.whatsapp.net'), '123');
 });

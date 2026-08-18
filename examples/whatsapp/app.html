@@ -610,6 +610,31 @@
     }
 
     /**
+     * How to render an identity we have NO name for.
+     *
+     * A jid comes in two spellings and only ONE of them is a phone number:
+     * `919876543210@s.whatsapp.net` is dialable, while `77771@lid` is an INTERNAL
+     * WhatsApp address that belongs to nobody. The first version printed '+' + digits for
+     * both, so unknown contacts appeared under confident, WRONG phone numbers — worse than
+     * showing nothing, because a plausible number invites the user to trust it
+     * (owner-reported, 2026-08-17).
+     */
+    function fallbackLabel(jid) {
+      var raw = String(jid === undefined || jid === null ? '' : jid);
+      var at = raw.indexOf('@');
+      var local = at >= 0 ? raw.slice(0, at) : raw;
+      var domain = at >= 0 ? raw.slice(at + 1) : '';
+      if (local.length === 0) return 'Unknown';
+      // Only the phone-number address space may be rendered as a number.
+      if (domain === 's.whatsapp.net' || domain === 'c.us' || domain === '') {
+        return /^\d{6,}$/.test(local) ? '+' + local : local;
+      }
+      if (domain === 'g.us') return 'Group';
+      // A LID (or anything else unrecognised) is not a number and must not look like one.
+      return 'Unknown contact';
+    }
+
+    /**
      * The USER's measured emoji habits — most frequent first. Nobody else's rows count.
      * One token = one pictograph plus its own modifiers (skin tone, VS16), extended ONLY
      * through a ZWJ — adjacent separate emoji must never glue into one token, or '😂😂'
@@ -858,7 +883,13 @@
         })();
         avatarCache.set(jid, load);
         load.then((result) => {
-          avatarCache.set(jid, result);
+          // A MISS is not cached as a permanent fact: the helper answers undefined both for
+          // "this contact has no picture" and for "that fetch failed", and treating a
+          // transient failure as permanent means one hiccup costs every avatar until the
+          // app is reopened. A hit caches; a miss simply clears the in-flight slot so a
+          // later render can try again.
+          if (result === null) avatarCache.delete(jid);
+          else avatarCache.set(jid, result);
           if (!cancelled) setUrl(result);
         });
         return () => { cancelled = true; };
@@ -1076,8 +1107,7 @@
         if (fromMe) return 'You';
         const known = nameByJid.get(jid);
         if (known) return known;
-        const local = String(jid || '').split('@')[0];
-        return local.length > 0 ? '+' + local : 'Unknown';
+        return fallbackLabel(jid);
       }, [nameByJid]);
 
       // ---- the pseudonym map for the open thread: persisted, extended, never shuffled.

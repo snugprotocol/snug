@@ -249,6 +249,34 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   /** Avatar cache: url-fetch results per jid, `null` caching "has none" honestly. */
   const pictures = new Map<string, { mime: string; base64: string } | null>();
 
+  /**
+   * Group rosters already requested, so a chat list of forty groups fires each fetch once.
+   * `groupMetadata` is a round trip to WhatsApp; the store keeps the answer.
+   */
+  const rosterRequested = new Set<string>();
+
+  /**
+   * Fetch a group's subject and participants ONCE (owner-reported 2026-08-17: group
+   * senders showed as ids because no roster was ever loaded). Failures are swallowed and
+   * retried on the next list: a group whose metadata is momentarily unavailable should
+   * degrade to ids, never break the list.
+   */
+  const ensureGroupRoster = (jid: string): void => {
+    if (!jid.endsWith('@g.us') || rosterRequested.has(jid) || sock === undefined || link !== 'linked') return;
+    rosterRequested.add(jid);
+    void sock
+      .groupMetadata(jid)
+      .then((metadata) => {
+        store.setGroupMetadata(jid, {
+          subject: metadata?.subject,
+          participants: (metadata?.participants ?? []).map((participant) => ({ id: participant.id })),
+        });
+      })
+      .catch(() => {
+        rosterRequested.delete(jid); // let a later list try again
+      });
+  };
+
   const ingest = (raw: Parameters<typeof toWaMessage>[0], live: boolean): void => {
     const mapped = toWaMessage(raw);
     if (mapped === undefined) return;
@@ -299,7 +327,21 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       }
     });
 
+    // THE ADDRESS BOOK (owner-reported 2026-08-17: no contact names anywhere). History sync
+    // carries `contacts` alongside `chats`/`messages`, and the live directory arrives as its
+    // own events — reading only the conversation rows meant a chat could be named ONLY by
+    // whatever WhatsApp happened to stamp on it, which for most DMs is nothing.
+    socket.ev.on('contacts.upsert', (contacts) => store.rememberContacts(contacts ?? []));
+    socket.ev.on('contacts.update', (contacts) => store.rememberContacts((contacts ?? []) as never));
+
+    // LID ↔ phone pairings. A LID is an INTERNAL address, not a phone number: rendering its
+    // digits produced a plausible-looking wrong number — worse than showing nothing, because
+    // it invites the user to trust it.
+    socket.ev.on('lid-mapping.update', (mapping) => store.rememberLidMappings([mapping as never]));
+
     socket.ev.on('messaging-history.set', (chunk) => {
+      store.rememberContacts((chunk.contacts ?? []) as never);
+      store.rememberLidMappings((chunk.lidPnMappings ?? []) as never);
       for (const chat of chunk.chats ?? []) {
         if (typeof chat.id === 'string') {
           // The sync snapshot is where the unread counter SEEDS from (review F4): Baileys
@@ -375,7 +417,14 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       connect();
     },
 
-    listChats: () => store.listChats(),
+    listChats: () => {
+      const rows = store.listChats();
+      // Lazily fill group rosters as the list is read — the first read returns what is
+      // known and the next one carries the names, rather than blocking the list on a
+      // round trip per group.
+      for (const row of rows) if (row.isGroup) ensureGroupRoster(row.jid);
+      return rows;
+    },
     history: (jid) => store.history(jid),
     messagesSince: (jid, since) => store.messagesSince(jid, since),
     historyState: () => history,
@@ -434,9 +483,23 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       const cached = pictures.get(jid);
       if (cached !== undefined) return cached ?? undefined;
       if (sock === undefined || link !== 'linked') return undefined;
+
+      // A LID and a phone jid are the same person; ask under the canonical spelling so one
+      // fetch serves both and a LID-addressed group member is not treated as a stranger.
+      const canonical = store.resolveIdentity(jid);
+      const canonicalHit = canonical !== jid ? pictures.get(canonical) : undefined;
+      if (canonicalHit !== undefined) return canonicalHit ?? undefined;
+
       try {
-        const url = await sock.profilePictureUrl(jid, 'preview');
-        if (typeof url !== 'string' || url.length === 0) throw new Error('no picture');
+        const url = await sock.profilePictureUrl(canonical, 'preview');
+        // NO PICTURE is a permanent, cacheable fact: WhatsApp answers this cleanly for a
+        // contact with a default avatar, and re-asking on every list render would spend a
+        // round trip per row forever.
+        if (typeof url !== 'string' || url.length === 0) {
+          pictures.set(jid, null);
+          if (canonical !== jid) pictures.set(canonical, null);
+          return undefined;
+        }
         const response = await fetch(url);
         if (!response.ok) throw new Error(`avatar fetch ${response.status}`);
         const bytes = Buffer.from(await response.arrayBuffer());
@@ -444,11 +507,13 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         const mime = response.headers.get('content-type') ?? 'image/jpeg';
         const picture = { mime, base64: bytes.toString('base64') };
         pictures.set(jid, picture);
+        if (canonical !== jid) pictures.set(canonical, picture);
         return picture;
       } catch {
-        // "Has none" and "cannot fetch" get the same honest 404 downstream — and the same
-        // cache slot, so a jid with no avatar is not re-asked on every list render.
-        pictures.set(jid, null);
+        // A FAILURE is not a fact — a hiccup, a rate limit or a privacy setting that will
+        // answer differently next time. Caching it as "has none" is what makes one bad
+        // moment mean "no avatars until you restart the helper", so it is deliberately NOT
+        // cached: the next list render asks again.
         return undefined;
       }
     },
