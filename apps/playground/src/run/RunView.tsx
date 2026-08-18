@@ -19,6 +19,7 @@ import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import type { ChatCardState } from '../agent/cards.js';
 import { createNetHandlerFor } from '../state/net.js';
+import { startSidecarLiveForApp } from '../state/sidecarLive.js';
 import {
   connectionWizardRevisionStore,
   isConnectionRepairableNetError,
@@ -230,6 +231,29 @@ export default function RunView(): ReactElement {
       setFrameEpoch((epoch) => epoch + 1);
     }
   }, [chat.lastArtifact, id]);
+
+  // THE LIVE PUMP (ADR-0034 §2): while THIS view has an app with an approved
+  // sidecar-symbolic-host connection mounted, long-poll the helper's hint stream through
+  // the governed executor and ring `notifyEvent('connection-event', …)` into the frame.
+  // `controlsRef.current` is read PER EMIT, so a frame remount (frameEpoch bump) needs no
+  // pump restart — the ref always points at the live host, and the destroyed host's
+  // `post()` drops anything late. The pump itself is epoch-tokened, so StrictMode's
+  // mount→unmount→remount never runs two loops against one cursor.
+  useEffect(() => {
+    if (isStarterId(id)) return; // a starter is uninstalled by definition — no connection row
+    let cancelled = false;
+    let stopPump: (() => void) | undefined;
+    void startSidecarLiveForApp(id, (event, data) => controlsRef.current?.notifyEvent(event, data)).then(
+      (stop) => {
+        if (cancelled) stop();
+        else stopPump = stop;
+      },
+    );
+    return () => {
+      cancelled = true;
+      stopPump?.();
+    };
+  }, [id]);
 
   // Identity seams — captured per app id (SnugAppFrame mount-captures them via key).
   // onLlmEvent is stable (useCallback with [] deps), so threading it here does not
