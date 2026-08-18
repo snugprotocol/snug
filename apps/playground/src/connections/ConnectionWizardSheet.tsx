@@ -52,6 +52,7 @@ import {
   advanceFromReview,
   cancelConnectionOAuthFlow,
   beginDeviceLink,
+  refreshDeviceLinkQr,
   canLinkDevice,
   canPairLanDevice,
   completeDeviceLink,
@@ -329,6 +330,21 @@ function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: (
     row.requirement.kind === 'linked_device'
       ? 'On your phone, open WhatsApp → Settings → Linked devices → Link a device, then scan the code below.'
       : `Follow ${provider}'s device-linking steps, then scan the code below.`;
+
+  // THE QR ROTATES (~20 s server-side) while the user is still fumbling for their phone, and
+  // a stale code scans as expired. Re-ask on a beat faster than the rotation and swap the
+  // drawing in place. `refreshDeviceLinkQr` answers `undefined` both when the helper withholds
+  // the QR (link landed) and on a transient failure — in either case the frame KEEPS the last
+  // code rather than blanking mid-scan.
+  useEffect(() => {
+    if (!waiting) return;
+    const beat = setInterval(() => {
+      void refreshDeviceLinkQr().then((fresh) => {
+        if (fresh !== undefined) setQr((prev) => (prev === fresh ? prev : fresh));
+      });
+    }, 5_000);
+    return () => clearInterval(beat);
+  }, [waiting]);
 
   const start = async (): Promise<void> => {
     setBusy(true);
