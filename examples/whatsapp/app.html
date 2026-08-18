@@ -1111,28 +1111,36 @@
 
       // ---- participants of the open thread, with display names (for the map and the UI).
       const openChat = chats.find((c) => c.jid === ui.openJid) || null;
-      const nameByJid = useMemo(() => {
+      const directory = useMemo(() => {
+        // BARE names only in `names` — this map feeds the pseudonym scrub (`mapForThread`),
+        // and a decorated string ('~Bo') can never match 'Bo' inside a message body, which
+        // would send the real name to the model UNREDACTED (review finding 2026-08-18). The
+        // ~push mark is presentation and is applied at render time only, from `pushMarked`.
         const names = new Map();
+        const pushMarked = new Set();
         for (const chat of chats) {
           // A jid-placeholder is NOT a name: mapping it here fed the raw jid straight back
           // through displayName's truthiness check, bypassing fallbackLabel entirely.
           if (!chat.isGroup && chat.name && chat.name !== chat.jid) {
-            names.set(chat.jid, chat.nameKind === 'push' ? '~' + chat.name : chat.name);
+            names.set(chat.jid, chat.name);
+            if (chat.nameKind === 'push') pushMarked.add(chat.jid);
           }
           for (const part of chat.participants || []) {
             if (part.name && !names.has(part.jid)) {
-              names.set(part.jid, part.nameKind === 'push' ? '~' + part.name : part.name);
+              names.set(part.jid, part.name);
+              if (part.nameKind === 'push') pushMarked.add(part.jid);
             }
           }
         }
-        return names;
+        return { names, pushMarked };
       }, [chats]);
+      const nameByJid = directory.names;
       const displayName = useCallback((jid, fromMe) => {
         if (fromMe) return 'You';
-        const known = nameByJid.get(jid);
-        if (known) return known;
+        const known = directory.names.get(jid);
+        if (known) return directory.pushMarked.has(jid) ? '~' + known : known;
         return fallbackLabel(jid);
-      }, [nameByJid]);
+      }, [directory]);
 
       // ---- the pseudonym map for the open thread: persisted, extended, never shuffled.
       const loadMapEntries = useCallback(async (jid) => {

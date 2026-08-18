@@ -1005,7 +1005,17 @@ export async function runLanPairing(): Promise<LanPairingOutcome> {
  * the shell's sidecar seam, and its proof of success is the ADR-0025 verify read rather than
  * a captured certificate.
  */
-export type DeviceLinkStart = { ok: true; qr: string } | { ok: false; message: string };
+export type DeviceLinkStart =
+  | { ok: true; qr: string }
+  /**
+   * The helper is ALREADY LINKED, so there is nothing to scan — `/pair/qr` withholds the
+   * code once linked, by design. This became the common wizard-time state the moment the
+   * shell started autostarting the helper (ADR-0037 §3): without this seat, the poll below
+   * spun its full deadline against a healthy helper and reported it broken (review finding,
+   * 2026-08-18). The caller skips straight to `completeDeviceLink`.
+   */
+  | { ok: true; alreadyLinked: true }
+  | { ok: false; message: string };
 export type DeviceLinkResult = { ok: true; token: string } | { ok: false; message: string };
 
 /** The nonce the pairing routes demand. Held for the life of one wizard pairing, never persisted. */
@@ -1062,9 +1072,9 @@ export async function beginDeviceLink(): Promise<DeviceLinkStart> {
     // lands, and make the never-lands case a NAMED failure rather than an indistinguishable
     // wait.
     for (let waited = 0; ; waited += QR_POLL_INTERVAL_MS) {
-      const qrResponse = await wizardFetch('GET', '/pair/qr');
-      const qr = readSidecarJson(qrResponse.body)['qr'];
-      if (typeof qr === 'string' && qr.length > 0) return { ok: true, qr };
+      const read = await readPairQr(wizardFetch);
+      if (read.qr !== undefined) return { ok: true, qr: read.qr };
+      if (read.linked) return { ok: true, alreadyLinked: true };
       if (waited >= QR_POLL_DEADLINE_MS) {
         return {
           ok: false,
@@ -1087,6 +1097,24 @@ const QR_POLL_INTERVAL_MS = 500;
 const QR_POLL_DEADLINE_MS = 20_000;
 
 /**
+ * The ONE reading of `/pair/qr` (review finding 2026-08-18: the first-paint poll and the
+ * rotation refresher had drifted into two spellings of this read). `linked` matters as much
+ * as `qr`: the route withholds the code once linked, so "no qr" alone cannot distinguish a
+ * cold handshake from a helper with nothing left to scan.
+ */
+async function readPairQr(
+  wizardFetch: NonNullable<ReturnType<typeof getPlatform>['sidecarWizardFetch']>,
+): Promise<{ qr?: string; linked: boolean }> {
+  const qrResponse = await wizardFetch('GET', '/pair/qr');
+  const body = readSidecarJson(qrResponse.body);
+  const qr = body['qr'];
+  return {
+    linked: body['state'] === 'linked',
+    ...(typeof qr === 'string' && qr.length > 0 ? { qr } : {}),
+  };
+}
+
+/**
  * Re-read the current QR while the user is still lining up their phone. WhatsApp rotates the
  * code server-side (~20 s), so the one `beginDeviceLink` returned goes stale mid-scan. Answers
  * `undefined` — never throws — when there is nothing new to show: the helper withholds the QR
@@ -1097,9 +1125,7 @@ export async function refreshDeviceLinkQr(): Promise<string | undefined> {
   const platform = getPlatform();
   if (platform.sidecarWizardFetch === undefined) return undefined;
   try {
-    const qrResponse = await platform.sidecarWizardFetch('GET', '/pair/qr');
-    const qr = readSidecarJson(qrResponse.body)['qr'];
-    return typeof qr === 'string' && qr.length > 0 ? qr : undefined;
+    return (await readPairQr(platform.sidecarWizardFetch)).qr;
   } catch {
     return undefined;
   }

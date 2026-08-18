@@ -255,6 +255,26 @@ describe('runDeviceLinkAttempt — start, poll, verify, then record', () => {
     if (!started.ok) expect(started.message).toMatch(/code|QR/i);
   });
 
+  it('an ALREADY-LINKED helper resolves alreadyLinked at once, never a 20 s hang', async () => {
+    // ADR-0037's autostart + boot resume make "already linked when the wizard opens" the
+    // common case, and `/pair/qr` withholds the code once linked BY DESIGN — so "no qr yet"
+    // must never be the whole story. Without this seat the poll spun its full deadline
+    // against a healthy helper and told the user to restart the desktop app (which would
+    // re-link the helper and reproduce it forever).
+    const { platform, calls } = scriptedPlatform({
+      'POST /pair/start': [{ status: 200, body: { state: 'linked' } }],
+      'GET /pair/qr': [{ status: 200, body: { state: 'linked' } }],
+    });
+    const { setPlatform } = await import('../platform/platform.js');
+    setPlatform(platform);
+    const { beginDeviceLink } = await import('../state/connectionWizard.js');
+    const started = await beginDeviceLink();
+    expect(started.ok).toBe(true);
+    if (started.ok) expect('alreadyLinked' in started && started.alreadyLinked).toBe(true);
+    // At once — a single read settled it; no poll spun against the withheld code.
+    expect(calls.filter((c) => c === 'GET /pair/qr').length).toBe(1);
+  });
+
   it('refreshDeviceLinkQr hands back the current payload, and undefined once withheld', async () => {
     // The QR ROTATES (~20 s): the sheet re-asks while the user is still holding their phone
     // up, so a slow scan never meets a stale code. Once the link lands the helper withholds

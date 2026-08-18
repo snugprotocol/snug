@@ -355,6 +355,13 @@ function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: (
       setNote(started.message);
       return;
     }
+    if ('alreadyLinked' in started) {
+      // The helper is linked and there is nothing to scan (autostart + boot resume make
+      // this the common case, ADR-0037): complete directly — the verify read and the mint
+      // are the same path the scan button drives.
+      await finish();
+      return;
+    }
     setQr(started.qr);
     setWaiting(true);
   };

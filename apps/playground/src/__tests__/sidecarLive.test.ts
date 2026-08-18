@@ -362,6 +362,27 @@ describe('the sync-state poll', () => {
     expect(reports).toEqual([]);
   });
 
+  it('retires on a NEEDS-RELINK report — a wedged session must not spin forever', async () => {
+    // `/chats` serves the restored cache even for a wedged session, answering
+    // `{complete:false, needsRelink:true}` indefinitely. Without this exit the header
+    // shows "syncing 0%" forever — contradicting the app's own relink prompt — and the
+    // host burns a governed read every few seconds for the life of the view.
+    const wedged = { progress: 0, complete: false, needsRelink: true as const };
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => {
+        asks += 1;
+        return wedged;
+      },
+      onState: (state) => reports.push(state),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(reports).toEqual([wedged]);
+    expect(asks).toBe(1);
+  });
+
   it('a failed read keeps the last state on screen — no report, then retry', async () => {
     const answers = [
       { progress: 30, complete: false },
@@ -399,5 +420,15 @@ describe('syncStateFromChatsBody — the extraction is the scrub', () => {
       progress: 0,
       complete: true,
     });
+  });
+
+  it('carries needsRelink through when the helper claims it, and only then', () => {
+    expect(
+      syncStateFromChatsBody(JSON.stringify({ sync: { complete: false, progress: 0, needsRelink: true } })),
+    ).toEqual({ progress: 0, complete: false, needsRelink: true });
+    // The flag is a claim, never a default (the wedge detector's own rule).
+    expect(
+      syncStateFromChatsBody(JSON.stringify({ sync: { complete: false, progress: 5, needsRelink: false } })),
+    ).toEqual({ progress: 5, complete: false });
   });
 });

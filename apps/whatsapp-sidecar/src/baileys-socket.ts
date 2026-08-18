@@ -99,20 +99,29 @@ export function shouldResetAuthStore(link: WaLinkState): boolean {
  * all and answers false: a value we cannot read is not evidence of a fault.
  */
 export function isHalfLinkedStore(authDir: string): boolean {
+  const material = readCredsMaterial(authDir);
+  if (material === undefined || !material.scanStarted) return false;
+  return !(material.hasAccount && material.hasIdentities);
+}
+
+/**
+ * The ONE reading of what pairing left in `creds.json` (review finding 2026-08-18: the
+ * half-linked and resumable predicates had grown two byte-identical copies of this read).
+ * `undefined` means the store made no claim at all — missing or unreadable.
+ */
+function readCredsMaterial(
+  authDir: string,
+): { scanStarted: boolean; hasAccount: boolean; hasIdentities: boolean } | undefined {
   try {
     const raw = readFileSync(join(authDir, 'creds.json'), 'utf8');
-    const creds = JSON.parse(raw) as {
-      me?: unknown;
-      account?: unknown;
-      signalIdentities?: unknown;
+    const creds = JSON.parse(raw) as { me?: unknown; account?: unknown; signalIdentities?: unknown };
+    return {
+      scanStarted: creds.me !== undefined && creds.me !== null,
+      hasAccount: creds.account !== undefined && creds.account !== null,
+      hasIdentities: Array.isArray(creds.signalIdentities) && creds.signalIdentities.length > 0,
     };
-    const scanStarted = creds.me !== undefined && creds.me !== null;
-    if (!scanStarted) return false;
-    const hasAccount = creds.account !== undefined && creds.account !== null;
-    const hasIdentities = Array.isArray(creds.signalIdentities) && creds.signalIdentities.length > 0;
-    return !(hasAccount && hasIdentities);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -154,20 +163,8 @@ export interface BaileysSocketDeps {
  * unreadable creds answer false: an absent claim is not a resumable session.
  */
 export function isResumableStore(authDir: string): boolean {
-  try {
-    const raw = readFileSync(join(authDir, 'creds.json'), 'utf8');
-    const creds = JSON.parse(raw) as { me?: unknown; account?: unknown; signalIdentities?: unknown };
-    return (
-      creds.me !== undefined &&
-      creds.me !== null &&
-      creds.account !== undefined &&
-      creds.account !== null &&
-      Array.isArray(creds.signalIdentities) &&
-      creds.signalIdentities.length > 0
-    );
-  } catch {
-    return false;
-  }
+  const material = readCredsMaterial(authDir);
+  return material !== undefined && material.scanStarted && material.hasAccount && material.hasIdentities;
 }
 
 interface MessageContent {
@@ -320,7 +317,10 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   let history: WaHistoryState = { complete: false, explicit: false, progress: 0 };
   let lastSendAt = 0;
 
-  const store = createThreadStore();
+  // The store owns its change signal (ADR-0037 §1): every mutation that changed durable
+  // state schedules a save BY CONSTRUCTION — no event handler can forget to. `scheduleSave`
+  // is declared below; the arrow defers the read until events actually fire.
+  const store = createThreadStore(undefined, () => scheduleSave());
   const events = createEventBuffer(EVENT_BUFFER_SIZE);
 
   // ---- THE DURABLE CACHE (ADR-0037 §1): restore first, so chats exist before any sync.
@@ -359,8 +359,11 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     saveTimer.unref?.();
   };
   if (deps.threadCache !== undefined) {
-    // The reap on shell exit is SIGTERM → clean process exit; a synchronous final write
-    // here means the debounce window's tail is never lost to it.
+    // The shell's reap sends SIGTERM first (KILL only as the backstop — `reap_child` in
+    // sidecar.rs, pinned by its own test); `cli.ts` turns that into `server.close()` →
+    // `process.exit(0)`, and 'exit' handlers run synchronously on that path — so this
+    // final write catches the debounce window's tail. A SIGKILL (backstop or crash) skips
+    // it, costing at most one debounce window of re-syncable rows.
     process.once('exit', persistNow);
   }
 
@@ -432,7 +435,6 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
           subject: metadata?.subject,
           participants: (metadata?.participants ?? []).map((participant) => ({ id: participant.id })),
         });
-        scheduleSave();
       })
       .catch(() => {
         rosterRequested.delete(jid); // let a later list try again
@@ -450,7 +452,6 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     }
     const { added } = store.ingest(mapped.chatJid, mapped.message, { live });
     if (!added) return;
-    scheduleSave();
     if (mapped.message.kind === 'image') {
       rawImages.set(`${mapped.chatJid} ${mapped.message.id}`, raw);
       if (rawImages.size > MAX_RAW_IMAGES) {
@@ -500,22 +501,13 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     // carries `contacts` alongside `chats`/`messages`, and the live directory arrives as its
     // own events — reading only the conversation rows meant a chat could be named ONLY by
     // whatever WhatsApp happened to stamp on it, which for most DMs is nothing.
-    socket.ev.on('contacts.upsert', (contacts) => {
-      store.rememberContacts(contacts ?? []);
-      scheduleSave();
-    });
-    socket.ev.on('contacts.update', (contacts) => {
-      store.rememberContacts((contacts ?? []) as never);
-      scheduleSave();
-    });
+    socket.ev.on('contacts.upsert', (contacts) => store.rememberContacts(contacts ?? []));
+    socket.ev.on('contacts.update', (contacts) => store.rememberContacts((contacts ?? []) as never));
 
     // LID ↔ phone pairings. A LID is an INTERNAL address, not a phone number: rendering its
     // digits produced a plausible-looking wrong number — worse than showing nothing, because
     // it invites the user to trust it.
-    socket.ev.on('lid-mapping.update', (mapping) => {
-      store.rememberLidMappings([mapping as never]);
-      scheduleSave();
-    });
+    socket.ev.on('lid-mapping.update', (mapping) => store.rememberLidMappings([mapping as never]));
 
     socket.ev.on('messaging-history.set', (chunk) => {
       store.rememberContacts((chunk.contacts ?? []) as never);
@@ -550,7 +542,6 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
           // count, and the chat-update hint lets an open app clear its badge immediately.
           store.seedChatMeta(update.id, { unreadCount: unread });
           events.push({ jid: update.id, kind: 'chat-update', ts: Math.floor(now() / 1000) });
-          scheduleSave();
         }
       }
     });

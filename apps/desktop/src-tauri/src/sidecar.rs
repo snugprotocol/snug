@@ -320,10 +320,8 @@ pub async fn sidecar_ctl(
         }),
         "start" => start_helper(&mut guard),
         "stop" => {
-            if let Some(mut running) = guard.take() {
-                let _ = running.child.kill();
-                let _ = running.child.wait();
-                let _ = std::fs::remove_file(&running.socket);
+            if let Some(running) = guard.take() {
+                reap_child(running);
             }
             Ok(SidecarStatus {
                 running: false,
@@ -332,6 +330,33 @@ pub async fn sidecar_ctl(
         }
         other => Err(format!("'{other}' is not a sidecar action")),
     }
+}
+
+/// Stop one running helper: TERM first, KILL as the backstop, then remove the socket file.
+///
+/// SIGTERM FIRST IS LOAD-BEARING (review finding 2026-08-18): the helper's entry point
+/// installs a SIGTERM handler whose clean exit runs the thread cache's final flush
+/// (ADR-0037 §1) — `Child::kill` alone is SIGKILL on Unix, which runs NO handlers and
+/// silently drops the last debounce window of synced content on every shell exit. The wait
+/// is bounded: a helper that ignores TERM for half a second is killed anyway, because a
+/// hung child must never trap shell shutdown.
+fn reap_child(mut running: RunningSidecar) {
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::kill(running.child.id() as libc::pid_t, libc::SIGTERM);
+        }
+        for _ in 0..10 {
+            if let Ok(Some(_)) = running.child.try_wait() {
+                let _ = std::fs::remove_file(&running.socket);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    let _ = running.child.kill();
+    let _ = running.child.wait();
+    let _ = std::fs::remove_file(&running.socket);
 }
 
 /// The `start` arm's body, extracted so launch-time autostart (ADR-0037 §3) runs the SAME
@@ -461,12 +486,11 @@ pub fn shutdown(state: &SidecarState) {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    if let Some(mut running) = guard.take() {
-        let _ = running.child.kill();
-        let _ = running.child.wait();
-        // The socket file outlives the process it belonged to; a stale one is what the next
-        // launch trips over.
-        let _ = std::fs::remove_file(&running.socket);
+    if let Some(running) = guard.take() {
+        // TERM-then-KILL via the shared reap: the helper's SIGTERM exit runs its final
+        // thread-cache flush (ADR-0037 §1); the socket file is removed either way, because
+        // a stale one is what the next launch trips over.
+        reap_child(running);
     }
 }
 
@@ -1262,6 +1286,48 @@ mod shutdown_tests {
         shutdown(&state);
         shutdown(&state);
         assert!(state.inner.lock().expect("mutex").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_reap_delivers_term_first_so_the_helper_flush_can_run() {
+        // ADR-0037 §1: the helper's SIGTERM handler runs the thread cache's final flush.
+        // `Child::kill` alone is SIGKILL, which runs NO handlers — this shipped once, with
+        // the flush comment claiming otherwise (review finding 2026-08-18). The child here
+        // writes a marker ONLY from its TERM trap: a marker on disk proves the handler ran,
+        // which a SIGKILL-only reap can never produce.
+        let dir = std::env::temp_dir().join(format!("snug-reap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let marker = dir.join("term-handled");
+        let socket = dir.join("whatsapp-sidecar.sock");
+        std::fs::write(&socket, b"").expect("placeholder socket file");
+
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "trap 'echo done > {}; exit 0' TERM; sleep 5 & wait $!",
+                marker.display()
+            ))
+            .spawn()
+            .expect("spawn a TERM-trapping child");
+        std::thread::sleep(std::time::Duration::from_millis(150)); // let the trap install
+
+        let state = SidecarState::default();
+        *state.inner.lock().expect("mutex") = Some(RunningSidecar {
+            child,
+            socket: socket.clone(),
+            nonce: "test-nonce".into(),
+        });
+        let begun = std::time::Instant::now();
+        shutdown(&state);
+
+        assert!(marker.exists(), "the TERM trap ran — the reap did not lead with SIGKILL");
+        assert!(
+            begun.elapsed() < std::time::Duration::from_secs(3),
+            "the reap is bounded — a hung child must not trap shell shutdown"
+        );
+        assert!(!socket.exists(), "the socket file is removed on the graceful path too");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

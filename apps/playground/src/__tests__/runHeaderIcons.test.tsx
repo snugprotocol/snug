@@ -63,7 +63,7 @@ interface RenderOptions {
   isStarter?: boolean;
   connectionSlots?: number;
   canExport?: boolean;
-  syncState?: { progress: number; complete: boolean };
+  syncState?: { progress: number; complete: boolean; needsRelink?: true };
   onManageConnections?: () => void;
   onExport?: () => void;
 }
@@ -205,16 +205,30 @@ describe('the sync indicator (ADR-0037 §4, owner interview 2026-08-18)', () => 
     expect(byTestId('sidecar-sync-progress'), 'no sidecar app: no indicator').toBeNull();
   });
 
+  it('never spins over a wedged session — needsRelink hides the indicator', async () => {
+    // "Syncing 0%" over a session that will never sync is a rendered lie contradicting the
+    // app's own relink prompt (lessons.md 2026-08-17: name the state, don't spin over it).
+    await renderActions({ syncState: { progress: 0, complete: false, needsRelink: true } });
+    expect(byTestId('sidecar-sync-progress')).toBeNull();
+  });
+
   it('RunView actually threads syncState from the pump into the header', async () => {
     // The wire, pinned at source level (a prop nobody passes is the untested wire in its
     // purest form): RunView must hold pump-reported state and hand it to this component.
-    // cwd-relative rather than import.meta.url: this file runs under jsdom, where the
-    // module URL is not a file: scheme.
-    const { readFileSync } = await import('node:fs');
+    // cwd-relative rather than import.meta.url (jsdom's module URL is not file:), with a
+    // root-cwd fallback so an IDE or workspace runner does not turn ENOENT into a false
+    // "wire disconnected". Only the PUBLIC seam is pinned — an internal setter's name is
+    // a refactor away from a spurious red.
+    const { existsSync, readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
-    const runView = readFileSync(resolve(process.cwd(), 'src/run/RunView.tsx'), 'utf8');
+    const candidates = ['src/run/RunView.tsx', 'apps/playground/src/run/RunView.tsx'].map((rel) =>
+      resolve(process.cwd(), rel),
+    );
+    const path = candidates.find((candidate) => existsSync(candidate));
+    expect(path, 'RunView.tsx is findable from this runner\'s cwd').toBeDefined();
+    const runView = readFileSync(path!, 'utf8');
     expect(runView).toMatch(/syncState=\{/);
-    expect(runView).toMatch(/onSyncState|setSidecarSync/);
+    expect(runView).toMatch(/startSidecarLiveForApp\(/);
   });
 });
 

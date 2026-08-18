@@ -41,7 +41,7 @@ export interface RunHeaderActionsProps {
    * overwhelmingly common case — an app with no sidecar connection — and the indicator
    * renders only while a sync is actually incomplete.
    */
-  syncState?: { progress: number; complete: boolean };
+  syncState?: { progress: number; complete: boolean; needsRelink?: true };
   onManageConnections: () => void;
   onExport: () => void;
 }
@@ -64,7 +64,7 @@ export function RunHeaderActions({
         `role="status"` + aria-label because a glyph and a bare percent announce nothing
         (this file's own rule #1) — and the label is what tests locate, so it is load-bearing.
       */}
-      {syncState !== undefined && !syncState.complete ? (
+      {syncState !== undefined && !syncState.complete && syncState.needsRelink !== true ? (
         <span
           className="run-sync-progress"
           data-testid="sidecar-sync-progress"

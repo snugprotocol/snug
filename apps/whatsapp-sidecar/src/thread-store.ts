@@ -103,7 +103,17 @@ interface NameEntry {
   kind: NameKind;
 }
 
-export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD): ThreadStore {
+/**
+ * `onChange` fires after any mutation that changed durable state — the persistence trigger
+ * lives WITH the mutations (ADR-0037 §1, review finding 2026-08-18: when the adapter
+ * sprinkled its save call per event handler, the next handler to forget one shipped data
+ * that silently evaporated on restart). `restore` does not fire it: loading saved state is
+ * not a change worth re-saving.
+ */
+export function createThreadStore(
+  maxPerThread: number = MAX_MESSAGES_PER_THREAD,
+  onChange?: () => void,
+): ThreadStore {
   const chats = new Map<string, WaChat>();
   const messages = new Map<string, WaMessage[]>();
   /** identity (either spelling) → display name + the tier it came from. */
@@ -114,10 +124,14 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
   const groupRosters = new Map<string, readonly string[]>();
 
   const nameFromContact = (contact: WaContact): NameEntry | undefined => {
+    // Seat order MATCHES the tier order (review finding 2026-08-18): with notify ahead of
+    // verifiedName, a business row carrying both learned the push name at push tier and
+    // the discarded verified name could then never displace it — "~acme team" forever
+    // instead of "Acme Corp". One ordering, stated once, in both places.
     const seats: ReadonlyArray<readonly [string | undefined, NameKind]> = [
       [contact.name, 'contact'],
-      [contact.notify, 'push'],
       [contact.verifiedName, 'verified'],
+      [contact.notify, 'push'],
     ];
     for (const [candidate, kind] of seats) {
       if (typeof candidate === 'string' && candidate.trim().length > 0) {
@@ -231,14 +245,17 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
         if (pn !== undefined && learnName(pn, entry)) learned = true;
       }
       if (!learned) return;
+      onChange?.();
       // Names can arrive after the chats and rosters they belong to.
       for (const jid of chats.keys()) refreshChatName(jid);
       for (const jid of groupRosters.keys()) refreshParticipants(jid);
     },
 
     rememberLidMappings(mappings) {
+      let mapped = false;
       for (const mapping of mappings) {
         if (typeof mapping?.lid !== 'string' || typeof mapping?.pn !== 'string') continue;
+        mapped = true;
         lidToPn.set(mapping.lid, mapping.pn);
         // A name known under either spelling now covers both.
         const known = names.get(mapping.pn) ?? names.get(mapping.lid);
@@ -249,6 +266,7 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
       }
       for (const jid of chats.keys()) refreshChatName(jid);
       for (const jid of groupRosters.keys()) refreshParticipants(jid);
+      if (mapped) onChange?.();
     },
 
     contactName,
@@ -267,6 +285,7 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
         .filter((id): id is string => typeof id === 'string' && id.length > 0);
       groupRosters.set(jid, roster);
       refreshParticipants(jid);
+      onChange?.();
     },
 
     seedChatMeta(jid, meta) {
@@ -279,6 +298,7 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
         // the badge here, or it never clears anywhere.
         ...(meta.unreadCount !== undefined ? { unreadCount: meta.unreadCount } : {}),
       });
+      onChange?.();
     },
 
     ingest(chatJid, message, opts) {
@@ -310,6 +330,7 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
           : {}),
         ...(opts.live && message.fromMe !== true ? { unreadCount: (chat.unreadCount ?? 0) + 1 } : {}),
       });
+      onChange?.();
       return { added: true };
     },
 
@@ -344,7 +365,14 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
       if (Array.isArray(snap.names)) {
         for (const entry of snap.names) {
           const [spelling, value] = Array.isArray(entry) ? entry : [];
-          if (typeof spelling === 'string' && typeof value?.name === 'string' && value.kind in NAME_TIER) {
+          // `hasOwnProperty`, not `in`: `in` walks the prototype chain, so a corrupt file
+          // with kind "toString" would pass and then break every tier comparison.
+          if (
+            typeof spelling === 'string' &&
+            typeof value?.name === 'string' &&
+            typeof value.kind === 'string' &&
+            Object.prototype.hasOwnProperty.call(NAME_TIER, value.kind)
+          ) {
             names.set(spelling, { name: value.name, kind: value.kind });
           }
         }

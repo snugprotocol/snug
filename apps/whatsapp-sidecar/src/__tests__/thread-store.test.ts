@@ -118,16 +118,23 @@ describe('retention', () => {
 //       is worse than showing nothing: it invites the user to trust it.
 
 describe('the contact directory', () => {
-  it('prefers the name YOU saved, then their own notify name, then verifiedName', () => {
+  it('prefers the name YOU saved, then verifiedName, then their own notify name', () => {
+    // MIGRATED 2026-08-18: notify and verifiedName swapped places so the row-internal
+    // order matches the tier order (contact > verified > push). The old order made a
+    // business row carrying both learn "~acme team" at push tier — and the discarded
+    // verified name could then never displace it. The saved-name-first claim, and the
+    // never-invent claim below, are unchanged.
     const store = createThreadStore();
     store.rememberContacts([
       { id: '111@s.whatsapp.net', name: 'Asha (work)', notify: 'Asha R', verifiedName: 'Asha Rao Ltd' },
-      { id: '222@s.whatsapp.net', notify: 'Bo', verifiedName: 'Bo Chen Inc' },
+      { id: '222@s.whatsapp.net', notify: 'bo from accounts', verifiedName: 'Bo Chen Inc' },
       { id: '333@s.whatsapp.net', verifiedName: 'Chai Corner' },
+      { id: '444@s.whatsapp.net', notify: 'Dee' },
     ]);
     expect(store.contactName('111@s.whatsapp.net')).toBe('Asha (work)');
-    expect(store.contactName('222@s.whatsapp.net')).toBe('Bo');
+    expect(store.contactName('222@s.whatsapp.net')).toBe('Bo Chen Inc');
     expect(store.contactName('333@s.whatsapp.net')).toBe('Chai Corner');
+    expect(store.contactName('444@s.whatsapp.net')).toBe('Dee');
   });
 
   it('never invents a name for an unknown id', () => {
@@ -256,6 +263,18 @@ describe('the contact directory', () => {
     store.restore('garbage');
     store.restore({ chats: 'not-an-array', messages: 42 });
     expect(store.listChats()).toEqual([]);
+  });
+
+  it('restore refuses a name entry whose kind is a PROTOTYPE key, not a real tier', () => {
+    // `'toString' in NAME_TIER` is true — `in` walks the prototype chain — so a corrupt
+    // file could smuggle an entry whose tier comparisons are NaN-shaped and break the
+    // tier invariant in both directions (review finding 2026-08-18).
+    const store = createThreadStore();
+    store.restore({ names: [['111@s.whatsapp.net', { name: 'junk', kind: 'toString' }]] });
+    expect(store.contactName('111@s.whatsapp.net')).toBeUndefined();
+    // A real tier restores fine beside it.
+    store.restore({ names: [['111@s.whatsapp.net', { name: 'Asha', kind: 'contact' }]] });
+    expect(store.contactName('111@s.whatsapp.net')).toBe('Asha');
   });
 
   it('a DM chat named only by push name says so, and sheds the mark when a saved name lands', () => {

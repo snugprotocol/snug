@@ -359,6 +359,50 @@ describe('the linking screen carries its consent copy where the user acts', () =
     expect(after, 'the drawing follows the rotated payload').not.toBe(before);
   });
 
+  it('completes in ONE click against an already-linked helper — no code, no hang', async () => {
+    // The autostarted, boot-resumed helper (ADR-0037) is linked before the wizard opens;
+    // `/pair/qr` withholds the code. One click of "start linking" must run the same
+    // verify+mint+store path the scan button drives, and land the wizard on done.
+    const { db, wizard, Sheet } = await fresh({
+      kind: 'desktop',
+      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
+      sidecarCtl: async () => ({ running: true, nonce: 'spawn-nonce' }),
+      sidecarFetch: async () => ({ status: 200, body: '{}' }),
+      sidecarWizardFetch: async (_method, pathAndQuery) => {
+        if (pathAndQuery === '/pair/qr') return { status: 200, body: JSON.stringify({ state: 'linked' }) };
+        if (pathAndQuery === '/pair/status') {
+          return { status: 200, body: JSON.stringify({ state: 'linked', token: 'minted-token' }) };
+        }
+        return { status: 200, body: JSON.stringify({ state: 'linked' }) };
+      },
+    });
+    const React = await import('react');
+    await act(async () => {
+      await wizard.openConnectionWizardForApp(APP, 'settings');
+    });
+    await renderNode(React.createElement(Sheet));
+    await act(async () => {
+      await wizard.advanceFromReview();
+    });
+    await settle();
+
+    const startButton = [...document.querySelectorAll('button')].find((b) =>
+      /start linking/i.test(b.textContent ?? ''),
+    );
+    expect(startButton, 'the start-linking button is on screen').toBeDefined();
+    await act(async () => {
+      startButton?.click();
+    });
+    await settle();
+
+    const dbmod = await import('@snugprotocol/db');
+    expect(
+      db.getSecret(dbmod.authConnectionCredentialSecretKey(APP, SLOT, 'sidecar_token')),
+      'the token landed without any QR ever rendering',
+    ).toBe('minted-token');
+    expect(wizard.connectionWizardStepStore.get(), 'the wizard advances to done').toBe('done');
+  });
+
   /**
    * THE MINTED TOKEN MUST BE STORED (owner report, 2026-08-17).
    *

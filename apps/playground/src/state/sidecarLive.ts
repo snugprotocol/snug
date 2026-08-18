@@ -150,6 +150,11 @@ export function createSidecarLivePump(deps: SidecarLivePumpDeps): SidecarLivePum
 export interface SidecarSyncState {
   progress: number;
   complete: boolean;
+  /**
+   * The session is wedged (scanned but never registered) or unlinked — sync will never
+   * progress, so a spinner would be a lie and the poll retires. Present only when true.
+   */
+  needsRelink?: true;
 }
 
 export interface SidecarSyncPollDeps {
@@ -177,9 +182,10 @@ export function createSidecarSyncPoll(deps: SidecarSyncPollDeps): SidecarLivePum
         if (epoch !== myEpoch) return;
         if (state !== undefined) {
           deps.onState(state);
-          // The COMPLETE report is final: polling past it would spend a governed read
-          // every few seconds forever, to learn a fact that no longer changes.
-          if (state.complete) return;
+          // COMPLETE and NEEDS-RELINK are both final: polling past either would spend a
+          // governed read every few seconds forever, to learn a fact that no longer
+          // changes on its own (a relink restarts the pump, and the poll with it).
+          if (state.complete || state.needsRelink === true) return;
         }
         // A failed read reports nothing — blanking an indicator the user is watching
         // over one hiccup is worse than a briefly stale number.
@@ -212,12 +218,18 @@ export function createSidecarSyncPoll(deps: SidecarSyncPollDeps): SidecarLivePum
  */
 export function syncStateFromChatsBody(body: string): SidecarSyncState | undefined {
   try {
-    const parsed = JSON.parse(body) as { sync?: { progress?: unknown; complete?: unknown } | null };
+    const parsed = JSON.parse(body) as {
+      sync?: { progress?: unknown; complete?: unknown; needsRelink?: unknown } | null;
+    };
     const sync = parsed.sync;
     if (sync === undefined || sync === null || typeof sync !== 'object') return undefined;
     return {
       progress: typeof sync.progress === 'number' ? sync.progress : 0,
       complete: sync.complete === true,
+      // Dropped when absent, carried when claimed: a wedged session must retire the poll
+      // and hide the spinner — "syncing 0%" forever over a session that will never sync is
+      // the rendered lie the wedge detector exists to prevent.
+      ...(sync.needsRelink === true ? { needsRelink: true as const } : {}),
     };
   } catch {
     return undefined;
