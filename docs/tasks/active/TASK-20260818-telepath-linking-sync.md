@@ -135,6 +135,12 @@ duplicated QR read and creds-material read; store-owned `onChange` persistence t
 - Next step: on approval → Phase A tests first (`linkedDeviceWizard.test.ts` QR poll deadline + named timeout state).
 - Open questions: none blocking; residual for AC2 noted (a group member who never spoke, has no 1:1 chat, and no PUSH_NAME chunk stays unresolved — allowed by AC wording).
 
+### 2026-08-18 (hardware finding) — Claude (with Jeetu) — session
+- Done: owner's restart test failed — root cause READ from artifacts: `~/Snug/helpers/whatsapp-sidecar` was the 13:42 (pre-task) build; `install:helper` had never been re-run, so the running sidecar had no thread cache, no boot resume, and no way to reconnect — an empty store reporting "syncing 0%" forever. New helper built + installed (thread-cache.js now present). Second, real gap fixed on the branch: a RESUMED session gets no history re-push from WhatsApp, so an empty-store resume showed "still syncing" forever even with the new code — the helper now infers completion (`explicit:false`) after a grace window with no history chunk, and the app's empty state names the situation and the fix (unlink on phone → relink). Sidecar 135, examples 204 green; helper reinstalled with the fix.
+- State: owner's historical data from the pre-restart session was only in the old helper's memory (app-side sqlite kept opened threads + analyses); full history requires a fresh pairing.
+- Next step: owner quits + relaunches desktop (autostart spawns the NEW helper), then unlinks Snug on the phone and relinks via the wizard → full history re-syncs, this time with visible progress and a durable cache. Then merge PR #71.
+- Open questions: helper staleness is a recurring hazard — version-stamp follow-up filed in next-steps.
+
 ### 2026-08-18 (Gate 5/6) — Claude — session
 - Done: six-angle fresh-context review ran; six findings fixed (`0c4c2ad` + tsc-narrowing follow-up), residuals + follow-ups recorded (task file, next-steps 2026-08-18 entries, lessons ×3), code-map row added, ADR-0037 §4 amended. Final verification: sidecar 132, playground 1214 (tsc-gated), examples 204, cargo 87, forced root `turbo run test --force` 23/23 `Cached: 0`, exit 0.
 - State: in-review; PR opened. Owner hardware walk owed (next-steps 2026-08-18 walk entry): first-click QR, names, avatars, sync progress + resume across app close and desktop restart, and a pseudonymization spot-check.
