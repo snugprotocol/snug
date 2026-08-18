@@ -551,20 +551,11 @@ pub async fn sidecar_wizard_fetch(
     send_over_unix_socket_with_nonce(&socket, &admitted, body.as_deref(), Some(&nonce)).await
 }
 
-/// The transport itself: a minimal HTTP/1.1 exchange over the unix socket.
-///
-/// Hand-rolled rather than pulled from a client crate because the surface is four routes
-/// and the cap must be enforced WHILE READING — a client that buffers first would defeat
-/// the bound before this code saw a byte.
-async fn send_over_unix_socket(
-    socket: &std::path::Path,
-    request: &AdmittedSidecarRequest,
-    body: Option<&str>,
-) -> Result<SidecarResponse, String> {
-    send_over_unix_socket_with_nonce(socket, request, body, None).await
-}
-
 /// The transport, with the wizard's spawn nonce when the caller is the wizard.
+///
+/// Hand-rolled rather than pulled from a client crate because the surface is a handful of
+/// routes and the cap must be enforced WHILE READING — a client that buffers first would
+/// defeat the bound before this code saw a byte.
 ///
 /// The nonce is read from SHELL STATE by the caller and never accepted from the webview: it
 /// is what proves to the helper that this request came from the process that started it, so a
