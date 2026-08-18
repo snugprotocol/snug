@@ -316,3 +316,26 @@ spec-changelog entry in Phase A; no push to `snugprotocol/spec` (release rules).
   unattributed ~1-in-5 flake once (114 files/1142 tests passed, non-zero exit, `tsc --noEmit`
   clean, clean on immediate rerun) — consistent with the existing advisory, not with anything this
   task introduced.
+
+### 2026-08-17 — claude (fable) — session (owner first-run feedback)
+- **Owner ran it and saw "old whatsapp".** Two distinct gaps, both mine:
+  1. **The shelf tile showed the FOLDER name** (`listStarterApps()` derives it from the
+     directory), so the rebuilt starter still read "whatsapp" — visually identical to a rebuild
+     that never landed. The same gap hid Rewind/Moodboard/Standup/Should I? behind their folder
+     names since the TASK-20260815 renames. Fixed (`959bc27`): `STARTER_LOOKS` gains an optional
+     display `name`, every user-facing string reads it, and `data-starter-name` stays the folder
+     because `install_source`, the desktopOnly gate and the tests all key on it. Four tests,
+     written red first; full playground suite 1148 green.
+  2. **An already-installed starter never receives a rebuild.** `install_source` is a unique
+     identity and RunView redirects an installed starter straight to the stored app, so the new
+     bytes are never copied. The owner had already deleted their Twin, so this did not block
+     them — but it is a REAL hole in the plan's "replace Twin in place" claim, which was true of
+     the repo and false of an installed database. **Not fixed; see next-steps.** The honest scope
+     is a version-upgrade path (save changed bundled HTML as a new version of the existing app,
+     preserving connection + DB + revert history), which is its own task.
+- Diagnosis note worth keeping: I chased three wrong theories (stale `dist`, a redirect to an
+  old app row, a stale running binary) before querying `~/Snug/user.sqlite` and reading
+  `listStarterApps()` — the two sources that actually answered it. The DB and the producing
+  function were cheaper to read than any of the inferences I made first.
+- State: branch 14 commits ahead of `main`, tree clean, everything still green.
+- Next step: unchanged — the owner hardware walk, then PR + Gate-5 review.

@@ -31,6 +31,8 @@ Forward-looking rules only, grouped by theme. **The agent reads this when planni
 
 ## Real browsers & rendered surfaces
 
+- (2026-08-17) A rebuild the SHELF cannot show is a rebuild the owner reads as "it did not land": the starter tile derives its label from the FOLDER (`folder.replace(/-/g,' ')`), so Telepath still read "whatsapp" — and four other renamed starters read as their folders too. Whenever an artifact is renamed, grep for every surface that derives a user-visible string from its identity key; the identity must stay the key, and the label becomes its own declared field.
+
 - (2026-08-15) A mocked persistence/bridge layer accepts strings a real engine refuses — Standup's `DEFERRABLE` column name (SQLite reserved word) passed every mocked-bridge check and failed only under real sql.js in a real host ("storage hiccup" on screen). An app's DDL must execute against the real engine once before it ships, and the real-browser pass is where that happens; screen the identifier list against the engine's reserved words when authoring generated schemas.
 - (2026-08-14) Geometry defects ("one char per line", "overlaps", "cut off") close only by measuring the rendered box in a real browser — `getBoundingClientRect()` ratios in Playwright; jsdom rects are 0×0 and stylesheet-text assertions pass on broken layouts. When a repro fails, suspect the ELEMENT (`.llm-summary`, not `.llm-block`) before the mechanism.
 - (2026-08-06) A sandbox/CSP flag disables whole DOM behaviors, not just channels — C2's `allow-scripts` blocks form submission before `submit` dispatches, so `<form onSubmit>` apps were jsdom-green and browser-dead. Enumerate what a flag disables; encode each item as a validator lint plus one real-browser probe per flow.
