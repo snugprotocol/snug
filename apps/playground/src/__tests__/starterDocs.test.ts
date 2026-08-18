@@ -18,6 +18,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 import {
+  bundledStarterAuthoring,
   installStarterDocs,
   __setStarterDocFixturesForTests,
   __resetStarterDocFixturesForTests,
@@ -120,5 +121,36 @@ describe('installStarterDocs', () => {
 
     await expect(installStarterDocs(db, appId)).resolves.toBeUndefined();
     expect(db.listAppDocs(appId)).toEqual([]);
+  });
+});
+
+describe('the REAL bundle (no fixtures) — the wire production actually uses', () => {
+  // Eight-seams rule 3: every injected dependency is an untested wire. The suite above
+  // drives `installStarterDocs` through the fixture seam, which proves the LOGIC and
+  // nothing about the glob — a misspelled pattern would leave all six tests green and
+  // every installed app doc-less (the exact shape of the 2026-08-08 `import.meta.glob`
+  // defect that kept 477 tests green with a feature inert for real users).
+  beforeEach(() => __resetStarterDocFixturesForTests());
+
+  it('resolves the shipped whatsapp authoring bundle from disk', async () => {
+    const all = await bundledStarterAuthoring();
+    const bundle = all['whatsapp'];
+    expect(bundle, 'the whatsapp starter ships an authoring bundle the glob can see').toBeDefined();
+    expect(Object.keys(bundle!.docs).sort()).toEqual(['lessons.md', 'plan.md', 'requirements.md', 'vision.md']);
+    // The owner's verbatim build prompt is requirement 10 — assert its WORDS, not its path.
+    expect(Object.values(bundle!.prompts).join('\n')).toContain('Rebuild an awseome, ultra cool Whatsapp twin');
+  });
+
+  it('seeds a real installed app end to end, glob included', async () => {
+    const db = await installTestUserDb();
+    const appId = await installedStarterApp(db);
+
+    await installStarterDocs(db, appId);
+
+    expect(db.listAppDocs(appId).map((doc) => doc.slug).sort()).toEqual([
+      'build-prompt', 'lessons', 'plan', 'requirements', 'vision',
+    ]);
+    expect(db.getAppDoc(appId, 'vision')?.content).toContain('Telepath');
+    expect(db.getAppDoc(appId, 'build-prompt')?.content).toContain('ultra cool Whatsapp twin');
   });
 });
