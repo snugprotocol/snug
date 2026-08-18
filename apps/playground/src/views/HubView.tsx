@@ -31,10 +31,10 @@ const STARTER_LOOKS: Readonly<Record<string, { emoji: string; color: string; blu
   hue: { emoji: '🌗', color: '#e11d48', blurb: 'light as mood — the agent is your lighting designer', desktopOnly: true },
   weather: { emoji: '🌦️', color: '#3b82f6', blurb: 'forecasts turned into decisions — run, ride, water, or wait' },
   github: { emoji: '🗞️', color: '#64748b', blurb: 'what needs you today, before you ask — your queue as a briefing' },
-  // The linked-device starter (TASK-20260816-whatsapp-twin, ADR-0032/0033). Desktop-only
-  // for a stronger reason than the other two: the session lives in a helper process this
-  // shell spawns, reached over a unix socket that no browser tab can open.
-  whatsapp: { emoji: '🪞', color: '#1f8a5c', blurb: 'one thread, read closely — and replies drafted in your own voice', desktopOnly: true },
+  // The linked-device starter (Telepath, TASK-20260817 rebuild of the Twin; ADR-0032/0034).
+  // Desktop-only for a stronger reason than the other two: the session lives in a helper
+  // process this shell spawns, reached over a unix socket that no browser tab can open.
+  whatsapp: { emoji: '🔮', color: '#0f7d61', blurb: 'your WhatsApp, live — with an analyst who knows the room and drafts in your voice', desktopOnly: true },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };

@@ -1,48 +1,44 @@
 # Requirements
 
-Single-file `app.html`; React + Babel from the fixed CDN allowlist; the embedded hooks block
-byte-identical to `packages/sdk/embedded/snug-hooks.js`; no `<form>` (the sandbox blocks
-submission before the event fires); no browser storage (null origin); no direct network — the
-governed `useConnectedFetch` seam only.
+Telepath (TASK-20260817-telepath) rebuilds the WhatsApp Twin POC into a full client. The
+owner's ten requirements, restated as what the app must do:
 
-## Surfaces
+1. **Landing = the official WhatsApp shape.** Recent conversations sorted by latest
+   activity, with avatar, name, last-message preview, timestamp, and an unread badge.
+   Opening one loads the thread with recent messages including photos (images only in v1 —
+   no voice/video/documents/stickers).
+2. **Real names in the UI; labels to the model.** The app shows exactly the names/numbers
+   WhatsApp shows. Before any LLM turn, every unique identity becomes a stable temp label
+   (YOU/P1/P2…); the mapping is kept app-side (persisted in the app DB) and answers are
+   mapped BACK to real names at render time. Names/numbers/JIDs never reach the model —
+   from author seats or message bodies.
+3. **Live ordering.** Threads and the list sort by recency; a message arriving while the
+   app is open appears immediately (host push doorbell → governed refetch) and badges
+   update per chat. Badge clears are local-only; no read receipts are ever sent.
+4. **Draft-from-AI in the composer.** A ✨ button drafts the most natural reply on the
+   user's behalf — their tone, their typical length, emoji chosen from their MEASURED
+   historical usage — into the composer, editable, never auto-sent.
+5. **Analyze on the thread.** A 🧠 button: the FIRST run implicitly pulls the full history
+   from the helper (no export file to upload), records the newest message's timestamp as
+   the watermark, and runs the full in-depth analysis (the Twin's knowledge base, carried
+   forward). LATER runs fetch the prior analysis from the DB and send it plus ONLY the
+   messages since the watermark. Results display with proper names (de-pseudonymised
+   locally).
+6. **The helper is always up on app load.** The mount-time read rides the transport that
+   auto-starts the sidecar; failure states render a retry surface with the real reason.
+7. **Charts tab.** Local, deterministic analytics per thread: share of messages per
+   participant, activity by hour of day and weekday, median response times, the user's
+   emoji signature, monthly volume trend. Computed in-app; never sent to a model.
+8. **No auto-respond.** The POC's auto-reply surface is removed entirely. The platform's
+   standing-approval gate (ADR-0033) stays where it is, unarmed.
+9. **Docs in the DB.** Vision/requirements/plan/lessons — these files — seed
+   `snug_app_docs` when the starter is installed (ADR-0035), so the installed app carries
+   its own wiki.
+10. **The build prompt in the DB too.** The verbatim owner prompt that drove this rebuild
+    ships in `authoring/prompts/` and seeds a `build-prompt` doc at install.
 
-- **Threads** — list conversations from `GET snug-connection://whatsapp/chats`; pick exactly
-  one. Show the history sync state honestly: `complete && explicit` is "this is everything",
-  `complete && !explicit` must render as **partial** (completion was inferred from a timeout,
-  not announced), and in-flight shows progress. An app that renders an inferred completion as
-  the whole record is misdescribing the evidence the entire analysis rests on.
-- **Export ingest** — paste a WhatsApp `Export chat` .txt. This is the reliability backstop,
-  not a convenience: history sync can stall, and a full analysis must still be possible.
-  Merge with live history, deduping on (text, minute) — the two sources name the same people
-  differently (display name vs JID), so a naive concat double-counts every author.
-- **Persona Lab** — the user's own voice card (tone, typical length, emoji signature, the
-  language they usually reply in), one card per participant, and the group dynamics. Plus the
-  **forget this thread** control, which cascades every table.
-- **Insights** — thread shape (totals, people, busiest, average length) computed locally, and
-  a question box answered by the model *from the saved rows only*.
-- **Reply Desk** — manual **Reply** (draft → read it → send, never automatic) and the
-  **auto-reply arm switch** (group: only messages tagging the user; DM: every new message),
-  with an activity journal of every send.
-- **Translate** — a per-message control shown only when the message's language differs from
-  the app default; tap yields a translation cached per (thread, message, language). A
-  default-language message must NOT offer it.
-- **Settings** — the default language, and a plain statement of what leaves the machine.
-
-## Non-negotiable
-
-- **AC12 — pseudonymise before every model turn.** Participants become `P1`/`P2`/`YOU`;
-  phone numbers and JIDs are stripped from the *body* as well as the author field. Labels are
-  stable across turns (the model reasons about who answers whom) and distinct per person.
-- **AC13 — the export parser handles what WhatsApp actually writes**: iOS bracketed, Android
-  dashed, 12- and 24-hour, dot-separated locales, and bidi control characters (U+200E/U+202F)
-  which silently defeat a parser anchored on a literal `[`. Multiline bodies attach to their
-  parent. System lines, `<Media omitted>` and deletion tombstones never become messages. An
-  unparseable upload yields zero messages and a count, never an exception.
-- Export-derived (display name) and live-derived (JID) identities are never silently merged —
-  two people sharing a display name are two people.
-- Every model reply is validated locally before it touches state; off-script degrades
-  visibly and saves nothing.
-- ToS/ban-risk copy on the surface where the user acts, not only in the README.
-- The DDL runs against real sql.js before shipping (a mocked bridge accepts identifiers the
-  real engine refuses).
+**Hard boundaries:** desktop-only (the unix-socket transport); images capped by the 1 MiB
+transport class (refused-with-thumbnail beyond it, never truncated); the LLM payload
+byte-budgeted under the 256 KB frame class with truncation disclosed to the model; all
+sidecar reads/writes through the governed connected-fetch seam — the app holds no token and
+no address; sends pass the host's write-confirm gate and land in the activity journal.

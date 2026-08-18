@@ -302,7 +302,31 @@ for (const app of APPS) {
       const dom = new JSDOM(html); // scripts NOT executed — parse only
       const doc = dom.window.document;
       assert.ok(doc.getElementById('root'), 'jsdom: #root exists');
-      assert.equal(doc.querySelectorAll('script[src]').length, 3, 'jsdom: exactly the three CDN UMD scripts');
+      // The three RUNTIME scripts are mandatory and exact; past them, an app may load
+      // ONLY builds from the KB's known-good table (80-cdn-compatibility.md) — pinned
+      // here as patterns so "on the CDN allowlist" can never quietly become "any script
+      // the CDN hosts" (TASK-20260817-telepath widened this from exactly-three when
+      // Telepath's charts brought in Chart.js 4, the first KB-blessed extra).
+      const scripts = [...doc.querySelectorAll('script[src]')].map((node) => node.getAttribute('src'));
+      for (const required of [
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/react@18\//,
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/react-dom@18\//,
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/@babel\/standalone@7\//,
+      ]) {
+        assert.ok(scripts.some((src) => required.test(src)), `jsdom: runtime script ${required} present`);
+      }
+      const KNOWN_GOOD_EXTRA_CDN_SCRIPTS = [
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/chart\.js@4\//,
+        /^https:\/\/cdn\.jsdelivr\.net\/npm\/d3@7\//,
+      ];
+      const extras = scripts.filter((src) =>
+        !/^https:\/\/cdn\.jsdelivr\.net\/npm\/(react@18|react-dom@18|@babel\/standalone@7)\//.test(src));
+      for (const extra of extras) {
+        assert.ok(
+          KNOWN_GOOD_EXTRA_CDN_SCRIPTS.some((pattern) => pattern.test(extra)),
+          `jsdom: extra script ${extra} is a KB known-good pinned build`,
+        );
+      }
       assert.equal(doc.querySelectorAll('script[type="text/babel"]').length, 1, 'jsdom: exactly one babel script');
       assert.ok(doc.querySelector('style'), 'jsdom: inline styles present');
     }

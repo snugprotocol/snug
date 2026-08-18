@@ -1,78 +1,75 @@
-# whatsapp — "WhatsApp Twin": one thread, read closely, answered in your own voice
+# Telepath
 
-**Please read this first.** Linking an automation tool to a personal WhatsApp account is
-**against WhatsApp's terms of service, and accounts have been banned for it.** Twin paces its
-sends like a human and caps them, but that is harm reduction, not evasion, and it is not a
-guarantee. Only link an account whose loss you would accept. This starter exists because the
-protocol should be able to carry an app no gatekept store would ship — not because the risk
-is small.
+Your WhatsApp, live, inside Snug — with an analyst who knows the room and drafts in your voice.
+Telepath is the TASK-20260817 rebuild of the WhatsApp Twin POC (same connection, same wizard,
+same privacy boundary — a real messaging surface around them).
 
-**Second thing worth knowing before you point it at a group.** The people in your threads
-never agreed to any of this. Twin builds written profiles of them and, under BYOK, their
-messages travel to whichever model provider you configured, under your own key. Twin
-pseudonymises before every model turn — participants become `P1`, `P2`, phone numbers and
-WhatsApp IDs are stripped — so what leaves is the conversation's shape, not its roster. The
-"forget this thread" control deletes everything derived from a conversation. Both are
-deliberate: the honest answer to "should this app exist" is "only with these".
+**Desktop only.** The linked-device session lives in a local helper process
+(`apps/whatsapp-sidecar`) that the Snug desktop shell spawns and reaches over a unix socket
+(ADR-0032). A browser tab structurally cannot open that transport.
 
-**What it demos:** the first `linked_device` connection (ADR-0032) — a provider that
-authenticates a *device*, not a request. The session lives in a helper process the desktop
-shell spawns and supervises, reached over a unix socket by a purpose-built Rust command
-rather than through the host ceiling, because a locally-spawned helper is a **capability, not
-a host**. Plus the usual connected-starter seams: symbolic `snug-connection://` addressing
-(ADR-0026), the provider chat lane, and an agent grounded in live data.
+## What it does
 
-**What it does NOT do yet: unattended replies.** Twin drafts, you send. The host-side
-approval gate that unattended sending requires is built and tested (ADR-0033's
-`StandingApprovalGate` — scoped to one thread and one trigger, rate-capped, quiet-hours
-aware, revocable), but an app cannot reach it: arming has to be a standing approval the
-*host* records, and the frames an app may speak have no seat for that. Rather than ship a
-switch that sets a boolean and authorizes nothing, this version says so on the surface and
-offers manual Reply. Picking the arming surface is a follow-up (owner decision, 2026-08-17).
+- **A real chat surface.** Your conversations, sorted by recency, with avatars, previews,
+  timestamps and unread badges; threads render text and photos (inline thumbnails, tap for
+  full size within the transport cap). New messages appear while the app is open — the host
+  long-polls the helper's hint stream and rings the frame (ADR-0034); every UI change still
+  flows from a governed read.
+- **Send, in your own hand or with a running start.** Type and send (each credentialed write
+  passes the host's confirm gate, and every send is journaled). Or tap ✨ and Telepath drafts
+  the reply in YOUR register — length, punctuation, and your measured emoji habits — into the
+  composer for you to edit. Nothing is ever sent for you.
+- **Analysis that compounds.** Tap 🧠 and the app pulls the full history from the helper (the
+  implicit export — no file to save and upload), watermarks the newest message, and asks your
+  configured model for the full profile: each person as their messages actually show them, the
+  group's dynamics, your own voice in that room. Tap again later and it sends the PRIOR
+  analysis plus only the delta since the watermark — cheaper, and the headline tells you what
+  changed. Results are stored in the app's own database.
+- **Charts.** A local, deterministic picture of the thread: who carries the conversation,
+  when it is alive (hour of day, in your timezone), the week's rhythm, who answers fastest,
+  your emoji signature, and the long arc of messages per month. Computed entirely in the app —
+  none of it touches a model.
 
-**Complement thesis:** WhatsApp's own app is for *having* the conversation — it is a great
-messenger and Twin does not try to be one. Twin is for *understanding* one: who carries the
-thread, who goes quiet when it gets tense, how you yourself write when you are in it. WhatsApp
-will never ship a feature that profiles your friends and drafts in your voice, and it
-shouldn't. That asymmetry is the point — this is the app you can only have because you own
-the runtime.
+## The privacy boundary (unchanged from the Twin, now bidirectional)
 
-**Connection posture:** slot `whatsapp`, kind `linked_device`. The registry entry pins the
-helper's symbolic host, the pairing flow (start → QR → poll → verify-before-claim per
-ADR-0025), and the header template that injects the minted helper token; this folder's
-[`connection.json`](connection.json) declares the slot, the kind and the one secret field.
-**Desktop only** — a unix socket is not reachable from a browser tab, and the shelf tile says
-so rather than dead-ending. Your WhatsApp session keys never leave the helper's own disk
-store: what Snug holds is a token *to the helper*, not a credential to WhatsApp. Every send —
-manual or armed — traverses the connected-fetch mutating gate, and every unattended send is
-written to the in-app activity journal.
+The app shows real names and numbers — you already see them in WhatsApp. The MODEL never
+does: before any LLM turn, every participant becomes a stable label (`YOU`, `P1`, `P2`…),
+and JIDs and phone numbers are scrubbed from author seats AND message bodies (a number
+shared inside a message is the common case). The label map is persisted in the app's
+database, so `P2` keeps meaning the same person across every incremental run — and when an
+answer comes back, the app maps labels to names locally, at render time. Analyses are stored
+pseudonymised at rest. Photos never reach the model at all.
 
-**LLM posture:** agent-driven (ADR-0011). `RESPONSE_SCHEMA` is non-null and a `responseSchema`
-travels with every `sendMessage`; the contract is in
-[`runtime-contract.json`](runtime-contract.json). Four actions: `profile_thread`,
-`answer_question`, `draft_reply`, `translate`. Every reply is validated locally before it
-touches state — an off-script answer degrades to a visible "the model answered off-script"
-notice and saves nothing, because a "profile" that silently half-parsed would be a confident
-statement about a real person built from garbage. **The helper itself is LLM-free by
-construction**: it holds no model key and makes no model call, so analysis, drafting and
-translation all happen in the governed host. One consequence, stated plainly rather than
-patched: auto-reply only runs while Snug is open. Giving the helper its own model key would
-fix that and create a second brain outside every reviewed surface, so it stays as it is.
+Under BYOK, the (pseudonymised) messages of people who never consented still reach your own
+model provider under your key. That is your call to make; the scrub is what makes it a
+defensible one.
 
-**App DB:** four tables. `threads` (which conversation was analysed, and when), `persona`
-(one row per person plus the dynamics and your own voice profile, replaced on re-analysis
-rather than accumulated), `translations` (per-message cache, keyed by thread + message +
-language), and `activity` (the send journal). "Forget this thread" cascades all four.
+## Honesty notes
 
-**The export path is not a nice-to-have.** WhatsApp *pushes* history in chunks and sometimes
-never confirms it finished — the sidecar reports `explicit: false` when completion was only
-inferred, and Twin renders that as *partial*, never as "this is everything". Pasting a
-`Export chat` .txt is the reliable route to a full analysis, so the parser handles the shapes
-WhatsApp really writes: iOS bracketed and Android dashed, 12- and 24-hour, dot-separated
-locales, and the invisible bidi control characters iOS emits (which silently defeat a parser
-anchored on `[`). Multiline messages attach to their parent rather than splitting — that bug
-does not crash anything, it just quietly reports that someone sends four times as many
-messages as they do. See [`../whatsapp-analysis.test.mjs`](../whatsapp-analysis.test.mjs).
+- **WhatsApp's terms.** Linking automation to a personal WhatsApp account violates
+  WhatsApp's terms of service, and accounts have been banned for it. The helper paces sends
+  (≥1.2 s apart) as harm reduction, never as detection evasion.
+- **History coverage.** WhatsApp pushes history in chunks and sometimes only *infers*
+  completion. The thread header says so ("history coverage inferred") rather than
+  pretending the record is complete.
+- **No unattended sends.** Auto-reply is not part of this app. The platform's standing
+  approval gate (ADR-0033) exists, unarmed; Telepath ships manual send only.
+- **Unread badges** clear locally when you open a thread. Telepath never sends read
+  receipts on your behalf.
 
-Authoring provenance lives in [`authoring/`](authoring/): the verbatim build prompt and the
-vision / requirements / plan / lessons docs.
+## Running it
+
+1. Install the helper once: `pnpm --filter whatsapp-sidecar build && pnpm --filter whatsapp-sidecar install:helper`
+   (Node 20+ must be on the GUI PATH — the app will tell you if it is not).
+2. Install Telepath from the starter shelf in the Snug desktop app and follow the connection
+   wizard: it starts the helper, shows the QR, and you scan it from WhatsApp's
+   *Linked devices*. The wizard mints the helper access token itself — there is nothing to
+   type or look up.
+3. Open the app. The first read starts the helper if it is down; the list fills as history
+   syncs from your phone.
+
+## Data it keeps (in the app's own namespaced tables)
+
+`threads` (watermarks + analysed-at) · `messages` (text cache the charts and deltas read —
+never photos) · `pseudonyms` (the persisted label map) · `analyses` (every run, pseudonymised)
+· `activity` (the send journal). "Forget" semantics: delete the app and its tables go with it.
