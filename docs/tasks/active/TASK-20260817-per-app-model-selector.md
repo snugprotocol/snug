@@ -1,6 +1,6 @@
 # TASK-20260817-per-app-model-selector: per-app model selector in the app header
 
-- **Status**: in-progress (Gate 3 done — tests written and red; Gate 4 next)
+- **Status**: in-review (Gates 3–5 done — implemented, green, owner-walked in a real browser; awaiting review + merge)
 - **Owner**: Jeetu
 - **Risk tier**: medium (see [engineering/PROCESS.md](../engineering/PROCESS.md#risk-tiers)) — **explicitly NOT escalated to High**; see "Why this is not High" below
 - **Branch**: `feat/TASK-20260817-per-app-model-selector`
@@ -165,3 +165,23 @@ Per `lessons.md`: every guard above is mutation-checked by reverting the fix and
 - State: Gate 3 complete. No implementation code written yet — `state/appModel.ts`, `run/ModelSelect.tsx`, `packages/adapters/src/model-catalog.ts` do not exist.
 - Next step: Gate 4 Phase 1 — the catalog module, then persistence/resolution, then the four lanes, then the control.
 - Open questions: unchanged — Risk 3 (the inferrer lane's `appId` path) is now written as a test (`AC6d`) that will confirm or refute the threading cost during implementation.
+
+### 2026-08-18 — Jeetu — session (Gates 4–5, implement + verify)
+- Done: **all 11 acceptance criteria implemented and green.**
+  - `packages/adapters/src/model-catalog.ts` — pinned ≤5 catalog per provider, each containing that provider's `*_DEFAULT_MODEL`.
+  - `packages/db/src/userdb/app-settings-keys.ts` — the ONE definition of `appModel:<appId>` (the `auth-secrets.ts` precedent); typed `listAppModels`/`setAppModel` accessors so no caller hand-rolls a prefix scan over the shared `snug_settings` namespace; `deleteApp` step 3c cascades by EQUALITY.
+  - `apps/playground/src/state/appModel.ts` — THE precedence rule; hydration wired into `hydrateSettings` so boot/import/first-pull all restore picks.
+  - Four lanes repointed: `transport.ts` (app frame + subscription), `builder.ts` + `useBuilderChat.ts` (builder AND app-attached chat — one memo), `inferrerAdapter.ts` (+ its two app-scoped call sites).
+  - `apps/playground/src/run/ModelSelect.tsx`, mounted in the run header between `manage-connections` and export; CSS + a real `.visually-hidden` rule (the class did not exist — referencing it without adding it would have been a no-op label).
+- **Verification — every guard mutation-checked** (revert the fix, watch red, restore): the ≤5 bound (2 red), the default-in-catalog pin (1 red), the `deleteApp` cascade (2 red), and each routing lane INDEPENDENTLY — transport 4 red, builder 1 red, inferrer 1 red. No lane hides behind another.
+- **Verification — four consecutive `turbo run test --force` root runs**, 23/23 tasks, `Cached: 0 cached` each time (2 further targeted runs before that). Playground 1184 · db 311 · adapters · server 126 · sdk 41 · auth · protocol · knowledge · runner · desktop · whatsapp-sidecar all green. The standing ~1-in-5 playground flake did not surface in any of the six runs.
+- **Verification — the real-browser walk** (`lessons.md` 2026-08-17: a feature is done when someone walks it). Installed two starters as real apps in one session and:
+  - the selector renders in the run header, labelled "model for this app", 44 px tall, inside the header bounds, with no horizontal page scroll — measured with `getBoundingClientRect` at 1280 px AND at a real 420 px viewport (jsdom rects are 0×0 and would have proved nothing);
+  - it is correctly ABSENT on a read-only starter and for the `mock` provider;
+  - **a pick survived a full page reload** against real OPFS-backed SQLite;
+  - **AC3's live inheritance, both directions**: changing the Settings default moved the un-pinned app to `default (claude-sonnet-4-6)` while the pinned app HELD `claude-opus-5` and offered the new default as the way back;
+  - **end-to-end on the wire**: a real chess move produced a real app-frame turn whose outbound Anthropic request carried `claude-opus-5` (the pin), while the un-pinned app's turn carried `claude-sonnet-4-6` (the default). Two apps, one session, each routing to its own model.
+- Docs: ADR-0036 written (D1 rejects the `RuntimeContract` home, D2 the storage choice + its cascade obligation, D3 the F15 exemption); `code-map.md` row added; `next-steps.md` records the inferrer residual and disambiguates the still-open WebLLM picker.
+- State: **Gate 5 done.** Two commits on `feat/TASK-20260817-per-app-model-selector` (tests, then implementation) plus this docs commit.
+- Next step: AI review of the diff + task file, then human review and PR.
+- Open questions: none blocking. Risk 3 RESOLVED as scoped — two of three inferrer call sites had an app id and were wired; the connection-requirement inferrer genuinely has none and is queued rather than forced.
