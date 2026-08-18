@@ -19,7 +19,7 @@ import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import type { ChatCardState } from '../agent/cards.js';
 import { createNetHandlerFor } from '../state/net.js';
-import { startSidecarLiveForApp } from '../state/sidecarLive.js';
+import { startSidecarLiveForApp, type SidecarSyncState } from '../state/sidecarLive.js';
 import {
   connectionWizardRevisionStore,
   isConnectionRepairableNetError,
@@ -234,6 +234,9 @@ export default function RunView(): ReactElement {
     }
   }, [chat.lastArtifact, id]);
 
+  // Linked-device history-sync state for the header indicator (ADR-0037 §4).
+  const [sidecarSync, setSidecarSync] = useState<SidecarSyncState | undefined>(undefined);
+
   // THE LIVE PUMP (ADR-0034 §2): while THIS view has an app with an approved
   // sidecar-symbolic-host connection mounted, long-poll the helper's hint stream through
   // the governed executor and ring `notifyEvent('connection-event', …)` into the frame.
@@ -245,15 +248,23 @@ export default function RunView(): ReactElement {
     if (isStarterId(id)) return; // a starter is uninstalled by definition — no connection row
     let cancelled = false;
     let stopPump: (() => void) | undefined;
-    void startSidecarLiveForApp(id, (event, data) => controlsRef.current?.notifyEvent(event, data)).then(
-      (stop) => {
-        if (cancelled) stop();
-        else stopPump = stop;
+    void startSidecarLiveForApp(
+      id,
+      (event, data) => controlsRef.current?.notifyEvent(event, data),
+      // The header's sync feed (ADR-0037 §4): pump-reported, session-scoped like every
+      // store write after an await — a late report from a superseded mount must not paint
+      // onto the next app's header.
+      (state) => {
+        if (!cancelled) setSidecarSync(state);
       },
-    );
+    ).then((stop) => {
+      if (cancelled) stop();
+      else stopPump = stop;
+    });
     return () => {
       cancelled = true;
       stopPump?.();
+      setSidecarSync(undefined);
     };
   }, [id]);
 
@@ -739,6 +750,7 @@ export default function RunView(): ReactElement {
               isStarter={isStarterId(id)}
               connectionSlots={connectionSlots}
               canExport={sawDbOp}
+              syncState={sidecarSync}
               onManageConnections={() => void openConnectionWizardForApp(id, 'settings')}
               onExport={() => void onExport()}
             />

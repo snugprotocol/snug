@@ -1806,3 +1806,28 @@ img.identity-avatar {
   font-size: 1.05rem;
   line-height: 1;
 }
+
+/* Linked-device history-sync indicator (ADR-0037 §4). The glyph spins; the percent holds
+   still — an animation on the number itself would make it unreadable. Reduced motion gets
+   a static glyph: the percent already conveys the progress. */
+.run-sync-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--text-muted, #888);
+  white-space: nowrap;
+}
+.run-sync-glyph {
+  display: inline-block;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .run-sync-glyph {
+    animation: run-sync-spin 1.2s linear infinite;
+  }
+}
+@keyframes run-sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

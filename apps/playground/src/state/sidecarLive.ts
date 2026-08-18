@@ -140,6 +140,90 @@ export function createSidecarLivePump(deps: SidecarLivePumpDeps): SidecarLivePum
   };
 }
 
+// ---------------------------------------------------------------- the sync-state poll
+//
+// ADR-0037 §4: the run header shows history-sync progress while it is incomplete.
+// `/session/status` is WIZARD-ONLY by contract (the ADR-0025 verify seat), so this rides
+// the app-reachable `/chats` — whose response carries `sync` by design — through the SAME
+// governed executor, and forwards nothing but a number and a bit.
+
+export interface SidecarSyncState {
+  progress: number;
+  complete: boolean;
+}
+
+export interface SidecarSyncPollDeps {
+  /** One status read; undefined for any failure (the poll keeps the last state and retries). */
+  fetchStatus(): Promise<SidecarSyncState | undefined>;
+  onState(state: SidecarSyncState): void;
+  sleep?: (ms: number) => Promise<void>;
+  pollGapMs?: number;
+}
+
+/** Slow next to the hint pump: progress moves in percent, not in messages. */
+const SYNC_POLL_GAP_MS = 4_000;
+
+export function createSidecarSyncPoll(deps: SidecarSyncPollDeps): SidecarLivePump {
+  const sleep = deps.sleep ?? realSleep;
+  const pollGapMs = deps.pollGapMs ?? SYNC_POLL_GAP_MS;
+  let epoch = 0;
+  let running = false;
+
+  const run = async (myEpoch: number): Promise<void> => {
+    try {
+      while (epoch === myEpoch) {
+        const state = await deps.fetchStatus();
+        // Same discipline as the hint pump: a superseded loop discards its own late result.
+        if (epoch !== myEpoch) return;
+        if (state !== undefined) {
+          deps.onState(state);
+          // The COMPLETE report is final: polling past it would spend a governed read
+          // every few seconds forever, to learn a fact that no longer changes.
+          if (state.complete) return;
+        }
+        // A failed read reports nothing — blanking an indicator the user is watching
+        // over one hiccup is worse than a briefly stale number.
+        await sleep(pollGapMs);
+      }
+    } finally {
+      if (epoch === myEpoch) running = false;
+    }
+  };
+
+  return {
+    start() {
+      if (running) return Promise.resolve();
+      running = true;
+      epoch += 1;
+      return run(epoch);
+    },
+    stop() {
+      epoch += 1;
+      running = false;
+    },
+  };
+}
+
+/**
+ * Extract the header's two numbers from a `/chats` response body — and NOTHING else. The
+ * response carries chat names, jids and message previews; none of that may ride into header
+ * state, however convenient the spread would be (the extraction IS the scrub). No `sync`
+ * seat answers undefined: that response made no claim about sync.
+ */
+export function syncStateFromChatsBody(body: string): SidecarSyncState | undefined {
+  try {
+    const parsed = JSON.parse(body) as { sync?: { progress?: unknown; complete?: unknown } | null };
+    const sync = parsed.sync;
+    if (sync === undefined || sync === null || typeof sync !== 'object') return undefined;
+    return {
+      progress: typeof sync.progress === 'number' ? sync.progress : 0,
+      complete: sync.complete === true,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Eligibility is a CONNECTION FACT: an approved row whose frozen ceiling carries the
  * sidecar's symbolic host. Pending rows grant nothing (approval is the user's gesture,
@@ -164,6 +248,7 @@ export function resolveSidecarSlot(db: UserDb, appId: string): string | undefine
 export async function startSidecarLiveForApp(
   appId: string,
   notify: (event: string, data: unknown) => void,
+  onSyncState?: (state: SidecarSyncState) => void,
 ): Promise<() => void> {
   if (getPlatform().sidecarFetch === undefined) return () => {};
   const db = await getUserDb();
@@ -204,5 +289,32 @@ export async function startSidecarLiveForApp(
     },
   });
   void pump.start();
-  return () => pump.stop();
+
+  // The header's progress feed (ADR-0037 §4), only when the caller wants it — same
+  // executor, same epoch discipline, and it retires itself on the complete report.
+  let stopSyncPoll: () => void = () => {};
+  if (onSyncState !== undefined) {
+    const syncPoll = createSidecarSyncPoll({
+      onState: onSyncState,
+      fetchStatus: async () => {
+        try {
+          const result = await executor.execute(appId, {
+            url: `snug-connection://${slot}/chats`,
+            method: 'GET',
+          });
+          if (!result.ok || result.status !== 200) return undefined;
+          return syncStateFromChatsBody(result.body);
+        } catch {
+          return undefined;
+        }
+      },
+    });
+    void syncPoll.start();
+    stopSyncPoll = () => syncPoll.stop();
+  }
+
+  return () => {
+    pump.stop();
+    stopSyncPoll();
+  };
 }

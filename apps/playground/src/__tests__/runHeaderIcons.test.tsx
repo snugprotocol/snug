@@ -63,6 +63,7 @@ interface RenderOptions {
   isStarter?: boolean;
   connectionSlots?: number;
   canExport?: boolean;
+  syncState?: { progress: number; complete: boolean };
   onManageConnections?: () => void;
   onExport?: () => void;
 }
@@ -78,6 +79,7 @@ async function renderActions(options: RenderOptions = {}): Promise<void> {
         isStarter={options.isStarter ?? false}
         connectionSlots={options.connectionSlots ?? 1}
         canExport={options.canExport ?? true}
+        syncState={options.syncState}
         onManageConnections={options.onManageConnections ?? ((): void => undefined)}
         onExport={options.onExport ?? ((): void => undefined)}
       />,
@@ -183,6 +185,36 @@ describe('the gates each control already had are unchanged', () => {
     expect(modelSelect()).toBeNull();
     // Export still belongs to a starter being tried out — it writes real rows.
     expect(exportBtn()).not.toBeNull();
+  });
+});
+
+describe('the sync indicator (ADR-0037 §4, owner interview 2026-08-18)', () => {
+  it('shows progress in the header while history sync is incomplete', async () => {
+    await renderActions({ syncState: { progress: 42, complete: false } });
+    const badge = byTestId('sidecar-sync-progress');
+    expect(badge, 'the indicator renders beside the app controls').not.toBeNull();
+    expect(badge?.textContent ?? '', 'and it carries the actual percent').toContain('42');
+    // A glyph is not a name (this file's own rule): the indicator must announce itself.
+    expect(badge?.getAttribute('aria-label') ?? '').toMatch(/sync/i);
+  });
+
+  it('disappears when sync completes, and never renders without a state', async () => {
+    await renderActions({ syncState: { progress: 100, complete: true } });
+    expect(byTestId('sidecar-sync-progress'), 'complete: the header returns to normal').toBeNull();
+    await renderActions({});
+    expect(byTestId('sidecar-sync-progress'), 'no sidecar app: no indicator').toBeNull();
+  });
+
+  it('RunView actually threads syncState from the pump into the header', async () => {
+    // The wire, pinned at source level (a prop nobody passes is the untested wire in its
+    // purest form): RunView must hold pump-reported state and hand it to this component.
+    // cwd-relative rather than import.meta.url: this file runs under jsdom, where the
+    // module URL is not a file: scheme.
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const runView = readFileSync(resolve(process.cwd(), 'src/run/RunView.tsx'), 'utf8');
+    expect(runView).toMatch(/syncState=\{/);
+    expect(runView).toMatch(/onSyncState|setSidecarSync/);
   });
 });
 

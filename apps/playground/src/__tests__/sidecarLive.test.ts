@@ -313,3 +313,91 @@ describe('eligibility — a connection fact, on the real user db', () => {
     expect(resolveSidecarSlot(db, 'app-3')).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------- the sync-state poll
+//
+// ADR-0037 §4 (owner interview 2026-08-18): the run header shows history-sync progress.
+// `/session/status` is WIZARD-ONLY by contract (the ADR-0025 verify seat), so the host poll
+// rides the app-reachable `/chats` — whose response carries `sync` by design — and forwards
+// NOTHING but the two numbers the header needs. Same epoch discipline as the hint pump.
+
+import { createSidecarSyncPoll, syncStateFromChatsBody } from '../state/sidecarLive.js';
+
+describe('the sync-state poll', () => {
+  it('reports progress while incomplete and STOPS once complete', async () => {
+    const statuses = [
+      { progress: 20, complete: false },
+      { progress: 70, complete: false },
+      { progress: 100, complete: true },
+      { progress: 100, complete: true }, // must never be reached: polling past complete is waste
+    ];
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => statuses[asks++],
+      onState: (state) => reports.push(state),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(reports).toEqual(statuses.slice(0, 3));
+    expect(asks).toBe(3);
+  });
+
+  it('a superseded poll never reports its late result', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => {
+        await gate;
+        return { progress: 10, complete: false };
+      },
+      onState: (state) => reports.push(state),
+      sleep: async () => {},
+    });
+    const done = poll.start();
+    poll.stop();
+    release?.();
+    await done;
+    expect(reports).toEqual([]);
+  });
+
+  it('a failed read keeps the last state on screen — no report, then retry', async () => {
+    const answers = [
+      { progress: 30, complete: false },
+      undefined, // one bad read must not blank an indicator the user is watching
+      { progress: 60, complete: false },
+      { progress: 100, complete: true },
+    ];
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => answers[asks++],
+      onState: (state) => reports.push(state),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(reports).toEqual([answers[0], answers[2], answers[3]]);
+  });
+});
+
+describe('syncStateFromChatsBody — the extraction is the scrub', () => {
+  it('keeps the two numbers and NOTHING else from a chats response', () => {
+    const body = JSON.stringify({
+      chats: [{ jid: '111@s.whatsapp.net', name: 'Asha', lastMessage: { text: 'secret', ts: 1 } }],
+      sync: { complete: false, explicit: false, progress: 37, needsRelink: false },
+    });
+    // The header needs a number and a bit; message content, names and jids must not ride
+    // along into header state, however convenient the object spread would be.
+    expect(syncStateFromChatsBody(body)).toEqual({ progress: 37, complete: false });
+  });
+
+  it('answers undefined for junk, and defaults progress honestly', () => {
+    expect(syncStateFromChatsBody('not json')).toBeUndefined();
+    expect(syncStateFromChatsBody(JSON.stringify({ chats: [] }))).toBeUndefined();
+    expect(syncStateFromChatsBody(JSON.stringify({ sync: { complete: true } }))).toEqual({
+      progress: 0,
+      complete: true,
+    });
+  });
+});
