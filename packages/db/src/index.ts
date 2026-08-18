@@ -87,6 +87,12 @@ export {
 } from './userdb/auth-secrets.js';
 
 export {
+  APP_MODEL_SETTING_PREFIX,
+  appIdFromModelSettingKey,
+  appModelSettingKey,
+} from './userdb/app-settings-keys.js';
+
+export {
   acquireUserDbWriterLock,
   createUserDbChannel,
   USERDB_LOCK_NAME,

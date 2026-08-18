@@ -30,22 +30,37 @@ import {
 /** The owner's "up to 5" — the whole point of the bound is that it cannot be widened silently. */
 const MAX_POPULAR_MODELS = 5;
 
-describe('popular model catalog (AC2)', () => {
-  it('offers between 1 and 5 models for every provider it knows', () => {
-    const providers = Object.keys(POPULAR_MODELS) as (keyof typeof POPULAR_MODELS)[];
-    // A catalog with no providers would pass every per-provider assertion below by
-    // vacuity, so the shape is asserted first.
-    expect(providers.length).toBeGreaterThan(0);
+/** Every provider the catalog knows, including `mock`, which deliberately carries none. */
+const ALL_PROVIDERS = Object.keys(POPULAR_MODELS) as (keyof typeof POPULAR_MODELS)[];
 
-    for (const provider of providers) {
+/**
+ * The providers that name a real model. `mock` is a real `ByokProvider` but IS the demo
+ * brain — it has no model to pick, and the selector is hidden for it (AC7), so it is
+ * exempt from the "at least one" rule while still being bound by the ≤5 ceiling.
+ */
+const MODEL_CARRYING_PROVIDERS = ALL_PROVIDERS.filter((p) => p !== 'mock');
+
+describe('popular model catalog (AC2)', () => {
+  it('offers between 1 and 5 models for every provider that carries one', () => {
+    // A catalog with no model-carrying providers would pass the per-provider assertions
+    // below by vacuity, so the shape is asserted first.
+    expect(MODEL_CARRYING_PROVIDERS.length).toBeGreaterThan(0);
+
+    for (const provider of MODEL_CARRYING_PROVIDERS) {
       const models = popularModelsFor(provider);
       expect(models.length).toBeGreaterThan(0);
       expect(models.length).toBeLessThanOrEqual(MAX_POPULAR_MODELS);
     }
   });
 
+  it('holds every provider — including model-less ones — to the ≤5 ceiling', () => {
+    for (const provider of ALL_PROVIDERS) {
+      expect(popularModelsFor(provider).length).toBeLessThanOrEqual(MAX_POPULAR_MODELS);
+    }
+  });
+
   it('gives every entry a non-empty id and a non-empty label', () => {
-    for (const provider of Object.keys(POPULAR_MODELS) as (keyof typeof POPULAR_MODELS)[]) {
+    for (const provider of ALL_PROVIDERS) {
       for (const model of popularModelsFor(provider)) {
         expect(model.id).toBeTypeOf('string');
         expect(model.id.trim()).not.toBe('');
@@ -56,7 +71,7 @@ describe('popular model catalog (AC2)', () => {
   });
 
   it('never lists the same model id twice within one provider', () => {
-    for (const provider of Object.keys(POPULAR_MODELS) as (keyof typeof POPULAR_MODELS)[]) {
+    for (const provider of ALL_PROVIDERS) {
       const ids = popularModelsFor(provider).map((m: PopularModel) => m.id);
       expect(new Set(ids).size).toBe(ids.length);
     }

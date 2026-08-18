@@ -26,6 +26,7 @@ import { ModelSelect } from '../run/ModelSelect.js';
 import { appModelStore, resolveModelForApp, setAppModel } from '../state/appModel.js';
 import { modeStore, modelStore, providerStore } from '../state/mode.js';
 import { ollamaStore } from '../state/ollama.js';
+import { webgpuStore, webllmFlagStore } from '../state/webllm.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 declare global {
@@ -46,6 +47,8 @@ beforeEach(async () => {
   modeStore.set('byok');
   providerStore.set('anthropic');
   ollamaStore.set('unknown');
+  webllmFlagStore.set(false);
+  webgpuStore.set('unknown');
   await installTestUserDb();
 });
 
@@ -153,20 +156,28 @@ describe('AC7 — hidden where a model choice would be a lie', () => {
   });
 
   it('renders nothing under the webllm brain', async () => {
-    // ADR-0015: `?webllm=1` OVERRIDES the configured mode entirely and the engine always
-    // loads its own pinned model — the `model` setting is a different namespace and is
-    // deliberately ignored (adapter.ts). Offering a picker here would imply a routing
-    // that cannot happen.
-    const url = new URL(window.location.href);
-    url.searchParams.set('webllm', '1');
-    window.history.replaceState({}, '', url);
-    try {
-      await renderSelect();
-      expect(select()).toBeNull();
-    } finally {
-      url.searchParams.delete('webllm');
-      window.history.replaceState({}, '', url);
-    }
+    // ADR-0015: the webllm brain OVERRIDES the configured mode entirely and the engine
+    // always loads its own pinned model — the `model` setting is a different namespace
+    // and is deliberately ignored (adapter.ts). Offering a picker here would imply a
+    // routing that cannot happen.
+    //
+    // Driven through the STORES the brain actually resolves from, not through the URL:
+    // the `?webllm=1` flag is read once at boot into `webllmFlagStore`, so setting the
+    // URL at render time would leave the brain untouched and the test would pass for
+    // the wrong reason (rendering nothing because nothing changed).
+    webllmFlagStore.set(true);
+    webgpuStore.set('yes');
+    await renderSelect();
+    expect(select()).toBeNull();
+  });
+
+  it('renders nothing under the demo fallback brain', async () => {
+    // The no-WebGPU fallback: same override, same reason. Asserting it separately means
+    // a gate written as `kind === 'webllm'` (rather than `!== 'settings'`) still reds.
+    webllmFlagStore.set(true);
+    webgpuStore.set('no');
+    await renderSelect();
+    expect(select()).toBeNull();
   });
 });
 

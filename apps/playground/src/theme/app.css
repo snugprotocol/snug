@@ -1758,3 +1758,40 @@ img.identity-avatar {
   height: auto;
   shape-rendering: crispEdges; /* keeps module edges hard when the SVG is scaled */
 }
+
+/* Per-app model selector in the run header (TASK-20260817). Sized to sit beside the
+   header's buttons rather than compete with them: the app's name is the header's
+   subject, and this is a setting the user changes rarely. `max-width` + `text-overflow`
+   keep a long model id from pushing the action cluster off a narrow screen — the
+   geometry is verified in a real browser (e2e), because jsdom rects are 0x0 and would
+   pass on a broken layout. */
+.app-model-select select {
+  max-width: 15ch;
+  min-height: var(--tap);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-s);
+  text-overflow: ellipsis;
+}
+.app-model-select select:hover {
+  color: var(--fg);
+}
+
+/* Available to screen readers, absent from the visual layout. The selector's own label
+   is a glyph-free <select>, so without this its accessible name would be whatever the
+   first option happens to say. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

@@ -20,7 +20,8 @@ import type { AgentAdapter } from '@snugprotocol/adapters';
 // rename to the surviving contract, not a change of shape.
 import { type RequirementInferrerComplete } from '@snugprotocol/auth';
 
-import { getByokKey, localUrlStore, modelStore, modeStore, providerStore, type ByokProvider } from '../state/mode.js';
+import { resolveModelForApp } from '../state/appModel.js';
+import { getByokKey, localUrlStore, modeStore, providerStore, type ByokProvider } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 
@@ -96,13 +97,18 @@ export async function inferenceWireCopy(): Promise<string> {
  * ladder would eventually disagree, and the disagreement would show up as an inference
  * turn quietly running on the mock brain.
  */
-export async function liveInferenceAdapter(): Promise<LiveAdapterResolution> {
+/**
+ * `appId` (TASK-20260817): the app this inference is being run FOR, so its per-app model
+ * pick routes the turn like every other app-scoped lane. Optional — a non-app-scoped
+ * inference resolves the Settings default, which is the pre-existing behavior exactly.
+ */
+export async function liveInferenceAdapter(appId?: string): Promise<LiveAdapterResolution> {
   const wire = await decideWire();
   if (wire.kind === 'unavailable') return { ok: false };
   if (wire.kind === 'webllm') {
     return { ok: true, adapter: createTurnAdapter({ mode: 'webllm', provider: providerStore.get() }, 'chat') };
   }
-  const model = modelStore.get();
+  const model = resolveModelForApp(appId);
   if (wire.kind === 'local') {
     return {
       ok: true,

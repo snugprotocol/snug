@@ -9,6 +9,7 @@ import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
 import { getPlatform } from '../platform/platform.js';
+import { resolveModelForApp } from '../state/appModel.js';
 import { endpointsNeedConfirmStore, getByokKey, type ByokProvider } from '../state/mode.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
@@ -188,7 +189,20 @@ export interface DirectBuilderOptions {
   sink: ArtifactSink;
   /** Injectable for tests; defaults to the user-DB secret for the provider. */
   getKey?: (provider: ByokProvider) => Promise<string | undefined>;
+  /**
+   * An EXPLICIT model override. When absent the model is resolved PER SEND from
+   * `appId` + the Settings default (ADR-0036) — so leave it unset in production and
+   * pass `appId` instead; this seat exists for the callers that already had one and for
+   * tests that want to pin a literal.
+   */
   model?: string;
+  /**
+   * The app this thread is attached to, if any (TASK-20260817). Its per-app model pick
+   * routes BOTH the app-attached data-chat lane and the builder lane, which share this
+   * one agent — resolved per send so switching model mid-thread takes effect on the next
+   * turn rather than after a remount.
+   */
+  appId?: string;
   localUrl?: string;
   /** Injectable for tests; default reads the F15 confirm-guard store. */
   needsConfirm?: () => boolean;
@@ -232,12 +246,16 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
       // local talks to an unauthenticated endpoint; webllm runs IN the page — neither
       // reads a provider key.
       const key = options.mode === 'local' || isWebllm ? undefined : await readKey(options.provider);
+      // PER SEND, never at construction — useBuilderChat memoizes this agent, so a model
+      // captured here at creation would freeze the thread on whatever was chosen when the
+      // view mounted. An explicit `options.model` still wins (test pins, existing callers).
+      const model = options.model ?? resolveModelForApp(options.appId);
       const adapter = createTurnAdapter(
         {
           mode: options.mode,
           provider: options.provider,
           ...(key !== undefined ? { key } : {}),
-          ...(options.model !== undefined ? { model: options.model } : {}),
+          ...(model !== undefined ? { model } : {}),
           ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),
         },
         'chat',

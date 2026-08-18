@@ -24,8 +24,9 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveAppTransport } from '../agent/transport.js';
+import { createAppTransport, resolveAppTransport } from '../agent/transport.js';
 import { createDirectBuilder } from '../agent/builder.js';
+import type { ArtifactSink } from '../agent/artifactSink.js';
 import { liveInferenceAdapter } from '../agent/inferrerAdapter.js';
 import { appModelStore, setAppModel } from '../state/appModel.js';
 import { modelStore, providerStore, modeStore, endpointsNeedConfirmStore } from '../state/mode.js';
@@ -66,6 +67,18 @@ function recordingFetch(): { calls: string[]; fetchImpl: typeof globalThis.fetch
   return { calls, fetchImpl };
 }
 
+/**
+ * A no-op ArtifactSink. These tests drive the model decision, not artifact writing — but
+ * the seam is required, and a stub that satisfies the real interface (rather than a cast)
+ * is what keeps the tsc gate meaningful.
+ */
+function testSink(): ArtifactSink {
+  return {
+    write: () => Promise.resolve({ id: APP_A, displayName: 'unused', version: 1 }),
+    ensureTargetId: () => Promise.resolve(APP_A),
+  };
+}
+
 beforeEach(async () => {
   appModelStore.set({});
   modelStore.set(undefined);
@@ -104,16 +117,21 @@ describe('AC6a — app-frame turns route to the app’s model', () => {
   });
 
   it('reads the pick PER SEND, so a mid-session switch takes effect without remounting', async () => {
-    // transport.ts:119-126 states the rule: these values are read per send, never
-    // captured at construction, because RunView memoizes the transport. A pick that only
-    // applied after a reload would violate the owner's "route all LLM calls" ask in the
-    // exact moment the user makes the choice.
+    // transport.ts states the rule: these values are read per send, never captured at
+    // construction, because RunView memoizes the transport. A pick that only applied
+    // after a reload would violate the owner's "route all LLM calls" ask in the exact
+    // moment the user makes the choice.
+    //
+    // The per-send resolution lives in `createAppTransport`, which re-enters
+    // `resolveAppTransport` on EVERY send — so this test drives the memoized wrapper
+    // (what RunView actually holds), not the inner factory. Driving the inner factory
+    // and re-using its result would test a transport nobody keeps.
     setAppModel(APP_A, 'claude-opus-5');
     await flush();
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
-    const transport = resolveAppTransport('byok', 'anthropic', undefined, APP_A);
+    const transport = createAppTransport('byok', 'anthropic', undefined, APP_A);
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
 
     setAppModel(APP_A, 'claude-sonnet-5');
@@ -155,10 +173,10 @@ describe('AC6b/AC6c — the builder + app-attached chat lane routes to the app�
     const builder = createDirectBuilder({
       mode: 'byok',
       provider: 'anthropic',
-      sink: { write: () => undefined },
+      sink: testSink(),
       appId: APP_A,
     });
-    await builder.send('hello', { signal: new AbortController().signal });
+    await builder.send('hello', {}, new AbortController().signal);
 
     expect(calls[0]).toBe('claude-opus-5');
   });
@@ -171,9 +189,9 @@ describe('AC6b/AC6c — the builder + app-attached chat lane routes to the app�
     const builder = createDirectBuilder({
       mode: 'byok',
       provider: 'anthropic',
-      sink: { write: () => undefined },
+      sink: testSink(),
     });
-    await builder.send('hello', { signal: new AbortController().signal });
+    await builder.send('hello', {}, new AbortController().signal);
 
     expect(calls[0]).toBe('claude-sonnet-5');
   });
@@ -191,7 +209,7 @@ describe('AC6d — connection inference routes to the app’s model', () => {
     const result = await liveInferenceAdapter(APP_A);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    await result.adapter.run({
+    await result.adapter.complete({
       system: 'sys',
       messages: [{ role: 'user', content: 'hi' }],
       signal: new AbortController().signal,
@@ -208,7 +226,7 @@ describe('AC6d — connection inference routes to the app’s model', () => {
     const result = await liveInferenceAdapter();
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    await result.adapter.run({
+    await result.adapter.complete({
       system: 'sys',
       messages: [{ role: 'user', content: 'hi' }],
       signal: new AbortController().signal,

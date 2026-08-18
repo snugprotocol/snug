@@ -49,6 +49,7 @@ import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
 import { DocsPanel } from './DocsPanel.js';
 import { downloadBlob, exportDatabase } from './exportDb.js';
+import { ModelSelect } from './ModelSelect.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from './llmInspector.js';
 import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
@@ -743,6 +744,13 @@ export default function RunView(): ReactElement {
                 🔌 connections
               </Button>
             ) : null}
+            {/*
+              TASK-20260817: which model THIS app's LLM calls use, remembered per app.
+              Starters are excluded on the same reasoning as the connections door above —
+              a read-only starter has no app row to key a pick to, and the pick would be
+              lost the moment it was installed (the install makes a new id).
+            */}
+            {!isStarterId(id) ? <ModelSelect appId={id} /> : null}
             {sawDbOp ? (
               <Button onClick={() => void onExport()} title="download this app’s database as a real .sqlite file">
                 export .sqlite
