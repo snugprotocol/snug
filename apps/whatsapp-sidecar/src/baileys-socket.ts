@@ -74,24 +74,42 @@ export function shouldResetAuthStore(link: WaLinkState): boolean {
 }
 
 /**
- * Is the store WEDGED — scanned but never registered?
+ * Is the store WEDGED — a scan that started an identity but never completed pairing?
  *
- * `registered: false` WITH a saved `me` means the QR was scanned and the handshake never
- * completed. Baileys loads that and tries to RESUME rather than pair; WhatsApp refuses, and
- * history sync never begins. `shouldResetAuthStore` already clears it — but only when the
- * user happens to re-pair, so until then the state is INDISTINGUISHABLE from a slow first
- * sync. That ambiguity is the defect this function exists to remove (owner-reported
- * 2026-08-17: "no chats yet — history is still syncing" forever, after a helper restart).
+ * **DO NOT reintroduce `registered` as the signal.** The first version of this function did,
+ * and it was wrong in the most expensive way: in `baileys@7.0.0-rc14`, `creds.registered` is
+ * set to true in EXACTLY ONE place — `Socket/messages-recv.js:940`, inside the
+ * `link_code_pairing` (phone-number code) flow. The QR flow never touches it: `pair-success`
+ * runs `configureSuccessfulPairing`, which writes `me`, `account`, `signalIdentities` and
+ * `platform`, and leaves `registered` at its `initAuthCreds` default of `false`.
  *
- * Absent `me` is a FIRST RUN, not a wedge — telling that user to "re-link" would be
- * nonsense. An unreadable or missing store makes no claim at all and answers false: a
- * value we cannot read is not evidence of a fault.
+ * Every session THIS helper creates is QR-paired, so `registered: false` is the permanent,
+ * correct steady state here. The old check therefore fired on every healthy session: the app
+ * told the user to re-link, re-linking ran `shouldResetAuthStore`, which DELETED the working
+ * session, and the loop repeated (owner-reported 2026-08-18, after re-pairing twice). A false
+ * positive on this predicate does not merely mislead — it destroys the thing it calls broken.
+ *
+ * The honest signal is the material a COMPLETED pairing leaves behind. `me` alone is not
+ * enough: it is written during the handshake. `account` and a non-empty `signalIdentities`
+ * are what a session actually needs to resume, so their absence beside a saved `me` is the
+ * real interrupted-scan shape.
+ *
+ * Absent `me` is a FIRST RUN, not a wedge. An unreadable or missing store makes no claim at
+ * all and answers false: a value we cannot read is not evidence of a fault.
  */
 export function isHalfLinkedStore(authDir: string): boolean {
   try {
     const raw = readFileSync(join(authDir, 'creds.json'), 'utf8');
-    const creds = JSON.parse(raw) as { registered?: unknown; me?: unknown };
-    return creds.registered !== true && creds.me !== undefined && creds.me !== null;
+    const creds = JSON.parse(raw) as {
+      me?: unknown;
+      account?: unknown;
+      signalIdentities?: unknown;
+    };
+    const scanStarted = creds.me !== undefined && creds.me !== null;
+    if (!scanStarted) return false;
+    const hasAccount = creds.account !== undefined && creds.account !== null;
+    const hasIdentities = Array.isArray(creds.signalIdentities) && creds.signalIdentities.length > 0;
+    return !(hasAccount && hasIdentities);
   } catch {
     return false;
   }
