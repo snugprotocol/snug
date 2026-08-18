@@ -302,8 +302,42 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
    */
   const rawImages = new Map<string, Parameters<typeof toWaMessage>[0]>();
 
-  /** Avatar cache: url-fetch results per jid, `null` caching "has none" honestly. */
-  const pictures = new Map<string, { mime: string; base64: string } | null>();
+  /**
+   * Avatar cache. A HIT is kept for the session. A MISS is kept only until `missUntil`:
+   * `profilePictureUrl` answers `undefined` both for a genuinely picture-less contact and
+   * for transient conditions (privacy tcToken missing or expired), and the two are
+   * indistinguishable in the reply — so "has none" is never allowed to be permanent
+   * (owner-reported 2026-08-18: one bad moment froze most avatars until a helper restart).
+   */
+  const pictures = new Map<string, { picture: { mime: string; base64: string } } | { missUntil: number }>();
+
+  /** How long a no-picture answer is trusted before the question goes live again. */
+  const PICTURE_MISS_TTL_MS = 10 * 60_000;
+
+  /**
+   * At most this many avatar lookups in flight. Every visible chat row asks on first paint;
+   * an uncapped burst of forty iqs gets rate-limited into timeouts whose retries re-enter
+   * the same burst. A drip is slower to fill the list and reliably fills it.
+   */
+  const MAX_PICTURE_FETCHES = 3;
+  let activePictureFetches = 0;
+  const pictureWaiters: Array<() => void> = [];
+  const acquirePictureSlot = (): Promise<void> =>
+    new Promise((resolve) => {
+      if (activePictureFetches < MAX_PICTURE_FETCHES) {
+        activePictureFetches += 1;
+        resolve();
+      } else {
+        pictureWaiters.push(() => {
+          activePictureFetches += 1;
+          resolve();
+        });
+      }
+    });
+  const releasePictureSlot = (): void => {
+    activePictureFetches -= 1;
+    pictureWaiters.shift()?.();
+  };
 
   /**
    * Group rosters already requested, so a chat list of forty groups fires each fetch once.
@@ -551,24 +585,39 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     },
 
     async pictureOf(jid) {
-      const cached = pictures.get(jid);
-      if (cached !== undefined) return cached ?? undefined;
+      // An expired miss reads as "not cached": the question is live again.
+      const readCache = (key: string): { hit: boolean; value?: { mime: string; base64: string } } => {
+        const entry = pictures.get(key);
+        if (entry === undefined) return { hit: false };
+        if ('picture' in entry) return { hit: true, value: entry.picture };
+        if (entry.missUntil > now()) return { hit: true };
+        pictures.delete(key);
+        return { hit: false };
+      };
+
+      const direct = readCache(jid);
+      if (direct.hit) return direct.value;
       if (sock === undefined || link !== 'linked') return undefined;
 
       // A LID and a phone jid are the same person; ask under the canonical spelling so one
       // fetch serves both and a LID-addressed group member is not treated as a stranger.
       const canonical = store.resolveIdentity(jid);
-      const canonicalHit = canonical !== jid ? pictures.get(canonical) : undefined;
-      if (canonicalHit !== undefined) return canonicalHit ?? undefined;
+      if (canonical !== jid) {
+        const viaCanonical = readCache(canonical);
+        if (viaCanonical.hit) return viaCanonical.value;
+      }
 
+      await acquirePictureSlot();
       try {
         const url = await sock.profilePictureUrl(canonical, 'preview');
-        // NO PICTURE is a permanent, cacheable fact: WhatsApp answers this cleanly for a
-        // contact with a default avatar, and re-asking on every list render would spend a
-        // round trip per row forever.
+        // NO URL is ambiguous: a contact with a default avatar answers this way, but so does
+        // a missing/expired privacy token. Trust it briefly — enough to stop a round trip
+        // per row per render — never permanently (a failure is not a fact, lessons.md
+        // 2026-08-17; this branch is where most real misses arrive).
         if (typeof url !== 'string' || url.length === 0) {
-          pictures.set(jid, null);
-          if (canonical !== jid) pictures.set(canonical, null);
+          const miss = { missUntil: now() + PICTURE_MISS_TTL_MS };
+          pictures.set(jid, miss);
+          if (canonical !== jid) pictures.set(canonical, miss);
           return undefined;
         }
         const response = await fetch(url);
@@ -577,15 +626,15 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         if (bytes.length === 0 || bytes.length > MAX_MEDIA_BYTES) throw new Error('avatar size');
         const mime = response.headers.get('content-type') ?? 'image/jpeg';
         const picture = { mime, base64: bytes.toString('base64') };
-        pictures.set(jid, picture);
-        if (canonical !== jid) pictures.set(canonical, picture);
+        pictures.set(jid, { picture });
+        if (canonical !== jid) pictures.set(canonical, { picture });
         return picture;
       } catch {
-        // A FAILURE is not a fact — a hiccup, a rate limit or a privacy setting that will
-        // answer differently next time. Caching it as "has none" is what makes one bad
-        // moment mean "no avatars until you restart the helper", so it is deliberately NOT
-        // cached: the next list render asks again.
+        // A THROWN failure — a hiccup, a rate limit — is not cached at all: the next list
+        // render asks again, now paced by the slot limiter instead of re-entering a burst.
         return undefined;
+      } finally {
+        releasePictureSlot();
       }
     },
 

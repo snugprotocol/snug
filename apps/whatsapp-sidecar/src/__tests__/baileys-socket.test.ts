@@ -75,8 +75,8 @@ afterEach(() => {
 });
 
 /** Stand the adapter up, linked, with the newest fake Baileys socket in hand. */
-async function linkedAdapter() {
-  const adapter = await createBaileysWaSocket({ authDir });
+async function linkedAdapter(deps: { now?: () => number } = {}) {
+  const adapter = await createBaileysWaSocket({ authDir, ...deps });
   await adapter.startLink();
   const fake = created.at(-1)!;
   fake.emit('connection.update', { connection: 'open' });
@@ -172,5 +172,87 @@ describe('push names harvested from history rows', () => {
       ],
     });
     expect(adapter.listChats().find((row) => row.jid === '888@s.whatsapp.net')?.name).toBe('Gia');
+  });
+});
+
+/**
+ * AVATARS (owner report 2026-08-18: "profile pics load for some and not the rest").
+ *
+ * `profilePictureUrl` answers `undefined` for a privacy-restricted contact AND for a
+ * missing/expired tcToken — the second is transient, and caching it as a permanent "has no
+ * picture" is what froze most avatars until the helper restarted. The 2026-08-17 "a failure
+ * is not a fact" lesson was applied to the THROWN branch only; the `undefined`-URL branch is
+ * where most real misses arrive. A miss is now remembered with a TTL: cheap enough not to
+ * hammer WhatsApp per render, honest enough to heal.
+ */
+describe('avatar caching and pacing', () => {
+  it('remembers a no-picture answer briefly, then asks again after the TTL', async () => {
+    let clock = 1_000_000;
+    const { adapter, fake } = await linkedAdapter({ now: () => clock });
+    fake.profilePictureUrl.mockResolvedValue(undefined);
+
+    expect(await adapter.pictureOf('111@s.whatsapp.net')).toBeUndefined();
+    expect(await adapter.pictureOf('111@s.whatsapp.net')).toBeUndefined();
+    // Within the TTL the miss is served from memory — one round trip, not one per render.
+    expect(fake.profilePictureUrl).toHaveBeenCalledTimes(1);
+
+    clock += 11 * 60_000; // past the TTL: the miss has expired, the question is live again
+    await adapter.pictureOf('111@s.whatsapp.net');
+    expect(fake.profilePictureUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('a THROWN lookup stays uncached — the very next ask retries', async () => {
+    const { adapter, fake } = await linkedAdapter();
+    fake.profilePictureUrl.mockRejectedValueOnce(new Error('rate limited'));
+    expect(await adapter.pictureOf('222@s.whatsapp.net')).toBeUndefined();
+    fake.profilePictureUrl.mockResolvedValueOnce('https://cdn.example/pic.jpg');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+        headers: { get: () => 'image/jpeg' },
+      })),
+    );
+    const picture = await adapter.pictureOf('222@s.whatsapp.net');
+    expect(picture?.base64).toBe(Buffer.from([1, 2, 3]).toString('base64'));
+    vi.unstubAllGlobals();
+  });
+
+  it('a fetched picture is cached — the second ask costs no round trip', async () => {
+    const { adapter, fake } = await linkedAdapter();
+    fake.profilePictureUrl.mockResolvedValue('https://cdn.example/pic.jpg');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new Uint8Array([7]).buffer,
+        headers: { get: () => 'image/jpeg' },
+      })),
+    );
+    await adapter.pictureOf('333@s.whatsapp.net');
+    await adapter.pictureOf('333@s.whatsapp.net');
+    expect(fake.profilePictureUrl).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('caps concurrent lookups so a forty-row list is a queue, not a burst', async () => {
+    // WhatsApp rate-limits these iqs; a burst of forty produces timeouts whose retries
+    // re-enter the same burst. The cap turns first paint into a drip the server tolerates.
+    const { adapter, fake } = await linkedAdapter();
+    let inFlight = 0;
+    let peak = 0;
+    fake.profilePictureUrl.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return undefined;
+    });
+    await Promise.all(
+      Array.from({ length: 12 }, (_, i) => adapter.pictureOf(`${400 + i}@s.whatsapp.net`)),
+    );
+    expect(fake.profilePictureUrl).toHaveBeenCalledTimes(12);
+    expect(peak).toBeLessThanOrEqual(3);
   });
 });
