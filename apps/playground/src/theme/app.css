@@ -1795,3 +1795,14 @@ img.identity-avatar {
   white-space: nowrap;
   border: 0;
 }
+
+/* Icon-only buttons in the run header's per-app cluster (connections, export).
+   `.btn` already carries `min-width: var(--tap)`, so the square tap target is inherited
+   — this only trims the horizontal padding meant for a text label and sizes the glyph,
+   which would otherwise render at the 600-weight label size and look undersized next to
+   the text buttons beside it. */
+.run-header .btn-icon {
+  padding: 0 var(--space-2);
+  font-size: 1.05rem;
+  line-height: 1;
+}

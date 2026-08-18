@@ -49,7 +49,7 @@ import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
 import { DocsPanel } from './DocsPanel.js';
 import { downloadBlob, exportDatabase } from './exportDb.js';
-import { ModelSelect } from './ModelSelect.js';
+import { RunHeaderActions } from './RunHeaderActions.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from './llmInspector.js';
 import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
@@ -729,33 +729,19 @@ export default function RunView(): ReactElement {
               </Button>
             ) : null}
             {/*
-              AC9 — the connections door, in the ONE place the owner asked for it: the
-              app's own header, beside export and theme. Shown whenever this app has
-              connection rows, connected or not; Settings keeps the cross-app list.
-              Starters are excluded because their declaration is a bundled manifest with
-              no persisted rows yet — a control here would open an empty wizard.
+              The per-APP controls — model, connections, export — live in one component
+              so the cluster is testable without a route, a runner and an iframe. The
+              theme and rail toggles below stay here: those are workspace preferences,
+              not properties of this app.
             */}
-            {connectionSlots > 0 && !isStarterId(id) ? (
-              <Button
-                onClick={() => void openConnectionWizardForApp(id, 'settings')}
-                data-testid="manage-connections"
-                title="review, reconnect, or disconnect what this app connects to"
-              >
-                🔌 connections
-              </Button>
-            ) : null}
-            {/*
-              TASK-20260817: which model THIS app's LLM calls use, remembered per app.
-              Starters are excluded on the same reasoning as the connections door above —
-              a read-only starter has no app row to key a pick to, and the pick would be
-              lost the moment it was installed (the install makes a new id).
-            */}
-            {!isStarterId(id) ? <ModelSelect appId={id} /> : null}
-            {sawDbOp ? (
-              <Button onClick={() => void onExport()} title="download this app’s database as a real .sqlite file">
-                export .sqlite
-              </Button>
-            ) : null}
+            <RunHeaderActions
+              appId={id}
+              isStarter={isStarterId(id)}
+              connectionSlots={connectionSlots}
+              canExport={sawDbOp}
+              onManageConnections={() => void openConnectionWizardForApp(id, 'settings')}
+              onExport={() => void onExport()}
+            />
             <Button variant="ghost" onClick={toggleTheme} aria-label={`switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
               {theme === 'dark' ? '☀ light' : '☾ dark'}
             </Button>
