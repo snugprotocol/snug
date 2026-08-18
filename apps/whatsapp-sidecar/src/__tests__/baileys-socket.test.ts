@@ -334,3 +334,42 @@ describe('the durable thread cache and boot resume', () => {
     expect(created.length).toBe(0);
   });
 });
+
+/**
+ * RESUME HONESTY (owner-reported on hardware, 2026-08-18). WhatsApp pushes history at
+ * PAIRING; a resumed session gets new/offline messages but never a history re-push. So a
+ * resume whose store is empty (lost cache, quarantined snapshot, pre-cache helper) would
+ * show "still syncing 0%" FOREVER — a permanent state rendering as a normal wait, the exact
+ * ambiguity lessons.md 2026-08-17 names. After a grace window with no history chunk, the
+ * helper reports completion as INFERRED (`explicit:false` — the seat built for exactly
+ * this claim), so the spinner retires and the app can say what actually happened.
+ */
+describe('resume without history', () => {
+  it('reports INFERRED completion when a resumed session sees no history chunk', async () => {
+    writeResumableCreds(authDir);
+    const adapter = await createBaileysWaSocket({ authDir, resumeHistoryGraceMs: 10 });
+    created.at(-1)!.emit('connection.update', { connection: 'open' });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(adapter.historyState()).toEqual({ complete: true, explicit: false, progress: 100 });
+  });
+
+  it('a resumed session that DOES receive history keeps its real progress', async () => {
+    writeResumableCreds(authDir);
+    const adapter = await createBaileysWaSocket({ authDir, resumeHistoryGraceMs: 10 });
+    const fake = created.at(-1)!;
+    fake.emit('connection.update', { connection: 'open' });
+    fake.emit('messaging-history.set', { chats: [], contacts: [], messages: [], progress: 30 });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const state = adapter.historyState();
+    expect(state.complete).toBe(false);
+    expect(state.progress).toBe(30);
+  });
+
+  it('a FRESH pairing keeps waiting for history — the grace applies to resumes only', async () => {
+    const adapter = await createBaileysWaSocket({ authDir, resumeHistoryGraceMs: 10 });
+    await adapter.startLink();
+    created.at(-1)!.emit('connection.update', { connection: 'open' });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(adapter.historyState().complete).toBe(false);
+  });
+});

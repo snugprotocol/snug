@@ -152,6 +152,8 @@ export interface BaileysSocketDeps {
   threadCache?: ThreadCache;
   /** Snapshot write debounce; injectable so tests need not wait five real seconds. */
   cacheDebounceMs?: number;
+  /** How long a RESUMED session waits for a history chunk before inferring completion. */
+  resumeHistoryGraceMs?: number;
 }
 
 /**
@@ -316,6 +318,10 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   let sock: BaileysSocket | undefined;
   let history: WaHistoryState = { complete: false, explicit: false, progress: 0 };
   let lastSendAt = 0;
+  /** True when this process connected by RESUMING stored creds rather than pairing fresh. */
+  let resumedSession = false;
+  /** Whether any `messaging-history.set` chunk has arrived this process lifetime. */
+  let sawHistoryChunk = false;
 
   // The store owns its change signal (ADR-0037 §1): every mutation that changed durable
   // state schedules a save BY CONSTRUCTION — no event handler can forget to. `scheduleSave`
@@ -478,6 +484,22 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       if (update.connection === 'open') {
         link = 'linked';
         qr = undefined;
+        // RESUME HONESTY (owner-reported 2026-08-18): WhatsApp pushes history at PAIRING;
+        // a resumed session never gets a re-push. A resume whose store lost its history
+        // (no cache, quarantined snapshot, pre-cache helper) would therefore report
+        // "still syncing 0%" FOREVER — a permanent state rendering as a normal wait. After
+        // a grace window with no history chunk, completion is reported as INFERRED
+        // (`explicit:false` is the seat built for exactly this claim), so the spinner
+        // retires and the app can say what actually happened.
+        if (resumedSession && !history.complete) {
+          const grace = setTimeout(() => {
+            if (!sawHistoryChunk && !history.complete) {
+              history = { complete: true, explicit: false, progress: 100 };
+              scheduleSave();
+            }
+          }, deps.resumeHistoryGraceMs ?? 60_000);
+          grace.unref?.();
+        }
       }
       if (update.connection === 'close') {
         const status = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output
@@ -510,6 +532,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     socket.ev.on('lid-mapping.update', (mapping) => store.rememberLidMappings([mapping as never]));
 
     socket.ev.on('messaging-history.set', (chunk) => {
+      sawHistoryChunk = true;
       store.rememberContacts((chunk.contacts ?? []) as never);
       store.rememberLidMappings((chunk.lidPnMappings ?? []) as never);
       for (const chat of chunk.chats ?? []) {
@@ -569,7 +592,10 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   // app request — that is what lets sync continue in the background after a shell restart.
   // The material predicate keeps this honest: a first run or a half-linked wedge makes no
   // outbound connection at all.
-  if (isResumableStore(deps.authDir)) connect();
+  if (isResumableStore(deps.authDir)) {
+    resumedSession = true;
+    connect();
+  }
 
   return {
     linkState: () => link,
@@ -594,6 +620,9 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       }
 
       link = 'waiting';
+      // A pairing-driven connect is NOT a resume: history is coming, so the resume grace
+      // (which infers completion) must never arm against it.
+      resumedSession = false;
       connect();
     },
 

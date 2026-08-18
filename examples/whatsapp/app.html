@@ -1382,6 +1382,16 @@
                   <div>the last link was interrupted before it finished, so WhatsApp never started sending your history</div>
                   <div style={{ fontSize: 13 }}>open the WhatsApp connection in Snug's settings and scan the QR again — your messages are safe on your phone</div>
                 </div>
+              ) : helper.sync && helper.sync.complete ? (
+                // Complete AND empty: a RESUMED session gets no history re-push from
+                // WhatsApp (owner-reported 2026-08-18 — the old copy said "still syncing"
+                // forever here). Say what happened and how to actually get the history.
+                <div className="center-state">
+                  <div className="big">📭</div>
+                  <div className="title">no history on this link</div>
+                  <div>a resumed session doesn't re-send old chats — new messages will appear as they arrive</div>
+                  <div style={{ fontSize: 13 }}>to fetch your full history: on your phone, open WhatsApp → Settings → Linked devices → remove Snug, then link again from Snug's connection settings</div>
+                </div>
               ) : (
                 <div className="center-state">
                   <div className="big">💬</div>
