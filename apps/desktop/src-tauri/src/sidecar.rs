@@ -318,78 +318,7 @@ pub async fn sidecar_ctl(
             running: guard.is_some(),
             nonce: guard.as_ref().map(|s| s.nonce.clone()),
         }),
-        "start" => {
-            if let Some(running) = guard.as_ref() {
-                return Ok(SidecarStatus {
-                    running: true,
-                    nonce: Some(running.nonce.clone()),
-                });
-            }
-            // `snug_dir` is the ONE owner of this path rule (userfile.rs) — re-deriving it
-            // here would be a second spelling of a decision that already shipped a
-            // platform-ordering bug once.
-            let dir = crate::userfile::snug_dir()?;
-            std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-            // Through `socket_path`, not a second `join`: that function documents itself as
-            // the owner of this rule, and a rule whose only caller is its own test is a
-            // comment the compiler cannot check.
-            let socket = socket_path(&dir, SOCKET_BASENAME);
-
-            // PREFLIGHT, before anything is spawned (both added 2026-08-17 after the owner
-            // hit "the WhatsApp helper could not be started" on real hardware). A GUI app
-            // inherits a minimal PATH, so the `node` found here is often NOT the one on a
-            // developer's shell PATH — the owner's resolved to v18, and baileys needs 20+.
-            // Checking after the fact is not enough: `spawn` succeeds the instant the process
-            // exists, so a runtime that dies on its first import looks like a clean start.
-            if let Some(refusal) = helper_entry_refusal(&dir) {
-                return Err(refusal);
-            }
-            node_version_preflight()?;
-
-            // A stale socket file from a crashed run would make bind fail; removing it is
-            // safe because this path is ours and nothing else may write it.
-            let _ = std::fs::remove_file(&socket);
-            let nonce = mint_nonce();
-            let mut child = std::process::Command::new("node")
-                .arg("--enable-source-maps")
-                .arg(helper_entry(&dir))
-                .env("SNUG_SIDECAR_SOCKET", &socket)
-                .env("SNUG_SIDECAR_NONCE", &nonce)
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|e| format!("could not start the WhatsApp helper: {e}"))?;
-
-            // DID IT SURVIVE? `spawn` only proves the process was created. The helper binds
-            // its socket within milliseconds, so a short wait distinguishes "running" from
-            // "exited immediately" — and the difference matters enormously to the user, who
-            // was previously told the helper could not start when it started and then died.
-            std::thread::sleep(std::time::Duration::from_millis(600));
-            if let Ok(Some(status)) = child.try_wait() {
-                let mut detail = String::new();
-                if let Some(mut stderr) = child.stderr.take() {
-                    use std::io::Read;
-                    let mut buf = String::new();
-                    let _ = stderr.read_to_string(&mut buf);
-                    // The helper's own last words are the most useful thing we have, but they
-                    // are a subprocess's stderr: cap them, and keep them out of any route.
-                    detail = buf.lines().rev().take(3).collect::<Vec<_>>().join(" / ");
-                    detail.truncate(400);
-                }
-                let _ = std::fs::remove_file(&socket);
-                return Err(format!(
-                    "the WhatsApp helper started and then stopped ({status}). {detail}"
-                ));
-            }
-            *guard = Some(RunningSidecar {
-                child,
-                socket,
-                nonce: nonce.clone(),
-            });
-            Ok(SidecarStatus {
-                running: true,
-                nonce: Some(nonce),
-            })
-        }
+        "start" => start_helper(&mut guard),
         "stop" => {
             if let Some(mut running) = guard.take() {
                 let _ = running.child.kill();
@@ -403,6 +332,111 @@ pub async fn sidecar_ctl(
         }
         other => Err(format!("'{other}' is not a sidecar action")),
     }
+}
+
+/// The `start` arm's body, extracted so launch-time autostart (ADR-0037 §3) runs the SAME
+/// spawn — preflights, survival check and bookkeeping included — rather than a second copy
+/// that could drift.
+fn start_helper(guard: &mut Option<RunningSidecar>) -> Result<SidecarStatus, String> {
+    if let Some(running) = guard.as_ref() {
+        return Ok(SidecarStatus {
+            running: true,
+            nonce: Some(running.nonce.clone()),
+        });
+    }
+    // `snug_dir` is the ONE owner of this path rule (userfile.rs) — re-deriving it
+    // here would be a second spelling of a decision that already shipped a
+    // platform-ordering bug once.
+    let dir = crate::userfile::snug_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    // Through `socket_path`, not a second `join`: that function documents itself as
+    // the owner of this rule, and a rule whose only caller is its own test is a
+    // comment the compiler cannot check.
+    let socket = socket_path(&dir, SOCKET_BASENAME);
+
+    // PREFLIGHT, before anything is spawned (both added 2026-08-17 after the owner
+    // hit "the WhatsApp helper could not be started" on real hardware). A GUI app
+    // inherits a minimal PATH, so the `node` found here is often NOT the one on a
+    // developer's shell PATH — the owner's resolved to v18, and baileys needs 20+.
+    // Checking after the fact is not enough: `spawn` succeeds the instant the process
+    // exists, so a runtime that dies on its first import looks like a clean start.
+    if let Some(refusal) = helper_entry_refusal(&dir) {
+        return Err(refusal);
+    }
+    node_version_preflight()?;
+
+    // A stale socket file from a crashed run would make bind fail; removing it is
+    // safe because this path is ours and nothing else may write it.
+    let _ = std::fs::remove_file(&socket);
+    let nonce = mint_nonce();
+    let mut child = std::process::Command::new("node")
+        .arg("--enable-source-maps")
+        .arg(helper_entry(&dir))
+        .env("SNUG_SIDECAR_SOCKET", &socket)
+        .env("SNUG_SIDECAR_NONCE", &nonce)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not start the WhatsApp helper: {e}"))?;
+
+    // DID IT SURVIVE? `spawn` only proves the process was created. The helper binds
+    // its socket within milliseconds, so a short wait distinguishes "running" from
+    // "exited immediately" — and the difference matters enormously to the user, who
+    // was previously told the helper could not start when it started and then died.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    if let Ok(Some(status)) = child.try_wait() {
+        let mut detail = String::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            use std::io::Read;
+            let mut buf = String::new();
+            let _ = stderr.read_to_string(&mut buf);
+            // The helper's own last words are the most useful thing we have, but they
+            // are a subprocess's stderr: cap them, and keep them out of any route.
+            detail = buf.lines().rev().take(3).collect::<Vec<_>>().join(" / ");
+            detail.truncate(400);
+        }
+        let _ = std::fs::remove_file(&socket);
+        return Err(format!(
+            "the WhatsApp helper started and then stopped ({status}). {detail}"
+        ));
+    }
+    *guard = Some(RunningSidecar {
+        child,
+        socket,
+        nonce: nonce.clone(),
+    });
+    Ok(SidecarStatus {
+        running: true,
+        nonce: Some(nonce),
+    })
+}
+
+/// Should the shell start the helper at LAUNCH, unasked (ADR-0037 §3)?
+///
+/// Only when a WhatsApp session store already exists on disk: linking is the user's opt-in
+/// to a background helper, and a user who never linked must never grow one. The check is a
+/// bare EXISTENCE test on purpose — whether the session can actually resume is the helper's
+/// own call (`isResumableStore`, the material predicate), made by the process that owns the
+/// store's format. Duplicating that judgement here would be a second spelling that drifts.
+pub fn should_autostart(snug_dir: &std::path::Path) -> bool {
+    snug_dir.join("whatsapp-session").join("creds.json").exists()
+}
+
+/// Launch-time autostart: spawn the helper iff a session store exists, so history sync
+/// RESUMES before the user opens Telepath (or never, if they don't). Best-effort by design:
+/// there is no caller to report to at launch, and every failure here (helper not installed,
+/// old node, spawn refusal) recurs — with a proper error surface — the moment the wizard or
+/// an app read asks for the helper.
+pub fn autostart_if_linked(state: &SidecarState) {
+    let Ok(dir) = crate::userfile::snug_dir() else {
+        return;
+    };
+    if !should_autostart(&dir) {
+        return;
+    }
+    let Ok(mut guard) = state.inner.lock() else {
+        return;
+    };
+    let _ = start_helper(&mut guard);
 }
 
 /// Stop the helper on shell exit — the OTHER half of spawning one.
@@ -1228,5 +1262,46 @@ mod shutdown_tests {
         shutdown(&state);
         shutdown(&state);
         assert!(state.inner.lock().expect("mutex").is_none());
+    }
+}
+
+#[cfg(test)]
+mod autostart_tests {
+    use super::*;
+
+    // ADR-0037 §3 (owner interview 2026-08-18): the helper starts at LAUNCH when a linked
+    // session exists, so sync resumes before Telepath is opened. The decision predicate is
+    // pure and tested both ways — a positive without its negative twin would let "always
+    // start" pass, and every unlinked user would grow a background helper they never asked
+    // for. Whether the session can actually RESUME is the helper's own predicate
+    // (`isResumableStore`); this one only answers "did the user ever link here".
+
+    #[test]
+    fn autostart_fires_only_when_a_session_store_exists() {
+        let dir = std::env::temp_dir().join(format!("snug-autostart-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        assert!(!should_autostart(&dir), "no session store: a user who never linked grows no helper");
+
+        let session = dir.join("whatsapp-session");
+        std::fs::create_dir_all(&session).expect("session dir");
+        assert!(!should_autostart(&dir), "an empty session dir is not a link either");
+
+        std::fs::write(session.join("creds.json"), b"{}").expect("creds file");
+        assert!(should_autostart(&dir), "a creds file is the opt-in: launch resumes sync");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_setup_hook_actually_calls_autostart() {
+        // A hook nobody calls is the untested wire in its purest form (lessons.md
+        // 2026-08-18, earned by `sidecar_ctl("stop")` shipping with zero callers). Pin the
+        // caller at the source level: `lib.rs`'s setup must reach for autostart by name.
+        let lib = include_str!("lib.rs");
+        assert!(
+            lib.contains("sidecar::autostart_if_linked"),
+            "lib.rs setup no longer calls sidecar::autostart_if_linked — launch-time resume (ADR-0037 §3) is disconnected"
+        );
     }
 }
