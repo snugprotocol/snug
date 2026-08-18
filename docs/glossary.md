@@ -22,3 +22,5 @@
 - **Hub provider** — a multi-tenant service provisioning Snug apps per user; optional by construction — apps run from the browser copy of the user DB with no hub backend.
 - **Sync origin** — where the user DB replicates (hub `/userdb`, Dropbox, …) via the `SyncProvider` contract; OPFS is authoritative, divergence resolves only by explicit user action (ADR-0009).
 - **Execution mode** — `byok` (browser-direct frontier API), `local` (browser-direct localhost LLM), or `subscription` (hub-mediated /invoke); the user DB is client-authoritative in all three (ADR-0008).
+- **Per-app model / pinned model** — the LLM model ONE app routes its calls to, chosen in that app's run header and stored as `snug_settings['appModel:<appId>']` (ADR-0036). An app with no pin **inherits** the global Settings model and keeps following it when that changes — inheritance is an absence, never a copy.
+- **Effective model** — what `resolveModelForApp(appId)` answers: the app's pin, else the Settings default, else `undefined` (meaning "let the adapter apply its own provider default"). Read per send, never captured at construction.

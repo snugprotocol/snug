@@ -1,6 +1,6 @@
 # Snug — Architecture
 
-> Status: **implemented (living-apps evolution + hub ops + hub polish + observability/caching + Dynamic Auth v2 + lean runtime turns & intent-routed data chat, pre-launch)** — 2026-08-15 (post-08-11 merges, each with its own section or ADR: registry-authoritative auth + multi-option auth kind ADR-0020 · desktop shell ADR-0021 · desktop-aware auth/LAN providers ADR-0022/0023 · think-rail ADR-0024 · LAN verify-before-claim ADR-0025 · connection-relative addressing ADR-0026 · registry-pinned scopes + provider-reason auth banner + pinned-URL console links ADR-0028/0029), TASK-20260804-observability-caching (on TASK-20260804-hub-polish (on TASK-20260803-hub-ops (on living-apps, TASK-20260803-living-apps, on portable-hub, TASK-20260803-portable-hub). Hub ops added: long-run builds (48-iteration ceiling — there was never a timeout), 30-minute server lifetimes, a build step timeline, an in-memory LLM round-trip inspector (a SIBLING of the structural frame inspector, never an extension), cascade app delete with a terminal-delete tombstone, and the LLM-optional app doctrine (ADR-0011)). Hub polish added: a header identity menu with the Google avatar, the ember-niche brand mark, one merged "think" rail surface, round-trip observability in the build view AND the app-frame transport, explicit starter install (a starter is read-only until owned), build-thread continuity, and CAS conflicts that reach the divergence resolver instead of throwing. Observability/caching added: LIVE round-trip observation (calls and tools appear as they start, each timed), the wire model name, prompt caching on the stable tools+system prefix of BUILDER turns only (a per-TURN request flag — the app-frame envelopes are below the cacheable minimum and deliberately excluded) (ADR-0012), cache-hit reporting as a cached %, and a rotating status line replacing the duplicate step timeline. The inspector's memory bound moved from a per-field ingest cap to a total-bytes budget so expanded payloads can be shown whole.) Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is internal-draft schema v6 (`docs/spec-drafts/spec-v0.2-userdb.md` staged; `userdb-schema.ts` is the truth). Auth broker (hosted credential custody) is deliberately unbuilt — RFC at 1.6, GA at 2.0 (roadmap v2, owner decision 2026-08-05); hub LOGIN shipped separately in `apps/server`.
+> Status: **implemented (living-apps evolution + hub ops + hub polish + observability/caching + Dynamic Auth v2 + lean runtime turns & intent-routed data chat, pre-launch)** — 2026-08-15 (post-08-11 merges, each with its own section or ADR: registry-authoritative auth + multi-option auth kind ADR-0020 · desktop shell ADR-0021 · desktop-aware auth/LAN providers ADR-0022/0023 · think-rail ADR-0024 · LAN verify-before-claim ADR-0025 · connection-relative addressing ADR-0026 · registry-pinned scopes + provider-reason auth banner + pinned-URL console links ADR-0028/0029), TASK-20260804-observability-caching (on TASK-20260804-hub-polish (on TASK-20260803-hub-ops (on living-apps, TASK-20260803-living-apps, on portable-hub, TASK-20260803-portable-hub). Hub ops added: long-run builds (48-iteration ceiling — there was never a timeout), 30-minute server lifetimes, a build step timeline, an in-memory LLM round-trip inspector (a SIBLING of the structural frame inspector, never an extension), cascade app delete with a terminal-delete tombstone, and the LLM-optional app doctrine (ADR-0011)). Hub polish added: a header identity menu with the Google avatar, the ember-niche brand mark, one merged "think" rail surface, round-trip observability in the build view AND the app-frame transport, explicit starter install (a starter is read-only until owned), build-thread continuity, and CAS conflicts that reach the divergence resolver instead of throwing. Observability/caching added: LIVE round-trip observation (calls and tools appear as they start, each timed), the wire model name, prompt caching on the stable tools+system prefix of BUILDER turns only (a per-TURN request flag — the app-frame envelopes are below the cacheable minimum and deliberately excluded) (ADR-0012), cache-hit reporting as a cached %, and a rotating status line replacing the duplicate step timeline. The inspector's memory bound moved from a per-field ingest cap to a total-bytes budget so expanded payloads can be shown whole.) Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is internal-draft schema v6 (`docs/spec-drafts/spec-v0.2-userdb.md` staged; `userdb-schema.ts` is the truth). Auth broker (hosted credential custody) is deliberately unbuilt — RFC at 1.6, GA at 2.0 (roadmap v2, owner decision 2026-08-05); hub LOGIN shipped separately in `apps/server`. **Per-app model selection (2026-08-18, ADR-0036)**: each app may pin its own LLM model and every app-scoped call for it routes there; storage is a namespaced `snug_settings` key, so the wire protocol and userdb schema are both unchanged (see the section below).
 >
 > **TASK-20260811 (ADR-0018/0019) added two protocol-level USPs.** (1) **Lean runtime
 > turns**: an installed app's own LLM turns are assembled from a compact, version-pinned
@@ -212,6 +212,34 @@ state too because an empty list is precisely where the ambiguity bites.
 
 Threat surface: `docs/security/threat-model-delta-whatsapp-sidecar.md` (+ its surface-v2
 addendum). Desktop-only by construction — a browser tab cannot open a unix socket.
+
+## Per-app model selection (TASK-20260817, ADR-0036)
+
+The model was ONE global setting applied to every app in every lane. An app may now PIN
+its own, and every app-scoped LLM call for that app routes there — the app's runtime
+turns, the builder lane, app-attached chat, and the two inference call sites that have an
+app id. All four resolve through one function, `resolveModelForApp(appId)`
+(`playground/src/state/appModel.ts`), whose precedence is **pick → Settings default →
+`undefined`**; the tail is contract, not a gap, because the adapters apply their own
+`*_DEFAULT_MODEL` when `model` is absent, which is what an empty Settings field has
+always meant.
+
+Two properties are load-bearing. **Inheriting is an ABSENCE, not a copy**: an app that
+was never picked-for stores no row and therefore FOLLOWS a later change to the global
+default, which is also what keeps "pinned" distinguishable from "inherited". And
+resolution happens **per send, never at construction** — RunView memoizes its transport
+and `useBuilderChat` its agent, so a value read once would freeze the app on whatever was
+chosen when the view mounted.
+
+Storage is a namespaced key in the EXISTING `snug_settings` KV
+(`appModel:<appId>`, shape single-homed in `packages/db/src/userdb/app-settings-keys.ts`),
+so there is **no `USERDB_SCHEMA_VERSION` bump, no migration and no spec-changelog entry**
+— the model is a host-side user preference, deliberately NOT a `RuntimeContract` field,
+which would version-link it and push the change through `packages/protocol` (ADR-0036 D1).
+The price of the shared namespace is that `deleteApp` must cascade to the key explicitly
+(step 3c, an equality delete beside the `auth:<appId>:*` prefix delete). Under the
+webllm/demo brain the pick is ignored and the control renders nothing — the brain
+overrides the configured mode entirely (ADR-0015).
 
 ## Dependency graph (who depends on whom → whose tests also run)
 
