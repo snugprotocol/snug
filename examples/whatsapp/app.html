@@ -635,6 +635,22 @@
     }
 
     /**
+     * The ONE place a chat row's label comes from (owner-reported 2026-08-18: 1:1 rows
+     * printed "…@s.whatsapp.net" raw). The helper names a chat by its own jid when it knows
+     * nothing better — an honest placeholder for a store, but never a label for a human.
+     * Order is the owner's chosen WhatsApp-Web convention: saved name → ~push name →
+     * whatever fallbackLabel can honestly say (formatted number, Group, Unknown contact).
+     */
+    function chatDisplayName(chat) {
+      var c = chat || {};
+      var name = typeof c.name === 'string' ? c.name : '';
+      if (name.length > 0 && name !== c.jid) {
+        return c.nameKind === 'push' ? '~' + name : name;
+      }
+      return fallbackLabel(c.jid);
+    }
+
+    /**
      * The USER's measured emoji habits — most frequent first. Nobody else's rows count.
      * One token = one pictograph plus its own modifiers (skin tone, VS16), extended ONLY
      * through a ZWJ — adjacent separate emoji must never glue into one token, or '😂😂'
@@ -862,7 +878,8 @@
       return AVATAR_HUES[h % AVATAR_HUES.length];
     }
     function initialsOf(name) {
-      const words = String(name || '?').trim().split(/\s+/).slice(0, 2);
+      // The ~push-name mark is presentation, not a person's initial.
+      const words = String(name || '?').replace(/^~/, '').trim().split(/\s+/).slice(0, 2);
       return words.map((w) => (w[0] || '').toUpperCase()).join('') || '?';
     }
 
@@ -1096,9 +1113,15 @@
       const nameByJid = useMemo(() => {
         const names = new Map();
         for (const chat of chats) {
-          if (!chat.isGroup) names.set(chat.jid, chat.name);
+          // A jid-placeholder is NOT a name: mapping it here fed the raw jid straight back
+          // through displayName's truthiness check, bypassing fallbackLabel entirely.
+          if (!chat.isGroup && chat.name && chat.name !== chat.jid) {
+            names.set(chat.jid, chat.nameKind === 'push' ? '~' + chat.name : chat.name);
+          }
           for (const part of chat.participants || []) {
-            if (part.name && !names.has(part.jid)) names.set(part.jid, part.name);
+            if (part.name && !names.has(part.jid)) {
+              names.set(part.jid, part.nameKind === 'push' ? '~' + part.name : part.name);
+            }
           }
         }
         return names;
@@ -1358,9 +1381,9 @@
               const badge = badgeFor(chat);
               return (
                 <button key={chat.jid} className="chat-row" aria-current={chat.jid === ui.openJid} data-unread={badge > 0} onClick={() => openThread(chat.jid)}>
-                  <Avatar api={api} jid={chat.jid} name={chat.name} />
+                  <Avatar api={api} jid={chat.jid} name={chatDisplayName(chat)} />
                   <span className="mid">
-                    <span className="name">{chat.name}</span>
+                    <span className="name">{chatDisplayName(chat)}</span>
                     <span className="preview">
                       {chat.lastMessage
                         ? `${chat.lastMessage.fromMe ? 'You: ' : ''}${chat.lastMessage.kind === 'image' ? '📷 Photo' + (chat.lastMessage.text ? ' · ' + chat.lastMessage.text : '') : chat.lastMessage.text}`
@@ -1392,12 +1415,12 @@
           <div>pick a conversation — read it live, analyse it, answer in your own voice</div>
         </section>
       ) : (
-        <section className="thread-pane" aria-label={`conversation with ${openChat ? openChat.name : ui.openJid}`}>
+        <section className="thread-pane" aria-label={`conversation with ${openChat ? chatDisplayName(openChat) : fallbackLabel(ui.openJid)}`}>
           <div className="thread-head">
             <button className="icon-btn back-btn" aria-label="back to chats" onClick={() => setUi((prev) => ({ ...prev, openJid: null }))}>‹</button>
-            <Avatar api={api} jid={ui.openJid} name={openChat ? openChat.name : '?'} size={38} />
+            <Avatar api={api} jid={ui.openJid} name={openChat ? chatDisplayName(openChat) : '?'} size={38} />
             <div className="who">
-              <div className="name">{openChat ? openChat.name : ui.openJid}</div>
+              <div className="name">{openChat ? chatDisplayName(openChat) : fallbackLabel(ui.openJid)}</div>
               <div className="sub">
                 {openChat && openChat.isGroup
                   ? `${(openChat.participants || []).length || 'group'} participants`

@@ -197,12 +197,22 @@ function mentionsOf(message: { message?: unknown }): readonly string[] | undefin
   return jids.length > 0 ? jids : undefined;
 }
 
-/** Map a Baileys message onto the seam's shape, or undefined when it is not a text message. */
+/**
+ * Map a Baileys message onto the seam's shape, or undefined when it is not a text message.
+ *
+ * `senderPushName` rides beside the row when the SENDER's self-set display name is known and
+ * the row is not the user's own: on a fromMe row the sender seat resolves to the chat PARTNER
+ * while `pushName` is the USER's name, so harvesting it would rename everyone as the user.
+ * Push names are the only name source for a group member with no 1:1 chat (history-sync
+ * contact rows are synthesized one-per-conversation), which made discarding them the dominant
+ * cause of "Unknown contact" (owner report 2026-08-18).
+ */
 export function toWaMessage(raw: {
   key?: { id?: string | null; remoteJid?: string | null; participant?: string | null; fromMe?: boolean | null };
   message?: unknown;
   messageTimestamp?: number | Long | null;
-}): { chatJid: string; message: WaMessage } | undefined {
+  pushName?: string | null;
+}): { chatJid: string; message: WaMessage; senderPushName?: string } | undefined {
   const id = raw.key?.id;
   const chatJid = raw.key?.remoteJid;
   const from = senderOf(raw);
@@ -220,8 +230,12 @@ export function toWaMessage(raw: {
         : 0;
   const mentions = mentionsOf(raw);
   const thumbnail = image !== undefined && image !== null ? thumbnailOf(image) : undefined;
+  const pushName = raw.key?.fromMe === true ? undefined : raw.pushName;
   return {
     chatJid,
+    ...(typeof pushName === 'string' && pushName.trim().length > 0
+      ? { senderPushName: pushName.trim() }
+      : {}),
     message: {
       id,
       from,
@@ -322,6 +336,12 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   const ingest = (raw: Parameters<typeof toWaMessage>[0], live: boolean): void => {
     const mapped = toWaMessage(raw);
     if (mapped === undefined) return;
+    // Harvest the sender's push name BEFORE the row lands, so a brand-new chat is born named
+    // rather than named on the next refresh. The store's tier rules make this safe (a push
+    // name never displaces a saved one) and cheap (an unchanged name skips the refresh pass).
+    if (mapped.senderPushName !== undefined) {
+      store.rememberContacts([{ id: mapped.message.from, notify: mapped.senderPushName }]);
+    }
     const { added } = store.ingest(mapped.chatJid, mapped.message, { live });
     if (!added) return;
     if (mapped.message.kind === 'image') {

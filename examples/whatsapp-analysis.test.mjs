@@ -52,7 +52,7 @@ function loadAnalysisModule() {
   assert.ok(source.trim().length > 200, 'the extracted analysis core is substantial, not an empty slice');
 
   const factory = new Function(
-    `${source}\nreturn { extendPseudonymMap, pseudonymizeForLlm, redactIdentifiers, deanonymizeText, emojiFrequency, fallbackLabel, buildAnalysisRequest, mergeMessages, statsByParticipant, activityBuckets, responseStats, messagesByMonth };`,
+    `${source}\nreturn { extendPseudonymMap, pseudonymizeForLlm, redactIdentifiers, deanonymizeText, emojiFrequency, fallbackLabel, chatDisplayName, buildAnalysisRequest, mergeMessages, statsByParticipant, activityBuckets, responseStats, messagesByMonth };`,
   );
   return factory();
 }
@@ -64,6 +64,7 @@ const {
   deanonymizeText,
   emojiFrequency,
   fallbackLabel,
+  chatDisplayName,
   buildAnalysisRequest,
   mergeMessages,
   statsByParticipant,
@@ -433,4 +434,37 @@ test('fallbackLabel does not put a + on a non-numeric local part', () => {
   // A short or non-numeric local part is not a dialable number either.
   assert.equal(fallbackLabel('status@s.whatsapp.net'), 'status');
   assert.equal(fallbackLabel('123@s.whatsapp.net'), '123');
+});
+
+// ------------------------------------------------------------- chat display names
+//
+// OWNER-REPORTED 2026-08-18: 1:1 chat rows printed the raw jid
+// ("…@s.whatsapp.net") because the sidecar's honest placeholder — a chat named by its own
+// jid — was rendered VERBATIM: `fallbackLabel` existed but was only applied to message
+// senders. `chatDisplayName` is the one place a chat row's label comes from now, and its
+// contract is the owner's chosen WhatsApp-Web order: saved name → ~push name → formatted
+// number — and NEVER a raw jid.
+
+test('chatDisplayName renders a real name verbatim', () => {
+  assert.equal(chatDisplayName({ jid: '111@s.whatsapp.net', name: 'Asha Rao' }), 'Asha Rao');
+});
+
+test('chatDisplayName marks a push-sourced name with the ~ convention', () => {
+  assert.equal(chatDisplayName({ jid: '222@s.whatsapp.net', name: 'Bo', nameKind: 'push' }), '~Bo');
+});
+
+test('chatDisplayName never renders a raw jid — a placeholder falls back to the number', () => {
+  assert.equal(
+    chatDisplayName({ jid: '919876543210@s.whatsapp.net', name: '919876543210@s.whatsapp.net' }),
+    '+919876543210',
+  );
+});
+
+test('chatDisplayName never renders a LID placeholder as a number', () => {
+  assert.equal(chatDisplayName({ jid: '77771@lid', name: '77771@lid' }), 'Unknown contact');
+});
+
+test('chatDisplayName treats an empty or missing name as a placeholder too', () => {
+  assert.equal(chatDisplayName({ jid: '919876543210@s.whatsapp.net', name: '' }), '+919876543210');
+  assert.equal(chatDisplayName({ jid: '123-456@g.us' }), 'Group');
 });

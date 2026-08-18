@@ -73,27 +73,64 @@ export interface ThreadStore {
   messagesSince(jid: string, since?: number): readonly WaMessage[] | undefined;
 }
 
+/**
+ * Where a name came from decides what may replace it (owner-chosen order, 2026-08-18):
+ * the name the USER saved outranks a business's verified name outranks the name a person
+ * set for themselves. Tiers exist because push names are now harvested from EVERY message
+ * row — without them, the newest message would constantly rename saved contacts.
+ */
+type NameKind = 'contact' | 'push' | 'verified';
+const NAME_TIER: Record<NameKind, number> = { contact: 3, verified: 2, push: 1 };
+
+interface NameEntry {
+  name: string;
+  kind: NameKind;
+}
+
 export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD): ThreadStore {
   const chats = new Map<string, WaChat>();
   const messages = new Map<string, WaMessage[]>();
-  /** identity (either spelling) → display name. */
-  const names = new Map<string, string>();
+  /** identity (either spelling) → display name + the tier it came from. */
+  const names = new Map<string, NameEntry>();
   /** lid → phone-number jid. The canonical direction: a LID is never a phone number. */
   const lidToPn = new Map<string, string>();
   /** Group rosters, kept raw so a later contact sync can re-name their participants. */
   const groupRosters = new Map<string, readonly string[]>();
 
-  const nameFromContact = (contact: WaContact): string | undefined => {
-    for (const candidate of [contact.name, contact.notify, contact.verifiedName]) {
-      if (typeof candidate === 'string' && candidate.trim().length > 0) return candidate.trim();
+  const nameFromContact = (contact: WaContact): NameEntry | undefined => {
+    const seats: ReadonlyArray<readonly [string | undefined, NameKind]> = [
+      [contact.name, 'contact'],
+      [contact.notify, 'push'],
+      [contact.verifiedName, 'verified'],
+    ];
+    for (const [candidate, kind] of seats) {
+      if (typeof candidate === 'string' && candidate.trim().length > 0) {
+        return { name: candidate.trim(), kind };
+      }
     }
     return undefined;
   };
 
+  /**
+   * Record one spelling's name. A LOWER tier never displaces a higher one (a push name must
+   * not rename a saved contact); the same tier overwrites (people rename themselves, users
+   * edit their address book). Returns whether anything actually changed — the caller skips
+   * its refresh pass otherwise, which matters now that every history row can carry a name.
+   */
+  const learnName = (spelling: string, entry: NameEntry): boolean => {
+    const existing = names.get(spelling);
+    if (existing !== undefined && NAME_TIER[entry.kind] < NAME_TIER[existing.kind]) return false;
+    if (existing !== undefined && existing.name === entry.name && existing.kind === entry.kind) return false;
+    names.set(spelling, entry);
+    return true;
+  };
+
   const resolveIdentity = (identity: string): string => lidToPn.get(identity) ?? identity;
 
-  const contactName = (identity: string): string | undefined =>
+  const nameEntryOf = (identity: string): NameEntry | undefined =>
     names.get(identity) ?? names.get(resolveIdentity(identity));
+
+  const contactName = (identity: string): string | undefined => nameEntryOf(identity)?.name;
 
   /**
    * Re-derive a group's participant list from its raw roster plus whatever the directory
@@ -108,10 +145,13 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
     chats.set(jid, {
       ...chat,
       participants: roster.map((id) => {
-        const name = contactName(id);
+        const entry = nameEntryOf(id);
         // No name seat at all when unknown — never a fabricated one. The app renders what
-        // it can and stays honest about the rest.
-        return name !== undefined ? { jid: id, name } : { jid: id };
+        // it can and stays honest about the rest. A push-sourced name says so (`nameKind`),
+        // so the app can render WhatsApp's ~convention.
+        return entry !== undefined
+          ? { jid: id, name: entry.name, ...(entry.kind === 'push' ? { nameKind: 'push' as const } : {}) }
+          : { jid: id };
       }),
     });
   };
@@ -120,8 +160,13 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
   const refreshChatName = (jid: string): void => {
     const chat = chats.get(jid);
     if (chat === undefined || chat.isGroup) return;
-    const name = contactName(jid);
-    if (name !== undefined && name !== chat.name) chats.set(jid, { ...chat, name });
+    const entry = nameEntryOf(jid);
+    if (entry === undefined) return;
+    const wantsPushMark = entry.kind === 'push';
+    if (entry.name === chat.name && wantsPushMark === (chat.nameKind === 'push')) return;
+    // Rebuilt rather than spread so an upgraded name SHEDS a stale `nameKind` seat.
+    const { nameKind: _stale, ...rest } = chat;
+    chats.set(jid, { ...rest, name: entry.name, ...(wantsPushMark ? { nameKind: 'push' as const } : {}) });
   };
 
   const rememberChat = (jid: string, name?: string): void => {
@@ -136,10 +181,12 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
     }
     // A new chat takes the offered name, else whatever the address book already knows
     // about this identity, else its jid as an honest placeholder.
-    const known = name !== undefined && name.length > 0 ? name : contactName(jid);
+    const known: NameEntry | undefined =
+      name !== undefined && name.length > 0 ? { name, kind: 'contact' } : nameEntryOf(jid);
     chats.set(jid, {
       jid,
-      name: known !== undefined && known.length > 0 ? known : jid,
+      name: known !== undefined ? known.name : jid,
+      ...(known !== undefined && known.kind === 'push' ? { nameKind: 'push' as const } : {}),
       isGroup: jid.endsWith('@g.us'),
     });
   };
@@ -155,16 +202,17 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
         if (typeof contact.lid === 'string' && typeof contact.phoneNumber === 'string') {
           lidToPn.set(contact.lid, contact.phoneNumber);
         }
-        const name = nameFromContact(contact);
+        const entry = nameFromContact(contact);
         // A partial update (no name seat) must not erase what we already know: Baileys
         // sends `contacts.update` with only the changed fields.
-        if (name === undefined) continue;
-        learned = true;
+        if (entry === undefined) continue;
         for (const spelling of [contact.id, contact.lid, contact.phoneNumber]) {
-          if (typeof spelling === 'string' && spelling.length > 0) names.set(spelling, name);
+          if (typeof spelling === 'string' && spelling.length > 0) {
+            if (learnName(spelling, entry)) learned = true;
+          }
         }
         const pn = lidToPn.get(contact.id);
-        if (pn !== undefined) names.set(pn, name);
+        if (pn !== undefined && learnName(pn, entry)) learned = true;
       }
       if (!learned) return;
       // Names can arrive after the chats and rosters they belong to.
@@ -179,8 +227,8 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
         // A name known under either spelling now covers both.
         const known = names.get(mapping.pn) ?? names.get(mapping.lid);
         if (known !== undefined) {
-          names.set(mapping.pn, known);
-          names.set(mapping.lid, known);
+          learnName(mapping.pn, known);
+          learnName(mapping.lid, known);
         }
       }
       for (const jid of chats.keys()) refreshChatName(jid);

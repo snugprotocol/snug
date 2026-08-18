@@ -182,11 +182,58 @@ describe('the contact directory', () => {
     const chat = store.listChats().find((row) => row.jid === 'g1@g.us')!;
     expect(chat.name).toBe('Trip planning');
     expect(chat.isGroup).toBe(true);
+    // MIGRATED 2026-08-18: a notify-sourced name now also carries `nameKind: 'push'`, so the
+    // consumer can render WhatsApp's ~convention. The original claim — names ride the roster,
+    // an unknown gets NO seat, never a fabrication — is unchanged.
     expect(chat.participants).toEqual([
       { jid: '111@s.whatsapp.net', name: 'Asha Rao' },
-      { jid: '222@s.whatsapp.net', name: 'Bo' },
+      { jid: '222@s.whatsapp.net', name: 'Bo', nameKind: 'push' },
       { jid: '333@s.whatsapp.net' }, // unknown: no name seat at all, never a fabricated one
     ]);
+  });
+
+  // ---- the push-name tier (owner report 2026-08-18: "most participants show Unknown
+  // contact"; the fix harvests `pushName` from every message row, which makes tier rules
+  // load-bearing: a self-set name must never displace the one the USER saved).
+
+  it('a push name fills a gap but never downgrades a saved name', () => {
+    const store = createThreadStore();
+    store.rememberContacts([{ id: '111@s.whatsapp.net', name: 'Asha (work)' }]);
+    // The message-harvest spelling: a bare notify row, as `ingest` feeds it.
+    store.rememberContacts([{ id: '111@s.whatsapp.net', notify: 'asha ✨' }]);
+    expect(store.contactName('111@s.whatsapp.net')).toBe('Asha (work)');
+    // And the gap-filling half: an identity with no saved name takes the push name.
+    store.rememberContacts([{ id: '222@s.whatsapp.net', notify: 'Bo' }]);
+    expect(store.contactName('222@s.whatsapp.net')).toBe('Bo');
+  });
+
+  it('a saved name arriving later upgrades a push name', () => {
+    const store = createThreadStore();
+    store.rememberContacts([{ id: '222@s.whatsapp.net', notify: 'Bo' }]);
+    store.rememberContacts([{ id: '222@s.whatsapp.net', name: 'Robert Chen' }]);
+    expect(store.contactName('222@s.whatsapp.net')).toBe('Robert Chen');
+  });
+
+  it('a newer push name replaces an older push name — people rename themselves', () => {
+    const store = createThreadStore();
+    store.rememberContacts([{ id: '222@s.whatsapp.net', notify: 'Bo' }]);
+    store.rememberContacts([{ id: '222@s.whatsapp.net', notify: 'Bo 🌊' }]);
+    expect(store.contactName('222@s.whatsapp.net')).toBe('Bo 🌊');
+  });
+
+  it('a DM chat named only by push name says so, and sheds the mark when a saved name lands', () => {
+    // `nameKind: 'push'` is how the app renders WhatsApp's ~convention; it must appear ONLY
+    // for push-sourced names — a saved name carrying it would print a spurious ~.
+    const store = createThreadStore();
+    store.ingest('222@s.whatsapp.net', msg('m1', 1), { live: false });
+    store.rememberContacts([{ id: '222@s.whatsapp.net', notify: 'Bo' }]);
+    const pushNamed = store.listChats().find((row) => row.jid === '222@s.whatsapp.net')!;
+    expect(pushNamed.name).toBe('Bo');
+    expect(pushNamed.nameKind).toBe('push');
+    store.rememberContacts([{ id: '222@s.whatsapp.net', name: 'Robert Chen' }]);
+    const saved = store.listChats().find((row) => row.jid === '222@s.whatsapp.net')!;
+    expect(saved.name).toBe('Robert Chen');
+    expect(saved).not.toHaveProperty('nameKind');
   });
 
   it('maps a group participant given by LID onto the contact behind it', () => {

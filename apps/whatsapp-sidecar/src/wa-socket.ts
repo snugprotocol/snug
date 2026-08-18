@@ -54,8 +54,14 @@ export interface WaMessage {
 export interface WaChat {
   jid: string;
   name: string;
+  /**
+   * Present (as `'push'`) ONLY when `name` is the contact's own self-set push name rather
+   * than one the user saved — the app renders those under WhatsApp's ~convention. Saved and
+   * verified names carry no mark.
+   */
+  nameKind?: 'push';
   isGroup: boolean;
-  participants?: readonly { jid: string; name?: string }[];
+  participants?: readonly { jid: string; name?: string; nameKind?: 'push' }[];
   /**
    * Owned by the SIDECAR (ADR-0034/review F4): Baileys reports unread only as a snapshot
    * on synced conversations, so the adapter seeds from that and increments itself per live
