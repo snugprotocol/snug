@@ -36,12 +36,14 @@ export interface SidecarRoute {
 }
 
 /**
- * The `:jid` placeholder — a WhatsApp thread id (`123@g.us`, `123@s.whatsapp.net`). Matched
- * as EXACTLY ONE non-empty path segment: a jid that could span segments would let
- * `/chats/a/b/messages` masquerade as a thread route, and a jid that could be empty would
- * make `/chats//messages` a legal read of nothing.
+ * A placeholder segment — `:jid` (a WhatsApp thread id: `123@g.us`, `123@s.whatsapp.net`)
+ * or `:id` (a message id, ADR-0034). Matched as EXACTLY ONE non-empty path segment: a value
+ * that could span segments would let `/chats/a/b/messages` masquerade as a thread route,
+ * and a value that could be empty would make `/chats//messages` a legal read of nothing.
+ * Every placeholder gets the same class — the traversal guard below, not the segment
+ * pattern, is what refuses `..`-shaped values.
  */
-const JID_SEGMENT = '[^/]+';
+const PARAM_SEGMENT = '[^/]+';
 
 /**
  * EVERY route the sidecar serves. Closed set: the Node server refuses anything absent from
@@ -59,6 +61,15 @@ export const SIDECAR_ROUTES: readonly SidecarRoute[] = [
   { method: 'GET', path: '/chats/:jid/history' },
   { method: 'GET', path: '/chats/:jid/messages' },
   { method: 'POST', path: '/chats/:jid/messages' },
+  // --- surface v2 (ADR-0034, TASK-20260817-telepath; app-reachable) ---
+  // `/events` long-polls a bounded ring of LEAN HINTS ({jid, kind, ts} — no message
+  // bodies, no thumbnails): the host pump's doorbell, never a delivery. `?cursor=` is a
+  // contract parameter like `?since=`. Media/picture return base64 JSON under the same
+  // 1 MiB while-reading transport cap as every other response — the sidecar REFUSES
+  // oversized media with a structured answer rather than truncating.
+  { method: 'GET', path: '/events' },
+  { method: 'GET', path: '/chats/:jid/media/:id' },
+  { method: 'GET', path: '/chats/:jid/picture' },
 ] as const;
 
 /**
@@ -89,7 +100,7 @@ export const APP_REACHABLE_SIDECAR_ROUTES: readonly SidecarRoute[] = SIDECAR_ROU
 function routeMatcher(path: string): RegExp {
   const escaped = path
     .split('/')
-    .map((segment) => (segment === ':jid' ? JID_SEGMENT : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    .map((segment) => (segment.startsWith(':') ? PARAM_SEGMENT : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     .join('/');
   return new RegExp(`^${escaped}$`);
 }
