@@ -61,6 +61,7 @@ export const IPC_CHECK_IDS = [
   'ipc-invoke-refused',
   'ipc-lan-fetch-refused',
   'ipc-sidecar-fetch-refused',
+  'ipc-sidecar-fetch-dispatchable',
 ] as const;
 
 /**
@@ -412,6 +413,37 @@ export function decideSidecarFetchRefused(
   };
 }
 
+/**
+ * THE POSITIVE TWIN (TASK-20260817-telepath, next-steps 2026-08-17 §1).
+ *
+ * `ipc-sidecar-fetch-refused` PASSED while the command was UNREGISTERED — eight-seam
+ * defect #1: `SidecarState` was never `.manage()`d, every invoke died at the IPC boundary,
+ * and an unreachable-from-everywhere command satisfies an unreachability check perfectly.
+ * So the negative check gets a twin proving the MAIN window can dispatch the command at
+ * all. Refusal from inside the command body ("helper not running", an admission refusal)
+ * is a PASS — the body ran, which is the whole question. Only the unregistered/uncapable
+ * shapes fail: those mean the dispatch never happened and the negative check opposite is
+ * vouching for nothing.
+ */
+export function decideSidecarFetchDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
+  const id = 'ipc-sidecar-fetch-dispatchable';
+  if (outcome.resolved) {
+    return { id, pass: true, detail: `${SIDECAR_FETCH_COMMAND} dispatched from the main window and resolved` };
+  }
+  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
+    return {
+      id,
+      pass: false,
+      detail: `${SIDECAR_FETCH_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the refusal check opposite is vouching for nothing`,
+    };
+  }
+  return {
+    id,
+    pass: true,
+    detail: `${SIDECAR_FETCH_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
+  };
+}
+
 export async function runIpcChecks(): Promise<CheckResult[]> {
   const { byId, report } = await new Promise<{ byId: Map<string, CheckResult>; report?: ProbeReport }>((resolve) => {
     const iframe = document.createElement('iframe');
@@ -475,6 +507,17 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
   );
   byId.set('ipc-lan-fetch-refused', decideLanFetchRefused(report, keyReachable));
   byId.set('ipc-sidecar-fetch-refused', decideSidecarFetchRefused(report, keyReachable));
+
+  // The POSITIVE twin, driven from the main frame — a real, well-formed app-route call.
+  // Any answer from the command BODY passes; only the unregistered shapes fail.
+  let dispatch: { resolved: boolean; detail: string };
+  try {
+    await invoke(SIDECAR_FETCH_COMMAND, { method: 'GET', pathAndQuery: '/chats' });
+    dispatch = { resolved: true, detail: 'resolved' };
+  } catch (err) {
+    dispatch = { resolved: false, detail: String(err) };
+  }
+  byId.set('ipc-sidecar-fetch-dispatchable', decideSidecarFetchDispatchable(dispatch));
 
   // EVERY id must be present — a missing verdict is a FAIL (AC7).
   return IPC_CHECK_IDS.map((id) => byId.get(id) ?? { id, pass: false, detail: 'no-verdict' });
