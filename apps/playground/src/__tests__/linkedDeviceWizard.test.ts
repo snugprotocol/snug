@@ -200,7 +200,7 @@ describe('runDeviceLinkAttempt — start, poll, verify, then record', () => {
     const { beginDeviceLink } = await import('../state/connectionWizard.js');
     const started = await beginDeviceLink();
     expect(started.ok).toBe(true);
-    if (started.ok) expect(started.qr).toBe('QR-PAYLOAD');
+    expect(started.ok && 'qr' in started ? started.qr : undefined).toBe('QR-PAYLOAD');
   });
 
   /**
@@ -229,7 +229,7 @@ describe('runDeviceLinkAttempt — start, poll, verify, then record', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     const started = await pending;
     expect(started.ok).toBe(true);
-    if (started.ok) expect(started.qr).toBe('QR-AFTER-HANDSHAKE');
+    expect(started.ok && 'qr' in started ? started.qr : undefined).toBe('QR-AFTER-HANDSHAKE');
     // The mechanism, not just the outcome: the QR arrived on the THIRD ask, so a green here
     // means the flow really re-asked rather than getting lucky on the first read.
     expect(calls.filter((c) => c === 'GET /pair/qr').length).toBeGreaterThanOrEqual(3);

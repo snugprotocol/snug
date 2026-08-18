@@ -1,6 +1,6 @@
 # TASK-20260818-telepath-linking-sync: Telepath — QR on first click, name/avatar resolution, sync progress + resume
 
-- **Status**: planned (awaiting owner plan approval — no implementation yet)
+- **Status**: in-review (plan owner-approved 2026-08-18 — "go"; Phases A–D implemented, Gate 5 in progress)
 - **Owner**: Jeetu
 - **Risk tier**: medium (owner-confirmed at interview, 2026-08-18)
 - **Branch**: `fix/TASK-20260818-telepath-linking-sync`
@@ -101,6 +101,32 @@ None (no protocol schema change). Re-check at Gate 5; tripwire in Phases table.
 - **The cache payload carries `history` beside the store snapshot (D1):** without it, a restored fully-synced session would report "still syncing" forever — the exact rendered-ambiguity lesson from 2026-08-17.
 - **`startLink`'s idempotence guard widened (D2):** boot resume means a socket can exist with link still `idle`; the old guard would have fallen through to `resetAuthStore` and destroyed the working session mid-resume. `idle`-with-a-socket now returns; only `closed` retries.
 
+## Gate-5 review outcome (2026-08-18)
+
+Six-angle fresh-context review (line-scan, removed-behavior, cross-file trace, reuse,
+simplification, altitude, efficiency + conventions). **Fixed in `0c4c2ad`:** already-linked
+wizard dead-end; `~`-prefix privacy-scrub regression; SIGKILL reap voiding the exit flush
+(now SIGTERM-first, test-pinned); needsRelink poll retirement + header hide; seat/tier order
+mismatch (verified before notify — migrated test); prototype-walking `in` on restore;
+duplicated QR read and creds-material read; store-owned `onChange` persistence trigger.
+
+**Accepted residuals (documented, not fixed here):**
+- A hung boot-resume (socket stuck `idle`) still ends in the QR deadline's named error; only a
+  helper restart clears it. Rare (needs a half-dead network exactly at resume).
+- A second app linking to WhatsApp after the one-shot token release hits "linked but no key" —
+  pre-existing one-mint-per-link posture, now more reachable; follow-up filed.
+- `start_helper` holds the state mutex through its 600 ms survival wait (pre-existing for the
+  command; autostart adds one such window at launch).
+- A half-linked wedge still grows an idle helper at launch (existence check is deliberately
+  shallow; the helper's own predicate refuses to connect).
+- A deleted address-book entry never demotes a saved (contact-tier) name — push names can't
+  displace it by design.
+- v1 snapshot is a whole-store synchronous JSON write every debounce during heavy sync;
+  SQLite successor named in ADR-0037.
+- Epoch-loop scaffold exists twice (pump + sync poll); thread-cache vs token-store file
+  primitives unshared; `/chats` poll pulls the full list for two numbers (an `/events` sync
+  seat is the spec-sync'd fix). All filed in next-steps.
+
 ## Session journal (append-only, newest last)
 
 ### 2026-08-18 — Claude (with Jeetu) — session
@@ -108,3 +134,15 @@ None (no protocol schema change). Re-check at Gate 5; tripwire in Phases table.
 - State: Gates 1–2 complete on the branch; STOPPED for owner plan approval. No implementation code written.
 - Next step: on approval → Phase A tests first (`linkedDeviceWizard.test.ts` QR poll deadline + named timeout state).
 - Open questions: none blocking; residual for AC2 noted (a group member who never spoke, has no 1:1 chat, and no PUSH_NAME chunk stays unresolved — allowed by AC wording).
+
+### 2026-08-18 (Gate 5/6) — Claude — session
+- Done: six-angle fresh-context review ran; six findings fixed (`0c4c2ad` + tsc-narrowing follow-up), residuals + follow-ups recorded (task file, next-steps 2026-08-18 entries, lessons ×3), code-map row added, ADR-0037 §4 amended. Final verification: sidecar 132, playground 1214 (tsc-gated), examples 204, cargo 87, forced root `turbo run test --force` 23/23 `Cached: 0`, exit 0.
+- State: in-review; PR opened. Owner hardware walk owed (next-steps 2026-08-18 walk entry): first-click QR, names, avatars, sync progress + resume across app close and desktop restart, and a pseudonymization spot-check.
+- Next step: human review + merge; then the hardware walk; ADR-0037 flips to accepted at merge.
+- Open questions: none.
+
+### 2026-08-18 (later) — Claude (with Jeetu) — session
+- Done: owner approved the plan ("go"). Phases A–D implemented tests-first and committed individually: A `4243bf4` (QR poll + rotation), B (pushName harvest + name tiers + chatDisplayName), C (avatar miss TTL + 3-slot limiter), D1+D2 (thread cache + boot resume), D3 (Rust launch autostart), D4 (sync poll on `/chats` + header indicator + in-app banner). Suites green per phase: sidecar 131, playground 1209, examples 204, cargo 86; forced root `turbo run test --force` green; app.html babel script parse-checked.
+- State: Gate 5 in progress — fresh-context AI review running; one confirmed finding queued (Rust reap is SIGKILL, so the sidecar's exit-flush never runs on shell exit).
+- Next step: land review fixes, then Gate 6 close-out (lessons, doc drift, PR) and the owner hardware walk (verification section).
+- Open questions: none.
