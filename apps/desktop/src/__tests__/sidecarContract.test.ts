@@ -112,6 +112,17 @@ describe('the shell wrappers name the commands lib.rs registers', () => {
     expect(libSource).toContain('sidecar::sidecar_fetch');
   });
 
+  it('STOPS the helper on exit — spawning without reaping is what orphans it', () => {
+    // OWNER-REPORTED 2026-08-18: quitting the shell left the helper running, so the next
+    // launch spawned a rival against the same Baileys auth store and the session ended up
+    // half-registered — read by the user as "it lost my connection". `sidecar_ctl('stop')`
+    // existed and had NO caller; the exit hook is the caller. Pinned at the source level
+    // because no unit test can drive Tauri's real RunEvent, and a hook nobody calls is
+    // exactly the class of defect the eight-seams doc names (an untested wire).
+    expect(libSource).toMatch(/RunEvent::Exit/);
+    expect(libSource).toMatch(/sidecar::shutdown/);
+  });
+
   it('registers the commands in BOTH handler lists — release is not a debug build', () => {
     // The lists are duplicated under `cfg` rather than stubbed (a release binary must not
     // carry gate command names at all), so a command added to only one ships working in

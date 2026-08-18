@@ -405,6 +405,37 @@ pub async fn sidecar_ctl(
     }
 }
 
+/// Stop the helper on shell exit — the OTHER half of spawning one.
+///
+/// WHY THIS EXISTS (owner-reported 2026-08-18: "the app loses connection across hub
+/// restarts"). The helper is a spawn-supervised child, and until now nothing supervised its
+/// DEATH: `sidecar_ctl("stop")` had no caller anywhere and no exit hook existed, so quitting
+/// the shell orphaned the process. The next launch then spawned a RIVAL against the same
+/// Baileys auth store, and two writers of one session directory is how a link ends up
+/// half-registered (`registered:false` with a saved `me`) — the wedge that reads to a user
+/// as "it lost my connection and wants me to link again". The credential layer was innocent
+/// throughout: the approved row, the minted token and the connection state all persisted
+/// correctly.
+///
+/// Deliberately infallible and idempotent. It runs on the exit path, where there is nobody
+/// left to report an error to and where Tauri may deliver the event after a window-destroy
+/// path already ran; refusing to clean up twice would be a fault, not a safeguard.
+pub fn shutdown(state: &SidecarState) {
+    // A poisoned mutex still hands back the data — a panic elsewhere must not become a
+    // leaked process here.
+    let mut guard = match state.inner.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(mut running) = guard.take() {
+        let _ = running.child.kill();
+        let _ = running.child.wait();
+        // The socket file outlives the process it belonged to; a stale one is what the next
+        // launch trips over.
+        let _ = std::fs::remove_file(&running.socket);
+    }
+}
+
 /// The helper's entry point, under `~/Snug/helpers/`. Never supplied by the webview, for
 /// the same reason the socket path is not.
 fn helper_entry(snug_dir: &std::path::Path) -> PathBuf {
@@ -1131,5 +1162,71 @@ mod wizard_admission_tests {
         // The wizard's probe reads a thread list to prove the token works. A wizard door that
         // admitted ONLY pairing would force a second command for that.
         assert!(admit_wizard_request("GET", "/chats").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    // OWNER-REPORTED 2026-08-18: "the app loses connection across hub restarts". The
+    // credential layer was innocent — the approved row, the minted token and the
+    // connection state all persist correctly. The real fault was that quitting the shell
+    // NEVER stopped the helper it spawned: `sidecar_ctl("stop")` had no caller anywhere
+    // in the codebase, and no exit hook existed. So every restart left an ORPHAN holding
+    // the WhatsApp session directory, the next launch spawned a rival, and two processes
+    // writing one Baileys auth store is how a session ends up half-linked
+    // (`registered:false` + a saved `me`) — which is exactly the wedge the owner hit
+    // twice. Confirmed on their machine: two live helpers, 17 minutes apart.
+    //
+    // `shutdown` is what the exit hook calls. It must be safe to call when nothing is
+    // running, and must leave no socket file behind for the next launch to trip over.
+
+    #[test]
+    fn shutdown_is_a_no_op_when_no_helper_is_running() {
+        let state = SidecarState::default();
+        shutdown(&state); // must not panic, must not poison the mutex
+        assert!(state.inner.lock().expect("mutex is healthy").is_none());
+    }
+
+    #[test]
+    fn shutdown_clears_the_slot_and_removes_the_socket_file() {
+        // A stand-in child that exits immediately: the point under test is the BOOKKEEPING
+        // (slot cleared, socket unlinked), not the signal delivery.
+        let dir = std::env::temp_dir().join(format!("snug-shutdown-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let socket = dir.join("whatsapp-sidecar.sock");
+        std::fs::write(&socket, b"").expect("placeholder socket file");
+
+        let child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn a trivial child");
+        let state = SidecarState::default();
+        *state.inner.lock().expect("mutex") = Some(RunningSidecar {
+            child,
+            socket: socket.clone(),
+            nonce: "test-nonce".into(),
+        });
+
+        shutdown(&state);
+
+        assert!(
+            state.inner.lock().expect("mutex").is_none(),
+            "the running slot is cleared, so a later start cannot see a dead child"
+        );
+        assert!(
+            !socket.exists(),
+            "the socket file is removed — a stale one is what the next launch trips over"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_twice_is_safe() {
+        // Tauri can deliver Exit after a window-destroy path already ran.
+        let state = SidecarState::default();
+        shutdown(&state);
+        shutdown(&state);
+        assert!(state.inner.lock().expect("mutex").is_none());
     }
 }

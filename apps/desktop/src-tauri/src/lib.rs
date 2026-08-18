@@ -183,6 +183,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building snug desktop")
         .run(|_app, _event| {
+            // STOP THE HELPER WE SPAWNED (owner-reported 2026-08-18). Quitting used to
+            // orphan it, so the next launch spawned a rival against the same Baileys auth
+            // store — two writers of one session directory is how a link ends up
+            // half-registered, which reads to the user as "it lost my connection". Exit is
+            // the one event that fires however the app quits (window close, Cmd-Q, dock
+            // quit); `shutdown` is idempotent and infallible because there is nobody left
+            // to report to here.
+            if matches!(_event, tauri::RunEvent::Exit) {
+                sidecar::shutdown(&_app.state::<sidecar::SidecarState>());
+            }
             // `RunEvent::Opened` is an APPLE-ONLY variant (macOS/iOS deliver
             // opened files as Apple Events); it does not exist in `RunEvent` on
             // Windows/Linux, where the compile fails rather than the match
