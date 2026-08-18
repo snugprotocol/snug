@@ -1,0 +1,106 @@
+# TASK-20260818-telepath-linking-sync: Telepath — QR on first click, name/avatar resolution, sync progress + resume
+
+- **Status**: planned (awaiting owner plan approval — no implementation yet)
+- **Owner**: Jeetu
+- **Risk tier**: medium (owner-confirmed at interview, 2026-08-18)
+- **Branch**: `fix/TASK-20260818-telepath-linking-sync`
+- **Packages touched**: `apps/whatsapp-sidecar`, `examples/whatsapp` (Telepath app), likely `apps/desktop` (wizard + run header)
+- **Spec impact**: none expected (no `packages/protocol` change anticipated; re-check at plan)
+- **Related**: ADR-0037 (drafted by this task, proposed), ADR-0032 (sidecar), ADR-0034 (surface v2 / live pump), ADR-0036 (run-header icon buttons), `docs/solutions/2026-08-17-eight-seam-defects-in-one-feature.md`, lessons 2026-08-17 (avatar negative-caching, LID mapping, unreadCount), TASK-20260818-registered-flag, TASK-20260818-sidecar-shutdown
+
+## Spec (what & why)
+
+The owner's hardware walk of Telepath (the re-owed verification in next-steps) surfaced five defects
+in the linking and sync experience. The link wizard needs a second click of "Start linking" before
+the QR renders (first click sits on "waiting for the code to be scanned…" with no code shown). After
+linking, name and avatar resolution is partial: group participants mostly render "Unknown contact",
+1:1 chat-list rows show the raw JID (`…@s.whatsapp.net`) instead of the contact name, and profile
+pictures load for only some chats. Finally, the initial history sync is long and invisible — there is
+no progress indication, and sync must survive the app being closed and the desktop shell restarting.
+
+**Reported issues** (owner, 2026-08-18):
+1. QR appears only on the second click of "Start linking"; first click shows the waiting state with no code and no error.
+2. Inside a group thread most participants show "Unknown contact"; only some resolve.
+3. Chat list: group names+avatars mostly correct; 1:1 rows show `<number>@s.whatsapp.net` instead of the contact name (WhatsApp Web shows the name).
+4. Profile pictures (groups and 1:1) load only partially.
+5. Initial sync: show progress/animation in the app header area (app name + icon buttons); sync must continue/resume if the app is closed mid-sync, and resume on next launch if the desktop app itself is shut down.
+
+**Acceptance criteria** (each becomes at least one test; refined at plan):
+1. One click of "Start linking" produces a scannable QR (asserting rendered structure/state, not copy — per lessons). A regression test drives the real first-click path.
+2. In a group thread, every participant with a resolvable identity (contact record, pushName, or LID mapping) renders that name; "Unknown contact" appears only when no source has a name.
+3. 1:1 chat-list rows never render a raw JID when a name source exists; fallback order is defined and tested.
+4. Avatar fetch failures are retried/not permanently cached as "no picture"; avatars resolve for chats where WhatsApp serves one.
+5. Sync progress is visible in the app header area while history sync is in flight, and disappears when complete; closing the app mid-sync does not stop the sidecar's sync; restarting the desktop shell resumes/continues sync without data loss.
+
+**Interview outcomes (owner, 2026-08-18):**
+- Sync progress lives in the **host run header** (ADR-0036 chrome — app name + icon row), not only in-app. → `apps/desktop` is in scope.
+- On desktop relaunch after a mid-sync shutdown: **auto-start the helper at shell launch** when a linked session exists and sync is incomplete, so sync resumes before Telepath is opened.
+- Risk tier: **Medium**.
+- 1:1 name fallback = **WhatsApp Web order**: saved contact name → push name (`~` prefix) → formatted phone number; raw JID never rendered; LID chats resolve through the LID→phone mapping first.
+
+**Out of scope**: helper packaging/bundled Node runtime; auto-reply/arming surface (ADR-0033); starter-rebuild delivery to installed apps (next-steps 2026-08-17); read receipts; unread-count live increment beyond what already ships.
+
+## Plan
+
+Root causes were established by code investigation (2026-08-18, verified against `baileys@7.0.0-rc14`
+sources). Summary, then phases. **No `packages/protocol` change is planned** — the sidecar route
+table (`packages/protocol/src/sidecar-contract.ts`) is untouched; every fix rides existing routes.
+If any phase turns out to need a route/table change, STOP: re-tier to High + spec-sync.
+
+### Root causes (file:line)
+
+| # | Root cause | Where |
+|---|---|---|
+| 1 | `beginDeviceLink` reads `GET /pair/qr` exactly once, immediately after `POST /pair/start` — a guaranteed race against the WhatsApp websocket+Noise handshake (QR lands 1–3 s later via `connection.update`). The empty result returns `{ok:true}` with no `qr`, which the sheet renders as a silent waiting state. Second click wins because `startLink` is idempotent and the QR is cached by then. Also: the QR rotates (~20 s) and the sheet never refreshes it. | `apps/playground/…/connectionWizard.ts:1056-1059`, `ConnectionWizardSheet.tsx:323,333-344,411-413`; sidecar `baileys-socket.ts:340-349,440-460` |
+| 2 | `pushName` — present on every history message row, the only name source for group members with no 1:1 chat — is discarded by `toWaMessage` (not in `MessageContent`/`WaMessage`), and Baileys emits `contacts.update` from pushName only for LIVE messages, never history rows. History-sync contact rows only cover existing conversations. | sidecar `baileys-socket.ts:201-239,322-337`; cf. `baileys/lib/Utils/history.js:55-62` |
+| 3 | Baileys leaves `Chat.name` unset for 1:1s (protobuf expects address-book resolution) and its synthesized contact row often carries no name either, so `rememberChat` keeps its raw-JID placeholder — and the app prints `chat.name` verbatim with no fallback (`fallbackLabel` exists but is only used for message senders). | sidecar `thread-store.ts:127-145`; `examples/whatsapp/app.html:1361,1363,1400` |
+| 4 | Avatars: `profilePictureUrl` returns `undefined` for privacy-restricted contacts AND missing/expired tcTokens; `pictureOf` caches that as **permanent** `null` ("has none") — the 2026-08-17 "failure is not a fact" lesson was applied to the `catch` but not the `undefined`-URL branch, which is where most real misses arrive. Plus: no concurrency cap/backoff — every visible row fires its own iq, bursts get rate-limited, retries re-enter the burst. | sidecar `baileys-socket.ts:533-570` (esp. 549-553) |
+| 5 | All synced content (chats/messages/contacts/LID map/rosters) lives in in-process `Map`s (`createThreadStore`) — nothing durable; the shell kills the helper on exit (deliberate, TASK-20260818-sidecar-shutdown) and nothing auto-starts it, so every desktop restart is a full invisible re-sync. `sync.progress` is computed, transmitted on `/chats` + `/session/status`, stored by the app (`helper.sync`) and **rendered nowhere** once one chat exists; the host run header has no seat for it. | sidecar `thread-store.ts:77-84`, `baileys-socket.ts:384-428`; `apps/desktop/src-tauri/src/sidecar.rs:423-437`; `app.html:1008,1341-1356`; `apps/playground/src/run/RunHeaderActions.tsx` |
+
+### Phases (each: tests first → implement → green → commit; independently landable)
+
+**Phase A — QR on first click (+ rotation)** — `apps/playground`
+1. Tests first (`linkedDeviceWizard.test.ts`, `linkedDeviceSheet.test.tsx`): `beginDeviceLink` polls `/pair/qr` until a QR or ~20 s deadline (fake timers; first N replies empty, then QR ⇒ resolves with QR); a deadline miss returns a **named error state**, never a silent `{ok:true}` (lesson 2026-08-17: a permanent failure must not render identically to a normal wait); sheet asserts rendered STRUCTURE (a QR img/canvas present after one click — not copy).
+2. Implement: poll loop in `beginDeviceLink` (bounded, ~500 ms interval); sheet re-polls `/pair/qr` while unscanned and swaps in rotated QR codes; explicit timeout copy.
+
+**Phase B — names (issues 2+3)** — `apps/whatsapp-sidecar` + `examples/whatsapp`
+1. Sidecar tests first: `toWaMessage` carries `raw.pushName`; `ingest` feeds `rememberContacts([{id: sender, notify: pushName}])` for history AND live rows; `thread-store` upgrade path already covered — add: pushName never overwrites an address-book `name`; chats/participants expose a `nameKind: 'contact'|'push'|'verified'` (optional field on existing JSON payloads — not a route change) so the app can render WhatsApp's `~` convention.
+2. New `baileys-socket.test.ts` seam test with a scripted fake Baileys event emitter (closes the named coverage gap: today nothing drives the event wiring, which is exactly where issue 2 lived).
+3. App tests first (`whatsapp-analysis.test.mjs`): add a `chatDisplayName(chat)` helper INSIDE the `ANALYSIS-CORE` block (testable by the existing loader): saved name → `~`+push name → formatted phone via `fallbackLabel` → **never** a raw JID (`@s.whatsapp.net` and `@lid` fixtures; LID resolves through mapping first, and is never rendered as a phone number — existing rule).
+4. Implement: sidecar harvest + `nameKind`; app routes chat rows (`app.html:1361,1363,1400`) through `chatDisplayName`.
+
+**Phase C — avatars (issue 4)** — `apps/whatsapp-sidecar`
+1. Tests first (extend `baileys-socket.test.ts`): `undefined` picture URL is cached as a TTL'd miss (retryable after expiry), NOT permanent `null`; permanent `null` only on a clean "no picture" answer; thrown errors still uncached; fetches run through a small concurrency limiter (assert ≤ N in flight against a slow fake) with backoff on failure; LID→phone canonicalization unchanged.
+2. Implement in `pictureOf` (`baileys-socket.ts:533-570`): split the `undefined`-URL branch from clean absence, TTL negative cache, limiter (~3 concurrent) + jittered retry.
+
+**Phase D — sync progress + resume (issue 5)** — `apps/whatsapp-sidecar`, `apps/desktop` (TS+Rust), `apps/playground`, `examples/whatsapp` — governed by **ADR-0037 (drafted, proposed)**
+1. **D1 durable thread cache** (sidecar): persistence seat on `createThreadStore` — v1 debounced atomic JSON snapshot (temp+rename, magic+version header) under `~/Snug/whatsapp-session/`, loaded on boot; corrupt/empty ⇒ quarantine + fresh (lesson 2026-08-03: zero bytes are CORRUPT, never "fresh"). Tests first, mirroring `store.persistence.test.ts`: survives restart; corrupt file quarantined; snapshot excludes media/avatar bytes (size posture) and excludes nothing the unread rules need. Sqlite is the named follow-up if snapshot size hurts; out of scope now.
+2. **D2 helper auto-resume** (sidecar): on boot, if session material is resumable (`account` + non-empty `signalIdentities` — the flow-agnostic material predicate, lesson 2026-08-18), `connect()` without waiting for a request. Test: fake store with resumable material ⇒ connect called on boot; fresh/half-linked store ⇒ not.
+3. **D3 shell auto-start** (desktop Rust): in the setup hook (`lib.rs` where `SidecarState` is managed), spawn the helper at launch iff the session store exists on disk; the exit reap stays. Positive twin test per lessons: auto-start fires with a session present AND stays quiet without one.
+4. **D4 progress surfacing**: app — render `helper.sync.progress` while `!complete` regardless of chat count (`app.html:1341-1356` + thread header). Host — the existing pump (`sidecarLive.ts`, which already resolves the slot and holds a governed executor) additionally polls `GET /session/status` (app-authorized, existing route) while sync is incomplete and exposes `{progress, complete}` to `RunView` → new `syncState` prop on `RunHeaderActions` rendering an indeterminate spinner + percent beside the connection icon. Tests first: `sidecarLive.test.ts` (poll stops on complete + epoch supersession; emits no message content — hints/progress only), `runHeaderIcons.test.tsx` + `connectionSurfaces.test.tsx` (indicator present while syncing, gone when complete; existing icon locators unbroken — grep for label-based locators before touching, lesson 2026-08-18).
+
+### Cross-package impact
+- `packages/protocol`: **untouched** (tripwire above). `packages/runner`/`auth`: untouched. C1/C2: no new channels — progress rides existing governed reads; the pump still forwards no content.
+- Dependency direction: sidecar changes are self-contained; desktop/playground consume existing routes. Root `turbo run test --force` at each phase end (touched + dependents; lesson 2026-08-15 re stale `dist/`).
+- Rust: `cargo test` for `sidecar.rs`/`lib.rs` changes; the macOS shell gate must stay green (`ipc-sidecar-fetch-dispatchable` etc.).
+
+### Verification beyond suites
+Owner hardware walk (the eight-seam lesson — a feature is done when someone walks it): fresh link
+shows QR on FIRST click; scan; watch header progress; close app mid-sync (sidecar keeps syncing);
+quit desktop mid-sync; relaunch (helper auto-starts, sync resumes, cache intact); group thread names
+resolve; 1:1 rows named or `+number`, never JID; avatars fill in over a few minutes.
+
+### Spec-sync impact
+None (no protocol schema change). Re-check at Gate 5; tripwire in Phases table.
+
+## Decisions & surprises
+
+- Prior art to respect: lessons 2026-08-17 — avatar "failure is not a fact" negative-caching rule; LID (`@lid`) vs phone-JID aliasing (`lidPnMappings` + `lid-mapping.update`); `unreadCount` snapshot-only. Verify whether those fixes shipped and where these five symptoms sit relative to them.
+
+## Session journal (append-only, newest last)
+
+### 2026-08-18 — Claude (with Jeetu) — session
+- Done: task file created from owner's 5-issue report; repo/docs recon (PROCESS, lessons, ADR-0032/0034, next-steps); interview held (progress in host run header; auto-start at shell launch; Medium; WhatsApp-Web name fallback); deep code investigation completed with root causes verified against baileys@7.0.0-rc14 sources; plan written (Phases A–D); ADR-0037 drafted (proposed); branch cut.
+- State: Gates 1–2 complete on the branch; STOPPED for owner plan approval. No implementation code written.
+- Next step: on approval → Phase A tests first (`linkedDeviceWizard.test.ts` QR poll deadline + named timeout state).
+- Open questions: none blocking; residual for AC2 noted (a group member who never spoke, has no 1:1 chat, and no PUSH_NAME chunk stays unresolved — allowed by AC wording).
