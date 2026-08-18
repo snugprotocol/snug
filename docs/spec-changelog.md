@@ -21,7 +21,20 @@ Wizard-only prefixes and their derivation are untouched: the app subset remains 
 never retyped, and the Rust admission mirror is held equal by the existing source-parsing
 equivalence test.
 
+**Amended 2026-08-17, after the owner's hardware walk** (recorded rather than back-dated —
+these landed after the entry above was written, in the same task):
+`WaHistoryState` (the sidecar's sync state, carried on `/session/status`, `/chats/:jid/history`
+and `/chats/:jid/messages`) gains an OPTIONAL `needsRelink` seat, and **`GET /chats` now
+carries that sync state too**. Additive on both counts — a consumer that ignores the seat
+behaves exactly as before, and the flag is present only when true, so it is a claim rather
+than a default. The reason it is a protocol-adjacent fact and not app detail: a half-linked
+session (scanned, never registered) renders identically to a slow first sync, and the list
+route is the one place an EMPTY answer is ambiguous. `WaChat` also gained optional
+`unreadCount`/`lastMessage`/`lastActivityTs` and `WaMessage` optional
+`kind`/`thumbnailBase64`/`mediaId` (both in the same additive shape, both covered by the
+sidecar suites).
 
+## 2026-08-17 — INTERNAL DRAFT, not staged for any push — TASK-20260816-whatsapp-twin (ADR-0032/0033)
 **Excluded from every spec push.** `connection-requirement` is outside `json-schemas.ts`
 SOURCES (the same publication line as `lanHost`/ADR-0023), so zero schema bytes changed and
 wire protocol v1 is untouched. No push to `snugprotocol/spec` (needs an explicit ask).

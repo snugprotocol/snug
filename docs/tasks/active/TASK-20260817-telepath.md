@@ -339,3 +339,63 @@ spec-changelog entry in Phase A; no push to `snugprotocol/spec` (release rules).
   function were cheaper to read than any of the inferences I made first.
 - State: branch 14 commits ahead of `main`, tree clean, everything still green.
 - Next step: unchanged — the owner hardware walk, then PR + Gate-5 review.
+
+### 2026-08-17 — claude (fable) — session (owner hardware walk: three defect waves)
+**The walk happened, and it earned its keep exactly as the eight-seams lesson predicted:
+three defect classes that a fully green tree could not see.** Everything below was found by
+the owner using the real app on real hardware, and fixed test-first in this session.
+
+- **Wave 1 — the rebuild was invisible** (`959bc27`). The shelf tile takes its label from
+  the FOLDER (`listStarterApps()` → `folder.replace(/-/g,' ')`), so a rebuilt starter still
+  read "whatsapp" — indistinguishable from "the rebuild did not land". The same gap had been
+  hiding Rewind/Moodboard/Standup/Should I? behind their folder names since TASK-20260815.
+  `STARTER_LOOKS` gains an optional display `name`; every user-facing string reads it;
+  `data-starter-name` stays the FOLDER because `install_source`, the desktopOnly gate and
+  the existing tests all key on it. 4 tests, red first.
+- **Wave 2 — no contact names, no participants, no avatars, wrong phone numbers**
+  (`029cdf5`). Four real defects in the sidecar, each independently invisible to the suites:
+  (a) `messaging-history.set` carries a `contacts` array — the address book — and the adapter
+  read only `chats`/`messages`; `contacts.upsert`/`contacts.update` were never subscribed at
+  all, so a DM could only ever be named by whatever WhatsApp stamped on the conversation row
+  (usually nothing). (b) `groupMetadata()` was never called, so groups had no roster and every
+  sender rendered as a raw id. (c) **LIDs rendered as phone numbers**: WhatsApp addresses
+  people by `123456@lid`, an INTERNAL id, and the app stripped the domain and printed
+  "+123456" — a confident, wrong number, which is worse than a blank because it invites trust.
+  (d) A transient avatar-fetch failure was cached as "has none" for the whole session, on both
+  the sidecar and app sides, so one hiccup meant no pictures until restart. Fix: a contact
+  directory in the thread store with LID resolution and group rosters (saved-name > notify >
+  verifiedName; a partial `contacts.update` never erases a known name), lazy `groupMetadata`
+  per group, `fallbackLabel` rendering a number ONLY for the phone-number address space, and
+  failure-vs-fact separated in both avatar caches. thread-store 11→18, sidecar 85→93, app
+  core 25→29.
+- **Wave 3 — a wedged session disguised as a slow sync** (`1539b8c`). After the helper
+  restart the app said "no chats yet — history is still syncing from your phone" forever.
+  Diagnosed by querying the live helper over its socket (0 chats, healthy) and reading
+  `creds.json`: `registered:false` WITH a saved `me` — the half-linked wedge the POC already
+  documented. Baileys resumes a registration that never finished, WhatsApp refuses, sync
+  never starts. `shouldResetAuthStore` already clears it, but ONLY on a pairing attempt, so
+  until the user happens to re-pair the state is indistinguishable from a slow first sync.
+  That ambiguity — not the wedge — is the defect: `isHalfLinkedStore` names it,
+  `historyState()` reports it as `needsRelink`, **`GET /chats` now carries the sync state
+  too** (an empty list is exactly where the ambiguity bites), and the app renders "this
+  device needs linking again" with the fix. Sidecar 93→100.
+  Also cleaned up: three rival helper processes were running (02:45, 16:24, 20:29) — rivals
+  racing one session directory is a plausible cause of the wedge itself; two were killed.
+- **Diagnosis note, kept because I repeated the exact mistake the solutions doc warns about:**
+  on wave 3 I chased a stale `dist`, an install-source redirect and a stale binary before
+  reading `~/Snug/user.sqlite`, `listStarterApps()` and `creds.json` — the three sources that
+  actually answered it. Each inference was plausible and none was confirmed before I acted on
+  it. The rule already exists ("reproduce before fixing; observe, don't reason"); what it
+  needs is the habit of asking "what would I READ to settle this?" before "what could cause
+  this?".
+- **Verification after every wave:** root `turbo run test --force` **23/23**, examples 199,
+  sidecar 100. Helper rebuilt and reinstalled to `~/Snug/helpers/whatsapp-sidecar` so the
+  fixes reach the running shell.
+- State: branch **18 commits** ahead of `main`, tree clean, all suites green.
+- **Owner action still owed: re-pair the linked device** (Settings → WhatsApp connection →
+  scan the QR). The session on disk is wedged; the code fix makes the app SAY so, but only
+  re-pairing clears it. History re-syncs from the phone afterwards; stored analyses are
+  untouched.
+- Next step: PR + merge (owner asked for both in this session).
+- Open questions: none blocking. The starter-upgrade gap (an installed starter never receives
+  a rebuild) stays recorded in `next-steps.md` as its own task.
