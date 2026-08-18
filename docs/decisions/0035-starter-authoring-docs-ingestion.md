@@ -17,14 +17,17 @@ only.
 
 ## Decision
 
-1. **Install-time ingestion, generic.** The explicit starter-install path (the one that runs
-   `installStarterConnections`/`installStarterRuntimeContract` — NOT the hub's open-only tiles)
-   gains a sibling, `installStarterDocs`: for any starter shipping `authoring/docs/*.md`, each file
-   seeds a `snug_app_docs` row (slug = filename, title = first H1); `authoring/prompts/*.md`
-   concatenate (in numbered order) into one `build-prompt` slug. All six connected starters benefit,
-   not just Telepath.
-2. **Seed absent slugs only.** An existing row is never overwritten — the wiki is the app's LIVING
-   memory (ADR-0010) and a re-install must not clobber what the user's sessions have compounded.
+1. **Install-time ingestion, generic.** The explicit starter-install path (`installThisStarter` in
+   RunView — the one that runs `installStarterConnections`/`installStarterRuntimeContract`; NOT the
+   hub's open-only tiles) gains a sibling, `installStarterDocs`, living in its OWN module
+   (`starterDocs.ts`) with its own `?raw` glob — `starterApps.ts` stays single-glob because the
+   AC9 shape pin asserts every glob there is app-html-shaped. For any starter shipping
+   `authoring/docs/*.md`, each file seeds a `snug_app_docs` row (slug = filename, title = first
+   H1); `authoring/prompts/*.md` concatenate (in numbered order) into one `build-prompt` slug. All
+   six connected starters benefit, not just Telepath.
+2. **Seed absent slugs only, per slug.** An existing row is never overwritten — the wiki is the
+   app's LIVING memory (ADR-0010) and a re-install must not clobber what the user's sessions have
+   compounded. A partial prior state (some slugs present, whatever its cause) fills only the gaps.
 3. **The shelf-glob pin stays, extended.** The `app.html` glob still cannot reach `authoring/`
    (that assertion is untouched); the NEW glob is separately pinned to match only
    `authoring/{docs,prompts}/*.md`. What changes is the doctrine sentence, not the guard: provenance

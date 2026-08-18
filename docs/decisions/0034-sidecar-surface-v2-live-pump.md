@@ -18,10 +18,11 @@ live WebSocket to WhatsApp; the platform already has an open additive host→app
 
 1. **Three routes join the app-reachable contract** (`sidecar-contract.ts`, mirrored in Rust,
    same one-home/derived-subset/decoded-traversal discipline):
-   - `GET /events?cursor=N` — long-poll over a bounded ring buffer of live events (message
-     received, chat metadata changed), hold ≤ 8 s (inside the server's 10 s request timeout),
-     monotonic cursor, `resync:true` when a cursor has aged out (the app then refetches lists
-     instead of trusting a gap).
+   - `GET /events?cursor=N` — long-poll over a bounded ring buffer of live event HINTS
+     (`{jid, kind: 'message'|'chat-update', ts}` — no message bodies, no thumbnails, no names),
+     hold ≤ 8 s (verified headroom: the server's request timeout is 10 s and the Rust unix-socket
+     read has no independent timeout), monotonic cursor, `resync:true` when a cursor has aged out
+     (the consumer then refetches lists instead of trusting a gap).
    - `GET /chats/:jid/media/:id` — image bytes as base64 JSON, only when the raw size fits the
      existing 1 MiB transport cap with base64 headroom; otherwise a structured `{tooLarge:true}`
      with the inline thumbnail — the cap refuses, never truncates.
@@ -29,14 +30,20 @@ live WebSocket to WhatsApp; the platform already has an open additive host→app
      (the app never receives a WhatsApp CDN URL it could not dial anyway).
    `/pair/*` and `/session/*` stay wizard-only; the widened table changes nothing about who may
    reach what.
-2. **Push is a HOST PUMP, not an app capability.** A playground module long-polls `/events`
+2. **Push is a HOST PUMP forwarding HINTS, not content.** A playground module long-polls `/events`
    through the governed connected-fetch executor (same deps assembly, same credential injection,
-   same gates — C1 identical to every other read) on behalf of the running app, and forwards
-   batches into the iframe via `RunnerHost.notifyEvent('connection-event', {slot, events})`. The
-   pump starts when RunView mounts an app holding an approved sidecar-symbolic-host connection and
-   stops on unmount. No new protocol frame, no schema change, no new iframe capability: the app
-   still cannot open a connection, name a socket, or hold a token — it just receives events on the
-   channel that already existed.
+   same gates — C1 identical to every other read) on behalf of the running app, and forwards hint
+   batches into the iframe via `RunnerHost.notifyEvent('connection-event', {slot, hints})`. The
+   app answers a hint with its own governed reads — the hint is a doorbell, never a delivery.
+   Two verified facts force this shape: `hostEvent` frames ride the ordinary 256 KB frame class
+   and the host's `post()` drops any oversized frame silently, so content-bearing batches could
+   vanish undetectably; and `hostEvent` frames carry no `instanceId`, so a hand-rolled app
+   listener cannot distinguish a stale sender — with hints, a stale event costs one redundant
+   refetch of the app's own data and can never inject state. The pump is epoch-tokened (StrictMode
+   double-mount discards the superseded loop), starts when RunView mounts an app holding an
+   approved sidecar-symbolic-host connection, and stops on unmount. No new protocol frame, no
+   schema change, no new iframe capability: the app still cannot open a connection, name a socket,
+   or hold a token — it just hears the doorbell on the channel that already existed.
 3. **Media bytes stop at the app frame.** Images render from base64 data URIs (`img-src data:`
    is already allowed), are cached in memory only, never written to the app DB, and never included
    in any LLM-bound payload. The pseudonymization boundary (Twin AC12) is unchanged; pictures of
@@ -61,7 +68,8 @@ live WebSocket to WhatsApp; the platform already has an open additive host→app
 - The event buffer makes the sidecar stateful-per-cursor; the bound + `resync` flag keep that
   honest (a consumer can always fall back to the list routes).
 - The pump is the first host component that acts as a standing on-behalf-of-an-app reader;
-  its tests must pin that emitted events carry no credential material and that unmount stops it.
+  its tests must pin that emitted events carry no credential material AND no message content
+  (hints only), and that unmount/epoch supersession stops it.
 - `connection-event` becomes the second consumer of `snug:host-event`; an SDK `useHostEvents`
   hook is recorded in next-steps as a follow-up (Telepath hand-rolls its listener outside the
   byte-checked embedded block).
