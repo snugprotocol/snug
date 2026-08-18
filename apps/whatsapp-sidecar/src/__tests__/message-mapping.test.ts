@@ -80,11 +80,69 @@ describe('toWaMessage', () => {
     expect(mapped?.message.ts).toBe(1_700_000_123);
   });
 
-  it('drops non-text messages rather than inventing a placeholder', () => {
-    // v1 is text-only. A synthesized "<image>" would enter the transcript as something the
-    // person never wrote, and the LLM would then analyse it as their words.
-    expect(toWaMessage({ key: { id: 'M5', remoteJid: '111@s.whatsapp.net' }, message: { imageMessage: {} }, messageTimestamp: 5 })).toBeUndefined();
-    expect(toWaMessage({ key: { id: 'M6', remoteJid: '111@s.whatsapp.net' }, message: null, messageTimestamp: 5 })).toBeUndefined();
+  it('drops unsupported message kinds rather than inventing a placeholder', () => {
+    // A synthesized "<sticker>" would enter the transcript as something the person never
+    // wrote, and the LLM would then analyse it as their words. Images are the ONE exception
+    // now (below) — and only because they map as a TYPED row, never as invented text.
+    for (const message of [
+      { audioMessage: {} },
+      { stickerMessage: {} },
+      { videoMessage: {} },
+      { reactionMessage: { text: '👍' } },
+      { protocolMessage: {} },
+      null,
+    ]) {
+      expect(
+        toWaMessage({ key: { id: 'M5', remoteJid: '111@s.whatsapp.net' }, message, messageTimestamp: 5 }),
+        JSON.stringify(message),
+      ).toBeUndefined();
+    }
+  });
+
+  // ---- surface v2 (ADR-0034, TASK-20260817-telepath): images become typed rows ----
+
+  it('maps an image message as a TYPED row — its caption as text, never invented words', () => {
+    const mapped = toWaMessage({
+      key: { id: 'IMG1', remoteJid: '111@s.whatsapp.net', fromMe: false },
+      message: {
+        imageMessage: {
+          caption: 'look at this',
+          mimetype: 'image/jpeg',
+          jpegThumbnail: new Uint8Array([1, 2, 3]),
+        },
+      },
+      messageTimestamp: 9,
+    });
+    expect(mapped?.message.kind).toBe('image');
+    expect(mapped?.message.text).toBe('look at this');
+    // The media id IS the message id — `GET /chats/:jid/media/:id` dereferences it.
+    expect(mapped?.message.mediaId).toBe('IMG1');
+    expect(mapped?.message.thumbnailBase64).toBe(Buffer.from([1, 2, 3]).toString('base64'));
+  });
+
+  it('maps a captionless image with EMPTY text — typed, not worded', () => {
+    const mapped = toWaMessage({
+      key: { id: 'IMG2', remoteJid: '111@s.whatsapp.net' },
+      message: { imageMessage: {} },
+      messageTimestamp: 9,
+    });
+    expect(mapped?.message.kind).toBe('image');
+    expect(mapped?.message.text).toBe('');
+    expect(mapped?.message).not.toHaveProperty('thumbnailBase64');
+  });
+
+  it('accepts a base64-string thumbnail as-is (Baileys serializes bytes both ways)', () => {
+    const mapped = toWaMessage({
+      key: { id: 'IMG3', remoteJid: '111@s.whatsapp.net' },
+      message: { imageMessage: { jpegThumbnail: 'AQID' } },
+      messageTimestamp: 9,
+    });
+    expect(mapped?.message.thumbnailBase64).toBe('AQID');
+  });
+
+  it('leaves plain text rows UNMARKED — v1 consumers keep reading them unchanged', () => {
+    expect(toWaMessage(dmMessage)?.message).not.toHaveProperty('kind');
+    expect(toWaMessage(dmMessage)?.message).not.toHaveProperty('mediaId');
   });
 
   it('drops a message with no id or no chat — an unaddressable row is not a message', () => {

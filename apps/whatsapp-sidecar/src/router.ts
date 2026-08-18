@@ -48,6 +48,12 @@ export interface RouterDeps {
   spawnNonce: string;
   mintToken: () => string;
   now: () => number;
+  /**
+   * How long `GET /events` may hold an up-to-date cursor before answering empty
+   * (ADR-0034 §1). Default 8 000 ms — inside the server's 10 s request timeout with margin;
+   * a hold that outlived the transport's own timeout would answer nobody.
+   */
+  eventHoldMs?: number;
 }
 
 export interface SidecarRouter {
@@ -99,8 +105,20 @@ function segmentsOf(path: string): string[] | undefined {
   return decoded;
 }
 
+/** The `?cursor=` value: a whole number, or undefined when absent. Anything else is null. */
+function cursorOf(path: string): number | undefined | null {
+  const query = path.split('#', 1)[0]?.split('?', 2)[1];
+  if (query === undefined) return undefined;
+  const raw = new URLSearchParams(query).get('cursor');
+  if (raw === null) return undefined;
+  // Digits only: '-1', '1.5' and '1e3' are all values a ring buffer cannot reason about.
+  if (!/^\d+$/.test(raw)) return null;
+  return Number(raw);
+}
+
 export function createRouter(deps: RouterDeps): SidecarRouter {
   const { socket, store, spawnNonce, mintToken } = deps;
+  const eventHoldMs = deps.eventHoldMs ?? 8_000;
 
   const wizardAuthorized = (request: SidecarRequest): boolean =>
     secretEquals(request.headers[SPAWN_NONCE_HEADER], spawnNonce);
@@ -151,6 +169,30 @@ export function createRouter(deps: RouterDeps): SidecarRouter {
         return json(405, { error: 'no such route' });
       }
 
+      // ---------------------------------------------- the hint stream (app surface, v2)
+      if (segments[0] === 'events') {
+        // Same two checks as every app route, same order — a long-poll is not a side door
+        // (review F6), and the contract module keeps the only opinion on reachability.
+        if (!isAppReachableSidecarRoute(method, request.path)) {
+          return json(['GET', 'POST'].includes(method) ? 404 : 405, { error: 'no such route' });
+        }
+        if (!appAuthorized(request)) return json(401, { error: 'unauthorized' });
+
+        const cursor = cursorOf(request.path);
+        if (cursor === null) return json(400, { error: 'cursor must be a whole number' });
+
+        let page = socket.eventsSince(cursor);
+        if (cursor !== undefined && page.hints.length === 0 && !page.resync) {
+          // THE HOLD — for a consumer that HAS a cursor and is up to date. Bounded well
+          // inside the transport's own 10 s request timeout; a hold that outlives the
+          // transport answers nobody. A cursorless call is the BOOTSTRAP ("hand me a live
+          // cursor") and answers immediately — holding it would stall every app open.
+          await socket.waitForEvents(cursor, eventHoldMs);
+          page = socket.eventsSince(cursor);
+        }
+        return json(200, page);
+      }
+
       // ------------------------------------------------------------------- app surface
       if (segments[0] === 'chats') {
         // The contract module decides what an app may reach; this process does not keep a
@@ -181,6 +223,22 @@ export function createRouter(deps: RouterDeps): SidecarRouter {
           const messages = socket.messagesSince(jid);
           if (messages === undefined) return json(404, { error: 'no such thread' });
           return json(200, { messages, sync: socket.historyState() });
+        }
+
+        if (leaf === 'media' && method === 'GET') {
+          const id = segments[3];
+          if (id === undefined) return json(404, { error: 'no such route' });
+          const result = await socket.mediaOf(jid, id);
+          if (result === undefined) return json(404, { error: 'no such media' });
+          // Relayed VERBATIM, the too-large refusal included: refusing is the adapter's
+          // decision and truncating here would turn an honest refusal into a corrupt image.
+          return json(200, result);
+        }
+
+        if (leaf === 'picture' && method === 'GET') {
+          const picture = await socket.pictureOf(jid);
+          if (picture === undefined) return json(404, { error: 'no picture' });
+          return json(200, picture);
         }
 
         if (leaf === 'messages' && method === 'POST') {

@@ -20,11 +20,16 @@
  * `messaging-history.status`.
  */
 
-/** One message, reduced to what analysis and reply actually need. */
+import type { WaEventsPage } from './event-buffer.js';
+
+export type { WaEventHint, WaEventKind, WaEventsPage } from './event-buffer.js';
+
+/** One message, reduced to what analysis, reply and (v2) rendering actually need. */
 export interface WaMessage {
   id: string;
   /** Sender JID. For a group this is the participant; for a DM, the other party. */
   from: string;
+  /** The body — or, for an image, its caption (possibly empty). Never invented words. */
   text: string;
   /** Unix seconds, as WhatsApp reports them. */
   ts: number;
@@ -32,6 +37,17 @@ export interface WaMessage {
   fromMe?: boolean;
   /** JIDs this message @-mentions. The group auto-reply trigger reads this. */
   mentions?: readonly string[];
+  /**
+   * ABSENT for plain text (v1 consumers read those rows unchanged); `'image'` marks a
+   * TYPED media row (ADR-0034) — typed rather than dropped, so a photo shows as a photo
+   * instead of silently not existing, and typed rather than worded, so no placeholder
+   * string ever enters a transcript as something the person wrote.
+   */
+  kind?: 'image';
+  /** Inline preview (Baileys' jpegThumbnail), small enough to ride list responses. */
+  thumbnailBase64?: string;
+  /** Dereferenced by `GET /chats/:jid/media/:id` for the full bytes. */
+  mediaId?: string;
 }
 
 /** One conversation the linked account can see. */
@@ -40,7 +56,21 @@ export interface WaChat {
   name: string;
   isGroup: boolean;
   participants?: readonly { jid: string; name?: string }[];
+  /**
+   * Owned by the SIDECAR (ADR-0034/review F4): Baileys reports unread only as a snapshot
+   * on synced conversations, so the adapter seeds from that and increments itself per live
+   * incoming message. Consumers clear their badge locally; nothing is sent to WhatsApp.
+   */
+  unreadCount?: number;
+  lastMessage?: { text: string; ts: number; fromMe?: boolean; kind?: 'image' };
+  /** Unix seconds of the newest known activity — the chat list's sort key. */
+  lastActivityTs?: number;
 }
+
+/** Full media bytes, or the structured refusal — the cap refuses, never truncates. */
+export type WaMediaResult =
+  | { mime: string; base64: string }
+  | { tooLarge: true; thumbnailBase64?: string };
 
 /**
  * How much of the history WhatsApp has actually delivered.
@@ -74,4 +104,14 @@ export interface WaSocket {
   messagesSince(jid: string, since?: number): readonly WaMessage[] | undefined;
   historyState(): WaHistoryState;
   sendText(jid: string, text: string): Promise<{ id: string }>;
+
+  // ---- surface v2 (ADR-0034) ----
+  /** The hint stream `GET /events` pages over. Hints only — the doorbell, not the delivery. */
+  eventsSince(cursor: number | undefined): WaEventsPage;
+  /** Resolve when a hint newer than `cursor` exists, or after `timeoutMs`. The long-poll hold. */
+  waitForEvents(cursor: number | undefined, timeoutMs: number): Promise<void>;
+  /** Full image bytes for a media row, the too-large refusal, or undefined when unknown. */
+  mediaOf(jid: string, id: string): Promise<WaMediaResult | undefined>;
+  /** Preview-size avatar, or undefined when the jid has none we can reach. */
+  pictureOf(jid: string): Promise<{ mime: string; base64: string } | undefined>;
 }
