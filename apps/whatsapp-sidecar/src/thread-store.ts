@@ -71,6 +71,22 @@ export interface ThreadStore {
   listChats(): WaChat[];
   history(jid: string): { messages: readonly WaMessage[] } | undefined;
   messagesSince(jid: string, since?: number): readonly WaMessage[] | undefined;
+  /**
+   * Everything a restart needs, JSON-safe (ADR-0037): chats with their meta, messages, the
+   * name directory WITH its tiers, LID mappings, group rosters. Media and avatar bytes are
+   * deliberately absent — re-fetchable, and the snapshot must stay a text-sized artifact.
+   */
+  snapshot(): ThreadStoreSnapshot;
+  /** Repopulate from a prior snapshot. Any malformed part is skipped, never thrown on. */
+  restore(snapshot: unknown): void;
+}
+
+export interface ThreadStoreSnapshot {
+  chats: WaChat[];
+  messages: Array<[string, WaMessage[]]>;
+  names: Array<[string, { name: string; kind: 'contact' | 'push' | 'verified' }]>;
+  lidToPn: Array<[string, string]>;
+  groupRosters: Array<[string, string[]]>;
 }
 
 /**
@@ -309,6 +325,55 @@ export function createThreadStore(maxPerThread: number = MAX_MESSAGES_PER_THREAD
       const rows = messages.get(jid);
       if (rows === undefined) return undefined;
       return since === undefined ? [...rows] : rows.filter((row) => row.ts > since);
+    },
+
+    snapshot: () => ({
+      chats: [...chats.values()],
+      messages: [...messages.entries()].map(([jid, rows]): [string, WaMessage[]] => [jid, [...rows]]),
+      names: [...names.entries()],
+      lidToPn: [...lidToPn.entries()],
+      groupRosters: [...groupRosters.entries()].map(([jid, roster]): [string, string[]] => [jid, [...roster]]),
+    }),
+
+    restore(raw) {
+      // DEFENSIVE at every seat: this crossed a disk, and a corrupt entry must cost that
+      // entry alone — never the boot. (The cache layer already quarantines whole-file
+      // corruption; this guards the shape inside a well-formed file.)
+      if (typeof raw !== 'object' || raw === null) return;
+      const snap = raw as Partial<ThreadStoreSnapshot>;
+      if (Array.isArray(snap.names)) {
+        for (const entry of snap.names) {
+          const [spelling, value] = Array.isArray(entry) ? entry : [];
+          if (typeof spelling === 'string' && typeof value?.name === 'string' && value.kind in NAME_TIER) {
+            names.set(spelling, { name: value.name, kind: value.kind });
+          }
+        }
+      }
+      if (Array.isArray(snap.lidToPn)) {
+        for (const entry of snap.lidToPn) {
+          const [lid, pn] = Array.isArray(entry) ? entry : [];
+          if (typeof lid === 'string' && typeof pn === 'string') lidToPn.set(lid, pn);
+        }
+      }
+      if (Array.isArray(snap.chats)) {
+        for (const chat of snap.chats) {
+          if (typeof chat?.jid === 'string' && typeof chat?.name === 'string') chats.set(chat.jid, chat);
+        }
+      }
+      if (Array.isArray(snap.messages)) {
+        for (const entry of snap.messages) {
+          const [jid, rows] = Array.isArray(entry) ? entry : [];
+          if (typeof jid === 'string' && Array.isArray(rows)) messages.set(jid, rows);
+        }
+      }
+      if (Array.isArray(snap.groupRosters)) {
+        for (const entry of snap.groupRosters) {
+          const [jid, roster] = Array.isArray(entry) ? entry : [];
+          if (typeof jid === 'string' && Array.isArray(roster)) {
+            groupRosters.set(jid, roster.filter((id): id is string => typeof id === 'string'));
+          }
+        }
+      }
     },
   };
 }

@@ -36,6 +36,7 @@ import makeWASocket, {
   type WASocket as BaileysSocket,
 } from 'baileys';
 import { createEventBuffer } from './event-buffer.js';
+import type { ThreadCache } from './thread-cache.js';
 import { createThreadStore } from './thread-store.js';
 import type { WaHistoryState, WaLinkState, WaMediaResult, WaMessage, WaSocket } from './wa-socket.js';
 
@@ -138,6 +139,35 @@ export interface BaileysSocketDeps {
   /** Injectable for tests; defaults to real time. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Durable content cache (ADR-0037): restored at boot, saved on a debounce as sync runs. */
+  threadCache?: ThreadCache;
+  /** Snapshot write debounce; injectable so tests need not wait five real seconds. */
+  cacheDebounceMs?: number;
+}
+
+/**
+ * Can this store RESUME — has a pairing ever COMPLETED here?
+ *
+ * The same material predicate as `isHalfLinkedStore`, asked in the affirmative: `me` plus
+ * `account` plus a non-empty `signalIdentities` is what `configureSuccessfulPairing` writes,
+ * for QR and phone-code flows alike (never `registered` — see the warning above). Missing or
+ * unreadable creds answer false: an absent claim is not a resumable session.
+ */
+export function isResumableStore(authDir: string): boolean {
+  try {
+    const raw = readFileSync(join(authDir, 'creds.json'), 'utf8');
+    const creds = JSON.parse(raw) as { me?: unknown; account?: unknown; signalIdentities?: unknown };
+    return (
+      creds.me !== undefined &&
+      creds.me !== null &&
+      creds.account !== undefined &&
+      creds.account !== null &&
+      Array.isArray(creds.signalIdentities) &&
+      creds.signalIdentities.length > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 interface MessageContent {
@@ -293,6 +323,47 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   const store = createThreadStore();
   const events = createEventBuffer(EVENT_BUFFER_SIZE);
 
+  // ---- THE DURABLE CACHE (ADR-0037 §1): restore first, so chats exist before any sync.
+  // The payload carries the HISTORY STATE beside the store: without it, a restored,
+  // fully-synced session would report "still syncing" forever — exactly the ambiguity
+  // lessons.md 2026-08-17 warns renders as a lie the user cannot see through.
+  if (deps.threadCache !== undefined) {
+    const cached = deps.threadCache.load() as { store?: unknown; history?: unknown } | undefined;
+    if (cached !== undefined && cached !== null && typeof cached === 'object') {
+      store.restore(cached.store);
+      const savedHistory = cached.history as Partial<WaHistoryState> | null | undefined;
+      if (savedHistory !== null && typeof savedHistory === 'object') {
+        history = {
+          complete: savedHistory.complete === true,
+          explicit: savedHistory.explicit === true,
+          progress: typeof savedHistory.progress === 'number' ? savedHistory.progress : 0,
+        };
+      }
+    }
+  }
+
+  const cacheDebounceMs = deps.cacheDebounceMs ?? 5_000;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  const persistNow = (): void => deps.threadCache?.save({ store: store.snapshot(), history });
+  /**
+   * Throttle-style: the first change opens a window, everything else in it rides along in
+   * one write. History sync mutates the store thousands of times a minute; the disk sees a
+   * snapshot every few seconds, and the process-exit flush below catches the tail.
+   */
+  const scheduleSave = (): void => {
+    if (deps.threadCache === undefined || saveTimer !== undefined) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = undefined;
+      persistNow();
+    }, cacheDebounceMs);
+    saveTimer.unref?.();
+  };
+  if (deps.threadCache !== undefined) {
+    // The reap on shell exit is SIGTERM → clean process exit; a synchronous final write
+    // here means the debounce window's tail is never lost to it.
+    process.once('exit', persistNow);
+  }
+
   /**
    * Raw Baileys image messages, retained so `mediaOf` can hand them to
    * `downloadMediaMessage` later — the download needs the full protobuf row, not the seam's
@@ -361,6 +432,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
           subject: metadata?.subject,
           participants: (metadata?.participants ?? []).map((participant) => ({ id: participant.id })),
         });
+        scheduleSave();
       })
       .catch(() => {
         rosterRequested.delete(jid); // let a later list try again
@@ -378,6 +450,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     }
     const { added } = store.ingest(mapped.chatJid, mapped.message, { live });
     if (!added) return;
+    scheduleSave();
     if (mapped.message.kind === 'image') {
       rawImages.set(`${mapped.chatJid} ${mapped.message.id}`, raw);
       if (rawImages.size > MAX_RAW_IMAGES) {
@@ -427,13 +500,22 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     // carries `contacts` alongside `chats`/`messages`, and the live directory arrives as its
     // own events — reading only the conversation rows meant a chat could be named ONLY by
     // whatever WhatsApp happened to stamp on it, which for most DMs is nothing.
-    socket.ev.on('contacts.upsert', (contacts) => store.rememberContacts(contacts ?? []));
-    socket.ev.on('contacts.update', (contacts) => store.rememberContacts((contacts ?? []) as never));
+    socket.ev.on('contacts.upsert', (contacts) => {
+      store.rememberContacts(contacts ?? []);
+      scheduleSave();
+    });
+    socket.ev.on('contacts.update', (contacts) => {
+      store.rememberContacts((contacts ?? []) as never);
+      scheduleSave();
+    });
 
     // LID ↔ phone pairings. A LID is an INTERNAL address, not a phone number: rendering its
     // digits produced a plausible-looking wrong number — worse than showing nothing, because
     // it invites the user to trust it.
-    socket.ev.on('lid-mapping.update', (mapping) => store.rememberLidMappings([mapping as never]));
+    socket.ev.on('lid-mapping.update', (mapping) => {
+      store.rememberLidMappings([mapping as never]);
+      scheduleSave();
+    });
 
     socket.ev.on('messaging-history.set', (chunk) => {
       store.rememberContacts((chunk.contacts ?? []) as never);
@@ -456,6 +538,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         ...history,
         progress: typeof progress === 'number' ? progress : history.progress,
       };
+      scheduleSave();
     });
 
     socket.ev.on('chats.update', (updates) => {
@@ -467,6 +550,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
           // count, and the chat-update hint lets an open app clear its badge immediately.
           store.seedChatMeta(update.id, { unreadCount: unread });
           events.push({ jid: update.id, kind: 'chat-update', ts: Math.floor(now() / 1000) });
+          scheduleSave();
         }
       }
     });
@@ -479,6 +563,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         explicit: status.explicit === true,
         progress: status.status === 'complete' ? 100 : history.progress,
       };
+      scheduleSave();
     });
 
     socket.ev.on('messages.upsert', (upsert) => {
@@ -489,14 +574,22 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     });
   };
 
+  // ADR-0037 §2: a COMPLETED pairing resumes at boot, without waiting for a wizard or an
+  // app request — that is what lets sync continue in the background after a shell restart.
+  // The material predicate keeps this honest: a first run or a half-linked wedge makes no
+  // outbound connection at all.
+  if (isResumableStore(deps.authDir)) connect();
+
   return {
     linkState: () => link,
     currentQr: () => (link === 'linked' ? undefined : qr),
 
     async startLink() {
       // Idempotent while one attempt is in flight — a second call must not open a rival
-      // socket racing the first for the same session.
-      if (sock !== undefined && (link === 'waiting' || link === 'linked')) return;
+      // socket racing the first for the same session. `idle`-with-a-socket is the boot
+      // RESUME in flight (above): resetting the store under it would destroy a working
+      // session, so that state returns here too; only `closed` may retry the connect.
+      if (sock !== undefined && link !== 'closed') return;
 
       // CLEAR A DEAD OR HALF-LINKED STORE BEFORE PAIRING (see `shouldResetAuthStore`). The
       // in-memory `state` is reloaded too: resetting the files while continuing to hand

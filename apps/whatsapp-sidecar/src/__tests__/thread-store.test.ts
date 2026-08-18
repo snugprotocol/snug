@@ -221,6 +221,43 @@ describe('the contact directory', () => {
     expect(store.contactName('222@s.whatsapp.net')).toBe('Bo 🌊');
   });
 
+  it('round-trips through snapshot/restore — the durable cache seat (ADR-0037)', () => {
+    // Every desktop restart used to be a full, invisible re-sync because all of this lived
+    // in in-process Maps. The snapshot must carry EVERY table a restart needs: chats (with
+    // meta), messages, the name directory WITH its tiers, LID mappings, and group rosters —
+    // through JSON, because that is how it crosses the disk.
+    const store = createThreadStore();
+    store.rememberContacts([{ id: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+    store.rememberContacts([{ id: '222@s.whatsapp.net', notify: 'Bo' }]);
+    store.rememberLidMappings([{ lid: '77771@lid', pn: '111@s.whatsapp.net' }]);
+    store.setGroupMetadata('g1@g.us', {
+      subject: 'Trip',
+      participants: [{ id: '111@s.whatsapp.net' }, { id: '222@s.whatsapp.net' }],
+    });
+    store.ingest('g1@g.us', msg('m1', 10), { live: false });
+    store.ingest('111@s.whatsapp.net', msg('m2', 20), { live: true });
+
+    const revived = createThreadStore();
+    revived.restore(JSON.parse(JSON.stringify(store.snapshot())));
+
+    expect(revived.listChats()).toEqual(store.listChats());
+    expect(revived.history('g1@g.us')).toEqual(store.history('g1@g.us'));
+    expect(revived.contactName('77771@lid')).toBe('Asha Rao');
+    // The TIER survived too: a push name arriving after restore must still not displace
+    // the restored saved name.
+    revived.rememberContacts([{ id: '111@s.whatsapp.net', notify: 'asha ✨' }]);
+    expect(revived.contactName('111@s.whatsapp.net')).toBe('Asha Rao');
+  });
+
+  it('restore tolerates junk without throwing and without inventing state', () => {
+    const store = createThreadStore();
+    store.restore(undefined);
+    store.restore(null);
+    store.restore('garbage');
+    store.restore({ chats: 'not-an-array', messages: 42 });
+    expect(store.listChats()).toEqual([]);
+  });
+
   it('a DM chat named only by push name says so, and sheds the mark when a saved name lands', () => {
     // `nameKind: 'push'` is how the app renders WhatsApp's ~convention; it must appear ONLY
     // for push-sourced names — a saved name carrying it would print a spurious ~.

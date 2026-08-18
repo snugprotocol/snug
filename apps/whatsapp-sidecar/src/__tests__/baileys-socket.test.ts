@@ -12,7 +12,7 @@
  * data they feed the store, not of WhatsApp's protocol.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -61,6 +61,7 @@ vi.mock('baileys', () => {
 });
 
 import { createBaileysWaSocket } from '../baileys-socket.js';
+import { createThreadStore } from '../thread-store.js';
 
 let authDir: string;
 
@@ -75,12 +76,20 @@ afterEach(() => {
 });
 
 /** Stand the adapter up, linked, with the newest fake Baileys socket in hand. */
-async function linkedAdapter(deps: { now?: () => number } = {}) {
+async function linkedAdapter(deps: Partial<Parameters<typeof createBaileysWaSocket>[0]> = {}) {
   const adapter = await createBaileysWaSocket({ authDir, ...deps });
   await adapter.startLink();
   const fake = created.at(-1)!;
   fake.emit('connection.update', { connection: 'open' });
   return { adapter, fake };
+}
+
+/** The material a COMPLETED QR pairing writes (see isHalfLinkedStore's doc): resumable. */
+function writeResumableCreds(dir: string): void {
+  writeFileSync(
+    join(dir, 'creds.json'),
+    JSON.stringify({ me: { id: '1@s.whatsapp.net' }, account: { details: 'x' }, signalIdentities: [{ identifier: {} }] }),
+  );
 }
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -254,5 +263,74 @@ describe('avatar caching and pacing', () => {
     );
     expect(fake.profilePictureUrl).toHaveBeenCalledTimes(12);
     expect(peak).toBeLessThanOrEqual(3);
+  });
+});
+
+/**
+ * SURVIVAL ACROSS A RESTART (ADR-0037 §1-2). The shell reaps the helper on exit — correctly
+ * (one writer per session store) — which made every desktop restart a full, invisible
+ * re-sync: all synced content lived in in-process Maps, and nothing reconnected until a
+ * request arrived. Ask what survives (lessons.md 2026-08-17): the content must, via the
+ * thread cache; and the CONNECTION must come back on its own, via boot resume.
+ */
+describe('the durable thread cache and boot resume', () => {
+  it('restores the cached snapshot at creation, so chats exist before any sync', async () => {
+    const seed = createThreadStore();
+    seed.rememberContacts([{ id: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+    seed.ingest('111@s.whatsapp.net', { id: 'm1', from: '111@s.whatsapp.net', text: 'hi', ts: 5 }, { live: false });
+    const cache = {
+      load: vi.fn(() => ({ store: JSON.parse(JSON.stringify(seed.snapshot())), history: { complete: true, explicit: true, progress: 100 } })),
+      save: vi.fn(),
+    };
+    const adapter = await createBaileysWaSocket({ authDir, threadCache: cache });
+    expect(cache.load).toHaveBeenCalledTimes(1);
+    expect(adapter.listChats().find((row) => row.jid === '111@s.whatsapp.net')?.name).toBe('Asha Rao');
+    // The HISTORY STATE survived too: without it, a restored, fully-synced session would
+    // report "still syncing" forever — the exact ambiguity lessons.md 2026-08-17 names.
+    expect(adapter.historyState().complete).toBe(true);
+  });
+
+  it('saves a snapshot (debounced) after ingesting, carrying store AND history state', async () => {
+    const cache = { load: vi.fn(() => undefined), save: vi.fn() };
+    const { fake } = await linkedAdapter({ threadCache: cache, cacheDebounceMs: 10 });
+    fake.emit('messaging-history.set', {
+      chats: [],
+      contacts: [],
+      messages: [
+        {
+          key: { id: 'H9', remoteJid: '555@s.whatsapp.net', fromMe: false },
+          message: { conversation: 'persist me' },
+          messageTimestamp: 9,
+          pushName: 'Pat',
+        },
+      ],
+      progress: 40,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(cache.save).toHaveBeenCalled();
+    const payload = cache.save.mock.calls.at(-1)![0] as {
+      store: { chats: unknown[] };
+      history: { progress: number };
+    };
+    const revived = createThreadStore();
+    revived.restore(payload.store);
+    expect(revived.listChats().find((row) => row.jid === '555@s.whatsapp.net')?.name).toBe('Pat');
+    expect(payload.history.progress).toBe(40);
+  });
+
+  it('resumes a completed pairing at boot, without waiting for any request', async () => {
+    writeResumableCreds(authDir);
+    await createBaileysWaSocket({ authDir });
+    // The Baileys socket exists already: syncing continues in the background whether or not
+    // Telepath (or the wizard) ever asks for anything.
+    expect(created.length).toBe(1);
+  });
+
+  it('does NOT dial out at boot on a first run or a half-linked store', async () => {
+    await createBaileysWaSocket({ authDir }); // empty dir: first run
+    expect(created.length).toBe(0);
+    writeFileSync(join(authDir, 'creds.json'), JSON.stringify({ me: { id: '1@s.whatsapp.net' } }));
+    await createBaileysWaSocket({ authDir }); // half-linked: me without account/identities
+    expect(created.length).toBe(0);
   });
 });
