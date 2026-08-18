@@ -102,23 +102,88 @@ describe('resetAuthStore', () => {
 // disk, so the helper reports it and the app can say "re-link" instead of "still syncing".
 
 describe('isHalfLinkedStore — the wedge, named', () => {
-  it('is TRUE for the wedge: a scan happened but registration never finished', () => {
+  // CORRECTED 2026-08-18, after the owner re-paired and was told to re-pair AGAIN.
+  //
+  // The original detector read `registered:false` + a saved `me` as "scanned but never
+  // finished". That premise was WRONG, and verifying it against the library rather than
+  // remembering it would have cost one grep: in baileys@7.0.0-rc14, `creds.registered` is
+  // set to true in EXACTLY ONE place — `Socket/messages-recv.js:940`, the `link_code_pairing`
+  // (phone-number code) path. The QR flow never touches it: `pair-success` calls
+  // `configureSuccessfulPairing`, which writes `me`, `account`, `signalIdentities` and
+  // `platform` and leaves `registered` at its `initAuthCreds` default of false.
+  //
+  // So for a QR-linked session — every session this helper creates — `registered:false` is
+  // the PERMANENT, CORRECT steady state. The old detector fired on every healthy session,
+  // the app told the owner to re-link, re-linking called `shouldResetAuthStore` which WIPED
+  // the working session, and the loop repeated. A false positive here does not merely
+  // mislead; it destroys the thing it claims is broken.
+  //
+  // The honest signal is the material a completed pairing writes. `me` alone is not enough
+  // (it is written mid-handshake); `account` + `signalIdentities` are what a session needs
+  // to actually resume.
+
+  it('is FALSE for a QR-paired session — registered:false is NORMAL there', () => {
+    // Shaped from the owner's real creds.json (identifiers redacted): everything a working
+    // link has, with registered:false. The old detector called this a wedge.
+    const dir = mkdtempSync(path.join(tmpdir(), 'snug-qr-'));
+    writeFileSync(
+      path.join(dir, 'creds.json'),
+      JSON.stringify({
+        registered: false,
+        me: { id: '1234567890:42@s.whatsapp.net', name: 'Someone', lid: '999:42@lid' },
+        account: { details: 'x', accountSignature: 'y', accountSignatureKey: 'z' },
+        signalIdentities: [{ identifier: { name: '1234567890:42@s.whatsapp.net' }, identifierKey: 'k' }],
+        myAppStateKeyId: 'AAAAAK4s',
+        platform: 'iphone',
+      }),
+    );
+    expect(isHalfLinkedStore(dir)).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is TRUE for a genuinely interrupted scan: identity started, pairing never completed', () => {
+    // `me` written mid-handshake, but no `account` and no `signalIdentities` — nothing that
+    // could resume a session. This is the real wedge.
     const dir = mkdtempSync(path.join(tmpdir(), 'snug-wedge-'));
-    writeFileSync(path.join(dir, 'creds.json'), JSON.stringify({ registered: false, me: { id: '1@s.whatsapp.net' } }));
+    writeFileSync(
+      path.join(dir, 'creds.json'),
+      JSON.stringify({ registered: false, me: { id: '1@s.whatsapp.net' } }),
+    );
     expect(isHalfLinkedStore(dir)).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('is FALSE for a healthy registered session', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'snug-ok-'));
-    writeFileSync(path.join(dir, 'creds.json'), JSON.stringify({ registered: true, me: { id: '1@s.whatsapp.net' } }));
+  it('is FALSE when signalIdentities exist but the array is empty — that is not a session', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'snug-empty-'));
+    writeFileSync(
+      path.join(dir, 'creds.json'),
+      JSON.stringify({ registered: false, me: { id: '1@s.whatsapp.net' }, account: { details: 'x' }, signalIdentities: [] }),
+    );
+    // account present + identities empty: incomplete, so the wedge verdict stands.
+    expect(isHalfLinkedStore(dir)).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is FALSE for a COMPLETED phone-code session — the material, not the flag, decides', () => {
+    // `registered:true` is the phone-code flow's marker, but it is not what this predicate
+    // reads: a completed session of EITHER flow carries account + identities, and a
+    // `registered:true` store without them could not resume anything. The verdict follows
+    // the material that makes a session usable, so it is flow-agnostic by construction.
+    const dir = mkdtempSync(path.join(tmpdir(), 'snug-code-'));
+    writeFileSync(
+      path.join(dir, 'creds.json'),
+      JSON.stringify({
+        registered: true,
+        me: { id: '1@s.whatsapp.net' },
+        account: { details: 'x' },
+        signalIdentities: [{ identifier: { name: '1@s.whatsapp.net' } }],
+      }),
+    );
     expect(isHalfLinkedStore(dir)).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('is FALSE for a never-paired store — that is a first run, not a wedge', () => {
-    // The distinction that matters: no `me` means nobody has scanned anything yet, and
-    // telling that user to "re-link" would be nonsense.
     const dir = mkdtempSync(path.join(tmpdir(), 'snug-fresh-'));
     writeFileSync(path.join(dir, 'creds.json'), JSON.stringify({ registered: false }));
     expect(isHalfLinkedStore(dir)).toBe(false);

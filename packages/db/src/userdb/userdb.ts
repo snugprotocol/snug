@@ -51,6 +51,7 @@ import {
   type RuntimeContract,
 } from '@snugprotocol/protocol';
 import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
+import { appIdFromModelSettingKey, appModelSettingKey } from './app-settings-keys.js';
 import { base64ToBytes } from '../base64.js';
 import {
   KV_TABLE_DDL,
@@ -644,6 +645,18 @@ export interface UserDb {
 
   getSetting(key: string): unknown;
   setSetting(key: string, value: unknown): void;
+  /**
+   * Every app that has PINNED a model, as `{ [appId]: modelId }` (TASK-20260817).
+   * Apps that inherit the global `model` setting are simply absent — inheritance is an
+   * absence, not a stored copy, so a later change to the default reaches them.
+   *
+   * Typed rather than left to callers because the `appModel:<appId>` key shape is a
+   * shared contract (`app-settings-keys.ts`): a caller hand-rolling a `startsWith` scan
+   * over `snug_settings` would read the global `model`/`mode`/`provider` rows as app ids.
+   */
+  listAppModels(): Record<string, string>;
+  /** Pin one app to a model, or clear the pin (`undefined`) so the app inherits again. */
+  setAppModel(appId: string, model: string | undefined): void;
   getProfileField(key: string): unknown;
   setProfileField(key: string, value: unknown): void;
   getSecret(key: string): string | undefined;
@@ -1994,6 +2007,14 @@ function construct(
         //     shapes ever widen.
         const prefix = authAppSecretPrefix(appId).replace(/([!%_])/g, '!$1');
         db.run(`DELETE FROM ${USERDB_TABLES.secrets} WHERE key LIKE ? ESCAPE '!'`, [`${prefix}%`]);
+        // 3c. The app's per-app model pick (TASK-20260817). `snug_settings` is a
+        //     hub-level KV holding global keys (`mode`, `provider`, `model`, …) plus
+        //     these ONE-PER-APP `appModel:<appId>` rows, so — unlike the tables above —
+        //     it cannot be swept by `app_id`. This is an EQUALITY match on the single
+        //     key, deliberately not a `LIKE 'appModel:%'` prefix delete: there is exactly
+        //     one row per app, and equality needs no metacharacter escaping and cannot
+        //     over-match a sibling id (the caveat noted for the secrets prefix above).
+        db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [appModelSettingKey(appId)]);
         // 4. The app row last, so a failure above leaves a consistent, still-installed app.
         db.run(`DELETE FROM ${USERDB_TABLES.apps} WHERE app_id = ?`, [appId]);
         db.run('COMMIT');
@@ -2730,6 +2751,35 @@ function construct(
 
     getSetting: (key) => kvGet(USERDB_TABLES.settings, key),
     setSetting: (key, value) => kvSet(USERDB_TABLES.settings, key, value),
+    listAppModels() {
+      assertOpen();
+      const out: Record<string, string> = {};
+      for (const row of select(`SELECT key, value FROM ${USERDB_TABLES.settings}`)) {
+        // Parse the key rather than trusting a prefix test: `appIdFromModelSettingKey`
+        // refuses a bare `appModel:` with no id, so a malformed row cannot become an
+        // entry keyed by the empty string.
+        const appId = appIdFromModelSettingKey(String(row[0]));
+        if (appId === undefined) continue;
+        const model = JSON.parse(String(row[1])) as unknown;
+        // A non-string (or empty) stored value is skipped rather than surfaced: it can
+        // only come from a corrupted or hand-edited file, and inheriting is the safe
+        // reading — the app runs on the user's default instead of on `null`.
+        if (typeof model === 'string' && model !== '') out[appId] = model;
+      }
+      return out;
+    },
+    setAppModel(appId, model) {
+      assertOpen();
+      const key = appModelSettingKey(appId);
+      // Clearing DELETES the row instead of storing '' — absence is what "inherits the
+      // global default" means, and an empty-string row would hydrate back as a falsy
+      // pick that different readers could disagree about.
+      if (model === undefined || model.trim() === '') {
+        run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]);
+        return;
+      }
+      kvSet(USERDB_TABLES.settings, key, model.trim());
+    },
     getProfileField: (key) => kvGet(USERDB_TABLES.profile, key),
     setProfileField: (key, value) => kvSet(USERDB_TABLES.profile, key, value),
 

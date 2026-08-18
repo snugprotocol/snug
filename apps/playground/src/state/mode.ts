@@ -18,6 +18,11 @@ import { LOCAL_DEFAULT_BASE_URL } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
 
 import { getPlatform } from '../platform/platform.js';
+// NOTE: appModel.ts imports `modelStore` from THIS module, so this is a cycle. It is
+// safe because neither side touches the other at module-evaluation time — the imports
+// are only dereferenced inside functions (`hydrateAppModels` here,
+// `resolveModelForApp` there), by which point both modules are fully initialized.
+import { hydrateAppModels } from './appModel.js';
 import { ollamaStore } from './ollama.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
@@ -83,6 +88,12 @@ export function hydrateSettings(db: UserDb): void {
   const localUrl = db.getSetting(SETTING_LOCAL_URL);
   localUrlStore.set(typeof localUrl === 'string' && localUrl !== '' ? localUrl : LOCAL_DEFAULT_BASE_URL);
   endpointsNeedConfirmStore.set(db.getSetting(SETTING_NEEDS_CONFIRM) === true);
+  // Per-app model picks ride the same hydration path as the global settings above, so a
+  // boot, an import and a first sync pull all restore them (TASK-20260817). They are NOT
+  // gated by the F15 `needsEndpointConfirm` flag: that gate exists for executable
+  // ENDPOINT config arriving in foreign bytes, and a model id names a model AT an
+  // endpoint the user has already confirmed (ADR-0036 D3).
+  hydrateAppModels(db);
 }
 
 /** Boot hook: hydrate once the user DB opens. */

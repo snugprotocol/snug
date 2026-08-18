@@ -21,6 +21,7 @@ const read = (rel: string): string => readFileSync(resolve(appRoot, rel), 'utf8'
 
 const css = read('src/theme/app.css');
 const runView = read('src/run/RunView.tsx');
+const headerActions = read('src/run/RunHeaderActions.tsx');
 const repairBanner = read('src/run/AuthRepairBanner.tsx');
 
 /** One CSS rule body, anchored so `.connection-note` ≠ `.connection-note-title`. */
@@ -36,8 +37,12 @@ describe('AC9 — the app header offers a way back to its connections', () => {
     // The gate is `connectionSlots > 0` — rows exist, whatever their status. An app
     // that is already CONNECTED is precisely the case the owner reported as having no
     // door, so gating on "not yet approved" would rebuild the same gap.
-    expect(runView).toMatch(/connectionSlots > 0/);
-    expect(runView).toContain('data-testid="manage-connections"');
+    //
+    // Re-pointed 2026-08-18: the control moved to `RunHeaderActions`; the CLAIM is
+    // unchanged, and the count is still computed and passed by RunView.
+    expect(headerActions).toMatch(/connectionSlots > 0/);
+    expect(headerActions).toContain('data-testid="manage-connections"');
+    expect(runView).toMatch(/connectionSlots=\{connectionSlots\}/);
   });
 
   it('counts rows for THIS app only, not every app in the hub', () => {
@@ -59,18 +64,41 @@ describe('AC9 — the app header offers a way back to its connections', () => {
 
   it('excludes starters, whose declaration has no persisted rows yet', () => {
     // A starter declares via a bundled manifest; the wizard would open empty.
-    expect(runView).toMatch(/connectionSlots > 0 && !isStarterId\(id\)/);
+    //
+    // Re-pointed 2026-08-18: the two halves of this gate now sit either side of the
+    // component boundary — RunView decides whether this id IS a starter, the cluster
+    // applies it. Both halves are asserted so neither can be dropped silently, and the
+    // rendered negative ("a starter shows no connections control") is pinned in
+    // `runHeaderIcons.test.tsx`.
+    expect(headerActions).toMatch(/connectionSlots > 0 && !isStarter/);
+    expect(runView).toMatch(/isStarter=\{isStarterId\(id\)\}/);
   });
 
   it('sits in the same action cluster as export and the theme toggle', () => {
     // The owner asked for it "in a common place like the header where export and
     // light/dark are" — so assert the ORDERING, not merely that it exists somewhere.
-    const manage = runView.indexOf('data-testid="manage-connections"');
-    const exportBtn = runView.indexOf('export .sqlite');
-    const theme = runView.indexOf('switch to ${theme');
+    //
+    // MIGRATED (2026-08-18): the per-app controls moved into `RunHeaderActions` and the
+    // model selector was swapped ahead of connections, so the source-index check that
+    // used to live here (manage < 'export .sqlite' < theme, all inside RunView.tsx) no
+    // longer describes the code. It is not DELETED: the same claim — connections sits
+    // with export, ahead of the workspace-level theme toggle — is asserted here across
+    // the two files, and the rendered document order (including the swap) is pinned by
+    // `runHeaderIcons.test.tsx`, which measures nodes rather than string positions.
+    const manage = headerActions.indexOf('data-testid="manage-connections"');
+    const exportBtn = headerActions.indexOf('data-testid="export-sqlite"');
     expect(manage).toBeGreaterThan(-1);
     expect(manage).toBeLessThan(exportBtn);
-    expect(exportBtn).toBeLessThan(theme);
+    // The app-level cluster renders before the workspace-level theme toggle in RunView.
+    expect(runView.indexOf('<RunHeaderActions')).toBeLessThan(runView.indexOf('switch to ${theme'));
+  });
+
+  it('the connections control is an ICON button that still has an accessible name', () => {
+    // A glyph is not a name (the rail-toggle rule, restated for this control). The
+    // rendered-DOM assertions live in `runHeaderIcons.test.tsx`; this pins the source so
+    // a future edit cannot quietly drop the label back to a bare emoji.
+    expect(headerActions).toMatch(/aria-label="connections"/);
+    expect(headerActions).toMatch(/title="review, reconnect, or disconnect/);
   });
 });
 

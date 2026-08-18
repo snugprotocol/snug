@@ -21,6 +21,13 @@ export { ANTHROPIC_DEFAULT_MODEL, anthropicAdapter, type AnthropicAdapterOptions
 
 export { OPENAI_DEFAULT_MODEL, openaiAdapter, type OpenAiAdapterOptions } from './openai.js';
 
+export {
+  POPULAR_MODELS,
+  popularModelsFor,
+  type CatalogProvider,
+  type PopularModel,
+} from './model-catalog.js';
+
 export { LOCAL_DEFAULT_BASE_URL, localAdapter, type LocalAdapterOptions } from './local.js';
 
 export { parseSse, tryParseJsonRecord, type SseEvent } from './sse.js';

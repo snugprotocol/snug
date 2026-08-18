@@ -19,6 +19,7 @@ import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirect
 
 import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
 import { createServerArtifactFetch } from '../state/library.js';
+import { resolveModelForApp } from '../state/appModel.js';
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
 import { resolveTurnMode, useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
@@ -372,18 +373,30 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   const serverTurn = resolveTurnMode(brain, mode) === 'subscription';
 
   const agent: BuilderAgent = useMemo(() => {
+    // TASK-20260817: the attached app's per-app model routes BOTH lanes this memo
+    // serves — the builder and the app-attached data chat (owner decision 1 (b)+(c),
+    // which are one change because they share this agent). `appId` is passed instead of
+    // a resolved `model` so `createDirectBuilder` can resolve PER SEND: this memo is
+    // keyed on `attachedAppId`, not on the pick, so a model chosen mid-thread would
+    // otherwise not reach the agent until something else invalidated the memo.
+    //
+    // The webllm/demo arms deliberately pass nothing: the brain OVERRIDES the configured
+    // mode entirely (ADR-0015) and always loads its own pinned model, so threading an
+    // app model there would imply a routing that cannot happen.
     if (brain.kind === 'webllm') return createDirectBuilder({ mode: 'webllm', provider, sink, localUrl });
     if (brain.kind === 'demo') return createDirectBuilder({ mode: 'byok', provider: 'mock', sink, localUrl });
     return mode === 'subscription'
-      ? createServerBuilder(threadId, undefined, model)
+      ? // Subscription mode resolves at CALL time (the value rides the /invoke body), so
+        // it takes the resolved model rather than the id.
+        createServerBuilder(threadId, undefined, resolveModelForApp(attachedAppId))
       : createDirectBuilder({
           mode,
           provider,
           sink,
-          ...(model !== undefined ? { model } : {}),
+          ...(attachedAppId !== undefined ? { appId: attachedAppId } : {}),
           localUrl,
         });
-  }, [brain, mode, provider, model, localUrl, threadId, sink]);
+  }, [brain, mode, provider, model, localUrl, threadId, sink, attachedAppId]);
 
   // AC4: a fresh session over the same user DB re-renders the persisted thread —
   // including artifact cards (from message meta) and the durable app pin.
@@ -505,7 +518,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         let route: ChatRoute | undefined;
         if (contextTarget !== undefined && !serverTurn) {
           const { liveInferenceAdapter } = await import('./inferrerAdapter.js');
-          const live = await liveInferenceAdapter();
+          // The classifier turn belongs to the app the message sits beside, so it
+          // routes on that app's model like the build/chat turn that follows it.
+          const live = await liveInferenceAdapter(contextTarget);
           if (live.ok) {
             route = await routeChatMessage({
               db,
@@ -796,7 +811,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                     import('./runtimeContractSynthesis.js'),
                     import('./inferrerAdapter.js'),
                   ]);
-                  const live = await liveInferenceAdapter();
+                  // The synthesis is FOR this artifact, so it routes on that app's model.
+                  const live = await liveInferenceAdapter(turn.artifact.artifactId);
                   if (live.ok) {
                     await synthesizeRuntimeContract({
                       db,

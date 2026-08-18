@@ -12,11 +12,11 @@ import { ERROR_CODES, parseAppRequest, type RuntimeContract } from '@snugprotoco
 import type { AgentTransport } from '@snugprotocol/runner';
 
 import { getPlatform } from '../platform/platform.js';
+import { resolveModelForApp } from '../state/appModel.js';
 import {
   endpointsNeedConfirmStore,
   getByokKey,
   localUrlStore,
-  modelStore,
   providerStore,
   type ByokProvider,
   type PlaygroundMode,
@@ -235,7 +235,11 @@ export function resolveAppTransport(
       ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
     });
   }
-  const model = modelStore.get();
+  // The per-app pick, falling back to the Settings default (ADR-0036). Read HERE rather
+  // than in createDirectAppTransport for the same reason the brain is: resolveAppTransport
+  // runs per send, so a model chosen mid-session takes effect on the next turn without a
+  // remount — RunView memoizes the transport it wraps.
+  const model = resolveModelForApp(appId);
   if (mode === 'subscription') return createServerAppTransport(model, appId);
   return createDirectAppTransport({
     mode,
