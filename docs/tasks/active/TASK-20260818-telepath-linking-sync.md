@@ -96,6 +96,10 @@ None (no protocol schema change). Re-check at Gate 5; tripwire in Phases table.
 ## Decisions & surprises
 
 - Prior art to respect: lessons 2026-08-17 — avatar "failure is not a fact" negative-caching rule; LID (`@lid`) vs phone-JID aliasing (`lidPnMappings` + `lid-mapping.update`); `unreadCount` snapshot-only. Verify whether those fixes shipped and where these five symptoms sit relative to them.
+- **Plan deviation (D4, in-scope):** the plan named `GET /session/status` as the host poll's source, but the contract (`sidecar-contract.ts` `WIZARD_ONLY_PREFIXES`) makes `/session/*` wizard-only — the app-door executor cannot reach it, and widening the table would be a protocol change (High + spec-sync). The poll rides `GET /chats` instead, whose response carries `sync` by design; `syncStateFromChatsBody` extracts ONLY `{progress, complete}` and a test pins that nothing else (names/jids/previews) reaches header state. ADR-0037 §4 updated to match. No route table touched; tier stays Medium.
+- **Name tiers were forced by the pushName harvest (B):** feeding every message row's pushName through `rememberContacts` meant the newest message would rename saved contacts; the store now tracks the tier a name came from (contact > verified > push) and lower never displaces higher. `nameKind: 'push'` rides chats/participants (optional field on existing JSON payloads, not a route change) so the app renders WhatsApp's `~` convention.
+- **The cache payload carries `history` beside the store snapshot (D1):** without it, a restored fully-synced session would report "still syncing" forever — the exact rendered-ambiguity lesson from 2026-08-17.
+- **`startLink`'s idempotence guard widened (D2):** boot resume means a socket can exist with link still `idle`; the old guard would have fallen through to `resetAuthStore` and destroyed the working session mid-resume. `idle`-with-a-socket now returns; only `closed` retries.
 
 ## Session journal (append-only, newest last)
 

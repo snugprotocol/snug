@@ -35,11 +35,13 @@ desktop restart.
    (cheap existence check in the Tauri setup hook; the helper's own honest predicate decides
    whether to actually connect). The exit reap from TASK-20260818-sidecar-shutdown stays —
    lifecycle is now symmetric: spawn at launch, reap at exit, one writer per session store.
-4. **Sync progress is surfaced on existing routes.** `sync.progress` already rides
-   `GET /session/status` and `GET /chats`; the host live pump (ADR-0034) polls status while
-   sync is incomplete and feeds a `syncState` seat in the run header, and the app renders the
-   same number in its own UI. No new route, no protocol change, no content in the pump —
-   progress is a number, not a message.
+4. **Sync progress is surfaced on existing routes.** `sync` rides `GET /chats` by design,
+   and `/session/status` is WIZARD-ONLY (the ADR-0025 verify seat) — so the host poll rides
+   `/chats` through the same governed executor as every other read, extracts ONLY
+   `{progress, complete}` (the extraction is the scrub — names, jids and previews in that
+   response never reach header state), polls on a slow gap while incomplete, and retires
+   itself on the complete report. The run header renders a `syncState` seat; the app renders
+   the same number in its own UI. No new route, no protocol change, no content in the pump.
 
 ## Alternatives considered
 
