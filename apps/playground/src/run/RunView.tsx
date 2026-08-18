@@ -39,6 +39,7 @@ import { toggleRailShown, useRailShown } from '../state/railLayout.js';
 import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
+import { installStarterDocs } from '../starter/starterDocs.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -404,6 +405,12 @@ export default function RunView(): ReactElement {
       // authoring turn ever runs to write one. Failure is a no-op — the app simply runs
       // on the lean generic layers.
       await installStarterRuntimeContract(installedDb, entry.id);
+      // The starter's authoring bundle becomes the installed app's wiki seed (ADR-0035):
+      // vision/requirements/plan/lessons plus the verbatim build prompt, into
+      // `snug_app_docs` where the app-attached chat compounds on them. Absent slugs only —
+      // a re-install never clobbers a page the user's own sessions have written. Like the
+      // contract copy, every failure path is a no-op: doc-less is a supported state.
+      await installStarterDocs(installedDb, entry.id);
       navigate(`/run/${entry.id}`, { replace: true });
     } catch (err) {
       setInstallError(err instanceof Error ? err.message : String(err));

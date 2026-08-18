@@ -452,6 +452,23 @@ test('AC9: the shelf glob can never bundle authoring/ content (derived from the 
   }
 });
 
+test('ADR-0035: the doc-ingestion glob reaches authoring/{docs,prompts} and nothing else', () => {
+  // The SIBLING of the pin above, and deliberately a separate assertion rather than a
+  // loosening of it. ADR-0035 reverses "provenance never ships" — but only through ONE
+  // named channel, whose shape is pinned here so it can never widen into "bundle whatever
+  // sits under the starter folder". The producer is parsed, never restated.
+  const producer = readFileSync(
+    path.join(REPO_ROOT, 'apps', 'playground', 'src', 'starter', 'starterDocs.ts'),
+    'utf8',
+  );
+  const globs = [...producer.matchAll(/import\.meta\.glob\(\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(globs.length, 1, 'starterDocs.ts declares exactly one glob');
+  assert.ok(
+    globs[0].endsWith('/examples/*/authoring/{docs,prompts}/*.md'),
+    `doc-ingestion glob must match only authoring docs and prompts (got ${globs[0]})`,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // The no-network-APIs rule, tested directly (TASK-20260807-connection-reachability,
 // owner decision (i)). The per-app assertions above prove the SHIPPED apps are clean;
