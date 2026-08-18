@@ -1,6 +1,6 @@
 # TASK-20260817-telepath: Telepath — the WhatsApp client rebuild (live inbox + insight)
 
-- **Status**: planned (awaiting Gate-2 owner approval)
+- **Status**: in-review (all phases implemented and green; owner hardware walk owed)
 - **Owner**: jeetu
 - **Risk tier**: **high** — touches `packages/protocol` (`sidecar-contract.ts`), the desktop Rust route admission (`sidecar.rs`, C2 gate scope), and the connected-fetch path. High-tier extras apply: negative tests, fresh-context AI plan review BEFORE implementation, journal self-sign-off.
 - **Branch**: `feat/TASK-20260817-telepath`
@@ -252,3 +252,67 @@ spec-changelog entry in Phase A; no push to `snugprotocol/spec` (release rules).
 - State: plan hardened; awaiting Gate-2 OWNER APPROVAL. No implementation code written.
 - Next step: on approval → Phase A failing tests (`sidecar-contract`), then B→H per plan.
 - Open questions: owner may veto any of D1–D9 or the two draft ADRs at approval.
+
+### 2026-08-17 — claude (fable) — session (Gates 3–6, approved plan → implementation)
+- **Owner approved the plan** ("approved", no vetoes) — D1–D9 and both draft ADRs stand as written.
+- Done, phase by phase, tests FIRST in every one:
+  - **A — protocol** (`6e4f4c4`): `SIDECAR_ROUTES` gains `GET /events`, `GET /chats/:jid/media/:id`,
+    `GET /chats/:jid/picture`; `:jid` generalized to any `:param` segment with the traversal guard —
+    not the pattern — still doing the refusing. 5 red → green; protocol 334 green. Spec-changelog
+    INTERNAL-DRAFT entry.
+  - **B — sidecar** (`e875e27`): new `event-buffer.ts` (hint ring, monotonic cursor, `resync`,
+    long-poll wait) and `thread-store.ts` (the sidecar-owned unread counter + chat metadata),
+    both extracted pure with their own suites; typed image rows in `toWaMessage`; `mediaOf` with
+    the `reuploadRequest` context and refuse-don't-truncate cap; `pictureOf` with a null-caching
+    avatar cache; three router handlers. **50 → 85 sidecar tests.** One real bug caught by its own
+    test: the bootstrap (cursorless) `/events` call was holding like a poll, which would have
+    stalled every app open — now only a cursor-bearing call holds.
+  - **C — Rust + gate** (`694d95a`): `APP_ROUTES` 4 → 7 and `WIZARD_ROUTES` 8 → 11, `route_matches`
+    generalized to any `:param`, `:id` traversal negatives; **the next-steps positive twin
+    `ipc-sidecar-fetch-dispatchable` shipped** and is green in the real WKWebView. cargo 81,
+    desktop TS 124 → 128.
+  - **D — host pump** (`78ff031`): `state/sidecarLive.ts` — epoch-tokened loop, hints rebuilt
+    field-by-field, chunked emits, exponential backoff, eligibility resolved from the REAL user db
+    (approved row + symbolic host in the frozen ceiling), wired into RunView's frame lifecycle.
+    10 new tests incl. the StrictMode double-mount and a serialized-payload C1 negative.
+  - **E — the app** (`4923a6d`, `b21330c`): `examples/whatsapp/app.html` rebuilt as **Telepath** —
+    iOS-style list/thread/composer, avatars, badges, inline photos + lightbox, live doorbell,
+    ✨ draft from measured voice+emoji, 🧠 first-run/incremental analysis with watermark, Charts tab
+    (Chart.js 4 from the allowlisted CDN, dataviz reference palette, numbers-table fallback),
+    persisted pseudonym map with the bidirectional boundary. Rewritten `whatsapp-analysis.test.mjs`
+    (22 core + 3 doorbell). Runtime contract v2 within the ADR-0018 caps; README, four authoring
+    docs, and the **verbatim owner build prompt** in `authoring/prompts/01-build.md`.
+  - **F — doc ingestion** (`1d55c04`): `starter/starterDocs.ts` (own module, own glob — the AC9 pin
+    would have rejected a second glob in `starterApps.ts`), absent-slugs-only seeding incl. the
+    partial-state case, wired at the real install site in `installThisStarter`; dedicated
+    glob-shape assertion added beside the untouched original.
+  - **G — verification** (`2196bfd`): root `turbo run test --force` **23/23**, cargo **81**, macOS
+    `pnpm --filter desktop gate` **GREEN** (all CSP + IPC + persistence + wizard-journey verdicts,
+    including the new twin). Removed a dead transport wrapper the compiler flagged.
+  - **H — close** (`c90ecfa`): ADR-0034/0035 → **accepted**; surface-v2 addendum appended to
+    `threat-model-delta-whatsapp-sidecar.md`; three generalized rules into `lessons.md`; next-steps
+    hardening item (1) closed, hardware walk re-pointed at Telepath, SDK `useHostEvents` follow-up
+    recorded.
+- **Two validate-suite gates deliberately touched** (both widenings, both reasoned, neither a
+  loosening of an existing guard): the `exactly-three-CDN-scripts` count became "the three runtime
+  scripts, plus extras only from the KB's known-good pinned table" (Chart.js 4 is the first);
+  and the new doc-ingestion glob got its own shape pin rather than an exemption from the old one.
+- **Deviations from plan:** none material. The pump's `HINTS_PER_EMIT` chunking and the sidecar's
+  bootstrap-vs-hold distinction are implementation detail the plan implied but did not name.
+- **Self-sign-off (High tier).** C1: no credential, token, socket path or address reaches the app —
+  the pump reads through the same governed executor as every other connected read and forwards
+  content-free hints (pinned by a serialized-payload negative). C2: the sandbox posture is
+  untouched; the widened route table is mirrored in Rust, wizard-only prefixes still refused, and
+  the C2 gate now proves both directions per command. C3: `sidecar-contract.ts` stays outside
+  `schemas/` SOURCES — internal-draft only, spec-changelog entered, nothing pushed. The privacy
+  boundary is stronger than the POC's (bidirectional, persisted, and the budget path cannot bypass
+  the scrub). Auto-reply remains unshipped and unarmable.
+- State: **tree green everywhere; nothing merged.** Branch `feat/TASK-20260817-telepath`, 10
+  commits ahead of `main`, working tree clean.
+- Next step: **owner hardware walk** (procedure in `docs/next-steps.md`) — the eight-seams lesson
+  says the first walk is part of the work, and every seam this task added crosses a process
+  boundary no suite can drive. Then PR + Gate-5 fresh-context review of the diff.
+- Open questions: none blocking. Noted for the reviewer: the playground suite hit the known
+  unattributed ~1-in-5 flake once (114 files/1142 tests passed, non-zero exit, `tsc --noEmit`
+  clean, clean on immediate rerun) — consistent with the existing advisory, not with anything this
+  task introduced.
