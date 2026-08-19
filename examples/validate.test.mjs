@@ -79,6 +79,12 @@ const APPS = [
   // personal-finance flagship. First `basic_auth` + token-claim credential shape —
   // the SimpleFIN access pair is MINTED by the wizard's claim, never typed.
   'ledger',
+  // The eighth connected starter (TASK-20260819-gmail-starter, ADR-0039): the AI
+  // inbox manager. Second `oauth2_auth_code` shape after Spotify, and the first
+  // starter whose value is DESTRUCTIVE work on a user's real account — which is why
+  // its whole design is preview-then-one-confirm, and why the registry pin
+  // deliberately withholds the scope that could permanently delete (ADR-0039 D3).
+  'gmail',
 ];
 
 /**
@@ -411,7 +417,7 @@ test('chess sends its board state ONCE, not in both payload and state', () => {
  * shelf: the playground glob is DERIVED from the source of truth rather than restated
  * (lesson 2026-07-31 — for artifacts no local suite executes, parse the producer).
  */
-const CONNECTED_APPS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github', 'whatsapp', 'ledger'];
+const CONNECTED_APPS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github', 'whatsapp', 'ledger', 'gmail'];
 const STANDARD_DOC_SLUGS = new Set(['vision', 'requirements', 'plan', 'lessons', 'memory', 'next-tasks']);
 
 for (const app of CONNECTED_APPS) {
