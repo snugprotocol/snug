@@ -1,6 +1,6 @@
 # TASK-20260819-starter-sample-data: Ledger-style sample data + wiki-doc completion for Rewind, Trade Copilot, Moodboard, Telepath
 
-- **Status**: planned
+- **Status**: in-review
 - **Owner**: Jeetu
 - **Risk tier**: medium (examples/ is nominally Low, escalated: app.html edits change install-act vouched bytes, Telepath sample data borders the pseudonymisation/scrub seam, and four extracted-core test suites ride on these files)
 - **Branch**: `feat/TASK-20260819-starter-sample-data`
@@ -60,3 +60,10 @@ The four connected starters open onto empty states (skeletons, "not connected ye
 - State: planned — awaiting owner plan approval before Gate 3.
 - Next step: on approval, write red tests (steps 1–2), then implement hue → spotify → trade-copilot → whatsapp.
 - Open questions: none blocking.
+
+### 2026-08-19 — Claude — session (implementation)
+- Done: red `sample-mode.test.mjs` (20 red) wired into the examples runner; 4-agent parallel implementation (hue → SAMPLE_ROOMS five-room lit home + canned "Movie Night" designer mood; spotify → SampleShowcase portrait through real components, fictional artists, canned weekly-rewind card, journal fallback still outranks sample; trade-copilot → sample portfolio/book/ticker + completed-TWAP centrepiece with computed "patience saved ≈ $129.94" verdict + mid-flight plan + 3 canned Ledger-persona notes, render-only via `isSample` flag, DB untouched (plan deviation: NO twap seeding — zero schema/migration risk, noted in Decisions); whatsapp → sample chat list/thread/canned analysis mounted ONLY in helper-down/never-linked branch, `sample.invalid` jids, three real-session zero-states byte-preserved with their 2026-08-17/18 owner-fix comments). New docs: spotify+hue lessons/next-tasks, whatsapp next-tasks. READMEs: "Sample mode" sections. `starterDocs.test.ts` real-bundle pin updated for whatsapp `next-tasks.md`.
+- Evidence (all local — CI billing-blocked): `pnpm --filter examples test` 257/257; `pnpm --filter playground test` 1244/1244 (121 files, tsc-gated); `e2e/starters.spec.ts` 5/5 Playwright.
+- Plan deviation recorded: trade-copilot sample is render-only (constants), not DB-seeded — stronger guarantee for AC3, no eviction machinery needed.
+- State: implementation complete on `feat/TASK-20260819-starter-sample-data`; connected starters are desktop-only/env-gated, so the visual sample-mode walk is an owner hardware item.
+- Next step: owner walk of the four sample surfaces on desktop (plus re-run of the 3 pending Telepath linking-sync walk items on a build containing this change), then PR.

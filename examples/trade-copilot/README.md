@@ -49,3 +49,18 @@ plan is settled as *interrupted* (unsent slices skipped, in-flight ones flagged 
 manual Coinbase check). Plans and slice outcomes journal to app-owned SQLite
 (`twap_plans` + `twap_slices`, newest 20 plans kept) and render as run history. The
 agent only ever returns a verdict — it never executes, schedules, or edits a plan.
+
+## Sample mode
+
+Before Coinbase is connected, the dashboard opens on a clearly-bannered **sample
+book** (TASK-20260819, Ledger's ADR-0038 pattern) instead of a wall of empty states:
+a five-asset portfolio (with a deliberately BTC-heavy tilt), a sample BTC-USD ticker
++ sparkline and a 14-level order book (with a planted 6.4 BTC bid wall), one
+*completed* TWAP run whose twelve slice fills reconcile to a computed ≈$130 saving
+versus a one-shot buy, one plan mid-flight, and three canned Ledger notes reading
+those planted insights. Everything is authored constants inside the
+`TRADE-COPILOT-SAMPLE-BEGIN/END` markers in `app.html` — deterministic, render-only,
+never touching the bridge, network, or database, and never entering the LLM lane.
+The sample renders only while the install has never connected (no successful fetch,
+no journal rows, no notes, no orders); the first real Coinbase load flips those
+signals and every sample panel unmounts wholesale. Connected behavior is unchanged.

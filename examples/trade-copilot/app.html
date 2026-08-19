@@ -713,6 +713,197 @@ const TWAP_CSS = `
 `;
 
 // ============================================================
+// ===== TRADE-COPILOT-SAMPLE-BEGIN =====
+// Sample book — TASK-20260819-starter-sample-data (Ledger sample-mode pattern,
+// ADR-0038). Everything in this block is authored fiction: fixed literals and
+// pure helpers over them, nothing else. It exists so a never-connected install
+// shows what the dashboard is FOR — a portfolio, a live-looking market, and one
+// finished TWAP run whose slice fills prove the point of slicing — instead of a
+// wall of empty states. It is render-only: nothing here may touch the bridge,
+// the network, the database, or a clock, and the App renders it only while
+// `isSample` holds (no successful fetch, no journal rows, no notes, no orders,
+// no active plan). The first real Coinbase load flips those signals and every
+// sample panel unmounts wholesale.
+// ============================================================
+
+// The banner's CSS lives here (a second style element), NOT in the head style
+// block — the head styles above the byte-locked banner stay byte-identical.
+const SAMPLE_CSS = `
+  .sample-note {
+    display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap;
+    background: rgba(77,141,255,0.1); border:1px solid var(--border); border-radius:12px;
+    padding:10px 14px; margin: 0 0 14px; font-size:13.5px; line-height:1.5;
+  }
+  .sample-note strong { color: var(--accent); }
+  .sample-cap {
+    font-size:10.5px; color:var(--muted); text-transform:uppercase;
+    letter-spacing:0.05em; margin-bottom:6px;
+  }
+`;
+
+// A believable book with one planted imbalance: BTC carries 58% of the total —
+// exactly the concentration the sample portfolio-review note calls out below.
+const SAMPLE_PORTFOLIO = [
+  { currency: 'BTC', name: 'BTC Wallet', qty: '0.4183', usd: 28381.74 },
+  { currency: 'ETH', name: 'ETH Wallet', qty: '2.85', usd: 10010.34 },
+  { currency: 'SOL', name: 'SOL Wallet', qty: '41.2', usd: 6535.14 },
+  { currency: 'USDC', name: 'USDC Wallet', qty: '1500', usd: 1500.0 },
+  { currency: 'USD', name: 'Cash (USD)', qty: '2410.55', usd: 2410.55 },
+];
+
+function samplePortfolioTotal() {
+  return SAMPLE_PORTFOLIO.reduce((sum, a) => sum + a.usd, 0);
+}
+
+const SAMPLE_MARKETS = [
+  { productId: 'BTC-USD', price: 67850.2, change24h: 2.34 },
+  { productId: 'ETH-USD', price: 3512.4, change24h: 1.12 },
+  { productId: 'SOL-USD', price: 158.62, change24h: -0.87 },
+  { productId: 'AVAX-USD', price: 31.18, change24h: 4.61 },
+  { productId: 'DOGE-USD', price: 0.1284, change24h: -2.1 },
+  { productId: 'LINK-USD', price: 17.93, change24h: 0.45 },
+];
+
+const SAMPLE_TICKER = {
+  productId: 'BTC-USD',
+  price: 67850.2,
+  change24h: 2.34,
+  vol24h: '11,482.4 BTC',
+  // A fixed intraday path: grind up with two shakeouts, so the sparkline has texture.
+  spark: [
+    66910, 66980, 67040, 66890, 66950, 67120, 67260, 67190, 67310, 67405, 67350, 67480,
+    67555, 67610, 67540, 67620, 67715, 67790, 67740, 67808, 67760, 67825, 67880, 67850,
+  ],
+};
+
+// A 14-level book with one deliberate feature: the 6.4 BTC bid wall parked at
+// $67,800 — the kind of level the sample market-take note points at.
+const SAMPLE_BOOK = {
+  bids: [
+    { price: 67849.95, size: 0.51 },
+    { price: 67847.2, size: 0.94 },
+    { price: 67845.0, size: 1.32 },
+    { price: 67841.75, size: 0.44 },
+    { price: 67838.6, size: 0.72 },
+    { price: 67835.0, size: 0.61 },
+    { price: 67800.0, size: 6.4 },
+  ],
+  asks: [
+    { price: 67851.1, size: 0.42 },
+    { price: 67853.55, size: 0.87 },
+    { price: 67855.0, size: 1.6 },
+    { price: 67858.25, size: 0.35 },
+    { price: 67861.4, size: 2.1 },
+    { price: 67865.0, size: 0.58 },
+    { price: 67870.15, size: 1.15 },
+  ],
+};
+
+function sampleBookMax(levels) {
+  return Math.max(1e-9, ...levels.map((l) => l.size));
+}
+
+// The centrepiece: one COMPLETED smart order whose per-slice fills tell the whole
+// story. The market dipped mid-run, the time-spaced slices caught the dip, and the
+// average fill beat the one-shot price at arm time by a dollar amount computed
+// below from the fills themselves — the numbers on screen always reconcile.
+const SAMPLE_TWAP_DONE = {
+  side: 'BUY',
+  productId: 'BTC-USD',
+  totalSize: '0.35',
+  sizeUnit: 'BTC',
+  durationLabel: '4h',
+  intervalLabel: '20:00',
+  sliceCount: 12,
+  execStyle: 'MARKET',
+  status: 'done',
+  verdictAssessment: 'looks_sound',
+  oneShotPrice: 68105.0, // best ask plus book impact at arm time, per the sample book
+  slices: [
+    { offset: '+0:00', size: '0.02917', fill: 68092 },
+    { offset: '+0:20', size: '0.02917', fill: 67940 },
+    { offset: '+0:40', size: '0.02917', fill: 67721 },
+    { offset: '+1:00', size: '0.02917', fill: 67502 },
+    { offset: '+1:20', size: '0.02917', fill: 67412 },
+    { offset: '+1:40', size: '0.02917', fill: 67455 },
+    { offset: '+2:00', size: '0.02917', fill: 67548 },
+    { offset: '+2:20', size: '0.02917', fill: 67610 },
+    { offset: '+2:40', size: '0.02916', fill: 67702 },
+    { offset: '+3:00', size: '0.02916', fill: 67798 },
+    { offset: '+3:20', size: '0.02916', fill: 67905 },
+    { offset: '+3:40', size: '0.02916', fill: 68120 },
+  ],
+};
+
+/** Size-weighted average fill and the dollars saved vs a one-shot at arm time. */
+function sampleTwapStats(plan) {
+  let qty = 0;
+  let cost = 0;
+  for (const s of plan.slices) {
+    const q = Number(s.size);
+    qty += q;
+    cost += q * s.fill;
+  }
+  const avgFill = qty > 0 ? cost / qty : 0;
+  return { qty, avgFill, saved: (plan.oneShotPrice - avgFill) * qty };
+}
+
+// And one plan mid-flight, so the journal reads like a living tool, not a museum.
+const SAMPLE_TWAP_RUNNING = {
+  side: 'SELL',
+  productId: 'SOL-USD',
+  totalSize: '18',
+  sizeUnit: 'SOL',
+  durationLabel: '1h',
+  sliceCount: 6,
+  execStyle: 'MARKET',
+  status: 'running',
+  verdictAssessment: 'looks_sound',
+  sliceStatuses: ['accepted', 'accepted', 'accepted', 'pending', 'pending', 'pending'],
+  caption: '3 of 6 slices filled — avg $158.72 so far, next slice on the ten-minute mark',
+};
+
+// Three canned notes in the Ledger persona, one per copilot lane (portfolio
+// review, TWAP check, market take). Each one reads the planted insight above.
+const SAMPLE_COPILOT_NOTES = [
+  {
+    when: 'sample · Fri 13:51',
+    productId: 'BTC-USD',
+    kind: 'market_take',
+    sentiment: 'bullish',
+    riskLevel: 'medium',
+    message:
+      'Up 2.3% on the day and the book is leaning your way — a 6.4 BTC bid wall is parked at $67,800 soaking up ' +
+      'sellers. While it holds, dips are shallow; if the wall pulls, so does the floor.',
+    suggestion: 'A limit buy resting just above $67,800 rides the wall without paying the spread.',
+  },
+  {
+    when: 'sample · Fri 13:44',
+    productId: 'BTC-USD',
+    kind: 'twap_check',
+    sentiment: 'neutral',
+    riskLevel: 'low',
+    message:
+      'Your 4h BTC accumulation was a textbook TWAP win: twelve confirmed slices averaged $67,733.73 against ' +
+      '$68,105.00 for a one-shot market buy at arm time — patience clipped about $130 off the same 0.35 BTC.',
+    suggestion: 'The same playbook works in reverse for the SOL trim — let the slices do the timing.',
+  },
+  {
+    when: 'sample · Fri 09:12',
+    productId: null,
+    kind: 'portfolio_review',
+    sentiment: 'cautious',
+    riskLevel: 'medium',
+    message:
+      'Solid base, but BTC is 58% of this book — one asset is carrying most of your risk. The $3,910 across cash ' +
+      'and USDC is dry powder, not a hedge.',
+    suggestion:
+      'If you add from here, add to what you are under-weight — or set the next buy up as a TWAP plan so a red day works for you.',
+  },
+];
+// ===== TRADE-COPILOT-SAMPLE-END =====
+
+// ============================================================
 // APP
 // ============================================================
 function App() {
@@ -1469,6 +1660,15 @@ function App() {
   const isMarketConnected = !productsError;
   const isPortfolioConnected = !accountsError;
 
+  // Sample mode (render-only, see the SAMPLE block above): only a never-connected
+  // install qualifies. Any real signal — a successful fetch, a journal row, a
+  // copilot note, a logged order, an active plan — wins, and every sample panel
+  // unmounts. Connected phase logic below is untouched.
+  const isSample =
+    !isPortfolioConnected && !isMarketConnected && !ticker &&
+    accounts.length === 0 && products.length === 0 && ordersLog.length === 0 &&
+    copilotNotes.length === 0 && twapJournal.length === 0 && !activePlan;
+
   const journalRows = twapJournal.filter((p) => !activePlan || p.planId !== activePlan.planId);
   const twapSettled = activePlan
     ? activePlan.slices.filter((s) => s.status === 'accepted' || s.status === 'rejected' || s.status === 'error' || s.status === 'skipped').length
@@ -1478,6 +1678,7 @@ function App() {
   return (
     <div className="shell">
       <style>{TWAP_CSS}</style>
+      <style>{SAMPLE_CSS}</style>
       <div className="topbar">
         <div className="brand">
           <div className="brand-icon">📈</div>
@@ -1503,6 +1704,18 @@ function App() {
         </div>
       </div>
 
+      {isSample && (
+        <div className="sample-note" data-sample-banner="true">
+          <span>🧪</span>
+          <span>
+            you&rsquo;re looking at a <strong>sample book</strong> — made-up balances, prices, and smart-order runs,
+            so what this dashboard does (and what a patient TWAP run saves) is real to see. Approve the{' '}
+            <strong>Coinbase connection</strong> above the chat and the first live load replaces every sample panel
+            with your real account.
+          </span>
+        </div>
+      )}
+
       <div className="grid">
         {/* PORTFOLIO PANEL */}
         <section className="panel">
@@ -1513,7 +1726,28 @@ function App() {
             </button>
           </h2>
 
-          {accountsError ? (
+          {isSample ? (
+            <React.Fragment>
+              <div className="portfolio-total">{fmtUSD(samplePortfolioTotal())}</div>
+              <div className="portfolio-total-label">estimated total value · sample</div>
+              {SAMPLE_PORTFOLIO.map((a) => (
+                <div className="holding-row" key={a.currency}>
+                  <div>
+                    <div className="holding-ccy">{a.currency}</div>
+                    <div className="holding-sub">{a.name}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div>{fmtQty(a.qty)}</div>
+                    <div className="holding-sub">{fmtUSD(a.usd)}</div>
+                  </div>
+                </div>
+              ))}
+              <div className="connect-hint">
+                This is the sample portfolio. Approve the Coinbase connection above the chat and your real balances
+                load here — every sample panel disappears on the first live load.
+              </div>
+            </React.Fragment>
+          ) : accountsError ? (
             <div className="empty-state">
               <span className="big-emoji">🔌</span>
               Not connected to Coinbase yet.
@@ -1553,7 +1787,22 @@ function App() {
 
           <div className="divider"></div>
           <h2 style={{ marginBottom: 8 }}>Watchlist</h2>
-          {watchlist.length === 0 ? (
+          {isSample ? (
+            <React.Fragment>
+              <div className="sample-cap">sample markets</div>
+              {SAMPLE_MARKETS.map((m) => (
+                <div className="holding-row" key={m.productId}>
+                  <div className="holding-ccy">{m.productId}</div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div>{fmtUSD(m.price)}</div>
+                    <div className={'ticker-change ' + (m.change24h >= 0 ? 'up' : 'down')} style={{ fontSize: 11 }}>
+                      {fmtPct(m.change24h)} · 24h
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </React.Fragment>
+          ) : watchlist.length === 0 ? (
             <div className="muted-small">Add assets from the search box below to build a watchlist.</div>
           ) : (
             watchlist.map((id) => (
@@ -1600,7 +1849,19 @@ function App() {
             </div>
           )}
 
-          {tickerError && !ticker ? (
+          {isSample ? (
+            <div className="ticker-card">
+              <div className="ticker-symbol">{SAMPLE_TICKER.productId} · sample</div>
+              <div className="ticker-price">{fmtUSD(SAMPLE_TICKER.price)}</div>
+              <div className="ticker-change up">{fmtPct(SAMPLE_TICKER.change24h)} · 24h</div>
+              <div className="sparkline-wrap">
+                <Sparkline points={SAMPLE_TICKER.spark} up={true} />
+              </div>
+              <div className="ticker-meta">
+                vol 24h {SAMPLE_TICKER.vol24h} · sample feed — connect Coinbase for live prices, updating ~4s
+              </div>
+            </div>
+          ) : tickerError && !ticker ? (
             <div className="empty-state">
               <span className="big-emoji">📡</span>
               Live prices need the Coinbase connection.
@@ -1625,7 +1886,30 @@ function App() {
 
           <div className="divider"></div>
           <h2 style={{ marginBottom: 8 }}>Order book</h2>
-          {bookError && book.bids.length === 0 && book.asks.length === 0 ? (
+          {isSample ? (
+            <div className="book-cols">
+              <div className="book-col">
+                <h3>Bids · sample</h3>
+                {SAMPLE_BOOK.bids.map((b, i) => (
+                  <div key={i} className="book-row bid">
+                    <div className="bar" style={{ width: (b.size / sampleBookMax(SAMPLE_BOOK.bids) * 100) + '%' }}></div>
+                    <span>{fmtUSD(b.price, { decimals: 2 })}</span>
+                    <span>{fmtQty(b.size)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="book-col">
+                <h3>Asks · sample</h3>
+                {SAMPLE_BOOK.asks.map((a, i) => (
+                  <div key={i} className="book-row ask">
+                    <div className="bar" style={{ width: (a.size / sampleBookMax(SAMPLE_BOOK.asks) * 100) + '%' }}></div>
+                    <span>{fmtUSD(a.price, { decimals: 2 })}</span>
+                    <span>{fmtQty(a.size)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : bookError && book.bids.length === 0 && book.asks.length === 0 ? (
             <div className="empty-state">
               <span className="big-emoji">📖</span>
               Order book needs the Coinbase connection too.
@@ -1885,6 +2169,60 @@ function App() {
                     </div>
                   )}
                 </div>
+              ) : isSample ? (
+                <div className="twap-plan-card">
+                  <div className="sample-cap">sample smart order — what a finished run looks like</div>
+                  <div className="twap-headline">
+                    Buy {SAMPLE_TWAP_DONE.totalSize} {SAMPLE_TWAP_DONE.sizeUnit} of {SAMPLE_TWAP_DONE.productId} · market IOC slices
+                  </div>
+                  <div className="twap-subline">
+                    {SAMPLE_TWAP_DONE.sliceCount} slices over {SAMPLE_TWAP_DONE.durationLabel} — one every {SAMPLE_TWAP_DONE.intervalLabel} · every slice confirmed before it was sent
+                  </div>
+                  <div className="twap-verdict">
+                    <strong>Ledger: looks sound.</strong> The market dipped mid-run and the slices caught it: average
+                    fill {fmtUSD(sampleTwapStats(SAMPLE_TWAP_DONE).avgFill)} against {fmtUSD(SAMPLE_TWAP_DONE.oneShotPrice)} for
+                    a one-shot market buy at arm time — patience saved ≈ {fmtUSD(sampleTwapStats(SAMPLE_TWAP_DONE).saved)} on
+                    the same {SAMPLE_TWAP_DONE.totalSize} {SAMPLE_TWAP_DONE.sizeUnit}.
+                  </div>
+                  <div className="twap-rail">
+                    <div className="twap-track">
+                      {SAMPLE_TWAP_DONE.slices.map((s, i) => (
+                        <div key={i} className="twap-slice s-accepted">
+                          <div className="twap-slice-head">
+                            <span>#{i + 1}</span>
+                            <span>{s.offset}</span>
+                          </div>
+                          <div className="twap-slice-size">{s.size} {SAMPLE_TWAP_DONE.sizeUnit} · filled {fmtUSD(s.fill, { decimals: 0 })}</div>
+                          <span className="slice-chip s-accepted">accepted</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="divider"></div>
+                  <h2 style={{ margin: '0 0 8px' }}>Run history</h2>
+                  <div className="twap-journal-row">
+                    <div className="twap-journal-top">
+                      <span>
+                        <span className="order-log-side sell">{SAMPLE_TWAP_RUNNING.side}</span>{' '}
+                        {SAMPLE_TWAP_RUNNING.totalSize} {SAMPLE_TWAP_RUNNING.sizeUnit} · {SAMPLE_TWAP_RUNNING.productId}
+                      </span>
+                      <span className="plan-badge p-running">{SAMPLE_TWAP_RUNNING.status}</span>
+                    </div>
+                    <div className="muted-small">
+                      {SAMPLE_TWAP_RUNNING.sliceCount} slices / {SAMPLE_TWAP_RUNNING.durationLabel} · market IOC · Ledger: looks sound · sample
+                    </div>
+                    <div className="slice-dots">
+                      {SAMPLE_TWAP_RUNNING.sliceStatuses.map((st, i) => (
+                        <span key={i} className={'slice-dot s-' + st} title={'#' + (i + 1) + ' ' + st}></span>
+                      ))}
+                    </div>
+                    <div className="muted-small">{SAMPLE_TWAP_RUNNING.caption}</div>
+                  </div>
+                  <div className="twap-note">
+                    This run is part of the sample book. Connect Coinbase, draft a plan on the left, and your own
+                    journal starts here — every slice is a real order you confirm before it is sent.
+                  </div>
+                </div>
               ) : journalRows.length === 0 ? (
                 <div className="empty-state">
                   <span className="big-emoji">🧭</span>
@@ -1934,7 +2272,26 @@ function App() {
           {copilotNotice && (
             <div className="notice error">{copilotNotice.text}</div>
           )}
-          {copilotNotes.length === 0 ? (
+          {isSample ? (
+            <div className="copilot-feed">
+              {SAMPLE_COPILOT_NOTES.map((n, i) => (
+                <div className="copilot-note" key={i}>
+                  <div className="copilot-avatar">{CopilotAvatarText()}</div>
+                  <div className="copilot-body">
+                    <div className="copilot-head">
+                      <span className="copilot-name">Ledger</span>
+                      <span className="copilot-time">{n.when}</span>
+                      {n.productId && <span className="tag">{n.productId}</span>}
+                      <span className={'tag sentiment-' + n.sentiment}>{n.sentiment}</span>
+                      <span className={'tag risk-' + n.riskLevel}>{n.riskLevel} risk</span>
+                    </div>
+                    <div className="copilot-msg">{n.message}</div>
+                    {n.suggestion && <div className="copilot-suggestion">💡 {n.suggestion}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : copilotNotes.length === 0 ? (
             <div className="empty-state">
               <span className="big-emoji">🤖</span>
               No notes yet — ask for a portfolio review, a market take, or place a trade to hear from your copilot.

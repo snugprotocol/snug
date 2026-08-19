@@ -57,6 +57,18 @@ defensible one.
 - **Unread badges** clear locally when you open a thread. Telepath never sends read
   receipts on your behalf.
 
+## Sample mode
+
+Before a phone is ever linked — and whenever the helper is unreachable — Telepath shows a
+clearly-bannered **sample** surface instead of a bare status screen: a made-up chat list, one
+openable conversation, and a completed analysis (insights, a voice profile, deterministic
+charts, a ✨ draft in "your" voice) so you can see what the app does before trusting it with
+your own messages. Everyone in it is fictional and the identifiers use the reserved
+`.invalid` domain; the data is canned constants that never touch the app's database, the
+pseudonym map, or any model request. Link your phone from Snug's connection settings and your
+real chats take over every one of those screens — nothing sample survives into a linked
+session.
+
 ## Running it
 
 1. Install the helper once: `pnpm --filter whatsapp-sidecar build && pnpm --filter whatsapp-sidecar install:helper`

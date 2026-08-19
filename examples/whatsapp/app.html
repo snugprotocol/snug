@@ -195,6 +195,12 @@
     .tos-note { padding: 6px 14px 10px; color: var(--ink-soft); font-size: 11px; border-top: 1px solid var(--line); background: var(--surface); }
     .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 999px; font-size: 13px; z-index: 40; box-shadow: var(--shadow); }
     .sync-banner { padding: 7px 14px; font-size: 12px; color: var(--ink-soft); background: var(--surface); border-bottom: 1px solid var(--line); }
+    .sample-note {
+      display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap;
+      background: var(--accent-soft); border: 1px solid var(--line); border-radius: 12px;
+      padding: 10px 14px; margin: 8px 12px; font-size: 13px;
+    }
+    .sample-note strong { color: var(--accent); }
     .spin { display: inline-block; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
@@ -847,6 +853,290 @@
     });
     // ===== LIVE-DOORBELL-END =====
 
+    // ===== WHATSAPP-SAMPLE-BEGIN =====
+    // Sample mode (ADR-0038, the Ledger pattern): everything between these markers is a
+    // CANNED, deterministic dataset rendered ONLY while the helper is unreachable — i.e.
+    // before a phone was ever linked (or while the helper is down). It is constants and pure
+    // data: no bridge, no reads, no writes. Nothing here ever enters SQLite, the pseudonym
+    // label map, redactIdentifiers, or any analysis request — the "analysis" below is an
+    // authored constant, not a model run. The people are fictional; identifiers use the
+    // reserved `.invalid` TLD so they can never collide with (or be fed to) the real
+    // identifier machinery. The first real link takes these screens over wholesale.
+
+    const SAMPLE_CHATS = [
+      {
+        jid: 'maya@sample.invalid', name: 'Maya Okafor', initials: 'MO', hue: 152,
+        preview: 'still on for saturday? i found a place that does the pistachio thing 🤤',
+        when: '09:39', unread: 2, openable: true,
+      },
+      {
+        jid: 'amma@sample.invalid', name: 'Amma ❤️', initials: 'A', hue: 16,
+        preview: 'You: calling you after lunch', when: 'Yesterday', unread: 0, openable: false,
+      },
+      {
+        jid: 'padel-crew@sample.invalid', name: 'Padel Crew 🎾', initials: 'PC', hue: 262,
+        preview: 'Dev: courts booked for sunday 🙌', when: 'Tue', unread: 5, openable: false,
+      },
+    ];
+
+    // The one openable thread — authored so the canned analysis below has something true
+    // to say about it: her weekday replies lag by hours, her weekend ones don't.
+    const SAMPLE_THREAD = {
+      jid: 'maya@sample.invalid',
+      name: 'Maya Okafor',
+      days: [
+        {
+          label: 'Thursday 14 Aug',
+          messages: [
+            { id: 's1', me: true, at: '08:12', text: 'morning 😂 saw a dog on the tram in a full raincoat. thought of you' },
+            { id: 's2', me: false, at: '11:47', text: 'WHY am i only seeing this now' },
+            { id: 's3', me: false, at: '11:48', text: 'that is literally my dream dog' },
+            { id: 's4', me: true, at: '11:52', text: 'took you 3.5 hours to answer a raincoat dog. shameful' },
+            { id: 's5', me: false, at: '15:03', text: 'SOME of us have a q3 report due tomorrow 🙃 friday cannot come fast enough' },
+            { id: 's6', me: true, at: '15:05', text: "one more day. you've got this" },
+          ],
+        },
+        {
+          label: 'Today',
+          messages: [
+            { id: 's7', me: false, at: '09:38', text: 'FREEDOM. report is in' },
+            { id: 's8', me: false, at: '09:39', text: 'still on for saturday? i found a place that does the pistachio thing 🤤' },
+          ],
+        },
+      ],
+    };
+
+    // The canned COMPLETED analysis — what tapping 🧠 produces on a real thread. Names are
+    // shown restored (exactly as the real render path does); the label beside each name
+    // shows what the model would actually have seen.
+    const SAMPLE_ANALYSIS = {
+      headline: "You open most conversations; Maya opens the long ones — and June's quiet spell tracked her deadline, not the friendship.",
+      people: [
+        {
+          name: 'You', label: 'YOU',
+          summary: 'The initiator. Quick, playful openers, usually in the morning; replies within minutes at any hour. You keep the thread warm with small observations rather than questions.',
+          traits: ['opens 7 in 10 conversations', 'replies in ~4 minutes', 'morning texter', 'lowercase, deadpan'],
+        },
+        {
+          name: 'Maya', label: 'P1',
+          summary: 'Slow on weekdays, instant on weekends — her reply time tracks her workload, not her interest. When she opens a conversation it runs about three times longer than one of yours.',
+          traits: ['weekday replies ~47 min', 'weekend replies ~6 min', 'starts the deep conversations', 'ALL CAPS for emphasis'],
+        },
+      ],
+      dynamics: 'A close, low-maintenance friendship with a clear rhythm: you keep the pilot light on with daily openers, and Maya turns it into a long conversation when she surfaces. The June dip lines up with her Q3 crunch — and recovered the week a real-life plan went in the calendar. Plans, not messages, are what reset this thread.',
+      voice: {
+        tone: 'casual and dry — lowercase, teasing, affectionate under the deadpan',
+        typicalLength: 'short',
+        emoji: ['😂', '🤤', '👀'],
+        language: 'English',
+      },
+    };
+
+    // Deterministic chart tables — twelve authored weeks with the dip-and-rebound planted.
+    const SAMPLE_CHARTS = {
+      // conversation openings across the window: the who-texts-first asymmetry
+      starters: { labels: ['You', 'Maya'], counts: [22, 9] },
+      // median minutes to reply — the weekday/weekend split IS the insight
+      responses: { labels: ['You', 'Maya'], weekday: [4, 47], weekend: [7, 6] },
+      // messages per week: the conversation's pulse, dip and rebound authored in
+      health: {
+        weeks: ['19 May', '26 May', '2 Jun', '9 Jun', '16 Jun', '23 Jun', '30 Jun', '7 Jul', '14 Jul', '21 Jul', '28 Jul', '4 Aug', '11 Aug'],
+        counts: [118, 104, 96, 61, 44, 38, 35, 41, 39, 58, 86, 97, 112],
+      },
+    };
+
+    // What tapping ✨ drafts in this thread — the measured register above, applied.
+    const SAMPLE_DRAFT = 'obviously 😂 congrats on the report!! 10:30 at the pistachio place — loser pays';
+    // ===== WHATSAPP-SAMPLE-END =====
+
+    // Sample-mode render components. They sit OUTSIDE the sample markers because they are
+    // React and share the app's chrome (useChart, css classes) — but they read ONLY the
+    // constants above and render ONLY inside the helper-unreachable branch. They hold their
+    // own tab/draft state, so no real state (ui.openJid, thread, analysis) ever sees a
+    // sample value, and the moment the helper answers they unmount without a trace.
+    function SampleAvatar({ chat, size }) {
+      return (
+        <div
+          className="avatar"
+          style={{ background: `hsl(${chat.hue} 45% 52%)`, ...(size ? { width: size, height: size, fontSize: size * 0.38 } : {}) }}
+          aria-hidden="true"
+        >{chat.initials}</div>
+      );
+    }
+
+    function SampleBanner() {
+      return (
+        <div className="sample-note" data-sample-banner="true">
+          <span>🧪</span>
+          <span style={{ flex: 1, minWidth: 200 }}>
+            this is <strong>sample data</strong> — a made-up friendship, so the charts (and what
+            the analyst finds in one) are real to look at. <strong>Link your phone</strong> from
+            Snug's connection settings and your own chats take over every one of these screens.
+          </span>
+        </div>
+      );
+    }
+
+    function SampleThreadPane({ onBack, theme }) {
+      const [tab, setTab] = useState('chat');
+      const [draft, setDraft] = useState('');
+      const startersRef = useRef(null);
+      const replyRef = useRef(null);
+      const healthRef = useRef(null);
+
+      useChart(startersRef, () => tab === 'charts' && {
+        type: 'bar',
+        data: {
+          labels: SAMPLE_CHARTS.starters.labels,
+          datasets: [{ label: 'conversations opened', data: SAMPLE_CHARTS.starters.counts, backgroundColor: [seriesColor(1), seriesColor(2)], borderRadius: 4, maxBarThickness: 44 }],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: inkSoft() }, grid: { display: false } },
+            y: { ticks: { color: inkSoft() }, grid: { color: gridColor() }, beginAtZero: true },
+          },
+        },
+      }, [tab, theme]);
+
+      useChart(replyRef, () => tab === 'charts' && {
+        type: 'bar',
+        data: {
+          labels: SAMPLE_CHARTS.responses.labels,
+          datasets: [
+            { label: 'weekdays', data: SAMPLE_CHARTS.responses.weekday, backgroundColor: seriesColor(3), borderRadius: 4, maxBarThickness: 22 },
+            { label: 'weekends', data: SAMPLE_CHARTS.responses.weekend, backgroundColor: seriesColor(4), borderRadius: 4, maxBarThickness: 22 },
+          ],
+        },
+        options: {
+          indexAxis: 'y', maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: inkSoft(), boxWidth: 12 } } },
+          scales: {
+            x: { ticks: { color: inkSoft() }, grid: { color: gridColor() }, beginAtZero: true },
+            y: { ticks: { color: inkSoft() }, grid: { display: false } },
+          },
+        },
+      }, [tab, theme]);
+
+      useChart(healthRef, () => tab === 'charts' && {
+        type: 'line',
+        data: {
+          labels: SAMPLE_CHARTS.health.weeks,
+          datasets: [{ label: 'messages per week', data: SAMPLE_CHARTS.health.counts, borderColor: seriesColor(1), backgroundColor: 'transparent', borderWidth: 2, pointRadius: 2, tension: 0.25 }],
+        },
+        options: {
+          maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: inkSoft(), maxTicksLimit: 7 }, grid: { color: gridColor() } },
+            y: { ticks: { color: inkSoft() }, grid: { color: gridColor() }, beginAtZero: true },
+          },
+        },
+      }, [tab, theme]);
+
+      const sampleChat = SAMPLE_CHATS[0];
+      return (
+        <section className="thread-pane" aria-label="sample conversation with Maya Okafor">
+          <div className="thread-head">
+            <button className="icon-btn back-btn" aria-label="back to chats" onClick={onBack}>‹</button>
+            <SampleAvatar chat={sampleChat} size={38} />
+            <div className="who">
+              <div className="name">{SAMPLE_THREAD.name}</div>
+              <div className="sub">sample conversation — link your phone for your real ones</div>
+            </div>
+            <button className="icon-btn" title="the sample analysis is on the Insights tab" aria-label="open the sample analysis" onClick={() => setTab('insights')}>🧠</button>
+          </div>
+
+          <div className="thread-tabs" role="tablist">
+            {['chat', 'insights', 'charts'].map((t) => (
+              <button key={t} role="tab" aria-selected={tab === t} className="thread-tab" onClick={() => setTab(t)}>
+                {t === 'chat' ? 'Chat' : t === 'insights' ? 'Insights' : 'Charts'}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'chat' && (
+            <React.Fragment>
+              <div className="msgs">
+                {SAMPLE_THREAD.days.map((day) => (
+                  <React.Fragment key={day.label}>
+                    <div className="day-sep">{day.label}</div>
+                    {day.messages.map((m) => (
+                      <div key={m.id} className={`bubble${m.me ? ' me' : ''}`}>
+                        <div className="body">{m.text}</div>
+                        <span className="stamp">{m.at}</span>
+                      </div>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </div>
+              <div className="composer">
+                <button className="icon-btn" title="draft a reply in my voice (sample)" aria-label="draft a sample reply in your voice" onClick={() => setDraft(SAMPLE_DRAFT)}>✨</button>
+                <textarea
+                  rows={1}
+                  placeholder="tap ✨ to see a draft in your voice"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                />
+                <button className="icon-btn" title="sending needs a linked phone" aria-label="send is disabled in sample mode" disabled>➤</button>
+              </div>
+            </React.Fragment>
+          )}
+
+          {tab === 'insights' && (
+            <div className="tab-scroll">
+              <div className="panel">
+                <div className="headline">{SAMPLE_ANALYSIS.headline}</div>
+                <p className="hint" style={{ marginTop: 6 }}>a sample analysis of a made-up thread — in a real run, the model only ever sees neutral labels; names come back on your screen only</p>
+              </div>
+              <div className="panel">
+                <h3>the people</h3>
+                {SAMPLE_ANALYSIS.people.map((person) => (
+                  <div className="person" key={person.label}>
+                    <div className="p-name">{person.name} <span className="hint" style={{ fontWeight: 400 }}>· the model saw “{person.label}”</span></div>
+                    <div className="p-summary">{person.summary}</div>
+                    <div>{person.traits.map((trait, i) => <span className="trait" key={i}>{trait}</span>)}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="panel">
+                <h3>the room</h3>
+                <p style={{ margin: 0 }}>{SAMPLE_ANALYSIS.dynamics}</p>
+              </div>
+              <div className="panel">
+                <h3>your voice here</h3>
+                <p style={{ margin: '0 0 6px' }}>{SAMPLE_ANALYSIS.voice.tone}</p>
+                <p className="hint" style={{ margin: 0 }}>
+                  typical length: {SAMPLE_ANALYSIS.voice.typicalLength} · language: {SAMPLE_ANALYSIS.voice.language} · your emoji: {SAMPLE_ANALYSIS.voice.emoji.join(' ')}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {tab === 'charts' && (
+            <div className="tab-scroll">
+              <div className="panel">
+                <h3>who texts first</h3>
+                <p className="hint">you open 7 of every 10 conversations — but when Maya opens one, it runs three times longer</p>
+                <div className="chart-box"><canvas ref={startersRef} role="img" aria-label="conversations opened by each person" /></div>
+              </div>
+              <div className="panel">
+                <h3>reply time, weekday vs weekend</h3>
+                <p className="hint">median minutes to reply — Maya's 47-minute weekdays fall to 6 minutes at the weekend: workload, not distance</p>
+                <div className="chart-box"><canvas ref={replyRef} role="img" aria-label="median reply minutes, weekday versus weekend" /></div>
+              </div>
+              <div className="panel">
+                <h3>the conversation's pulse</h3>
+                <p className="hint">messages per week — June's dip tracks a work crunch, and rebounds the week a Saturday plan went in the calendar</p>
+                <div className="chart-box"><canvas ref={healthRef} role="img" aria-label="messages per week over three months" /></div>
+              </div>
+            </div>
+          )}
+        </section>
+      );
+    }
+
     // ---- time formatting (list + thread), WhatsApp-style
     const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     function fmtClock(ts) {
@@ -993,6 +1283,9 @@
       const [analysis, setAnalysis] = useState(null); // { payload, runAt, watermarkTs, nameMap }
       const [toast, setToast] = useState(null);
       const [lightbox, setLightbox] = useState(null); // dataUrl
+      // Sample mode only (helper unreachable / never linked): which SAMPLE chat is open.
+      // Deliberately separate from ui.openJid so sample jids never touch persisted state.
+      const [sampleJid, setSampleJid] = useState(null);
       const msgsEndRef = useRef(null);
       const openJidRef = useRef(null);
       openJidRef.current = ui.openJid;
@@ -1386,13 +1679,40 @@
           </div>
           <div className="chatlist">
             {helper.phase === 'down' && (
-              <div className="center-state">
-                <div className="big">📵</div>
-                <div className="title">the WhatsApp helper is not reachable</div>
-                <div style={{ fontSize: 13 }}>{helper.detail}</div>
-                <button className="btn primary" onClick={() => void refreshChats()}>try again</button>
-                <div style={{ fontSize: 12 }}>trying again also starts the helper if it is installed</div>
-              </div>
+              <React.Fragment>
+                <div className="center-state" style={{ flex: 'none', padding: '18px 24px 8px' }}>
+                  <div className="big">📵</div>
+                  <div className="title">the WhatsApp helper is not reachable</div>
+                  <div style={{ fontSize: 13 }}>{helper.detail}</div>
+                  <button className="btn primary" onClick={() => void refreshChats()}>try again</button>
+                  <div style={{ fontSize: 12 }}>trying again also starts the helper if it is installed</div>
+                </div>
+                {/* Sample mode (ADR-0038): a populated surface instead of a bare status
+                    screen. Render-only constants — see the WHATSAPP-SAMPLE block. */}
+                <SampleBanner />
+                {SAMPLE_CHATS.map((chat) => (
+                  <button
+                    key={chat.jid}
+                    className="chat-row"
+                    aria-current={sampleJid === chat.jid}
+                    data-unread={chat.unread > 0}
+                    onClick={() => {
+                      if (chat.openable) setSampleJid(chat.jid);
+                      else say('sample data — only the top conversation opens. Link your phone for the real thing');
+                    }}
+                  >
+                    <SampleAvatar chat={chat} />
+                    <span className="mid">
+                      <span className="name">{chat.name}</span>
+                      <span className="preview">{chat.preview}</span>
+                    </span>
+                    <span className="side">
+                      <span className="when">{chat.when}</span>
+                      {chat.unread > 0 && <span className="unread-badge">{chat.unread}</span>}
+                    </span>
+                  </button>
+                ))}
+              </React.Fragment>
             )}
             {helper.phase === 'starting' && <div className="center-state"><div className="spin big">◌</div><div>starting the helper…</div></div>}
             {helper.phase === 'up' && chats.length === 0 && (
@@ -1475,7 +1795,13 @@
       const openMessages = thread.jid === ui.openJid ? thread.messages : [];
       let lastDay = '';
 
-      const threadPane = !ui.openJid ? (
+      // Sample thread (render-only, helper unreachable only) — unmounts the moment the
+      // helper answers, because every branch below keys off helper.phase.
+      const sampleOpen = helper.phase === 'down' && sampleJid !== null;
+
+      const threadPane = sampleOpen ? (
+        <SampleThreadPane onBack={() => setSampleJid(null)} theme={theme} />
+      ) : !ui.openJid ? (
         <section className="thread-pane center-state" aria-label="no chat open">
           <div className="big">🔮</div>
           <div className="title">Telepath</div>
@@ -1580,7 +1906,7 @@
 
       return (
         <div className="frame">
-          <style>{`@media (max-width: 759px) { .list-pane { display: ${ui.openJid ? 'none' : 'flex'}; } .thread-pane { display: ${ui.openJid ? 'flex' : 'none'}; } }`}</style>
+          <style>{`@media (max-width: 759px) { .list-pane { display: ${ui.openJid || sampleOpen ? 'none' : 'flex'}; } .thread-pane { display: ${ui.openJid || sampleOpen ? 'flex' : 'none'}; } }`}</style>
           {listPane}
           {threadPane}
           {lightbox && (

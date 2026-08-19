@@ -136,7 +136,7 @@ describe('the REAL bundle (no fixtures) — the wire production actually uses', 
     const all = await bundledStarterAuthoring();
     const bundle = all['whatsapp'];
     expect(bundle, 'the whatsapp starter ships an authoring bundle the glob can see').toBeDefined();
-    expect(Object.keys(bundle!.docs).sort()).toEqual(['lessons.md', 'plan.md', 'requirements.md', 'vision.md']);
+    expect(Object.keys(bundle!.docs).sort()).toEqual(['lessons.md', 'next-tasks.md', 'plan.md', 'requirements.md', 'vision.md']);
     // The owner's verbatim build prompt is requirement 10 — assert its WORDS, not its path.
     expect(Object.values(bundle!.prompts).join('\n')).toContain('Rebuild an awseome, ultra cool Whatsapp twin');
   });
@@ -148,7 +148,7 @@ describe('the REAL bundle (no fixtures) — the wire production actually uses', 
     await installStarterDocs(db, appId);
 
     expect(db.listAppDocs(appId).map((doc) => doc.slug).sort()).toEqual([
-      'build-prompt', 'lessons', 'plan', 'requirements', 'vision',
+      'build-prompt', 'lessons', 'next-tasks', 'plan', 'requirements', 'vision',
     ]);
     expect(db.getAppDoc(appId, 'vision')?.content).toContain('Telepath');
     expect(db.getAppDoc(appId, 'build-prompt')?.content).toContain('ultra cool Whatsapp twin');

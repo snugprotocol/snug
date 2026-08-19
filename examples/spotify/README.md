@@ -25,6 +25,20 @@ fixed-port loopback redirect posture). Note the pin deliberately omits
 403 as a labeled degrade, and derives discovery from top-list drift instead — see
 [`authoring/docs/plan.md`](authoring/docs/plan.md).
 
+## Sample mode
+
+Before Spotify is connected, the Portrait surface renders a fully fictional sample
+listener — authored constants (invented artists, never real ones) drawn through the
+same tiles, meters, and magazine card the live portrait uses, under a visible
+"sample data" banner. The dataset plants the app's story across all three lenses: a
+one-album obsession month (rotation depth 62%), the six-month discovery season it
+grew out of, an artist who climbed from a spring discovery into the all-time top
+five, and one canned weekly-rewind column showing what the agent writes from real
+numbers. It is deterministic and render-only (no clock, no PRNG, no bridge/db/net
+calls), a journaled real portrait always outranks it, and the first successful
+Spotify read unmounts it wholesale — nothing sample survives into a connected
+session.
+
 **LLM posture:** agent-driven (ADR-0011) — `RESPONSE_SCHEMA` is non-null, every
 `sendMessage` carries a `responseSchema` plus full compact stats in `state`, and the
 runtime contract ships in [`runtime-contract.json`](runtime-contract.json). The agent
