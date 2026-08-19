@@ -135,6 +135,12 @@ duplicated QR read and creds-material read; store-owned `onChange` persistence t
 - Next step: on approval → Phase A tests first (`linkedDeviceWizard.test.ts` QR poll deadline + named timeout state).
 - Open questions: none blocking; residual for AC2 noted (a group member who never spoke, has no 1:1 chat, and no PUSH_NAME chunk stays unresolved — allowed by AC wording).
 
+### 2026-08-18 (hardware walk 4) — Claude (with Jeetu) — session
+- Done: pill climbed to 127/233 then froze and (correctly) hid via the stall guard; cache sampling 35 s apart confirmed the helper was idle — the retry-per-sweep-beat cadence had burned all 5 attempts per group inside one throttle window, writing off 106 rosters. Fixed (`bfce7e5`): exponential backoff per group (30 s base doubling, 8 attempts, ~1 h coverage — a throttle now costs one attempt, not all), `rostersGivenUp` reported in the sync detail, and the playground subtracts it from the pill's target so "Names n/m" converges on the achievable count and retires honestly. Sidecar 143, playground affected suites 39 green; helper rebuilt + reinstalled.
+- State: a fresh helper process resets attempt counters, so the next desktop restart re-tries all 106 on the gentle cadence; genuinely dead groups (left/community containers) will be written off and leave the target.
+- Next step: owner restarts, expects Names to climb past 127 over the following minutes (backoff-paced — slower but durable), pill converging then disappearing; then merge.
+- Open questions: none.
+
 ### 2026-08-18 (hardware walk 3) — Claude (with Jeetu) — session
 - Done: post-restart the pairing fix was measurably biting (LID mappings 159→760, named seats 577→758, unmapped LIDs 1079→156) but names STALLED — rosters loaded only on `/chats` reads and failures waited for the next read (98/233 after 14 min). Fixed (`5a9c385`): the helper sweeps missing rosters on its own paced beat (bounded 5 attempts/group, cache-restored rosters count as loaded, injectable `rosterSweepMs`), and `historyState()` carries `detail: {groups, rostersLoaded, names, messages}`. Owner UX ask delivered: the header indicator is now a two-phase capsule — "Syncing · N%" (history) then "Names · n/m" (roster sweep) — with tooltip detail, tabular numerals, fade-in, and a stall guard (the poll retires and clears the seat rather than freeze at 230/233). Sidecar 142, playground 1220, examples 204 green; helper rebuilt + reinstalled.
 - State: owner needs one desktop restart to load the swept helper; the pill should show "Names · n/233" climbing, then disappear.
