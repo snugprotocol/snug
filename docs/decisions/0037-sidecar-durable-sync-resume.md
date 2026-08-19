@@ -67,3 +67,27 @@ desktop restart.
   already shows helper state.
 - The run header gains its first live-updating, connection-fed indicator; its tests pin that
   it renders from `syncState` and disappears on completion.
+
+## Addendum — 2026-08-19 (TASK-20260818-sidecar-orphan-reap)
+
+The reap-on-exit above covers the CLEAN shell exit only, and that turned out to be half the
+problem. An unclean one — a crash, `kill -9`, or a `tauri dev` rebuild — runs no exit hook,
+so the helper survives its parent; autostart then spawns a rival against the same auth store
+and the two replace each other's stream forever (`stream:error … conflict type=replaced`, in
+a loop, from launch). Owner-reported 2026-08-19 with two live pids, one orphaned at ppid 1.
+
+Two additions, deliberately overlapping, because each covers the other's blind spot:
+
+- **The helper watches its own parent** (`parent-watch.ts`): on reparenting it runs the same
+  clean shutdown SIGTERM runs, so the final thread-cache flush above still happens. The
+  signal is a CHANGED ppid, not `ppid === 1` — a Linux subreaper adopts orphans to some other
+  pid. This prevents future orphans but cannot help against a helper already running.
+- **The shell reaps a stale helper before spawning** (`pidfile_path`, `stale_helper_verdict`,
+  `reap_stale_helper`): the pid is recorded beside the socket AFTER the survival check, and
+  the next `start` TERM-then-KILLs it — but only when the live process's command line names
+  this shell's helper entry. Pids are recycled, so a verdict on the number alone would let
+  this fix kill a stranger; that guard is where the tests concentrate. Order is load-bearing:
+  reaping AFTER the spawn would leave both helpers live long enough to ping-pong.
+
+The pidfile is removed by every reap path, because a stale claim is exactly what makes a
+recycled pid dangerous on the next launch.
