@@ -467,16 +467,45 @@ describe('roster sweep and sync detail', () => {
     expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(3);
   });
 
-  it('gives up after bounded attempts and REPORTS the write-off in the sync detail', async () => {
+  it('a DEFINITIVE refusal writes the group off at once — no retry budget for the dead', async () => {
+    // `item-not-found` / `forbidden` are answers, not weather: the group is gone or we
+    // have no access (110 + 14 of the owner's 233 groups). Retrying them five times spent
+    // real iq budget learning nothing.
     const { adapter, fake } = await linkedAdapter({ rosterSweepMs: 2, rosterRetryBaseMs: 1 });
-    fake.groupMetadata.mockRejectedValue(new Error('forbidden'));
+    fake.groupMetadata.mockRejectedValue(new Error('item-not-found'));
     fake.emit('messaging-history.set', { chats: [{ id: 'g3@g.us', name: 'Dead' }], contacts: [], messages: [] });
     adapter.listChats();
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(5);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(fake.groupMetadata.mock.calls.length).toBe(1);
     // The consumer subtracts given-up groups from the target, so the pill CONVERGES on
     // what is achievable instead of stalling at n/m forever.
     expect(adapter.historyState().detail?.rostersGivenUp).toBe(1);
+  });
+
+  it("a THROTTLE pauses the whole sweep and never consumes a group's budget", async () => {
+    // `rate-overlimit` is Meta's server saying "slow down" — 287 of them in one evening
+    // burned the retry budgets of groups that were perfectly loadable. A throttle is
+    // evidence about the MOMENT, not the group: pause everything, keep every attempt.
+    const { adapter, fake } = await linkedAdapter({
+      rosterSweepMs: 2,
+      rosterRetryBaseMs: 1,
+      rosterCooldownBaseMs: 60_000, // a long pause the test window never crosses
+    });
+    fake.groupMetadata.mockRejectedValue(new Error('rate-overlimit'));
+    fake.emit('messaging-history.set', {
+      chats: [
+        { id: 'gA@g.us', name: 'A' },
+        { id: 'gB@g.us', name: 'B' },
+      ],
+      contacts: [],
+      messages: [],
+    });
+    adapter.listChats();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // The first burst hits the wall; the cooldown then gates EVERYTHING — dozens of sweep
+    // beats pass without another call, and nothing is written off.
+    expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(adapter.historyState().detail?.rostersGivenUp).toBe(0);
   });
 
   it('persists the failure CLASSES to the cache, so a stalled sweep is diagnosable from disk', async () => {

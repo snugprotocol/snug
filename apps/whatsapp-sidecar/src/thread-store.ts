@@ -248,9 +248,17 @@ export function createThreadStore(
           lidToPn.get(lidSpelling) !== contact.phoneNumber
         ) {
           lidToPn.set(lidSpelling, contact.phoneNumber);
-          // A NEW pairing is news even when the row teaches no name: lookups resolve
-          // LID→phone, so every name already known under the phone spelling now covers
-          // this LID seat — the refresh pass below is what re-derives the rosters.
+          // A NEW pairing is news even when the row teaches no name — and the copy must go
+          // BOTH ways (hardware walk 6): a push name learned from someone's group rows
+          // lives under their LID spelling, while the DM with them is keyed by phone
+          // number, and `resolveIdentity` only maps LID→phone. Without the copy, the name
+          // is unreachable from the DM and the chat list shows a bare +number for a person
+          // the directory already knows.
+          const known = names.get(lidSpelling) ?? names.get(contact.phoneNumber);
+          if (known !== undefined) {
+            learnName(lidSpelling, known);
+            learnName(contact.phoneNumber, known);
+          }
           learned = true;
         }
         const entry = nameFromContact(contact);

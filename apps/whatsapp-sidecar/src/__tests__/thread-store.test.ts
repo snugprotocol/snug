@@ -309,6 +309,26 @@ describe('the contact directory', () => {
     ]);
   });
 
+  it('a new pairing carries names ACROSS spellings — a group-learned name reaches the DM', () => {
+    // HARDWARE WALK 6 (owner: "none of the individual chats has a name"): push names from
+    // GROUP messages land under the sender's LID spelling, while the DM with that person is
+    // keyed by phone number. The pairing alone recorded the link but copied nothing, so the
+    // lookup missed in both directions and the DM stayed a bare +number.
+    const store = createThreadStore();
+    store.ingest('111@s.whatsapp.net', msg('m1', 5), { live: false }); // the DM, keyed by PN
+    store.rememberContacts([{ id: '77771@lid', notify: 'Asha ✨' }]); // named via a group row
+    expect(store.listChats()[0]?.name).toBe('111@s.whatsapp.net'); // not joinable yet
+    store.rememberContacts([{ id: '77771@lid', phoneNumber: '111@s.whatsapp.net' }]); // the pairing
+    const chat = store.listChats()[0]!;
+    expect(chat.name).toBe('Asha ✨');
+    expect(chat.nameKind).toBe('push');
+    // And the reverse direction: a PN-keyed name covers the LID seat.
+    const reverse = createThreadStore();
+    reverse.rememberContacts([{ id: '222@s.whatsapp.net', name: 'Bo Saved' }]);
+    reverse.rememberContacts([{ id: '88881@lid', phoneNumber: '222@s.whatsapp.net' }]);
+    expect(reverse.contactName('88881@lid')).toBe('Bo Saved');
+  });
+
   it('maps a group participant given by LID onto the contact behind it', () => {
     const store = createThreadStore();
     store.rememberContacts([{ id: '111@s.whatsapp.net', name: 'Asha Rao' }]);

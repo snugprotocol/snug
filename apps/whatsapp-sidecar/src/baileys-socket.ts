@@ -158,6 +158,18 @@ export interface BaileysSocketDeps {
   rosterSweepMs?: number;
   /** First retry delay after a roster fetch fails; doubles per failure. Injectable for tests. */
   rosterRetryBaseMs?: number;
+  /** First sweep-wide pause after a server throttle; doubles while throttled. Injectable. */
+  rosterCooldownBaseMs?: number;
+}
+
+/**
+ * Is this roster failure an ANSWER rather than weather? `item-not-found` (the group no
+ * longer exists) and `forbidden`/`not-authorized` (we are not in it) are definitive — the
+ * roster will never load, and retrying spends iq budget learning nothing. Everything else
+ * (timeouts, `rate-overlimit`, transport hiccups) says nothing about the group itself.
+ */
+function isPermanentRosterRefusal(message: string): boolean {
+  return /item-not-found|forbidden|not-authorized/i.test(message);
 }
 
 /**
@@ -468,6 +480,16 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   const rosterRetryBaseMs = deps.rosterRetryBaseMs ?? 20_000;
   /** Failure classes, aggregated for the cache diagnostics — message → count, capped. */
   const rosterErrorCounts = new Map<string, number>();
+  /**
+   * Sweep-wide THROTTLE cooldown (hardware walk 6): `rate-overlimit` is Meta's server
+   * telling this whole session to slow down — 287 of them in one evening burned the retry
+   * budgets of groups that were perfectly loadable. When it appears, everything pauses
+   * (60 s, doubling to 10 min while it persists; reset on the next success), and the
+   * throttled attempt is NOT charged to the group.
+   */
+  let rosterCooldownUntil = 0;
+  let rosterCooldownStreak = 0;
+  const rosterCooldownBaseMs = deps.rosterCooldownBaseMs ?? 60_000;
   const rostersGivenUp = (): number => {
     let count = 0;
     for (const [jid, tries] of rosterAttempts) {
@@ -484,6 +506,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
    */
   const ensureGroupRoster = (jid: string): void => {
     if (!jid.endsWith('@g.us') || sock === undefined || link !== 'linked') return;
+    if (now() < rosterCooldownUntil) return; // the server asked the whole session to wait
     if (rosterLoaded.has(jid) || rosterInFlight.has(jid)) return;
     const tries = rosterAttempts.get(jid);
     if (tries !== undefined && (tries.attempts >= ROSTER_MAX_ATTEMPTS || now() < tries.nextAt)) return;
@@ -502,16 +525,28 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
           participants: (metadata?.participants ?? []).map((participant) => ({ id: participant.id })),
         });
         rosterLoaded.add(jid);
+        rosterCooldownStreak = 0; // the server is answering again
       } catch (err) {
-        const attempts = (rosterAttempts.get(jid)?.attempts ?? 0) + 1;
-        rosterAttempts.set(jid, {
-          attempts,
-          nextAt: now() + rosterRetryBaseMs * 2 ** (attempts - 1),
-        });
+        const reason = (err instanceof Error ? err.message : String(err)).slice(0, 120) || 'unknown';
+        if (/rate-overlimit/i.test(reason)) {
+          // The MOMENT is bad, not the group: pause the sweep, charge nobody.
+          rosterCooldownStreak += 1;
+          rosterCooldownUntil =
+            now() + Math.min(rosterCooldownBaseMs * 2 ** (rosterCooldownStreak - 1), 600_000);
+        } else if (isPermanentRosterRefusal(reason)) {
+          // An ANSWER: the group is gone or we are not in it. Write it off now — the pill's
+          // target shrinks by exactly this group, and no further iq is spent on it.
+          rosterAttempts.set(jid, { attempts: ROSTER_MAX_ATTEMPTS, nextAt: now() });
+        } else {
+          const attempts = (rosterAttempts.get(jid)?.attempts ?? 0) + 1;
+          rosterAttempts.set(jid, {
+            attempts,
+            nextAt: now() + rosterRetryBaseMs * 2 ** (attempts - 1),
+          });
+        }
         // Aggregate the failure CLASS (never per-group detail) and persist it: a steady
         // state of failures used to write nothing to disk, which made the stall invisible
         // to diagnosis — the cache aged while the sweep silently burned retries.
-        const reason = (err instanceof Error ? err.message : String(err)).slice(0, 120) || 'unknown';
         if (rosterErrorCounts.size < 20 || rosterErrorCounts.has(reason)) {
           rosterErrorCounts.set(reason, (rosterErrorCounts.get(reason) ?? 0) + 1);
         }
