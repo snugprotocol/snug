@@ -471,3 +471,19 @@ C4. Ledger app: money-leaks view, cancel playbook LLM lane (responseSchema'd), o
 - Suites: auth 879 green; root `turbo run test --force` 23/23, 0 cached.
 - Owner path: restart `tauri dev` (stale auth dist in vite's dep cache — third deploy
   target), then ↻ sync; the first pull may take up to a minute.
+
+### 2026-08-18 — Claude (Fable 5) — close-session (Gate 6; owner ordered PR + merge)
+- Done: doc drift fixed in-branch — architecture.md (status line + ADR-0038 section),
+  code-map.md (examples row 11→12 folders / 6→7 manifests + two new rows: token-claim
+  provider, open-url capability), glossary (token-claim, open-url), decisions/README
+  (indexed 0034–0037, which had drifted, + 0038), ADR-0038 status → **accepted**,
+  second lesson (self-naming wall clocks) appended. Spec-changelog entry landed earlier
+  in-task (host-ready `openUrl` flag; internal-draft frames); spec-sync PUSH deliberately
+  not performed — pushes to `snugprotocol/spec` need their own explicit ask.
+- State at close: all three phases green (root `turbo run test --force` 23/23, twice at
+  Phase C close and once after each hotfix). Owner hardware walk: claim + wizard test
+  VERIFIED on desktop; first-sync retry (post-60s-timeout fix, needs a `tauri dev`
+  restart) not yet reported — tracked with the full Ledger walk in next-steps.
+- Next step: owner reports the sync retry; if it still exceeds 60 s, chunk the first
+  sync into date windows (noted in next-steps entry).
+- Open questions: none blocking merge (owner ordered the merge; residuals in next-steps).

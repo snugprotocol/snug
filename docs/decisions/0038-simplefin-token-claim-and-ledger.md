@@ -1,7 +1,8 @@
 # 0038 — SimpleFIN rides plain connected-fetch via a token-claim pairing; Ledger ships the open-url concierge capability
 
-- **Status:** **draft** (proposed 2026-08-18 at Gate 2 of TASK-20260818-ledger-starter;
-  accepted only on owner plan approval)
+- **Status:** **accepted** (2026-08-18 — owner approved the plan at Gate 2 with one
+  amendment (sample data showcases the concierge) and ordered the merge at Gate 6;
+  amended same day after the owner's first real walk — see the Amendment section)
 - **Date:** 2026-08-18
 - **Task:** TASK-20260818-ledger-starter
 

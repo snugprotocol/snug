@@ -24,3 +24,11 @@
 - **Execution mode** — `byok` (browser-direct frontier API), `local` (browser-direct localhost LLM), or `subscription` (hub-mediated /invoke); the user DB is client-authoritative in all three (ADR-0008).
 - **Per-app model / pinned model** — the LLM model ONE app routes its calls to, chosen in that app's run header and stored as `snug_settings['appModel:<appId>']` (ADR-0036). An app with no pin **inherits** the global Settings model and keeps following it when that changes — inheritance is an absence, never a copy.
 - **Effective model** — what `resolveModelForApp(appId)` answers: the app's pin, else the Settings default, else `undefined` (meaning "let the adapter apply its own provider default"). Read per send, never captured at construction.
+
+- **token-claim** — the third pairing family (ADR-0038): a claim-once provider mints a
+  permanent `basic_auth` pair from a ONE-TIME setup token the user pastes; the wizard
+  decodes it, checks it against the frozen ceiling, claims once, verifies, and writes
+  credentials + `claimVerifiedAt` together. SimpleFIN is the first occupant.
+- **open-url capability** — the host-mediated way an app opens a website (ADR-0038 D5):
+  an internal-draft frame the runner routes to a host confirm dialog; only a real user
+  gesture opens the tab (`noopener,noreferrer`), and the sandbox gains nothing (C2).
