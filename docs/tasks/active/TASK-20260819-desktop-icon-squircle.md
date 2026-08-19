@@ -59,3 +59,9 @@ Cross-package impact: none — `apps/desktop` consumes packages, nothing consume
 - Evidence (all local — CI billing-blocked): `vitest run appIcon.test.ts` 16/16 green; `pnpm --filter desktop test` 128/128 green; `pnpm --filter desktop gate` ✓ GATE GREEN. AC6: dock-style preview (dark + light) rendered and sent to owner — squircle radius matches neighbors, niche `#171310`, no white.
 - State: implementation complete on `fix/TASK-20260819-desktop-icon-squircle`; awaiting owner dock check on a real build + PR review.
 - Next step: owner eyeball on hardware (`pnpm --filter desktop tauri build` or dev run), then PR.
+
+### 2026-08-19 — Claude — Gate 6 close-session
+- Done: re-verified the branch from a clean checkout before opening the PR — `pnpm --filter desktop test` **128/128**, `pnpm --filter desktop gate` **✓ GATE GREEN** (macOS). Pushed `fix/TASK-20260819-desktop-icon-squircle` and opened **PR #75**. Lesson recorded (`docs/lessons.md`, "Trusting a green run"): the gate's first run this session failed with "FATAL: shell process exited before writing results" — a stale `snug-desktop` from an interrupted run held the single-instance lock, so zero checks executed; that is an environment verdict, not a red suite, and the distinguishing question is always *did the checks RUN?*
+- State: PR #75 open against `main`, all local evidence green. CI is billing-blocked (next-steps 2026-08-19), so no machine verification exists — the PR page will show red X's that are NOT this branch's suites.
+- Next step: owner eyeball of the icon on a real dock from a built bundle (`pnpm --filter desktop bundle`) — AC6, and the standing next-steps item "Desktop icon has never been seen on a real dock/taskbar" (2026-08-14). Merge is not gated on it: the pixel assertions cover AC1–AC5.
+- Open questions: none blocking.
