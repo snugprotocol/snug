@@ -1,6 +1,6 @@
 # 0028 — Registry-pinned OAuth scopes: reviewed registry data, never silent defaults
 
-- **Status:** accepted (2026-08-15, at merge; owner approved the plan, verified the live Spotify round trip on hardware — playlists load with the pinned scopes — and commissioned the merge explicitly)
+- **Status:** accepted (2026-08-15, at merge; owner approved the plan, verified the live Spotify round trip on hardware — playlists load with the pinned scopes — and commissioned the merge explicitly) · **AMENDED 2026-08-19** (TASK-20260819, PR #78): rule 4's Spotify set gains `user-read-recently-played` — see the amendment block at the foot of this file. Rules 1–3 and 5 stand unchanged.
 - **Date:** 2026-08-15
 - **Task:** TASK-20260815-spotify-scopes-wizard-links
 
