@@ -1,6 +1,6 @@
 # TASK-20260819-gmail-starter: Gmail inbox-copilot starter app
 
-- **Status**: planned (awaiting owner approval)
+- **Status**: in-review (implemented; gates green; awaiting human review + merge)
 - **Owner**: Jeetu
 - **Risk tier**: **High** (auto-escalated — the Gmail scope/fields pin touches `packages/auth/src/well-known-providers.ts`; owner picked Low in the interview for the examples work, but PROCESS.md's escalation rule wins). High extras: negative tests, fresh-context AI plan review BEFORE implementation (**done 2026-08-19, findings folded in**), explicit self-sign-off in the journal.
 - **Branch**: `feat/TASK-20260819-gmail-starter`
@@ -199,3 +199,43 @@ green as files land → playground suites → root `pnpm test` at Gate 5.
 - Open questions: (a) High tier accepted, or split the auth pin into its own
   micro-task? (b) desktop-only v1 acceptable? (c) walkthrough posture if owner
   prefers not to publish the Google project to Production (accept 7-day re-consent?).
+
+### 2026-08-19 (later) — Claude (Fable 5) — session
+- Done: **Gates 3–5 complete, owner approved the plan as written.**
+  - *Slice A* (High-tier): RED (12 cases) → `gmail` entry pinned with scopes, BOTH
+    credential fields and the console walkthrough. **Probe result: `client_secret` IS
+    required** — Google's native-app parameter table calls it "Optional" but the token
+    endpoint refuses a Desktop-client exchange without it, so the plan's conditional
+    became a definite pin and no "no secret needed" copy was written. ADR-0028 amended
+    (second pinned entry, plus the new doctrine point: a pin can be load-bearing for
+    what an app CANNOT do).
+  - *Slice B*: RED `gmail-analysis.test.mjs` (27 cases) wired into the examples test
+    script, then the app — four lanes, SVG charts, deterministic sample inbox,
+    preview-then-one-confirm writes. All five shelf pins updated.
+  - *Slice C*: shelf tile, `desktopOnly` (Desktop-app OAuth clients register loopback
+    redirects only, so the web origin is not registrable at all).
+  - *Slice D*: ADR-0039 accepted + indexed; doc drift fixed (code-map 12/7→13/8,
+    examples README "Ten curated"→thirteen with three missing rows, next-steps item (7)
+    pruned of gmail).
+  - *Browser pass*: rendered against a stub host. **Found a bug no suite could:** the
+    readiness check read `app.ready` where the hook returns `isReady`, so the app sat on
+    its skeleton forever with every gate green. Also fixed the trend chart (scales to
+    its card; baselines on the quietest week rather than zero) and the sender-bar
+    ranking (reserves a slot for a replied-to correspondent, so the green legend
+    describes a colour actually on screen). Verified all four lanes, both themes, 375px,
+    and the confirm flow ("Move 187 emails from 2 senders to Trash" — arithmetic checks).
+  - *Guard added*: `validate.test.mjs` now derives `useSnugApp`'s returned property set
+    from the SDK hook and fails any app reading a property it does not return.
+    **Proved non-vacuous** by reintroducing the bug (fails) and restoring it (passes).
+- State: examples 254/254, auth 895/895, playground 1254/1254, root `pnpm test` 23/23.
+  Four commits on `feat/TASK-20260819-gmail-starter`.
+- Next step: human review, then PR + merge. On merge: `/close-session` (compact the task
+  file to one line in `tasks/done/INDEX.md` per ADR-0027).
+- Self-sign-off (High tier): the auth change is registry DATA only — no code path in
+  `packages/auth` was touched, the ADR-0028 machinery carries the new seats unchanged,
+  and the negative tests pin what must never happen (no `mail.google.com/` scope, no
+  delete call expressible in any plan). Owner manual test still owed: a live Gmail
+  connect on desktop plus one governed cleanup batch on real mail.
+- Open questions: none blocking. Deferred by design and recorded in the app's
+  `authoring/docs/next-tasks.md`: web-playground support, incremental `historyId` sync,
+  batch undo, label taxonomy, storage view.

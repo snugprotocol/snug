@@ -709,3 +709,51 @@ test('hue drives the real bridge through connection-relative URLs — no dummy d
     );
   }
 });
+
+/**
+ * Every property an app reads off `useSnugApp`'s return value must be one the hook
+ * ACTUALLY returns (TASK-20260819-gmail-starter, lesson 2026-08-19).
+ *
+ * WHY THIS GATE EXISTS. The Gmail starter shipped `app.ready` where the hook returns
+ * `isReady`, and the app sat on its loading skeleton forever — with every gate in this
+ * file green. Nothing here was wrong: these rules check SHAPE (single file, hooks
+ * byte-identity, announce fields, no forms), and the per-app analysis suites evaluate
+ * only the pure extracted core, which by design never renders. A misspelled property on
+ * a JS object is `undefined`, not a throw, so the failure is silent, total, and lands on
+ * the very first screen a user sees.
+ *
+ * The valid set is DERIVED from `packages/sdk/embedded/snug-hooks.js` rather than
+ * restated, so it cannot drift from the hook: adding a field to the hook admits it here
+ * automatically, and removing one starts failing the apps that still read it.
+ *
+ * Only whole-object usage (`const app = useSnugApp(...)` → `app.x`) is checkable this
+ * way; the destructuring style every other starter uses is already compile-checked by
+ * being a plain binding. That asymmetry is the point — the object style is the one with
+ * no safety net, which is exactly how this bug survived to a browser.
+ */
+test('apps read only properties useSnugApp actually returns', () => {
+  const hooks = readFileSync(EMBEDDED_HOOKS, 'utf8');
+  // The single `return { ... }` inside useSnugApp — sliced from the function body so a
+  // later hook gaining another object literal cannot widen the set by accident.
+  const hookBody = /function useSnugApp\([\s\S]*?\n}\n/.exec(hooks)?.[0] ?? '';
+  assert.ok(hookBody, 'located useSnugApp in the SDK hooks file');
+  const returned = /return \{([\s\S]*?)\};/.exec(hookBody)?.[1] ?? '';
+  const allowed = new Set(
+    [...returned.matchAll(/^\s*(\w+)\s*[:,]/gm)].map(([, key]) => key),
+  );
+  assert.ok(allowed.size >= 4, `derived an implausibly small hook surface: ${[...allowed]}`);
+
+  for (const app of APPS) {
+    const html = readFileSync(path.join(HERE, app, 'app.html'), 'utf8');
+    // Find `const <name> = useSnugApp(` — the whole-object style.
+    const binding = /(?:const|let)\s+(\w+)\s*=\s*useSnugApp\s*\(/.exec(html)?.[1];
+    if (!binding) continue; // destructured, or LLM-free: nothing to check
+    const authored = html.slice(html.indexOf('5. RESPONSE SCHEMA'));
+    for (const [, prop] of authored.matchAll(new RegExp(`\\b${binding}\\.(\\w+)`, 'g'))) {
+      assert.ok(
+        allowed.has(prop),
+        `${app}: reads \`${binding}.${prop}\`, which useSnugApp does not return (it returns ${[...allowed].join(', ')}) — a misspelled property is undefined, not an error, so this fails silently at runtime`,
+      );
+    }
+  }
+});
