@@ -359,3 +359,35 @@ C4. Ledger app: money-leaks view, cancel playbook LLM lane (responseSchema'd), o
   shape pinned; (10) Phase C severability stated.
 - State: plan amended and re-committed; review verdict "implementable as amended".
 - Next step: Gate 3 — A1/A2 structural tests first.
+
+### 2026-08-18 — Claude (Fable 5) — session (Phases A + B implemented, green)
+- Done — **Phase A** (commits c3ad38d, 58af1de): `WellKnownTokenClaimPairing` union member
+  + `simplefin` registry entry (structural suites extended: kind table, browserCallable
+  documented-set, network-seat allowlist deliberately widened to THREE named modules);
+  `performTokenClaim` pure mint (26 tests: full refusal battery, write-together-after-
+  verify call order, never-echoes-secrets probes); `claimVerifiedAt` state seat; wizard
+  family routing (`tokenClaimPairingFor`/`isTokenClaimRequirement`), paste-and-claim
+  screen, third `saveConnectionCredentials` refusal + positive twin, no-re-claim gate
+  loaded from the row on reopen; threat-model delta doc. Auth 878 green; playground
+  1236 green.
+- Done — **Phase B** (commits 688c665 + prior): `examples/ledger/` — 85 KB single-file
+  app (sample household with PLANTED leaks per the owner amendment; deterministic
+  radar/time-machine/cash-flow/heatmap/net-worth reconstruction; four agent lanes over
+  one discriminated schema; SimpleFIN sync with watermark+overlap upsert and wholesale
+  sample eviction), bare `connection.json`, runtime contract (1838 B), README,
+  full authoring bundle (both owner prompts verbatim); suite wiring (APPS,
+  CONNECTED_APPS, MANIFEST_APPS, P4/SURVEYED, STARTER_LOOKS, shelf membership pin);
+  `ledger-analysis.test.mjs` (15 extracted-core tests — examples 235 green); ledger
+  e2e row PASSES in a real browser (DDL on real sql.js under real CSP, banner + time
+  machine rendered).
+- Surprise (pre-existing, repaired half / residual half): the env-gated
+  `starters-connect` DEGRADED rows had never run since the TASK-20260817 tile rename —
+  tile clicks keyed on the FOLDER while labels became display names. Repaired the
+  helper to click by `data-starter-name` identity (the 2026-08-17 lesson's exact
+  surface). STILL RED, pre-existing, NOT this task's: github/spotify/weather content
+  pins + the read-only row — their apps key pre-connect state on a probe a read-only
+  route never answers; needs per-app investigation → next-steps.
+- State: Phases A+B complete and green; Phase C (open-url + concierge) not started.
+- Next step: Phase C tests first (protocol frame + host-ready openUrl flag + runner
+  seam + confirm dialog + app money-leaks integration), then root `turbo run test
+  --force` + owner real-token walk.
