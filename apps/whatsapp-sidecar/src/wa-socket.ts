@@ -93,6 +93,18 @@ export interface WaHistoryState {
   explicit: boolean;
   progress: number;
   /**
+   * Live sync bookkeeping for progress surfaces (owner ask, 2026-08-18): history percent
+   * alone hides the SECOND phase — name resolution, which runs on group rosters loading a
+   * paced few at a time and continues after the history push completes. Computed at read
+   * time, never persisted-and-trusted.
+   */
+  detail?: {
+    groups: number;
+    rostersLoaded: number;
+    names: number;
+    messages: number;
+  };
+  /**
    * The session is WEDGED — scanned but never registered — so history sync will never
    * begin and "still syncing" would be a lie the user cannot see through. Present only
    * when true: the flag is a claim, never a default (owner-reported 2026-08-17).

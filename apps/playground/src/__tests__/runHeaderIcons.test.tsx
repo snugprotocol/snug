@@ -63,7 +63,13 @@ interface RenderOptions {
   isStarter?: boolean;
   connectionSlots?: number;
   canExport?: boolean;
-  syncState?: { progress: number; complete: boolean; needsRelink?: true };
+  syncState?: {
+    progress: number;
+    complete: boolean;
+    needsRelink?: true;
+    rosters?: { loaded: number; total: number };
+    names?: number;
+  };
   onManageConnections?: () => void;
   onExport?: () => void;
 }
@@ -203,6 +209,27 @@ describe('the sync indicator (ADR-0037 §4, owner interview 2026-08-18)', () => 
     expect(byTestId('sidecar-sync-progress'), 'complete: the header returns to normal').toBeNull();
     await renderActions({});
     expect(byTestId('sidecar-sync-progress'), 'no sidecar app: no indicator').toBeNull();
+  });
+
+  it('shows the NAMES phase after history completes, while rosters are still loading', async () => {
+    // The owner's ask (2026-08-18): the header should tell the truth about the second
+    // phase too — name resolution rides the paced roster sweep and outlives the history
+    // percent. One capsule, two phases, gone when both are done.
+    await renderActions({
+      syncState: { progress: 100, complete: true, rosters: { loaded: 98, total: 233 }, names: 1561 },
+    });
+    const badge = byTestId('sidecar-sync-progress');
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent ?? '').toContain('98');
+    expect(badge?.textContent ?? '').toContain('233');
+    expect(badge?.getAttribute('aria-label') ?? '').toMatch(/name/i);
+  });
+
+  it('disappears once the rosters finish too', async () => {
+    await renderActions({
+      syncState: { progress: 100, complete: true, rosters: { loaded: 233, total: 233 }, names: 1561 },
+    });
+    expect(byTestId('sidecar-sync-progress')).toBeNull();
   });
 
   it('never spins over a wedged session — needsRelink hides the indicator', async () => {

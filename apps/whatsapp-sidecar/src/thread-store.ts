@@ -71,6 +71,8 @@ export interface ThreadStore {
   listChats(): WaChat[];
   history(jid: string): { messages: readonly WaMessage[] } | undefined;
   messagesSince(jid: string, since?: number): readonly WaMessage[] | undefined;
+  /** Cheap counters for progress surfaces — computed on demand, never cached. */
+  stats(): { chats: number; groups: number; names: number; messages: number };
   /**
    * Everything a restart needs, JSON-safe (ADR-0037): chats with their meta, messages, the
    * name directory WITH its tiers, LID mappings, group rosters. Media and avatar bytes are
@@ -366,6 +368,13 @@ export function createThreadStore(
       if (rows === undefined) return undefined;
       return since === undefined ? [...rows] : rows.filter((row) => row.ts > since);
     },
+
+    stats: () => ({
+      chats: chats.size,
+      groups: [...chats.values()].filter((chat) => chat.isGroup).length,
+      names: names.size,
+      messages: [...messages.values()].reduce((total, rows) => total + rows.length, 0),
+    }),
 
     snapshot: () => ({
       chats: [...chats.values()],

@@ -401,7 +401,7 @@ describe('resume without history', () => {
     const adapter = await createBaileysWaSocket({ authDir, resumeHistoryGraceMs: 10 });
     created.at(-1)!.emit('connection.update', { connection: 'open' });
     await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(adapter.historyState()).toEqual({ complete: true, explicit: false, progress: 100 });
+    expect(adapter.historyState()).toMatchObject({ complete: true, explicit: false, progress: 100 });
   });
 
   it('a resumed session that DOES receive history keeps its real progress', async () => {
@@ -422,5 +422,81 @@ describe('resume without history', () => {
     created.at(-1)!.emit('connection.update', { connection: 'open' });
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(adapter.historyState().complete).toBe(false);
+  });
+});
+
+/**
+ * PROACTIVE ROSTER LOADING + PROGRESS DETAIL (owner hardware walk 3, 2026-08-18).
+ *
+ * Rosters loaded only when the app happened to re-read `/chats`, and a failure waited for
+ * the NEXT read to retry — on real hardware that meant 98 of 233 rosters after 14 minutes
+ * and "no new names coming through". The helper now sweeps missing rosters itself on a
+ * paced beat with bounded attempts, treats cache-restored rosters as already loaded, and
+ * reports `{groups, rostersLoaded, names, messages}` on the sync state so the header can
+ * show name-resolution progress as its own phase.
+ */
+describe('roster sweep and sync detail', () => {
+  it('retries a failed roster on the sweep beat, without waiting for another list read', async () => {
+    const { adapter, fake } = await linkedAdapter({ rosterSweepMs: 10 });
+    fake.groupMetadata
+      .mockRejectedValueOnce(new Error('rate limited'))
+      .mockResolvedValue({ subject: 'Healed', participants: [{ id: '555@s.whatsapp.net' }] });
+    fake.emit('messaging-history.set', {
+      chats: [{ id: 'g1@g.us', name: 'Healed' }],
+      contacts: [],
+      messages: [],
+    });
+    adapter.listChats(); // first attempt fails
+    await new Promise((resolve) => setTimeout(resolve, 80)); // the sweep retries on its own
+    const group = adapter.listChats().find((row) => row.jid === 'g1@g.us');
+    expect(group?.participants).toEqual([{ jid: '555@s.whatsapp.net' }]);
+    expect(fake.groupMetadata.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('gives up on a roster after bounded attempts — a dead group must not burn iqs forever', async () => {
+    const { adapter, fake } = await linkedAdapter({ rosterSweepMs: 5 });
+    fake.groupMetadata.mockRejectedValue(new Error('forbidden'));
+    fake.emit('messaging-history.set', { chats: [{ id: 'g2@g.us', name: 'Dead' }], contacts: [], messages: [] });
+    adapter.listChats();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(5);
+  });
+
+  it('treats a cache-restored roster as loaded — no refetch burst at every boot', async () => {
+    const seed = createThreadStore();
+    seed.seedChatMeta('g3@g.us', { name: 'Restored', isGroup: true });
+    seed.setGroupMetadata('g3@g.us', { subject: 'Restored', participants: [{ id: '111@s.whatsapp.net' }] });
+    const cache = {
+      load: () => ({ store: JSON.parse(JSON.stringify(seed.snapshot())), history: { complete: true, explicit: true, progress: 100 } }),
+      save: vi.fn(),
+    };
+    const { adapter, fake } = await linkedAdapter({ threadCache: cache, rosterSweepMs: 5 });
+    adapter.listChats();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(fake.groupMetadata).not.toHaveBeenCalled();
+  });
+
+  it('reports sync DETAIL — groups, rosters loaded, names, messages — on the history state', async () => {
+    const { adapter, fake } = await linkedAdapter();
+    fake.groupMetadata.mockResolvedValue({ subject: 'Crew', participants: [{ id: '222@s.whatsapp.net', notify: 'Bo' }] });
+    fake.emit('messaging-history.set', {
+      chats: [{ id: 'g4@g.us', name: 'Crew' }],
+      contacts: [{ id: '111@s.whatsapp.net', name: 'Asha' }],
+      messages: [
+        {
+          key: { id: 'D1', remoteJid: '111@s.whatsapp.net', fromMe: false },
+          message: { conversation: 'hi' },
+          messageTimestamp: 5,
+          pushName: 'Asha R',
+        },
+      ],
+    });
+    adapter.listChats();
+    await flush();
+    const detail = adapter.historyState().detail;
+    expect(detail?.groups).toBe(1);
+    expect(detail?.rostersLoaded).toBe(1);
+    expect(detail?.names).toBeGreaterThanOrEqual(2); // Asha (contact) + Bo (roster push seat)
+    expect(detail?.messages).toBe(1);
   });
 });

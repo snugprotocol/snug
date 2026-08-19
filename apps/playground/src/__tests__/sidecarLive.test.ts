@@ -432,3 +432,76 @@ describe('syncStateFromChatsBody — the extraction is the scrub', () => {
     ).toEqual({ progress: 5, complete: false });
   });
 });
+
+// -------------------------------------------------- the names phase (owner ask 2026-08-18)
+//
+// History percent hides the SECOND phase: name resolution rides group rosters loading a
+// paced few at a time, and continues after the history push completes. The poll now keeps
+// going through that phase and retires when rosters are done — or quietly gives up when
+// they stall, because a frozen progress pill is worse than none.
+
+describe('the sync poll through the names phase', () => {
+  const state = (over: Record<string, unknown>) => ({ progress: 100, complete: true, ...over });
+
+  it('keeps polling while rosters are loading, and retires when they are done', async () => {
+    const answers = [
+      state({ rosters: { loaded: 90, total: 233 }, names: 1500 }),
+      state({ rosters: { loaded: 180, total: 233 }, names: 1550 }),
+      state({ rosters: { loaded: 233, total: 233 }, names: 1561 }),
+      state({ rosters: { loaded: 233, total: 233 }, names: 1561 }), // must never be reached
+    ];
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => answers[asks++] as never,
+      onState: (s) => reports.push(s),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(asks).toBe(3);
+    expect(reports).toEqual(answers.slice(0, 3));
+  });
+
+  it('quietly gives up when rosters STALL — a frozen pill is worse than none', async () => {
+    const stuck = state({ rosters: { loaded: 230, total: 233 }, names: 1561 });
+    let asks = 0;
+    const reports: Array<{ rosters?: unknown }> = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => {
+        asks += 1;
+        return stuck as never;
+      },
+      onState: (s) => reports.push(s as never),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(asks).toBeLessThanOrEqual(8); // bounded, not forever
+    // The FINAL report clears the roster seat so the header hides rather than freezing.
+    expect(reports.at(-1)?.rosters).toBeUndefined();
+  });
+
+  it('extracts the roster detail from the chats body — numbers only', () => {
+    const body = JSON.stringify({
+      chats: [{ jid: 'x@s.whatsapp.net', name: 'Private' }],
+      sync: {
+        complete: true,
+        explicit: true,
+        progress: 100,
+        detail: { groups: 233, rostersLoaded: 98, names: 1561, messages: 16627 },
+      },
+    });
+    expect(syncStateFromChatsBody(body)).toEqual({
+      progress: 100,
+      complete: true,
+      rosters: { loaded: 98, total: 233 },
+      names: 1561,
+    });
+  });
+
+  it('tolerates a helper with NO detail seat — the old shape retires on complete', () => {
+    expect(syncStateFromChatsBody(JSON.stringify({ sync: { complete: true, progress: 100 } }))).toEqual({
+      progress: 100,
+      complete: true,
+    });
+  });
+});

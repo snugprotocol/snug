@@ -37,11 +37,17 @@ export interface RunHeaderActionsProps {
   /** Whether this app has touched its database (the export moment has been earned). */
   canExport: boolean;
   /**
-   * Linked-device history-sync state, pump-reported (ADR-0037 §4). Undefined for the
-   * overwhelmingly common case — an app with no sidecar connection — and the indicator
-   * renders only while a sync is actually incomplete.
+   * Linked-device sync state, pump-reported (ADR-0037 §4). Undefined for the
+   * overwhelmingly common case — an app with no sidecar connection — and the capsule
+   * renders only while one of its two phases (history, then names) is actually live.
    */
-  syncState?: { progress: number; complete: boolean; needsRelink?: true };
+  syncState?: {
+    progress: number;
+    complete: boolean;
+    needsRelink?: true;
+    rosters?: { loaded: number; total: number };
+    names?: number;
+  };
   onManageConnections: () => void;
   onExport: () => void;
 }
@@ -58,26 +64,53 @@ export function RunHeaderActions({
   return (
     <>
       {/*
-        THE SYNC INDICATOR (owner ask, 2026-08-18): a long first sync was invisible once one
-        chat existed — the user had no way to tell "still filling in" from "this is all of
-        it". Leads the cluster so it reads as a status of the app, not one more control.
-        `role="status"` + aria-label because a glyph and a bare percent announce nothing
-        (this file's own rule #1) — and the label is what tests locate, so it is load-bearing.
+        THE SYNC CAPSULE (owner ask, 2026-08-18): one quiet pill, two honest phases. While
+        WhatsApp pushes history it reads "Syncing · N%"; once that completes it hands over
+        to "Names · n/m" while the paced roster sweep resolves group members — the phase
+        that used to be invisible, which read as "names stopped arriving". Gone entirely
+        when both finish (or on a wedge — the app surface owns that story). Leads the
+        cluster so it reads as a status of the app, not one more control. `role="status"`
+        + aria-label because a glyph and bare numbers announce nothing (this file's own
+        rule #1) — and the label is what tests locate, so it is load-bearing.
       */}
-      {syncState !== undefined && !syncState.complete && syncState.needsRelink !== true ? (
-        <span
-          className="run-sync-progress"
-          data-testid="sidecar-sync-progress"
-          role="status"
-          aria-label={`history sync ${Math.round(syncState.progress)}% complete`}
-          title="history is still syncing from your phone — the app fills in as it arrives"
-        >
-          <span className="run-sync-glyph" aria-hidden="true">
-            ⟳
-          </span>{' '}
-          {Math.round(syncState.progress)}%
-        </span>
-      ) : null}
+      {(() => {
+        if (syncState === undefined || syncState.needsRelink === true) return null;
+        const phase = !syncState.complete
+          ? ('history' as const)
+          : syncState.rosters !== undefined && syncState.rosters.loaded < syncState.rosters.total
+            ? ('names' as const)
+            : undefined;
+        if (phase === undefined) return null;
+        const percent = Math.round(syncState.progress);
+        const rosters = syncState.rosters;
+        const tooltip = [
+          `history ${syncState.complete ? 100 : percent}%`,
+          rosters !== undefined ? `group names ${rosters.loaded} of ${rosters.total}` : undefined,
+          syncState.names !== undefined ? `${syncState.names} contacts named` : undefined,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        return (
+          <span
+            className="run-sync-progress"
+            data-testid="sidecar-sync-progress"
+            role="status"
+            aria-label={
+              phase === 'history'
+                ? `history sync ${percent}% complete`
+                : `resolving names — ${rosters!.loaded} of ${rosters!.total} groups`
+            }
+            title={`syncing from your phone — ${tooltip}`}
+          >
+            <span className="run-sync-glyph" aria-hidden="true">
+              ⟳
+            </span>
+            <span className="run-sync-text">
+              {phase === 'history' ? `Syncing · ${percent}%` : `Names · ${rosters!.loaded}/${rosters!.total}`}
+            </span>
+          </span>
+        );
+      })()}
       {/*
         The model selector leads the cluster (owner ask: swapped with connections).
         It is the widest control and the only non-button, so it reads as a setting the

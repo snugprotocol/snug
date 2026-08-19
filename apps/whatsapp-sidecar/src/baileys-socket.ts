@@ -154,6 +154,8 @@ export interface BaileysSocketDeps {
   cacheDebounceMs?: number;
   /** How long a RESUMED session waits for a history chunk before inferring completion. */
   resumeHistoryGraceMs?: number;
+  /** Beat of the background roster sweep; injectable so tests need not wait twenty seconds. */
+  rosterSweepMs?: number;
 }
 
 /**
@@ -432,24 +434,29 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   const releaseRosterSlot = rosterSlots.release;
 
   /**
-   * Group rosters already requested, so a chat list of forty groups fires each fetch once.
-   * `groupMetadata` is a round trip to WhatsApp; the store keeps the answer.
+   * Roster bookkeeping. LOADED rosters are never refetched this process lifetime (and a
+   * cache-restored roster counts as loaded — no refetch burst at every boot); a FAILED
+   * fetch gets bounded retries on the sweep beat below, because on real hardware the old
+   * retry-on-next-list-read scheme left 98 of 233 rosters unloaded after 14 minutes —
+   * which the user experiences as names that simply stop arriving (2026-08-18).
    */
-  const rosterRequested = new Set<string>();
+  const ROSTER_MAX_ATTEMPTS = 5;
+  const rosterLoaded = new Set<string>();
+  const rosterInFlight = new Set<string>();
+  const rosterAttempts = new Map<string, number>();
 
   /**
-   * Fetch a group's subject and participants ONCE (owner-reported 2026-08-17: group
-   * senders showed as ids because no roster was ever loaded). Failures are swallowed and
-   * retried on the next list: a group whose metadata is momentarily unavailable should
-   * degrade to ids, never break the list.
+   * Fetch a group's subject and participants (owner-reported 2026-08-17: group senders
+   * showed as ids because no roster was ever loaded). Paced like the avatar lookups: a
+   * chat list of 233 groups fired 233 concurrent metadata iqs, and the rate-limited
+   * failures left most rosters unloaded. A queue loads them all, just not at once.
    */
   const ensureGroupRoster = (jid: string): void => {
-    if (!jid.endsWith('@g.us') || rosterRequested.has(jid) || sock === undefined || link !== 'linked') return;
-    rosterRequested.add(jid);
+    if (!jid.endsWith('@g.us') || sock === undefined || link !== 'linked') return;
+    if (rosterLoaded.has(jid) || rosterInFlight.has(jid)) return;
+    if ((rosterAttempts.get(jid) ?? 0) >= ROSTER_MAX_ATTEMPTS) return;
+    rosterInFlight.add(jid);
     void (async () => {
-      // Paced like the avatar lookups: a chat list of 233 groups fired 233 concurrent
-      // metadata iqs, and the rate-limited failures left most rosters unloaded on the
-      // owner's hardware (82 of 233). A queue loads them all, just not at once.
       await acquireRosterSlot();
       try {
         const metadata = await sock!.groupMetadata(jid);
@@ -462,9 +469,11 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
           subject: metadata?.subject,
           participants: (metadata?.participants ?? []).map((participant) => ({ id: participant.id })),
         });
+        rosterLoaded.add(jid);
       } catch {
-        rosterRequested.delete(jid); // let a later list try again
+        rosterAttempts.set(jid, (rosterAttempts.get(jid) ?? 0) + 1);
       } finally {
+        rosterInFlight.delete(jid);
         releaseRosterSlot();
       }
     })();
@@ -620,6 +629,23 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     connect();
   }
 
+  // A cache-restored roster is already loaded — refetching all of them at every boot would
+  // re-create the burst the limiter exists to prevent.
+  for (const row of store.listChats()) {
+    if (row.isGroup && row.participants !== undefined) rosterLoaded.add(row.jid);
+  }
+
+  // THE ROSTER SWEEP: missing rosters are fetched on this beat, unprompted — names must
+  // keep arriving whether or not the app happens to re-read the chat list. Bounded per
+  // group by ROSTER_MAX_ATTEMPTS; a fully-loaded state makes this a no-op scan.
+  const rosterSweep = setInterval(() => {
+    if (link !== 'linked') return;
+    for (const row of store.listChats()) {
+      if (row.isGroup) ensureGroupRoster(row.jid);
+    }
+  }, deps.rosterSweepMs ?? 20_000);
+  rosterSweep.unref?.();
+
   return {
     linkState: () => link,
     currentQr: () => (link === 'linked' ? undefined : qr),
@@ -660,14 +686,24 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     history: (jid) => store.history(jid),
     messagesSince: (jid, since) => store.messagesSince(jid, since),
     historyState: () => {
+      // Progress DETAIL rides every read (owner ask 2026-08-18): the history percent hides
+      // the second phase — name resolution via the paced roster sweep — which continues
+      // after the history push completes. Computed here, never persisted-and-trusted.
+      const stats = store.stats();
+      const detail = {
+        groups: stats.groups,
+        rostersLoaded: rosterLoaded.size,
+        names: stats.names,
+        messages: stats.messages,
+      };
       // The wedge is checked on READ, from disk, because it can only change through a
       // pairing attempt (which rewrites the store) — and reading it here means every
       // history and messages response carries the fact, with no extra route and no
       // background poll. Cheap: one small file, only while unlinked or empty.
       if (!history.complete && isHalfLinkedStore(deps.authDir)) {
-        return { ...history, needsRelink: true };
+        return { ...history, needsRelink: true, detail };
       }
-      return history;
+      return { ...history, detail };
     },
 
     eventsSince: (cursor) => events.since(cursor),

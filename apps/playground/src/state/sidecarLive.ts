@@ -155,6 +155,14 @@ export interface SidecarSyncState {
    * progress, so a spinner would be a lie and the poll retires. Present only when true.
    */
   needsRelink?: true;
+  /**
+   * The NAMES phase (owner ask 2026-08-18): group rosters load a paced few at a time and
+   * carry the LID→name joins, so name resolution continues after the history percent hits
+   * 100. Absent on helpers that predate the detail seat.
+   */
+  rosters?: { loaded: number; total: number };
+  /** Names known in the helper's directory — tooltip color, never load-bearing. */
+  names?: number;
 }
 
 export interface SidecarSyncPollDeps {
@@ -174,18 +182,45 @@ export function createSidecarSyncPoll(deps: SidecarSyncPollDeps): SidecarLivePum
   let epoch = 0;
   let running = false;
 
+  /** Consecutive identical roster counts before the poll gives up on a stalled tail. */
+  const ROSTER_STALL_POLLS = 5;
+
   const run = async (myEpoch: number): Promise<void> => {
+    let lastRosterCount: number | undefined;
+    let rosterStalls = 0;
     try {
       while (epoch === myEpoch) {
         const state = await deps.fetchStatus();
         // Same discipline as the hint pump: a superseded loop discards its own late result.
         if (epoch !== myEpoch) return;
         if (state !== undefined) {
+          // NEEDS-RELINK is final; COMPLETE is final once the NAMES phase is done too —
+          // rosters load after the history push, and retiring on the percent alone froze
+          // the header out of the phase the owner actually asked about.
+          if (state.needsRelink === true) {
+            deps.onState(state);
+            return;
+          }
+          const rostersPending =
+            state.rosters !== undefined && state.rosters.loaded < state.rosters.total;
+          if (state.complete && !rostersPending) {
+            deps.onState(state);
+            return;
+          }
+          if (state.complete && rostersPending) {
+            // A tail of rosters can be permanently unloadable (dead groups exhaust their
+            // retries). A pill frozen at 230/233 forever is worse than none: after a few
+            // identical reads, deliver a final state WITHOUT the roster seat so the
+            // header hides, and stop spending governed reads.
+            rosterStalls = state.rosters!.loaded === lastRosterCount ? rosterStalls + 1 : 0;
+            lastRosterCount = state.rosters!.loaded;
+            if (rosterStalls >= ROSTER_STALL_POLLS) {
+              const { rosters: _stalled, ...rest } = state;
+              deps.onState(rest);
+              return;
+            }
+          }
           deps.onState(state);
-          // COMPLETE and NEEDS-RELINK are both final: polling past either would spend a
-          // governed read every few seconds forever, to learn a fact that no longer
-          // changes on its own (a relink restarts the pump, and the poll with it).
-          if (state.complete || state.needsRelink === true) return;
         }
         // A failed read reports nothing — blanking an indicator the user is watching
         // over one hiccup is worse than a briefly stale number.
@@ -219,10 +254,23 @@ export function createSidecarSyncPoll(deps: SidecarSyncPollDeps): SidecarLivePum
 export function syncStateFromChatsBody(body: string): SidecarSyncState | undefined {
   try {
     const parsed = JSON.parse(body) as {
-      sync?: { progress?: unknown; complete?: unknown; needsRelink?: unknown } | null;
+      sync?: {
+        progress?: unknown;
+        complete?: unknown;
+        needsRelink?: unknown;
+        detail?: { groups?: unknown; rostersLoaded?: unknown; names?: unknown } | null;
+      } | null;
     };
     const sync = parsed.sync;
     if (sync === undefined || sync === null || typeof sync !== 'object') return undefined;
+    const detail = sync.detail;
+    const rosters =
+      detail !== null &&
+      typeof detail === 'object' &&
+      typeof detail.groups === 'number' &&
+      typeof detail.rostersLoaded === 'number'
+        ? { loaded: detail.rostersLoaded, total: detail.groups }
+        : undefined;
     return {
       progress: typeof sync.progress === 'number' ? sync.progress : 0,
       complete: sync.complete === true,
@@ -230,6 +278,10 @@ export function syncStateFromChatsBody(body: string): SidecarSyncState | undefin
       // and hide the spinner — "syncing 0%" forever over a session that will never sync is
       // the rendered lie the wedge detector exists to prevent.
       ...(sync.needsRelink === true ? { needsRelink: true as const } : {}),
+      ...(rosters !== undefined ? { rosters } : {}),
+      ...(detail !== null && typeof detail === 'object' && typeof detail.names === 'number'
+        ? { names: detail.names }
+        : {}),
     };
   } catch {
     return undefined;

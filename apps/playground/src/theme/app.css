@@ -1807,16 +1807,32 @@ img.identity-avatar {
   line-height: 1;
 }
 
-/* Linked-device history-sync indicator (ADR-0037 §4). The glyph spins; the percent holds
-   still — an animation on the number itself would make it unreadable. Reduced motion gets
-   a static glyph: the percent already conveys the progress. */
+/* Linked-device sync capsule (ADR-0037 §4): a quiet pill beside the app's controls. The
+   glyph spins; the numbers hold still (tabular, so digits don't jitter as they count).
+   Reduced motion gets a static glyph: the numbers already convey the progress. */
 .run-sync-progress {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.8rem;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted, #888);
+  background: color-mix(in srgb, currentColor 9%, transparent);
   white-space: nowrap;
+  animation: run-sync-appear 240ms ease;
+}
+.run-sync-text {
+  letter-spacing: 0.01em;
+}
+@keyframes run-sync-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 .run-sync-glyph {
   display: inline-block;
