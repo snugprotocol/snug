@@ -378,7 +378,18 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
 
   const cacheDebounceMs = deps.cacheDebounceMs ?? 5_000;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  const persistNow = (): void => deps.threadCache?.save({ store: store.snapshot(), history });
+  const persistNow = (): void =>
+    deps.threadCache?.save({
+      store: store.snapshot(),
+      history,
+      // Diagnostics only — restore() ignores this seat. It exists so a stalled sweep can
+      // be read off the cache file instead of guessed at (hardware walk 5, 2026-08-18).
+      rosterDiagnostics: {
+        rostersLoaded: rosterLoaded.size,
+        rostersGivenUp: rostersGivenUp(),
+        errors: Object.fromEntries(rosterErrorCounts),
+      },
+    });
   /**
    * Throttle-style: the first change opens a window, everything else in it rides along in
    * one write. History sync mutates the store thousands of times a minute; the disk sees a
@@ -442,17 +453,21 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
    * retry-on-next-list-read scheme left 98 of 233 rosters unloaded after 14 minutes —
    * which the user experiences as names that simply stop arriving (2026-08-18).
    */
-  const ROSTER_MAX_ATTEMPTS = 8;
+  const ROSTER_MAX_ATTEMPTS = 5;
   const rosterLoaded = new Set<string>();
   const rosterInFlight = new Set<string>();
   /**
    * Retry bookkeeping with EXPONENTIAL BACKOFF (hardware walk 4, 2026-08-18): a retry per
    * sweep beat burned every attempt inside one ~2-minute throttle window and wrote off 106
-   * of 233 groups. Doubling the spacing (30 s base → ~an hour across 8 attempts) means a
-   * throttle costs one attempt, not all of them.
+   * of 233 groups. Doubling the spacing (20 s base, five attempts ≈ 10 minutes of
+   * coverage) means a throttle costs one attempt, not all of them — while write-offs of
+   * genuinely dead groups still land fast enough for the progress pill to converge within
+   * minutes, not an hour.
    */
   const rosterAttempts = new Map<string, { attempts: number; nextAt: number }>();
-  const rosterRetryBaseMs = deps.rosterRetryBaseMs ?? 30_000;
+  const rosterRetryBaseMs = deps.rosterRetryBaseMs ?? 20_000;
+  /** Failure classes, aggregated for the cache diagnostics — message → count, capped. */
+  const rosterErrorCounts = new Map<string, number>();
   const rostersGivenUp = (): number => {
     let count = 0;
     for (const [jid, tries] of rosterAttempts) {
@@ -487,12 +502,20 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
           participants: (metadata?.participants ?? []).map((participant) => ({ id: participant.id })),
         });
         rosterLoaded.add(jid);
-      } catch {
+      } catch (err) {
         const attempts = (rosterAttempts.get(jid)?.attempts ?? 0) + 1;
         rosterAttempts.set(jid, {
           attempts,
           nextAt: now() + rosterRetryBaseMs * 2 ** (attempts - 1),
         });
+        // Aggregate the failure CLASS (never per-group detail) and persist it: a steady
+        // state of failures used to write nothing to disk, which made the stall invisible
+        // to diagnosis — the cache aged while the sweep silently burned retries.
+        const reason = (err instanceof Error ? err.message : String(err)).slice(0, 120) || 'unknown';
+        if (rosterErrorCounts.size < 20 || rosterErrorCounts.has(reason)) {
+          rosterErrorCounts.set(reason, (rosterErrorCounts.get(reason) ?? 0) + 1);
+        }
+        scheduleSave();
       } finally {
         rosterInFlight.delete(jid);
         releaseRosterSlot();

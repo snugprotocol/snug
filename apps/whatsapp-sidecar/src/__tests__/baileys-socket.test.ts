@@ -473,10 +473,30 @@ describe('roster sweep and sync detail', () => {
     fake.emit('messaging-history.set', { chats: [{ id: 'g3@g.us', name: 'Dead' }], contacts: [], messages: [] });
     adapter.listChats();
     await new Promise((resolve) => setTimeout(resolve, 400));
-    expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(8);
+    expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(5);
     // The consumer subtracts given-up groups from the target, so the pill CONVERGES on
     // what is achievable instead of stalling at n/m forever.
     expect(adapter.historyState().detail?.rostersGivenUp).toBe(1);
+  });
+
+  it('persists the failure CLASSES to the cache, so a stalled sweep is diagnosable from disk', async () => {
+    // A failing-only steady state used to write NOTHING (saves ride store changes), so the
+    // cache aged silently while retries burned — the stall could only be guessed at.
+    const cache = { load: vi.fn(() => undefined), save: vi.fn() };
+    const { adapter, fake } = await linkedAdapter({
+      threadCache: cache,
+      cacheDebounceMs: 10,
+      rosterSweepMs: 2,
+      rosterRetryBaseMs: 1,
+    });
+    fake.groupMetadata.mockRejectedValue(new Error('item-not-found'));
+    fake.emit('messaging-history.set', { chats: [{ id: 'g5@g.us', name: 'Gone' }], contacts: [], messages: [] });
+    adapter.listChats();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const payload = cache.save.mock.calls.at(-1)?.[0] as {
+      rosterDiagnostics?: { errors: Record<string, number> };
+    };
+    expect(payload?.rosterDiagnostics?.errors['item-not-found']).toBeGreaterThanOrEqual(1);
   });
 
   it('treats a cache-restored roster as loaded — no refetch burst at every boot', async () => {

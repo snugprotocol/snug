@@ -462,7 +462,7 @@ describe('the sync poll through the names phase', () => {
     expect(reports).toEqual(answers.slice(0, 3));
   });
 
-  it('quietly gives up when rosters STALL — a frozen pill is worse than none', async () => {
+  it('quietly gives up when rosters STALL — but only after minutes of true silence', async () => {
     const stuck = state({ rosters: { loaded: 230, total: 233 }, names: 1561 });
     let asks = 0;
     const reports: Array<{ rosters?: unknown }> = [];
@@ -475,9 +475,33 @@ describe('the sync poll through the names phase', () => {
       sleep: async () => {},
     });
     await poll.start();
-    expect(asks).toBeLessThanOrEqual(8); // bounded, not forever
+    // PATIENT: the roster sweep backs off between retries (20 s doubling), so quiet
+    // stretches over a minute are normal — a 20 s guard hid the pill in every gap
+    // (hardware walk 5). Bounded still: ~3 minutes of identical reads, then out.
+    expect(asks).toBeGreaterThan(20);
+    expect(asks).toBeLessThanOrEqual(50);
     // The FINAL report clears the roster seat so the header hides rather than freezing.
     expect(reports.at(-1)?.rosters).toBeUndefined();
+  });
+
+  it('a SHRINKING total counts as movement — write-offs reset the stall clock', async () => {
+    // Totals fall as unfetchable groups are written off; that is progress toward
+    // convergence and must not be mistaken for a stall.
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => {
+        asks += 1;
+        if (asks <= 44) return state({ rosters: { loaded: 127, total: 233 } }) as never;
+        if (asks === 45) return state({ rosters: { loaded: 127, total: 200 } }) as never; // write-offs landed
+        return state({ rosters: { loaded: 127, total: 127 } }) as never; // converged
+      },
+      onState: (s) => reports.push(s),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(asks).toBe(46); // survived past the pre-shrink stall count, then completed
+    expect((reports.at(-1) as { rosters?: { total: number } }).rosters?.total).toBe(127);
   });
 
   it('extracts the roster detail from the chats body — numbers only', () => {

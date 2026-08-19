@@ -182,11 +182,18 @@ export function createSidecarSyncPoll(deps: SidecarSyncPollDeps): SidecarLivePum
   let epoch = 0;
   let running = false;
 
-  /** Consecutive identical roster counts before the poll gives up on a stalled tail. */
-  const ROSTER_STALL_POLLS = 5;
+  /**
+   * Consecutive polls with NO movement before the poll gives up on a stalled tail. Three
+   * minutes at the 4 s gap: the roster sweep retries on an exponential backoff (20 s base,
+   * doubling), so quiet stretches of a minute-plus are NORMAL mid-phase — the first guard
+   * (20 s) hid the pill in every backoff gap and read as "it broke again" (hardware walk
+   * 5, 2026-08-18). Movement means the (loaded, total) PAIR changed: write-offs shrink the
+   * total, and that is progress toward convergence too.
+   */
+  const ROSTER_STALL_POLLS = 45;
 
   const run = async (myEpoch: number): Promise<void> => {
-    let lastRosterCount: number | undefined;
+    let lastRosterKey: string | undefined;
     let rosterStalls = 0;
     try {
       while (epoch === myEpoch) {
@@ -209,11 +216,12 @@ export function createSidecarSyncPoll(deps: SidecarSyncPollDeps): SidecarLivePum
           }
           if (state.complete && rostersPending) {
             // A tail of rosters can be permanently unloadable (dead groups exhaust their
-            // retries). A pill frozen at 230/233 forever is worse than none: after a few
-            // identical reads, deliver a final state WITHOUT the roster seat so the
-            // header hides, and stop spending governed reads.
-            rosterStalls = state.rosters!.loaded === lastRosterCount ? rosterStalls + 1 : 0;
-            lastRosterCount = state.rosters!.loaded;
+            // retries). A pill frozen at n/m forever is worse than none — but only after
+            // minutes of TRUE silence: loaded climbing counts as movement, and so does
+            // the total shrinking as write-offs land.
+            const rosterKey = `${state.rosters!.loaded}/${state.rosters!.total}`;
+            rosterStalls = rosterKey === lastRosterKey ? rosterStalls + 1 : 0;
+            lastRosterKey = rosterKey;
             if (rosterStalls >= ROSTER_STALL_POLLS) {
               const { rosters: _stalled, ...rest } = state;
               deps.onState(rest);
