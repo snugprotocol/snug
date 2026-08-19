@@ -194,6 +194,7 @@
     .lightbox img { max-width: 92vw; max-height: 88vh; border-radius: 10px; }
     .tos-note { padding: 6px 14px 10px; color: var(--ink-soft); font-size: 11px; border-top: 1px solid var(--line); background: var(--surface); }
     .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 999px; font-size: 13px; z-index: 40; box-shadow: var(--shadow); }
+    .sync-banner { padding: 7px 14px; font-size: 12px; color: var(--ink-soft); background: var(--surface); border-bottom: 1px solid var(--line); }
     .spin { display: inline-block; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
@@ -635,6 +636,22 @@
     }
 
     /**
+     * The ONE place a chat row's label comes from (owner-reported 2026-08-18: 1:1 rows
+     * printed "…@s.whatsapp.net" raw). The helper names a chat by its own jid when it knows
+     * nothing better — an honest placeholder for a store, but never a label for a human.
+     * Order is the owner's chosen WhatsApp-Web convention: saved name → ~push name →
+     * whatever fallbackLabel can honestly say (formatted number, Group, Unknown contact).
+     */
+    function chatDisplayName(chat) {
+      var c = chat || {};
+      var name = typeof c.name === 'string' ? c.name : '';
+      if (name.length > 0 && name !== c.jid) {
+        return c.nameKind === 'push' ? '~' + name : name;
+      }
+      return fallbackLabel(c.jid);
+    }
+
+    /**
      * The USER's measured emoji habits — most frequent first. Nobody else's rows count.
      * One token = one pictograph plus its own modifiers (skin tone, VS16), extended ONLY
      * through a ZWJ — adjacent separate emoji must never glue into one token, or '😂😂'
@@ -862,7 +879,8 @@
       return AVATAR_HUES[h % AVATAR_HUES.length];
     }
     function initialsOf(name) {
-      const words = String(name || '?').trim().split(/\s+/).slice(0, 2);
+      // The ~push-name mark is presentation, not a person's initial.
+      const words = String(name || '?').replace(/^~/, '').trim().split(/\s+/).slice(0, 2);
       return words.map((w) => (w[0] || '').toUpperCase()).join('') || '?';
     }
 
@@ -1057,34 +1075,58 @@
         void loadThread(jid);
       }, [chats, setUi, loadThread]);
 
+      // Delta-refresh the open thread: fetch only what's newer than the newest row we
+      // hold (minus a merge margin), merge, persist. Shared by the doorbell AND the
+      // polling safety net below — one refresh, two triggers.
+      const refreshOpenThread = useCallback((jid) => {
+        setThread((prev) => {
+          const maxTs = prev.jid === jid ? prev.messages.reduce((max, row) => Math.max(max, row.ts || 0), 0) : 0;
+          void (async () => {
+            const fresh = await sidecar.since(jid, Math.max(0, maxTs - 60));
+            if (openJidRef.current !== jid) return;
+            setThread((current) => (current.jid === jid
+              ? { ...current, messages: mergeMessages(current.messages, fresh.messages) }
+              : current));
+            await persistMessages(jid, fresh.messages);
+            setUi((prevUi) => ({
+              ...prevUi,
+              readAt: { ...prevUi.readAt, [jid]: Math.floor(Date.now() / 1000) },
+            }));
+          })();
+          return prev;
+        });
+      }, [sidecar, persistMessages, setUi]);
+
       // ---- the doorbell: a hint means REFETCH (list always; open thread when named).
       useEffect(() => {
         if (!isReady || !schemaReady) return undefined;
         const onLive = ({ jids, resync }) => {
           void refreshChats();
           const openJid = openJidRef.current;
-          if (openJid && (resync || jids.has(openJid))) {
-            setThread((prev) => {
-              const maxTs = prev.messages.reduce((max, row) => Math.max(max, row.ts || 0), 0);
-              void (async () => {
-                const fresh = await sidecar.since(openJid, Math.max(0, maxTs - 60));
-                if (openJidRef.current !== openJid) return;
-                setThread((current) => (current.jid === openJid
-                  ? { ...current, messages: mergeMessages(current.messages, fresh.messages) }
-                  : current));
-                await persistMessages(openJid, fresh.messages);
-                setUi((prevUi) => ({
-                  ...prevUi,
-                  readAt: { ...prevUi.readAt, [openJid]: Math.floor(Date.now() / 1000) },
-                }));
-              })();
-              return prev;
-            });
-          }
+          if (openJid && (resync || jids.has(openJid))) refreshOpenThread(openJid);
         };
         liveListeners.add(onLive);
         return () => liveListeners.delete(onLive);
-      }, [isReady, schemaReady, refreshChats, sidecar, persistMessages, setUi]);
+      }, [isReady, schemaReady, refreshChats, refreshOpenThread]);
+
+      // ---- THE SAFETY NET (owner-reported 2026-08-18: new messages needed a manual
+      // refresh on hardware). The doorbell remains the fast path; this gentle poll
+      // guarantees freshness whatever the push path is doing. Local unix socket, delta
+      // reads for the thread — cheap by construction.
+      useEffect(() => {
+        if (!isReady || !schemaReady) return undefined;
+        const listBeat = setInterval(() => {
+          void refreshChats();
+        }, 25_000);
+        const threadBeat = setInterval(() => {
+          const openJid = openJidRef.current;
+          if (openJid) refreshOpenThread(openJid);
+        }, 10_000);
+        return () => {
+          clearInterval(listBeat);
+          clearInterval(threadBeat);
+        };
+      }, [isReady, schemaReady, refreshChats, refreshOpenThread]);
 
       // Keep the newest message in view.
       useEffect(() => {
@@ -1093,22 +1135,36 @@
 
       // ---- participants of the open thread, with display names (for the map and the UI).
       const openChat = chats.find((c) => c.jid === ui.openJid) || null;
-      const nameByJid = useMemo(() => {
+      const directory = useMemo(() => {
+        // BARE names only in `names` — this map feeds the pseudonym scrub (`mapForThread`),
+        // and a decorated string ('~Bo') can never match 'Bo' inside a message body, which
+        // would send the real name to the model UNREDACTED (review finding 2026-08-18). The
+        // ~push mark is presentation and is applied at render time only, from `pushMarked`.
         const names = new Map();
+        const pushMarked = new Set();
         for (const chat of chats) {
-          if (!chat.isGroup) names.set(chat.jid, chat.name);
+          // A jid-placeholder is NOT a name: mapping it here fed the raw jid straight back
+          // through displayName's truthiness check, bypassing fallbackLabel entirely.
+          if (!chat.isGroup && chat.name && chat.name !== chat.jid) {
+            names.set(chat.jid, chat.name);
+            if (chat.nameKind === 'push') pushMarked.add(chat.jid);
+          }
           for (const part of chat.participants || []) {
-            if (part.name && !names.has(part.jid)) names.set(part.jid, part.name);
+            if (part.name && !names.has(part.jid)) {
+              names.set(part.jid, part.name);
+              if (part.nameKind === 'push') pushMarked.add(part.jid);
+            }
           }
         }
-        return names;
+        return { names, pushMarked };
       }, [chats]);
+      const nameByJid = directory.names;
       const displayName = useCallback((jid, fromMe) => {
         if (fromMe) return 'You';
-        const known = nameByJid.get(jid);
-        if (known) return known;
+        const known = directory.names.get(jid);
+        if (known) return directory.pushMarked.has(jid) ? '~' + known : known;
         return fallbackLabel(jid);
-      }, [nameByJid]);
+      }, [directory]);
 
       // ---- the pseudonym map for the open thread: persisted, extended, never shuffled.
       const loadMapEntries = useCallback(async (jid) => {
@@ -1350,17 +1406,51 @@
                   <div>the last link was interrupted before it finished, so WhatsApp never started sending your history</div>
                   <div style={{ fontSize: 13 }}>open the WhatsApp connection in Snug's settings and scan the QR again — your messages are safe on your phone</div>
                 </div>
+              ) : helper.sync && helper.sync.complete ? (
+                // Complete AND empty: a RESUMED session gets no history re-push from
+                // WhatsApp (owner-reported 2026-08-18 — the old copy said "still syncing"
+                // forever here). Say what happened and how to actually get the history.
+                <div className="center-state">
+                  <div className="big">📭</div>
+                  <div className="title">no history on this link</div>
+                  <div>a resumed session doesn't re-send old chats — new messages will appear as they arrive</div>
+                  <div style={{ fontSize: 13 }}>to fetch your full history: on your phone, open WhatsApp → Settings → Linked devices → remove Snug, then link again from Snug's connection settings</div>
+                </div>
               ) : (
-                <div className="center-state"><div className="big">💬</div><div>no chats yet — history is still syncing from your phone</div></div>
+                <div className="center-state">
+                  <div className="big">💬</div>
+                  <div>no chats yet — history is still syncing from your phone{typeof (helper.sync && helper.sync.progress) === 'number' && helper.sync.progress > 0 ? ` (${Math.round(helper.sync.progress)}%)` : ''}</div>
+                </div>
               )
+            )}
+            {/* The sync banner (owner-reported 2026-08-18): once ONE chat existed, a long
+                first sync was invisible — progress was computed, transmitted, stored on
+                `helper.sync`, and rendered nowhere. Shown whenever sync is incomplete,
+                regardless of how many chats are already in. */}
+            {helper.phase === 'up' && chats.length > 0 && helper.sync && !helper.sync.complete && !helper.sync.needsRelink && (
+              <div className="sync-banner" role="status">
+                <span className="spin">◌</span> syncing history from your phone…
+                {typeof helper.sync.progress === 'number' && helper.sync.progress > 0 ? ` ${Math.round(helper.sync.progress)}%` : ''}
+              </div>
+            )}
+            {/* Owner ask (2026-08-18): say WHY some groups stay anonymous rather than let
+                the user wonder. These groups answered item-not-found/forbidden — left or
+                deleted — so their rosters can never load; throttled groups are never
+                written off (the helper pauses and retries those on its own). */}
+            {helper.phase === 'up' && chats.length > 0 && helper.sync && helper.sync.complete
+              && helper.sync.detail && helper.sync.detail.rostersGivenUp > 0 && (
+              <div className="sync-banner" role="note">
+                {helper.sync.detail.rostersGivenUp} group{helper.sync.detail.rostersGivenUp === 1 ? ' is' : 's are'} no
+                longer accessible (left or deleted) — member names there may show as unknown
+              </div>
             )}
             {helper.phase === 'up' && chats.map((chat) => {
               const badge = badgeFor(chat);
               return (
                 <button key={chat.jid} className="chat-row" aria-current={chat.jid === ui.openJid} data-unread={badge > 0} onClick={() => openThread(chat.jid)}>
-                  <Avatar api={api} jid={chat.jid} name={chat.name} />
+                  <Avatar api={api} jid={chat.jid} name={chatDisplayName(chat)} />
                   <span className="mid">
-                    <span className="name">{chat.name}</span>
+                    <span className="name">{chatDisplayName(chat)}</span>
                     <span className="preview">
                       {chat.lastMessage
                         ? `${chat.lastMessage.fromMe ? 'You: ' : ''}${chat.lastMessage.kind === 'image' ? '📷 Photo' + (chat.lastMessage.text ? ' · ' + chat.lastMessage.text : '') : chat.lastMessage.text}`
@@ -1392,12 +1482,12 @@
           <div>pick a conversation — read it live, analyse it, answer in your own voice</div>
         </section>
       ) : (
-        <section className="thread-pane" aria-label={`conversation with ${openChat ? openChat.name : ui.openJid}`}>
+        <section className="thread-pane" aria-label={`conversation with ${openChat ? chatDisplayName(openChat) : fallbackLabel(ui.openJid)}`}>
           <div className="thread-head">
             <button className="icon-btn back-btn" aria-label="back to chats" onClick={() => setUi((prev) => ({ ...prev, openJid: null }))}>‹</button>
-            <Avatar api={api} jid={ui.openJid} name={openChat ? openChat.name : '?'} size={38} />
+            <Avatar api={api} jid={ui.openJid} name={openChat ? chatDisplayName(openChat) : '?'} size={38} />
             <div className="who">
-              <div className="name">{openChat ? openChat.name : ui.openJid}</div>
+              <div className="name">{openChat ? chatDisplayName(openChat) : fallbackLabel(ui.openJid)}</div>
               <div className="sub">
                 {openChat && openChat.isGroup
                   ? `${(openChat.participants || []).length || 'group'} participants`

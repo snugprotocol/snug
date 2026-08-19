@@ -313,3 +313,233 @@ describe('eligibility — a connection fact, on the real user db', () => {
     expect(resolveSidecarSlot(db, 'app-3')).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------- the sync-state poll
+//
+// ADR-0037 §4 (owner interview 2026-08-18): the run header shows history-sync progress.
+// `/session/status` is WIZARD-ONLY by contract (the ADR-0025 verify seat), so the host poll
+// rides the app-reachable `/chats` — whose response carries `sync` by design — and forwards
+// NOTHING but the two numbers the header needs. Same epoch discipline as the hint pump.
+
+import { createSidecarSyncPoll, syncStateFromChatsBody } from '../state/sidecarLive.js';
+
+describe('the sync-state poll', () => {
+  it('reports progress while incomplete and STOPS once complete', async () => {
+    const statuses = [
+      { progress: 20, complete: false },
+      { progress: 70, complete: false },
+      { progress: 100, complete: true },
+      { progress: 100, complete: true }, // must never be reached: polling past complete is waste
+    ];
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => statuses[asks++],
+      onState: (state) => reports.push(state),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(reports).toEqual(statuses.slice(0, 3));
+    expect(asks).toBe(3);
+  });
+
+  it('a superseded poll never reports its late result', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => {
+        await gate;
+        return { progress: 10, complete: false };
+      },
+      onState: (state) => reports.push(state),
+      sleep: async () => {},
+    });
+    const done = poll.start();
+    poll.stop();
+    release?.();
+    await done;
+    expect(reports).toEqual([]);
+  });
+
+  it('retires on a NEEDS-RELINK report — a wedged session must not spin forever', async () => {
+    // `/chats` serves the restored cache even for a wedged session, answering
+    // `{complete:false, needsRelink:true}` indefinitely. Without this exit the header
+    // shows "syncing 0%" forever — contradicting the app's own relink prompt — and the
+    // host burns a governed read every few seconds for the life of the view.
+    const wedged = { progress: 0, complete: false, needsRelink: true as const };
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => {
+        asks += 1;
+        return wedged;
+      },
+      onState: (state) => reports.push(state),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(reports).toEqual([wedged]);
+    expect(asks).toBe(1);
+  });
+
+  it('a failed read keeps the last state on screen — no report, then retry', async () => {
+    const answers = [
+      { progress: 30, complete: false },
+      undefined, // one bad read must not blank an indicator the user is watching
+      { progress: 60, complete: false },
+      { progress: 100, complete: true },
+    ];
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => answers[asks++],
+      onState: (state) => reports.push(state),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(reports).toEqual([answers[0], answers[2], answers[3]]);
+  });
+});
+
+describe('syncStateFromChatsBody — the extraction is the scrub', () => {
+  it('keeps the two numbers and NOTHING else from a chats response', () => {
+    const body = JSON.stringify({
+      chats: [{ jid: '111@s.whatsapp.net', name: 'Asha', lastMessage: { text: 'secret', ts: 1 } }],
+      sync: { complete: false, explicit: false, progress: 37, needsRelink: false },
+    });
+    // The header needs a number and a bit; message content, names and jids must not ride
+    // along into header state, however convenient the object spread would be.
+    expect(syncStateFromChatsBody(body)).toEqual({ progress: 37, complete: false });
+  });
+
+  it('answers undefined for junk, and defaults progress honestly', () => {
+    expect(syncStateFromChatsBody('not json')).toBeUndefined();
+    expect(syncStateFromChatsBody(JSON.stringify({ chats: [] }))).toBeUndefined();
+    expect(syncStateFromChatsBody(JSON.stringify({ sync: { complete: true } }))).toEqual({
+      progress: 0,
+      complete: true,
+    });
+  });
+
+  it('carries needsRelink through when the helper claims it, and only then', () => {
+    expect(
+      syncStateFromChatsBody(JSON.stringify({ sync: { complete: false, progress: 0, needsRelink: true } })),
+    ).toEqual({ progress: 0, complete: false, needsRelink: true });
+    // The flag is a claim, never a default (the wedge detector's own rule).
+    expect(
+      syncStateFromChatsBody(JSON.stringify({ sync: { complete: false, progress: 5, needsRelink: false } })),
+    ).toEqual({ progress: 5, complete: false });
+  });
+});
+
+// -------------------------------------------------- the names phase (owner ask 2026-08-18)
+//
+// History percent hides the SECOND phase: name resolution rides group rosters loading a
+// paced few at a time, and continues after the history push completes. The poll now keeps
+// going through that phase and retires when rosters are done — or quietly gives up when
+// they stall, because a frozen progress pill is worse than none.
+
+describe('the sync poll through the names phase', () => {
+  const state = (over: Record<string, unknown>) => ({ progress: 100, complete: true, ...over });
+
+  it('keeps polling while rosters are loading, and retires when they are done', async () => {
+    const answers = [
+      state({ rosters: { loaded: 90, total: 233 }, names: 1500 }),
+      state({ rosters: { loaded: 180, total: 233 }, names: 1550 }),
+      state({ rosters: { loaded: 233, total: 233 }, names: 1561 }),
+      state({ rosters: { loaded: 233, total: 233 }, names: 1561 }), // must never be reached
+    ];
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => answers[asks++] as never,
+      onState: (s) => reports.push(s),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(asks).toBe(3);
+    expect(reports).toEqual(answers.slice(0, 3));
+  });
+
+  it('quietly gives up when rosters STALL — but only after minutes of true silence', async () => {
+    const stuck = state({ rosters: { loaded: 230, total: 233 }, names: 1561 });
+    let asks = 0;
+    const reports: Array<{ rosters?: unknown }> = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => {
+        asks += 1;
+        return stuck as never;
+      },
+      onState: (s) => reports.push(s as never),
+      sleep: async () => {},
+    });
+    await poll.start();
+    // PATIENT: the roster sweep backs off between retries (20 s doubling), so quiet
+    // stretches over a minute are normal — a 20 s guard hid the pill in every gap
+    // (hardware walk 5). Bounded still: ~3 minutes of identical reads, then out.
+    expect(asks).toBeGreaterThan(20);
+    expect(asks).toBeLessThanOrEqual(50);
+    // The FINAL report clears the roster seat so the header hides rather than freezing.
+    expect(reports.at(-1)?.rosters).toBeUndefined();
+  });
+
+  it('a SHRINKING total counts as movement — write-offs reset the stall clock', async () => {
+    // Totals fall as unfetchable groups are written off; that is progress toward
+    // convergence and must not be mistaken for a stall.
+    let asks = 0;
+    const reports: unknown[] = [];
+    const poll = createSidecarSyncPoll({
+      fetchStatus: async () => {
+        asks += 1;
+        if (asks <= 44) return state({ rosters: { loaded: 127, total: 233 } }) as never;
+        if (asks === 45) return state({ rosters: { loaded: 127, total: 200 } }) as never; // write-offs landed
+        return state({ rosters: { loaded: 127, total: 127 } }) as never; // converged
+      },
+      onState: (s) => reports.push(s),
+      sleep: async () => {},
+    });
+    await poll.start();
+    expect(asks).toBe(46); // survived past the pre-shrink stall count, then completed
+    expect((reports.at(-1) as { rosters?: { total: number } }).rosters?.total).toBe(127);
+  });
+
+  it('extracts the roster detail from the chats body — numbers only', () => {
+    const body = JSON.stringify({
+      chats: [{ jid: 'x@s.whatsapp.net', name: 'Private' }],
+      sync: {
+        complete: true,
+        explicit: true,
+        progress: 100,
+        detail: { groups: 233, rostersLoaded: 98, rostersGivenUp: 0, names: 1561, messages: 16627 },
+      },
+    });
+    expect(syncStateFromChatsBody(body)).toEqual({
+      progress: 100,
+      complete: true,
+      rosters: { loaded: 98, total: 233 },
+      names: 1561,
+    });
+  });
+
+  it('subtracts GIVEN-UP rosters from the target, so the pill can converge', () => {
+    // Hardware walk 4: 106 of 233 rosters were permanently unfetchable and the pill sat
+    // at 127/233 until the stall guard hid it. With the write-off reported, the target
+    // becomes what is achievable — and loaded >= total retires the poll honestly.
+    const body = JSON.stringify({
+      sync: {
+        complete: true,
+        progress: 100,
+        detail: { groups: 233, rostersLoaded: 127, rostersGivenUp: 106, names: 1563, messages: 1 },
+      },
+    });
+    expect(syncStateFromChatsBody(body)?.rosters).toEqual({ loaded: 127, total: 127 });
+  });
+
+  it('tolerates a helper with NO detail seat — the old shape retires on complete', () => {
+    expect(syncStateFromChatsBody(JSON.stringify({ sync: { complete: true, progress: 100 } }))).toEqual({
+      progress: 100,
+      complete: true,
+    });
+  });
+});

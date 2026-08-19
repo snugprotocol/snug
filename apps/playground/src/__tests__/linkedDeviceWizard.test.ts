@@ -200,7 +200,96 @@ describe('runDeviceLinkAttempt — start, poll, verify, then record', () => {
     const { beginDeviceLink } = await import('../state/connectionWizard.js');
     const started = await beginDeviceLink();
     expect(started.ok).toBe(true);
-    if (started.ok) expect(started.qr).toBe('QR-PAYLOAD');
+    expect(started.ok && 'qr' in started ? started.qr : undefined).toBe('QR-PAYLOAD');
+  });
+
+  /**
+   * THE TWO-CLICK BUG (owner report, 2026-08-18). `startLink` returns as soon as the Baileys
+   * socket is CREATED; the QR only exists 1–3 s later, when WhatsApp's handshake completes and
+   * `connection.update` delivers it. A single immediate `GET /pair/qr` is therefore a race the
+   * wizard always loses on a cold helper — and the loser path returned `{ok:true}` with no QR,
+   * which the sheet painted as a silent "waiting" state. The second click won only because the
+   * QR had landed in the meantime. One click must be enough: the flow keeps asking until the
+   * code arrives or a deadline names the failure.
+   */
+  it('polls /pair/qr until the QR lands, so ONE click is enough', async () => {
+    const { platform, calls } = scriptedPlatform({
+      'POST /pair/start': [{ status: 200, body: { state: 'waiting' } }],
+      'GET /pair/qr': [
+        { status: 200, body: { state: 'waiting' } },
+        { status: 200, body: { state: 'waiting' } },
+        { status: 200, body: { state: 'waiting', qr: 'QR-AFTER-HANDSHAKE' } },
+      ],
+    });
+    const { setPlatform } = await import('../platform/platform.js');
+    setPlatform(platform);
+    const { beginDeviceLink } = await import('../state/connectionWizard.js');
+    vi.useFakeTimers();
+    const pending = beginDeviceLink();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const started = await pending;
+    expect(started.ok).toBe(true);
+    expect(started.ok && 'qr' in started ? started.qr : undefined).toBe('QR-AFTER-HANDSHAKE');
+    // The mechanism, not just the outcome: the QR arrived on the THIRD ask, so a green here
+    // means the flow really re-asked rather than getting lucky on the first read.
+    expect(calls.filter((c) => c === 'GET /pair/qr').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('a QR that never arrives is a NAMED failure, never ok-without-a-code', async () => {
+    // The old loser path was `{ok:true}` with `qr` absent — indistinguishable on screen from
+    // a normal wait (lessons.md 2026-08-17: when a permanent failure and a normal wait render
+    // identically, the ambiguity IS the defect). A helper that never produces a code now has
+    // to say so.
+    const { platform } = scriptedPlatform({
+      'POST /pair/start': [{ status: 200, body: { state: 'waiting' } }],
+      'GET /pair/qr': [{ status: 200, body: { state: 'waiting' } }],
+    });
+    const { setPlatform } = await import('../platform/platform.js');
+    setPlatform(platform);
+    const { beginDeviceLink } = await import('../state/connectionWizard.js');
+    vi.useFakeTimers();
+    const pending = beginDeviceLink();
+    await vi.advanceTimersByTimeAsync(30_000);
+    const started = await pending;
+    expect(started.ok).toBe(false);
+    if (!started.ok) expect(started.message).toMatch(/code|QR/i);
+  });
+
+  it('an ALREADY-LINKED helper resolves alreadyLinked at once, never a 20 s hang', async () => {
+    // ADR-0037's autostart + boot resume make "already linked when the wizard opens" the
+    // common case, and `/pair/qr` withholds the code once linked BY DESIGN — so "no qr yet"
+    // must never be the whole story. Without this seat the poll spun its full deadline
+    // against a healthy helper and told the user to restart the desktop app (which would
+    // re-link the helper and reproduce it forever).
+    const { platform, calls } = scriptedPlatform({
+      'POST /pair/start': [{ status: 200, body: { state: 'linked' } }],
+      'GET /pair/qr': [{ status: 200, body: { state: 'linked' } }],
+    });
+    const { setPlatform } = await import('../platform/platform.js');
+    setPlatform(platform);
+    const { beginDeviceLink } = await import('../state/connectionWizard.js');
+    const started = await beginDeviceLink();
+    expect(started.ok).toBe(true);
+    if (started.ok) expect('alreadyLinked' in started && started.alreadyLinked).toBe(true);
+    // At once — a single read settled it; no poll spun against the withheld code.
+    expect(calls.filter((c) => c === 'GET /pair/qr').length).toBe(1);
+  });
+
+  it('refreshDeviceLinkQr hands back the current payload, and undefined once withheld', async () => {
+    // The QR ROTATES (~20 s): the sheet re-asks while the user is still holding their phone
+    // up, so a slow scan never meets a stale code. Once the link lands the helper withholds
+    // the QR; `undefined` tells the sheet to keep what it has rather than blank the frame.
+    const { platform } = scriptedPlatform({
+      'GET /pair/qr': [
+        { status: 200, body: { state: 'waiting', qr: 'ROTATED-PAYLOAD' } },
+        { status: 200, body: { state: 'linked' } },
+      ],
+    });
+    const { setPlatform } = await import('../platform/platform.js');
+    setPlatform(platform);
+    const { refreshDeviceLinkQr } = await import('../state/connectionWizard.js');
+    expect(await refreshDeviceLinkQr()).toBe('ROTATED-PAYLOAD');
+    expect(await refreshDeviceLinkQr()).toBeUndefined();
   });
 
   it('surfaces an unreachable helper as a NAMED failure, never as "still waiting"', async () => {

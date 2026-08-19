@@ -59,6 +59,43 @@ describe('toWaMessage', () => {
     expect(toWaMessage(dmMessage)?.message).not.toHaveProperty('fromMe');
   });
 
+  /**
+   * THE PUSH NAME IS THE RICHEST NAME SOURCE IN A HISTORY SYNC (owner report 2026-08-18:
+   * "most participants show Unknown contact"). Baileys stamps `pushName` — the sender's
+   * self-set display name — on every message row, and it is the ONLY name source for a group
+   * member who never had a 1:1 chat with the user: history-sync contact rows are synthesized
+   * one-per-conversation, and `contacts.update` is emitted from pushName only for LIVE
+   * messages, never for history replay. Discarding it here was the dominant cause.
+   */
+  it('carries the sender push name for a row someone else sent', () => {
+    const mapped = toWaMessage({
+      key: { id: 'M20', remoteJid: '999@g.us', participant: '222@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'hi' },
+      messageTimestamp: 5,
+      pushName: 'Bo Chen',
+    });
+    expect(mapped?.senderPushName).toBe('Bo Chen');
+  });
+
+  it("never harvests a push name from the user's OWN row", () => {
+    // On a fromMe row the sender seat resolves to the CHAT PARTNER (a DM's remoteJid) while
+    // `pushName` is the USER's own name — harvesting it would rename the partner as the
+    // user. The worst possible spelling of this bug: every DM partner becomes "you".
+    const mapped = toWaMessage({
+      key: { id: 'M21', remoteJid: '111@s.whatsapp.net', fromMe: true },
+      message: { conversation: 'me' },
+      messageTimestamp: 5,
+      pushName: 'My Own Name',
+    });
+    expect(mapped).toBeDefined();
+    expect(mapped).not.toHaveProperty('senderPushName');
+  });
+
+  it('omits the seat for an empty or missing push name rather than writing a blank', () => {
+    expect(toWaMessage({ ...dmMessage, pushName: '' })).not.toHaveProperty('senderPushName');
+    expect(toWaMessage(dmMessage)).not.toHaveProperty('senderPushName');
+  });
+
   it('captures @-mentions — the group auto-reply trigger reads them', () => {
     const mapped = toWaMessage({
       key: { id: 'M4', remoteJid: '999@g.us', participant: '222@s.whatsapp.net', fromMe: false },

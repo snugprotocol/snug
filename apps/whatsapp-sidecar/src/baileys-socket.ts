@@ -36,6 +36,7 @@ import makeWASocket, {
   type WASocket as BaileysSocket,
 } from 'baileys';
 import { createEventBuffer } from './event-buffer.js';
+import type { ThreadCache } from './thread-cache.js';
 import { createThreadStore } from './thread-store.js';
 import type { WaHistoryState, WaLinkState, WaMediaResult, WaMessage, WaSocket } from './wa-socket.js';
 
@@ -98,20 +99,29 @@ export function shouldResetAuthStore(link: WaLinkState): boolean {
  * all and answers false: a value we cannot read is not evidence of a fault.
  */
 export function isHalfLinkedStore(authDir: string): boolean {
+  const material = readCredsMaterial(authDir);
+  if (material === undefined || !material.scanStarted) return false;
+  return !(material.hasAccount && material.hasIdentities);
+}
+
+/**
+ * The ONE reading of what pairing left in `creds.json` (review finding 2026-08-18: the
+ * half-linked and resumable predicates had grown two byte-identical copies of this read).
+ * `undefined` means the store made no claim at all — missing or unreadable.
+ */
+function readCredsMaterial(
+  authDir: string,
+): { scanStarted: boolean; hasAccount: boolean; hasIdentities: boolean } | undefined {
   try {
     const raw = readFileSync(join(authDir, 'creds.json'), 'utf8');
-    const creds = JSON.parse(raw) as {
-      me?: unknown;
-      account?: unknown;
-      signalIdentities?: unknown;
+    const creds = JSON.parse(raw) as { me?: unknown; account?: unknown; signalIdentities?: unknown };
+    return {
+      scanStarted: creds.me !== undefined && creds.me !== null,
+      hasAccount: creds.account !== undefined && creds.account !== null,
+      hasIdentities: Array.isArray(creds.signalIdentities) && creds.signalIdentities.length > 0,
     };
-    const scanStarted = creds.me !== undefined && creds.me !== null;
-    if (!scanStarted) return false;
-    const hasAccount = creds.account !== undefined && creds.account !== null;
-    const hasIdentities = Array.isArray(creds.signalIdentities) && creds.signalIdentities.length > 0;
-    return !(hasAccount && hasIdentities);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -138,6 +148,41 @@ export interface BaileysSocketDeps {
   /** Injectable for tests; defaults to real time. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Durable content cache (ADR-0037): restored at boot, saved on a debounce as sync runs. */
+  threadCache?: ThreadCache;
+  /** Snapshot write debounce; injectable so tests need not wait five real seconds. */
+  cacheDebounceMs?: number;
+  /** How long a RESUMED session waits for a history chunk before inferring completion. */
+  resumeHistoryGraceMs?: number;
+  /** Beat of the background roster sweep; injectable so tests need not wait twenty seconds. */
+  rosterSweepMs?: number;
+  /** First retry delay after a roster fetch fails; doubles per failure. Injectable for tests. */
+  rosterRetryBaseMs?: number;
+  /** First sweep-wide pause after a server throttle; doubles while throttled. Injectable. */
+  rosterCooldownBaseMs?: number;
+}
+
+/**
+ * Is this roster failure an ANSWER rather than weather? `item-not-found` (the group no
+ * longer exists) and `forbidden`/`not-authorized` (we are not in it) are definitive — the
+ * roster will never load, and retrying spends iq budget learning nothing. Everything else
+ * (timeouts, `rate-overlimit`, transport hiccups) says nothing about the group itself.
+ */
+function isPermanentRosterRefusal(message: string): boolean {
+  return /item-not-found|forbidden|not-authorized/i.test(message);
+}
+
+/**
+ * Can this store RESUME — has a pairing ever COMPLETED here?
+ *
+ * The same material predicate as `isHalfLinkedStore`, asked in the affirmative: `me` plus
+ * `account` plus a non-empty `signalIdentities` is what `configureSuccessfulPairing` writes,
+ * for QR and phone-code flows alike (never `registered` — see the warning above). Missing or
+ * unreadable creds answer false: an absent claim is not a resumable session.
+ */
+export function isResumableStore(authDir: string): boolean {
+  const material = readCredsMaterial(authDir);
+  return material !== undefined && material.scanStarted && material.hasAccount && material.hasIdentities;
 }
 
 interface MessageContent {
@@ -197,12 +242,22 @@ function mentionsOf(message: { message?: unknown }): readonly string[] | undefin
   return jids.length > 0 ? jids : undefined;
 }
 
-/** Map a Baileys message onto the seam's shape, or undefined when it is not a text message. */
+/**
+ * Map a Baileys message onto the seam's shape, or undefined when it is not a text message.
+ *
+ * `senderPushName` rides beside the row when the SENDER's self-set display name is known and
+ * the row is not the user's own: on a fromMe row the sender seat resolves to the chat PARTNER
+ * while `pushName` is the USER's name, so harvesting it would rename everyone as the user.
+ * Push names are the only name source for a group member with no 1:1 chat (history-sync
+ * contact rows are synthesized one-per-conversation), which made discarding them the dominant
+ * cause of "Unknown contact" (owner report 2026-08-18).
+ */
 export function toWaMessage(raw: {
   key?: { id?: string | null; remoteJid?: string | null; participant?: string | null; fromMe?: boolean | null };
   message?: unknown;
   messageTimestamp?: number | Long | null;
-}): { chatJid: string; message: WaMessage } | undefined {
+  pushName?: string | null;
+}): { chatJid: string; message: WaMessage; senderPushName?: string } | undefined {
   const id = raw.key?.id;
   const chatJid = raw.key?.remoteJid;
   const from = senderOf(raw);
@@ -220,8 +275,12 @@ export function toWaMessage(raw: {
         : 0;
   const mentions = mentionsOf(raw);
   const thumbnail = image !== undefined && image !== null ? thumbnailOf(image) : undefined;
+  const pushName = raw.key?.fromMe === true ? undefined : raw.pushName;
   return {
     chatJid,
+    ...(typeof pushName === 'string' && pushName.trim().length > 0
+      ? { senderPushName: pushName.trim() }
+      : {}),
     message: {
       id,
       from,
@@ -254,6 +313,30 @@ interface MediaLogger {
   error(...args: unknown[]): void;
 }
 
+/** A tiny FIFO slot limiter — the pacing primitive the avatar and roster fetches share. */
+function createSlotLimiter(maxConcurrent: number): { acquire(): Promise<void>; release(): void } {
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  return {
+    acquire: () =>
+      new Promise((resolve) => {
+        if (active < maxConcurrent) {
+          active += 1;
+          resolve();
+        } else {
+          waiters.push(() => {
+            active += 1;
+            resolve();
+          });
+        }
+      }),
+    release: () => {
+      active -= 1;
+      waiters.shift()?.();
+    },
+  };
+}
+
 const silentLogger: MediaLogger = {
   level: 'silent',
   child: () => silentLogger,
@@ -275,9 +358,71 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   let sock: BaileysSocket | undefined;
   let history: WaHistoryState = { complete: false, explicit: false, progress: 0 };
   let lastSendAt = 0;
+  /** True when this process connected by RESUMING stored creds rather than pairing fresh. */
+  let resumedSession = false;
+  /** Whether any `messaging-history.set` chunk has arrived this process lifetime. */
+  let sawHistoryChunk = false;
 
-  const store = createThreadStore();
+  // The store owns its change signal (ADR-0037 §1): every mutation that changed durable
+  // state schedules a save BY CONSTRUCTION — no event handler can forget to. `scheduleSave`
+  // is declared below; the arrow defers the read until events actually fire.
+  const store = createThreadStore(undefined, () => scheduleSave());
   const events = createEventBuffer(EVENT_BUFFER_SIZE);
+
+  // ---- THE DURABLE CACHE (ADR-0037 §1): restore first, so chats exist before any sync.
+  // The payload carries the HISTORY STATE beside the store: without it, a restored,
+  // fully-synced session would report "still syncing" forever — exactly the ambiguity
+  // lessons.md 2026-08-17 warns renders as a lie the user cannot see through.
+  if (deps.threadCache !== undefined) {
+    const cached = deps.threadCache.load() as { store?: unknown; history?: unknown } | undefined;
+    if (cached !== undefined && cached !== null && typeof cached === 'object') {
+      store.restore(cached.store);
+      const savedHistory = cached.history as Partial<WaHistoryState> | null | undefined;
+      if (savedHistory !== null && typeof savedHistory === 'object') {
+        history = {
+          complete: savedHistory.complete === true,
+          explicit: savedHistory.explicit === true,
+          progress: typeof savedHistory.progress === 'number' ? savedHistory.progress : 0,
+        };
+      }
+    }
+  }
+
+  const cacheDebounceMs = deps.cacheDebounceMs ?? 5_000;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  const persistNow = (): void =>
+    deps.threadCache?.save({
+      store: store.snapshot(),
+      history,
+      // Diagnostics only — restore() ignores this seat. It exists so a stalled sweep can
+      // be read off the cache file instead of guessed at (hardware walk 5, 2026-08-18).
+      rosterDiagnostics: {
+        rostersLoaded: rosterLoaded.size,
+        rostersGivenUp: rostersGivenUp(),
+        errors: Object.fromEntries(rosterErrorCounts),
+      },
+    });
+  /**
+   * Throttle-style: the first change opens a window, everything else in it rides along in
+   * one write. History sync mutates the store thousands of times a minute; the disk sees a
+   * snapshot every few seconds, and the process-exit flush below catches the tail.
+   */
+  const scheduleSave = (): void => {
+    if (deps.threadCache === undefined || saveTimer !== undefined) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = undefined;
+      persistNow();
+    }, cacheDebounceMs);
+    saveTimer.unref?.();
+  };
+  if (deps.threadCache !== undefined) {
+    // The shell's reap sends SIGTERM first (KILL only as the backstop — `reap_child` in
+    // sidecar.rs, pinned by its own test); `cli.ts` turns that into `server.close()` →
+    // `process.exit(0)`, and 'exit' handlers run synchronously on that path — so this
+    // final write catches the debounce window's tail. A SIGKILL (backstop or crash) skips
+    // it, costing at most one debounce window of re-syncable rows.
+    process.once('exit', persistNow);
+  }
 
   /**
    * Raw Baileys image messages, retained so `mediaOf` can hand them to
@@ -288,40 +433,140 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
    */
   const rawImages = new Map<string, Parameters<typeof toWaMessage>[0]>();
 
-  /** Avatar cache: url-fetch results per jid, `null` caching "has none" honestly. */
-  const pictures = new Map<string, { mime: string; base64: string } | null>();
-
   /**
-   * Group rosters already requested, so a chat list of forty groups fires each fetch once.
-   * `groupMetadata` is a round trip to WhatsApp; the store keeps the answer.
+   * Avatar cache. A HIT is kept for the session. A MISS is kept only until `missUntil`:
+   * `profilePictureUrl` answers `undefined` both for a genuinely picture-less contact and
+   * for transient conditions (privacy tcToken missing or expired), and the two are
+   * indistinguishable in the reply — so "has none" is never allowed to be permanent
+   * (owner-reported 2026-08-18: one bad moment froze most avatars until a helper restart).
    */
-  const rosterRequested = new Set<string>();
+  const pictures = new Map<string, { picture: { mime: string; base64: string } } | { missUntil: number }>();
+
+  /** How long a no-picture answer is trusted before the question goes live again. */
+  const PICTURE_MISS_TTL_MS = 10 * 60_000;
 
   /**
-   * Fetch a group's subject and participants ONCE (owner-reported 2026-08-17: group
-   * senders showed as ids because no roster was ever loaded). Failures are swallowed and
-   * retried on the next list: a group whose metadata is momentarily unavailable should
-   * degrade to ids, never break the list.
+   * At most this many lookups of one kind in flight. Every visible chat row asks for its
+   * avatar on first paint, and a chat list of 233 groups asks for 233 rosters — an uncapped
+   * burst of iqs gets rate-limited into timeouts whose retries re-enter the same burst. A
+   * drip is slower to fill the list and reliably fills it.
+   */
+  const pictureSlots = createSlotLimiter(3);
+  const rosterSlots = createSlotLimiter(3);
+  const acquirePictureSlot = pictureSlots.acquire;
+  const releasePictureSlot = pictureSlots.release;
+  const acquireRosterSlot = rosterSlots.acquire;
+  const releaseRosterSlot = rosterSlots.release;
+
+  /**
+   * Roster bookkeeping. LOADED rosters are never refetched this process lifetime (and a
+   * cache-restored roster counts as loaded — no refetch burst at every boot); a FAILED
+   * fetch gets bounded retries on the sweep beat below, because on real hardware the old
+   * retry-on-next-list-read scheme left 98 of 233 rosters unloaded after 14 minutes —
+   * which the user experiences as names that simply stop arriving (2026-08-18).
+   */
+  const ROSTER_MAX_ATTEMPTS = 5;
+  const rosterLoaded = new Set<string>();
+  const rosterInFlight = new Set<string>();
+  /**
+   * Retry bookkeeping with EXPONENTIAL BACKOFF (hardware walk 4, 2026-08-18): a retry per
+   * sweep beat burned every attempt inside one ~2-minute throttle window and wrote off 106
+   * of 233 groups. Doubling the spacing (20 s base, five attempts ≈ 10 minutes of
+   * coverage) means a throttle costs one attempt, not all of them — while write-offs of
+   * genuinely dead groups still land fast enough for the progress pill to converge within
+   * minutes, not an hour.
+   */
+  const rosterAttempts = new Map<string, { attempts: number; nextAt: number }>();
+  const rosterRetryBaseMs = deps.rosterRetryBaseMs ?? 20_000;
+  /** Failure classes, aggregated for the cache diagnostics — message → count, capped. */
+  const rosterErrorCounts = new Map<string, number>();
+  /**
+   * Sweep-wide THROTTLE cooldown (hardware walk 6): `rate-overlimit` is Meta's server
+   * telling this whole session to slow down — 287 of them in one evening burned the retry
+   * budgets of groups that were perfectly loadable. When it appears, everything pauses
+   * (60 s, doubling to 10 min while it persists; reset on the next success), and the
+   * throttled attempt is NOT charged to the group.
+   */
+  let rosterCooldownUntil = 0;
+  let rosterCooldownStreak = 0;
+  const rosterCooldownBaseMs = deps.rosterCooldownBaseMs ?? 60_000;
+  const rostersGivenUp = (): number => {
+    let count = 0;
+    for (const [jid, tries] of rosterAttempts) {
+      if (tries.attempts >= ROSTER_MAX_ATTEMPTS && !rosterLoaded.has(jid)) count += 1;
+    }
+    return count;
+  };
+
+  /**
+   * Fetch a group's subject and participants (owner-reported 2026-08-17: group senders
+   * showed as ids because no roster was ever loaded). Paced like the avatar lookups: a
+   * chat list of 233 groups fired 233 concurrent metadata iqs, and the rate-limited
+   * failures left most rosters unloaded. A queue loads them all, just not at once.
    */
   const ensureGroupRoster = (jid: string): void => {
-    if (!jid.endsWith('@g.us') || rosterRequested.has(jid) || sock === undefined || link !== 'linked') return;
-    rosterRequested.add(jid);
-    void sock
-      .groupMetadata(jid)
-      .then((metadata) => {
+    if (!jid.endsWith('@g.us') || sock === undefined || link !== 'linked') return;
+    if (now() < rosterCooldownUntil) return; // the server asked the whole session to wait
+    if (rosterLoaded.has(jid) || rosterInFlight.has(jid)) return;
+    const tries = rosterAttempts.get(jid);
+    if (tries !== undefined && (tries.attempts >= ROSTER_MAX_ATTEMPTS || now() < tries.nextAt)) return;
+    rosterInFlight.add(jid);
+    void (async () => {
+      await acquireRosterSlot();
+      try {
+        const metadata = await sock!.groupMetadata(jid);
+        // FULL rows, not bare ids (hardware finding 2026-08-18): each participant is a
+        // Contact — a LID id with a `phoneNumber` pairing (groups.js:337) and sometimes
+        // name seats. Feeding them to the directory is what joins LID roster seats to the
+        // saved names; dropping them rendered "Unknown contact" by the hundreds.
+        store.rememberContacts((metadata?.participants ?? []) as never);
         store.setGroupMetadata(jid, {
           subject: metadata?.subject,
           participants: (metadata?.participants ?? []).map((participant) => ({ id: participant.id })),
         });
-      })
-      .catch(() => {
-        rosterRequested.delete(jid); // let a later list try again
-      });
+        rosterLoaded.add(jid);
+        rosterCooldownStreak = 0; // the server is answering again
+      } catch (err) {
+        const reason = (err instanceof Error ? err.message : String(err)).slice(0, 120) || 'unknown';
+        if (/rate-overlimit/i.test(reason)) {
+          // The MOMENT is bad, not the group: pause the sweep, charge nobody.
+          rosterCooldownStreak += 1;
+          rosterCooldownUntil =
+            now() + Math.min(rosterCooldownBaseMs * 2 ** (rosterCooldownStreak - 1), 600_000);
+        } else if (isPermanentRosterRefusal(reason)) {
+          // An ANSWER: the group is gone or we are not in it. Write it off now — the pill's
+          // target shrinks by exactly this group, and no further iq is spent on it.
+          rosterAttempts.set(jid, { attempts: ROSTER_MAX_ATTEMPTS, nextAt: now() });
+        } else {
+          const attempts = (rosterAttempts.get(jid)?.attempts ?? 0) + 1;
+          rosterAttempts.set(jid, {
+            attempts,
+            nextAt: now() + rosterRetryBaseMs * 2 ** (attempts - 1),
+          });
+        }
+        // Aggregate the failure CLASS (never per-group detail) and persist it: a steady
+        // state of failures used to write nothing to disk, which made the stall invisible
+        // to diagnosis — the cache aged while the sweep silently burned retries.
+        if (rosterErrorCounts.size < 20 || rosterErrorCounts.has(reason)) {
+          rosterErrorCounts.set(reason, (rosterErrorCounts.get(reason) ?? 0) + 1);
+        }
+        scheduleSave();
+      } finally {
+        rosterInFlight.delete(jid);
+        releaseRosterSlot();
+      }
+    })();
   };
 
   const ingest = (raw: Parameters<typeof toWaMessage>[0], live: boolean): void => {
     const mapped = toWaMessage(raw);
     if (mapped === undefined) return;
+    // Harvest the sender's push name BEFORE the row lands, so a brand-new chat is born named
+    // rather than named on the next refresh. The store's tier rules make this safe (a push
+    // name never displaces a saved one) and cheap (an unchanged name skips the refresh pass).
+    if (mapped.senderPushName !== undefined) {
+      store.rememberContacts([{ id: mapped.message.from, notify: mapped.senderPushName }]);
+    }
     const { added } = store.ingest(mapped.chatJid, mapped.message, { live });
     if (!added) return;
     if (mapped.message.kind === 'image') {
@@ -350,6 +595,22 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       if (update.connection === 'open') {
         link = 'linked';
         qr = undefined;
+        // RESUME HONESTY (owner-reported 2026-08-18): WhatsApp pushes history at PAIRING;
+        // a resumed session never gets a re-push. A resume whose store lost its history
+        // (no cache, quarantined snapshot, pre-cache helper) would therefore report
+        // "still syncing 0%" FOREVER — a permanent state rendering as a normal wait. After
+        // a grace window with no history chunk, completion is reported as INFERRED
+        // (`explicit:false` is the seat built for exactly this claim), so the spinner
+        // retires and the app can say what actually happened.
+        if (resumedSession && !history.complete) {
+          const grace = setTimeout(() => {
+            if (!sawHistoryChunk && !history.complete) {
+              history = { complete: true, explicit: false, progress: 100 };
+              scheduleSave();
+            }
+          }, deps.resumeHistoryGraceMs ?? 60_000);
+          grace.unref?.();
+        }
       }
       if (update.connection === 'close') {
         const status = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output
@@ -382,6 +643,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     socket.ev.on('lid-mapping.update', (mapping) => store.rememberLidMappings([mapping as never]));
 
     socket.ev.on('messaging-history.set', (chunk) => {
+      sawHistoryChunk = true;
       store.rememberContacts((chunk.contacts ?? []) as never);
       store.rememberLidMappings((chunk.lidPnMappings ?? []) as never);
       for (const chat of chunk.chats ?? []) {
@@ -402,6 +664,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         ...history,
         progress: typeof progress === 'number' ? progress : history.progress,
       };
+      scheduleSave();
     });
 
     socket.ev.on('chats.update', (updates) => {
@@ -425,6 +688,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         explicit: status.explicit === true,
         progress: status.status === 'complete' ? 100 : history.progress,
       };
+      scheduleSave();
     });
 
     socket.ev.on('messages.upsert', (upsert) => {
@@ -435,14 +699,42 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     });
   };
 
+  // ADR-0037 §2: a COMPLETED pairing resumes at boot, without waiting for a wizard or an
+  // app request — that is what lets sync continue in the background after a shell restart.
+  // The material predicate keeps this honest: a first run or a half-linked wedge makes no
+  // outbound connection at all.
+  if (isResumableStore(deps.authDir)) {
+    resumedSession = true;
+    connect();
+  }
+
+  // A cache-restored roster is already loaded — refetching all of them at every boot would
+  // re-create the burst the limiter exists to prevent.
+  for (const row of store.listChats()) {
+    if (row.isGroup && row.participants !== undefined) rosterLoaded.add(row.jid);
+  }
+
+  // THE ROSTER SWEEP: missing rosters are fetched on this beat, unprompted — names must
+  // keep arriving whether or not the app happens to re-read the chat list. Bounded per
+  // group by ROSTER_MAX_ATTEMPTS; a fully-loaded state makes this a no-op scan.
+  const rosterSweep = setInterval(() => {
+    if (link !== 'linked') return;
+    for (const row of store.listChats()) {
+      if (row.isGroup) ensureGroupRoster(row.jid);
+    }
+  }, deps.rosterSweepMs ?? 20_000);
+  rosterSweep.unref?.();
+
   return {
     linkState: () => link,
     currentQr: () => (link === 'linked' ? undefined : qr),
 
     async startLink() {
       // Idempotent while one attempt is in flight — a second call must not open a rival
-      // socket racing the first for the same session.
-      if (sock !== undefined && (link === 'waiting' || link === 'linked')) return;
+      // socket racing the first for the same session. `idle`-with-a-socket is the boot
+      // RESUME in flight (above): resetting the store under it would destroy a working
+      // session, so that state returns here too; only `closed` may retry the connect.
+      if (sock !== undefined && link !== 'closed') return;
 
       // CLEAR A DEAD OR HALF-LINKED STORE BEFORE PAIRING (see `shouldResetAuthStore`). The
       // in-memory `state` is reloaded too: resetting the files while continuing to hand
@@ -456,6 +748,9 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       }
 
       link = 'waiting';
+      // A pairing-driven connect is NOT a resume: history is coming, so the resume grace
+      // (which infers completion) must never arm against it.
+      resumedSession = false;
       connect();
     },
 
@@ -470,14 +765,25 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     history: (jid) => store.history(jid),
     messagesSince: (jid, since) => store.messagesSince(jid, since),
     historyState: () => {
+      // Progress DETAIL rides every read (owner ask 2026-08-18): the history percent hides
+      // the second phase — name resolution via the paced roster sweep — which continues
+      // after the history push completes. Computed here, never persisted-and-trusted.
+      const stats = store.stats();
+      const detail = {
+        groups: stats.groups,
+        rostersLoaded: rosterLoaded.size,
+        rostersGivenUp: rostersGivenUp(),
+        names: stats.names,
+        messages: stats.messages,
+      };
       // The wedge is checked on READ, from disk, because it can only change through a
       // pairing attempt (which rewrites the store) — and reading it here means every
       // history and messages response carries the fact, with no extra route and no
       // background poll. Cheap: one small file, only while unlinked or empty.
       if (!history.complete && isHalfLinkedStore(deps.authDir)) {
-        return { ...history, needsRelink: true };
+        return { ...history, needsRelink: true, detail };
       }
-      return history;
+      return { ...history, detail };
     },
 
     eventsSince: (cursor) => events.since(cursor),
@@ -531,24 +837,39 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     },
 
     async pictureOf(jid) {
-      const cached = pictures.get(jid);
-      if (cached !== undefined) return cached ?? undefined;
+      // An expired miss reads as "not cached": the question is live again.
+      const readCache = (key: string): { hit: boolean; value?: { mime: string; base64: string } } => {
+        const entry = pictures.get(key);
+        if (entry === undefined) return { hit: false };
+        if ('picture' in entry) return { hit: true, value: entry.picture };
+        if (entry.missUntil > now()) return { hit: true };
+        pictures.delete(key);
+        return { hit: false };
+      };
+
+      const direct = readCache(jid);
+      if (direct.hit) return direct.value;
       if (sock === undefined || link !== 'linked') return undefined;
 
       // A LID and a phone jid are the same person; ask under the canonical spelling so one
       // fetch serves both and a LID-addressed group member is not treated as a stranger.
       const canonical = store.resolveIdentity(jid);
-      const canonicalHit = canonical !== jid ? pictures.get(canonical) : undefined;
-      if (canonicalHit !== undefined) return canonicalHit ?? undefined;
+      if (canonical !== jid) {
+        const viaCanonical = readCache(canonical);
+        if (viaCanonical.hit) return viaCanonical.value;
+      }
 
+      await acquirePictureSlot();
       try {
         const url = await sock.profilePictureUrl(canonical, 'preview');
-        // NO PICTURE is a permanent, cacheable fact: WhatsApp answers this cleanly for a
-        // contact with a default avatar, and re-asking on every list render would spend a
-        // round trip per row forever.
+        // NO URL is ambiguous: a contact with a default avatar answers this way, but so does
+        // a missing/expired privacy token. Trust it briefly — enough to stop a round trip
+        // per row per render — never permanently (a failure is not a fact, lessons.md
+        // 2026-08-17; this branch is where most real misses arrive).
         if (typeof url !== 'string' || url.length === 0) {
-          pictures.set(jid, null);
-          if (canonical !== jid) pictures.set(canonical, null);
+          const miss = { missUntil: now() + PICTURE_MISS_TTL_MS };
+          pictures.set(jid, miss);
+          if (canonical !== jid) pictures.set(canonical, miss);
           return undefined;
         }
         const response = await fetch(url);
@@ -557,15 +878,15 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         if (bytes.length === 0 || bytes.length > MAX_MEDIA_BYTES) throw new Error('avatar size');
         const mime = response.headers.get('content-type') ?? 'image/jpeg';
         const picture = { mime, base64: bytes.toString('base64') };
-        pictures.set(jid, picture);
-        if (canonical !== jid) pictures.set(canonical, picture);
+        pictures.set(jid, { picture });
+        if (canonical !== jid) pictures.set(canonical, { picture });
         return picture;
       } catch {
-        // A FAILURE is not a fact — a hiccup, a rate limit or a privacy setting that will
-        // answer differently next time. Caching it as "has none" is what makes one bad
-        // moment mean "no avatars until you restart the helper", so it is deliberately NOT
-        // cached: the next list render asks again.
+        // A THROWN failure — a hiccup, a rate limit — is not cached at all: the next list
+        // render asks again, now paced by the slot limiter instead of re-entering a burst.
         return undefined;
+      } finally {
+        releasePictureSlot();
       }
     },
 

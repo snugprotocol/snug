@@ -14,12 +14,15 @@
 export { createSidecarServer, type SidecarServer, type SidecarServerDeps } from './server.js';
 export { createRouter, SPAWN_NONCE_HEADER, type SidecarRouter } from './router.js';
 export { createMemoryStore, createFileStore, type SidecarStore } from './store.js';
-export { createBaileysWaSocket, toWaMessage } from './baileys-socket.js';
+export { createThreadCache, type ThreadCache } from './thread-cache.js';
+export { createBaileysWaSocket, isResumableStore, toWaMessage } from './baileys-socket.js';
 export type { WaChat, WaHistoryState, WaLinkState, WaMessage, WaSocket } from './wa-socket.js';
 
 import { randomBytes } from 'node:crypto';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createBaileysWaSocket } from './baileys-socket.js';
+import { createThreadCache } from './thread-cache.js';
 import { createRouter } from './router.js';
 import { createSidecarServer, type SidecarServer } from './server.js';
 import { createFileStore } from './store.js';
@@ -41,7 +44,12 @@ export interface StartSidecarOptions {
  * tests can pin a value without weakening the real one.
  */
 export async function startSidecar(options: StartSidecarOptions): Promise<SidecarServer> {
-  const socket = await createBaileysWaSocket({ authDir: options.authDir });
+  // The durable content cache (ADR-0037) lives beside the session keys — same lifetime,
+  // same "forget" sweep. It is what makes a shell restart a RESUME instead of a re-sync.
+  const socket = await createBaileysWaSocket({
+    authDir: options.authDir,
+    threadCache: createThreadCache(join(options.authDir, 'thread-cache.json')),
+  });
   // FILE-backed, not memory: the helper is a spawn-supervised child that restarts on demand,
   // and a token that died with the process meant every restart invalidated the host's stored
   // copy. It lives beside the session keys, which already persist.

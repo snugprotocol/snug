@@ -54,8 +54,14 @@ export interface WaMessage {
 export interface WaChat {
   jid: string;
   name: string;
+  /**
+   * Present (as `'push'`) ONLY when `name` is the contact's own self-set push name rather
+   * than one the user saved — the app renders those under WhatsApp's ~convention. Saved and
+   * verified names carry no mark.
+   */
+  nameKind?: 'push';
   isGroup: boolean;
-  participants?: readonly { jid: string; name?: string }[];
+  participants?: readonly { jid: string; name?: string; nameKind?: 'push' }[];
   /**
    * Owned by the SIDECAR (ADR-0034/review F4): Baileys reports unread only as a snapshot
    * on synced conversations, so the adapter seeds from that and increments itself per live
@@ -86,6 +92,20 @@ export interface WaHistoryState {
   complete: boolean;
   explicit: boolean;
   progress: number;
+  /**
+   * Live sync bookkeeping for progress surfaces (owner ask, 2026-08-18): history percent
+   * alone hides the SECOND phase — name resolution, which runs on group rosters loading a
+   * paced few at a time and continues after the history push completes. Computed at read
+   * time, never persisted-and-trusted.
+   */
+  detail?: {
+    groups: number;
+    rostersLoaded: number;
+    /** Groups whose roster is unfetchable (attempts exhausted) — subtracted from targets. */
+    rostersGivenUp: number;
+    names: number;
+    messages: number;
+  };
   /**
    * The session is WEDGED — scanned but never registered — so history sync will never
    * begin and "still syncing" would be a lie the user cannot see through. Present only

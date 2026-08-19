@@ -101,6 +101,7 @@ afterEach(() => {
   container = undefined;
   root = undefined;
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 async function settle(): Promise<void> {
@@ -258,6 +259,148 @@ describe('the linking screen carries its consent copy where the user acts', () =
 
     // And the raw payload must NOT be dumped as text beside it — that was the bug.
     expect(qr?.textContent ?? '', 'the payload is not printed as a string').not.toContain('2@');
+  });
+
+  /**
+   * ONE CLICK MUST BE ENOUGH (owner report, 2026-08-18).
+   *
+   * On a cold helper the QR does not exist yet when `/pair/qr` is first asked — WhatsApp's
+   * handshake delivers it 1–3 s after `startLink` returns. The old flow asked once, got
+   * nothing, and rendered the waiting copy with NO code and NO error; the second click
+   * happened to win the race. This drives the real sheet against a helper whose first two
+   * answers carry no QR, clicks ONCE, and asserts the code appears — structure, not copy.
+   *
+   * The same platform script then rotates the payload, pinning that the on-screen QR keeps
+   * up while the user is still fumbling for their phone (WhatsApp rotates ~20 s server-side;
+   * a stale code scans as expired).
+   */
+  function desktopWithSlowRotatingQr(): SnugPlatform {
+    let qrAsks = 0;
+    return {
+      kind: 'desktop',
+      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
+      sidecarCtl: async () => ({ running: true, nonce: 'spawn-nonce' }),
+      sidecarFetch: async () => ({ status: 200, body: '{}' }),
+      sidecarWizardFetch: async (_method, pathAndQuery) => {
+        if (pathAndQuery === '/pair/qr') {
+          qrAsks += 1;
+          // Asks 1–2: the handshake has not delivered a QR yet. Ask 3: the first code.
+          // Every later ask: the rotated code.
+          if (qrAsks <= 2) return { status: 200, body: JSON.stringify({ state: 'waiting' }) };
+          const payload = qrAsks === 3 ? '2@FIRST-QR-PAYLOAD' : '2@ROTATED-QR-PAYLOAD';
+          return { status: 200, body: JSON.stringify({ state: 'waiting', qr: payload }) };
+        }
+        return { status: 200, body: JSON.stringify({ state: 'waiting' }) };
+      },
+    };
+  }
+
+  it('shows the QR after ONE click even when the helper needs a moment', async () => {
+    const { wizard, Sheet } = await fresh(desktopWithSlowRotatingQr());
+    const React = await import('react');
+    await act(async () => {
+      await wizard.openConnectionWizardForApp(APP, 'settings');
+    });
+    await renderNode(React.createElement(Sheet));
+    await act(async () => {
+      await wizard.advanceFromReview();
+    });
+    await settle();
+
+    vi.useFakeTimers();
+    const startButton = [...document.querySelectorAll('button')].find((b) =>
+      /start linking/i.test(b.textContent ?? ''),
+    );
+    expect(startButton, 'the start-linking button is on screen').toBeDefined();
+    await act(async () => {
+      startButton?.click();
+    });
+    // Long enough for the flow's own re-asks to reach the third answer; nobody clicks twice.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    const qr = testId('linked-device-qr');
+    expect(qr, 'one click produces the QR panel').not.toBeNull();
+    expect(qr?.querySelector('svg'), 'and it is drawn, not described').not.toBeNull();
+  });
+
+  it('keeps the on-screen QR current while waiting for the scan', async () => {
+    const { wizard, Sheet } = await fresh(desktopWithSlowRotatingQr());
+    const React = await import('react');
+    await act(async () => {
+      await wizard.openConnectionWizardForApp(APP, 'settings');
+    });
+    await renderNode(React.createElement(Sheet));
+    await act(async () => {
+      await wizard.advanceFromReview();
+    });
+    await settle();
+
+    vi.useFakeTimers();
+    const startButton = [...document.querySelectorAll('button')].find((b) =>
+      /start linking/i.test(b.textContent ?? ''),
+    );
+    await act(async () => {
+      startButton?.click();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    const before = testId('linked-device-qr')?.innerHTML;
+    expect(before, 'the first code is on screen').toBeTruthy();
+
+    // A rotation interval later, the frame holds a DIFFERENT drawing — the rotated payload.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    const after = testId('linked-device-qr')?.innerHTML;
+    expect(after, 'the frame still holds a code').toBeTruthy();
+    expect(after, 'the drawing follows the rotated payload').not.toBe(before);
+  });
+
+  it('completes in ONE click against an already-linked helper — no code, no hang', async () => {
+    // The autostarted, boot-resumed helper (ADR-0037) is linked before the wizard opens;
+    // `/pair/qr` withholds the code. One click of "start linking" must run the same
+    // verify+mint+store path the scan button drives, and land the wizard on done.
+    const { db, wizard, Sheet } = await fresh({
+      kind: 'desktop',
+      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
+      sidecarCtl: async () => ({ running: true, nonce: 'spawn-nonce' }),
+      sidecarFetch: async () => ({ status: 200, body: '{}' }),
+      sidecarWizardFetch: async (_method, pathAndQuery) => {
+        if (pathAndQuery === '/pair/qr') return { status: 200, body: JSON.stringify({ state: 'linked' }) };
+        if (pathAndQuery === '/pair/status') {
+          return { status: 200, body: JSON.stringify({ state: 'linked', token: 'minted-token' }) };
+        }
+        return { status: 200, body: JSON.stringify({ state: 'linked' }) };
+      },
+    });
+    const React = await import('react');
+    await act(async () => {
+      await wizard.openConnectionWizardForApp(APP, 'settings');
+    });
+    await renderNode(React.createElement(Sheet));
+    await act(async () => {
+      await wizard.advanceFromReview();
+    });
+    await settle();
+
+    const startButton = [...document.querySelectorAll('button')].find((b) =>
+      /start linking/i.test(b.textContent ?? ''),
+    );
+    expect(startButton, 'the start-linking button is on screen').toBeDefined();
+    await act(async () => {
+      startButton?.click();
+    });
+    await settle();
+
+    const dbmod = await import('@snugprotocol/db');
+    expect(
+      db.getSecret(dbmod.authConnectionCredentialSecretKey(APP, SLOT, 'sidecar_token')),
+      'the token landed without any QR ever rendering',
+    ).toBe('minted-token');
+    expect(wizard.connectionWizardStepStore.get(), 'the wizard advances to done').toBe('done');
   });
 
   /**

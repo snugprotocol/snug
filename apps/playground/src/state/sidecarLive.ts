@@ -140,6 +140,174 @@ export function createSidecarLivePump(deps: SidecarLivePumpDeps): SidecarLivePum
   };
 }
 
+// ---------------------------------------------------------------- the sync-state poll
+//
+// ADR-0037 §4: the run header shows history-sync progress while it is incomplete.
+// `/session/status` is WIZARD-ONLY by contract (the ADR-0025 verify seat), so this rides
+// the app-reachable `/chats` — whose response carries `sync` by design — through the SAME
+// governed executor, and forwards nothing but a number and a bit.
+
+export interface SidecarSyncState {
+  progress: number;
+  complete: boolean;
+  /**
+   * The session is wedged (scanned but never registered) or unlinked — sync will never
+   * progress, so a spinner would be a lie and the poll retires. Present only when true.
+   */
+  needsRelink?: true;
+  /**
+   * The NAMES phase (owner ask 2026-08-18): group rosters load a paced few at a time and
+   * carry the LID→name joins, so name resolution continues after the history percent hits
+   * 100. Absent on helpers that predate the detail seat.
+   */
+  rosters?: { loaded: number; total: number };
+  /** Names known in the helper's directory — tooltip color, never load-bearing. */
+  names?: number;
+}
+
+export interface SidecarSyncPollDeps {
+  /** One status read; undefined for any failure (the poll keeps the last state and retries). */
+  fetchStatus(): Promise<SidecarSyncState | undefined>;
+  onState(state: SidecarSyncState): void;
+  sleep?: (ms: number) => Promise<void>;
+  pollGapMs?: number;
+}
+
+/** Slow next to the hint pump: progress moves in percent, not in messages. */
+const SYNC_POLL_GAP_MS = 4_000;
+
+export function createSidecarSyncPoll(deps: SidecarSyncPollDeps): SidecarLivePump {
+  const sleep = deps.sleep ?? realSleep;
+  const pollGapMs = deps.pollGapMs ?? SYNC_POLL_GAP_MS;
+  let epoch = 0;
+  let running = false;
+
+  /**
+   * Consecutive polls with NO movement before the poll gives up on a stalled tail. Three
+   * minutes at the 4 s gap: the roster sweep retries on an exponential backoff (20 s base,
+   * doubling), so quiet stretches of a minute-plus are NORMAL mid-phase — the first guard
+   * (20 s) hid the pill in every backoff gap and read as "it broke again" (hardware walk
+   * 5, 2026-08-18). Movement means the (loaded, total) PAIR changed: write-offs shrink the
+   * total, and that is progress toward convergence too.
+   */
+  const ROSTER_STALL_POLLS = 45;
+
+  const run = async (myEpoch: number): Promise<void> => {
+    let lastRosterKey: string | undefined;
+    let rosterStalls = 0;
+    try {
+      while (epoch === myEpoch) {
+        const state = await deps.fetchStatus();
+        // Same discipline as the hint pump: a superseded loop discards its own late result.
+        if (epoch !== myEpoch) return;
+        if (state !== undefined) {
+          // NEEDS-RELINK is final; COMPLETE is final once the NAMES phase is done too —
+          // rosters load after the history push, and retiring on the percent alone froze
+          // the header out of the phase the owner actually asked about.
+          if (state.needsRelink === true) {
+            deps.onState(state);
+            return;
+          }
+          const rostersPending =
+            state.rosters !== undefined && state.rosters.loaded < state.rosters.total;
+          if (state.complete && !rostersPending) {
+            deps.onState(state);
+            return;
+          }
+          if (state.complete && rostersPending) {
+            // A tail of rosters can be permanently unloadable (dead groups exhaust their
+            // retries). A pill frozen at n/m forever is worse than none — but only after
+            // minutes of TRUE silence: loaded climbing counts as movement, and so does
+            // the total shrinking as write-offs land.
+            const rosterKey = `${state.rosters!.loaded}/${state.rosters!.total}`;
+            rosterStalls = rosterKey === lastRosterKey ? rosterStalls + 1 : 0;
+            lastRosterKey = rosterKey;
+            if (rosterStalls >= ROSTER_STALL_POLLS) {
+              const { rosters: _stalled, ...rest } = state;
+              deps.onState(rest);
+              return;
+            }
+          }
+          deps.onState(state);
+        }
+        // A failed read reports nothing — blanking an indicator the user is watching
+        // over one hiccup is worse than a briefly stale number.
+        await sleep(pollGapMs);
+      }
+    } finally {
+      if (epoch === myEpoch) running = false;
+    }
+  };
+
+  return {
+    start() {
+      if (running) return Promise.resolve();
+      running = true;
+      epoch += 1;
+      return run(epoch);
+    },
+    stop() {
+      epoch += 1;
+      running = false;
+    },
+  };
+}
+
+/**
+ * Extract the header's two numbers from a `/chats` response body — and NOTHING else. The
+ * response carries chat names, jids and message previews; none of that may ride into header
+ * state, however convenient the spread would be (the extraction IS the scrub). No `sync`
+ * seat answers undefined: that response made no claim about sync.
+ */
+export function syncStateFromChatsBody(body: string): SidecarSyncState | undefined {
+  try {
+    const parsed = JSON.parse(body) as {
+      sync?: {
+        progress?: unknown;
+        complete?: unknown;
+        needsRelink?: unknown;
+        detail?: { groups?: unknown; rostersLoaded?: unknown; names?: unknown } | null;
+      } | null;
+    };
+    const sync = parsed.sync;
+    if (sync === undefined || sync === null || typeof sync !== 'object') return undefined;
+    const detail = sync.detail as
+      | { groups?: unknown; rostersLoaded?: unknown; rostersGivenUp?: unknown; names?: unknown }
+      | null
+      | undefined;
+    // Given-up groups (unfetchable rosters — left groups, community containers, exhausted
+    // retries) come OFF the target: the pill converges on what is achievable instead of
+    // stalling three short of a total that includes the unreachable.
+    const rosters =
+      detail !== null &&
+      typeof detail === 'object' &&
+      typeof detail.groups === 'number' &&
+      typeof detail.rostersLoaded === 'number'
+        ? {
+            loaded: detail.rostersLoaded,
+            total: Math.max(
+              detail.rostersLoaded,
+              detail.groups - (typeof detail.rostersGivenUp === 'number' ? detail.rostersGivenUp : 0),
+            ),
+          }
+        : undefined;
+    return {
+      progress: typeof sync.progress === 'number' ? sync.progress : 0,
+      complete: sync.complete === true,
+      // Dropped when absent, carried when claimed: a wedged session must retire the poll
+      // and hide the spinner — "syncing 0%" forever over a session that will never sync is
+      // the rendered lie the wedge detector exists to prevent.
+      ...(sync.needsRelink === true ? { needsRelink: true as const } : {}),
+      ...(rosters !== undefined ? { rosters } : {}),
+      ...(detail !== null && typeof detail === 'object' && typeof detail.names === 'number'
+        ? { names: detail.names }
+        : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Eligibility is a CONNECTION FACT: an approved row whose frozen ceiling carries the
  * sidecar's symbolic host. Pending rows grant nothing (approval is the user's gesture,
@@ -164,6 +332,7 @@ export function resolveSidecarSlot(db: UserDb, appId: string): string | undefine
 export async function startSidecarLiveForApp(
   appId: string,
   notify: (event: string, data: unknown) => void,
+  onSyncState?: (state: SidecarSyncState) => void,
 ): Promise<() => void> {
   if (getPlatform().sidecarFetch === undefined) return () => {};
   const db = await getUserDb();
@@ -204,5 +373,32 @@ export async function startSidecarLiveForApp(
     },
   });
   void pump.start();
-  return () => pump.stop();
+
+  // The header's progress feed (ADR-0037 §4), only when the caller wants it — same
+  // executor, same epoch discipline, and it retires itself on the complete report.
+  let stopSyncPoll: () => void = () => {};
+  if (onSyncState !== undefined) {
+    const syncPoll = createSidecarSyncPoll({
+      onState: onSyncState,
+      fetchStatus: async () => {
+        try {
+          const result = await executor.execute(appId, {
+            url: `snug-connection://${slot}/chats`,
+            method: 'GET',
+          });
+          if (!result.ok || result.status !== 200) return undefined;
+          return syncStateFromChatsBody(result.body);
+        } catch {
+          return undefined;
+        }
+      },
+    });
+    void syncPoll.start();
+    stopSyncPoll = () => syncPoll.stop();
+  }
+
+  return () => {
+    pump.stop();
+    stopSyncPoll();
+  };
 }

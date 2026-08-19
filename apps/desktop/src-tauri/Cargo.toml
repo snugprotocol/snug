@@ -49,6 +49,12 @@ futures-util = "0.3"
 # while `cargo test` was never run to notice.
 tokio = { version = "1", default-features = false, features = ["net", "io-util"] }
 
+# The sidecar reap sends SIGTERM before SIGKILL (ADR-0037 §1: the helper's TERM handler
+# runs the thread cache's final flush; `Child::kill` alone is SIGKILL, which runs no
+# handlers). Already in the tree transitively; named because this crate calls it directly.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 # Certificate fixtures for the pin verifier's Rust-boundary test (amendment 13):

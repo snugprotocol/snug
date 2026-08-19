@@ -178,6 +178,15 @@ pub fn run() {
                     });
                 });
             }
+
+            // START THE HELPER AT LAUNCH when a WhatsApp session exists (ADR-0037 §3), so
+            // history sync resumes before Telepath is ever opened. On a worker thread: the
+            // spawn includes a deliberate 600 ms survival wait, and launch must not pay it.
+            // A user who never linked has no session store, and grows no helper.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                sidecar::autostart_if_linked(&handle.state::<sidecar::SidecarState>());
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
