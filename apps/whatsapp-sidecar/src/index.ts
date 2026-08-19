@@ -16,6 +16,7 @@ export { createRouter, SPAWN_NONCE_HEADER, type SidecarRouter } from './router.j
 export { createMemoryStore, createFileStore, type SidecarStore } from './store.js';
 export { createThreadCache, type ThreadCache } from './thread-cache.js';
 export { createBaileysWaSocket, isResumableStore, toWaMessage } from './baileys-socket.js';
+export { watchParent, type ParentWatchOptions } from './parent-watch.js';
 export type { WaChat, WaHistoryState, WaLinkState, WaMessage, WaSocket } from './wa-socket.js';
 
 import { randomBytes } from 'node:crypto';

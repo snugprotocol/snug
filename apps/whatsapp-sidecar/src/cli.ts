@@ -23,6 +23,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { startSidecar } from './index.js';
+import { watchParent } from './parent-watch.js';
 
 /**
  * The CLI body, exported so `index.ts` (which is what `sidecar_ctl` actually spawns) runs the
@@ -58,6 +59,13 @@ async function main(): Promise<void> {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // DIE WITH THE SHELL, even when the shell dies badly (TASK-20260818-sidecar-orphan-reap).
+  // `sidecar_ctl` reaps this process on a clean exit; a crash, a `kill -9`, or a `tauri dev`
+  // rebuild skips that, and an orphan holding the session makes the next launch's helper
+  // fight it for the one connection WhatsApp allows. Same `shutdown` as SIGTERM, so the
+  // thread cache's final flush still runs (ADR-0037 §1).
+  watchParent({ onOrphaned: shutdown });
 }
 
 /** Run when invoked as the bin. `index.ts` has its own equivalent guard. */

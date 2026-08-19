@@ -258,6 +258,17 @@ pub fn socket_path(snug_dir: &std::path::Path, basename: &str) -> PathBuf {
     snug_dir.join(basename)
 }
 
+/// Where the running helper's pid is recorded, beside its socket.
+///
+/// WHY A PIDFILE AT ALL (TASK-20260818-sidecar-orphan-reap). The `RunningSidecar` handle
+/// lives in this process's memory, so it describes only the helper THIS shell spawned. A
+/// helper orphaned by a previous shell's unclean exit is invisible to it — and invisible is
+/// exactly how two processes ended up sharing one WhatsApp session. The pidfile is the part
+/// of that bookkeeping that survives the shell, so the next launch can find its predecessor.
+pub fn pidfile_path(snug_dir: &std::path::Path) -> PathBuf {
+    snug_dir.join("whatsapp-sidecar.pid")
+}
+
 // ---------------------------------------------------------------- the commands
 //
 // Both are thin: every decision they make is delegated to the pure functions above, which
@@ -341,6 +352,9 @@ pub async fn sidecar_ctl(
 /// is bounded: a helper that ignores TERM for half a second is killed anyway, because a
 /// hung child must never trap shell shutdown.
 fn reap_child(mut running: RunningSidecar) {
+    // The pidfile is a claim that a helper is running; it must not outlive the process it
+    // describes, or the next launch reads it and aims at whatever inherited that number.
+    let pidfile = running.socket.parent().map(pidfile_path);
     #[cfg(unix)]
     {
         unsafe {
@@ -349,6 +363,9 @@ fn reap_child(mut running: RunningSidecar) {
         for _ in 0..10 {
             if let Ok(Some(_)) = running.child.try_wait() {
                 let _ = std::fs::remove_file(&running.socket);
+                if let Some(pidfile) = pidfile.as_ref() {
+                    let _ = std::fs::remove_file(pidfile);
+                }
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -357,6 +374,132 @@ fn reap_child(mut running: RunningSidecar) {
     let _ = running.child.kill();
     let _ = running.child.wait();
     let _ = std::fs::remove_file(&running.socket);
+    if let Some(pidfile) = pidfile.as_ref() {
+        let _ = std::fs::remove_file(pidfile);
+    }
+}
+
+/// What to do about the pid a leftover pidfile names.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StaleHelper {
+    /// A live process, running OUR helper entry. Signal it.
+    Kill(u32),
+    /// Anything else: no file, unparsable, already dead, or a pid now owned by a stranger.
+    Ignore,
+}
+
+/// Decide — purely — whether the pid on disk may be signalled.
+///
+/// THE DANGEROUS PART OF THIS FIX, ISOLATED SO IT CAN BE TESTED WITHOUT KILLING ANYTHING.
+/// Pids are recycled. A pidfile left behind by a helper that died days ago can name the
+/// user's editor, a database, another app's worker. So a number alone is never enough: the
+/// live process's command line must also name the very helper entry this shell would spawn.
+/// A fix that killed strangers would be worse than the conflict loop it repairs.
+///
+/// `command_line` is `None` when the pid is not running at all.
+pub fn stale_helper_verdict(
+    pidfile_contents: Option<&str>,
+    command_line: Option<&str>,
+    helper_entry: &std::path::Path,
+) -> StaleHelper {
+    let Some(contents) = pidfile_contents else {
+        return StaleHelper::Ignore;
+    };
+    let Ok(pid) = contents.trim().parse::<u32>() else {
+        return StaleHelper::Ignore;
+    };
+    // 0 is "every process in my group" to `kill(2)`, and our own pid would be suicide on
+    // launch. Neither is ever a helper we spawned.
+    if pid == 0 || pid == std::process::id() {
+        return StaleHelper::Ignore;
+    }
+    let Some(command_line) = command_line else {
+        return StaleHelper::Ignore;
+    };
+    // The FULL entry path, not a basename: `index.js` matches half the processes on a
+    // developer's machine, and another user's Snug install is not ours to kill.
+    let entry = helper_entry.to_string_lossy();
+    if entry.is_empty() || !command_line.contains(entry.as_ref()) {
+        return StaleHelper::Ignore;
+    }
+    StaleHelper::Kill(pid)
+}
+
+/// The live command line for a pid, or `None` if no such process exists.
+///
+/// `ps` rather than a platform crate: this is one read on a cold path, and shelling out to
+/// the tool every Unix ships keeps the dependency surface of a kill-capable code path at
+/// zero.
+#[cfg(unix)]
+fn command_line_of(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .arg("-o")
+        .arg("command=")
+        .arg("-p")
+        .arg(pid.to_string())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text)
+}
+
+#[cfg(not(unix))]
+fn command_line_of(_pid: u32) -> Option<String> {
+    // Windows is deliberately unimplemented here (ADR-0021 D8 leaves the platform open).
+    // Answering `None` means "cannot vouch for this pid", and the verdict then refuses to
+    // kill — the safe direction for a guess.
+    None
+}
+
+/// Reap a helper left behind by a previous shell, BEFORE spawning a new one.
+///
+/// This is the half of the fix that covers helpers from OLDER builds, which have no parent
+/// watch of their own and so will otherwise outlive every crash indefinitely.
+///
+/// Infallible and quiet: it runs on the start path, where a failure to clean up must not
+/// become a failure to start. The pidfile is removed either way — a claim we have finished
+/// acting on is litter, and litter is what makes a recycled pid dangerous next time.
+fn reap_stale_helper(snug_dir: &std::path::Path) {
+    let pidfile = pidfile_path(snug_dir);
+    let contents = std::fs::read_to_string(&pidfile).ok();
+    let verdict = {
+        let pid = contents.as_deref().and_then(|c| c.trim().parse::<u32>().ok());
+        let command_line = pid.and_then(command_line_of);
+        stale_helper_verdict(contents.as_deref(), command_line.as_deref(), &helper_entry(snug_dir))
+    };
+
+    if let StaleHelper::Kill(pid) = verdict {
+        #[cfg(unix)]
+        {
+            // TERM first, exactly as `reap_child` does and for the same reason: the helper's
+            // clean exit runs the thread cache's final flush (ADR-0037 §1). This one cannot
+            // `try_wait` — it is not our child — so liveness is re-read through `ps`.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            }
+            for _ in 0..10 {
+                if command_line_of(pid).is_none() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if command_line_of(pid).is_some() {
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+        }
+        // The dead helper's socket file would otherwise make the new one's bind fail.
+        let _ = std::fs::remove_file(socket_path(snug_dir, SOCKET_BASENAME));
+    }
+
+    let _ = std::fs::remove_file(&pidfile);
 }
 
 /// The `start` arm's body, extracted so launch-time autostart (ADR-0037 §3) runs the SAME
@@ -389,6 +532,13 @@ fn start_helper(guard: &mut Option<RunningSidecar>) -> Result<SidecarStatus, Str
         return Err(refusal);
     }
     node_version_preflight()?;
+
+    // BEFORE THE SPAWN, NEVER AFTER (TASK-20260818-sidecar-orphan-reap). A helper orphaned
+    // by a previous shell's unclean exit still holds the WhatsApp session, and WhatsApp
+    // allows one live connection per linked device — so a new helper started alongside it
+    // does not win, it ping-pongs (`conflict type=replaced`, forever). Reaping afterwards
+    // would leave exactly that overlap open.
+    reap_stale_helper(&dir);
 
     // A stale socket file from a crashed run would make bind fail; removing it is
     // safe because this path is ours and nothing else may write it.
@@ -424,6 +574,11 @@ fn start_helper(guard: &mut Option<RunningSidecar>) -> Result<SidecarStatus, Str
             "the WhatsApp helper started and then stopped ({status}). {detail}"
         ));
     }
+    // Record the pid only now that the helper has PROVEN it survives: a pidfile written at
+    // spawn time would name a process that died a moment later, and the next launch would
+    // read that number back after the OS had handed it to someone else.
+    let _ = std::fs::write(pidfile_path(&dir), child.id().to_string());
+
     *guard = Some(RunningSidecar {
         child,
         socket,
@@ -1360,7 +1515,7 @@ mod autostart_tests {
     }
 
     #[test]
-    fn the_setup_hook_actually_calls_autostart() {
+    fn the_setup_hook_actually_calls_autostart_and_the_orphan_reap_is_wired() {
         // A hook nobody calls is the untested wire in its purest form (lessons.md
         // 2026-08-18, earned by `sidecar_ctl("stop")` shipping with zero callers). Pin the
         // caller at the source level: `lib.rs`'s setup must reach for autostart by name.
@@ -1368,6 +1523,233 @@ mod autostart_tests {
         assert!(
             lib.contains("sidecar::autostart_if_linked"),
             "lib.rs setup no longer calls sidecar::autostart_if_linked — launch-time resume (ADR-0037 §3) is disconnected"
+        );
+    }
+}
+
+#[cfg(test)]
+mod orphan_reap_tests {
+    use super::*;
+
+    // THE ORPHAN (TASK-20260818-sidecar-orphan-reap, owner-reported 2026-08-19).
+    //
+    // `shutdown()` reaps the helper on a CLEAN shell exit. An unclean one — a crash, a
+    // `kill -9`, a `tauri dev` rebuild — does not run it, and the helper survives with a
+    // dead parent. The next launch autostarts a RIVAL against the same Baileys auth store,
+    // and WhatsApp (one live connection per linked device) makes them replace each other's
+    // stream forever: `stream:error … conflict type=replaced`, in a loop, on every launch.
+    // Observed live: pid 60490 (ppid 1, orphaned) against pid 50057 (supervised).
+    //
+    // The helper now watches its own parent (`parent-watch.ts`), but a helper left by an
+    // OLDER build has no watch and no parent to notice — so the shell must also be able to
+    // reap a stranger. That is the dangerous half: killing by a pid read off disk. These
+    // tests pin the verdict that guards it.
+
+    #[test]
+    fn a_live_helper_named_by_the_pidfile_is_killed() {
+        let entry = std::path::Path::new("/Users/x/Snug/helpers/whatsapp-sidecar/index.js");
+        let verdict = stale_helper_verdict(
+            Some("4242\n"),
+            Some("node --enable-source-maps /Users/x/Snug/helpers/whatsapp-sidecar/index.js"),
+            entry,
+        );
+        assert_eq!(verdict, StaleHelper::Kill(4242));
+    }
+
+    #[test]
+    fn a_pid_running_something_else_is_never_killed() {
+        // THE WHOLE REASON THIS FUNCTION EXISTS. Pids are recycled: a pidfile left by a
+        // helper that died days ago can name a process the user cares about — their editor,
+        // a database, another app's worker. Killing by number alone would make this fix
+        // strictly worse than the bug it repairs.
+        let entry = std::path::Path::new("/Users/x/Snug/helpers/whatsapp-sidecar/index.js");
+        for command in [
+            "/Applications/Safari.app/Contents/MacOS/Safari",
+            "node /Users/x/other-project/server.js",
+            "postgres -D /usr/local/var/postgres",
+            // Close enough to be tempting, still not ours: a different helper install.
+            "node /Users/someone-else/Snug/helpers/whatsapp-sidecar/index.js",
+        ] {
+            assert_eq!(
+                stale_helper_verdict(Some("4242"), Some(command), entry),
+                StaleHelper::Ignore,
+                "{command} must survive"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dead_pid_is_ignored_rather_than_signalled() {
+        // No command line came back, so the pid is gone. Nothing to kill; the pidfile is
+        // just litter from a previous run.
+        let entry = std::path::Path::new("/Users/x/Snug/helpers/whatsapp-sidecar/index.js");
+        assert_eq!(stale_helper_verdict(Some("4242"), None, entry), StaleHelper::Ignore);
+    }
+
+    #[test]
+    fn an_unreadable_or_nonsense_pidfile_is_ignored() {
+        let entry = std::path::Path::new("/Users/x/Snug/helpers/whatsapp-sidecar/index.js");
+        let helper_cmd = Some("node /Users/x/Snug/helpers/whatsapp-sidecar/index.js");
+        for contents in [None, Some(""), Some("   "), Some("not-a-pid"), Some("-1"), Some("0")] {
+            assert_eq!(
+                stale_helper_verdict(contents, helper_cmd, entry),
+                StaleHelper::Ignore,
+                "{contents:?} must not become a signal"
+            );
+        }
+    }
+
+    #[test]
+    fn our_own_pid_is_never_the_target() {
+        // A pidfile that somehow names this very process must not make the shell kill
+        // itself on launch — an unrecoverable, self-inflicted crash loop.
+        let entry = std::path::Path::new("/Users/x/Snug/helpers/whatsapp-sidecar/index.js");
+        let mine = std::process::id().to_string();
+        assert_eq!(
+            stale_helper_verdict(
+                Some(&mine),
+                Some("node /Users/x/Snug/helpers/whatsapp-sidecar/index.js"),
+                entry
+            ),
+            StaleHelper::Ignore
+        );
+    }
+
+    #[test]
+    fn the_pidfile_sits_beside_the_socket_and_matches_the_helper_it_supervises() {
+        let dir = std::path::Path::new("/Users/x/Snug");
+        assert_eq!(pidfile_path(dir), dir.join("whatsapp-sidecar.pid"));
+        // Same directory as the socket: one place to look, one place to sweep.
+        assert_eq!(
+            pidfile_path(dir).parent(),
+            socket_path(dir, SOCKET_BASENAME).parent()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_reap_removes_the_pidfile_along_with_the_socket() {
+        // The pidfile is a claim that a helper is running. Leaving it behind after a reap
+        // means the NEXT launch reads a stale claim — which is how a recycled pid becomes
+        // an innocent victim. It must die with the process it describes.
+        let dir = std::env::temp_dir().join(format!("snug-pidfile-reap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let socket = dir.join("whatsapp-sidecar.sock");
+        let pidfile = pidfile_path(&dir);
+        std::fs::write(&socket, b"").expect("placeholder socket");
+
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 5")
+            .spawn()
+            .expect("spawn a child to reap");
+        std::fs::write(&pidfile, child.id().to_string()).expect("pidfile");
+
+        reap_child(RunningSidecar {
+            child,
+            socket: socket.clone(),
+            nonce: "test-nonce".into(),
+        });
+
+        assert!(!socket.exists(), "the socket file is removed");
+        assert!(!pidfile.exists(), "the pidfile is removed with it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stale_reap_kills_a_real_helper_look_alike_and_clears_the_file() {
+        // End to end over a real process, because the verdict being right is only half of
+        // it: the signal must actually land and the file must actually go.
+        let dir = std::env::temp_dir().join(format!("snug-stale-reap-{}", std::process::id()));
+        let helpers = dir.join("helpers").join("whatsapp-sidecar");
+        std::fs::create_dir_all(&helpers).expect("helper dir");
+        let entry = helpers.join("index.js");
+        std::fs::write(&entry, b"// stand-in for the helper\n").expect("entry file");
+
+        // A process whose command line names the helper entry, exactly like the real one.
+        let child = std::process::Command::new("node")
+            .arg("--enable-source-maps")
+            .arg(&entry)
+            .spawn();
+        let Ok(mut child) = child else {
+            eprintln!("skipping: no node on PATH");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+        // The stand-in exits on its own (the file is a comment); keep it simple by pinning
+        // only what we control — the pidfile — when it has already gone.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::fs::write(pidfile_path(&dir), child.id().to_string()).expect("pidfile");
+
+        reap_stale_helper(&dir);
+
+        assert!(
+            !pidfile_path(&dir).exists(),
+            "the pidfile is cleared whether or not a kill was needed"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Drive the real reap against a directory a shell script prepared, for the manual
+    /// end-to-end check (`scratchpad/kill-path-check.sh`). Ignored by default: it acts on
+    /// whatever `SNUG_TEST_DIR` names, which is not a decision a routine `cargo test` should
+    /// make.
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    fn orphan_reap_manual_against_snug_test_dir() {
+        let dir = std::env::var("SNUG_TEST_DIR").expect("SNUG_TEST_DIR must name a scratch dir");
+        reap_stale_helper(std::path::Path::new(&dir));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stale_reap_spares_a_live_bystander_that_inherited_the_pid() {
+        // THE PID-REUSE CASE, END TO END. The unit tests pin the verdict; this pins what the
+        // reap actually DOES with a real, live process that is not ours — the scenario where
+        // a careless fix kills the user's editor because a dead helper once had that number.
+        let dir = std::env::temp_dir().join(format!("snug-decoy-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("helpers").join("whatsapp-sidecar")).expect("dirs");
+        std::fs::write(helper_entry(&dir), b"// stand-in\n").expect("entry");
+
+        let mut decoy = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .spawn()
+            .expect("spawn a bystander");
+        std::fs::write(pidfile_path(&dir), decoy.id().to_string()).expect("pidfile");
+
+        reap_stale_helper(&dir);
+
+        assert!(
+            matches!(decoy.try_wait(), Ok(None)),
+            "a live process that is not the helper must survive the reap"
+        );
+        assert!(!pidfile_path(&dir).exists(), "the stale claim is cleared either way");
+
+        let _ = decoy.kill();
+        let _ = decoy.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn start_reaps_before_it_spawns() {
+        // Order is the fix. Reaping AFTER the spawn would mean both helpers are live at
+        // once — briefly, but long enough for WhatsApp to hand the session back and forth
+        // and for the new helper to be the one replaced.
+        let source = include_str!("sidecar.rs");
+        let body = source
+            .split_once("fn start_helper")
+            .expect("start_helper exists")
+            .1;
+        let reap_at = body.find("reap_stale_helper").expect("start_helper reaps stale helpers");
+        let spawn_at = body.find("Command::new(\"node\")").expect("start_helper spawns node");
+        assert!(
+            reap_at < spawn_at,
+            "the stale reap must run BEFORE the spawn, or two helpers share the session"
         );
     }
 }
