@@ -1,6 +1,6 @@
 # 0039 — Gmail starter: pinned modify/settings/send scopes and governed inbox cleanup
 
-- **Status:** proposed (draft at Gate 2 of TASK-20260819-gmail-starter; plan-review findings folded 2026-08-19; pending owner plan approval)
+- **Status:** accepted (2026-08-19 — owner approved the plan; implemented in TASK-20260819-gmail-starter)
 - **Date:** 2026-08-19
 - **Task:** TASK-20260819-gmail-starter
 
@@ -27,11 +27,13 @@ set was the first pin; this is the second).
 2. **The entry gains pinned `fields` and a layman `registration` walkthrough.** The
    wizard renders `requirement.fields ?? []` and `generateAuthUrl` has no
    stored-client_id fallback, so fields are load-bearing: `client_id`, plus
-   `client_secret` iff the pre-implementation live probe confirms Google's
-   installed-app token exchange requires it even with PKCE (expected yes; Google
-   documents the Desktop-client secret as "not treated as a secret", and the GitHub
+   `client_secret` — **probed 2026-08-19 and confirmed required**: Google's
+   native-app parameter table calls it "Optional", but the token endpoint refuses a
+   Desktop-client code exchange without it (`client_secret is missing.`) even with a
+   valid `code_verifier`. Google documents the Desktop-client secret as "not treated
+   as a secret" (it ships inside every distributed desktop binary), and the GitHub
    `oauth_app` option is the C1-compatible secret-collection precedent — the hub
-   holds it in the user's own file, it never enters the iframe or the LLM). The
+   holds it in the user's own file; it never enters the iframe or the LLM. The
    walkthrough (console URL + create project → enable Gmail API → consent screen →
    Desktop-app client → copy credentials) is honest about provider caveats, Spotify
    precedent: restricted-scope unverified-app warning, and Testing-status refresh

@@ -1,12 +1,13 @@
 # examples — the starter apps
 
-Ten curated single-file Snug apps, built exactly the way the app-builder LLM is told to
+Thirteen curated single-file Snug apps, built exactly the way the app-builder LLM is told to
 build them (`packages/knowledge/prompts/knowledge-base/app-authoring/20-html-template.md`).
 The playground bundles them as its "starter apps" shelf, loadable with no server and no
 key — they degrade gracefully when the agent is a mock or unreachable.
 
 Curated 2026-08-15 (TASK-20260815-starter-apps-rebuild, ADR-0031): five keepers plus
-five **gold-standard connected starters** — each complements its provider's own app
+the **gold-standard connected starters** — five at curation, eight today (`whatsapp`
+ADR-0032, `ledger` ADR-0038, `gmail` ADR-0039) — each complements its provider's own app
 rather than cloning it, exploits the provider chat lane (ask the app's chat about the
 connected service; the host composes and governs the API calls), and ships its
 authoring provenance in `authoring/` (the dev-time prompts plus the same wiki pages the
@@ -24,6 +25,9 @@ hub keeps for user-built apps — vision, requirements, plan, lessons).
 | [`hue/`](hue/) | **the LAN-class starter** — rooms and agent-composed moods over `snug-connection://hue/…` symbolic addressing (ADR-0026); the bridge address never enters the app |
 | [`weather/`](weather/) | **forecasts turned into decisions** — OpenWeather (query-key injected host-side) + agent verdict cards with a local decision history |
 | [`github/`](github/) | **what needs you, before you ask** — review queue + activity pulse + an agent morning briefing; label/triage actions ride confirmed writes |
+| [`whatsapp/`](whatsapp/) | **the linked-device starter** — a live session in a host-spawned sidecar over a unix socket (ADR-0032/0034), with an analyst that knows the room |
+| [`ledger/`](ledger/) | **the personal-finance flagship** — every connected account in the user's own file, a subscription radar, and a net-worth time machine (ADR-0038) |
+| [`gmail/`](gmail/) | **the AI inbox manager** — who really fills your inbox, who you never answer, and a mass cleanup you approve once; trash-only by construction (ADR-0039) |
 
 ## The contract every app follows
 
