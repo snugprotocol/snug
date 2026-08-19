@@ -75,6 +75,10 @@ const APPS = [
   // reached over a unix socket, not a host — see the ADRs for why the sidecar is a
   // capability rather than a ceiling entry.
   'whatsapp',
+  // The seventh connected starter (TASK-20260818-ledger-starter, ADR-0038): the
+  // personal-finance flagship. First `basic_auth` + token-claim credential shape —
+  // the SimpleFIN access pair is MINTED by the wizard's claim, never typed.
+  'ledger',
 ];
 
 /**
@@ -407,7 +411,7 @@ test('chess sends its board state ONCE, not in both payload and state', () => {
  * shelf: the playground glob is DERIVED from the source of truth rather than restated
  * (lesson 2026-07-31 — for artifacts no local suite executes, parse the producer).
  */
-const CONNECTED_APPS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github', 'whatsapp'];
+const CONNECTED_APPS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github', 'whatsapp', 'ledger'];
 const STANDARD_DOC_SLUGS = new Set(['vision', 'requirements', 'plan', 'lessons', 'memory', 'next-tasks']);
 
 for (const app of CONNECTED_APPS) {

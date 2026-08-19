@@ -92,6 +92,10 @@ const MANIFEST_APPS = [
   'github',
   // The sixth: the linked-device starter (TASK-20260816-whatsapp-twin, ADR-0032).
   'whatsapp',
+  // The seventh: Ledger (TASK-20260818-ledger-starter, ADR-0038) — a BARE manifest
+  // naming SimpleFIN; the borrow hit substitutes the registry's pinned fields,
+  // walkthrough and host, and the claim mints the credentials.
+  'ledger',
 ];
 
 /** The full set of starter folders SURVEYED for a manifest — all declarers now. */
@@ -105,6 +109,7 @@ const P4_STARTER_FOLDERS = [
   'weather',
   'github',
   'whatsapp',
+  'ledger',
 ];
 
 const readManifest = (app) => JSON.parse(readFileSync(path.join(HERE, app, 'connection.json'), 'utf8'));

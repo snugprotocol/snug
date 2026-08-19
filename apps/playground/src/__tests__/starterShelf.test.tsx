@@ -43,7 +43,7 @@ const KEEPER_FOLDERS = ['chess', 'flying-pig', 'adventure-quest', 'quiz-me', 'tr
  * They reach the shelf through the same `examples/*` glob as every other folder — which
  * is exactly why the count assertion below had to move with them rather than be relaxed.
  */
-const CONNECTED_FOLDERS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github', 'whatsapp'];
+const CONNECTED_FOLDERS = ['trade-copilot', 'spotify', 'hue', 'weather', 'github', 'whatsapp', 'ledger'];
 /** Every folder that must reach the shelf with its own look — the coverage loop's input. */
 const LOOK_COVERED = [...KEEPER_FOLDERS, ...CONNECTED_FOLDERS];
 
