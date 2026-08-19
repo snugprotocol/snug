@@ -391,3 +391,41 @@ C4. Ledger app: money-leaks view, cancel playbook LLM lane (responseSchema'd), o
 - Next step: Phase C tests first (protocol frame + host-ready openUrl flag + runner
   seam + confirm dialog + app money-leaks integration), then root `turbo run test
   --force` + owner real-token walk.
+
+### 2026-08-18 — Claude (Fable 5) — session (Phase C implemented; ALL PHASES GREEN)
+- Done — **Phase C** (commits after 6e013f6): protocol `snug:open-url-request`/
+  `snug:open-url-result` (internal draft, strict, https-only + userinfo-free at the
+  schema, no target/features seats; `parseFrame` taught; protocol 342 green) +
+  host-ready `openUrl` capability flag (PUBLISHED surface — `gen:schemas` regenerated
+  `host-ready.json`, real spec-changelog entry, `net`-flag precedent); runner
+  `OpenUrlHandler` seam (named refusal on absence — never the silent unknown-frame
+  drop; single-pending per instance; stale-drop; capability truth on host-ready;
+  runner 119 green; three capability-set pins in host-lifecycle MIGRATED to include
+  the new seat); playground `OpenUrlConfirmDialog` + `state/openUrl.ts` (provenance
+  copy, NORMALIZED-href rendering so a homograph displays as xn--, synchronous
+  open-inside-gesture with 'noopener,noreferrer', desktop routes the same gesture via
+  `oauth.openExternal`; 6 unit tests incl. the Cyrillic-а homograph and the
+  opened-during-click pin), RunView binds the handler for installed apps only
+  (starters: capability false); **real-browser popup-escape proof** — new scoped
+  Playwright project `open-url` (net-project precedent: the https stub is the popup
+  target) driving PRODUCTION runner bytes: real click → real tab → `window.opener`
+  null → app hears `opened`; negative: no handler → app hears named `refused`.
+  Ledger gained the `cancel_playbook` lane (schema+contract re-trimmed under seat
+  caps), the hand-rolled open-url bridge (Telepath doorbell precedent — no snug-hooks
+  byte-bump), the app-side https/userinfo gate on LLM-proposed cancelUrls, and the
+  honest copy-the-link fallback on `refused`; examples 235 green; ledger e2e boot row
+  re-verified.
+- Verification: **root `turbo run test --force` 23/23 tasks green, 0 cached, run
+  TWICE** (the trusting-a-green-run lesson).
+- Deviations from plan text (recorded): token-claim's `secretFields` became two named
+  seats (`usernameField`/`passwordField` — order-proof for the basic_auth injection
+  contract) + an `accessPath` seat (Blocker 3's checked invariant); the network-seat
+  allowlist (`test-request-single-path`) deliberately widened to THREE named modules
+  with in-test justification; the open-url e2e proof rides a fixture harness on
+  production runner bytes (the playground dialog's synchronous-order is pinned by its
+  unit test) because the playground-level popup path needs an LLM turn no e2e brain
+  can produce.
+- State: Phases A, B, C all implemented and green. NOT yet done: owner real-token
+  walk (SimpleFIN Bridge account + fresh setup token — next-steps entry), PR + AI/
+  human review (Gate 5), ADR-0038 status flip to accepted at merge, Gate 6 close-out.
+- Next step: owner walks Ledger end-to-end with a real SimpleFIN setup token; then PR.
