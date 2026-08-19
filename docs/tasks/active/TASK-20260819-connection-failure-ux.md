@@ -1,6 +1,6 @@
 # TASK-20260819-connection-failure-ux: honest Spotify scopes, wizard-owned failure disclosure, readable Ledger playbook
 
-- **Status**: planned
+- **Status**: in-review
 - **Owner**: Jeetu
 - **Risk tier**: **high** (touches `packages/auth` credential broker + registry scopes; ADR-0028 re-consent path)
 - **Branch**: `fix/TASK-20260819-connection-failure-ux`
@@ -255,7 +255,7 @@ re-sign-in. Deliberate act, never a quiet fix-forward.
 
 ## Session journal (append-only, newest last)
 
-### 2026-08-19 — Jeetu — session
+### 2026-08-19 — Jeetu — session (Gates 1-2)
 - Done: Gate 1 spec + Gate 2 plan. Root causes confirmed in code for all three defects.
   Owner interviewed (D1, D2). Fresh-context High-tier plan review run BEFORE any
   implementation — it returned 2 BLOCKERs and 4 MAJORs, all independently verified
@@ -272,3 +272,31 @@ re-sign-in. Deliberate act, never a quiet fix-forward.
 - Next step: write the eight test groups in §1 order, red first.
 - Open questions: none blocking. The accepted residual is owner-visible and scheduled for
   hardware verification at §4.2.
+
+### 2026-08-19 — Jeetu — session (Gates 3-5)
+- Done: **Gates 3, 4 and 5 complete.** Tests first, red-verified individually, then
+  implementation, then verification.
+  - Gate 3: eight test groups, each confirmed red for the RIGHT reason before any
+    implementation (AC1 failed through the whole chain to the authorize URL; AC2 failed
+    `'none' != 'staged'`, proving the old-seven fixture is non-vacuous).
+  - Gate 4: registry scope + ADR-0028 amendment + README; the derived attention gate;
+    the chip and its mount move; the Ledger restructure; the three stale Spotify
+    comments.
+  - Gate 5: `packages/auth` **880/880**. `apps/playground` **1254/1254** with
+    `--no-file-parallelism`. Playground typechecks clean. `examples` **270/270**.
+    Both restructured starters re-parsed through @babel/parser (JSX balance).
+    Ledger panel rendered and screenshotted at 420px — the width the owner reported —
+    confirming the overlap is gone.
+- **Two findings worth keeping:**
+  1. A real bug my own test caught mid-implementation: `showAttention` read `session.failure`
+     above the sheet's null-session guard, crashing the sheet whenever it rendered closed.
+     Fixed to `session?.failure`, matching the file's existing idiom at :1816.
+  2. **The playground vitest flake is now CLASSIFIED** (next-steps updated). It is FILE
+     PARALLELISM: 1254/1254 serial, but a different failing set each parallel run
+     (14/15/31 observed) — on clean `main` as well as this branch. All timeouts, all in
+     React-rendering suites. The 2026-08-14 note said the failing test was never
+     captured; it is captured now.
+- State: implementation complete and verified. Awaiting owner hardware verification (§4)
+  before merge — in particular §4.2, the accepted residual.
+- Next step: owner runs §4.1-§4.4 on hardware; then Gate 6 close-out.
+- Open questions: none blocking.
