@@ -60,7 +60,7 @@ describe('the simplefin entry', () => {
     // host (NET_AMBIGUOUS_CONNECTION), and the declared test probe fires at
     // `allowedHosts[0]` — under a sorted two-host ceiling both would break a REAL
     // production claim (beta-bridge sorts before bridge).
-    expect(entry?.apiHosts).toEqual(['bridge.simplefin.org']);
+    expect(entry?.apiHosts).toEqual(['beta-bridge.simplefin.org']);
     expect(entry?.lanHost).toBeUndefined();
   });
 
@@ -105,7 +105,7 @@ describe('the simplefin entry', () => {
 
   it('carries a registration WALKTHROUGH with a console URL and layman steps', () => {
     const registration = entry?.registration;
-    expect(registration?.consoleUrl).toBe('https://bridge.simplefin.org/');
+    expect(registration?.consoleUrl).toBe('https://beta-bridge.simplefin.org/');
     expect((registration?.instructions ?? []).length).toBeGreaterThan(2);
     // The walkthrough must name the thing the user goes to get — the setup token.
     expect((registration?.instructions ?? []).join(' ')).toMatch(/setup token/i);
@@ -181,7 +181,7 @@ describe('the emitter and admission handle the entry', () => {
   it('emits a requirement that the protocol schema accepts', () => {
     const requirement = requirementFromRegistryEntry(entry!, 'SimpleFIN', 'simplefin');
     expect(requirement.kind).toBe('basic_auth');
-    expect(requirement.declaredApiHosts).toEqual(['bridge.simplefin.org']);
+    expect(requirement.declaredApiHosts).toEqual(['beta-bridge.simplefin.org']);
     const parsed = connectionRequirementSchema.safeParse(requirement);
     expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [])).toBe(true);
   });
@@ -225,7 +225,7 @@ describe('the emitter and admission handle the entry', () => {
         slot: 'simplefin',
         provider: { name: 'SimpleFIN' },
         kind: 'basic_auth',
-        declaredApiHosts: ['bridge.simplefin.org'],
+        declaredApiHosts: ['beta-bridge.simplefin.org'],
       },
       { channel: 'starter' },
     );
@@ -236,7 +236,7 @@ describe('the emitter and admission handle the entry', () => {
       declaredApiHosts: string[];
       fields?: Array<{ key: string }>;
     };
-    expect(requirement.declaredApiHosts).toEqual(['bridge.simplefin.org']);
+    expect(requirement.declaredApiHosts).toEqual(['beta-bridge.simplefin.org']);
     expect(requirement.fields?.map((field) => field.key)).toEqual(['username', 'password']);
   });
 });

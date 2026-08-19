@@ -8,7 +8,7 @@ your net worth.
 
 ## What it does
 
-- **Consolidates everything** — one [SimpleFIN](https://bridge.simplefin.org/) connection
+- **Consolidates everything** — one [SimpleFIN](https://beta-bridge.simplefin.org/) connection
   syncs every bank and credit-card account you attach to your SimpleFIN Bridge account,
   with balances, pending transactions, and history, into the app's own SQLite tables.
 - **The time machine** — your reconstructed net-worth history plus projected branches:

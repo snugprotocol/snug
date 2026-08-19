@@ -442,7 +442,12 @@ function useConnectedFetch() {
     // on the first real sync) so the money-leaks radar and the time machine show their
     // value before a single bank is connected.
 
-    const SFIN = 'https://bridge.simplefin.org/simplefin';
+    // CONNECTION-RELATIVE (ADR-0026), not a literal host — the app names its SLOT and
+    // the host resolves the approved ceiling. Chosen the hard way (owner's first real
+    // walk): the literal-host v1 baked yesterday's host into installed bytes, and an
+    // installed starter never receives a rebuild. The bridge serves under /simplefin,
+    // so the resolved URL is https://<approved-host>/simplefin/<rest>.
+    const SFIN = 'snug-connection://simplefin/simplefin';
 
     const CATEGORIES = [
       'income', 'housing', 'groceries', 'dining', 'transport', 'utilities',

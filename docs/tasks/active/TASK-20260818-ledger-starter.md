@@ -429,3 +429,25 @@ C4. Ledger app: money-leaks view, cancel playbook LLM lane (responseSchema'd), o
   walk (SimpleFIN Bridge account + fresh setup token — next-steps entry), PR + AI/
   human review (Gate 5), ADR-0038 status flip to accepted at merge, Gate 6 close-out.
 - Next step: owner walks Ledger end-to-end with a real SimpleFIN setup token; then PR.
+
+### 2026-08-18 — Claude (Fable 5) — session (owner's first real walk: host-pin hotfix)
+- Defect (owner report, real setup token): "this token points somewhere other than the
+  SimpleFIN Bridge…" on every token. Root cause CONFIRMED by probe before any change:
+  `bridge.simplefin.org` (the pinned host) is a **302 alias** of the real serving host
+  `beta-bridge.simplefin.org` — my CORS probes had hit beta all along while the pin
+  used the alias. The refusal fired PRE-network, so the owner's tokens were never
+  consumed.
+- Fixed, three layers: (1) the pin + tests + manifest + docs moved to
+  `beta-bridge.simplefin.org` (probe incl. the 302 recorded beside the seat);
+  (2) `migrateConnectionRegistryDrift`'s gate gained **host drift** — it was host-blind,
+  so an approved row could never heal from a moved registry host; a ceiling move now
+  stages to the reapproval diff (never silent), pinned by a legacy-row fixture test
+  (switchable admission gate modeling "yesterday's registry admitted this");
+  (3) Ledger switched to **connection-relative addressing** (`snug-connection://
+  simplefin/...`) — installed starters never receive rebuilds, so an app must never
+  name a host it didn't need to know.
+- Suites: auth 878 · playground 1244 (16 simplefin-flow incl. 2 new healing tests) ·
+  examples 235 — all green. Lesson appended to lessons.md.
+- Owner path on the running desktop (tauri dev): restart the dev process (vite's dep
+  cache holds the stale auth dist), delete the installed Ledger app, reinstall from the
+  shelf, connect → paste the SAME token (never consumed) or a fresh one.

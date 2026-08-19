@@ -1198,14 +1198,21 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     aliases: ['SimpleFIN Bridge'],
     // EXACTLY ONE host, and the singleton is load-bearing (review Blocker 2): symbolic
     // `snug-connection://` resolution refuses a ceiling that is not exactly one host,
-    // and the declared test probe fires at `allowedHosts[0]` — a second (beta) host
-    // would sort FIRST and aim production credentials at the wrong bridge. The beta
-    // bridge is a dev fixture concern, never a shipped seat.
-    apiHosts: ['bridge.simplefin.org'],
-    // VERIFIED 2026-08-18 by live probe: OPTIONS and GET /simplefin/accounts echo an
-    // arbitrary Origin with `access-control-allow-headers: authorization` and
-    // credentials allowed; the claim POST returns CORS headers and is preflight-free
-    // (empty body, no custom headers).
+    // and the declared test probe fires at `allowedHosts[0]`.
+    //
+    // WHY `beta-` IS THE PRODUCTION HOST (owner-found on the first real walk,
+    // 2026-08-18): `bridge.simplefin.org` is a 302 ALIAS to
+    // `beta-bridge.simplefin.org` — the "beta" name is historical; it is where the
+    // accounts live, where setup tokens are minted, and where their decoded claim URLs
+    // point. The first pin used the alias, so every REAL token refused at the ceiling
+    // gate with "points somewhere other than the SimpleFIN Bridge". Verified by probe:
+    // `curl -sI https://bridge.simplefin.org/` → `302 Location:
+    // https://beta-bridge.simplefin.org/`.
+    apiHosts: ['beta-bridge.simplefin.org'],
+    // VERIFIED 2026-08-18 by live probe AGAINST THIS HOST: OPTIONS and GET
+    // /simplefin/accounts echo an arbitrary Origin with `access-control-allow-headers:
+    // authorization` and credentials allowed; the claim POST returns CORS headers and
+    // is preflight-free (empty body, no custom headers).
     browserCallable: true,
     // Two fields the user never types: the claim below parses them out of the minted
     // access URL. Injection ORDER is the contract — the basic_auth kind default reads
@@ -1245,9 +1252,9 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       verify: { method: 'GET', pathAndQuery: '/simplefin/accounts?balances-only=1' },
     },
     registration: {
-      consoleUrl: 'https://bridge.simplefin.org/',
+      consoleUrl: 'https://beta-bridge.simplefin.org/',
       instructions: [
-        'Create a SimpleFIN Bridge account at bridge.simplefin.org — a small paid service (about $1.50 a year) built exactly for apps like this. Your banks connect to SimpleFIN, and SimpleFIN hands apps read-only data.',
+        'Create a SimpleFIN Bridge account at beta-bridge.simplefin.org — a small paid service (about $1.50 a year) built exactly for apps like this. Your banks connect to SimpleFIN, and SimpleFIN hands apps read-only data.',
         'Inside SimpleFIN Bridge, choose "Connect a bank" and sign in to each bank or credit-card provider you want the app to see. Your bank passwords stay with SimpleFIN — they never touch Snug. You can add more banks later.',
         'When your banks are connected, create a new app connection — SimpleFIN calls this a setup token.',
         'Copy the whole setup token and paste it on the next screen. It works exactly once and expires quickly, so paste it soon after copying.',

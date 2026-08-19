@@ -25,9 +25,13 @@ import type { UserDb } from '@snugprotocol/db';
 import { authConnectionCredentialSecretKey, authConnectionStateSecretKey } from '@snugprotocol/db';
 
 import { ConnectionWizardSheet } from '../connections/ConnectionWizardSheet.js';
+import { createMemoryBackend, openUserDb } from '@snugprotocol/db';
+import { admitConnectionRequirement } from '@snugprotocol/auth';
+
 import {
   __resetConnectionWizardForTests,
   claimConnectionVerified,
+  migrateConnectionRegistryDrift,
   connectionWizardStepStore,
   isTokenClaimRequirement,
   openConnectionWizard,
@@ -35,7 +39,8 @@ import {
   saveConnectionCredentials,
   tokenClaimPairingFor,
 } from '../state/connectionWizard.js';
-import { installTestUserDb } from './userdbTestHelper.js';
+import { installTestUserDb, locateWasm } from './userdbTestHelper.js';
+import { resetUserDbForTests, setUserDbForTests } from '../state/userdb.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -56,7 +61,7 @@ const simplefinRequirement: ConnectionRequirement = {
   slot: 'simplefin',
   provider: { name: 'SimpleFIN' },
   kind: 'basic_auth',
-  declaredApiHosts: ['bridge.simplefin.org'],
+  declaredApiHosts: ['beta-bridge.simplefin.org'],
 };
 
 /** A registry-unknown basic_auth provider — must keep the ordinary typed flow. */
@@ -71,8 +76,8 @@ const customBasicRequirement: ConnectionRequirement = {
   declaredApiHosts: ['portal.example'],
 };
 
-const CLAIM_URL = 'https://bridge.simplefin.org/simplefin/claim/tok-1';
-const ACCESS_URL = 'https://u1:p1@bridge.simplefin.org/simplefin';
+const CLAIM_URL = 'https://beta-bridge.simplefin.org/simplefin/claim/tok-1';
+const ACCESS_URL = 'https://u1:p1@beta-bridge.simplefin.org/simplefin';
 const setupToken = btoa(CLAIM_URL);
 
 /** Claim-then-verify stub; fresh Response per call (one-shot-resource lesson). */
@@ -375,5 +380,72 @@ describe('the sheet routes a token-claim row to the paste screen', () => {
     expect(container.querySelector('[data-testid="token-claim-step"]')).toBeNull();
     expect(container.querySelector('input[data-field-key="username"]')).not.toBeNull();
     expect(container.querySelector('input[data-field-key="password"]')).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registry host drift heals (owner-found, first real walk 2026-08-18)
+// ---------------------------------------------------------------------------
+//
+// THE DEFECT: the first registry pin used `bridge.simplefin.org` — a 302 ALIAS of the
+// real serving host `beta-bridge.simplefin.org` — so every REAL token refused at the
+// ceiling gate. Fixing the pin fixed fresh installs; an ALREADY-APPROVED row kept its
+// frozen alias ceiling, and the drift migration's gate (fields/seats/scopes) was
+// HOST-BLIND: it answered 'none' forever. These tests pin the healing path.
+//
+// THE FIXTURE fabricates the row the way it truly arises — approved by a build whose
+// registry pinned the old host. That gate ADMITTED the old shape verbatim, so the
+// fixture db wires a pass-through admission gate for the legacy write; the migration
+// under test runs TODAY's real admission, which is the whole point.
+describe('migrateConnectionRegistryDrift — a moved registry host reaches the diff screen', () => {
+  /**
+   * The gate is SWITCHABLE: permissive while the legacy row is written (yesterday's
+   * registry admitted that shape verbatim), then TODAY's real gate — which is what the
+   * migration's staging write runs through in production, and what substitutes the
+   * moved host into the pending column.
+   */
+  async function installLegacyHostDb(): Promise<{ db: UserDb; endLegacyWrites: () => void }> {
+    resetUserDbForTests();
+    let legacyMode = true;
+    const opened = await openUserDb({
+      backend: createMemoryBackend(),
+      locateWasm,
+      persistDebounceMs: 1,
+      admissionGate: (requirement, context) =>
+        legacyMode
+          ? { ok: true, requirement, issues: [], borrowed: false }
+          : admitConnectionRequirement(requirement, { channel: context.channel as never }),
+    });
+    if (opened.status !== 'ok') throw new Error(`legacy fixture db open failed: ${opened.status}`);
+    setUserDbForTests(opened.userDb);
+    return { db: opened.userDb, endLegacyWrites: () => (legacyMode = false) };
+  }
+
+  it('stages the host move, and re-approval re-freezes the ceiling to the real host', async () => {
+    const { db: legacyDb, endLegacyWrites } = await installLegacyHostDb();
+    legacyDb.putDeclaredConnection(
+      APP,
+      'simplefin',
+      { ...simplefinRequirement, declaredApiHosts: ['bridge.simplefin.org'] },
+      'starter' as never,
+    );
+    legacyDb.approveConnection(APP, 'simplefin');
+    expect(legacyDb.getConnection(APP, 'simplefin')?.allowedHosts).toEqual(['bridge.simplefin.org']);
+    endLegacyWrites(); // today's build takes over — every later write meets the real gate
+
+    const outcome = await migrateConnectionRegistryDrift(APP, 'simplefin');
+    // NEVER a silent promotion — the ceiling is moving, so the user decides on the
+    // diff screen the staged column renders.
+    expect(outcome).toBe('staged');
+    const staged = legacyDb.getConnection(APP, 'simplefin');
+    expect(staged?.pendingRequirement?.declaredApiHosts).toEqual(['beta-bridge.simplefin.org']);
+
+    legacyDb.reapproveConnection(APP, 'simplefin');
+    expect(legacyDb.getConnection(APP, 'simplefin')?.allowedHosts).toEqual(['beta-bridge.simplefin.org']);
+  });
+
+  it('a row already on the real host answers none — no perpetual re-staging loop', async () => {
+    declare(simplefinRequirement, { approve: true });
+    expect(await migrateConnectionRegistryDrift(APP, 'simplefin')).toBe('none');
   });
 });

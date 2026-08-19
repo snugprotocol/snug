@@ -41,7 +41,7 @@ open a merchant's cancellation page for the user.
    and the minted credentials fill the entry's declared `basic_auth` fields. The
    ADR-0023 binding order is preserved unchanged — collect → approve → **freeze** →
    claim → verify — and the seat still **cannot express a host**: the ceiling freezes
-   from the registry's pinned bridge host (**exactly one** — `bridge.simplefin.org`;
+   from the registry's pinned bridge host (**exactly one** — `beta-bridge.simplefin.org`;
    symbolic connection-relative addressing requires a singleton ceiling, and the
    declared test probe fires at `allowedHosts[0]` — review Blocker 2), and the decoded
    claim URL and returned access URL must land on it (https-only, punycode-normalized,
@@ -105,3 +105,18 @@ open a merchant's cancellation page for the user.
 - Threat-model delta: `docs/security/threat-model-delta-simplefin-token-claim.md`
   (user-supplied claim target bounded by the frozen ceiling; single-use-token honesty;
   open-url phishing surface bounded by the full-URL confirm dialog).
+
+## Amendment (2026-08-18, owner's first real walk)
+
+The first pinned host was `bridge.simplefin.org` — a **302 alias** of the real serving
+host `beta-bridge.simplefin.org` (the "beta" name is historical; it is where accounts
+live, tokens mint, and claim URLs point). Every real token therefore refused at the
+ceiling gate, correctly, against a wrong pin. Three fixes rode the correction:
+1. The pin moved to `beta-bridge.simplefin.org` (probe recorded beside the seat).
+2. `migrateConnectionRegistryDrift`'s detection gate gained **host drift** — it was
+   blind to a moved registry host, so an already-approved row could never heal; a
+   ceiling move now stages to the reapproval diff screen (never a silent promotion).
+3. Ledger switched from a literal-host sync URL to **connection-relative addressing**
+   (`snug-connection://simplefin/...`, ADR-0026) — installed starters never receive
+   rebuilds, so an app that names a host bakes yesterday's host into bytes forever;
+   an app that names its SLOT is immune to host moves by construction.

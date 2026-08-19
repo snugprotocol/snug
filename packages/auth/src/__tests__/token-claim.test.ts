@@ -30,9 +30,9 @@ const PAIRING: WellKnownTokenClaimPairing = {
   verify: { method: 'GET', pathAndQuery: '/simplefin/accounts?balances-only=1' },
 };
 
-const CEILING = ['bridge.simplefin.org'] as const;
-const CLAIM_URL = 'https://bridge.simplefin.org/simplefin/claim/demo-token-123';
-const ACCESS_URL = 'https://user-abc:secret-xyz@bridge.simplefin.org/simplefin';
+const CEILING = ['beta-bridge.simplefin.org'] as const;
+const CLAIM_URL = 'https://beta-bridge.simplefin.org/simplefin/claim/demo-token-123';
+const ACCESS_URL = 'https://user-abc:secret-xyz@beta-bridge.simplefin.org/simplefin';
 
 /** Standard base64 the way SimpleFIN mints tokens (btoa is fine: claim URLs are ASCII). */
 const token = (url: string): string => btoa(url);
@@ -90,7 +90,7 @@ function expectNoSecretEcho(result: TokenClaimResult, setupToken: string): void 
   expect(bytes).not.toContain(setupToken);
   expect(bytes).not.toContain('user-abc');
   expect(bytes).not.toContain('secret-xyz');
-  expect(bytes).not.toContain('bridge.simplefin.org/simplefin/claim');
+  expect(bytes).not.toContain('beta-bridge.simplefin.org/simplefin/claim');
 }
 
 describe('the happy path', () => {
@@ -119,7 +119,7 @@ describe('the happy path', () => {
   it('verifies at the pairing path on the ACCESS URL host, Basic-credentialed, redirect:"error"', async () => {
     const { fetchImpl, calls } = claimThenVerifyFetch();
     await run(token(CLAIM_URL), fetchImpl);
-    expect(calls[1]?.url).toBe('https://bridge.simplefin.org/simplefin/accounts?balances-only=1');
+    expect(calls[1]?.url).toBe('https://beta-bridge.simplefin.org/simplefin/accounts?balances-only=1');
     expect(calls[1]?.init?.method).toBe('GET');
     expect(calls[1]?.init?.redirect).toBe('error');
     const headers = (calls[1]?.init?.headers ?? {}) as Record<string, string>;
@@ -130,7 +130,7 @@ describe('the happy path', () => {
     // The URL API keeps userinfo percent-encoded; the Basic header must carry the REAL
     // bytes or every credential containing a reserved character fails forever.
     const { fetchImpl } = claimThenVerifyFetch({
-      claimBody: 'https://u%40x:p%2Fw@bridge.simplefin.org/simplefin',
+      claimBody: 'https://u%40x:p%2Fw@beta-bridge.simplefin.org/simplefin',
     });
     const commit = commitSpy();
     await run(token(CLAIM_URL), fetchImpl, commit);
@@ -160,15 +160,15 @@ describe('the pasted token is refused before any network', () => {
   it('not base64 at all', () => refusedBeforeNetwork('%%% not a token %%%', 'malformed_token'));
   it('base64 of something that is not a URL', () => refusedBeforeNetwork(btoa('just words'), 'malformed_token'));
   it('an http claim URL', () =>
-    refusedBeforeNetwork(token('http://bridge.simplefin.org/simplefin/claim/x'), 'claim_target_refused'));
+    refusedBeforeNetwork(token('http://beta-bridge.simplefin.org/simplefin/claim/x'), 'claim_target_refused'));
   it('a claim URL off the frozen ceiling', () =>
     refusedBeforeNetwork(token('https://evil.example/simplefin/claim/x'), 'claim_target_refused'));
   it('a lookalike host (subdomain of an attacker domain)', () =>
-    refusedBeforeNetwork(token('https://bridge.simplefin.org.evil.example/claim/x'), 'claim_target_refused'));
+    refusedBeforeNetwork(token('https://beta-bridge.simplefin.org.evil.example/claim/x'), 'claim_target_refused'));
   it('a claim URL with an explicit port', () =>
-    refusedBeforeNetwork(token('https://bridge.simplefin.org:8443/simplefin/claim/x'), 'claim_target_refused'));
+    refusedBeforeNetwork(token('https://beta-bridge.simplefin.org:8443/simplefin/claim/x'), 'claim_target_refused'));
   it('a claim URL carrying its own userinfo', () =>
-    refusedBeforeNetwork(token('https://a:b@bridge.simplefin.org/simplefin/claim/x'), 'claim_target_refused'));
+    refusedBeforeNetwork(token('https://a:b@beta-bridge.simplefin.org/simplefin/claim/x'), 'claim_target_refused'));
 });
 
 describe('the claim response is refused honestly', () => {
@@ -205,13 +205,13 @@ describe('the claim response is refused honestly', () => {
   };
 
   it('an access URL that is not a URL', () => accessRefused('the bridge is on fire'));
-  it('an http access URL', () => accessRefused('http://user:pass@bridge.simplefin.org/simplefin'));
+  it('an http access URL', () => accessRefused('http://user:pass@beta-bridge.simplefin.org/simplefin'));
   it('an access URL off the frozen ceiling', () => accessRefused('https://user:pass@evil.example/simplefin'));
   it('an access URL with an explicit port', () =>
-    accessRefused('https://user:pass@bridge.simplefin.org:8443/simplefin'));
-  it('an access URL missing its credentials', () => accessRefused('https://bridge.simplefin.org/simplefin'));
+    accessRefused('https://user:pass@beta-bridge.simplefin.org:8443/simplefin'));
+  it('an access URL missing its credentials', () => accessRefused('https://beta-bridge.simplefin.org/simplefin'));
   it('an access URL on the WRONG BASE PATH — the checked invariant (review Blocker 3)', () =>
-    accessRefused('https://user:pass@bridge.simplefin.org/other-prefix'));
+    accessRefused('https://user:pass@beta-bridge.simplefin.org/other-prefix'));
 });
 
 describe('verify-before-commit (ADR-0025)', () => {
@@ -288,7 +288,7 @@ describe('bounds', () => {
     const adversarial = [
       'AAAA%%%%',
       btoa('https://evil.example/steal?token=SENTINEL-9'),
-      btoa('http://bridge.simplefin.org/claim/SENTINEL-9'),
+      btoa('http://beta-bridge.simplefin.org/claim/SENTINEL-9'),
     ];
     for (const setupToken of adversarial) {
       const { result } = await run(setupToken, (() => {

@@ -1788,7 +1788,15 @@ export async function migrateConnectionRegistryDrift(appId: string, slot: string
     // seat drift, so the detection gate returned 'none' and a scope-less row (the
     // owner's real Spotify install) could never heal at all.
     const scopesChanged = requirementScopesDigest(row.requirement) !== requirementScopesDigest(substituted);
-    if (!fieldSetChanged && !gainsSeats && !scopesChanged) return 'none';
+    // HOST drift joins the gate (TASK-20260818, owner-found on Ledger's first real
+    // walk): the registry moved SimpleFIN's pinned host (`bridge.` was a 302 alias of
+    // `beta-bridge.`), and a gate keyed only on fields/seats/scopes returned 'none' —
+    // leaving every already-approved row frozen to a ceiling no real token could ever
+    // land on, permanently. A ceiling move NEVER promotes silently (the promote branch
+    // below already requires host equality); detecting it here routes the row to the
+    // reapproval diff screen, where the moved host is a visible line the user approves.
+    const hostsChanged = !connectionHostsEqual(deriveConnectionAllowedHosts(substituted), row.allowedHosts);
+    if (!fieldSetChanged && !gainsSeats && !scopesChanged && !hostsChanged) return 'none';
 
     // Stage the row's OWN requirement: the gate's substitution writes the current
     // registry values into the pending column (amendment 1 opened exactly this path —

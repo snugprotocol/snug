@@ -2,5 +2,5 @@
   "slot": "simplefin",
   "provider": { "name": "SimpleFIN" },
   "kind": "basic_auth",
-  "declaredApiHosts": ["bridge.simplefin.org"]
+  "declaredApiHosts": ["beta-bridge.simplefin.org"]
 }
