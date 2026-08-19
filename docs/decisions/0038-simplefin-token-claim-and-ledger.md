@@ -28,16 +28,29 @@ open a merchant's cancellation page for the user.
    credentials allowed; the claim POST is a preflight-free simple request), so the
    integration is **web + desktop**, `browserCallable: true` with a dated probe comment.
    The sidecar remains the pattern for device-session providers only (ADR-0032).
-2. **A third pairing discriminant: `token-claim`.** Beside `exchange` (Hue) and
-   `device-link` (WhatsApp), the pairing union gains a shape for claim-once providers:
+2. **A third pairing discriminant: `token-claim` — in the REGISTRY union, zero protocol
+   bytes.** Beside `exchange` (Hue) and `device-link` (WhatsApp), the `WellKnownPairing`
+   union in `packages/auth/src/well-known-providers.ts` gains a shape for claim-once
+   providers. Like both siblings it is registry data, deliberately never persisted on
+   the connection row (ADR-0023 D2: a requirement seat carrying claim mechanics would be
+   a channel through which a prompt-injected declaration could aim an uncredentialed
+   POST) — so `connection-requirement.ts` is untouched and Phase A has no spec impact
+   (fresh-context review Blocker 1; the plan's first draft mis-homed this).
+   The shape:
    the user pastes a one-time token, the WIZARD (never the app) decodes and claims it,
-   and the minted credentials fill the requirement's declared `basic_auth` fields. The
+   and the minted credentials fill the entry's declared `basic_auth` fields. The
    ADR-0023 binding order is preserved unchanged — collect → approve → **freeze** →
    claim → verify — and the seat still **cannot express a host**: the ceiling freezes
-   from the registry's pinned bridge hosts, and both the decoded claim URL and the
-   returned access URL must land on that frozen ceiling (https-only, punycode-normalized)
-   or the claim refuses. Verify-before-claim (ADR-0025) is required; minted credentials
-   and connected state are written together by the proving function (the
+   from the registry's pinned bridge host (**exactly one** — `bridge.simplefin.org`;
+   symbolic connection-relative addressing requires a singleton ceiling, and the
+   declared test probe fires at `allowedHosts[0]` — review Blocker 2), and the decoded
+   claim URL and returned access URL must land on it (https-only, punycode-normalized,
+   default port, empty userinfo, `redirect:'error'` on both requests) or the claim
+   refuses. The returned access URL's path must be exactly `/simplefin` — the base-path
+   assumption is a checked invariant, not a hope (review Blocker 3). Verify-before-claim
+   (ADR-0025) is required, at the same `/simplefin/accounts?balances-only=1` spelling as
+   `testRequest`; minted credentials and connected state (`claimVerifiedAt`, its own
+   `AuthConnectionState` seat) are written together by the proving function (the
    `completeDeviceLink` lesson). The setup token is consumed, never persisted.
 3. **Kind is `basic_auth` with mint-filled fields.** `username`/`password` are parsed
    from the access URL by the claim step; no `request` seat — the kind default produces
@@ -78,8 +91,11 @@ open a merchant's cancellation page for the user.
 
 ## Consequences
 
-- `packages/protocol` gains two internal-draft surfaces (token-claim pairing seat;
-  open-url frame) — spec-changelog internal-draft entries, zero `schemas/` bytes.
+- Phase A touches **zero** protocol bytes: the token-claim union member is registry data
+  in `packages/auth`. Phase C touches protocol twice: the open-url frame (internal
+  draft, out of `schemas/`, net-frames precedent) AND an optional `openUrl` capability
+  flag on `hostReadySchema` — which IS published surface: `gen:schemas` + a real
+  spec-changelog entry (the `net` flag precedent).
 - `packages/auth` gains the `simplefin` registry entry + a pure claim module; the
   structural registry suites extend to cover it.
 - The wizard gains one screen variant (paste token → claim → verified), reusing the

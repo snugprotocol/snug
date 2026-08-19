@@ -5,8 +5,8 @@
 - **Owner**: Jeetu
 - **Risk tier**: **High** (auto-escalated: touches `packages/protocol` connection-requirement schema + `packages/auth` registry/wizard runtime — credential-minting path, C1-bearing)
 - **Branch**: `feat/TASK-20260818-ledger-starter`
-- **Packages touched**: `protocol` (internal-draft pairing discriminant) · `auth` (registry entry + claim runtime) · `playground` (wizard flow + shelf) · `examples` (the `ledger/` starter) · dependents per graph (protocol → everything)
-- **Spec impact**: **internal draft only** — `connection-requirement.ts` is deliberately NOT in `schemas/` exports (AL-02 posture); follows the ADR-0026 precedent: internal-draft spec-changelog entry, zero `schemas/` bytes changed
+- **Packages touched**: `auth` (pairing union + registry entry + claim runtime + `claimVerifiedAt` state seat) · `playground` (wizard flow + shelf + open-url confirm) · `examples` (the `ledger/` starter) · `protocol` + `runner` (**Phase C only**: open-url frame internal draft + host-ready `openUrl` capability flag) · dependents per graph
+- **Spec impact**: **Phase A: none** (fresh-context review Blocker 1 — the pairing union is REGISTRY data in `packages/auth`, deliberately never persisted on the row (ADR-0023 D2), so token-claim touches zero protocol bytes). **Phase C: real** — the open-url frame is internal-draft (out of `schemas/`, net-frames precedent) BUT capability discovery rides `hostReadySchema`, which IS in the published `SOURCES` set: optional `openUrl` flag ⇒ `pnpm gen:schemas` + a real spec-changelog entry for `host-ready.json` (the `net` flag's own precedent)
 - **Related**: ADR-0038 (drafted this task) · precedents ADR-0025 (verify-before-claim), ADR-0023 (collect→approve→freeze→pair binding order), ADR-0026 (connection-relative addressing), ADR-0031 (connected shelf + provenance), ADR-0035 (authoring-docs ingestion), ADR-0011 (LLM-optional), ADR-0018 (runtime contract) · `docs/next-steps.md` BYOK CORS advisory (2026-08-12)
 
 ## Spec (what & why)
@@ -38,29 +38,49 @@ contract; Q&A, planning, projections) on top of deterministic dashboards.
 
 **Acceptance criteria** (each becomes ≥1 test):
 
-*Phase A — SimpleFIN provider (High-tier surface)*
-1. `connection-requirement.ts` pairing union gains a `token-claim` discriminant (beside
-   `exchange`/`device-link`); schema refuses a token-claim seat carrying its own host/URL,
-   and refuses it on kinds other than `basic_auth`.
-2. Registry gains `simplefin` (kind `basic_auth`, `apiHosts: ['bridge.simplefin.org',
-   'beta-bridge.simplefin.org']`, `browserCallable: true` with dated probe comment,
-   `testRequest` GET `/simplefin/accounts?balances-only=1`, Hue-grade layman
-   `registration.instructions`); all registry structural suites
-   (self-containment/template-parity/static-kind) pass with the new row.
+*Phase A — SimpleFIN provider (High-tier surface; amended per fresh-context review 2026-08-18)*
+1. `WellKnownPairing` union (`packages/auth/src/well-known-providers.ts` — NOT
+   `connection-requirement.ts`; Blocker 1) gains `WellKnownTokenClaimPairing`
+   (`kind: 'token-claim'`, seats `tokenLabel`, `preconditionInstruction`, `secretFields`,
+   REQUIRED `verify`); "no host/URL representable" and "basic_auth-only" are enforced by
+   the type's construction + structural-registry tests (the `linked_device` precedent),
+   never by requirement-schema superRefines. The seat stays registry data, never
+   persisted on the row (ADR-0023 D2).
+2. Registry gains `simplefin` — **ONE host: `apiHosts: ['bridge.simplefin.org']`**
+   (Blocker 2: symbolic addressing requires a one-host ceiling —
+   `connected-fetch.ts:943` refuses `allowedHosts.length !== 1` — and the declared
+   probe fires at `allowedHosts[0]`); kind `basic_auth`, `browserCallable: true` with
+   dated probe comment, `testRequest` GET `/simplefin/accounts?balances-only=1`,
+   Hue-grade layman `registration.instructions`. Beta-bridge for the owner's demo-token
+   manual check rides a dev-only fixture, never the shipped entry. All registry
+   structural suites pass with the new row.
 3. Wizard runs the claim: paste setup token → base64-decode → refuse unless decoded URL
-   is https AND its host is on the row's **frozen ceiling** → POST (no auth header, empty
-   body) → response access URL refused unless https AND host on ceiling → parse
-   `username`/`password` → **verify** (`GET /accounts?balances-only=1` with minted Basic
-   creds, 2xx only) → credentials + connected state written TOGETHER by the proving
-   function (completeDeviceLink lesson). Binding order collect → approve → freeze →
-   claim → verify pinned by test.
+   is https AND host on the frozen (singleton) ceiling AND default port (empty
+   `url.port`) AND empty userinfo → POST with `redirect: 'error'`, no auth header,
+   empty body → returned access URL refused unless https + on-ceiling host + default
+   port + **path exactly `/simplefin`** (Blocker 3: the base path becomes a checked
+   invariant, refused with a named error, live-probed and date-commented) → parse
+   `username`/`password` → **verify** (`GET /simplefin/accounts?balances-only=1` — SAME
+   spelling as `testRequest`, one definition — with minted Basic creds, `redirect:
+   'error'`, 2xx only) → credentials + connected state (`claimVerifiedAt`, its OWN
+   `AuthConnectionState` seat per the lanVerifiedAt/linkVerifiedAt doctrine) written
+   TOGETHER by the proving function. Binding order collect → approve → freeze → claim →
+   verify pinned by test.
 4. Negative tests (C1): setup token never persisted anywhere; minted username/password
    never returned from the claim function, never in any store/render/log (byte-probe);
    claim POST carries no credential header; decoded host off-ceiling refused
-   (punycode-normalized comparison); a used token's 403 surfaces as a named,
-   plain-language error with a "get a fresh token" retry path — never a silent failure.
-5. Re-opening the wizard on a connected row never re-claims; revoke wipes the
-   `auth:<appId>:simplefin:*` slice (existing accessors — pinned for this slot).
+   (punycode-normalized comparison); off-default port refused; userinfo-bearing URL
+   refused; redirect refused; wrong access-URL path refused; a used token's 403
+   surfaces as a named, plain-language error with a "get a fresh token" retry path —
+   never a silent failure.
+5. Wizard routing: `isTokenClaimRequirement(row)` (single registry resolution, the
+   `lanPairingExchangeFor` rule) routes to the paste screen; `saveConnectionCredentials`
+   gains a third family refusal ("this access key is created when you claim your setup
+   token — there is nothing to type") WITH its positive twin (claim path still writes);
+   a custom user-authored `basic_auth` provider still gets the typed screen (pinned).
+   Re-opening the wizard on a row with `claimVerifiedAt` never re-claims; revoke wipes
+   the `auth:<appId>:simplefin:*` slice (per-slot wipe accessor verified in A4 tests,
+   not assumed).
 
 *Phase B — the Ledger starter*
 6. `examples/ledger/` passes the full examples validate suite: single-file `app.html`
@@ -113,8 +133,15 @@ contract; Q&A, planning, projections) on top of deterministic dashboards.
     existing https-only system-browser opener. The app can never navigate anywhere
     itself (C2 unchanged: sandbox flags untouched, no `allow-popups`). Negative tests:
     non-https refused, credential-bearing URL userinfo refused, no confirm → no open,
-    frame from a starter (uninstalled) refused. **The user signs in on the merchant's
-    site themselves — merchant credentials never touch Snug (C1).**
+    frame from a starter (uninstalled) refused; an app without the capability gets a
+    named HOST_ERROR-style refusal, never the router's silent unknown-frame drop.
+    **The user signs in on the merchant's site themselves — merchant credentials never
+    touch Snug (C1).** Dialog hardening (review SF8): provenance copy ("The app asked
+    to open this address — Snug hasn't checked it…"), host rendered in punycode/toASCII
+    form (homograph defense), `window.open(url, '_blank', 'noopener,noreferrer')`
+    called SYNCHRONOUSLY in the click handler (no awaits between gesture and open —
+    popup-blocker escape proven by a real-browser Playwright assertion, not a stub),
+    one pending open-url dialog per app instance.
 15. Verified-cancelled tracking: user marks "I cancelled"; the app watches the next
     expected charge window and flips to "verified — no charge since <date>" (or flags
     "still charging"), with a running savings tally. Deterministic, testable from
@@ -133,8 +160,15 @@ contract; Q&A, planning, projections) on top of deterministic dashboards.
   refresh only.
 - Investment holdings detail, multi-currency conversion (per-currency display only),
   generalizing connection-relative addressing to carry a base path (Ledger addresses
-  `/simplefin/...` literally; prefix is stable for the pinned hosts — residual noted in
-  ADR-0038).
+  `/simplefin/...` literally; the claim step REFUSES an access URL whose path is not
+  `/simplefin`, so the assumption is checked, not hoped — residual noted in ADR-0038).
+- Third-party SimpleFIN servers on other hosts (the ceiling is the pinned bridge host;
+  named limitation, ADR-0038).
+- **Phase C is explicitly severable** (review N10): if it stalls, Phase B ships with the
+  deterministic subscription radar (AC9) as the demo surface the sample data points at;
+  the ranked money-leaks view + open-url land when C does. A post-B edit to `app.html`
+  re-baselines the starter-HTML vouch for already-installed users — acceptable
+  pre-launch, noted.
 
 ## Plan
 
@@ -144,27 +178,37 @@ implementation code**, and negative tests land with each C1-adjacent step.
 
 ### Phase A — SimpleFIN provider + token-claim (protocol → auth → playground)
 
-A1. `packages/protocol/src/connection-requirement.ts`: add `token-claim` pairing
-    discriminant — seats: `tokenLabel`, `preconditionInstruction`, `secretFields`
-    (must equal the requirement's two `basic_auth` field keys), `verify` (required,
-    ADR-0025). SuperRefine: no host/URL seat representable; `basic_auth`-only coherence.
-    Tests first in `connection-requirement.test.ts` (accept + both refusals).
-    Spec-sync: internal-draft changelog entry (ADR-0026 precedent).
-A2. `packages/auth/src/well-known-providers.ts`: `simplefin` entry per AC2. Extend
-    structural suites (`static-kind-registry`, `registry-self-containment`,
-    `registry-template-parity`) — no `request` seat: `basic_auth` kind default produces
-    the `Authorization: Basic` header; fields `username`/`password` marked
-    "filled in for you when you connect".
+A1. `packages/auth/src/well-known-providers.ts`: add `WellKnownTokenClaimPairing` to the
+    `WellKnownPairing` union (registry data, never persisted on the row — Blocker 1) —
+    seats: `tokenLabel`, `preconditionInstruction`, `secretFields` (must equal the
+    entry's two `basic_auth` field keys), `verify` (required, ADR-0025). No host/URL
+    seat is representable by construction. Tests first in the structural registry
+    suites (accept + coherence refusals: token-claim beside non-basic_auth kind,
+    secretFields/fields mismatch, missing verify).
+A2. Same file: `simplefin` entry per AC2 (ONE host `bridge.simplefin.org`; no `request`
+    seat — `basic_auth` kind default produces the header; fields `username`/`password`
+    marked "filled in for you when you connect"). Extend `static-kind-registry`,
+    `registry-self-containment`, `registry-template-parity`. Live-probe the `/simplefin`
+    base path on the pinned host; date the comment (CORS probes already dated
+    2026-08-18).
 A3. `packages/auth/src/token-claim.ts` (new, pure, DI over `fetchImpl`): decode/validate
-    setup token, claim POST, access-URL parse (URL API, never regex), ceiling checks via
-    existing `isHostAllowed`/`normalizeAuthHost`. Unit tests incl. every refusal + the
-    never-returns-secret probe. The CredentialStore write happens in the wizard step
-    (A4) via the same write-together contract as `completeDeviceLink`.
+    setup token, claim POST (`redirect:'error'`, no headers, empty body), access-URL
+    parse (URL API, never regex; refuse non-https / off-ceiling host / non-default port
+    / userinfo in the DECODED claim URL, and additionally wrong base path on the
+    RETURNED access URL), verify GET (`redirect:'error'`) — ceiling checks via existing
+    `isHostAllowed`/`normalizeAuthHost`. Unit tests incl. every refusal (AC4) + the
+    never-returns-secret probe. `AuthConnectionState` gains `claimVerifiedAt` (its own
+    seat, credential-store.ts doctrine). The CredentialStore write happens in the
+    wizard step (A4) via the same write-together contract as `completeDeviceLink`.
 A4. `apps/playground/src/state/connectionWizard.ts` + `ConnectionWizardSheet.tsx`:
-    token-claim credentials screen (one paste box, verb button "Claim my access key"),
-    claim runs over the platform `fetchImpl` seam (wizard-probe path — desktop native
-    fetch included for free), verify-before-claim, named error copy for 403/expired,
-    honest retry. Tests: `simplefinWizardFlow` (step machine + refusals + write-together
+    `isTokenClaimRequirement(row)` predicate (single registry resolution) routes the
+    sheet to the paste screen (one paste box, verb button "Claim my access key");
+    `saveConnectionCredentials` gains the third family refusal + positive twin; custom
+    basic_auth providers still get the typed screen (pinned). Claim runs over the
+    platform `fetchImpl` seam (wizard-probe path — desktop native fetch for free),
+    verify-before-claim, no-re-claim gate keyed on `claimVerifiedAt`, named error copy
+    for 403/expired, honest retry. Per-slot revoke wipe accessor verified by test, not
+    assumed. Tests: `simplefinWizardFlow` (step machine + refusals + write-together
     call-order spy), mirroring `linkedDeviceWizard` structure.
 A5. Threat-model delta: `docs/security/threat-model-delta-simplefin-token-claim.md`
     (user-supplied claim target bounded by ceiling; single-use token; what is accepted
@@ -177,11 +221,16 @@ B1. Read `/Users/jeetu/.claude/projects/-Users-jeetu-SnugProtocol/memory/prompt-
     before authoring the runtime contract + in-app prompts (standing owner rule).
 B2. `examples/ledger/` per AC6–AC10: app.html from the KB template (hooks verbatim; all
     authored code below the RESPONSE_SCHEMA banner); DDL literal array + `schemaReady`
-    gate; deterministic sample-data generator (fixed seed); sync engine; dashboards
-    (canvas/SVG, no new CDN deps beyond allowlist); LLM lanes with responseSchema.
-    `connection.json` bare manifest; `runtime-contract.json`; README ("Data it keeps"
-    section naming every table); authoring bundle — `01-build.md` carries the owner's
-    verbatim prompt (preserved below), header block per Telepath precedent.
+    gate; deterministic sample-data generator (fixed seed, authored to showcase the
+    money-leaks concierge per the owner amendment); sync engine; dashboards (canvas/SVG,
+    no new CDN deps beyond allowlist); LLM lanes with responseSchema. `connection.json`
+    bare manifest with the EXACT shape pinned (review N9: `slot`, `provider.name:
+    'SimpleFIN'`, `kind: 'basic_auth'`, `declaredApiHosts: ['bridge.simplefin.org']`,
+    NO `fields`, NO `pairing` key — the strict schema refuses unknown keys and
+    `parseManifest` fails SOFT to "declares nothing"); `runtime-contract.json`; README
+    ("Data it keeps" section naming every table); authoring bundle — `01-build.md`
+    carries the owner's verbatim prompt (preserved below),
+    `02-subscription-concierge.md` the follow-up, header blocks per Telepath precedent.
 B3. Suite wiring: `APPS` + `CONNECTED_APPS` (validate.test.mjs), `MANIFEST_APPS` +
     `P4_STARTER_FOLDERS` + `SURVEYED_FOLDERS` (connection-manifests.test.mjs),
     `STARTER_LOOKS` (HubView). Extracted-core tests for the pure logic (recurrence
@@ -194,15 +243,21 @@ B4. Playwright: starters-connect spec for ledger (install → declared row → w
 ### Phase C — subscription concierge (runner/protocol `open-url` capability + app surface)
 
 C1. `packages/protocol`: internal-draft `open-url` request frame (app→host; https-only,
-    no userinfo, own modest size class) — OUT of `schemas/` like the net frames; tests
-    first (accept + the AC14 refusals). Spec-sync: internal-draft changelog entry.
+    no userinfo, own modest size class) — OUT of `schemas/` like the net frames — PLUS
+    the published-surface half (review SF6): `hostReadySchema` capabilities gain an
+    optional `openUrl` flag (additive, R2-safe), `pnpm gen:schemas` regeneration, and a
+    REAL spec-changelog entry for `host-ready.json` (the `net` flag precedent). Tests
+    first (accept + the AC14 refusals).
 C2. `packages/runner`: `openUrl` capability seam beside NetHandler (host-assigned app
     binding, value-blind — the runner never opens anything itself; capability flag off
-    by default, off for starters). Tests mirror `host-net.test.ts`.
-C3. `apps/playground`: confirm dialog (full URL shown, verb button "Open <host>"), web
-    = host-page `window.open(url, '_blank', 'noopener')` on the confirm gesture, desktop
-    = existing https-only system-browser opener via the platform seam. Tests + one
-    Playwright spec (confirm → tab opened stub; decline → nothing).
+    by default, off for starters). An app without the capability gets a named refusal,
+    never the router's silent unknown-frame drop. Tests mirror `host-net.test.ts`.
+C3. `apps/playground`: confirm dialog per AC14 hardening (provenance copy, toASCII
+    host, `'noopener,noreferrer'`, SYNCHRONOUS open in the click handler, one pending
+    dialog per instance); web = host-page `window.open` on the confirm gesture, desktop
+    = existing https-only system-browser opener via the platform seam. Unit tests + one
+    REAL-BROWSER Playwright spec (confirm → tab actually opens — popup-blocker escape
+    is only provable there; decline → nothing).
 C4. Ledger app: money-leaks view, cancel playbook LLM lane (responseSchema'd), open-url
     integration with copy-link fallback when the capability is absent, verified-cancelled
     watcher + savings tally (pure logic in the extracted-core test file).
@@ -287,3 +342,20 @@ C4. Ledger app: money-leaks view, cancel playbook LLM lane (responseSchema'd), o
   subscriptions in the bundled feed). Fresh-context plan review launched next.
 - State: entering Gate 3 (tests first) on Phase A after review findings are addressed.
 - Next step: fresh-context plan review → address findings → A1 protocol tests.
+
+### 2026-08-18 — Claude (Fable 5) — review (fresh-context plan review, High-tier)
+- Done: adversarial fresh-context review returned 3 BLOCKERs, 5 SHOULD-FIXes, 2 NOTEs —
+  all plan-text defects, none architectural. Folded into the ACs/plan/ADR: (1) token-claim
+  lives in the registry `WellKnownPairing` union, NOT connection-requirement.ts — Phase A
+  touches zero protocol bytes; (2) ONE pinned host (`bridge.simplefin.org`) — a two-host
+  ceiling breaks symbolic addressing (`allowedHosts.length !== 1` refusal) AND aims the
+  declared probe at the wrong bridge; (3) `/simplefin` base path rides every spelling and
+  the claim REFUSES a divergent access-URL path; (4) `isTokenClaimRequirement` routing +
+  third `saveConnectionCredentials` refusal; (5) `claimVerifiedAt` as its own state seat;
+  (6) Phase C's host-ready `openUrl` flag IS a published-schema change (gen:schemas +
+  real spec-changelog entry); (7) claim/verify pin `redirect:'error'`, default port,
+  empty userinfo; (8) open-url dialog hardening (provenance copy, toASCII host,
+  noopener+noreferrer, synchronous open, real-browser proof); (9) exact bare-manifest
+  shape pinned; (10) Phase C severability stated.
+- State: plan amended and re-committed; review verdict "implementable as amended".
+- Next step: Gate 3 — A1/A2 structural tests first.
