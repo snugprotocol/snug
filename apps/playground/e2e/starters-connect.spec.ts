@@ -76,7 +76,12 @@ function appFrame(page: Page): FrameLocator {
 
 async function openStarterByName(page: Page, folder: string): Promise<FrameLocator> {
   await page.goto('/');
-  await page.getByRole('button', { name: `open ${folder.replace(/-/g, ' ')}` }).click();
+  // Click by IDENTITY, never by label (TASK-20260818 repair, first integration run of
+  // this env-gated spec): the tile's accessible name derives from its DISPLAY label
+  // (`open Standup`), which TASK-20260817's rename decoupled from the folder — so
+  // `open ${folder}` stopped matching for every renamed starter while this spec sat
+  // un-run. `data-starter-name` is the identity key the hue tests already key on.
+  await page.locator(`[data-testid="starter-tile"][data-starter-name="${folder}"] .tile-card-button`).click();
   await expect(page).toHaveURL(new RegExp(`/run/starter--${folder}`));
   return appFrame(page);
 }
@@ -133,6 +138,18 @@ test.describe('P4-AC7 / AL-09 AC8 — the degraded pre-connect state is real', (
         expect(app.getByRole('heading', { name: /connect openweather/i })).toBeVisible({ timeout: 20_000 }),
       // The city search — places/decisions work before any forecast can load.
       shell: (app) => app.getByLabel(/search for a city/i),
+    },
+    {
+      folder: 'ledger',
+      // examples/ledger/app.html (TASK-20260818, ADR-0038): Ledger's pre-connect state
+      // is SAMPLE MODE, not a degraded shell — the honesty is the banner saying so
+      // (sample data, swap-on-connect), and the usefulness is the full dashboard alive
+      // on the planted household. The DDL executing here is also the real-sql.js proof
+      // for the whole schema (the Standup DEFERRABLE lesson).
+      honest: async (app) =>
+        expect(app.locator('[data-sample-banner]')).toContainText(/sample data/i, { timeout: 20_000 }),
+      // The time machine — the hero chart renders from the seeded rows.
+      shell: (app) => app.getByRole('heading', { name: /the time machine/i }),
     },
   ];
 
