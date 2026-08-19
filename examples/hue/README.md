@@ -29,14 +29,30 @@ a session grant collapses a whole mood into a single yes.
 `sendMessage`, runtime contract in [`runtime-contract.json`](runtime-contract.json).
 The agent's reply is validated hard (unknown rooms dropped, numbers clamped to the
 bridge's legal ranges); off-schema replies degrade to narration-as-text and nothing
-is staged. Keyless/unpaired, the app stays whole: skeleton grid, wizard-pointing
-copy, built-in moods previewing against stand-in rooms, and full manual control the
-moment the bridge answers.
+is staged. Keyless/unpaired, the app stays whole: a lit sample home (see below),
+wizard-pointing copy, built-in moods previewing against the sample rooms, and full
+manual control the moment the bridge answers.
 
 **App DB:** one table — `moods(id, name, source, narration, rooms_json, created_at)`;
 `rooms_json` holds the per-room entries (`{roomName, brightness, xy|mirek}` or
 `{roomName, off}`) as a JSON column, applied atomically as sequenced grouped_light
 writes.
+
+## Sample mode
+
+Before a bridge has ever been paired (the `unconnected` phase — and only that phase:
+a paired bridge that is loading, unreachable, or erroring gets the real skeleton and
+a phase-specific notice, never fictional rooms), Moodboard renders a
+clearly-bannered **sample home** instead of a skeleton: five made-up rooms caught
+mid-evening — Living Room in dusk amber at 45%, Office at day-white 100%, Bedroom in
+candle glow at 18%, Kitchen off, a rose-lit Reading Nook — as the same glowing tiles
+a real house gets, with the built-in moods previewing against them and one canned
+designer look ("Movie Night") standing in under *your moods*. The dataset is a fixed
+authored constant (the `HUE-SAMPLE-BEGIN/END` block): deterministic, render-only,
+never written to the moods table, never sent to the designer, and incapable of
+reaching the bridge (`groupedLightId: null`). The first successful link replaces it
+wholesale — the moment the bridge answers with your rooms, the sample home unmounts
+and never renders again while the bridge is linked.
 
 Authoring provenance lives in [`authoring/`](authoring/): the verbatim build prompt
 and the short vision / requirements / plan docs.

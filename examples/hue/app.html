@@ -191,6 +191,12 @@
     .assign .dot { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 1px solid var(--border); background: var(--chipc, var(--card2)); }
     .assign .pct { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
     .note { color: var(--muted); font-size: 0.85rem; }
+    .sample-note {
+      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      background: var(--accent-soft); border: 1px solid var(--border); border-radius: 14px;
+      padding: 10px 14px; font-size: 0.88rem; line-height: 1.45;
+    }
+    .sample-note strong { color: var(--accent); }
     .fineprint { color: var(--muted); font-size: 0.8rem; font-style: italic; margin: 2px 0 0; }
     .soft { color: var(--muted); font-size: 0.9rem; margin: 0; }
     .designer .lanehint ul { margin: 8px 0 0; padding-left: 18px; }
@@ -588,6 +594,77 @@ const builtinEntries = (mood, rooms) => {
   const base = rooms.length > 0 ? rooms : [1, 2, 3, 4].map((n) => ({ name: 'room ' + n }));
   return base.map((r, i) => ({ roomName: r.name, ...mood.recipe(i, base.length) }));
 };
+
+// ===== HUE-SAMPLE-BEGIN =====
+// The sample home (ADR-0038, Ledger pattern). Before a bridge is ever paired,
+// Moodboard renders THIS home instead of a skeleton: a made-up house caught
+// mid-evening, so the glowing tiles demo what the app is for. Everything here is
+// a fixed authored constant — no clocks, no randomness — and strictly render-only:
+// nothing in this block can reach the bridge, the database, or the designer. It is
+// never saved and never applied; the moment the bridge answers, the real rooms
+// mount and this home simply stops rendering.
+//
+// The scene is authored to plant the app's pitch in one glance:
+//  - Living Room, dusk amber at 45% — light as mood, not as a toggle.
+//  - Office, crisp day-white at 100% — two rooms, two jobs, one house: per-room
+//    composition is the point.
+//  - Bedroom, candle glow dimmed to 18% — the low end of the range reads as
+//    warmth, not darkness.
+//  - Kitchen, off — an unlit tile, so on/off state is legible at a glance.
+//  - Reading Nook, rose at 30% — color (not just temperature) in a small room.
+// Room objects are shaped exactly like composeRooms() output; groupedLightId is
+// null so no write path could address them even in principle.
+const SAMPLE_ROOMS = [
+  { id: 'sample-living', name: 'Living Room', groupedLightId: null, on: true, brightness: 45, lightCount: 3, color: { xy: { x: 0.5266, y: 0.4133 } } },
+  { id: 'sample-office', name: 'Office', groupedLightId: null, on: true, brightness: 100, lightCount: 2, color: { mirek: 182 } },
+  { id: 'sample-bedroom', name: 'Bedroom', groupedLightId: null, on: true, brightness: 18, lightCount: 2, color: { mirek: 500 } },
+  { id: 'sample-kitchen', name: 'Kitchen', groupedLightId: null, on: false, brightness: 0, lightCount: 4, color: { mirek: 250 } },
+  { id: 'sample-nook', name: 'Reading Nook', groupedLightId: null, on: true, brightness: 30, lightCount: 1, color: { xy: { x: 0.42, y: 0.26 } } },
+];
+
+// One finished designer proposal, canned: what "movie night" comes back as when the
+// agent plays lighting designer. Shows the USP (narration + a validated per-room
+// plan) without any agent turn — it is a constant, not a live compose.
+const SAMPLE_DESIGNED_MOOD = {
+  name: 'Movie Night',
+  narration: 'The screen does the talking: the house drops to embers, and the nook keeps one small reading flame for whoever loses interest in the film.',
+  entries: [
+    { roomName: 'Living Room', brightness: 9, mirek: 454 },
+    { roomName: 'Office', off: true },
+    { roomName: 'Bedroom', brightness: 12, xy: { x: 0.18, y: 0.12 } },
+    { roomName: 'Kitchen', off: true },
+    { roomName: 'Reading Nook', brightness: 16, mirek: 500 },
+  ],
+};
+
+// Sample-mode handlers are inert by construction: the tiles render, nothing writes.
+const noSampleWrite = () => {};
+
+const SAMPLE_COPY = {
+  rooms: (
+    <span>
+      you're looking at a <strong>sample home</strong> — made-up rooms, lit so the tiles (and the
+      moods they carry) are real to see. Pair your bridge from Moodboard's <strong>connect</strong> card,
+      and the moment it answers these rooms step aside for yours.
+    </span>
+  ),
+  moods: (
+    <span>
+      these palettes are previewing against the <strong>sample home</strong> — pair your bridge and
+      every mood re-drapes itself over your real rooms the moment the bridge answers.
+    </span>
+  ),
+};
+
+function SampleBanner({ where }) {
+  return (
+    <div className="sample-note" data-sample-banner="true" role="note">
+      <span aria-hidden="true">🧪</span>
+      {SAMPLE_COPY[where] || SAMPLE_COPY.rooms}
+    </div>
+  );
+}
+// ===== HUE-SAMPLE-END =====
 
 const EXAMPLES = [
   'golden hour in the study',
@@ -1101,6 +1178,10 @@ function App() {
   const tab = ui.tab || 'rooms';
   const setTab = (t) => setUi((prev) => ({ ...prev, tab: t }));
   const offline = ['unconnected', 'unreachable', 'ambiguous', 'rejected', 'error'].includes(bridge.phase);
+  // The sample home renders ONLY before a bridge has ever been paired. A paired
+  // bridge that is loading, unreachable, or erroring must never show fictional
+  // rooms — those phases get the real skeleton/notice presentation instead.
+  const sampleHome = bridge.phase === 'unconnected' && rooms.length === 0;
 
   const statusText = bridge.phase === 'loading' ? 'finding your rooms…'
     : ready ? rooms.length + (rooms.length === 1 ? ' room' : ' rooms') + ' · bridge linked'
@@ -1137,7 +1218,28 @@ function App() {
       {tab === 'rooms' && (
         <section className="surface">
           {bridge.phase === 'loading' && <SkeletonGrid />}
-          {offline && (
+          {sampleHome && (
+            <React.Fragment>
+              <SampleBanner where="rooms" />
+              <div className="grid">
+                {SAMPLE_ROOMS.map((room) => (
+                  <RoomTile
+                    key={room.id}
+                    room={room}
+                    busy={false}
+                    selected={false}
+                    disabled={true}
+                    onToggle={noSampleWrite}
+                    onSelect={noSampleWrite}
+                    onBrightness={noSampleWrite}
+                    onSwatch={noSampleWrite}
+                  />
+                ))}
+              </div>
+              <BridgeNotice phase={bridge.phase} detail={bridge.detail} onRetry={() => loadBridge(false)} />
+            </React.Fragment>
+          )}
+          {offline && !sampleHome && (
             <div className="stagegrid">
               <SkeletonGrid />
               <div className="overlay">
@@ -1178,7 +1280,8 @@ function App() {
 
       {tab === 'moods' && (
         <section className="surface">
-          {!ready && <p className="soft">moods apply once the bridge is linked — until then the palettes below preview against a stand-in set of rooms.</p>}
+          {sampleHome && <SampleBanner where="moods" />}
+          {!ready && !sampleHome && <p className="soft">moods apply once the bridge is linked — until then the palettes below preview against a stand-in set of rooms.</p>}
           <div className="saverow">
             <input
               className="text" value={snapName} placeholder="name the current look…"
@@ -1193,7 +1296,7 @@ function App() {
           <h2 className="secname">house moods</h2>
           <div className="cards">
             {BUILT_IN_MOODS.map((m) => {
-              const entries = builtinEntries(m, rooms);
+              const entries = builtinEntries(m, sampleHome ? SAMPLE_ROOMS : rooms);
               return (
                 <MoodCard
                   key={m.id} name={m.name} note={m.tagline} entries={entries}
@@ -1207,9 +1310,21 @@ function App() {
 
           <h2 className="secname">your moods</h2>
           {savedMoods === null && <div className="skelgrid"><div className="skel short" /><div className="skel short" /></div>}
-          {savedMoods && savedMoods.length === 0 && (
+          {savedMoods && savedMoods.length === 0 && (!sampleHome ? (
             <p className="soft">nothing saved yet — compose one with the designer, or set the rooms by hand and save the look above.</p>
-          )}
+          ) : (
+            <div className="cards wide">
+              <MoodCard
+                name={SAMPLE_DESIGNED_MOOD.name}
+                badge="sample · designer"
+                note={SAMPLE_DESIGNED_MOOD.narration}
+                entries={SAMPLE_DESIGNED_MOOD.entries}
+                canApply={false}
+                applyLabel="light it"
+                onApply={noSampleWrite}
+              />
+            </div>
+          ))}
           {savedMoods && savedMoods.length > 0 && (
             <div className="cards wide">
               {savedMoods.map((m) => (

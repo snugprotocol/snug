@@ -115,6 +115,12 @@
     .btn.ghost { background: transparent; color: var(--accent); }
     .notice { border: 1px solid var(--border); background: var(--bg); border-radius: 12px; padding: 10px 14px; color: var(--muted); font-size: 0.9rem; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
     .notice.bad { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
+    .sample-note {
+      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      background: var(--accent-soft); border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px 14px; margin: 0 0 14px; font-size: 0.87rem; line-height: 1.5;
+    }
+    .sample-note strong { color: var(--accent); }
     .skel {
       background: linear-gradient(100deg, var(--skeleton-a) 40%, var(--skeleton-b) 50%, var(--skeleton-a) 60%);
       background-size: 200% 100%; animation: shimmer 1.4s ease-in-out infinite;
@@ -604,6 +610,157 @@ function useConnectedFetch() {
       return { headline, story, highlights };
     }
 
+    // ===== SPOTIFY-SAMPLE-BEGIN =====
+    // Sample mode (ADR-0038, the Ledger pattern): a fully fictional listener,
+    // rendered through the REAL portrait components while nothing is connected.
+    // Authored constants only — deterministic, render-only, no clock, no PRNG,
+    // no bridge. Every artist, track, and album here is invented; the moment a
+    // real Spotify read succeeds (or a journaled portrait exists) this data is
+    // unmounted wholesale. The planted story across the three lenses:
+    //   · last 4 weeks — an OBSESSION month: Velvet Arcade's album "Neon Reverie"
+    //     holds four of the five track seats, rotation depth spikes to 62%.
+    //   · last 6 months — the DISCOVERY season the obsession grew out of:
+    //     rotation relaxes to 38%, nearly half the top artists are new faces.
+    //   · all time — the canon, with the payoff: Marrow & Pine, discovered only
+    //     months ago, has already climbed into the all-time top five.
+    const sampleTrack = (id, name, artist) => ({ id, name, artists: [{ id: id + '-a', name: artist }] });
+    const sampleArtist = (id, name, genre) => ({ id, name, genres: [genre] });
+
+    const SAMPLE_PORTRAIT = {
+      short_term: {
+        tracks: [
+          sampleTrack('smp-t1', 'Static Bloom', 'Velvet Arcade'),
+          sampleTrack('smp-t2', 'Neon Reverie', 'Velvet Arcade'),
+          sampleTrack('smp-t3', 'Glass Elevator', 'Velvet Arcade'),
+          sampleTrack('smp-t4', 'Northern Doorway', 'Marrow & Pine'),
+          sampleTrack('smp-t5', 'Midnight Copper', 'Velvet Arcade'),
+        ],
+        artists: [
+          sampleArtist('smp-a1', 'Velvet Arcade', 'indie synth-pop'),
+          sampleArtist('smp-a2', 'Marrow & Pine', 'folk duo'),
+          sampleArtist('smp-a3', 'Nia Solace', 'neo-soul'),
+          sampleArtist('smp-a4', 'Okafor Sound System', 'afro-electronic'),
+          sampleArtist('smp-a5', 'Lightship Camera', 'dream pop'),
+        ],
+        rotation: 0.62,
+        rotationCap: 'of the top 50 tracks sit with just 3 artists — one album has eaten this month whole.',
+        discovery: 0.15,
+        discoveryCap: 'of this month’s top 20 artists are new against the all-time canon. Obsession months narrow the door.',
+      },
+      medium_term: {
+        tracks: [
+          sampleTrack('smp-t4', 'Northern Doorway', 'Marrow & Pine'),
+          sampleTrack('smp-t1', 'Static Bloom', 'Velvet Arcade'),
+          sampleTrack('smp-t6', 'Lagos Lightning', 'Okafor Sound System'),
+          sampleTrack('smp-t7', 'Honey & Smoke', 'Nia Solace'),
+          sampleTrack('smp-t8', 'Undertow', 'Lightship Camera'),
+        ],
+        artists: [
+          sampleArtist('smp-a2', 'Marrow & Pine', 'folk duo'),
+          sampleArtist('smp-a1', 'Velvet Arcade', 'indie synth-pop'),
+          sampleArtist('smp-a4', 'Okafor Sound System', 'afro-electronic'),
+          sampleArtist('smp-a3', 'Nia Solace', 'neo-soul'),
+          sampleArtist('smp-a6', 'The Paper Foxes', 'indie rock'),
+        ],
+        rotation: 0.38,
+        rotationCap: 'a much wider table over six months — the current obsession is recent, not chronic.',
+        discovery: 0.45,
+        discoveryCap: 'of this half-year’s top 20 artists were new faces — the discovery season the obsession grew out of.',
+      },
+      long_term: {
+        tracks: [
+          sampleTrack('smp-t9', 'Paper Planes Over Us', 'The Paper Foxes'),
+          sampleTrack('smp-t10', 'Cathedral of Small Hours', 'Halloway Strings'),
+          sampleTrack('smp-t1', 'Static Bloom', 'Velvet Arcade'),
+          sampleTrack('smp-t11', 'Interstate Hymn', 'Sunset Freight'),
+          sampleTrack('smp-t4', 'Northern Doorway', 'Marrow & Pine'),
+        ],
+        artists: [
+          sampleArtist('smp-a6', 'The Paper Foxes', 'indie rock'),
+          sampleArtist('smp-a1', 'Velvet Arcade', 'indie synth-pop'),
+          sampleArtist('smp-a7', 'Halloway Strings', 'modern classical'),
+          sampleArtist('smp-a8', 'Sunset Freight', 'americana'),
+          sampleArtist('smp-a2', 'Marrow & Pine', 'folk duo'),
+        ],
+        rotation: 0.24,
+        rotationCap: 'the all-time canon spreads across many artists — years of listening flatten any one obsession.',
+        discovery: null,
+        discoveryCap: 'the all-time canon is the baseline itself — pick a shorter lens to see what’s new against it.',
+      },
+    };
+
+    // The agent-written weekly rewind, as one canned card: this is the app's USP —
+    // the model reads the same numbers above and writes the column. A real card is
+    // only ever produced by a live agent turn; this one is authored, and labeled so.
+    const SAMPLE_REWIND = {
+      headline: 'Four Weeks Inside Neon Reverie',
+      story:
+        'This was an obsession month: Velvet Arcade held four of your five track seats, and rotation depth hit 62% — ' +
+        'the deepest this portrait has measured. The quiet headline is Marrow & Pine: discovered in the spring ' +
+        'exploring season, "Northern Doorway" never left the rotation, and six months later they have climbed into ' +
+        'your all-time top five. Obsessions pass; some of them become canon.',
+      highlights: [
+        'Velvet Arcade held 4 of your top 5 track seats — “Neon Reverie” is a full-album obsession',
+        'Rotation depth spiked to 62%, up from 38% across the six-month lens',
+        'Marrow & Pine cracked your all-time top five just months after first appearing',
+        'Discovery dipped to 15% — obsession months narrow the door, and that’s fine',
+      ],
+      stamp: 'a sample column · what the agent writes from your real numbers',
+    };
+
+    /**
+     * The pre-connect showcase: the sample listener rendered through the real
+     * portrait components, under an unmissable banner. Render-only — it exists
+     * only while phase === 'unconnected' with nothing journaled, and unmounts
+     * the moment real data (or the journal fallback) takes over.
+     */
+    function SampleShowcase() {
+      const [lens, setLens] = useState('short_term');
+      const v = SAMPLE_PORTRAIT[lens];
+      return (
+        <div data-testid="sample-portrait">
+          <div className="sample-note" data-sample-banner="true">
+            <span>🧪</span>
+            <span>
+              you’re looking at <strong>sample data</strong> — a made-up listener, so the portrait (and its
+              obsessions) are real to see. Connect your <strong>spotify</strong> connection and the first
+              successful read replaces every tile below with your own listening.
+            </span>
+          </div>
+          <div className="portrait-head">
+            <p className="greet"><span className="who">a sample listener</span>{'’s '}{rangeLabel(lens)}, understood</p>
+            <div className="seg" role="tablist" aria-label="sample time range">
+              {RANGES.map((r) => (
+                <button key={r.id} className={r.id === lens ? 'on' : ''} aria-pressed={r.id === lens} onClick={() => setLens(r.id)}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="stat-grid">
+            <StatTile label="rotation depth" value={v.rotation} caption={v.rotationCap} />
+            <StatTile label="discovery" value={v.discovery} caption={v.discoveryCap} />
+          </div>
+          <section className="card" style={{ marginTop: 16 }}>
+            <h2>top five tracks</h2>
+            <div className="tiles">{v.tracks.map((t, i) => <TrackTile key={t.id} track={t} rank={i + 1} />)}</div>
+          </section>
+          <section className="card">
+            <h2>top five artists</h2>
+            <div className="tiles">{v.artists.map((a, i) => <ArtistFace key={a.id} artist={a} rank={i + 1} />)}</div>
+          </section>
+          <section className="card mag">
+            <span className="kicker">the weekly rewind — sample</span>
+            <h3>{SAMPLE_REWIND.headline}</h3>
+            <p className="story">{SAMPLE_REWIND.story}</p>
+            <ul>{SAMPLE_REWIND.highlights.map((h, i) => <li key={i}>{h}</li>)}</ul>
+            <p className="stamp">{SAMPLE_REWIND.stamp}</p>
+          </section>
+        </div>
+      );
+    }
+    // ===== SPOTIFY-SAMPLE-END =====
+
     const DDL = [
       `CREATE TABLE IF NOT EXISTS rewind_snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -714,10 +871,8 @@ function useConnectedFetch() {
                 <li><b>Trends</b> — a visit-by-visit journal in your own database: the history Spotify’s API cannot give you.</li>
                 <li><b>Now</b> — see what’s playing and steer it; every control is a confirmed write.</li>
               </ul>
-              <SkeletonRow n={5} />
-              <p className="preview-cap">A preview of the shape only — your real top five appears once Spotify is connected. No sample data pretends to be you.</p>
             </section>
-            {latestSnap && <SnapshotPortrait snap={latestSnap} />}
+            {latestSnap ? <SnapshotPortrait snap={latestSnap} /> : <SampleShowcase />}
           </div>
         );
       }
