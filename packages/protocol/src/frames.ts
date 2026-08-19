@@ -263,6 +263,8 @@ export type Frame =
   | DbResponseFrame
   | NetRequestFrame
   | NetResponseFrame
+  | OpenUrlRequestFrame
+  | OpenUrlResultFrame
   | HostEventFrame
   | AppEventFrame;
 
@@ -276,6 +278,8 @@ const FRAME_SCHEMAS: Record<string, z.ZodType<Frame>> = {
   [FRAME_TYPES.dbResponse]: dbResponseSchema,
   [FRAME_TYPES.netRequest]: netRequestSchema,
   [FRAME_TYPES.netResponse]: netResponseSchema,
+  [FRAME_TYPES.openUrlRequest]: openUrlRequestSchema,
+  [FRAME_TYPES.openUrlResult]: openUrlResultSchema,
   [FRAME_TYPES.hostEvent]: hostEventSchema,
   [FRAME_TYPES.appEvent]: appEventSchema,
 };

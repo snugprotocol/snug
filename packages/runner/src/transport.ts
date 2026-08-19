@@ -96,3 +96,16 @@ export type NetHandlerResult =
 export interface NetHandler {
   handle(netAppId: string, request: NetRequestFrame): Promise<NetHandlerResult>;
 }
+
+/**
+ * The open-url seam (ADR-0038 D5, TASK-20260818). The runner ROUTES a validated
+ * `snug:open-url-request` to this handler and posts back the outcome; it never opens a
+ * window itself — the runner holds no navigation primitive, the value-blind
+ * discipline's sibling. The handler IS the host's confirm-dialog surface: `open`
+ * resolves 'opened' only after a real user gesture confirmed the full URL, 'declined'
+ * when the user said no. Refusals (no capability, invalid frame, a second request
+ * while one is pending) are the RUNNER's answers and never reach the handler.
+ */
+export interface OpenUrlHandler {
+  open(url: string): Promise<'opened' | 'declined'>;
+}
