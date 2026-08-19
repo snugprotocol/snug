@@ -153,8 +153,67 @@ export interface WellKnownDeviceLinkPairing {
   };
 }
 
-/** Either pairing shape. Readers narrow on `kind` — never on which fields are present. */
-export type WellKnownPairing = WellKnownPairingExchange | WellKnownDeviceLinkPairing;
+/**
+ * A TOKEN CLAIM — how a claim-once provider mints a credential from a one-time token the
+ * user pastes (ADR-0038, TASK-20260818; SimpleFIN is the first occupant).
+ *
+ * WHY NEITHER SIBLING CAN CARRY THIS. The exchange's request body is PINNED REGISTRY
+ * DATA and its response is walked by `secretPath`; a device link is three beats and a
+ * poll. Here the pasted token IS the request target (a base64-encoded claim URL, POSTed
+ * once with an empty body), the response BODY is the minted credential (an access URL
+ * whose userinfo carries HTTP Basic credentials), and the mint fills TWO fields.
+ * Overloading `secretPath` to mean "parse the body as a URL and split its userinfo"
+ * would make one field mean two things — the exact reason `device-link` was
+ * discriminated rather than folded into `exchange`.
+ *
+ * WHAT THIS SEAT DELIBERATELY CANNOT EXPRESS, inheriting the family discipline:
+ *  - A HOST. The decoded claim URL and the returned access URL are checked AGAINST the
+ *    connection's frozen ceiling (ADR-0023's binding order: approve → freeze → claim →
+ *    verify); the pasted token is user-supplied data and is never trusted to name a
+ *    destination. https-only, default port, empty userinfo on the CLAIM target,
+ *    `redirect:'error'` on every request.
+ *  - A HEADER TEMPLATE. The claim is uncredentialed by definition.
+ *  - ARBITRARY RESPONSE HANDLING. The body is parsed by the URL API and refused unless
+ *    its path is exactly `accessPath` — the base-path assumption is a checked invariant
+ *    (fresh-context review Blocker 3), so a bridge minting under a different prefix
+ *    refuses loudly at claim time instead of breaking silently mid-sync.
+ *
+ * CUSTODY (C1): the minted username/password go straight into `snug_secrets` under the
+ * entry's own declared fields, written TOGETHER with the connected state by the function
+ * that ran the verify (the `completeDeviceLink` lesson). The setup token is consumed and
+ * never persisted; the claim response never enters app-, LLM-, or export-visible state.
+ */
+export interface WellKnownTokenClaimPairing {
+  kind: 'token-claim';
+  /** Label for the wizard's paste box — the provider's own name for the token. */
+  tokenLabel: string;
+  /**
+   * Which of the entry's OWN declared `fields` the minted values fill — TWO seats,
+   * named rather than an ordered array, because the basic_auth kind default reads
+   * fields[0] as the username and fields[1] as the password and a mixed-up pair is a
+   * credential that fails on every request while looking stored.
+   */
+  usernameField: string;
+  passwordField: string;
+  /**
+   * The EXACT path the returned access URL must carry (leading '/', never a URL).
+   * Checked, not hoped: any other path is a named refusal at claim time.
+   */
+  accessPath: string;
+  /** Shown verbatim above the paste box — where the token comes from, and its one-use nature. */
+  preconditionInstruction: string;
+  /** THE VERIFY READ (ADR-0025), identical in purpose to both siblings'. */
+  verify: {
+    method: 'GET';
+    pathAndQuery: string;
+  };
+}
+
+/** Any pairing shape. Readers narrow on `kind` — never on which fields are present. */
+export type WellKnownPairing =
+  | WellKnownPairingExchange
+  | WellKnownDeviceLinkPairing
+  | WellKnownTokenClaimPairing;
 
 /**
  * How a provider's OAuth flow can receive its redirect on the DESKTOP shell
@@ -1127,6 +1186,72 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         'Snug starts the helper for you. Nothing is sent anywhere: your WhatsApp session stays on this machine, and Snug itself only ever holds a key to the helper.',
         'When the code appears, open WhatsApp on your phone → Settings → Linked devices → Link a device, and scan it.',
         'Keep the desktop app open while you use the app — the linked session lives with the helper, and your phone can unlink it at any time.',
+      ],
+    },
+  },
+
+  simplefin: {
+    displayName: 'SimpleFIN',
+    kind: 'basic_auth',
+    // `'SimpleFIN'` normalizes to this entry's key, so only the added-word spelling is
+    // an alias (the whatsapp shadowing lesson).
+    aliases: ['SimpleFIN Bridge'],
+    // EXACTLY ONE host, and the singleton is load-bearing (review Blocker 2): symbolic
+    // `snug-connection://` resolution refuses a ceiling that is not exactly one host,
+    // and the declared test probe fires at `allowedHosts[0]` — a second (beta) host
+    // would sort FIRST and aim production credentials at the wrong bridge. The beta
+    // bridge is a dev fixture concern, never a shipped seat.
+    apiHosts: ['bridge.simplefin.org'],
+    // VERIFIED 2026-08-18 by live probe: OPTIONS and GET /simplefin/accounts echo an
+    // arbitrary Origin with `access-control-allow-headers: authorization` and
+    // credentials allowed; the claim POST returns CORS headers and is preflight-free
+    // (empty body, no custom headers).
+    browserCallable: true,
+    // Two fields the user never types: the claim below parses them out of the minted
+    // access URL. Injection ORDER is the contract — the basic_auth kind default reads
+    // fields[0] as the username and fields[1] as the password.
+    fields: [
+      {
+        key: 'username',
+        label: 'Access ID',
+        type: 'text',
+        description:
+          'Created for you when Snug claims your setup token — there is nothing to look up.',
+      },
+      {
+        key: 'password',
+        label: 'Access key',
+        type: 'secret',
+        description:
+          'Created together with the Access ID during the claim. Both live in your own Snug file, never on a server.',
+      },
+    ],
+    // NO `request` seat, deliberately: the basic_auth kind default produces the
+    // `Authorization: Basic` header, and a request seat would SUPPRESS it (ADR-0022).
+    // The bridge serves under /simplefin (probed 2026-08-18); `balances-only=1` keeps
+    // the probe cheap, and the bridge's 403-on-bad-credentials is what makes it a GOOD
+    // probe (the CoinGecko anti-lesson).
+    testRequest: { method: 'GET', pathAndQuery: '/simplefin/accounts?balances-only=1' },
+    pairing: {
+      kind: 'token-claim',
+      tokenLabel: 'SimpleFIN setup token',
+      usernameField: 'username',
+      passwordField: 'password',
+      accessPath: '/simplefin',
+      preconditionInstruction:
+        'In SimpleFIN Bridge, create a new app connection and copy the whole setup token — a long block of letters and numbers. It works exactly once and expires quickly, so paste it here soon after copying. Snug trades it for a permanent access key stored in your own file.',
+      // ADR-0025 verify-before-claim, at the SAME spelling as `testRequest` — one path,
+      // two seats, zero drift.
+      verify: { method: 'GET', pathAndQuery: '/simplefin/accounts?balances-only=1' },
+    },
+    registration: {
+      consoleUrl: 'https://bridge.simplefin.org/',
+      instructions: [
+        'Create a SimpleFIN Bridge account at bridge.simplefin.org — a small paid service (about $1.50 a year) built exactly for apps like this. Your banks connect to SimpleFIN, and SimpleFIN hands apps read-only data.',
+        'Inside SimpleFIN Bridge, choose "Connect a bank" and sign in to each bank or credit-card provider you want the app to see. Your bank passwords stay with SimpleFIN — they never touch Snug. You can add more banks later.',
+        'When your banks are connected, create a new app connection — SimpleFIN calls this a setup token.',
+        'Copy the whole setup token and paste it on the next screen. It works exactly once and expires quickly, so paste it soon after copying.',
+        'Snug trades the token for a permanent read-only access key and stores it in your own file. To disconnect later, revoke the app inside SimpleFIN Bridge, or delete the connection here — both work.',
       ],
     },
   },

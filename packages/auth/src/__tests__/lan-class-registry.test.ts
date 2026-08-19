@@ -186,7 +186,10 @@ describe('P5/AC7 — the `hue` registry entry (the 11th, and the first LAN-class
   it('the pairing seat names a field the entry actually declares (no dangling secret slot)', () => {
     const entry = WELL_KNOWN_PROVIDERS_REGISTRY['hue']!;
     const keys = (entry.fields ?? []).map((field) => field.key);
-    expect(keys).toContain(entry.pairing!.secretField);
+    // Narrow before reading: `secretField` belongs to the exchange/device-link members,
+    // not the whole (now three-member) union.
+    if (entry.pairing?.kind !== 'exchange') throw new Error('hue must remain an exchange pairing');
+    expect(keys).toContain(entry.pairing.secretField);
   });
 
   it('browserCallable:false — a bridge cert and a private IP are not browser-reachable', () => {
@@ -263,7 +266,8 @@ describe('P5/AC7 — the `hue` registry entry (the 11th, and the first LAN-class
     // the verify read is credentialed by construction rather than by a parallel seat.
     const entry = WELL_KNOWN_PROVIDERS_REGISTRY['hue']!;
     const template = JSON.stringify(entry.request?.headerTemplate ?? {});
-    expect(template).toContain(`{{${entry.pairing!.secretField}}}`);
+    if (entry.pairing?.kind !== 'exchange') throw new Error('hue must remain an exchange pairing');
+    expect(template).toContain(`{{${entry.pairing.secretField}}}`);
   });
 });
 
