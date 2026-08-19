@@ -1,17 +1,31 @@
-// appIcon — TASK-20260813 AC3: the desktop app icon must fill its canvas.
+// appIcon — TASK-20260819 (supersedes TASK-20260813 AC3): per-platform icon composition.
 //
-// The bug this locks: every committed icon was a scaled copy of ONE hand-made,
-// mis-composed 1024x1024 source in which the opaque plate covered only about the
-// top-left 60% of the canvas, with the ember mark inset within THAT — so the mark
-// occupied roughly a quarter of the tile and macOS/Windows rendered a small dark
-// square shoved into the upper-left with empty space to its right and below.
+// The bugs this locks (found 2026-08-19 by pixel-sampling the shipped set):
+//   1. The arched niche rendered WHITE, not the dark ground. The generator drew a
+//      dark backing path under the evenodd ember path, but the mark's inner subpath
+//      winds opposite to its outer square, so nonzero filling knocked the niche out
+//      of the backing layer too — the Chromium page background showed through both.
+//   2. The screenshot baked that page background in (omitBackground: false), so the
+//      canvas corners outside the rounded tile were opaque WHITE.
+//   3. The mark was scaled full-bleed with zero margin. macOS does NOT mask or inset
+//      app icons — the squircle shape and ~10% transparent margin must be baked into
+//      the PNG (Apple grid: 824px artwork centred in a 1024 canvas) — so the dock
+//      showed an oversized white-chipped square next to properly-shaped neighbours.
+//
+// The set is therefore split per platform (owner decision 2026-08-19):
+//   mac-facing  (icon.png, icon.icns): transparent margin, Apple-radius squircle
+//                filled ember, niche painted the dark ground #171310.
+//   win-facing  (32x32.png, 128x128.png, 128x128@2x.png, icon.ico): full-bleed and
+//                fully opaque (Windows expects no margin) on a dark plate — corners
+//                are the PLATE, never white — with the same dark niche.
+//   icon.ico is generated from the same win master as the win PNGs; it is not
+//   re-parsed here (ICO entries may be BMP DIBs), the PNGs stand evidence for it.
 //
 // Why pixels and not a snapshot: an icon is a binary asset no component test can
-// reach, and the defect is purely spatial — a hash comparison would say "changed"
-// without saying "correct", and would need updating every time the mark is retouched.
-// Asserting the COMPOSITION (corners opaque, artwork centred) states the actual
-// requirement, so a future regeneration from a bad source fails here rather than
-// shipping. This is the "assert the outcome, not a proxy" rule from docs/lessons.md.
+// reach, and these defects are spatial/chromatic — a hash comparison would say
+// "changed" without saying "correct". Asserting the COMPOSITION states the actual
+// requirement ("assert the outcome, not a proxy", docs/lessons.md 2026-08-04 — the
+// previous revision of this file is the cited failure: white passed every assertion).
 //
 // PNG decoding is done inline: zlib is in the Node stdlib and the IDAT format is
 // small enough to read directly, so this adds no dependency for one assertion.
@@ -38,9 +52,8 @@ interface Decoded {
  * Handles the five PNG filter types, which is the whole of the format that matters
  * here — the icons are plain truecolour-with-alpha, written by one generator.
  */
-function decodePng(file: string): Decoded {
-  const buf = readFileSync(file);
-  expect(buf.subarray(0, 8).toString('hex'), `${file} is not a PNG`).toBe('89504e470d0a1a0a');
+function decodePngBuffer(buf: Buffer, label: string): Decoded {
+  expect(buf.subarray(0, 8).toString('hex'), `${label} is not a PNG`).toBe('89504e470d0a1a0a');
 
   let width = 0;
   let height = 0;
@@ -68,10 +81,10 @@ function decodePng(file: string): Decoded {
     offset += 12 + length;
   }
 
-  expect(bitDepth, `${file} must be 8-bit`).toBe(8);
-  expect(interlace, `${file} must not be interlaced`).toBe(0);
+  expect(bitDepth, `${label} must be 8-bit`).toBe(8);
+  expect(interlace, `${label} must not be interlaced`).toBe(0);
   // 6 = truecolour+alpha, 2 = truecolour. Both are decodable here.
-  expect([2, 6], `${file} must be truecolour`).toContain(colorType);
+  expect([2, 6], `${label} must be truecolour`).toContain(colorType);
 
   const channels = colorType === 6 ? 4 : 3;
   const raw = inflateSync(Buffer.concat(idat));
@@ -114,7 +127,7 @@ function decodePng(file: string): Decoded {
           break;
         }
         default:
-          throw new Error(`${file}: unknown PNG filter ${filter}`);
+          throw new Error(`${label}: unknown PNG filter ${filter}`);
       }
     }
 
@@ -132,137 +145,229 @@ function decodePng(file: string): Decoded {
   return { width, height, pixels: out };
 }
 
-const alphaAt = ({ width, pixels }: Decoded, x: number, y: number): number =>
-  pixels[(y * width + x) * 4 + 3];
+const decodePng = (file: string): Decoded => decodePngBuffer(readFileSync(file), file);
 
-/** The PNGs listed in tauri.conf.json's bundle.icon array, plus the 1024 master. */
-const PNGS = ['32x32.png', '128x128.png', '128x128@2x.png', 'icon.png'] as const;
+/**
+ * Pull the largest embedded PNG out of icon.icns. The icns container is a flat run
+ * of [4-byte type][4-byte big-endian length] chunks; modern sizes (ic07..ic13) carry
+ * whole PNG files as their payload, so finding the PNG magic is all the parsing the
+ * assertion needs.
+ */
+function largestIcnsPng(file: string): Decoded {
+  const buf = readFileSync(file);
+  expect(buf.subarray(0, 4).toString('ascii'), `${file} is not an icns`).toBe('icns');
+  const PNG_MAGIC = '89504e470d0a1a0a';
+  let best: Decoded | null = null;
+  let offset = 8;
+  while (offset + 8 <= buf.length) {
+    const length = buf.readUInt32BE(offset + 4);
+    const payload = buf.subarray(offset + 8, offset + length);
+    if (payload.subarray(0, 8).toString('hex') === PNG_MAGIC) {
+      const decoded = decodePngBuffer(payload, `${file} entry @${offset}`);
+      if (!best || decoded.width > best.width) best = decoded;
+    }
+    offset += length;
+  }
+  expect(best, `${file} contains no PNG entries`).not.toBeNull();
+  return best as Decoded;
+}
 
-describe('desktop app icon composition (TASK-20260813 AC3)', () => {
-  it.each(PNGS)('%s is square', (name) => {
+const EMBER = { r: 232, g: 135, b: 58 }; // #e8873a
+const NICHE = { r: 23, g: 19, b: 16 }; // #171310 — the dark-theme ground
+
+const rgbaAt = ({ width, pixels }: Decoded, x: number, y: number): [number, number, number, number] => {
+  const i = (y * width + x) * 4;
+  return [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
+};
+
+const alphaAt = (img: Decoded, x: number, y: number): number => rgbaAt(img, x, y)[3];
+
+/** Warm-orange heuristic: red clearly dominant on a bright-ish opaque pixel. */
+const isEmber = (img: Decoded, x: number, y: number): boolean => {
+  const [r, g, b, a] = rgbaAt(img, x, y);
+  return a > 128 && r > 150 && r > b + 60 && g > 60;
+};
+
+/** The dark ground, exactly (± antialias slack), and OPAQUE — never white, never a hole. */
+const isNiche = (img: Decoded, x: number, y: number): boolean => {
+  const [r, g, b, a] = rgbaAt(img, x, y);
+  const tol = 10;
+  return (
+    a === 255 &&
+    Math.abs(r - NICHE.r) <= tol &&
+    Math.abs(g - NICHE.g) <= tol &&
+    Math.abs(b - NICHE.b) <= tol
+  );
+};
+
+// The mark's geometry in its 32-unit viewBox: the tile spans units 2..30; the arched
+// niche spans x 11..21, y 11..23. Interior sample points, safely off every edge:
+const NICHE_SAMPLES: Array<[string, number, number]> = [
+  ['niche centre', 16, 17],
+  ['mid-arch', 16, 13],
+];
+const TILE_INSET = 2;
+const TILE_SPAN = 28;
+
+// Apple icon grid: artwork occupies 824/1024 of the canvas, margin 100/1024 per side.
+const MAC_MARGIN_FRACTION = 100 / 1024;
+
+/** Map a mark-space unit to a pixel for a FULL-BLEED (win) canvas. */
+const winPx = (img: Decoded, u: number): number =>
+  Math.round(((u - TILE_INSET) / TILE_SPAN) * img.width);
+
+/** Map a mark-space unit to a pixel for a MARGINED (mac) canvas. */
+const macPx = (img: Decoded, u: number): number => {
+  const margin = Math.round(img.width * MAC_MARGIN_FRACTION);
+  const artSpan = img.width - margin * 2;
+  return Math.round(margin + ((u - TILE_INSET) / TILE_SPAN) * artSpan);
+};
+
+const WIN_PNGS = ['32x32.png', '128x128.png', '128x128@2x.png'] as const;
+
+const macImages = (): Array<[string, Decoded]> => [
+  ['icon.png', decodePng(resolve(iconDir, 'icon.png'))],
+  ['icon.icns (largest entry)', largestIcnsPng(resolve(iconDir, 'icon.icns'))],
+];
+
+describe('desktop app icon composition (TASK-20260819)', () => {
+  it.each([...WIN_PNGS, 'icon.png'] as const)('%s is square', (name) => {
     const img = decodePng(resolve(iconDir, name));
     expect(img.width).toBe(img.height);
   });
 
-  it.each(PNGS)('%s fills its canvas — all four corners are opaque', (name) => {
-    const img = decodePng(resolve(iconDir, name));
-    const { width: w, height: h } = img;
-    // THE defect, stated directly: the old artwork left the right column and bottom
-    // band fully transparent, so the bottom-right corner had alpha 0. A full-bleed
-    // plate makes every corner opaque.
-    const corners: Array<[string, number, number]> = [
-      ['top-left', 0, 0],
-      ['top-right', w - 1, 0],
-      ['bottom-left', 0, h - 1],
-      ['bottom-right', w - 1, h - 1],
-    ];
-    for (const [label, x, y] of corners) {
-      expect(alphaAt(img, x, y), `${name}: ${label} corner is transparent`).toBeGreaterThan(0);
-    }
-  });
-
-  it.each(PNGS)('%s carries its artwork across the whole canvas, not one quadrant', (name) => {
-    const img = decodePng(resolve(iconDir, name));
-    const { width: w, height: h } = img;
-    // The old source put every opaque pixel inside the top-left ~60%. Sampling the
-    // far edges catches that without pinning the exact art: a centred, full-bleed
-    // composition is opaque at the midpoint of all four edges.
-    const edges: Array<[string, number, number]> = [
-      ['right edge', w - 1, Math.floor(h / 2)],
-      ['bottom edge', Math.floor(w / 2), h - 1],
-      ['left edge', 0, Math.floor(h / 2)],
-      ['top edge', Math.floor(w / 2), 0],
-    ];
-    for (const [label, x, y] of edges) {
-      expect(alphaAt(img, x, y), `${name}: ${label} is transparent`).toBeGreaterThan(0);
-    }
-  });
-
-  it('the ember mark is centred, not anchored to a corner', () => {
-    // Measured on the master. The mark is the only ember-coloured region; its bounding
-    // box must sit symmetrically in the canvas. The old art failed this badly — its
-    // mark spanned roughly x 115..500 of 1024, i.e. entirely left of centre.
-    const img = decodePng(resolve(iconDir, 'icon.png'));
-    const { width: w, height: h, pixels } = img;
-    const isEmber = (x: number, y: number): boolean => {
-      const i = (y * w + x) * 4;
-      const [r, g, b, a] = [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
-      // The ember is a warm orange; the plate is near-black. Red clearly dominant
-      // and a bright-ish pixel is the mark.
-      return a > 128 && r > 150 && r > b + 60 && g > 60;
-    };
-
-    let minX = w;
-    let maxX = -1;
-    let minY = h;
-    let maxY = -1;
-    for (let y = 0; y < h; y += 1) {
-      for (let x = 0; x < w; x += 1) {
-        if (isEmber(x, y)) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
+  describe('mac-facing files: Apple-grid squircle on a transparent canvas', () => {
+    it('corners and the margin band are fully transparent', () => {
+      // macOS composites the PNG as-is: anything opaque outside the squircle renders
+      // as chips on the dock. The previous set had opaque WHITE corners (the baked-in
+      // Chromium page background) and no margin at all.
+      for (const [label, img] of macImages()) {
+        const { width: w, height: h } = img;
+        const margin = Math.round(w * MAC_MARGIN_FRACTION);
+        const probes: Array<[string, number, number]> = [
+          ['top-left corner', 0, 0],
+          ['top-right corner', w - 1, 0],
+          ['bottom-left corner', 0, h - 1],
+          ['bottom-right corner', w - 1, h - 1],
+          ['left margin band', Math.floor(margin / 2), Math.floor(h / 2)],
+          ['right margin band', w - 1 - Math.floor(margin / 2), Math.floor(h / 2)],
+          ['top margin band', Math.floor(w / 2), Math.floor(margin / 2)],
+          ['bottom margin band', Math.floor(w / 2), h - 1 - Math.floor(margin / 2)],
+        ];
+        for (const [where, x, y] of probes) {
+          expect(alphaAt(img, x, y), `${label}: ${where} is not transparent`).toBe(0);
         }
       }
-    }
+    });
 
-    expect(maxX, 'no ember-coloured mark found in icon.png').toBeGreaterThan(-1);
+    it('ember fills the squircle to its edges, and the artwork sits on the 824/1024 grid', () => {
+      for (const [label, img] of macImages()) {
+        const { width: w, height: h } = img;
+        const margin = Math.round(w * MAC_MARGIN_FRACTION);
+        const inside = Math.max(2, Math.round(w * 0.01)); // just inside the artwork edge
+        const mid = Math.floor(h / 2);
+        const edgeProbes: Array<[string, number, number]> = [
+          ['left squircle edge', margin + inside, mid],
+          ['right squircle edge', w - 1 - margin - inside, mid],
+          ['top squircle edge', Math.floor(w / 2), margin + inside],
+          ['bottom squircle edge', Math.floor(w / 2), h - 1 - margin - inside],
+        ];
+        for (const [where, x, y] of edgeProbes) {
+          expect(isEmber(img, x, y), `${label}: no ember at the ${where}`).toBe(true);
+        }
 
-    // Symmetry: the gap left of the mark matches the gap right of it, within a few
-    // percent of the canvas. Same vertically.
-    const leftGap = minX;
-    const rightGap = w - 1 - maxX;
-    const topGap = minY;
-    const bottomGap = h - 1 - maxY;
-    const tolerance = w * 0.03;
-    expect(Math.abs(leftGap - rightGap), `mark is off-centre horizontally (${leftGap} vs ${rightGap})`).toBeLessThanOrEqual(tolerance);
-    expect(Math.abs(topGap - bottomGap), `mark is off-centre vertically (${topGap} vs ${bottomGap})`).toBeLessThanOrEqual(tolerance);
+        // The opaque artwork must START at the margin (both sides): centred and
+        // grid-sized, not full-bleed and not adrift.
+        let minX = w;
+        let maxX = -1;
+        for (let x = 0; x < w; x += 1) {
+          if (alphaAt(img, x, mid) > 0) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+          }
+        }
+        const tolerance = Math.max(3, w * 0.015);
+        expect(Math.abs(minX - margin), `${label}: artwork left edge off-grid (${minX} vs ${margin})`).toBeLessThanOrEqual(tolerance);
+        expect(Math.abs(w - 1 - maxX - margin), `${label}: artwork right edge off-grid`).toBeLessThanOrEqual(tolerance);
+      }
+    });
 
-    // And it must be substantial — a centred speck would pass the symmetry check.
-    expect((maxX - minX) / w, 'the mark is too small for the tile').toBeGreaterThan(0.5);
+    it('the niche is the dark ground — not white, not a hole', () => {
+      // THE 2026-08-19 owner report: the icon centre rendered white. The niche must
+      // read as the same dark ground the web logo's knockout shows (#171310).
+      for (const [label, img] of macImages()) {
+        for (const [where, ux, uy] of NICHE_SAMPLES) {
+          const x = macPx(img, ux);
+          const y = macPx(img, uy);
+          const [r, g, b, a] = rgbaAt(img, x, y);
+          expect(
+            isNiche(img, x, y),
+            `${label}: ${where} at (${x},${y}) is rgba(${r},${g},${b},${a}) — expected opaque #171310`,
+          ).toBe(true);
+        }
+      }
+    });
   });
 
-  it.each(PNGS)('%s — the logo IS the icon: the mark reaches every edge', (name) => {
-    // OWNER REPORT 2026-08-13: "the logo should cover it completely". The first fix
-    // centred the mark on a dark plate at 61% of the tile (copying apple-touch-icon.svg,
-    // where the plate is load-bearing because iOS squares off transparency). On a
-    // desktop dock that reads as a small logo adrift in a dark square.
-    //
-    // THIS IS THE ASSERTION THE CENTRING TEST ABOVE COULD NOT MAKE: symmetry is
-    // satisfied by ANY concentric mark, so it passed on the 61% art and on the
-    // full-bleed art alike. Measuring how far the EMBER reaches is what separates them.
-    const img = decodePng(resolve(iconDir, name));
-    const { width: w, height: h, pixels } = img;
-    const isEmber = (x: number, y: number): boolean => {
-      const i = (y * w + x) * 4;
-      const [r, g, b, a] = [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
-      return a > 128 && r > 150 && r > b + 60 && g > 60;
-    };
-
-    // The tile is a ROUNDED square, so its corners are legitimately not ember — but the
-    // midpoint of each edge must be, or the mark is not reaching the canvas bounds.
-    const mid = (n: number): number => Math.floor(n / 2);
-    const edges: Array<[string, number, number]> = [
-      ['top', mid(w), 0],
-      ['bottom', mid(w), h - 1],
-      ['left', 0, mid(h)],
-      ['right', w - 1, mid(h)],
-    ];
-    for (const [label, x, y] of edges) {
-      expect(isEmber(x, y), `${name}: the mark does not reach the ${label} edge`).toBe(true);
-    }
-
-    // Belt and braces: the ember must span essentially the whole width, not 61% of it.
-    let minX = w;
-    let maxX = -1;
-    const row = mid(h);
-    for (let x = 0; x < w; x += 1) {
-      if (isEmber(x, row)) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
+  describe('win-facing files: full-bleed, fully opaque, dark plate — never white', () => {
+    it.each(WIN_PNGS)('%s corners are opaque PLATE pixels', (name) => {
+      // Windows expects no margin, so full-bleed stays — but the corner pixels outside
+      // the tile's rounded corners must be the dark plate, not baked-in page white.
+      const img = decodePng(resolve(iconDir, name));
+      const { width: w, height: h } = img;
+      const corners: Array<[string, number, number]> = [
+        ['top-left', 0, 0],
+        ['top-right', w - 1, 0],
+        ['bottom-left', 0, h - 1],
+        ['bottom-right', w - 1, h - 1],
+      ];
+      for (const [where, x, y] of corners) {
+        const [r, g, b, a] = rgbaAt(img, x, y);
+        expect(a, `${name}: ${where} corner is transparent`).toBe(255);
+        expect(
+          isNiche(img, x, y),
+          `${name}: ${where} corner is rgba(${r},${g},${b},${a}) — expected the dark plate #171310`,
+        ).toBe(true);
       }
-    }
-    expect((maxX - minX + 1) / w, `${name}: the mark covers too little of the tile`).toBeGreaterThan(0.95);
+    });
+
+    it.each(WIN_PNGS)('%s — the mark reaches every edge and spans the tile', (name) => {
+      const img = decodePng(resolve(iconDir, name));
+      const { width: w, height: h } = img;
+      const mid = (n: number): number => Math.floor(n / 2);
+      const edges: Array<[string, number, number]> = [
+        ['top', mid(w), 0],
+        ['bottom', mid(w), h - 1],
+        ['left', 0, mid(h)],
+        ['right', w - 1, mid(h)],
+      ];
+      for (const [where, x, y] of edges) {
+        expect(isEmber(img, x, y), `${name}: the mark does not reach the ${where} edge`).toBe(true);
+      }
+
+      let minX = w;
+      let maxX = -1;
+      const row = mid(h);
+      for (let x = 0; x < w; x += 1) {
+        if (isEmber(img, x, row)) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+        }
+      }
+      expect((maxX - minX + 1) / w, `${name}: the mark covers too little of the tile`).toBeGreaterThan(0.95);
+    });
+
+    it.each(WIN_PNGS)('%s niche is the dark ground — not white, not a hole', (name) => {
+      const img = decodePng(resolve(iconDir, name));
+      for (const [where, ux, uy] of NICHE_SAMPLES) {
+        const x = winPx(img, ux);
+        const y = winPx(img, uy);
+        const [r, g, b, a] = rgbaAt(img, x, y);
+        expect(
+          isNiche(img, x, y),
+          `${name}: ${where} at (${x},${y}) is rgba(${r},${g},${b},${a}) — expected opaque #171310`,
+        ).toBe(true);
+      }
+    });
   });
 });
