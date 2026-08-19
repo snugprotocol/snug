@@ -1,6 +1,6 @@
 # TASK-20260819-desktop-icon-squircle: macOS app icon — squircle, transparent margin, dark niche
 
-- **Status**: planned
+- **Status**: in-review
 - **Owner**: Jeetu
 - **Risk tier**: medium (apps/desktop assets + tests; no protocol/runner/auth surface)
 - **Branch**: `fix/TASK-20260819-desktop-icon-squircle`
@@ -53,3 +53,9 @@ Cross-package impact: none — `apps/desktop` consumes packages, nothing consume
 - State: planned — awaiting owner plan approval before Gate 3.
 - Next step: on approval, rewrite `appIcon.test.ts` (red), then fix `generate-icons.mjs`, regenerate, verify, dock screenshot.
 - Open questions: none blocking.
+
+### 2026-08-19 — Claude — session (implementation)
+- Done: rewrote `appIcon.test.ts` per-platform (16 assertions; 9 red against the shipped set — white niche confirmed as rgba(255,255,255,255) at the sampled centre). Rewrote `generate-icons.mjs`: two masters (mac Apple-grid squircle w/ transparent margin + win full-bleed on opaque `#171310` plate), niche dark as a solid single-subpath layer (winding-proof), `omitBackground: true`, `tauri icon` per master with the six shipped files copied explicitly. Regenerated all six binaries. Corrected `docs/code-map.md` icon entry.
+- Evidence (all local — CI billing-blocked): `vitest run appIcon.test.ts` 16/16 green; `pnpm --filter desktop test` 128/128 green; `pnpm --filter desktop gate` ✓ GATE GREEN. AC6: dock-style preview (dark + light) rendered and sent to owner — squircle radius matches neighbors, niche `#171310`, no white.
+- State: implementation complete on `fix/TASK-20260819-desktop-icon-squircle`; awaiting owner dock check on a real build + PR review.
+- Next step: owner eyeball on hardware (`pnpm --filter desktop tauri build` or dev run), then PR.
