@@ -18,6 +18,7 @@ import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/proto
 import { createAppTransport } from '../agent/transport.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import type { ChatCardState } from '../agent/cards.js';
+import { createOpenUrlHandlerFor } from '../state/openUrl.js';
 import { createNetHandlerFor } from '../state/net.js';
 import { startSidecarLiveForApp, type SidecarSyncState } from '../state/sidecarLive.js';
 import {
@@ -303,6 +304,10 @@ export default function RunView(): ReactElement {
   );
   const netProps: { net: NetHandler; netAppId: string } | Record<string, never> =
     netHandler !== undefined ? { net: netHandler, netAppId: id } : {};
+  // The open-url capability (ADR-0038 D5): installed apps only — a read-only starter
+  // keeps the flag false, so its copy-the-link fallback renders instead of a dialog a
+  // browse session should never see. Host-assigned id, same rule as net.
+  const openUrlHandler = useMemo(() => (isStarterId(id) ? undefined : createOpenUrlHandlerFor(id)), [id]);
   // The db driver is the SHARED user DB's materialized face (ADR-0010) — never closed
   // here; it lives as long as the page. App data lands as native app_* tables.
   //
@@ -839,6 +844,7 @@ export default function RunView(): ReactElement {
               db={db}
               dbNamespace={id}
               {...netProps}
+              openUrl={openUrlHandler}
               theme={theme}
               title={meta?.displayName ?? 'Snug app'}
               controlsRef={controlsRef}

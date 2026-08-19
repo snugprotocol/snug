@@ -96,7 +96,7 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/, /net\.spec\.ts/, /connection-wizard\.spec\.ts/],
+      testIgnore: [/mobile\.spec\.ts/, /no-server\.spec\.ts/, /net\.spec\.ts/, /openurl\.spec\.ts/, /connection-wizard\.spec\.ts/],
     },
     {
       // AL-03 net e2e: its OWN project so the self-signed-cert allowance and the
@@ -112,6 +112,25 @@ export default defineConfig({
             `--host-resolver-rules=MAP stub.snug.test 127.0.0.1`,
             // The document-level fetch to the self-signed stub needs the cert error
             // ignored at the browser level too — scoped to THIS project's browser.
+            '--ignore-certificate-errors',
+          ],
+        },
+      },
+    },
+    {
+      // ADR-0038 open-url popup-escape proof (TASK-20260818): its OWN project for the
+      // net project's exact reason — the popup target must be https (the open-url
+      // schema refuses anything else), so the spec opens the self-signed stub and the
+      // cert allowance + resolver rule stay scoped here, never touching the plain app
+      // contexts.
+      name: 'open-url',
+      testMatch: /openurl\.spec\.ts/,
+      use: {
+        ...devices['Desktop Chrome'],
+        ignoreHTTPSErrors: true,
+        launchOptions: {
+          args: [
+            `--host-resolver-rules=MAP stub.snug.test 127.0.0.1`,
             '--ignore-certificate-errors',
           ],
         },
