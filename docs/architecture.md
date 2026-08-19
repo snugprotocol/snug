@@ -154,8 +154,11 @@ re-credential.
 
 **Silent auth failures surface.** A credentialed 401/403 still reaches the app unchanged
 (`ok:true`, status as-is — the app contract is not broken to gain visibility), and a
-host-only `onAuthShapedFailure` observer fires on the FINAL delivered result, rendering
-`AuthRepairBanner` in RunView with a CTA into the wizard on the exact failing (appId, slot).
+host-only `onAuthShapedFailure` observer fires on the FINAL delivered result. Since
+TASK-20260819 the DIAGNOSIS lives in the wizard's derived attention gate (Step 0) and the
+run surface carries only `AuthRepairChip` in the app header: the chip hands the failure off
+to the wizard session on a real open (never on a refused one), and a staged re-approval
+diff OUTRANKS the gate — the diff is the cure for the failure it would otherwise explain.
 
 **LAN-class providers.** `connectionRequirementSchema` gained an optional `lanHost` seat
 with `declaredApiHosts` **required-XOR-`lanHost`**: a device whose address the user's

@@ -1,6 +1,6 @@
 # TASK-20260819-connection-failure-ux: honest Spotify scopes, wizard-owned failure disclosure, readable Ledger playbook
 
-- **Status**: in-review
+- **Status**: done
 - **Owner**: Jeetu
 - **Risk tier**: **high** (touches `packages/auth` credential broker + registry scopes; ADR-0028 re-consent path)
 - **Branch**: `fix/TASK-20260819-connection-failure-ux`
@@ -300,3 +300,28 @@ re-sign-in. Deliberate act, never a quiet fix-forward.
   before merge — in particular §4.2, the accepted residual.
 - Next step: owner runs §4.1-§4.4 on hardware; then Gate 6 close-out.
 - Open questions: none blocking.
+
+### 2026-08-19 — Jeetu — session (Gate 6 close-out)
+- Done: owner verified on hardware — issues 1 and 2 confirmed working; issue 3 re-reported
+  as still broken, which turned out to be the session's most valuable finding.
+  **The Ledger fix was correct all along and could not reach the owner's device.**
+  Installing a starter COPIES `app.html` into the user library (`RunView.tsx:410`) and the
+  run path reads that snapshot forever (`:457`), so the installed Ledger was rendering
+  pre-fix HTML. The owner's screenshot proved it before any code was read: it showed a
+  `dashed` border, and the new CSS contains that word only inside a comment. Verified the
+  shipped `LeakList` by extracting it from `app.html` and driving it through React with the
+  owner's own Experian data — renders clean. Owner chose delete+reinstall (Ledger holds
+  sample data); the underlying gap is logged in next-steps as its own piece of work.
+- Gate 6: 4 lessons written (delivery-path vs disk-path; serial-run flake triage;
+  propose-into-doctrine; non-vacuous regression fixtures). Doc drift fixed in-branch —
+  `architecture.md`, two `code-map.md` rows, and the desktop-auth threat model all named
+  the removed `AuthRepairBanner`; the threat-model entry matters most, since it documents
+  where the hostile-copy rule is enforced (it moved WITH the render, and the chip renders
+  no `detail` at all, narrowing the surface).
+- State: **merged to main via PR.** All ACs met; suites green (auth 880/880, playground
+  1254/1254 serial, examples 270/270).
+- Next step: none for this task. Two follow-ups queued in next-steps — the
+  installed-app update path, and the now-classified playground parallelism flake.
+- Open questions: the accepted residual stands and is recorded in ADR-0028's amendment —
+  a user who dismisses the re-approval diff without completing it keeps the old
+  seven-scope token, so the chip returns on every launch for them.
