@@ -25,6 +25,13 @@ export const hostReadySchema = z.object({
     auth: z.boolean(),
     /** The envelope net capability (AL-03). Optional so pre-AL-03 host-ready frames still parse (R2). */
     net: z.boolean().optional(),
+    /**
+     * The open-url capability (ADR-0038 D5): the host will show a confirm dialog for
+     * `snug:open-url-request` frames and open approved https URLs in the user's real
+     * browser. Optional for the same R2 reason as `net` — and absence is how an app
+     * knows to render its copy-the-link fallback instead of a dead button.
+     */
+    openUrl: z.boolean().optional(),
   }),
   theme: z.enum(['light', 'dark']),
   locale: z.string().max(32).optional(),
@@ -170,6 +177,52 @@ export const netResponseSchema = z.union([
   z.strictObject({ ...netResponseBase, ok: z.literal(false), error: responseErrorSchema }),
 ]);
 
+/**
+ * INTERNAL draft (ADR-0038 D5, TASK-20260818): the open-url request. An app may ASK the
+ * host to open an https URL in the user's real browser; the host renders the full URL
+ * in a confirm dialog (provenance copy, punycode host) and only the user's gesture
+ * opens anything — web via host-page window.open('noopener,noreferrer'), desktop via
+ * the https-only system opener. STRICT and URL-only by design: no target, no window
+ * features, no navigation primitive — the frame cannot express anything C2 would have
+ * to defend against, and the sandbox flags are untouched.
+ *
+ * https-only and userinfo-free at the SCHEMA so every consumer inherits the refusal;
+ * the runner re-refuses on capability absence, and the playground's dialog is the
+ * human gate.
+ */
+export const openUrlRequestSchema = z
+  .strictObject({
+    v: version,
+    type: z.literal(FRAME_TYPES.openUrlRequest),
+    requestId: id,
+    instanceId: id,
+    url: z.string().min(1).max(2048),
+  })
+  .superRefine((frame, ctx) => {
+    let url: URL;
+    try {
+      url = new URL(frame.url);
+    } catch {
+      ctx.addIssue({ code: 'custom', path: ['url'], message: 'url must parse' });
+      return;
+    }
+    if (url.protocol !== 'https:') {
+      ctx.addIssue({ code: 'custom', path: ['url'], message: 'only https URLs may be opened' });
+    }
+    if (url.username !== '' || url.password !== '') {
+      ctx.addIssue({ code: 'custom', path: ['url'], message: 'a URL carrying userinfo is refused (phishing shape)' });
+    }
+  });
+
+/** The one reply per open-url request: opened (user confirmed), declined, or refused (no capability / invalid). */
+export const openUrlResultSchema = z.strictObject({
+  v: version,
+  type: z.literal(FRAME_TYPES.openUrlResult),
+  requestId: id,
+  status: z.enum(['opened', 'declined', 'refused']),
+  reason: z.string().max(300).optional(),
+});
+
 export const hostEventSchema = z.object({
   v: version,
   type: z.literal(FRAME_TYPES.hostEvent),
@@ -195,6 +248,8 @@ export type DbRequestFrame = z.infer<typeof dbRequestSchema>;
 export type DbResponseFrame = z.infer<typeof dbResponseSchema>;
 export type NetRequestFrame = z.infer<typeof netRequestSchema>;
 export type NetResponseFrame = z.infer<typeof netResponseSchema>;
+export type OpenUrlRequestFrame = z.infer<typeof openUrlRequestSchema>;
+export type OpenUrlResultFrame = z.infer<typeof openUrlResultSchema>;
 export type HostEventFrame = z.infer<typeof hostEventSchema>;
 export type AppEventFrame = z.infer<typeof appEventSchema>;
 
