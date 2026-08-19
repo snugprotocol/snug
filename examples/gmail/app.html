@@ -931,19 +931,30 @@ function useConnectedFetch() {
 
     /** Line + area trend. Hand-drawn SVG: no chart library, both themes, no images. */
     function TrendChart({ weeks }) {
-      const width = 560;
-      const height = 132;
+      // viewBox units, not pixels — the SVG scales to its container width and the
+      // height attribute below keeps the drawn band a fixed 150px tall. The ratio is
+      // chosen so a full-width card letterboxes as little as possible.
+      const width = 1000;
+      const height = 150;
       const pad = { top: 10, right: 8, bottom: 20, left: 8 };
       const max = Math.max(1, ...weeks.map((w) => w.count));
+      // The baseline is the quietest week rather than zero. Twelve weeks of a steady
+      // sender never touch zero, so a zero-anchored axis draws a flat line across the
+      // top of the box and hides the very variation the chart exists to show.
+      const low = Math.min(...weeks.map((w) => w.count));
+      const floor = Math.max(0, low - Math.max(1, Math.round((max - low) * 0.35)));
+      const span = Math.max(1, max - floor);
       const stepX = (width - pad.left - pad.right) / Math.max(1, weeks.length - 1);
-      const y = (count) => pad.top + (1 - count / max) * (height - pad.top - pad.bottom);
+      const y = (count) => pad.top + (1 - (count - floor) / span) * (height - pad.top - pad.bottom);
       const points = weeks.map((w, i) => [pad.left + i * stepX, y(w.count)]);
       const line = points.map(([px, py], i) => (i === 0 ? 'M' : 'L') + px.toFixed(1) + ' ' + py.toFixed(1)).join(' ');
       const area = line + ' L' + points[points.length - 1][0].toFixed(1) + ' ' + (height - pad.bottom) +
         ' L' + points[0][0].toFixed(1) + ' ' + (height - pad.bottom) + ' Z';
       return (
         <svg viewBox={'0 0 ' + width + ' ' + height} width="100%" height={height} role="img"
-             aria-label={'Weekly email volume, peaking at ' + max + ' messages'} style={{ display: 'block' }}>
+             aria-label={'Weekly email volume, peaking at ' + max + ' messages'}
+             style={{ display: 'block', width: '100%' }}
+             preserveAspectRatio="xMidYMid meet">
           {[0.25, 0.5, 0.75, 1].map((fraction) => (
             <line key={fraction} x1={pad.left} x2={width - pad.right}
                   y1={y(max * fraction)} y2={y(max * fraction)} stroke="var(--grid)" strokeWidth="1" />
@@ -1081,7 +1092,16 @@ function useConnectedFetch() {
 
       const rows = messages || [];
       const weeks = useMemo(() => volumeByWeek(rows, { now, weeks: 12 }), [rows, now]);
-      const senders = useMemo(() => topSenders(rows, { limit: 7 }), [rows]);
+      // Top six by volume, plus the loudest sender the user actually writes back to.
+      // Volume alone would show seven broadcasters and no correspondents — which makes
+      // the "you have replied" legend describe a colour nothing on screen is wearing,
+      // and quietly hides the contrast the chart exists to draw.
+      const senders = useMemo(() => {
+        const ranked = topSenders(rows, { limit: 40 });
+        const head = ranked.slice(0, 6);
+        const replied = ranked.find((sender) => sender.replied && head.indexOf(sender) === -1);
+        return replied ? [...head, replied] : ranked.slice(0, 7);
+      }, [rows]);
       const mix = useMemo(() => categoryMix(rows), [rows]);
       const flags = useMemo(() => neverRepliedFlags(rows, { now }), [rows, now]);
       const unsubs = useMemo(() => unsubscribeCandidates(rows, { now }), [rows, now]);
@@ -1344,7 +1364,7 @@ function useConnectedFetch() {
 
       const displayedSuggestions = agent.suggestions || LOCAL_SUGGESTIONS(flags, unsubs);
 
-      if (!app.ready || messages === null) {
+      if (!app.isReady || messages === null) {
         return (
           <div className="wrap">
             <div className="card">

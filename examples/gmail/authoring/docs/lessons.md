@@ -32,3 +32,17 @@
 - **The linter caught a URL inside a comment.** The single-file scan flags any
   external-looking URL, including a phishing example written to explain the URL gate.
   Reword the illustration; do not weaken the scan.
+
+- **The shipped contract suite cannot tell you the app never boots.** Every gate was
+  green while the app sat on its loading skeleton forever: the readiness check read
+  `app.ready`, and the hook returns `isReady`. A typo'd property on an object is
+  `undefined`, not an error, so nothing failed — not the validator, not the extracted-core
+  suite, which by design evaluates only the pure region and never renders. Ten minutes in
+  a real browser with a stub host found it immediately. Render the app before calling it
+  done; a starter whose first screen is a skeleton is worse than no starter.
+
+- **A legend must describe a colour something on screen is wearing.** The sender bars
+  coloured replied-to correspondents green — and the top seven by volume were all
+  broadcasters, so the legend explained a colour the chart never showed. Ranking now
+  reserves a slot for the loudest sender the user actually answers, which is also the
+  contrast the chart exists to draw.
