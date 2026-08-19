@@ -67,7 +67,9 @@ import {
   type OAuthStartResult,
   type WellKnownAuthOption,
   type WellKnownOauthProvider,
+  performTokenClaim,
   type WellKnownPairingExchange,
+  type WellKnownTokenClaimPairing,
 } from '@snugprotocol/auth';
 
 import { createStore } from './store.js';
@@ -661,6 +663,18 @@ export async function saveConnectionCredentials(values: Record<string, string>):
       };
     }
 
+    // THE THIRD FAMILY REFUSAL (ADR-0038, review SF4): a token-claim row's fields are
+    // filled by the claim, never typed. Its kind is plain `basic_auth`, so without this
+    // guard the generic screen would happily store hand-typed garbage as minted
+    // credentials — the LAN liar, one family later. Custom basic_auth providers (no
+    // registry token-claim seat) still pass here and keep the typed screen.
+    if (isTokenClaimRequirement(row.requirement)) {
+      return {
+        ok: false,
+        message: 'this access key is created when Snug claims your setup token — there is nothing to type or save',
+      };
+    }
+
     // A CREDENTIAL-BEARING KIND WITH NO FIELDS IS A REFUSAL, NEVER A SUCCESS.
     //
     // The loop below is field-driven: with an empty list it runs zero times, stores
@@ -1236,6 +1250,130 @@ function linkedDeviceSecretField(requirement: ConnectionRequirement | undefined)
   if (requirement === undefined || !isLinkedDeviceRequirement(requirement)) return undefined;
   const secret = (requirement.fields ?? []).find((field) => field.type === 'secret');
   return secret?.key;
+}
+
+// ---------------------------------------------------------------------------
+// Token-claim connections (ADR-0038; TASK-20260818-ledger-starter A4)
+// ---------------------------------------------------------------------------
+//
+// THE THIRD PAIRING FAMILY: a claim-once provider (SimpleFIN) mints its basic_auth
+// pair from a ONE-TIME setup token the user pastes. The binding order is the LAN
+// family's, applied to a pasted target instead of a typed address:
+//
+//     review → approve (ceiling FREEZES from the registry's pinned host) → claim →
+//     verify → write-together
+//
+// The pasted token is USER-SUPPLIED DATA naming a URL — it is checked against the
+// frozen ceiling inside `performTokenClaim` (packages/auth), never trusted to name a
+// destination. The claim runs over the platform fetch seam like every wizard probe.
+
+/**
+ * The registry's token-claim seat for this requirement, resolved at claim time and
+ * NEVER persisted on the row — the same single-resolution rule and the same ADR-0023 D2
+ * reason as `lanPairingExchangeFor`: the registry is the one channel Guard 2b reserves
+ * for values a human reviewed in a PR.
+ */
+export function tokenClaimPairingFor(
+  requirement: ConnectionRequirement | undefined,
+): WellKnownTokenClaimPairing | undefined {
+  if (requirement === undefined) return undefined;
+  // Family disjointness first: a lanHost row routes to LAN pairing, a linked_device row
+  // to the helper link. Neither may ever reach a claim, whatever a registry entry says.
+  if (isLanRequirement(requirement) || isLinkedDeviceRequirement(requirement)) return undefined;
+  const pairing = resolveRegistryEntryByName(requirement.provider.name)?.entry.pairing;
+  return pairing?.kind === 'token-claim' ? pairing : undefined;
+}
+
+/**
+ * Is this a TOKEN-CLAIM requirement? The sheet's routing predicate (review SF4): a
+ * token-claim row's kind is plain `basic_auth` — shared with genuinely typed providers —
+ * so routing must key on the resolved registry seat, and a custom user-authored
+ * basic_auth provider (no registry hit) keeps the ordinary typed credentials screen.
+ */
+export function isTokenClaimRequirement(requirement: ConnectionRequirement | undefined): boolean {
+  return tokenClaimPairingFor(requirement) !== undefined;
+}
+
+/**
+ * Has the ADR-0025 verify read proven this token-claim connection? The `claimVerifiedAt`
+ * twin of `lanConnectionVerified`, and the wizard's no-re-claim gate (AC5): a setup
+ * token works exactly once, so a wizard reopened on a claimed row must land on done —
+ * never on a paste box whose submission could only fail.
+ */
+export async function claimConnectionVerified(db: UserDb, appId: string, slot: string): Promise<boolean> {
+  const store = slotCredentialStore(db, slot);
+  const state = await store.getConnectionState(appId);
+  return state?.status === 'connected' && typeof state.claimVerifiedAt === 'number';
+}
+
+/**
+ * RUN THE CLAIM (ADR-0038 D2) — decode, gate, POST once, verify, then write TOGETHER.
+ *
+ * The mint lands HERE via `performTokenClaim`'s `commit`, not in any caller: both
+ * credential fields and the `claimVerifiedAt` connected state are written by the
+ * function that did the proving, so there is no window in which a verified claim is not
+ * a stored one (the `completeDeviceLink` lesson). Failure messages are the module's
+ * fixed sentences — never pasted bytes, never provider bytes (C1).
+ */
+export async function runTokenClaim(
+  setupToken: string,
+  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>,
+): Promise<ConnectionWizardResult> {
+  const session = connectionWizardStore.get();
+  if (session === null) return { ok: false, message: 'no wizard session' };
+  const db = await getUserDb();
+  if (connectionWizardStore.get() !== session) return { ok: false, message: 'the wizard session changed' };
+  const row = db.getConnection(session.appId, session.slot);
+  if (row === undefined) return { ok: false, message: 'this connection has no declared requirement' };
+  // The B1 wall, restated at the mint: a claim may only run against a FROZEN ceiling.
+  if (row.status !== CONNECTION_STATUS.approved) {
+    return { ok: false, message: 'approve this connection before claiming the setup token' };
+  }
+  const pairing = tokenClaimPairingFor(row.requirement);
+  if (pairing === undefined) {
+    return { ok: false, message: 'this connection does not use a setup token' };
+  }
+  // THE NO-RE-CLAIM GATE (AC5): an already-proven row is done — a second claim would
+  // burn a token the user did not need to mint.
+  if (await claimConnectionVerified(db, session.appId, session.slot)) {
+    if (connectionWizardStore.get() === session) connectionWizardStepStore.set('done');
+    return { ok: true };
+  }
+
+  // Test seam wins, then the desktop native fetch, then the page's own — the
+  // `serviceFetchDep` ladder, restated for the claim (the wizard-probe path).
+  const claimFetch = (fetchImpl ?? getPlatform().fetchImpl ?? fetch.bind(globalThis)) as typeof fetch;
+
+  const result = await performTokenClaim({
+    setupToken,
+    allowedHosts: row.allowedHosts,
+    pairing,
+    fetchImpl: claimFetch,
+    commit: async ({ username, password, verifiedAt }) => {
+      db.setSecret(
+        authConnectionCredentialSecretKey(session.appId, session.slot, pairing.usernameField),
+        username,
+      );
+      db.setSecret(
+        authConnectionCredentialSecretKey(session.appId, session.slot, pairing.passwordField),
+        password,
+      );
+      await slotCredentialStore(db, session.slot).setConnectionState(session.appId, {
+        status: 'connected',
+        // ADR-0025's marker, family rule intact: only this write-together commit may
+        // set it, and it describes the pair now in the store — never an earlier one.
+        claimVerifiedAt: verifiedAt,
+      });
+    },
+  });
+  if (!result.ok) return { ok: false, message: result.message };
+
+  invalidateNetGrants(session.appId);
+  bumpRevision();
+  // Session-scoped, like both pairing twins: an await sits above, so steering the step
+  // store unconditionally would steer whatever wizard happens to be open now.
+  if (connectionWizardStore.get() === session) connectionWizardStepStore.set('done');
+  return { ok: true };
 }
 
 async function runLanPairingAttempt(): Promise<LanPairingOutcome> {
