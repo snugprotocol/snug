@@ -1,6 +1,6 @@
 # TASK-20260818-sidecar-orphan-reap: WhatsApp helper singleton — reap orphans, die with the shell
 
-- **Status**: in-review
+- **Status**: done (merged 2026-08-19, PR #73, squash `a8bd416`)
 - **Owner**: jeetu
 - **Risk tier**: low (owner-set at interview; kill-path still gets tests first — the verify-before-kill verdict is pure and cheap to pin)
 - **Branch**: `fix/TASK-20260818-sidecar-orphan-reap`
@@ -132,3 +132,20 @@ a one-paragraph addendum note in the ADR-0037 file at close-out (append-only sec
   pid 50057 still has the old code loaded.
 - Open questions: none. Windows leaves `command_line_of` answering `None` (so it never
   kills) — consistent with ADR-0021 D8 leaving the platform open.
+
+### 2026-08-19 01:0x — jeetu/claude — close-session (Gate 6)
+- Done: PR #73 opened and squash-merged to `main` (`a8bd416`), branch deleted; task file
+  moved to `done/` with its INDEX line; `next-steps.md` gained a dated 🔴 owner-action entry
+  for the CI billing stop.
+- **CI was NOT green and was not expected to be**: all three legs failed in ~2 s with zero
+  steps executed. The annotation reads "The job was not started because recent account
+  payments have failed or your spending limit needs to be increased" — a billing stop, not a
+  test failure, and every recent `main` run (incl. already-merged PRs #67–#72) fails
+  identically. Merged on local evidence per the owner's explicit instruction, matching how
+  the two preceding tasks were closed. The gate's absence is now tracked in next-steps
+  rather than only inside done-index prose, because it is on its third consecutive merge.
+- State: shipped. `main` carries the fix; the working tree is clean.
+- Next step: **restart the desktop client** — pid 50057 still runs the pre-fix helper, since
+  a live process keeps the code it loaded at spawn. After that, the conflict loop cannot
+  recur from either direction.
+- Open questions: none.
