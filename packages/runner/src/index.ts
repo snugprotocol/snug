@@ -23,6 +23,7 @@ export {
   type DbDriverResult,
   type NetHandler,
   type NetHandlerResult,
+  type OpenUrlHandler,
   type TransportResult,
 } from './transport.js';
 

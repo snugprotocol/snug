@@ -63,6 +63,11 @@ const KIND_TABLE = {
   // the provider authenticates a DEVICE, and the credential this row governs is a token
   // for the local helper holding that device session, never the WhatsApp session itself.
   whatsapp: 'linked_device',
+  // ADDED 2026-08-18 (TASK-20260818-ledger-starter, ADR-0038): the 13th entry and the
+  // first `basic_auth` one. Like hue, the kind is ordinary — what is unusual is the
+  // MINTING (a token-claim pairing: the user pastes a one-time setup token and the
+  // wizard trades it for the basic pair), which is not a kind.
+  simplefin: 'basic_auth',
 } as const;
 
 describe('AC1 — every registry entry declares its OWN kind (the table is exhaustive)', () => {

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactElement, type Ref } from 'react';
 import { injectCsp } from '../csp.js';
 import { createRunnerHost, type RunnerHost, type RunnerHostBaseOptions, type RunnerHostOptions } from '../host.js';
-import type { DbDriver, NetHandler } from '../transport.js';
+import type { DbDriver, NetHandler, OpenUrlHandler } from '../transport.js';
 
 export type SnugAppFrameProps = Omit<RunnerHostBaseOptions, 'iframe'> &
   ({ db: DbDriver; dbNamespace: string } | { db?: undefined; dbNamespace?: undefined }) &
   ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined }) & {
+    /** The open-url capability (ADR-0038 D5) — mount-captured like db/net. */
+    openUrl?: OpenUrlHandler;
     /** The untrusted app HTML. RUNNER_CSP is injected before it ever reaches the iframe. */
     html: string;
     className?: string;
@@ -87,6 +89,7 @@ export function SnugAppFrame(props: SnugAppFrameProps): ReactElement {
       onNavigatedAway: () => propsRef.current.onNavigatedAway?.(),
       ...(initial.db !== undefined ? { db: initial.db, dbNamespace: initial.dbNamespace } : {}),
       ...(initial.net !== undefined ? { net: initial.net, netAppId: initial.netAppId } : {}),
+      ...(initial.openUrl !== undefined ? { openUrl: initial.openUrl } : {}),
     } as RunnerHostOptions);
     hostRef.current = host;
     applyRef(propsRef.current.controlsRef, host);

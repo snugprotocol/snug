@@ -4,6 +4,22 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-18 — schemas: `host-ready.json` capability flag + INTERNAL-DRAFT open-url frames — TASK-20260818-ledger-starter (ADR-0038 D5)
+**One published schema changed, additively:** `hostReadySchema.capabilities` gains an
+optional `openUrl` boolean (the `net` flag's exact precedent — optional so pre-existing
+host-ready frames still parse, R2), regenerated via `pnpm gen:schemas` into
+`schemas/host-ready.json`. `true` means the host will show a confirm dialog for
+`snug:open-url-request` frames and open approved https URLs in the user's real browser;
+absence is how an app knows to render a copy-the-link fallback.
+
+**The frames themselves are INTERNAL DRAFT**, out of the `json-schemas.ts` SOURCES (the
+net-frames publication line): `snug:open-url-request` (strict; https-only + userinfo-free
+at the schema; URL only — no target, no window features, no navigation primitive; ≤2048
+chars, ordinary 256 KiB frame class) and `snug:open-url-result` (`opened` | `declined` |
+`refused`, optional reason on refused). C2 unchanged — the sandbox gains no capability;
+the HOST opens the window, after its own confirm dialog, on a user gesture. No push to
+`snugprotocol/spec` (needs an explicit ask).
+
 ## 2026-08-17 — INTERNAL DRAFT, not staged for any push — TASK-20260817-telepath (ADR-0034)
 **Excluded from every spec push.** `sidecar-contract.ts` stays outside `json-schemas.ts`
 SOURCES (the publication line ADR-0032 set); zero schema bytes changed, wire protocol v1

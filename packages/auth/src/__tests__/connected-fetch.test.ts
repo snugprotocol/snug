@@ -103,6 +103,7 @@ function harness(opts: {
   confirmResult?: boolean;
   /** Decision 6 (desktop LAN policy) — absent everywhere else so every other test pins the browser profile. */
   transportPolicy?: { allowHttpForPrivateHosts: boolean };
+  requestTimeoutMs?: number;
   /**
    * Record a TOFU pin in the connection's `_connection` KV (ADR-0023 D3), so an
    * https LAN request can take the pinned transport. Absent by default: a
@@ -148,6 +149,7 @@ function harness(opts: {
     },
     confirmGate: { confirm },
     ...(opts.transportPolicy !== undefined ? { transportPolicy: opts.transportPolicy } : {}),
+    ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
   });
   return {
     executor,
@@ -1009,5 +1011,38 @@ describe('optional credential fields — declared but not stored', () => {
     });
     expect(await executor.execute(APP, GET())).toMatchObject({ ok: false, code: NET_ERROR_CODES.NET_AUTH_FAILED });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('the armed timeout names itself (TASK-20260818, owner report)', () => {
+  it("a request outliving the wall clock fails with the EXECUTOR's sentence, never transport noise", async () => {
+    // The transport double spells its abort the way the tauri plugin does ("Request
+    // canceled") — the exact noise the owner saw on Ledger's first real sync. The
+    // executor armed the signal, so the executor owns the sentence: seconds named,
+    // retryable, zero transport bytes.
+    const quartet = memoryQuartet();
+    quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'api_key'), API_KEY_VALUE);
+    const hangUntilAbort = (url: string, init?: RequestInit): Promise<Response> =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('Request canceled')));
+      });
+    const executor = createConnectedFetch({
+      credentialStore: new UserDbCredentialStore(quartet),
+      connectionReader: {
+        listConnections: (appId) => (appId === APP ? [rowFor(apiKeySpec, 'approved', ['api.example.com'])] : []),
+      },
+      fetchImpl: hangUntilAbort,
+      confirmGate: { confirm: async () => true },
+      requestTimeoutMs: 30,
+    });
+
+    const result = await executor.execute(APP, { url: 'https://api.example.com/v1/slow', method: 'GET' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(NET_ERROR_CODES.NET_FETCH_FAILED);
+      expect(result.message).toMatch(/did not answer within \d+s/);
+      expect(result.message).not.toContain('Request canceled');
+      expect(result.retryable).toBe(true);
+    }
   });
 });

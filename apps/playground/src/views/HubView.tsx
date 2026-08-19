@@ -47,6 +47,11 @@ const STARTER_LOOKS: Readonly<
   // Desktop-only for a stronger reason than the other two: the session lives in a helper
   // process this shell spawns, reached over a unix socket that no browser tab can open.
   whatsapp: { name: 'Telepath', emoji: '🔮', color: '#0f7d61', blurb: 'your WhatsApp, live — with an analyst who knows the room and drafts in your voice', desktopOnly: true },
+  // The personal-finance flagship (TASK-20260818-ledger-starter, ADR-0038). Web AND
+  // desktop: the SimpleFIN bridge serves CORS (probed 2026-08-18), so no transport
+  // constraint applies — the sample dataset makes the tile compelling before any
+  // connection exists.
+  ledger: { name: 'Ledger', emoji: '📒', color: '#b95c22', blurb: 'your money, at home — every account in your file, an analyst on tap, a time machine for your net worth' },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };

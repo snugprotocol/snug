@@ -1,0 +1,1780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ledger</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f6f4ef; --fg: #22282e; --muted: #6d7680; --faint: #9aa3ac;
+      --card: #ffffff; --border: #e3ded4; --shadow: 0 8px 26px rgba(50, 42, 28, 0.09);
+      --accent: #b95c22; --accent-soft: #f7e7da; --accent-fg: #fff8f2;
+      --up: #1d7a4d; --up-soft: #dcf1e5;
+      --down: #b5382c; --down-soft: #f9e2de;
+      --warn: #96690b; --warn-soft: #f7ecca;
+      --ink-line: #2f3a45; --grid: #eee9df;
+      --proj: #7a6bd0; --proj-soft: #ece8fb;
+      --heat0: #f1ede4; --heat1: #f4d9bd; --heat2: #eab275; --heat3: #d97f33; --heat4: #a84e12;
+      --chip: #f1ede4;
+    }
+    :root[data-theme="dark"] {
+      --bg: #14181d; --fg: #e6e3dc; --muted: #97a0aa; --faint: #6b747e;
+      --card: #1d232a; --border: #313a44; --shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+      --accent: #e08543; --accent-soft: #3a2718; --accent-fg: #1b1209;
+      --up: #4cc07a; --up-soft: #143523;
+      --down: #e2685a; --down-soft: #3a1713;
+      --warn: #d9a83c; --warn-soft: #35290e;
+      --ink-line: #cfd7de; --grid: #262d35;
+      --proj: #a99af0; --proj-soft: #272040;
+      --heat0: #20262d; --heat1: #3d2d1c; --heat2: #6b4520; --heat3: #a05f23; --heat4: #d97f33;
+      --chip: #262d35;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { min-width: 44px; min-height: 44px; cursor: pointer; font-family: inherit; }
+    #root { max-width: 1080px; margin: 0 auto; padding: 14px 16px 60px; }
+    .num { font-variant-numeric: tabular-nums; }
+
+    .topbar { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin: 6px 0 4px; }
+    .topbar h1 { font-size: 17px; letter-spacing: 0.04em; text-transform: uppercase; margin: 0; color: var(--muted); }
+    .networth { font-size: 34px; font-weight: 700; }
+    .networth small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 8px; }
+    .delta-up { color: var(--up); } .delta-down { color: var(--down); }
+
+    .sample-note {
+      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      background: var(--accent-soft); border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px 14px; margin: 10px 0; font-size: 13.5px;
+    }
+    .sample-note strong { color: var(--accent); }
+
+    .acct-strip { display: flex; gap: 8px; overflow-x: auto; padding: 6px 0 10px; }
+    .acct-chip {
+      flex: 0 0 auto; background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 8px 12px; min-width: 150px; box-shadow: var(--shadow);
+    }
+    .acct-chip .org { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; }
+    .acct-chip .name { font-size: 13px; color: var(--muted); margin: 1px 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+    .acct-chip .bal { font-size: 16px; font-weight: 650; }
+
+    .tabs { display: flex; gap: 4px; margin: 8px 0 14px; flex-wrap: wrap; }
+    .tabs button {
+      border: 1px solid var(--border); background: var(--card); color: var(--muted);
+      border-radius: 999px; padding: 7px 14px; font-size: 13.5px;
+    }
+    .tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      box-shadow: var(--shadow); padding: 14px 16px; margin-bottom: 14px;
+    }
+    .card h2 { margin: 0 0 2px; font-size: 15px; }
+    .card .sub { margin: 0 0 10px; font-size: 12.5px; color: var(--muted); }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+
+    .scrub { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+    .scrub input[type="range"] { flex: 1; accent-color: var(--accent); }
+    .scrub .read { font-size: 13px; color: var(--muted); min-width: 200px; text-align: right; }
+    .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .legend .key { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+
+    .catrow { display: flex; align-items: center; gap: 10px; margin: 7px 0; }
+    .catrow .lbl { width: 118px; font-size: 13px; color: var(--muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .catrow .bar { flex: 1; height: 18px; background: var(--chip); border-radius: 9px; overflow: hidden; }
+    .catrow .bar i { display: block; height: 100%; background: var(--accent); border-radius: 9px; min-width: 2px; }
+    .catrow .amt { width: 90px; font-size: 13px; font-weight: 600; }
+    .catrow.over .bar i { background: var(--down); }
+
+    .leak {
+      display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 12px; margin: 8px 0; background: var(--card);
+    }
+    .leak .emoji { font-size: 20px; }
+    .leak .body { flex: 1; min-width: 0; }
+    .leak .head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+    .leak .merchant { font-weight: 650; font-size: 14px; }
+    .leak .cost { font-weight: 700; font-size: 14px; }
+    .leak .why { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+    .leak .flags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; }
+    .flag { font-size: 11px; border-radius: 999px; padding: 2px 8px; background: var(--warn-soft); color: var(--warn); }
+    .flag.overlap { background: var(--down-soft); color: var(--down); }
+    .flag.creep { background: var(--proj-soft); color: var(--proj); }
+    .flag.ok { background: var(--up-soft); color: var(--up); }
+
+    .txn { display: flex; gap: 10px; align-items: baseline; padding: 7px 2px; border-bottom: 1px solid var(--grid); font-size: 13.5px; }
+    .txn:last-child { border-bottom: none; }
+    .txn .d { color: var(--faint); width: 74px; flex: 0 0 auto; font-size: 12px; }
+    .txn .desc { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .txn .cat { color: var(--muted); font-size: 11.5px; background: var(--chip); border-radius: 999px; padding: 1px 8px; flex: 0 0 auto; }
+    .txn .amt { width: 92px; text-align: right; font-weight: 600; flex: 0 0 auto; }
+    .txn .amt.in { color: var(--up); }
+    .txn.pending { opacity: 0.62; }
+
+    .heat { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .heat .cell { aspect-ratio: 1; border-radius: 6px; background: var(--heat0); position: relative; }
+    .heat .cell span { position: absolute; top: 3px; left: 5px; font-size: 10px; color: var(--faint); }
+    .heat .dow { text-align: center; font-size: 11px; color: var(--faint); padding-bottom: 2px; }
+
+    .askbar { display: flex; gap: 8px; }
+    .askbar input {
+      flex: 1; border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+      border-radius: 10px; padding: 10px 12px; font-size: 14px; font-family: inherit;
+    }
+    .askbar button, .btn {
+      border: none; border-radius: 10px; background: var(--accent); color: var(--accent-fg);
+      font-weight: 600; font-size: 13.5px; padding: 0 16px;
+    }
+    .btn.quiet { background: var(--chip); color: var(--muted); font-weight: 500; }
+    .btn:disabled { opacity: 0.55; cursor: default; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .chips button { background: var(--chip); border: none; border-radius: 999px; color: var(--muted); font-size: 12.5px; padding: 6px 12px; min-height: 32px; }
+
+    .answer { border-left: 3px solid var(--accent); padding: 4px 0 4px 12px; margin-top: 12px; }
+    .answer .a { font-size: 14.5px; }
+    .answer .ev { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .agent-note { font-size: 12.5px; color: var(--warn); margin-top: 8px; }
+
+    .goalrow { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+    .ring { flex: 0 0 auto; }
+    .planbox { border: 1px dashed var(--border); border-radius: 12px; padding: 10px 12px; margin-top: 10px; font-size: 13.5px; }
+    .planbox .step { margin: 4px 0; }
+    .rulecard { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--grid); font-size: 13.5px; }
+    .rulecard:last-child { border-bottom: none; }
+    .rulecard .to { color: var(--muted); }
+    .rulecard button { min-height: 34px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--fg); font-size: 12.5px; }
+
+    .empty { color: var(--muted); font-size: 13.5px; padding: 8px 0; }
+    .spin { display: inline-block; animation: lspin 1s linear infinite; }
+    @keyframes lspin { to { transform: rotate(360deg); } }
+    .footrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+    .synced { font-size: 12px; color: var(--faint); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+// hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+// before any write, and scrubs the response. You never see a token.
+// A connection whose host only the USER knows (a device on their network): address it as
+// snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    // ONE discriminated union for the three lanes; `kind` names the lane the reply
+    // answers. Output only the JSON — no preamble. Use null over guessing.
+    const RESPONSE_SCHEMA = {
+      kind: "string: 'answer' | 'rules' | 'plan' | 'leaks' — which lane this reply belongs to",
+      answer: 'string (kind=answer): two-to-four plain sentences grounded ONLY in the figures provided; cite amounts you were given, never invented ones',
+      evidence: "number[] (kind=answer, optional): row ids from the provided rows that ground the answer",
+      rules: "array (kind=rules): [{ pattern: 'lowercase merchant substring', category: 'one of the provided category names' }] — at most 8, only for the merchants provided",
+      plan: "object (kind=plan): { name: 'short scenario name', monthlySteps: [{ category, monthlyDelta: 'negative number = spend less per month' }], monthlyTotal: number, note: 'one sentence on the tradeoff' }",
+      leaks: "array (kind=leaks): [{ merchant: 'one of the provided merchants', verdict: 'keep'|'consider'|'cut', why: 'one short sentence naming the overlap, disuse signal, or price change' }]",
+      playbook: "object (kind=playbook): { merchant: 'the provided merchant key', steps: ['3-6 short imperative steps to cancel, warning about retention offers where they are known'], cancelUrl: 'the provider's own https cancellation/account page, or null when unsure — NEVER invent a domain', emailDraft: 'a short polite cancellation email when email is the provider's mechanism, else null' }",
+    };
+
+    // ============================================================
+    // 6. YOUR APP — Ledger (your money, at home)
+    // ============================================================
+    // Complement, never clone: Mint watches your money to sell you cards; Ledger is
+    // YOURS. Every account SimpleFIN can reach lands in this app's own SQLite file,
+    // every chart is computed locally, and the only brain that ever reads a
+    // transaction is the one the user configured. Fully useful with no model in the
+    // loop (ADR-0011): dashboards, the subscription radar, budgets and projections are
+    // all deterministic; the agent lanes (ask-your-money, rule proposals, goal plans,
+    // leak verdicts) each upgrade a surface and fail soft with a visible note.
+    //
+    // The host injects the SimpleFIN Basic credentials on every request — no secret
+    // ever appears in these URLs or this file (C1). Before a connection exists the app
+    // seeds a deterministic SAMPLE dataset (provenance-flagged, swapped out wholesale
+    // on the first real sync) so the money-leaks radar and the time machine show their
+    // value before a single bank is connected.
+
+    // CONNECTION-RELATIVE (ADR-0026), not a literal host — the app names its SLOT and
+    // the host resolves the approved ceiling. Chosen the hard way (owner's first real
+    // walk): the literal-host v1 baked yesterday's host into installed bytes, and an
+    // installed starter never receives a rebuild. The bridge serves under /simplefin,
+    // so the resolved URL is https://<approved-host>/simplefin/<rest>.
+    const SFIN = 'snug-connection://simplefin/simplefin';
+
+    const CATEGORIES = [
+      'income', 'housing', 'groceries', 'dining', 'transport', 'utilities',
+      'insurance', 'subscriptions', 'shopping', 'health', 'travel',
+      'entertainment', 'transfers', 'other',
+    ];
+
+    /** Rows are provenance-flagged: sample=1 rows vanish wholesale on the first real sync. */
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY,
+        org_name TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        balance REAL NOT NULL DEFAULT 0,
+        available REAL,
+        balance_date INTEGER,
+        sample INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS txns (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        posted INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        description TEXT NOT NULL,
+        pending INTEGER NOT NULL DEFAULT 0,
+        category TEXT NOT NULL DEFAULT '',
+        sample INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        balance REAL NOT NULL,
+        sample INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pattern TEXT NOT NULL,
+        category TEXT NOT NULL,
+        approved INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'builtin'
+      )`,
+      `CREATE TABLE IF NOT EXISTS budgets (
+        category TEXT PRIMARY KEY,
+        monthly REAL NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS scenarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        monthly_total REAL NOT NULL,
+        detail TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS cancels (
+        merchant TEXT PRIMARY KEY,
+        marked_at INTEGER NOT NULL,
+        monthly_cost REAL NOT NULL,
+        verified INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS sync_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        ok INTEGER NOT NULL,
+        message TEXT NOT NULL DEFAULT '',
+        watermark INTEGER
+      )`,
+    ];
+
+    // ===== LEDGER-CORE-BEGIN ===== (extracted and executed by ledger-analysis.test.mjs)
+    // ------------------------------------------------------------
+    // Categorization — deterministic rules; the agent only PROPOSES more.
+    // ------------------------------------------------------------
+    const BUILTIN_RULES = [
+      ['payroll', 'income'], ['salary', 'income'], ['direct dep', 'income'], ['interest paid', 'income'],
+      ['mortgage', 'housing'], ['rent ', 'housing'], ['hoa ', 'housing'],
+      ['grocer', 'groceries'], ['market', 'groceries'], ['wholefoods', 'groceries'], ['costco', 'groceries'], ['trader joe', 'groceries'],
+      ['restaurant', 'dining'], ['coffee', 'dining'], ['pizza', 'dining'], ['sushi', 'dining'], ['taqueria', 'dining'], ['thai ', 'dining'], ['doordash', 'dining'],
+      ['uber', 'transport'], ['lyft', 'transport'], ['shell oil', 'transport'], ['chevron', 'transport'], ['parking', 'transport'], ['transit', 'transport'],
+      ['electric', 'utilities'], ['water dist', 'utilities'], ['internet', 'utilities'], ['wireless', 'utilities'], ['gas co', 'utilities'],
+      ['insurance', 'insurance'], ['geico', 'insurance'],
+      ['netflix', 'subscriptions'], ['hulu', 'subscriptions'], ['disney+', 'subscriptions'], ['spotify', 'subscriptions'],
+      ['cloudvault', 'subscriptions'], ['fitstream', 'subscriptions'], ['icloud', 'subscriptions'], ['nytimes', 'subscriptions'], ['gym', 'subscriptions'],
+      ['amazon', 'shopping'], ['target', 'shopping'], ['ikea', 'shopping'],
+      ['pharmacy', 'health'], ['dental', 'health'], ['clinic', 'health'],
+      ['airline', 'travel'], ['hotel', 'travel'], ['airbnb', 'travel'],
+      ['cinema', 'entertainment'], ['steam ', 'entertainment'], ['ticket', 'entertainment'],
+      ['transfer', 'transfers'], ['payment thank', 'transfers'], ['zelle', 'transfers'], ['venmo', 'transfers'],
+    ];
+
+    function categorize(description, extraRules) {
+      const hay = description.toLowerCase();
+      for (const rule of extraRules) {
+        if (rule.approved && hay.includes(rule.pattern)) return rule.category;
+      }
+      for (const [pattern, category] of BUILTIN_RULES) {
+        if (hay.includes(pattern)) return category;
+      }
+      return 'other';
+    }
+
+    // ------------------------------------------------------------
+    // Sample data — deterministic (fixed-seed PRNG), authored so the money-leaks
+    // radar has something honest to find: three overlapping streaming services, a
+    // converted-and-unused trial, and one quiet price creep.
+    // ------------------------------------------------------------
+    function mulberry32(seed) {
+      let a = seed >>> 0;
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    const SAMPLE_ACCOUNTS = [
+      { id: 'smp-chk', org_name: 'Harbor Bank', name: 'Everyday Checking', start: 4200 },
+      { id: 'smp-sav', org_name: 'Harbor Bank', name: 'Rainy-Day Savings', start: 18500 },
+      { id: 'smp-cc1', org_name: 'Summit Card', name: 'Summit Rewards Visa', start: -1240 },
+      { id: 'smp-cc2', org_name: 'Northline', name: 'Northline Platinum', start: -420 },
+    ];
+
+    /** [description, account, category-independent amount, day-of-month, kind] */
+    const SAMPLE_SUBS = [
+      { desc: 'NETFLIX.COM', acct: 'smp-cc1', amount: -15.49, day: 3 },
+      { desc: 'HULU 8884652390', acct: 'smp-cc1', amount: -17.99, day: 7 },
+      { desc: 'DISNEY+ BURBANK', acct: 'smp-cc2', amount: -13.99, day: 12 },
+      { desc: 'SPOTIFY USA', acct: 'smp-cc1', amount: -11.99, day: 9 },
+      { desc: 'CLOUDVAULT PRO STORAGE', acct: 'smp-cc2', amount: -9.99, day: 17, startMonth: -7 },
+      { desc: 'FITSTREAM MEMBERSHIP', acct: 'smp-cc1', amount: -9.99, day: 21, creep: [[-5, -12.99], [-2, -14.99]] },
+      { desc: 'ICLOUD STORAGE 200GB', acct: 'smp-cc2', amount: -2.99, day: 24 },
+      { desc: 'NYTIMES DIGITAL', acct: 'smp-cc1', amount: -8.0, day: 5 },
+      { desc: 'IRONWORKS GYM MONTHLY', acct: 'smp-chk', amount: -39.99, day: 2 },
+    ];
+
+    const SAMPLE_SPEND = [
+      { desc: 'GREENLEAF GROCER', acct: 'smp-cc1', base: -84, jitter: 40, times: 5 },
+      { desc: 'TRADER JOES #291', acct: 'smp-cc1', base: -46, jitter: 22, times: 3 },
+      { desc: 'BLUE FLAME THAI RESTAURANT', acct: 'smp-cc1', base: -38, jitter: 20, times: 2 },
+      { desc: 'CORVUS COFFEE', acct: 'smp-cc1', base: -6.5, jitter: 3, times: 8 },
+      { desc: 'DOORDASH ORDER', acct: 'smp-cc2', base: -31, jitter: 14, times: 3 },
+      { desc: 'UBER TRIP', acct: 'smp-cc2', base: -17, jitter: 9, times: 4 },
+      { desc: 'SHELL OIL 5731', acct: 'smp-cc1', base: -48, jitter: 12, times: 3 },
+      { desc: 'AMAZON MKTPLACE', acct: 'smp-cc1', base: -42, jitter: 35, times: 4 },
+      { desc: 'TARGET STORE 0442', acct: 'smp-cc2', base: -55, jitter: 25, times: 2 },
+      { desc: 'CITY CINEMA', acct: 'smp-cc2', base: -24, jitter: 8, times: 1 },
+      { desc: 'WESTSIDE PHARMACY', acct: 'smp-chk', base: -22, jitter: 12, times: 1 },
+    ];
+
+    const SAMPLE_FIXED = [
+      { desc: 'OAKWOOD PROPERTIES RENT ', acct: 'smp-chk', amount: -2150, day: 1 },
+      { desc: 'CITY ELECTRIC UTILITY', acct: 'smp-chk', amount: -96, day: 11, jitter: 30 },
+      { desc: 'HARBOR INTERNET SERVICE', acct: 'smp-chk', amount: -69.99, day: 14 },
+      { desc: 'PACIFIC WIRELESS BILL', acct: 'smp-chk', amount: -85, day: 19 },
+      { desc: 'GEICO INSURANCE AUTOPAY', acct: 'smp-chk', amount: -138, day: 8 },
+    ];
+
+    function buildSampleData(now) {
+      const rng = mulberry32(20260818);
+      const txns = [];
+      const monthsBack = 13;
+      const anchor = new Date(now.getFullYear(), now.getMonth(), 1);
+      for (let m = -monthsBack; m <= 0; m += 1) {
+        const monthStart = new Date(anchor.getFullYear(), anchor.getMonth() + m, 1);
+        const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+        const lastDay = m === 0 ? Math.min(now.getDate(), daysInMonth) : daysInMonth;
+        const at = (day, hour) => new Date(monthStart.getFullYear(), monthStart.getMonth(), day, hour).getTime() / 1000;
+        const push = (desc, acct, amount, day, hour) => {
+          if (day > lastDay) return;
+          txns.push({
+            id: 'smp-' + monthStart.getFullYear() + '-' + (monthStart.getMonth() + 1) + '-' + txns.length,
+            account_id: acct, posted: Math.floor(at(day, hour || 12)),
+            amount: Math.round(amount * 100) / 100, description: desc, pending: 0,
+          });
+        };
+        // Pay lands twice a month; a little overtime jitter keeps the chart honest.
+        push('ACME ANALYTICS PAYROLL DIRECT DEP', 'smp-chk', 3120 + Math.floor(rng() * 140), 1, 9);
+        push('ACME ANALYTICS PAYROLL DIRECT DEP', 'smp-chk', 3120 + Math.floor(rng() * 140), 15, 9);
+        push('HARBOR BANK INTEREST PAID', 'smp-sav', 21 + Math.floor(rng() * 6), lastDay, 23);
+        push('TRANSFER TO RAINY-DAY SAVINGS', 'smp-chk', -600, 16, 10);
+        push('TRANSFER FROM CHECKING', 'smp-sav', 600, 16, 10);
+        for (const fixed of SAMPLE_FIXED) {
+          push(fixed.desc, fixed.acct, fixed.amount - (fixed.jitter ? rng() * fixed.jitter : 0), fixed.day, 8);
+        }
+        for (const sub of SAMPLE_SUBS) {
+          if (sub.startMonth !== undefined && m < sub.startMonth) continue;
+          let amount = sub.amount;
+          for (const [fromMonth, creepAmount] of sub.creep || []) {
+            if (m >= fromMonth) amount = creepAmount;
+          }
+          push(sub.desc, sub.acct, amount, sub.day, 6);
+        }
+        for (const spend of SAMPLE_SPEND) {
+          for (let i = 0; i < spend.times; i += 1) {
+            const day = 1 + Math.floor(rng() * (daysInMonth - 1));
+            push(spend.desc, spend.acct, spend.base - rng() * spend.jitter, day, 10 + Math.floor(rng() * 10));
+          }
+        }
+        // One travel spike, twice a year, so the heatmap and cash flow have texture.
+        if (monthStart.getMonth() === 5 || monthStart.getMonth() === 11) {
+          push('SUNCOAST AIRLINE TICKETS', 'smp-cc1', -420 - rng() * 160, 6, 7);
+          push('DRIFTWOOD HOTEL', 'smp-cc1', -380 - rng() * 120, 20, 15);
+        }
+        // Card autopay keeps the card balances from drifting off a cliff.
+        push('SUMMIT CARD PAYMENT THANK YOU', 'smp-cc1', 900 + Math.floor(rng() * 250), 26, 9);
+        push('AUTOPAY PAYMENT THANK YOU', 'smp-cc2', 350 + Math.floor(rng() * 120), 27, 9);
+        push('PAYMENT TO SUMMIT CARD', 'smp-chk', -(900 + Math.floor(rng() * 250)), 26, 9);
+        push('PAYMENT TO NORTHLINE', 'smp-chk', -(350 + Math.floor(rng() * 120)), 27, 9);
+      }
+      return txns;
+    }
+
+    // ------------------------------------------------------------
+    // Analytics — every one of these is deterministic and unit-testable.
+    // ------------------------------------------------------------
+
+    /** Merchant key: strip trailing store numbers/ids so 'TARGET 0442' and 'TARGET 0871' meet. */
+    function merchantKey(description) {
+      return description
+        .toLowerCase()
+        .replace(/[#*]?\d{3,}/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    /**
+     * THE SUBSCRIPTION RADAR. A merchant is recurring when it charges a similar amount
+     * (±20% of its median) at a regular cadence (28–33 d monthly, 350–380 d yearly) at
+     * least three times. Deterministic on purpose: the agent lane only ranks and
+     * explains what this finds — it can never invent a subscription.
+     */
+    function detectRecurring(rows, nowSec) {
+      const byMerchant = new Map();
+      for (const t of rows) {
+        if (t.amount >= 0 || t.pending) continue;
+        const key = merchantKey(t.description);
+        if (!byMerchant.has(key)) byMerchant.set(key, []);
+        byMerchant.get(key).push(t);
+      }
+      const found = [];
+      for (const [key, list] of byMerchant) {
+        if (list.length < 3) continue;
+        list.sort((a, b) => a.posted - b.posted);
+        const gaps = [];
+        for (let i = 1; i < list.length; i += 1) gaps.push((list[i].posted - list[i - 1].posted) / 86400);
+        const medGap = median(gaps);
+        const cadence = medGap >= 26 && medGap <= 35 ? 'monthly' : medGap >= 340 && medGap <= 395 ? 'yearly' : null;
+        if (cadence === null) continue;
+        const amounts = list.map((t) => -t.amount);
+        const medAmount = median(amounts);
+        if (amounts.some((a) => Math.abs(a - medAmount) > Math.max(2, medAmount * 0.6))) continue;
+        const last = list[list.length - 1];
+        const lastAmount = -last.amount;
+        const firstAmount = amounts[0];
+        const monthly = cadence === 'monthly' ? lastAmount : lastAmount / 12;
+        const daysSinceLast = (nowSec - last.posted) / 86400;
+        found.push({
+          merchant: key,
+          display: last.description,
+          category: last.category || 'subscriptions',
+          cadence,
+          count: list.length,
+          lastAmount,
+          monthly: Math.round(monthly * 100) / 100,
+          priceCreep: lastAmount > firstAmount * 1.15,
+          firstAmount,
+          lapsed: cadence === 'monthly' ? daysSinceLast > 45 : daysSinceLast > 420,
+          txnIds: list.map((t) => t.id),
+        });
+      }
+      // Overlap: two or more streaming-video services is the classic quiet leak. Keyed
+      // on a small name set rather than category so groceries never "overlap".
+      const streaming = ['netflix', 'hulu', 'disney', 'max ', 'paramount', 'peacock', 'appletv', 'apple tv'];
+      const streamers = found.filter((s) => streaming.some((name) => s.merchant.includes(name)));
+      if (streamers.length >= 2) for (const s of streamers) s.overlap = 'streaming video';
+      found.sort((a, b) => b.monthly - a.monthly);
+      return found;
+    }
+
+    function median(list) {
+      const sorted = [...list].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    /** Month key 'YYYY-MM' in local time. */
+    function monthKey(posted) {
+      const d = new Date(posted * 1000);
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    }
+
+    /** Cash flow per month: { key, income, spend, net } — transfers excluded from both sides. */
+    function cashFlowByMonth(rows) {
+      const months = new Map();
+      for (const t of rows) {
+        if (t.pending || t.category === 'transfers') continue;
+        const key = monthKey(t.posted);
+        if (!months.has(key)) months.set(key, { key, income: 0, spend: 0, net: 0 });
+        const m = months.get(key);
+        if (t.amount >= 0) m.income += t.amount; else m.spend += -t.amount;
+        m.net = m.income - m.spend;
+      }
+      return [...months.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
+    }
+
+    /** Spend by category for one month key; income and transfers excluded. */
+    function spendByCategory(rows, key) {
+      const cats = new Map();
+      for (const t of rows) {
+        if (t.pending || t.amount >= 0 || t.category === 'transfers') continue;
+        if (monthKey(t.posted) !== key) continue;
+        cats.set(t.category, (cats.get(t.category) || 0) + -t.amount);
+      }
+      return [...cats.entries()].map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
+    }
+
+    /**
+     * NET-WORTH HISTORY, reconstructed: today's total balance walked BACKWARD through
+     * the transaction log (balance yesterday = balance today − today's transactions).
+     * One point per day; exact where the data is, honest where it is not.
+     */
+    function netWorthSeries(accounts, rows, nowSec, days) {
+      const totalNow = accounts.reduce((sum, a) => sum + a.balance, 0);
+      const deltaByDay = new Map();
+      for (const t of rows) {
+        if (t.pending) continue;
+        const day = Math.floor(t.posted / 86400);
+        deltaByDay.set(day, (deltaByDay.get(day) || 0) + t.amount);
+      }
+      const today = Math.floor(nowSec / 86400);
+      const series = [];
+      let running = totalNow;
+      for (let d = today; d > today - days; d -= 1) {
+        series.push({ day: d, value: running });
+        running -= deltaByDay.get(d) || 0;
+      }
+      series.reverse();
+      return series;
+    }
+
+    /**
+     * THE TIME MACHINE's forward half. The base trajectory extends the median monthly
+     * net of the last six FULL months; each scenario adds its monthlyTotal on top.
+     * Deliberately simple math, stated on the card — a projection the user can check
+     * by hand beats a clever one they must trust.
+     */
+    function projectForward(lastValue, flows, months, scenarioMonthly) {
+      const closed = flows.slice(-7, -1);
+      const baseMonthly = closed.length > 0 ? median(closed.map((f) => f.net)) : 0;
+      const points = [];
+      let value = lastValue;
+      for (let m = 1; m <= months; m += 1) {
+        value += baseMonthly + scenarioMonthly;
+        points.push({ month: m, value });
+      }
+      return { baseMonthly, points };
+    }
+
+    /** Spend per day-of-current-month for the heatmap. */
+    function heatmapDays(rows, now) {
+      const key = monthKey(now.getTime() / 1000);
+      const days = new Map();
+      for (const t of rows) {
+        if (t.pending || t.amount >= 0 || t.category === 'transfers') continue;
+        if (monthKey(t.posted) !== key) continue;
+        const day = new Date(t.posted * 1000).getDate();
+        days.set(day, (days.get(day) || 0) + -t.amount);
+      }
+      return days;
+    }
+
+    /** Verified-cancelled watcher: a marked merchant with no charge in >40 d is PROVEN by the feed. */
+    function cancelVerdicts(cancels, rows, nowSec) {
+      return cancels.map((c) => {
+        const later = rows.filter(
+          (t) => !t.pending && t.amount < 0 && merchantKey(t.description) === c.merchant && t.posted > c.marked_at,
+        );
+        const lastCharge = later.length > 0 ? Math.max(...later.map((t) => t.posted)) : null;
+        const quietDays = ((lastCharge === null ? nowSec - c.marked_at : nowSec - lastCharge) / 86400) | 0;
+        const verified = later.length === 0 ? quietDays > 40 : false;
+        return { ...c, stillCharging: later.length > 0, quietDays, verifiedNow: verified };
+      });
+    }
+
+    // ===== LEDGER-CORE-END =====
+
+    // ------------------------------------------------------------
+    // Money formatting
+    // ------------------------------------------------------------
+    function fmtMoney(value, opts) {
+      const abs = Math.abs(value);
+      const text = abs.toLocaleString(undefined, {
+        minimumFractionDigits: abs >= 1000 && !(opts && opts.cents) ? 0 : 2,
+        maximumFractionDigits: abs >= 1000 && !(opts && opts.cents) ? 0 : 2,
+      });
+      return (value < 0 ? '−$' : '$') + text;
+    }
+    function fmtDay(posted) {
+      return new Date(posted * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+
+    // ------------------------------------------------------------
+    // Data layer — literal SQL with bind params only (never concatenated).
+    // ------------------------------------------------------------
+    async function loadAll(db) {
+      const accountRows = await db.exec('SELECT id, org_name, name, currency, balance, available, balance_date, sample FROM accounts ORDER BY balance DESC');
+      const txnRows = await db.exec('SELECT id, account_id, posted, amount, description, pending, category, sample FROM txns ORDER BY posted DESC');
+      const ruleRows = await db.exec('SELECT id, pattern, category, approved, source FROM rules ORDER BY id');
+      const budgetRows = await db.exec('SELECT category, monthly FROM budgets');
+      const scenarioRows = await db.exec('SELECT id, name, monthly_total, detail, created_at FROM scenarios ORDER BY id DESC');
+      const cancelRows = await db.exec('SELECT merchant, marked_at, monthly_cost, verified FROM cancels');
+      const runRows = await db.exec('SELECT at, ok, message, watermark FROM sync_runs ORDER BY id DESC LIMIT 1');
+      const row = (r, cols) => Object.fromEntries(cols.map((c, i) => [c, r[i]]));
+      return {
+        accounts: accountRows.rows.map((r) => row(r, accountRows.columns)),
+        txns: txnRows.rows.map((r) => row(r, txnRows.columns)),
+        rules: ruleRows.rows.map((r) => row(r, ruleRows.columns)),
+        budgets: budgetRows.rows.map((r) => row(r, budgetRows.columns)),
+        scenarios: scenarioRows.rows.map((r) => row(r, scenarioRows.columns)),
+        cancels: cancelRows.rows.map((r) => row(r, cancelRows.columns)),
+        lastRun: runRows.rows.length > 0 ? row(runRows.rows[0], runRows.columns) : null,
+      };
+    }
+
+    async function seedSampleIfEmpty(db, now) {
+      const count = await db.exec('SELECT COUNT(*) FROM accounts');
+      if (count.rows[0][0] > 0) return false;
+      for (const a of SAMPLE_ACCOUNTS) {
+        await db.exec(
+          'INSERT INTO accounts (id, org_name, name, currency, balance, available, balance_date, sample) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+          [a.id, a.org_name, a.name, 'USD', 0, null, Math.floor(now.getTime() / 1000)],
+        );
+      }
+      const txns = buildSampleData(now);
+      for (const t of txns) {
+        await db.exec(
+          'INSERT OR IGNORE INTO txns (id, account_id, posted, amount, description, pending, category, sample) VALUES (?, ?, ?, ?, ?, 0, ?, 1)',
+          [t.id, t.account_id, t.posted, t.amount, t.description, categorize(t.description, [])],
+        );
+      }
+      // Balances derive from the seed's own arithmetic so the header agrees with the chart.
+      for (const a of SAMPLE_ACCOUNTS) {
+        const sum = await db.exec('SELECT COALESCE(SUM(amount), 0) FROM txns WHERE account_id = ?', [a.id]);
+        const balance = Math.round((a.start + sum.rows[0][0]) * 100) / 100;
+        await db.exec('UPDATE accounts SET balance = ? WHERE id = ?', [balance, a.id]);
+      }
+      return true;
+    }
+
+    // ------------------------------------------------------------
+    // Sync — SimpleFIN /accounts through the governed connected fetch.
+    // ------------------------------------------------------------
+    /**
+     * Watermark minus a 7-day overlap window: pending transactions settle with NEW ids
+     * at some providers, so re-reading the seam and upserting by id is what converts
+     * pending→posted without duplicates.
+     */
+    async function syncNow(db, api, lastRun) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const overlap = 7 * 86400;
+      const since = lastRun && lastRun.ok && lastRun.watermark ? lastRun.watermark - overlap : nowSec - 400 * 86400;
+      const result = await api.fetch(SFIN + '/accounts?start-date=' + Math.floor(since) + '&pending=1');
+      if (!result.ok) {
+        await db.exec('INSERT INTO sync_runs (at, ok, message, watermark) VALUES (?, 0, ?, NULL)',
+          [nowSec, (result.error && result.error.message) || 'request failed']);
+        return { ok: false, message: (result.error && result.error.message) || 'request failed' };
+      }
+      if (result.status < 200 || result.status >= 300) {
+        const message = result.status === 402 ? 'SimpleFIN says payment is due on your Bridge account'
+          : result.status === 403 ? 'SimpleFIN rejected the stored access key — reconnect to mint a fresh one'
+          : 'SimpleFIN answered with status ' + result.status;
+        await db.exec('INSERT INTO sync_runs (at, ok, message, watermark) VALUES (?, 0, ?, NULL)', [nowSec, message]);
+        return { ok: false, message };
+      }
+      let payload;
+      try { payload = JSON.parse(result.body); } catch {
+        await db.exec('INSERT INTO sync_runs (at, ok, message, watermark) VALUES (?, 0, ?, NULL)', [nowSec, 'unreadable reply']);
+        return { ok: false, message: 'SimpleFIN answered unreadably' };
+      }
+      // FIRST REAL DATA EVICTS THE SAMPLE WHOLESALE — provenance flag, total swap.
+      await db.exec('DELETE FROM txns WHERE sample = 1');
+      await db.exec('DELETE FROM accounts WHERE sample = 1');
+      await db.exec('DELETE FROM snapshots WHERE sample = 1');
+
+      const ruleRows = await db.exec('SELECT id, pattern, category, approved, source FROM rules ORDER BY id');
+      const rules = ruleRows.rows.map((r) => ({ pattern: r[1], category: r[2], approved: r[3] }));
+      let txnCount = 0;
+      for (const account of payload.accounts || []) {
+        const org = (account.org && (account.org.name || account.org.domain)) || '';
+        await db.exec(
+          'INSERT INTO accounts (id, org_name, name, currency, balance, available, balance_date, sample) VALUES (?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET org_name = excluded.org_name, name = excluded.name, currency = excluded.currency, balance = excluded.balance, available = excluded.available, balance_date = excluded.balance_date, sample = 0',
+          [String(account.id), org, String(account.name || account.id), String(account.currency || 'USD'),
+            Number(account.balance) || 0, account['available-balance'] === undefined ? null : Number(account['available-balance']),
+            Number(account['balance-date']) || nowSec],
+        );
+        await db.exec('INSERT INTO snapshots (at, account_id, balance, sample) VALUES (?, ?, ?, 0)',
+          [nowSec, String(account.id), Number(account.balance) || 0]);
+        for (const t of account.transactions || []) {
+          const description = String(t.description || '').slice(0, 200);
+          await db.exec(
+            'INSERT INTO txns (id, account_id, posted, amount, description, pending, category, sample) VALUES (?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET posted = excluded.posted, amount = excluded.amount, description = excluded.description, pending = excluded.pending',
+            [String(t.id), String(account.id), Number(t.posted) || nowSec, Number(t.amount) || 0,
+              description, t.pending ? 1 : 0, categorize(description, rules)],
+          );
+          txnCount += 1;
+        }
+      }
+      const errors = Array.isArray(payload.errors) ? payload.errors.filter((e) => typeof e === 'string') : [];
+      const message = errors.length > 0 ? 'synced with notes: ' + errors.join(' · ').slice(0, 200) : 'synced ' + txnCount + ' transactions';
+      await db.exec('INSERT INTO sync_runs (at, ok, message, watermark) VALUES (?, 1, ?, ?)', [nowSec, message, nowSec]);
+      return { ok: true, message };
+    }
+
+    // ------------------------------------------------------------
+    // Charts — hand-rolled SVG; no chart library, no external bytes.
+    // ------------------------------------------------------------
+
+    /** The Time Machine: history line + base projection + scenario branches, one SVG. */
+    function TimeMachineChart({ series, projections, width, height }) {
+      const w = width || 640; const h = height || 220;
+      const pad = { l: 8, r: 8, t: 12, b: 18 };
+      const historyMonths = series.length / 30;
+      const all = series.map((p) => p.value);
+      for (const proj of projections) for (const p of proj.points) all.push(p.value);
+      const min = Math.min(...all); const max = Math.max(...all);
+      const span = Math.max(1, max - min);
+      const totalUnits = series.length + (projections[0] ? projections[0].points.length * 30 : 0);
+      const x = (unit) => pad.l + (unit / Math.max(1, totalUnits - 1)) * (w - pad.l - pad.r);
+      const y = (value) => pad.t + (1 - (value - min) / span) * (h - pad.t - pad.b);
+      const historyPath = series.map((p, i) => (i === 0 ? 'M' : 'L') + x(i).toFixed(1) + ' ' + y(p.value).toFixed(1)).join(' ');
+      const lastX = x(series.length - 1);
+      const lastY = y(series[series.length - 1].value);
+      const projPath = (proj) => 'M' + lastX.toFixed(1) + ' ' + lastY.toFixed(1) + ' ' +
+        proj.points.map((p) => 'L' + x(series.length - 1 + p.month * 30).toFixed(1) + ' ' + y(p.value).toFixed(1)).join(' ');
+      return (
+        <svg viewBox={'0 0 ' + w + ' ' + h} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="net worth: history and projections">
+          <line x1={lastX} y1={pad.t} x2={lastX} y2={h - pad.b} stroke="var(--grid)" strokeWidth="1" strokeDasharray="3 3" />
+          <text x={lastX - 4} y={h - 6} fontSize="10" fill="var(--faint)" textAnchor="end">today</text>
+          <text x={pad.l + 2} y={h - 6} fontSize="10" fill="var(--faint)">{'−' + Math.round(historyMonths) + ' mo'}</text>
+          {projections.map((proj, i) => (
+            <path key={proj.name} d={projPath(proj)} fill="none"
+              stroke={proj.kind === 'base' ? 'var(--muted)' : 'var(--proj)'}
+              strokeWidth={proj.kind === 'base' ? 1.6 : 2.2}
+              strokeDasharray={proj.kind === 'base' ? '5 4' : '1 0'} opacity={0.55 + 0.45 / (i + 1)} />
+          ))}
+          <path d={historyPath} fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinejoin="round" />
+          <circle cx={lastX} cy={lastY} r="3.4" fill="var(--accent)" />
+        </svg>
+      );
+    }
+
+    /** Monthly cash-flow bars: income up, spend down, net dot line. */
+    function CashFlowChart({ flows }) {
+      const w = 640; const h = 190; const pad = { l: 8, r: 8, t: 10, b: 20 };
+      const shown = flows.slice(-12);
+      if (shown.length === 0) return <div className="empty">no months yet</div>;
+      const peak = Math.max(...shown.map((f) => Math.max(f.income, f.spend)), 1);
+      const zero = pad.t + (h - pad.t - pad.b) / 2;
+      const scale = (h - pad.t - pad.b) / 2 / peak;
+      const bw = (w - pad.l - pad.r) / shown.length;
+      return (
+        <svg viewBox={'0 0 ' + w + ' ' + h} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="monthly cash flow">
+          <line x1={pad.l} y1={zero} x2={w - pad.r} y2={zero} stroke="var(--grid)" strokeWidth="1" />
+          {shown.map((f, i) => {
+            const cx = pad.l + i * bw + bw / 2;
+            return (
+              <g key={f.key}>
+                <rect x={cx - bw * 0.32} y={zero - f.income * scale} width={bw * 0.28} height={Math.max(1, f.income * scale)} rx="2" fill="var(--up)" opacity="0.85" />
+                <rect x={cx + bw * 0.04} y={zero} width={bw * 0.28} height={Math.max(1, f.spend * scale)} rx="2" fill="var(--down)" opacity="0.8" />
+                <circle cx={cx} cy={zero - f.net * scale} r="2.6" fill="var(--ink-line)" />
+                <text x={cx} y={h - 6} fontSize="9.5" fill="var(--faint)" textAnchor="middle">{f.key.slice(5)}</text>
+              </g>
+            );
+          })}
+        </svg>
+      );
+    }
+
+    function Sparkline({ series }) {
+      if (series.length < 2) return null;
+      const w = 120; const h = 34;
+      const min = Math.min(...series.map((p) => p.value));
+      const max = Math.max(...series.map((p) => p.value));
+      const span = Math.max(1, max - min);
+      const path = series.map((p, i) =>
+        (i === 0 ? 'M' : 'L') + ((i / (series.length - 1)) * w).toFixed(1) + ' ' + (h - 3 - ((p.value - min) / span) * (h - 6)).toFixed(1),
+      ).join(' ');
+      return (
+        <svg viewBox={'0 0 ' + w + ' ' + h} width={w} height={h} aria-hidden="true">
+          <path d={path} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+
+    function GoalRing({ pct, size }) {
+      const s = size || 46; const r = (s - 8) / 2; const c = 2 * Math.PI * r;
+      const done = Math.max(0, Math.min(1, pct));
+      return (
+        <svg className="ring" width={s} height={s} viewBox={'0 0 ' + s + ' ' + s} aria-hidden="true">
+          <circle cx={s / 2} cy={s / 2} r={r} fill="none" stroke="var(--chip)" strokeWidth="6" />
+          <circle cx={s / 2} cy={s / 2} r={r} fill="none" stroke="var(--up)" strokeWidth="6"
+            strokeDasharray={c} strokeDashoffset={c * (1 - done)} strokeLinecap="round"
+            transform={'rotate(-90 ' + s / 2 + ' ' + s / 2 + ')'} />
+          <text x="50%" y="54%" textAnchor="middle" fontSize="11" fill="var(--fg)" fontWeight="600">{Math.round(done * 100) + '%'}</text>
+        </svg>
+      );
+    }
+
+    function Heatmap({ days, now }) {
+      const year = now.getFullYear(); const month = now.getMonth();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const firstDow = new Date(year, month, 1).getDay();
+      const peak = Math.max(1, ...days.values());
+      const level = (spend) => (spend === 0 ? 0 : spend < peak * 0.15 ? 1 : spend < peak * 0.4 ? 2 : spend < peak * 0.75 ? 3 : 4);
+      const cells = [];
+      for (let i = 0; i < firstDow; i += 1) cells.push(null);
+      for (let d = 1; d <= daysInMonth; d += 1) cells.push(d);
+      return (
+        <div>
+          <div className="heat" aria-hidden="true">
+            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <div key={'dow' + i} className="dow">{d}</div>)}
+            {cells.map((d, i) => d === null
+              ? <div key={'pad' + i} />
+              : (
+                <div key={d} className="cell" title={d + ': ' + fmtMoney(-(days.get(d) || 0))}
+                  style={{ background: 'var(--heat' + level(days.get(d) || 0) + ')' }}>
+                  <span>{d}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ------------------------------------------------------------
+    // Agent lanes — every reply is validated hard against RESPONSE_SCHEMA's shape for
+    // its lane; a failed or off-script reply leaves the deterministic surface standing
+    // with a visible note (ADR-0011 — stated honestly, never faked).
+    // ------------------------------------------------------------
+    function validAnswer(data) {
+      if (!data || data.kind !== 'answer' || typeof data.answer !== 'string' || data.answer.length === 0) return null;
+      const evidence = Array.isArray(data.evidence) ? data.evidence.filter((e) => typeof e === 'number' || typeof e === 'string') : [];
+      return { answer: data.answer, evidence };
+    }
+    function validRules(data) {
+      if (!data || data.kind !== 'rules' || !Array.isArray(data.rules)) return null;
+      const rules = data.rules
+        .filter((r) => r && typeof r.pattern === 'string' && r.pattern.trim().length > 1 && CATEGORIES.includes(r.category))
+        .map((r) => ({ pattern: r.pattern.trim().toLowerCase(), category: r.category }))
+        .slice(0, 8);
+      return rules.length > 0 ? rules : null;
+    }
+    function validPlan(data) {
+      if (!data || data.kind !== 'plan' || !data.plan || typeof data.plan !== 'object') return null;
+      const plan = data.plan;
+      if (typeof plan.name !== 'string' || !Array.isArray(plan.monthlySteps)) return null;
+      const steps = plan.monthlySteps
+        .filter((s) => s && typeof s.category === 'string' && typeof s.monthlyDelta === 'number' && isFinite(s.monthlyDelta))
+        .slice(0, 10);
+      const total = typeof plan.monthlyTotal === 'number' && isFinite(plan.monthlyTotal)
+        ? plan.monthlyTotal
+        : steps.reduce((sum, s) => sum + s.monthlyDelta, 0);
+      if (steps.length === 0) return null;
+      return { name: plan.name.slice(0, 60), steps, total, note: typeof plan.note === 'string' ? plan.note : '' };
+    }
+    function validLeaks(data, merchants) {
+      if (!data || data.kind !== 'leaks' || !Array.isArray(data.leaks)) return null;
+      const allowed = new Set(merchants);
+      const verdicts = data.leaks
+        .filter((l) => l && allowed.has(l.merchant) && ['keep', 'consider', 'cut'].includes(l.verdict) && typeof l.why === 'string')
+        .map((l) => ({ merchant: l.merchant, verdict: l.verdict, why: l.why.slice(0, 160) }));
+      return verdicts.length > 0 ? verdicts : null;
+    }
+
+    // ------------------------------------------------------------
+    // Views
+    // ------------------------------------------------------------
+    function CategoryBars({ cats, budgets, total }) {
+      const budgetFor = (category) => budgets.find((b) => b.category === category);
+      const peak = Math.max(1, ...cats.map((c) => c.total));
+      return (
+        <div>
+          {cats.map((c) => {
+            const budget = budgetFor(c.category);
+            const over = budget !== undefined && c.total > budget.monthly;
+            return (
+              <div key={c.category} className={'catrow' + (over ? ' over' : '')}>
+                <div className="lbl">{c.category}</div>
+                <div className="bar"><i style={{ width: Math.max(2, (c.total / peak) * 100) + '%' }} /></div>
+                <div className="amt num">{fmtMoney(-c.total)}{budget !== undefined ? <span style={{ color: 'var(--faint)', fontWeight: 400 }}> / {fmtMoney(-budget.monthly)}</span> : null}</div>
+              </div>
+            );
+          })}
+          {cats.length === 0 ? <div className="empty">nothing spent yet this month</div> : null}
+          <div className="sub" style={{ marginTop: 8 }}>this month so far: <strong className="num">{fmtMoney(-total)}</strong></div>
+        </div>
+      );
+    }
+
+    function LeakList({ leaks, verdicts, cancels, onMarkCancelled, onAskVerdicts, asking, agentNote, playbooks, playbookBusy, onAskPlaybook, onOpenCancelPage }) {
+      const verdictFor = (merchant) => (verdicts || []).find((v) => v.merchant === merchant);
+      const cancelFor = (merchant) => cancels.find((c) => c.merchant === merchant);
+      const flaggable = leaks.filter((l) => l.overlap || l.priceCreep || l.lapsed);
+      const monthlyTotal = leaks.reduce((sum, l) => sum + l.monthly, 0);
+      return (
+        <div>
+          <div className="sub">
+            {leaks.length} recurring charges · <strong className="num">{fmtMoney(-monthlyTotal)}/mo</strong>
+            {flaggable.length > 0 ? <> · <span style={{ color: 'var(--warn)' }}>{flaggable.length} worth a look</span></> : null}
+          </div>
+          {leaks.map((leak) => {
+            const verdict = verdictFor(leak.merchant);
+            const cancel = cancelFor(leak.merchant);
+            return (
+              <div className="leak" key={leak.merchant}>
+                <div className="emoji">{leak.overlap ? '📺' : leak.cadence === 'yearly' ? '📅' : '🔁'}</div>
+                <div className="body">
+                  <div className="head">
+                    <span className="merchant">{leak.display}</span>
+                    <span className="cost num">{fmtMoney(-leak.lastAmount)}<small style={{ color: 'var(--faint)' }}>/{leak.cadence === 'monthly' ? 'mo' : 'yr'}</small></span>
+                  </div>
+                  <div className="why">
+                    seen {leak.count}× · ≈{fmtMoney(-leak.monthly)}/mo
+                    {verdict !== undefined ? <> — <strong>{verdict.verdict}</strong>: {verdict.why}</> : null}
+                  </div>
+                  <div className="flags">
+                    {leak.overlap ? <span className="flag overlap">overlaps: {leak.overlap}</span> : null}
+                    {leak.priceCreep ? <span className="flag creep">price creep {fmtMoney(-leak.firstAmount)} → {fmtMoney(-leak.lastAmount)}</span> : null}
+                    {leak.lapsed ? <span className="flag">may have lapsed</span> : null}
+                    {cancel !== undefined ? (
+                      cancel.stillCharging
+                        ? <span className="flag overlap">marked cancelled but STILL CHARGING</span>
+                        : cancel.verifiedNow
+                          ? <span className="flag ok">✓ verified cancelled — quiet {cancel.quietDays} d, saving {fmtMoney(-cancel.monthly_cost)}/mo</span>
+                          : <span className="flag">cancelled — watching ({cancel.quietDays} quiet days)</span>
+                    ) : null}
+                  </div>
+                </div>
+                {playbooks && playbooks[leak.merchant] ? (
+                  <div className="planbox" data-playbook={leak.merchant}>
+                    <strong>how to cancel</strong>
+                    {playbooks[leak.merchant].steps.map((step, i) => (
+                      <div className="step" key={i}>{(i + 1) + '. ' + step}</div>
+                    ))}
+                    {playbooks[leak.merchant].emailDraft ? (
+                      <div className="sub" style={{ marginTop: 6 }}>
+                        email draft (copy it): <em>{playbooks[leak.merchant].emailDraft}</em>
+                      </div>
+                    ) : null}
+                    {playbooks[leak.merchant].cancelUrl ? (
+                      playbooks[leak.merchant].openFallback ? (
+                        <div className="sub" style={{ marginTop: 6 }}>
+                          open this address in your browser: <code>{playbooks[leak.merchant].cancelUrl}</code>
+                        </div>
+                      ) : (
+                        <button className="btn" style={{ marginTop: 8, minHeight: 34, fontSize: 12.5 }}
+                          onClick={() => onOpenCancelPage(leak.merchant)}>
+                          open the cancellation page
+                        </button>
+                      )
+                    ) : null}
+                    <div className="sub" style={{ marginTop: 6 }}>
+                      you sign in there yourself — Snug never sees those credentials. When it's done, tap “I cancelled
+                      this” and the feed will verify it.
+                    </div>
+                  </div>
+                ) : null}
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {cancel === undefined ? (
+                    <button className="btn quiet" style={{ minHeight: 34, fontSize: 12 }} onClick={() => onMarkCancelled(leak)}>
+                      I cancelled this
+                    </button>
+                  ) : null}
+                  {(!playbooks || !playbooks[leak.merchant]) && cancel === undefined ? (
+                    <button className="btn quiet" style={{ minHeight: 34, fontSize: 12 }} onClick={() => onAskPlaybook(leak)}
+                      disabled={playbookBusy === leak.merchant}>
+                      {playbookBusy === leak.merchant ? 'thinking…' : 'help me cancel'}
+                    </button>
+                  ) : null}
+                </span>
+              </div>
+            );
+          })}
+          {leaks.length === 0 ? <div className="empty">no recurring charges detected yet — sync some history first</div> : null}
+          {leaks.length > 0 ? (
+            <div className="footrow">
+              <button className="btn" onClick={onAskVerdicts} disabled={asking}>
+                {asking ? <span><span className="spin">✦</span> weighing them…</span> : 'ask the agent: which are leaks?'}
+              </button>
+              {agentNote ? <span className="agent-note">{agentNote}</span> : null}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    function TxnList({ txns, filter, onFilter }) {
+      const shown = (filter ? txns.filter((t) => t.category === filter) : txns).slice(0, 60);
+      return (
+        <div>
+          <div className="chips">
+            <button onClick={() => onFilter(null)} style={filter === null ? { background: 'var(--accent)', color: 'var(--accent-fg)' } : undefined}>all</button>
+            {CATEGORIES.filter((c) => txns.some((t) => t.category === c)).map((c) => (
+              <button key={c} onClick={() => onFilter(c)} style={filter === c ? { background: 'var(--accent)', color: 'var(--accent-fg)' } : undefined}>{c}</button>
+            ))}
+          </div>
+          <div style={{ marginTop: 8 }}>
+            {shown.map((t) => (
+              <div key={t.id} className={'txn' + (t.pending ? ' pending' : '')}>
+                <span className="d">{fmtDay(t.posted)}{t.pending ? ' ·⏳' : ''}</span>
+                <span className="desc">{t.description}</span>
+                <span className="cat">{t.category}</span>
+                <span className={'num amt' + (t.amount >= 0 ? ' in' : '')}>{fmtMoney(t.amount, { cents: true })}</span>
+              </div>
+            ))}
+            {shown.length === 0 ? <div className="empty">nothing here yet</div> : null}
+          </div>
+        </div>
+      );
+    }
+
+    // ------------------------------------------------------------
+    // The open-url bridge (ADR-0038 D5) — hand-rolled OUTSIDE the byte-locked hooks
+    // block (the Telepath doorbell precedent): posts `snug:open-url-request` and waits
+    // for the host's answer. The HOST shows the full URL in its own confirm dialog and
+    // only a real user gesture opens anything; `refused`/`declined` here simply means
+    // the app renders its copy-the-link fallback. Capability truth comes from the
+    // host-ready frame — absent means this route (a read-only starter, an older host)
+    // cannot open windows, which is a fact to design for, not an error.
+    // ------------------------------------------------------------
+    const openUrlWaiters = new Map();
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || data.v !== 1 || data.type !== 'snug:open-url-result') return;
+      const waiter = openUrlWaiters.get(data.requestId);
+      if (!waiter) return;
+      openUrlWaiters.delete(data.requestId);
+      waiter({ status: data.status, reason: data.reason });
+    });
+    function canOpenUrls() {
+      return SnugBridge.capabilities && SnugBridge.capabilities.openUrl === true;
+    }
+    function requestOpenUrl(url) {
+      if (!canOpenUrls()) return Promise.resolve({ status: 'refused', reason: 'no capability' });
+      const requestId = 'ou-' + Math.random().toString(36).slice(2);
+      return new Promise((resolve) => {
+        openUrlWaiters.set(requestId, resolve);
+        SnugBridge.post({ type: 'snug:open-url-request', requestId, url });
+        // The user may sit on the host dialog; be patient, but never leak the waiter.
+        setTimeout(() => {
+          if (openUrlWaiters.delete(requestId)) resolve({ status: 'refused', reason: 'no answer' });
+        }, 180000);
+      });
+    }
+
+    /** App-side gate on an LLM-proposed URL: https, no userinfo, parseable — or no button. */
+    function safeCancelUrl(candidate) {
+      if (typeof candidate !== 'string') return null;
+      try {
+        const url = new URL(candidate);
+        if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return null;
+        return url.href;
+      } catch { return null; }
+    }
+
+    function validPlaybook(data, merchants) {
+      if (!data || data.kind !== 'playbook' || !data.playbook || typeof data.playbook !== 'object') return null;
+      const p = data.playbook;
+      if (!merchants.includes(p.merchant) || !Array.isArray(p.steps)) return null;
+      const steps = p.steps.filter((s) => typeof s === 'string' && s.trim().length > 0).slice(0, 6);
+      if (steps.length === 0) return null;
+      return {
+        merchant: p.merchant,
+        steps,
+        cancelUrl: safeCancelUrl(p.cancelUrl),
+        emailDraft: typeof p.emailDraft === 'string' && p.emailDraft.trim().length > 0 ? p.emailDraft.slice(0, 800) : null,
+      };
+    }
+
+    // ------------------------------------------------------------
+    // The app shell
+    // ------------------------------------------------------------
+    const ASK_SUGGESTIONS = [
+      'where did my money go last month?',
+      'how much do I spend on dining out?',
+      'what changed vs three months ago?',
+      'am I on track to grow savings this year?',
+    ];
+
+    function App() {
+      const { isReady, theme, sendMessage } = useSnugApp({
+        appId: 'ledger',
+        displayName: 'Ledger',
+        description: 'Your money, at home — every account in your own file, with an analyst on tap and a time machine for your net worth.',
+        iconEmoji: '📒',
+        iconColor: '#b95c22',
+      });
+      const db = useAppDB();
+      const api = useConnectedFetch();
+
+      const [schemaReady, setSchemaReady] = useState(false);
+      const [data, setData] = useState(null);
+      const [tab, setTab] = useState('overview');
+      const [txnFilter, setTxnFilter] = useState(null);
+      const [syncing, setSyncing] = useState(false);
+      const [syncNote, setSyncNote] = useState(null);
+      const [months, setMonths] = useState(12);
+      const [question, setQuestion] = useState('');
+      const [askState, setAskState] = useState({ status: 'idle' });
+      const [leakVerdicts, setLeakVerdicts] = useState(null);
+      const [playbooks, setPlaybooks] = useState({});
+      const [playbookBusy, setPlaybookBusy] = useState(null);
+      const [leakAsking, setLeakAsking] = useState(false);
+      const [leakNote, setLeakNote] = useState(null);
+      const [ruleProposals, setRuleProposals] = useState(null);
+      const [ruleNote, setRuleNote] = useState(null);
+      const [ruleAsking, setRuleAsking] = useState(false);
+      const [planAsking, setPlanAsking] = useState(false);
+      const [planNote, setPlanNote] = useState(null);
+      const [goalText, setGoalText] = useState('');
+
+      useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : 'light');
+      }, [theme]);
+
+      const reload = useCallback(async () => {
+        const loaded = await loadAll(db);
+        setData(loaded);
+      }, [db]);
+
+      // Schema first; everything else gates on it (real sql.js, real DDL).
+      useEffect(() => {
+        if (!isReady) return;
+        let alive = true;
+        (async () => {
+          for (const stmt of DDL) await db.exec(stmt);
+          await seedSampleIfEmpty(db, new Date());
+          if (!alive) return;
+          setSchemaReady(true);
+          await reload();
+        })().catch(() => setSyncNote('storage hiccup — export your file and reload'));
+        return () => { alive = false; };
+      }, [isReady, db, reload]);
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const now = new Date();
+      const isSample = data !== null && data.accounts.length > 0 && data.accounts.every((a) => a.sample === 1);
+
+      // Derived analytics — all deterministic, all memoized on the loaded rows.
+      const flows = useMemo(() => (data === null ? [] : cashFlowByMonth(data.txns)), [data]);
+      const series = useMemo(
+        () => (data === null || data.accounts.length === 0 ? [] : netWorthSeries(data.accounts, data.txns, nowSec, 370)),
+        [data, nowSec],
+      );
+      const leaks = useMemo(() => (data === null ? [] : detectRecurring(data.txns, nowSec)), [data, nowSec]);
+      const thisMonthKey = monthKey(nowSec);
+      const cats = useMemo(() => (data === null ? [] : spendByCategory(data.txns, thisMonthKey)), [data, thisMonthKey]);
+      const heat = useMemo(() => (data === null ? new Map() : heatmapDays(data.txns, now)), [data]);
+      const cancels = useMemo(
+        () => (data === null ? [] : cancelVerdicts(data.cancels, data.txns, nowSec)),
+        [data, nowSec],
+      );
+
+      const netNow = data === null ? 0 : data.accounts.reduce((sum, a) => sum + a.balance, 0);
+      const monthAgo = series.length > 30 ? series[series.length - 31].value : null;
+      const delta = monthAgo === null ? null : netNow - monthAgo;
+
+      const projections = useMemo(() => {
+        if (series.length === 0) return [];
+        const last = series[series.length - 1].value;
+        const base = projectForward(last, flows, months, 0);
+        const list = [{ name: 'current path', kind: 'base', points: base.points, baseMonthly: base.baseMonthly }];
+        for (const scenario of (data ? data.scenarios : []).slice(0, 2)) {
+          list.push({ name: scenario.name, kind: 'scenario', points: projectForward(last, flows, months, scenario.monthly_total).points });
+        }
+        return list;
+      }, [series, flows, months, data]);
+
+      // --- sync ---
+      const runSync = async () => {
+        setSyncing(true); setSyncNote(null);
+        try {
+          const result = await syncNow(db, api, data === null ? null : data.lastRun);
+          setSyncNote(result.message);
+          await reload();
+        } finally { setSyncing(false); }
+      };
+
+      // --- lanes ---
+      const ask = async (q) => {
+        const query = (q || question).trim();
+        if (query === '') return;
+        setAskState({ status: 'busy', q: query });
+        const monthCats = spendByCategory(data.txns, thisMonthKey);
+        const recentRows = data.txns.slice(0, 120).map((t) => ({ id: t.id, d: fmtDay(t.posted), amt: t.amount, desc: t.description.slice(0, 40), cat: t.category }));
+        const result = await sendMessage('ask_money', { question: query }, {
+          state: {
+            netWorth: Math.round(netNow),
+            monthlyFlows: flows.slice(-6),
+            thisMonthByCategory: monthCats,
+            recurring: leaks.map((l) => ({ merchant: l.display, monthly: l.monthly })),
+            recentRows,
+          },
+          responseSchema: RESPONSE_SCHEMA,
+        });
+        if (!result.ok) { setAskState({ status: 'failed', q: query, note: 'the agent went quiet (' + ((result.error && result.error.message) || 'no reply') + ')' }); return; }
+        const answer = validAnswer(result.data);
+        if (!answer) { setAskState({ status: 'failed', q: query, note: 'the agent answered off-script — the numbers above are still exact' }); return; }
+        setAskState({ status: 'done', q: query, answer });
+      };
+
+      const askLeakVerdicts = async () => {
+        setLeakAsking(true); setLeakNote(null);
+        const result = await sendMessage('leak_verdicts', {
+          recurring: leaks.map((l) => ({ merchant: l.merchant, display: l.display, monthly: l.monthly, cadence: l.cadence, overlap: l.overlap || null, priceCreep: l.priceCreep, firstAmount: l.firstAmount, lastAmount: l.lastAmount, lapsed: l.lapsed })),
+        }, { responseSchema: RESPONSE_SCHEMA });
+        setLeakAsking(false);
+        if (!result.ok) { setLeakNote('the agent went quiet — the flags above are still real'); return; }
+        const verdicts = validLeaks(result.data, leaks.map((l) => l.merchant));
+        if (!verdicts) { setLeakNote('the agent answered off-script — the flags above are still real'); return; }
+        setLeakVerdicts(verdicts);
+      };
+
+      const askRules = async () => {
+        setRuleAsking(true); setRuleNote(null);
+        const uncategorized = [...new Set(data.txns.filter((t) => t.category === 'other').map((t) => merchantKey(t.description)))].slice(0, 25);
+        if (uncategorized.length === 0) { setRuleAsking(false); setRuleNote('nothing uncategorized — all tidy'); return; }
+        const result = await sendMessage('propose_rules', { merchants: uncategorized, categories: CATEGORIES }, { responseSchema: RESPONSE_SCHEMA });
+        setRuleAsking(false);
+        if (!result.ok) { setRuleNote('the agent went quiet'); return; }
+        const rules = validRules(result.data);
+        if (!rules) { setRuleNote('the agent answered off-script'); return; }
+        setRuleProposals(rules);
+      };
+
+      const approveRule = async (rule) => {
+        await db.exec('INSERT INTO rules (pattern, category, approved, source) VALUES (?, ?, 1, ?)', [rule.pattern, rule.category, 'agent']);
+        await db.exec('UPDATE txns SET category = ? WHERE category = ? AND LOWER(description) LIKE ?', [rule.category, 'other', '%' + rule.pattern + '%']);
+        setRuleProposals((prev) => prev.filter((r) => r !== rule));
+        await reload();
+      };
+
+      const askPlan = async () => {
+        const goal = goalText.trim();
+        if (goal === '') return;
+        setPlanAsking(true); setPlanNote(null);
+        const result = await sendMessage('plan_goal', { goal }, {
+          state: {
+            netWorth: Math.round(netNow),
+            typicalMonth: flows.slice(-7, -1),
+            thisMonthByCategory: cats,
+            recurring: leaks.map((l) => ({ merchant: l.display, monthly: l.monthly, overlap: l.overlap || null })),
+          },
+          responseSchema: RESPONSE_SCHEMA,
+        });
+        setPlanAsking(false);
+        if (!result.ok) { setPlanNote('the agent went quiet — try again'); return; }
+        const plan = validPlan(result.data);
+        if (!plan) { setPlanNote('the agent answered off-script — try rephrasing the goal'); return; }
+        await db.exec('INSERT INTO scenarios (name, monthly_total, detail, created_at) VALUES (?, ?, ?, ?)',
+          [plan.name, plan.total, JSON.stringify({ steps: plan.steps, note: plan.note }), nowSec]);
+        setGoalText('');
+        await reload();
+      };
+
+      const askPlaybook = async (leak) => {
+        setPlaybookBusy(leak.merchant);
+        const result = await sendMessage('cancel_playbook', {
+          merchant: leak.merchant,
+          display: leak.display,
+          monthly: leak.monthly,
+          cadence: leak.cadence,
+        }, { responseSchema: RESPONSE_SCHEMA });
+        setPlaybookBusy(null);
+        if (!result.ok) { setLeakNote('the agent went quiet — you can still cancel on the provider\u2019s site'); return; }
+        const playbook = validPlaybook(result.data, [leak.merchant]);
+        if (!playbook) { setLeakNote('the agent answered off-script — you can still cancel on the provider\u2019s site'); return; }
+        setPlaybooks((prev) => ({ ...prev, [leak.merchant]: playbook }));
+      };
+
+      const openCancelPage = async (merchant) => {
+        const playbook = playbooks[merchant];
+        if (!playbook || !playbook.cancelUrl) return;
+        const outcome = await requestOpenUrl(playbook.cancelUrl);
+        // Declined is the user's call — leave the button. Refused (no capability, no
+        // answer) means this route cannot open windows: show the honest fallback.
+        if (outcome.status === 'refused') {
+          setPlaybooks((prev) => ({ ...prev, [merchant]: { ...prev[merchant], openFallback: true } }));
+        }
+      };
+
+      const markCancelled = async (leak) => {
+        await db.exec('INSERT OR REPLACE INTO cancels (merchant, marked_at, monthly_cost, verified) VALUES (?, ?, ?, 0)',
+          [leak.merchant, nowSec, leak.monthly]);
+        await reload();
+      };
+
+      const dropScenario = async (id) => {
+        await db.exec('DELETE FROM scenarios WHERE id = ?', [id]);
+        await reload();
+      };
+
+      if (!isReady || !schemaReady || data === null) {
+        return <div className="empty" style={{ padding: 40 }}>opening your ledger…</div>;
+      }
+
+      const savingsVerified = cancels.filter((c) => c.verifiedNow).reduce((sum, c) => sum + c.monthly_cost, 0);
+
+      return (
+        <div>
+          <div className="topbar">
+            <h1>Ledger</h1>
+            <div className="networth num">
+              {fmtMoney(netNow)}
+              {delta !== null ? (
+                <small className={delta >= 0 ? 'delta-up' : 'delta-down'}>
+                  {(delta >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(delta))} past 30 d
+                </small>
+              ) : null}
+            </div>
+            <div style={{ marginLeft: 'auto' }}><Sparkline series={series.slice(-90)} /></div>
+          </div>
+
+          {isSample ? (
+            <div className="sample-note" data-sample-banner="true">
+              <span>🧪</span>
+              <span>
+                you're looking at <strong>sample data</strong> — a made-up household, so the charts (and its money
+                leaks) are real to see. Connect your own banks with the <strong>connect</strong> button, and the first
+                sync replaces every sample row.
+              </span>
+            </div>
+          ) : null}
+
+          <div className="acct-strip">
+            {data.accounts.map((a) => (
+              <div className="acct-chip" key={a.id}>
+                <div className="org">{a.org_name || '—'}</div>
+                <div className="name">{a.name}</div>
+                <div className={'bal num' + (a.balance < 0 ? ' delta-down' : '')}>{fmtMoney(a.balance)}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="tabs" role="tablist">
+            {[['overview', 'overview'], ['leaks', 'money leaks'], ['txns', 'transactions'], ['plan', 'plan']].map(([id, label]) => (
+              <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)} role="tab" aria-selected={tab === id}>
+                {label}
+                {id === 'leaks' && leaks.filter((l) => l.overlap || l.priceCreep || l.lapsed).length > 0
+                  ? ' · ' + leaks.filter((l) => l.overlap || l.priceCreep || l.lapsed).length
+                  : ''}
+              </button>
+            ))}
+            <button style={{ marginLeft: 'auto' }} className="btn quiet" onClick={runSync} disabled={syncing} aria-label="sync accounts now">
+              {syncing ? <span><span className="spin">↻</span> syncing…</span> : '↻ sync'}
+            </button>
+          </div>
+          {syncNote !== null ? <div className="sub" role="status">{syncNote}</div> : null}
+
+          {tab === 'overview' ? (
+            <div>
+              <div className="card">
+                <h2>the time machine</h2>
+                <p className="sub">
+                  where you've been, and where the current path leads — median of your last six closed months
+                  ({projections.length > 0 ? fmtMoney(projections[0].baseMonthly) + '/mo' : '…'}), plus any plan you've saved.
+                </p>
+                {series.length > 0 ? <TimeMachineChart series={series} projections={projections} /> : <div className="empty">sync to draw your history</div>}
+                <div className="scrub">
+                  <input type="range" min="3" max="36" step="3" value={months} onChange={(e) => setMonths(Number(e.target.value))} aria-label="projection horizon in months" />
+                  <div className="read num">
+                    in {months} mo: <strong>{projections.length > 0 && projections[0].points.length > 0 ? fmtMoney(projections[0].points[projections[0].points.length - 1].value) : '—'}</strong>
+                    {projections.length > 1 && projections[1].points.length > 0 ? <> · with “{projections[1].name}”: <strong style={{ color: 'var(--proj)' }}>{fmtMoney(projections[1].points[projections[1].points.length - 1].value)}</strong></> : null}
+                  </div>
+                </div>
+                <div className="legend">
+                  <span><i className="key" style={{ background: 'var(--accent)' }} />history</span>
+                  <span><i className="key" style={{ background: 'var(--muted)' }} />current path</span>
+                  {projections.slice(1).map((p) => <span key={p.name}><i className="key" style={{ background: 'var(--proj)' }} />{p.name}</span>)}
+                </div>
+              </div>
+
+              <div className="card">
+                <h2>ask your money</h2>
+                <p className="sub">plain questions, grounded answers — every figure cited comes from your own rows.</p>
+                <div className="askbar">
+                  <input value={question} onChange={(e) => setQuestion(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void ask(); }}
+                    placeholder="ask anything about your money…" aria-label="ask about your money" />
+                  <button onClick={() => void ask()} disabled={askState.status === 'busy'}>
+                    {askState.status === 'busy' ? <span className="spin">✦</span> : 'ask'}
+                  </button>
+                </div>
+                <div className="chips">
+                  {ASK_SUGGESTIONS.map((s) => <button key={s} onClick={() => { setQuestion(s); void ask(s); }}>{s}</button>)}
+                </div>
+                {askState.status === 'failed' ? <div className="agent-note">{askState.note}</div> : null}
+                {askState.status === 'done' ? (
+                  <div className="answer">
+                    <div className="a">{askState.answer.answer}</div>
+                    {askState.answer.evidence.length > 0 ? <div className="ev">grounded in {askState.answer.evidence.length} transaction{askState.answer.evidence.length === 1 ? '' : 's'} from your ledger</div> : null}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="grid2">
+                <div className="card">
+                  <h2>cash flow</h2>
+                  <p className="sub">income up · spending down · the dot is the month's net</p>
+                  <CashFlowChart flows={flows} />
+                </div>
+                <div className="card">
+                  <h2>this month's heat</h2>
+                  <p className="sub">darker days cost more — hover a square</p>
+                  <Heatmap days={heat} now={now} />
+                </div>
+              </div>
+
+              <div className="card">
+                <h2>where it goes</h2>
+                <p className="sub">this month by category{data.budgets.length > 0 ? ' — red bars run past their budget' : ''}</p>
+                <CategoryBars cats={cats} budgets={data.budgets} total={cats.reduce((sum, c) => sum + c.total, 0)} />
+              </div>
+            </div>
+          ) : null}
+
+          {tab === 'leaks' ? (
+            <div className="card">
+              <h2>money leaks</h2>
+              <p className="sub">
+                recurring charges found deterministically in your own rows — overlaps, price creep and lapsed
+                trials get flags{savingsVerified > 0 ? <> · <strong style={{ color: 'var(--up)' }}>verified savings so far: {fmtMoney(-savingsVerified)}/mo</strong></> : null}
+              </p>
+              <LeakList leaks={leaks} verdicts={leakVerdicts} cancels={cancels}
+                onMarkCancelled={markCancelled} onAskVerdicts={askLeakVerdicts} asking={leakAsking} agentNote={leakNote}
+                playbooks={playbooks} playbookBusy={playbookBusy} onAskPlaybook={askPlaybook}
+                onOpenCancelPage={(merchant) => void openCancelPage(merchant)} />
+            </div>
+          ) : null}
+
+          {tab === 'txns' ? (
+            <div className="card">
+              <h2>transactions</h2>
+              <p className="sub">latest first · pending shown faded</p>
+              <div className="footrow" style={{ marginBottom: 6 }}>
+                <button className="btn quiet" onClick={askRules} disabled={ruleAsking}>
+                  {ruleAsking ? <span><span className="spin">✦</span> reading merchants…</span> : 'tidy the “other” pile (agent)'}
+                </button>
+                {ruleNote ? <span className="agent-note">{ruleNote}</span> : null}
+              </div>
+              {ruleProposals !== null && ruleProposals.length > 0 ? (
+                <div className="planbox">
+                  <strong>proposed rules</strong> — each applies only when you approve it:
+                  {ruleProposals.map((rule) => (
+                    <div className="rulecard" key={rule.pattern + rule.category}>
+                      <span>“{rule.pattern}” <span className="to">→ {rule.category}</span></span>
+                      <span>
+                        <button onClick={() => void approveRule(rule)}>approve</button>{' '}
+                        <button onClick={() => setRuleProposals((prev) => prev.filter((r) => r !== rule))}>skip</button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <TxnList txns={data.txns} filter={txnFilter} onFilter={setTxnFilter} />
+            </div>
+          ) : null}
+
+          {tab === 'plan' ? (
+            <div className="card">
+              <h2>plan a future</h2>
+              <p className="sub">
+                say the goal in your own words — the agent turns it into monthly steps, and the time machine grows a
+                branch you can compare against the current path.
+              </p>
+              <div className="askbar">
+                <input value={goalText} onChange={(e) => setGoalText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void askPlan(); }}
+                  placeholder="e.g. save $6,000 for a Norway trip by next June" aria-label="describe a goal" />
+                <button onClick={() => void askPlan()} disabled={planAsking}>
+                  {planAsking ? <span className="spin">✦</span> : 'plan it'}
+                </button>
+              </div>
+              {planNote ? <div className="agent-note">{planNote}</div> : null}
+              {data.scenarios.length === 0 ? <div className="empty" style={{ marginTop: 10 }}>no saved plans yet — the time machine shows only the current path</div> : null}
+              {data.scenarios.map((scenario) => {
+                let detail = null;
+                try { detail = JSON.parse(scenario.detail); } catch { detail = null; }
+                return (
+                  <div className="planbox" key={scenario.id}>
+                    <div className="footrow">
+                      <strong>{scenario.name}</strong>
+                      <span>
+                        <span className="num" style={{ color: scenario.monthly_total >= 0 ? 'var(--up)' : 'var(--down)', fontWeight: 700 }}>
+                          {(scenario.monthly_total >= 0 ? '+' : '') + fmtMoney(scenario.monthly_total)}/mo
+                        </span>{' '}
+                        <button className="btn quiet" style={{ minHeight: 32, fontSize: 12 }} onClick={() => void dropScenario(scenario.id)}>remove</button>
+                      </span>
+                    </div>
+                    {detail !== null ? (
+                      <div>
+                        {detail.steps.map((step, i) => (
+                          <div className="step" key={i}>· {step.category}: <span className="num">{(step.monthlyDelta >= 0 ? '+' : '') + fmtMoney(step.monthlyDelta)}/mo</span></div>
+                        ))}
+                        {detail.note ? <div className="sub" style={{ marginTop: 6 }}>{detail.note}</div> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
+          <div className="footrow">
+            <span className="synced">
+              {data.lastRun !== null
+                ? (data.lastRun.ok ? 'last sync ' : 'last sync failed ') + new Date(data.lastRun.at * 1000).toLocaleString()
+                : isSample ? 'sample data — never synced' : 'never synced'}
+            </span>
+            <span className="synced">your data lives in your own file — export it any time from the header</span>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

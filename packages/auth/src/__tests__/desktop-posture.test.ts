@@ -227,6 +227,12 @@ describe('desktop postures — browserCallable is a documented fact or ABSENT, n
     // an absence of any reachable transport, which makes `false` the most documented
     // value in this table. The wizard discloses it before anything is collected.
     { key: 'whatsapp', value: false },
+    // ADR-0038 (TASK-20260818): VERIFIED by live probe 2026-08-18 — the SimpleFIN
+    // bridge echoes an arbitrary Origin with `access-control-allow-headers:
+    // authorization` and credentials allowed on both the claim POST and GET
+    // /simplefin/accounts. `true` is a documented fact with the probe dated beside the
+    // registry seat, not an assumption.
+    { key: 'simplefin', value: true },
   ];
 
   for (const { key, value } of BROWSER_CALLABLE) {

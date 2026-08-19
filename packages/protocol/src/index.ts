@@ -100,6 +100,8 @@ export {
   hostReadySchema,
   netRequestSchema,
   netResponseSchema,
+  openUrlRequestSchema,
+  openUrlResultSchema,
   parseFrame,
   respondTo,
   responseErrorSchema,
@@ -116,6 +118,8 @@ export {
   type HostReadyFrame,
   type NetRequestFrame,
   type NetResponseFrame,
+  type OpenUrlRequestFrame,
+  type OpenUrlResultFrame,
   type Responder,
   type ResponseError,
 } from './frames.js';

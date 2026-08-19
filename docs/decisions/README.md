@@ -52,3 +52,8 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0031 — Provider chat lane, inline cards, and the read/write posture reset](0031-provider-chat-lane-and-write-posture.md)
 - [0032 — Linked-device connections: the `linked_device` kind and the WhatsApp sidecar](0032-linked-device-connections-whatsapp-sidecar.md)
 - [0033 — Armed auto-reply: the first standing, scoped write approval](0033-armed-auto-reply-standing-write-approval.md)
+- [0034 — Sidecar surface v2: event long-poll, media reads, and the host live pump](0034-sidecar-surface-v2-live-pump.md)
+- [0035 — Starter authoring docs become the installed app's wiki seed](0035-starter-authoring-docs-ingestion.md)
+- [0036 — Per-app model selection](0036-per-app-model-selection.md)
+- [0037 — Sidecar durable thread cache and launch-time sync resume](0037-sidecar-durable-sync-resume.md)
+- [0038 — SimpleFIN rides plain connected-fetch via a token-claim pairing; Ledger ships the open-url concierge capability](0038-simplefin-token-claim-and-ledger.md)

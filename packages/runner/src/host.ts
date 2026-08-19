@@ -18,6 +18,7 @@ import {
   type Frame,
   type NetRequestFrame,
   type NetResponseFrame,
+  type OpenUrlRequestFrame,
   type Responder,
 } from '@snugprotocol/protocol';
 import type {
@@ -27,6 +28,7 @@ import type {
   DbDriverResult,
   NetHandler,
   NetHandlerResult,
+  OpenUrlHandler,
   TransportResult,
 } from './transport.js';
 
@@ -83,7 +85,15 @@ export interface RunnerHostBaseOptions extends RunnerHostCallbacks {
  */
 export type RunnerHostOptions = RunnerHostBaseOptions &
   ({ db: DbDriver; dbNamespace: string } | { db?: undefined; dbNamespace?: undefined }) &
-  ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined });
+  ({ net: NetHandler; netAppId: string } | { net?: undefined; netAppId?: undefined }) & {
+    /**
+     * The open-url capability (ADR-0038 D5) — optional and standalone: unlike db/net it
+     * needs no id binding, because the frame carries only a URL and the handler is the
+     * host's own confirm surface. Absent ⇒ `capabilities.openUrl` is false and every
+     * request gets a named `refused` result, never a silent drop.
+     */
+    openUrl?: OpenUrlHandler;
+  };
 
 export interface RunnerHost {
   /** Removes listeners/observers, aborts in-flight work, drops all timers. Idempotent. */
@@ -170,6 +180,12 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   const dbInFlight = new Set<string>();
   /** In-flight net requestIds — same discipline as the db seam (AL-03). */
   const netInFlight = new Set<string>();
+  /**
+   * ONE pending open-url request per instance (ADR-0038): each open is a modal human
+   * decision, so a queue would be a dialog-spam primitive. A second request while one
+   * is pending gets a named `refused`, never a stacked dialog.
+   */
+  let openUrlPending = false;
 
   const observer = new MutationObserver((records) => {
     allowedLoads += records.length;
@@ -193,7 +209,13 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       type: FRAME_TYPES.hostReady,
       instanceId,
       protocolVersions: [PROTOCOL_VERSION],
-      capabilities: { streaming: true, db: options.db !== undefined, auth: false, net: options.net !== undefined },
+      capabilities: {
+        streaming: true,
+        db: options.db !== undefined,
+        auth: false,
+        net: options.net !== undefined,
+        openUrl: options.openUrl !== undefined,
+      },
       theme,
       ...(options.locale !== undefined ? { locale: options.locale } : {}),
     });
@@ -577,6 +599,49 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
     post(response);
   }
 
+  function postOpenUrlResult(requestId: string, status: 'opened' | 'declined' | 'refused', reason?: string): void {
+    post({
+      v: PROTOCOL_VERSION,
+      type: FRAME_TYPES.openUrlResult,
+      requestId,
+      status,
+      ...(reason !== undefined ? { reason: clampMessage(reason) } : {}),
+    });
+  }
+
+  /**
+   * Route a validated open-url request to the host's confirm surface (ADR-0038 D5).
+   * The runner never opens a window itself — it holds no navigation primitive — and a
+   * missing capability is a NAMED refusal, never the router's silent unknown-frame
+   * drop: an app must be able to render its copy-the-link fallback on a fact, not a
+   * timeout.
+   */
+  async function handleOpenUrlRequest(frame: OpenUrlRequestFrame): Promise<void> {
+    if (frame.instanceId !== instanceId) return; // stale instance — drop silently
+    if (options.openUrl === undefined) {
+      postOpenUrlResult(frame.requestId, 'refused', 'this app does not have the open-url capability');
+      return;
+    }
+    if (openUrlPending) {
+      postOpenUrlResult(frame.requestId, 'refused', 'an open-url request is already waiting on the user');
+      return;
+    }
+    openUrlPending = true;
+    const boundInstance = instanceId;
+    let status: 'opened' | 'declined' | 'refused';
+    let reason: string | undefined;
+    try {
+      status = await options.openUrl.open(frame.url);
+    } catch (err) {
+      status = 'refused';
+      reason = err instanceof Error ? err.message : 'the host could not open the link';
+    } finally {
+      openUrlPending = false;
+    }
+    if (destroyed || navigatedAway || instanceId !== boundInstance) return; // superseded meanwhile
+    postOpenUrlResult(frame.requestId, status, reason);
+  }
+
   /**
    * Answer UNSUPPORTED_VERSION/MALFORMED on the wire ONLY when a requestId is recoverable
    * (R1) AND the raw `type` is an answerable app-origin request type. Anything else —
@@ -612,6 +677,7 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       case FRAME_TYPES.appCancel:
       case FRAME_TYPES.dbRequest:
       case FRAME_TYPES.netRequest:
+      case FRAME_TYPES.openUrlRequest:
       case FRAME_TYPES.appEvent:
         break;
       default:
@@ -633,6 +699,9 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
         return;
       case FRAME_TYPES.netRequest:
         void handleNetRequest(frame);
+        return;
+      case FRAME_TYPES.openUrlRequest:
+        void handleOpenUrlRequest(frame);
         return;
       case FRAME_TYPES.appEvent:
         options.onAppEvent?.(frame.event, frame.data);

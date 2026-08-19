@@ -249,7 +249,7 @@ describe('P1-AC6 — SOURCE PROOF: packages/auth has exactly one seat that calls
     expect(probeBody).not.toContain('deps.lanFetch(');
   });
 
-  it('exactly TWO modules hold a network seat, both of them named — a third is a test failure', () => {
+  it('exactly THREE modules hold a network seat, all of them named — a fourth is a test failure', () => {
     const callers = walkSources()
       .filter(({ text }) => /fetchImpl\s*\(/.test(text))
       .map(({ name }) => name)
@@ -258,11 +258,20 @@ describe('P1-AC6 — SOURCE PROOF: packages/auth has exactly one seat that calls
     // value of the test. `oauth-service.ts` legitimately calls its own injected seam for
     // token exchange — a token mint is not an app request and never carries the app's
     // headers — and `connected-fetch.ts` is the app-request executor that supplies it.
-    // Pinning both by NAME means a third network seat (the shape a "test this connection"
+    // Pinning each by NAME means a new network seat (the shape a "test this connection"
     // button naturally grows) fails this test the moment it appears, which is precisely
-    // the Q7 obligation. A `toHaveLength(2)` would have let a third replace a second
+    // the Q7 obligation. A length assertion would let a new seat replace an old one
     // silently.
-    expect(callers).toEqual(['connected-fetch.ts', 'oauth-service.ts']);
+    //
+    // EXTENDED 2026-08-18 (TASK-20260818-ledger-starter, ADR-0038): `token-claim.ts` is
+    // the third seat, and it is oauth-service's class, not a bypass of the executor's —
+    // a credential MINT over the same injected seam, running BEFORE any stored
+    // credential exists. The executor structurally cannot host it: gate 3 requires an
+    // approved row whose credential it INJECTS from the store, while the claim's verify
+    // must ride the just-minted, not-yet-stored pair (ADR-0025 verify-before-commit).
+    // Its own gates are pinned in token-claim.test.ts (ceiling membership on BOTH URLs,
+    // https/port/userinfo refusals, redirect:'error' arriving as an option).
+    expect(callers).toEqual(['connected-fetch.ts', 'oauth-service.ts', 'token-claim.ts']);
   });
 
   /**

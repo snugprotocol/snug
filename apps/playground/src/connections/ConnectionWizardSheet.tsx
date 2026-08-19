@@ -57,6 +57,10 @@ import {
   canPairLanDevice,
   completeDeviceLink,
   isLinkedDeviceRequirement,
+  isTokenClaimRequirement,
+  claimConnectionVerified,
+  runTokenClaim,
+  tokenClaimPairingFor,
   lanConnectionVerified,
   lanPairingErrorStore,
   closeConnectionWizard,
@@ -682,6 +686,73 @@ function LanPairScreen({ row, onPaired }: { row: ConnectionRow; onPaired: () => 
 
       <Button variant="primary" onClick={pair} disabled={pairing}>
         {pairing ? 'talking to the device…' : "I pressed the button — connect"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Token claim (ADR-0038)
+// ---------------------------------------------------------------------------
+
+/**
+ * The paste-and-claim screen for a token-claim row (SimpleFIN's family): one box, one
+ * verb. The pasted token is held in LOCAL state only — it is consumed by the claim and
+ * must never outlive this screen — and the error is local too, unlike LanPairScreen's
+ * store, because a FAILED claim writes nothing durable, bumps no revision, and so is
+ * never remounted out from under its own error.
+ */
+function TokenClaimScreen({ row, onClaimed }: { row: ConnectionRow; onClaimed: () => void }): ReactElement {
+  const [setupToken, setSetupToken] = useState('');
+  const [claiming, setClaiming] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const pairing = tokenClaimPairingFor(row.requirement);
+  const provider = row.requirement.provider.name;
+
+  const claim = (): void => {
+    setClaiming(true);
+    setError(undefined);
+    void runTokenClaim(setupToken)
+      .then((result) => {
+        if (!result.ok) {
+          setError(result.message);
+          return;
+        }
+        // The token is spent the moment the claim succeeds — clear the paste box so the
+        // one-time value does not linger in component state behind a done screen.
+        setSetupToken('');
+        onClaimed();
+      })
+      .finally(() => setClaiming(false));
+  };
+
+  return (
+    <div className="field" data-testid="token-claim-step">
+      <label>{pairing?.tokenLabel ?? `your ${provider} setup token`}</label>
+      {pairing !== undefined ? (
+        <span className="hint" data-testid="token-claim-precondition">
+          {pairing.preconditionInstruction}
+        </span>
+      ) : null}
+
+      <textarea
+        data-testid="token-claim-input"
+        value={setupToken}
+        onChange={(event) => setSetupToken(event.target.value)}
+        rows={4}
+        placeholder="paste the whole token here"
+        autoComplete="off"
+        spellCheck={false}
+      />
+
+      {error !== undefined ? (
+        <div className="error-note" role="alert" data-testid="token-claim-error">
+          {error}
+        </div>
+      ) : null}
+
+      <Button variant="primary" onClick={claim} disabled={claiming || setupToken.trim() === ''}>
+        {claiming ? 'claiming your access key…' : 'claim my access key'}
       </Button>
     </div>
   );
@@ -1663,6 +1734,13 @@ export function ConnectionWizardSheet(): ReactElement | null {
   const [lanVerified, setLanVerified] = useState(false);
   const [linkVerified, setLinkVerified] = useState(false);
   /**
+   * Has the claim already run for this token-claim row? LOADED FROM THE ROW'S state on
+   * every (re)open, unlike `linkVerified` — a setup token works exactly once (AC5), so
+   * a wizard reopened on a claimed row must land on done rather than on a paste box
+   * whose submission could only burn a token and fail.
+   */
+  const [claimVerified, setClaimVerified] = useState(false);
+  /**
    * The revision whose row the effect below has actually re-read (ADR-0025 §6). The
    * step store moves SYNCHRONOUSLY on a transition while the row refreshes async — and
    * a chain evaluated with a fresh step against a stale row once rendered a success
@@ -1685,6 +1763,7 @@ export function ConnectionWizardSheet(): ReactElement | null {
       setRow(undefined);
       setRevoked(undefined);
       setLanVerified(false);
+      setClaimVerified(false);
       setLoadedRevision(-1);
       return;
     }
@@ -1704,10 +1783,15 @@ export function ConnectionWizardSheet(): ReactElement | null {
         found !== undefined && isLanRequirement(found.requirement)
           ? await lanConnectionVerified(db, appId, slot)
           : false;
+      const claimed =
+        found !== undefined && isTokenClaimRequirement(found.requirement)
+          ? await claimConnectionVerified(db, appId, slot)
+          : false;
       if (!alive) return;
       setRow(found);
       setRevoked(found === undefined ? undefined : findRevokedBefore(db, appId, found.requirement, slot));
       setLanVerified(verified);
+      setClaimVerified(claimed);
       setLoadedRevision(revision);
     });
     return () => {
@@ -1806,6 +1890,19 @@ export function ConnectionWizardSheet(): ReactElement | null {
    * unproven row into the credentials or done screens.
    */
   const linkNeedsPairing = isLinkedDeviceRow && !linkWall && step !== 'review' && !linkVerified;
+
+  /**
+   * THE TOKEN-CLAIM FAMILY (ADR-0038) — one boolean, derived from the ROW like every
+   * gate here. No wall: the claim is plain HTTPS with verified CORS, so it works on
+   * web and desktop alike. The `register` exemption is deliberate and unique to this
+   * family: the walkthrough is where the user goes to GET the setup token, so it must
+   * render before the paste box — while every OTHER step value (credentials, connect,
+   * done, however arrived at) is caught, so no unproven row can reach the typed
+   * credentials screen or a done screen no claim backs (the ADR-0025 catch-all
+   * doctrine, with one named door).
+   */
+  const isTokenClaimRow = row !== undefined && isTokenClaimRequirement(row.requirement);
+  const claimNeedsToken = isTokenClaimRow && step !== 'review' && step !== 'register' && !claimVerified;
 
   if (session === null) return null;
 
@@ -1912,6 +2009,14 @@ export function ConnectionWizardSheet(): ReactElement | null {
           surface can fill.
         */
         <LanPairScreen row={row} onPaired={() => undefined} />
+      ) : claimNeedsToken ? (
+        /*
+          THE CLAIM REPLACES THE CREDENTIALS SCREEN for a token-claim row (ADR-0038):
+          the basic pair is minted by the claim, never typed, so the ordinary screen
+          would show two boxes nothing can fill — and `saveConnectionCredentials`
+          refuses this family anyway (the belt to this brace).
+        */
+        <TokenClaimScreen row={row} onClaimed={() => setClaimVerified(true)} />
       ) : desktopRefusal !== undefined && step !== 'done' ? (
         <DesktopOAuthRefusalScreen refusal={desktopRefusal} appId={session.appId} slot={session.slot} onClose={requestClose} />
       ) : step === 'register' ? (

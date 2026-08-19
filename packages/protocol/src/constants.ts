@@ -22,6 +22,14 @@ export const FRAME_TYPES = {
   /** INTERNAL draft (AL-03, plan D1): the envelope net capability. Out of json-schemas SOURCES until Beta exit. */
   netRequest: 'snug:net-request',
   netResponse: 'snug:net-response',
+  /**
+   * INTERNAL draft (ADR-0038 D5, TASK-20260818): the open-url capability — an app may
+   * REQUEST the host open an https URL; a host confirm dialog and a user gesture sit
+   * between the request and any window. Out of json-schemas SOURCES like the net pair;
+   * the published half is host-ready's `openUrl` capability flag.
+   */
+  openUrlRequest: 'snug:open-url-request',
+  openUrlResult: 'snug:open-url-result',
 } as const;
 
 export type FrameType = (typeof FRAME_TYPES)[keyof typeof FRAME_TYPES];

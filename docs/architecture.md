@@ -1,6 +1,6 @@
 # Snug — Architecture
 
-> Status: **implemented (living-apps evolution + hub ops + hub polish + observability/caching + Dynamic Auth v2 + lean runtime turns & intent-routed data chat, pre-launch)** — 2026-08-15 (post-08-11 merges, each with its own section or ADR: registry-authoritative auth + multi-option auth kind ADR-0020 · desktop shell ADR-0021 · desktop-aware auth/LAN providers ADR-0022/0023 · think-rail ADR-0024 · LAN verify-before-claim ADR-0025 · connection-relative addressing ADR-0026 · registry-pinned scopes + provider-reason auth banner + pinned-URL console links ADR-0028/0029), TASK-20260804-observability-caching (on TASK-20260804-hub-polish (on TASK-20260803-hub-ops (on living-apps, TASK-20260803-living-apps, on portable-hub, TASK-20260803-portable-hub). Hub ops added: long-run builds (48-iteration ceiling — there was never a timeout), 30-minute server lifetimes, a build step timeline, an in-memory LLM round-trip inspector (a SIBLING of the structural frame inspector, never an extension), cascade app delete with a terminal-delete tombstone, and the LLM-optional app doctrine (ADR-0011)). Hub polish added: a header identity menu with the Google avatar, the ember-niche brand mark, one merged "think" rail surface, round-trip observability in the build view AND the app-frame transport, explicit starter install (a starter is read-only until owned), build-thread continuity, and CAS conflicts that reach the divergence resolver instead of throwing. Observability/caching added: LIVE round-trip observation (calls and tools appear as they start, each timed), the wire model name, prompt caching on the stable tools+system prefix of BUILDER turns only (a per-TURN request flag — the app-frame envelopes are below the cacheable minimum and deliberately excluded) (ADR-0012), cache-hit reporting as a cached %, and a rotating status line replacing the duplicate step timeline. The inspector's memory bound moved from a per-field ingest cap to a total-bytes budget so expanded payloads can be shown whole.) Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is internal-draft schema v6 (`docs/spec-drafts/spec-v0.2-userdb.md` staged; `userdb-schema.ts` is the truth). Auth broker (hosted credential custody) is deliberately unbuilt — RFC at 1.6, GA at 2.0 (roadmap v2, owner decision 2026-08-05); hub LOGIN shipped separately in `apps/server`. **Per-app model selection (2026-08-18, ADR-0036)**: each app may pin its own LLM model and every app-scoped call for it routes there; storage is a namespaced `snug_settings` key, so the wire protocol and userdb schema are both unchanged (see the section below).
+> Status: **implemented (living-apps evolution + hub ops + hub polish + observability/caching + Dynamic Auth v2 + lean runtime turns & intent-routed data chat, pre-launch)** — 2026-08-15 (post-08-11 merges, each with its own section or ADR: registry-authoritative auth + multi-option auth kind ADR-0020 · desktop shell ADR-0021 · desktop-aware auth/LAN providers ADR-0022/0023 · think-rail ADR-0024 · LAN verify-before-claim ADR-0025 · connection-relative addressing ADR-0026 · registry-pinned scopes + provider-reason auth banner + pinned-URL console links ADR-0028/0029), TASK-20260804-observability-caching (on TASK-20260804-hub-polish (on TASK-20260803-hub-ops (on living-apps, TASK-20260803-living-apps, on portable-hub, TASK-20260803-portable-hub). Hub ops added: long-run builds (48-iteration ceiling — there was never a timeout), 30-minute server lifetimes, a build step timeline, an in-memory LLM round-trip inspector (a SIBLING of the structural frame inspector, never an extension), cascade app delete with a terminal-delete tombstone, and the LLM-optional app doctrine (ADR-0011)). Hub polish added: a header identity menu with the Google avatar, the ember-niche brand mark, one merged "think" rail surface, round-trip observability in the build view AND the app-frame transport, explicit starter install (a starter is read-only until owned), build-thread continuity, and CAS conflicts that reach the divergence resolver instead of throwing. Observability/caching added: LIVE round-trip observation (calls and tools appear as they start, each timed), the wire model name, prompt caching on the stable tools+system prefix of BUILDER turns only (a per-TURN request flag — the app-frame envelopes are below the cacheable minimum and deliberately excluded) (ADR-0012), cache-hit reporting as a cached %, and a rotating status line replacing the duplicate step timeline. The inspector's memory bound moved from a per-field ingest cap to a total-bytes budget so expanded payloads can be shown whole.) Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is internal-draft schema v6 (`docs/spec-drafts/spec-v0.2-userdb.md` staged; `userdb-schema.ts` is the truth). Auth broker (hosted credential custody) is deliberately unbuilt — RFC at 1.6, GA at 2.0 (roadmap v2, owner decision 2026-08-05); hub LOGIN shipped separately in `apps/server`. **SimpleFIN token-claim + the Ledger starter + the open-url capability (2026-08-18, ADR-0038)**: see the section below. **Per-app model selection (2026-08-18, ADR-0036)**: each app may pin its own LLM model and every app-scoped call for it routes there; storage is a namespaced `snug_settings` key, so the wire protocol and userdb schema are both unchanged (see the section below).
 >
 > **TASK-20260811 (ADR-0018/0019) added two protocol-level USPs.** (1) **Lean runtime
 > turns**: an installed app's own LLM turns are assembled from a compact, version-pinned
@@ -252,6 +252,39 @@ The price of the shared namespace is that `deleteApp` must cascade to the key ex
 (step 3c, an equality delete beside the `auth:<appId>:*` prefix delete). Under the
 webllm/demo brain the pick is ignored and the control renders nothing — the brain
 overrides the configured mode entirely (ADR-0015).
+
+## Token-claim connections, Ledger, and the open-url capability (TASK-20260818, ADR-0038)
+
+**A third pairing family.** The registry's `WellKnownPairing` union gained `token-claim`
+(beside Hue's `exchange` and WhatsApp's `device-link`): a claim-once provider's setup
+token — base64 of a claim URL the user pastes — is decoded by the WIZARD, checked against
+the row's frozen ceiling (https, exact host, default port, no userinfo, `redirect:'error'`
+on every request), POSTed once, and the returned access URL (path checked against the
+entry's pinned `accessPath`) is parsed into the entry's two `basic_auth` fields — written
+TOGETHER with `claimVerifiedAt` (the third verify-marker sibling) only after an ADR-0025
+verify read. Registry data only, zero protocol bytes; `performTokenClaim` is the third
+NAMED network seat in `packages/auth` (a mint, oauth-service's class). SimpleFIN is the
+first occupant — pinned to `beta-bridge.simplefin.org` (the apex `bridge.` is a 302
+alias; owner-found on the first real walk), `browserCallable: true` (probed), executor
+wall clock raised to a named, self-describing 60 s for aggregate first pulls. The drift
+migration's gate now detects a MOVED REGISTRY HOST (it was fields/seats/scopes-blind) and
+stages it to the reapproval diff — a ceiling move never promotes silently.
+
+**Ledger** (`examples/ledger/`) is the seventh connected starter: sample mode seeds a
+deterministic household (planted subscription leaks) evicted wholesale by the first real
+sync; deterministic radar/time-machine/cash-flow analytics (extracted-core tested); five
+agent lanes over one discriminated schema; SimpleFIN addressed connection-relatively
+(`snug-connection://simplefin/...` — an installed starter never receives a rebuild, so an
+app must never name a host it didn't need to know).
+
+**The open-url capability** (ADR-0038 D5): an app may REQUEST the host open an https URL
+— internal-draft `snug:open-url-request`/`-result` frames (strict, https-only,
+userinfo-free, URL-only), a value-blind runner seam (named refusal when absent,
+single-pending per instance), and a host confirm dialog (provenance copy, punycode host,
+synchronous `window.open('noopener,noreferrer')` inside the gesture; desktop rides the
+system opener). The published half is host-ready's optional `openUrl` capability flag
+(gen:schemas + spec-changelog). C2 untouched; popup-blocker escape proven in a real
+browser on production runner bytes.
 
 ## Dependency graph (who depends on whom → whose tests also run)
 
