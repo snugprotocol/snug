@@ -1,6 +1,7 @@
 # TASK-20260818-ledger-starter: Ledger — the personal-finance starter + SimpleFIN token-claim connections
 
-- **Status**: planned (awaiting owner plan approval — Gate 2 stop)
+- **Status**: in-progress (plan approved by owner 2026-08-18 with one amendment — sample
+  data showcases the Phase C concierge; fresh-context plan review owed before code)
 - **Owner**: Jeetu
 - **Risk tier**: **High** (auto-escalated: touches `packages/protocol` connection-requirement schema + `packages/auth` registry/wizard runtime — credential-minting path, C1-bearing)
 - **Branch**: `feat/TASK-20260818-ledger-starter`
@@ -71,7 +72,13 @@ contract; Q&A, planning, projections) on top of deterministic dashboards.
 7. Demo mode: with no approved connection, the app seeds a deterministic bundled sample
    dataset (fixed seed → identical bytes every install), shows a persistent "sample data"
    banner with the connect CTA; connecting replaces sample rows with real data (sample
-   rows carry a provenance flag so the swap is total and testable).
+   rows carry a provenance flag so the swap is total and testable). **Owner amendment
+   (2026-08-18, plan approval): the sample dataset is authored to showcase Phase C — it
+   contains recurring subscriptions with clear redundancies (two overlapping streaming
+   services, a free trial that converted and is unused, one price-creep case), so the
+   money-leaks view is the demo's hero moment and motivates installing + connecting.
+   Test: the deterministic recurrence detector finds ≥3 flaggable subscriptions in the
+   bundled sample feed.**
 8. Sync engine: fetch with `start-date` watermark from the last successful run; upsert by
    SimpleFIN transaction id (re-fetch overlap window for pending→posted transitions);
    consolidated into native tables (`accounts`, `transactions`, `balance_snapshots`,
@@ -273,3 +280,10 @@ C4. Ledger app: money-leaks view, cancel playbook LLM lane (responseSchema'd), o
   owed before implementation.
 - Next step: owner approves/amends plan → fresh-context plan review → Phase A tests first.
 - Open questions: none blocking (residuals recorded in Out of scope).
+
+### 2026-08-18 — Claude (Fable 5) — session (plan approved, implementation begins)
+- Done: owner approved the plan with one amendment (sample data must showcase the Phase C
+  money-leaks concierge — folded into AC7 with a testable floor of ≥3 flaggable
+  subscriptions in the bundled feed). Fresh-context plan review launched next.
+- State: entering Gate 3 (tests first) on Phase A after review findings are addressed.
+- Next step: fresh-context plan review → address findings → A1 protocol tests.
