@@ -31,9 +31,11 @@ import {
   connectionWizardStore,
   connectionWizardSlotStore,
   openConnectionWizard,
+  openConnectionWizardForFailure,
   testConnection,
 } from '../state/connectionWizard.js';
-import { AuthRepairBanner } from '../run/AuthRepairBanner.js';
+import { AuthRepairChip } from '../run/AuthRepairChip.js';
+import { ConnectionWizardSheet } from '../connections/ConnectionWizardSheet.js';
 import { getUserDb } from '../state/userdb.js';
 
 declare global {
@@ -230,21 +232,61 @@ describe('createNetHandlerFor — the auth-shaped failure observer reaches the h
 });
 
 // ---------------------------------------------------------------------------
-// The banner: provider-named copy + the "check this connection" CTA
+// The CHIP: the quiet run-surface trace of a live failure (TASK-20260819 D2)
 // ---------------------------------------------------------------------------
+//
+// WHAT CHANGED AND WHY. Until 2026-08-19 this surface was a full-bleed maroon block
+// rendered INSIDE the running app, carrying the whole diagnosis and two buttons. The
+// owner's report: it displaced the app's own UI and read as an alarm even when the app
+// was working. Owner decision D2 moves the diagnosis into the wizard (Step 0, the
+// attention gate) and leaves here only a quiet chip in the run header — enough that a
+// failure is never invisible, little enough that it is not an alarm.
+//
+// The CTA contract below is UNCHANGED from the banner era and deliberately so: the v3
+// Promise-truthiness lesson (a refused open must not clear the only route back) is a
+// property of the failure store, not of the surface that renders it.
 
-describe('AuthRepairBanner — renders the repair CTA on the failing (appId, slot)', () => {
+describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, slot)', () => {
   let container: HTMLDivElement;
   let root: Root;
 
-  async function renderBanner(appId: string): Promise<void> {
+  async function renderChip(appId: string): Promise<void> {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
     await act(async () => {
-      root.render(<AuthRepairBanner appId={appId} />);
+      root.render(<AuthRepairChip appId={appId} />);
     });
     await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  /**
+   * Render the wizard sheet parked on the ATTENTION gate (Step 0) for a live failure.
+   *
+   * The three provider-detail assertions below used to render the banner directly. They
+   * moved here rather than being deleted, because what they pin is unchanged and still
+   * load-bearing: the provider's own sentence must reach the user, and it must reach them
+   * as TEXT. Only the surface that shows it changed (owner decision D2).
+   */
+  async function renderAttentionStep(appId: string, failure: { status: number; detail?: string }): Promise<void> {
+    // Routed through the REAL handoff (store → chip door → session copy) rather than by
+    // constructing a session by hand: what these tests pin is that the provider's own
+    // sentence survives the whole trip to the screen, and a hand-built session would
+    // prove only that the screen can render a prop.
+    authShapedFailureStore.set({ appId, slot: SLOT, ...failure });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root.render(<ConnectionWizardSheet />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      openConnectionWizardForFailure(appId);
       await Promise.resolve();
     });
   }
@@ -262,37 +304,43 @@ describe('AuthRepairBanner — renders the repair CTA on the failing (appId, slo
 
   it('renders nothing while no failure is stored', async () => {
     await seedApprovedApp();
-    await renderBanner(APP);
+    await renderChip(APP);
     expect(text()).toBe('');
   });
 
-  it('names the PROVIDER and the status, and offers "check this connection"', async () => {
+  it('AC8: names the PROVIDER and offers ONE way in — the diagnosis itself belongs to Step 0', async () => {
     await seedApprovedApp();
-    await renderBanner(APP);
+    await renderChip(APP);
     await act(async () => {
       authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 401 });
       await Promise.resolve();
     });
-    // Provider name resolves from the row — the banner speaks the user's vocabulary,
-    // not the executor's.
-    //
-    // Asserted as "names the provider" rather than by matching the sentence verbatim:
-    // TASK-20260813 AC10 rewrote this copy (the old line was "Example rejected this
-    // app's credentials") and a literal match makes every future wording change look
-    // like a regression. What must hold is that the user learns WHICH provider and
-    // WHAT status — the two facts they need to act.
+    // The provider name resolves from the ROW — this surface speaks the user's
+    // vocabulary, not the executor's. Asserted as "names the provider" rather than by
+    // matching a sentence: copy has been rewritten twice (TASK-20260813 AC10, and again
+    // here), and a literal match makes every wording change look like a regression.
     expect(text()).toContain('Example');
-    expect(text()).toContain('401');
     expect(button(/check this connection/i)).toBeDefined();
   });
 
-  it("TASK-20260815 AC4: renders the provider's own reason when the failure carries one", async () => {
+  it('AC8: the chip is QUIET — no status code, no provider sentence, no dismiss (that is Step 0 now)', async () => {
+    // The point of D2. A chip that reproduced the full diagnosis would be the maroon
+    // block again in a smaller box; a chip carrying its own dismiss would let the user
+    // silence a failure without ever seeing what it was.
     await seedApprovedApp();
-    await renderBanner(APP);
+    await renderChip(APP);
     await act(async () => {
       authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403, detail: 'Insufficient client scope' });
       await Promise.resolve();
     });
+    expect(text(), 'the raw status belongs on the screen that explains it').not.toContain('403');
+    expect(text()).not.toContain('Insufficient client scope');
+    expect(button(/^dismiss$/i), 'dismissing happens where the diagnosis is read').toBeUndefined();
+  });
+
+  it("TASK-20260815 AC4 / TASK-20260819 AC6: Step 0 renders the provider's own reason", async () => {
+    await seedApprovedApp();
+    await renderAttentionStep(APP, { status: 403, detail: 'Insufficient client scope' });
     const detail = container.querySelector('[data-testid="auth-repair-detail"]');
     expect(detail, 'the provider-says line must render when a detail exists').not.toBeNull();
     expect(detail!.textContent).toContain('Insufficient client scope');
@@ -303,11 +351,7 @@ describe('AuthRepairBanner — renders the repair CTA on the failing (appId, slo
 
   it('TASK-20260815 AC4 NEGATIVE: no detail → no provider-says line (the guess copy stands alone)', async () => {
     await seedApprovedApp();
-    await renderBanner(APP);
-    await act(async () => {
-      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403 });
-      await Promise.resolve();
-    });
+    await renderAttentionStep(APP, { status: 403 });
     expect(container.querySelector('[data-testid="auth-repair-detail"]')).toBeNull();
     expect(text()).toContain('403');
   });
@@ -319,20 +363,16 @@ describe('AuthRepairBanner — renders the repair CTA on the failing (appId, slo
     // or a linkifier.
     const hostile = '<a href="https://evil.example/fix">click here to fix</a> or visit https://evil.example/fix now';
     await seedApprovedApp();
-    await renderBanner(APP);
-    await act(async () => {
-      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403, detail: hostile });
-      await Promise.resolve();
-    });
+    await renderAttentionStep(APP, { status: 403, detail: hostile });
     const detail = container.querySelector('[data-testid="auth-repair-detail"]')!;
     expect(detail.querySelector('a'), 'markup must never become an element').toBeNull();
     expect(detail.querySelector('img')).toBeNull();
     expect(detail.textContent, 'the hostile string renders VERBATIM as text').toContain('<a href=');
   });
 
-  it('the CTA opens the wizard on the EXACT failing (appId, slot) and dismisses the banner', async () => {
+  it('AC8/AC7: the CTA opens the wizard on the EXACT failing (appId, slot) and HANDS OFF the failure', async () => {
     await seedApprovedApp();
-    await renderBanner(APP);
+    await renderChip(APP);
     await act(async () => {
       authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 401 });
       await Promise.resolve();
@@ -342,13 +382,16 @@ describe('AuthRepairBanner — renders the repair CTA on the failing (appId, slo
     });
     expect(connectionWizardStore.get()).toMatchObject({ appId: APP, slot: SLOT });
     expect(connectionWizardSlotStore.get()).toBe(SLOT);
-    expect(authShapedFailureStore.get(), 'a real open clears the banner').toBeNull();
+    // HANDED OFF, not merely dropped (decision D4): the session carries the copy Step 0
+    // reads, and the store is cleared so two surfaces never own one failure.
+    expect(connectionWizardStore.get()?.failure?.status).toBe(401);
+    expect(authShapedFailureStore.get(), 'a real open clears the store').toBeNull();
   });
 
   it('the CTA does NOT dismiss when the wizard refuses to open (another wizard already parked)', async () => {
     await seedApprovedApp();
     openConnectionWizard({ appId: 'app-other', slot: 'busy', source: 'settings' });
-    await renderBanner(APP);
+    await renderChip(APP);
     await act(async () => {
       authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 401 });
       await Promise.resolve();
@@ -361,23 +404,27 @@ describe('AuthRepairBanner — renders the repair CTA on the failing (appId, slo
     expect(authShapedFailureStore.get()).not.toBeNull();
   });
 
-  it('dismiss clears the store without opening anything', async () => {
+  it('AC10: the chip hides itself while the wizard is open on this app — never a double render', async () => {
+    // Chip AND Step 0 rendering the same failure at once would be the plan review's
+    // double-render finding: two surfaces claiming one fact, and a user who dismisses one
+    // still staring at the other.
     await seedApprovedApp();
-    await renderBanner(APP);
+    await renderChip(APP);
     await act(async () => {
       authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 401 });
       await Promise.resolve();
     });
+    expect(text(), 'visible before the wizard opens').toContain('Example');
+
     await act(async () => {
-      button(/dismiss/i)!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button(/check this connection/i)!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(authShapedFailureStore.get()).toBeNull();
-    expect(connectionWizardStore.get()).toBeNull();
+    expect(text(), 'the wizard owns the failure once it is open').toBe('');
   });
 
   it("NEGATIVE: a failure for a DIFFERENT app renders nothing in this app's view", async () => {
     await seedApprovedApp();
-    await renderBanner('app-somebody-else');
+    await renderChip('app-somebody-else');
     await act(async () => {
       authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 401 });
       await Promise.resolve();

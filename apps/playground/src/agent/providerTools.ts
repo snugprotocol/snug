@@ -170,8 +170,9 @@ export function buildProviderTools(options: BuildProviderToolsOptions): AgentToo
         const db = await getDb();
         const deps = connectedFetchDepsFor(db, fetchImpl, (slot, status, detail) =>
           // Same deps-level adaptation as createNetHandlerFor: the executor reports
-          // (slot, status, detail?), the appId is OUR closure — the shipped
-          // AuthRepairBanner is the consumer.
+          // (slot, status, detail?), the appId is OUR closure. The consumer is the run
+          // header's `AuthRepairChip` (TASK-20260819) — this lane and the iframe lane are
+          // the store's TWO writers, and both surface through that one chip.
           authShapedFailureStore.set({ appId, slot, status, ...(detail !== undefined ? { detail } : {}) }),
         );
         const executor = createConnectedFetch({

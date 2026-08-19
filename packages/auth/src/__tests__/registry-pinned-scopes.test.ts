@@ -26,6 +26,12 @@ import { UserDbCredentialStore } from '../credential-store.js';
 
 // The ADR-0028 §4 set, verbatim and ORDERED (scopes are semantically ordered — the
 // review screen and the consent screen render them in this order).
+// AMENDED 2026-08-19 (TASK-20260819-connection-failure-ux): `user-read-recently-played`
+// joins the set. Rewind ships a complete recently-played lane (`recentMetrics`, the
+// recent-chips row, the second branch of the discovery caption) that the original pin
+// left unreachable — and the resulting expected-403 raised the auth-repair alarm on
+// every launch of a perfectly healthy connection. ADR-0028 §4 amendment records the
+// consent tradeoff.
 const SPOTIFY_SCOPES = [
   'playlist-read-private',
   'playlist-read-collaborative',
@@ -34,6 +40,7 @@ const SPOTIFY_SCOPES = [
   'user-top-read',
   'user-read-playback-state',
   'user-modify-playback-state',
+  'user-read-recently-played',
 ];
 
 /**
@@ -67,6 +74,13 @@ function memoryQuartet(): {
 describe('ADR-0028 — the Spotify entry pins its reviewed scope set', () => {
   it('pins exactly the ADR-0028 set, in its recorded order', () => {
     expect(lookupWellKnownProvider('Spotify')?.scopes).toEqual(SPOTIFY_SCOPES);
+  });
+
+  it('TASK-20260819 AC1: pins user-read-recently-played — Rewind\'s built lane is reachable', () => {
+    // Named EXPLICITLY rather than resting on the set equality above: this one scope is
+    // the whole point of the task, and a future set edit that drops it should fail with
+    // a sentence that says why it mattered, not just a diff of two arrays.
+    expect(lookupWellKnownProvider('Spotify')?.scopes).toContain('user-read-recently-played');
   });
 
   it('user-read-email stays deliberately excluded (no Snug surface needs the address)', () => {

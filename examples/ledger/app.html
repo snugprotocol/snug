@@ -93,10 +93,16 @@
     .catrow .amt { width: 90px; font-size: 13px; font-weight: 600; }
     .catrow.over .bar i { background: var(--down); }
 
+    /* THE CARD STACKS (TASK-20260819): a row, and — when the user asks how to cancel —
+       a full-width panel beneath it. It used to be a single flex row with the panel as a
+       SIBLING of .body, so the panel and the merchant column fought for the same width;
+       .body carries flex:1 and was the only child that could shrink, so on a narrow app
+       frame it collapsed to a ribbon and the step text overprinted it. */
     .leak {
-      display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border);
+      display: flex; flex-direction: column; border: 1px solid var(--border);
       border-radius: 12px; padding: 10px 12px; margin: 8px 0; background: var(--card);
     }
+    .leak-row { display: flex; gap: 12px; align-items: flex-start; }
     .leak .emoji { font-size: 20px; }
     .leak .body { flex: 1; min-width: 0; }
     .leak .head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
@@ -144,8 +150,51 @@
 
     .goalrow { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
     .ring { flex: 0 0 auto; }
-    .planbox { border: 1px dashed var(--border); border-radius: 12px; padding: 10px 12px; margin-top: 10px; font-size: 13.5px; }
-    .planbox .step { margin: 4px 0; }
+    /* THE CANCELLATION PLAYBOOK — the app's biggest single value-add, so it is styled as
+       a deliberate surface rather than a dashed afterthought. Full width by declaration
+       (it is now a sibling of the row, not a competitor inside it), a solid accent edge
+       to read as "this is the answer you asked for", and a type scale that lets six
+       numbered steps be scanned rather than deciphered. */
+    .planbox {
+      width: 100%; box-sizing: border-box; margin-top: 10px; padding: 12px 14px;
+      border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      border-radius: 12px; background: var(--chip); font-size: 13px;
+    }
+    .planbox .plan-head {
+      display: block; font-weight: 700; font-size: 13.5px; letter-spacing: 0.01em;
+      color: var(--accent); margin-bottom: 8px;
+    }
+    /* Each step is a two-column grid — number, then text — so a step that wraps aligns
+       its continuation under its own words instead of hanging beneath the digit. That
+       hanging indent was half of what made the old panel hard to read. */
+    .planbox .step {
+      display: grid; grid-template-columns: 20px 1fr; gap: 8px; align-items: start;
+      padding: 6px 0; border-top: 1px solid var(--border); line-height: 1.5;
+    }
+    .planbox .step:first-of-type { border-top: none; padding-top: 2px; }
+    .planbox .step-n {
+      font-variant-numeric: tabular-nums; font-weight: 700; font-size: 12px;
+      color: var(--accent); text-align: right; line-height: 1.6;
+    }
+    .planbox .step-t { min-width: 0; overflow-wrap: anywhere; }
+    /* The draft is quotable text the user copies, so it gets a block of its own rather
+       than an <em> run inside a paragraph. */
+    .planbox .draft {
+      margin-top: 10px; padding: 8px 10px; border-radius: 8px;
+      background: var(--card); border: 1px solid var(--border);
+      font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere;
+    }
+    .planbox .draft b { display: block; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--faint); margin-bottom: 4px; }
+    .planbox .plan-actions {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px;
+    }
+    .planbox .plan-note { font-size: 12px; color: var(--muted); line-height: 1.5; margin-top: 8px; }
+    .planbox .plan-url {
+      display: block; margin-top: 8px; padding: 8px 10px; border-radius: 8px;
+      background: var(--card); border: 1px solid var(--border);
+      font-size: 12px; overflow-wrap: anywhere;
+    }
     .rulecard { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--grid); font-size: 13.5px; }
     .rulecard:last-child { border-bottom: none; }
     .rulecard .to { color: var(--muted); }
@@ -1164,6 +1213,7 @@ function useConnectedFetch() {
             const cancel = cancelFor(leak.merchant);
             return (
               <div className="leak" key={leak.merchant}>
+                <div className="leak-row">
                 <div className="emoji">{leak.overlap ? '📺' : leak.cadence === 'yearly' ? '📅' : '🔁'}</div>
                 <div className="body">
                   <div className="head">
@@ -1187,35 +1237,6 @@ function useConnectedFetch() {
                     ) : null}
                   </div>
                 </div>
-                {playbooks && playbooks[leak.merchant] ? (
-                  <div className="planbox" data-playbook={leak.merchant}>
-                    <strong>how to cancel</strong>
-                    {playbooks[leak.merchant].steps.map((step, i) => (
-                      <div className="step" key={i}>{(i + 1) + '. ' + step}</div>
-                    ))}
-                    {playbooks[leak.merchant].emailDraft ? (
-                      <div className="sub" style={{ marginTop: 6 }}>
-                        email draft (copy it): <em>{playbooks[leak.merchant].emailDraft}</em>
-                      </div>
-                    ) : null}
-                    {playbooks[leak.merchant].cancelUrl ? (
-                      playbooks[leak.merchant].openFallback ? (
-                        <div className="sub" style={{ marginTop: 6 }}>
-                          open this address in your browser: <code>{playbooks[leak.merchant].cancelUrl}</code>
-                        </div>
-                      ) : (
-                        <button className="btn" style={{ marginTop: 8, minHeight: 34, fontSize: 12.5 }}
-                          onClick={() => onOpenCancelPage(leak.merchant)}>
-                          open the cancellation page
-                        </button>
-                      )
-                    ) : null}
-                    <div className="sub" style={{ marginTop: 6 }}>
-                      you sign in there yourself — Snug never sees those credentials. When it's done, tap “I cancelled
-                      this” and the feed will verify it.
-                    </div>
-                  </div>
-                ) : null}
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {cancel === undefined ? (
                     <button className="btn quiet" style={{ minHeight: 34, fontSize: 12 }} onClick={() => onMarkCancelled(leak)}>
@@ -1229,6 +1250,51 @@ function useConnectedFetch() {
                     </button>
                   ) : null}
                 </span>
+                </div>
+                {/* The playbook is a sibling of the ROW, so it spans the whole card and
+                    never competes with the merchant column for width. */}
+                {playbooks && playbooks[leak.merchant] ? (
+                  <div className="planbox" data-playbook={leak.merchant}>
+                    <strong className="plan-head">how to cancel {leak.display}</strong>
+                    {playbooks[leak.merchant].steps.map((step, i) => (
+                      <div className="step" key={i}>
+                        {/* Number and text are separate elements so a wrapped step aligns
+                            under its own words, not under the digit. */}
+                        <span className="step-n">{i + 1}</span>
+                        <span className="step-t">{step}</span>
+                      </div>
+                    ))}
+                    {playbooks[leak.merchant].emailDraft ? (
+                      <div className="draft">
+                        <b>email draft — copy it</b>
+                        {playbooks[leak.merchant].emailDraft}
+                      </div>
+                    ) : null}
+                    {playbooks[leak.merchant].cancelUrl && playbooks[leak.merchant].openFallback ? (
+                      <div className="plan-url">
+                        open this address in your browser: <code>{playbooks[leak.merchant].cancelUrl}</code>
+                      </div>
+                    ) : null}
+                    <div className="plan-actions">
+                      {playbooks[leak.merchant].cancelUrl && !playbooks[leak.merchant].openFallback ? (
+                        <button className="btn" style={{ minHeight: 34, fontSize: 12.5 }}
+                          onClick={() => onOpenCancelPage(leak.merchant)}>
+                          open the cancellation page
+                        </button>
+                      ) : null}
+                      {cancel === undefined ? (
+                        <button className="btn quiet" style={{ minHeight: 34, fontSize: 12.5 }}
+                          onClick={() => onMarkCancelled(leak)}>
+                          I cancelled this
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="plan-note">
+                      you sign in there yourself — Snug never sees those credentials. When it's done, tap “I cancelled
+                      this” and the feed will verify it.
+                    </div>
+                  </div>
+                ) : null}
               </div>
             );
           })}

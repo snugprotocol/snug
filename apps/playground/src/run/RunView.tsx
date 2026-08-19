@@ -29,7 +29,6 @@ import {
   openConnectionWizardForNetError,
 } from '../state/connectionWizard.js';
 import { useStore } from '../state/store.js';
-import { AuthRepairBanner } from './AuthRepairBanner.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
@@ -639,13 +638,16 @@ export default function RunView(): ReactElement {
       {/* NetConfirmDialog moved to the App shell (TASK-20260815 AC12): the confirm gate's
           callers now include provider-lane chat turns on other routes. */}
       {/*
-        AC5 (ADR-0022 §4): a provider rejecting this app's stored credentials is now
-        VISIBLE — additive to the app result (which stays ok:true/401 per contract) and
-        distinct from the code-keyed net-ERROR banner below: this one fires on delivered
-        401/403s where the executor injected credentials, and its CTA opens the wizard on
-        the exact failing (appId, slot). The component filters on appId itself.
+        AC5 (ADR-0022 §4) MOVED, 2026-08-19 (TASK-20260819, owner decision D2): a provider
+        rejecting this app's stored credentials is still VISIBLE, but no longer as a
+        full-bleed block here. It displaced the app's own UI and — because the host cannot
+        tell an expected refusal from a broken credential — greeted the owner on every
+        launch of a healthy connection. The diagnosis now opens in the wizard's attention
+        gate; the run surface carries only `AuthRepairChip`, in the header beside the
+        connections door. The net-ERROR surface below is unrelated and unchanged: it is
+        code-keyed, while the auth-shaped one fires on delivered 401/403s where the
+        executor injected credentials.
       */}
-      <AuthRepairBanner appId={id} />
       {netAuthError !== null ? (
         // AC10: "this app wants to connect" is ORDINARY, not a failure — it was
         // arriving in the same alarm red as a rejected credential. Calm surface, ember

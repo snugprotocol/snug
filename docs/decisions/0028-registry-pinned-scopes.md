@@ -86,3 +86,46 @@ construction.
   point here.
 - Widening a pinned set later is a normal registry edit: drift stages it, the user
   re-consents. Narrowing likewise (tokens keep serving until re-consent).
+
+---
+
+## Amendment — 2026-08-19 (TASK-20260819-connection-failure-ux)
+
+**Rule 4's Spotify set gains an eighth scope: `user-read-recently-played`.** The list in
+rule 4 above is left as written — it records what was decided on 2026-08-15 — and this
+block records what changed and why. Appended rather than edited, per the repo's
+append-only decision convention; the machine-readable truth is
+`packages/auth/src/well-known-providers.ts`, pinned by `registry-pinned-scopes.test.ts`.
+
+**Why.** The original seven deliberately omitted this scope, and Rewind was written to
+match: it attempts the recently-played read once per session, expects the 403, and
+derives discovery from top-list drift instead. That was honest inside the app — and
+invisible to the host. The auth-shaped failure observer (ADR-0022 §4) fires on any
+delivered credentialed 401/403 and cannot know a refusal was expected, so the owner saw
+the repair alarm — *"Spotify isn't accepting this app's key … Insufficient client
+scope"* — on **every launch of a working connection**, dismissed it, and used the app
+normally. A surface that cries wolf on every launch is one users learn to ignore, which
+costs exactly the failures it exists to report.
+
+**Why widen rather than teach the host to expect refusals.** An app-declared
+"expected refusal" seat on the net request was considered and rejected: a
+protocol-visible knob whose only consumer is one starter, cutting against this ADR's own
+rule that privilege breadth is reviewed registry data. The deciding fact is that Rewind
+already ships a complete recently-played lane (`recentMetrics`, the recent-chips row, the
+second branch of the discovery caption) that the omission left unreachable — so the pin
+switches on built functionality rather than merely silencing an alarm.
+
+**Consent tradeoff, stated:** every Spotify-connected Snug app's token can now read
+listening history. The consent screen lists it, and the review screen renders it before
+any approval. `user-read-email` stays excluded.
+
+**Consequence, accepted:** rule 3 applies unchanged — every existing Spotify row stages a
+diff and re-consents once, tokens invalidated before promotion.
+
+**Residual, NOT closed by this amendment.** Invalidation happens on *approval*
+(`reapproveFromDiff`). A user who dismisses the diff without re-approving keeps the old
+seven-scope token, and the 403 — and therefore the alarm — returns on every launch.
+Static-kind Spotify rows and non-registry provenance gain no scopes at all (rule 2's
+kind guard), so they are in the same position permanently. Rewind cannot self-gate: C1
+means it never sees the token, and granted scopes are host-side. The task file records
+this as an accepted residual rather than a closed defect.

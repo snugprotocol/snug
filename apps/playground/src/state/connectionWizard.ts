@@ -74,7 +74,7 @@ import {
 
 import { createStore } from './store.js';
 import { getUserDb } from './userdb.js';
-import { connectedFetchDepsFor, invalidateNetGrants } from './net.js';
+import { authShapedFailureStore, connectedFetchDepsFor, dismissAuthShapedFailure, invalidateNetGrants } from './net.js';
 import { recordLanHostChoice } from './authKindChoice.js';
 import { getPlatform } from '../platform/platform.js';
 
@@ -84,12 +84,32 @@ export type ConnectionWizardSource = 'settings' | 'error_cta' | 'directive';
 
 export type ConnectionWizardMode = 'connect' | 'reapprove';
 
+/**
+ * A COPY of the auth-shaped failure that sent the user here (TASK-20260819, decision D4).
+ *
+ * WHY A COPY AND NOT A STORE READ. `authShapedFailureStore` is a doorbell — one failure
+ * at a time, overwritten by the next — and the chip clears it on a successful open so two
+ * surfaces never claim one fact. A Step-0 screen that read the store would therefore read
+ * `null` the instant it mounted. Copying at open hands the wizard a stable subject for as
+ * long as the session lives, and lets the store go back to meaning exactly one thing:
+ * "something is ringing that no surface has picked up yet".
+ *
+ * Carries no appId/slot: the SESSION already keys those, and a second copy of the keying
+ * is a second thing that can disagree with the row.
+ */
+export interface ConnectionWizardFailure {
+  status: number;
+  detail?: string;
+}
+
 export interface ConnectionWizardSession {
   appId: string;
   /** The connection SLOT this session operates on — the R6 keying, surfaced in the UI. */
   slot: string;
   source: ConnectionWizardSource;
   mode: ConnectionWizardMode;
+  /** Present only when a live auth-shaped failure routed the user here. */
+  failure?: ConnectionWizardFailure;
 }
 
 export interface OpenConnectionWizardRequest {
@@ -97,6 +117,7 @@ export interface OpenConnectionWizardRequest {
   slot: string;
   source: ConnectionWizardSource;
   mode?: ConnectionWizardMode;
+  failure?: ConnectionWizardFailure;
 }
 
 /**
@@ -178,9 +199,50 @@ export function openConnectionWizard(request: OpenConnectionWizardRequest): bool
     slot: request.slot,
     source: request.source,
     mode: request.mode ?? 'connect',
+    ...(request.failure !== undefined ? { failure: request.failure } : {}),
   });
   bumpRevision();
   return true;
+}
+
+/**
+ * THE CHIP'S DOOR (TASK-20260819 AC7/AC9) — open the wizard on whatever failure is
+ * currently ringing for this app, handing the failure off to the session.
+ *
+ * THE HANDOFF IS THE POINT, and it is ordered deliberately: read the store, attempt the
+ * open, and clear the store ONLY if the open really happened. `openConnectionWizard`
+ * returns false when another wizard is parked, and the v3 defect this shape exists to
+ * prevent was a CTA that treated a refusal as success — dismissing the one surface
+ * offering the repair and leaving the user with a broken connection and no door back.
+ * The boolean is the contract; a Promise here would silently be truthy, which is exactly
+ * how that bug shipped the first time.
+ *
+ * Returns false (touching nothing) when no failure is ringing for this app.
+ */
+export function openConnectionWizardForFailure(appId: string): boolean {
+  const failure = authShapedFailureStore.get();
+  if (failure === null || failure.appId !== appId) return false;
+  const opened = openConnectionWizard({
+    appId: failure.appId,
+    slot: failure.slot,
+    source: 'error_cta',
+    failure: { status: failure.status, ...(failure.detail !== undefined ? { detail: failure.detail } : {}) },
+  });
+  if (opened) dismissAuthShapedFailure();
+  return opened;
+}
+
+/**
+ * Close the attention gate for the OPEN session — the user has read the diagnosis and is
+ * continuing into the ordinary review. Session-scoped so a close/reopen racing this
+ * cannot strip the gate from a different session's failure.
+ */
+export function acknowledgeConnectionWizardFailure(): void {
+  const session = connectionWizardStore.get();
+  if (session?.failure === undefined) return;
+  const { failure: _acknowledged, ...rest } = session;
+  connectionWizardStore.set(rest);
+  bumpRevision();
 }
 
 /**

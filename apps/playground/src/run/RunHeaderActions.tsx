@@ -26,6 +26,7 @@ import type { ReactElement } from 'react';
 
 import { Button } from '../ui/Button.js';
 import { ModelSelect } from './ModelSelect.js';
+import { AuthRepairChip } from './AuthRepairChip.js';
 
 export interface RunHeaderActionsProps {
   /** The library id of the app whose header this is. */
@@ -121,6 +122,13 @@ export function RunHeaderActions({
         the pick would be lost the moment it was installed (install mints a new id).
       */}
       {!isStarter ? <ModelSelect appId={appId} /> : null}
+      {/*
+        THE FAILURE CHIP (TASK-20260819) sits immediately before the connections door it
+        opens, so the standing note and the way to act on it read as one control rather
+        than as an alert that happens to be near a button. It renders only when a live
+        auth-shaped failure names THIS app, and hides itself while the wizard is open.
+      */}
+      <AuthRepairChip appId={appId} />
       {/*
         AC9 (TASK-20260813) — the connections door, in the ONE place the owner asked for
         it: the app's own header. Shown whenever this app has connection rows, connected
