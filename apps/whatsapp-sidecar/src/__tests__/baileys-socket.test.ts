@@ -147,6 +147,57 @@ describe('push names harvested from history rows', () => {
     ]);
   });
 
+  it('feeds FULL roster rows to the directory — phoneNumber pairings and name seats included', async () => {
+    // THE HARDWARE FINDING (owner, 2026-08-18): rosters were mapped to bare `{id}` rows,
+    // discarding the `phoneNumber` the server sends beside each LID participant
+    // (baileys groups.js:337) and any name seats — so LID seats could never join the
+    // saved-name directory and rendered "Unknown contact" by the hundreds.
+    const { adapter, fake } = await linkedAdapter();
+    fake.emit('messaging-history.set', {
+      chats: [{ id: 'g7@g.us', name: 'Mapped Crew' }],
+      contacts: [{ id: '999@s.whatsapp.net', name: 'Noor Saved' }],
+      messages: [],
+    });
+    fake.groupMetadata.mockResolvedValue({
+      subject: 'Mapped Crew',
+      participants: [
+        { id: '31337@lid', phoneNumber: '999@s.whatsapp.net' },
+        { id: '41414@lid', notify: 'Riz' },
+      ],
+    });
+    adapter.listChats();
+    await flush();
+    const group = adapter.listChats().find((row) => row.jid === 'g7@g.us');
+    expect(group?.participants).toEqual([
+      { jid: '31337@lid', name: 'Noor Saved' }, // joined to the saved name via the pairing
+      { jid: '41414@lid', name: 'Riz', nameKind: 'push' }, // named from the roster's own seat
+    ]);
+  });
+
+  it('paces groupMetadata fetches — a 233-group list must be a queue, not a burst', async () => {
+    // Same failure mode the avatar limiter fixed: an unpaced burst of roster iqs gets
+    // rate-limited into failures (the owner's cache showed 82 of 233 rosters loaded).
+    const { adapter, fake } = await linkedAdapter();
+    let inFlight = 0;
+    let peak = 0;
+    fake.groupMetadata.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return { subject: 'G', participants: [] };
+    });
+    fake.emit('messaging-history.set', {
+      chats: Array.from({ length: 12 }, (_, i) => ({ id: `grp${i}@g.us`, name: `G${i}` })),
+      contacts: [],
+      messages: [],
+    });
+    adapter.listChats();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(fake.groupMetadata).toHaveBeenCalledTimes(12);
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
   it("never renames a DM partner with the user's own pushName from a fromMe row", async () => {
     // On a fromMe DM row the sender seat resolves to the PARTNER while pushName is the
     // USER's — harvesting it would caption every conversation with the user's own name.

@@ -229,8 +229,27 @@ export function createThreadStore(
       for (const contact of contacts) {
         if (typeof contact?.id !== 'string' || contact.id.length === 0) continue;
         // Pair the row's own spellings before naming, so either reaches the same person.
-        if (typeof contact.lid === 'string' && typeof contact.phoneNumber === 'string') {
-          lidToPn.set(contact.lid, contact.phoneNumber);
+        // The row's ID can ITSELF be the LID spelling (group-roster rows arrive as
+        // `{id: '…@lid', phoneNumber: '…@s.whatsapp.net'}` — groups.js:337): without this,
+        // 1,079 of the owner's 1,677 roster seats could never join the saved-name
+        // directory and rendered "Unknown contact" (hardware finding, 2026-08-18).
+        const lidSpelling =
+          typeof contact.lid === 'string' && contact.lid.length > 0
+            ? contact.lid
+            : contact.id.endsWith('@lid')
+              ? contact.id
+              : undefined;
+        if (
+          lidSpelling !== undefined &&
+          typeof contact.phoneNumber === 'string' &&
+          contact.phoneNumber.length > 0 &&
+          lidToPn.get(lidSpelling) !== contact.phoneNumber
+        ) {
+          lidToPn.set(lidSpelling, contact.phoneNumber);
+          // A NEW pairing is news even when the row teaches no name: lookups resolve
+          // LID→phone, so every name already known under the phone spelling now covers
+          // this LID seat — the refresh pass below is what re-derives the rosters.
+          learned = true;
         }
         const entry = nameFromContact(contact);
         // A partial update (no name seat) must not erase what we already know: Baileys

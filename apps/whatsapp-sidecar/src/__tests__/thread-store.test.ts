@@ -292,6 +292,23 @@ describe('the contact directory', () => {
     expect(saved).not.toHaveProperty('nameKind');
   });
 
+  it('pairs a roster-shaped row (LID id + phoneNumber seat) so saved names reach LID seats', () => {
+    // THE HARDWARE FINDING (owner, 2026-08-18, second walk): 1,079 of 1,677 roster seats
+    // were unmapped LIDs. `groupMetadata` participants carry `phoneNumber` beside a LID id
+    // (groups.js:337) — the mapping was in our hands. A row whose ID is itself the LID
+    // must pair with its phoneNumber seat even with no explicit `lid` seat.
+    const store = createThreadStore();
+    store.rememberContacts([{ id: '111@s.whatsapp.net', name: 'Asha Rao' }]);
+    store.rememberContacts([{ id: '77771@lid', phoneNumber: '111@s.whatsapp.net' }]);
+    expect(store.contactName('77771@lid')).toBe('Asha Rao');
+    expect(store.resolveIdentity('77771@lid')).toBe('111@s.whatsapp.net');
+    // And through a roster: the participant seat gets the saved name.
+    store.setGroupMetadata('g1@g.us', { subject: 'Trip', participants: [{ id: '77771@lid' }] });
+    expect(store.listChats().find((c) => c.jid === 'g1@g.us')?.participants).toEqual([
+      { jid: '77771@lid', name: 'Asha Rao' },
+    ]);
+  });
+
   it('maps a group participant given by LID onto the contact behind it', () => {
     const store = createThreadStore();
     store.rememberContacts([{ id: '111@s.whatsapp.net', name: 'Asha Rao' }]);

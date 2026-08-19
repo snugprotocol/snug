@@ -297,6 +297,30 @@ interface MediaLogger {
   error(...args: unknown[]): void;
 }
 
+/** A tiny FIFO slot limiter — the pacing primitive the avatar and roster fetches share. */
+function createSlotLimiter(maxConcurrent: number): { acquire(): Promise<void>; release(): void } {
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  return {
+    acquire: () =>
+      new Promise((resolve) => {
+        if (active < maxConcurrent) {
+          active += 1;
+          resolve();
+        } else {
+          waiters.push(() => {
+            active += 1;
+            resolve();
+          });
+        }
+      }),
+    release: () => {
+      active -= 1;
+      waiters.shift()?.();
+    },
+  };
+}
+
 const silentLogger: MediaLogger = {
   level: 'silent',
   child: () => silentLogger,
@@ -395,29 +419,17 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   const PICTURE_MISS_TTL_MS = 10 * 60_000;
 
   /**
-   * At most this many avatar lookups in flight. Every visible chat row asks on first paint;
-   * an uncapped burst of forty iqs gets rate-limited into timeouts whose retries re-enter
-   * the same burst. A drip is slower to fill the list and reliably fills it.
+   * At most this many lookups of one kind in flight. Every visible chat row asks for its
+   * avatar on first paint, and a chat list of 233 groups asks for 233 rosters — an uncapped
+   * burst of iqs gets rate-limited into timeouts whose retries re-enter the same burst. A
+   * drip is slower to fill the list and reliably fills it.
    */
-  const MAX_PICTURE_FETCHES = 3;
-  let activePictureFetches = 0;
-  const pictureWaiters: Array<() => void> = [];
-  const acquirePictureSlot = (): Promise<void> =>
-    new Promise((resolve) => {
-      if (activePictureFetches < MAX_PICTURE_FETCHES) {
-        activePictureFetches += 1;
-        resolve();
-      } else {
-        pictureWaiters.push(() => {
-          activePictureFetches += 1;
-          resolve();
-        });
-      }
-    });
-  const releasePictureSlot = (): void => {
-    activePictureFetches -= 1;
-    pictureWaiters.shift()?.();
-  };
+  const pictureSlots = createSlotLimiter(3);
+  const rosterSlots = createSlotLimiter(3);
+  const acquirePictureSlot = pictureSlots.acquire;
+  const releasePictureSlot = pictureSlots.release;
+  const acquireRosterSlot = rosterSlots.acquire;
+  const releaseRosterSlot = rosterSlots.release;
 
   /**
    * Group rosters already requested, so a chat list of forty groups fires each fetch once.
@@ -434,17 +446,28 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   const ensureGroupRoster = (jid: string): void => {
     if (!jid.endsWith('@g.us') || rosterRequested.has(jid) || sock === undefined || link !== 'linked') return;
     rosterRequested.add(jid);
-    void sock
-      .groupMetadata(jid)
-      .then((metadata) => {
+    void (async () => {
+      // Paced like the avatar lookups: a chat list of 233 groups fired 233 concurrent
+      // metadata iqs, and the rate-limited failures left most rosters unloaded on the
+      // owner's hardware (82 of 233). A queue loads them all, just not at once.
+      await acquireRosterSlot();
+      try {
+        const metadata = await sock!.groupMetadata(jid);
+        // FULL rows, not bare ids (hardware finding 2026-08-18): each participant is a
+        // Contact — a LID id with a `phoneNumber` pairing (groups.js:337) and sometimes
+        // name seats. Feeding them to the directory is what joins LID roster seats to the
+        // saved names; dropping them rendered "Unknown contact" by the hundreds.
+        store.rememberContacts((metadata?.participants ?? []) as never);
         store.setGroupMetadata(jid, {
           subject: metadata?.subject,
           participants: (metadata?.participants ?? []).map((participant) => ({ id: participant.id })),
         });
-      })
-      .catch(() => {
+      } catch {
         rosterRequested.delete(jid); // let a later list try again
-      });
+      } finally {
+        releaseRosterSlot();
+      }
+    })();
   };
 
   const ingest = (raw: Parameters<typeof toWaMessage>[0], live: boolean): void => {
