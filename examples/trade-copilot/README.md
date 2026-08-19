@@ -61,6 +61,11 @@ versus a one-shot buy, one plan mid-flight, and three canned Ledger notes readin
 those planted insights. Everything is authored constants inside the
 `TRADE-COPILOT-SAMPLE-BEGIN/END` markers in `app.html` — deterministic, render-only,
 never touching the bridge, network, or database, and never entering the LLM lane.
-The sample renders only while the install has never connected (no successful fetch,
-no journal rows, no notes, no orders); the first real Coinbase load flips those
-signals and every sample panel unmounts wholesale. Connected behavior is unchanged.
+The sample renders only while the install has **never connected**: a durable
+`connected_once` flag (a tiny `app_meta` table) is written on the first successful
+Coinbase fetch and read back at boot, so a fresh install shows the sample
+immediately — no waiting for fetches to fail — and an install that has ever
+connected never sees it again, even during a later API outage or key revocation
+(the real empty/error states show instead). Any local data — journal rows, copilot
+notes, logged orders, watchlist rows, an active plan — also disables it, and every
+sample panel unmounts wholesale. Connected behavior is unchanged.

@@ -40,7 +40,9 @@ writes.
 
 ## Sample mode
 
-Before a bridge is paired (and in every unlinked bridge state), Moodboard renders a
+Before a bridge has ever been paired (the `unconnected` phase — and only that phase:
+a paired bridge that is loading, unreachable, or erroring gets the real skeleton and
+a phase-specific notice, never fictional rooms), Moodboard renders a
 clearly-bannered **sample home** instead of a skeleton: five made-up rooms caught
 mid-evening — Living Room in dusk amber at 45%, Office at day-white 100%, Bedroom in
 candle glow at 18%, Kitchen off, a rose-lit Reading Nook — as the same glowing tiles

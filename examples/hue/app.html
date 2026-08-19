@@ -1178,6 +1178,10 @@ function App() {
   const tab = ui.tab || 'rooms';
   const setTab = (t) => setUi((prev) => ({ ...prev, tab: t }));
   const offline = ['unconnected', 'unreachable', 'ambiguous', 'rejected', 'error'].includes(bridge.phase);
+  // The sample home renders ONLY before a bridge has ever been paired. A paired
+  // bridge that is loading, unreachable, or erroring must never show fictional
+  // rooms — those phases get the real skeleton/notice presentation instead.
+  const sampleHome = bridge.phase === 'unconnected' && rooms.length === 0;
 
   const statusText = bridge.phase === 'loading' ? 'finding your rooms…'
     : ready ? rooms.length + (rooms.length === 1 ? ' room' : ' rooms') + ' · bridge linked'
@@ -1214,7 +1218,7 @@ function App() {
       {tab === 'rooms' && (
         <section className="surface">
           {bridge.phase === 'loading' && <SkeletonGrid />}
-          {offline && (
+          {sampleHome && (
             <React.Fragment>
               <SampleBanner where="rooms" />
               <div className="grid">
@@ -1234,6 +1238,14 @@ function App() {
               </div>
               <BridgeNotice phase={bridge.phase} detail={bridge.detail} onRetry={() => loadBridge(false)} />
             </React.Fragment>
+          )}
+          {offline && !sampleHome && (
+            <div className="stagegrid">
+              <SkeletonGrid />
+              <div className="overlay">
+                <BridgeNotice phase={bridge.phase} detail={bridge.detail} onRetry={() => loadBridge(false)} />
+              </div>
+            </div>
           )}
           {ready && rooms.length === 0 && (
             <div className="card">
@@ -1268,7 +1280,8 @@ function App() {
 
       {tab === 'moods' && (
         <section className="surface">
-          {!ready && <SampleBanner where="moods" />}
+          {sampleHome && <SampleBanner where="moods" />}
+          {!ready && !sampleHome && <p className="soft">moods apply once the bridge is linked — until then the palettes below preview against a stand-in set of rooms.</p>}
           <div className="saverow">
             <input
               className="text" value={snapName} placeholder="name the current look…"
@@ -1283,7 +1296,7 @@ function App() {
           <h2 className="secname">house moods</h2>
           <div className="cards">
             {BUILT_IN_MOODS.map((m) => {
-              const entries = builtinEntries(m, !ready && rooms.length === 0 ? SAMPLE_ROOMS : rooms);
+              const entries = builtinEntries(m, sampleHome ? SAMPLE_ROOMS : rooms);
               return (
                 <MoodCard
                   key={m.id} name={m.name} note={m.tagline} entries={entries}
@@ -1297,7 +1310,7 @@ function App() {
 
           <h2 className="secname">your moods</h2>
           {savedMoods === null && <div className="skelgrid"><div className="skel short" /><div className="skel short" /></div>}
-          {savedMoods && savedMoods.length === 0 && (ready ? (
+          {savedMoods && savedMoods.length === 0 && (!sampleHome ? (
             <p className="soft">nothing saved yet — compose one with the designer, or set the rooms by hand and save the look above.</p>
           ) : (
             <div className="cards wide">

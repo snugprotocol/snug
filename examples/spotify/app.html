@@ -708,7 +708,57 @@ function useConnectedFetch() {
       stamp: 'a sample column · what the agent writes from your real numbers',
     };
 
-    const sampleView = (rid) => SAMPLE_PORTRAIT[rid] || SAMPLE_PORTRAIT.short_term;
+    /**
+     * The pre-connect showcase: the sample listener rendered through the real
+     * portrait components, under an unmissable banner. Render-only — it exists
+     * only while phase === 'unconnected' with nothing journaled, and unmounts
+     * the moment real data (or the journal fallback) takes over.
+     */
+    function SampleShowcase() {
+      const [lens, setLens] = useState('short_term');
+      const v = SAMPLE_PORTRAIT[lens];
+      return (
+        <div data-testid="sample-portrait">
+          <div className="sample-note" data-sample-banner="true">
+            <span>🧪</span>
+            <span>
+              you’re looking at <strong>sample data</strong> — a made-up listener, so the portrait (and its
+              obsessions) are real to see. Connect your <strong>spotify</strong> connection and the first
+              successful read replaces every tile below with your own listening.
+            </span>
+          </div>
+          <div className="portrait-head">
+            <p className="greet"><span className="who">a sample listener</span>{'’s '}{rangeLabel(lens)}, understood</p>
+            <div className="seg" role="tablist" aria-label="sample time range">
+              {RANGES.map((r) => (
+                <button key={r.id} className={r.id === lens ? 'on' : ''} aria-pressed={r.id === lens} onClick={() => setLens(r.id)}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="stat-grid">
+            <StatTile label="rotation depth" value={v.rotation} caption={v.rotationCap} />
+            <StatTile label="discovery" value={v.discovery} caption={v.discoveryCap} />
+          </div>
+          <section className="card" style={{ marginTop: 16 }}>
+            <h2>top five tracks</h2>
+            <div className="tiles">{v.tracks.map((t, i) => <TrackTile key={t.id} track={t} rank={i + 1} />)}</div>
+          </section>
+          <section className="card">
+            <h2>top five artists</h2>
+            <div className="tiles">{v.artists.map((a, i) => <ArtistFace key={a.id} artist={a} rank={i + 1} />)}</div>
+          </section>
+          <section className="card mag">
+            <span className="kicker">the weekly rewind — sample</span>
+            <h3>{SAMPLE_REWIND.headline}</h3>
+            <p className="story">{SAMPLE_REWIND.story}</p>
+            <ul>{SAMPLE_REWIND.highlights.map((h, i) => <li key={i}>{h}</li>)}</ul>
+            <p className="stamp">{SAMPLE_REWIND.stamp}</p>
+          </section>
+        </div>
+      );
+    }
     // ===== SPOTIFY-SAMPLE-END =====
 
     const DDL = [
@@ -989,58 +1039,6 @@ function useConnectedFetch() {
             </div>
           </div>
         </section>
-      );
-    }
-
-    /**
-     * The pre-connect showcase: the sample listener rendered through the real
-     * portrait components, under an unmissable banner. Render-only — it exists
-     * only while phase === 'unconnected' with nothing journaled, and unmounts
-     * the moment real data (or the journal fallback) takes over.
-     */
-    function SampleShowcase() {
-      const [lens, setLens] = useState('short_term');
-      const v = sampleView(lens);
-      return (
-        <div data-testid="sample-portrait">
-          <div className="sample-note" data-sample-banner="true">
-            <span>🧪</span>
-            <span>
-              you’re looking at <strong>sample data</strong> — a made-up listener, so the portrait (and its
-              obsessions) are real to see. Connect your <strong>spotify</strong> connection and the first
-              successful read replaces every tile below with your own listening.
-            </span>
-          </div>
-          <div className="portrait-head">
-            <p className="greet"><span className="who">a sample listener</span>{'’s '}{rangeLabel(lens)}, understood</p>
-            <div className="seg" role="tablist" aria-label="sample time range">
-              {RANGES.map((r) => (
-                <button key={r.id} className={r.id === lens ? 'on' : ''} aria-pressed={r.id === lens} onClick={() => setLens(r.id)}>
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="stat-grid">
-            <StatTile label="rotation depth" value={v.rotation} caption={v.rotationCap} />
-            <StatTile label="discovery" value={v.discovery} caption={v.discoveryCap} />
-          </div>
-          <section className="card" style={{ marginTop: 16 }}>
-            <h2>top five tracks</h2>
-            <div className="tiles">{v.tracks.map((t, i) => <TrackTile key={t.id} track={t} rank={i + 1} />)}</div>
-          </section>
-          <section className="card">
-            <h2>top five artists</h2>
-            <div className="tiles">{v.artists.map((a, i) => <ArtistFace key={a.id} artist={a} rank={i + 1} />)}</div>
-          </section>
-          <section className="card mag">
-            <span className="kicker">the weekly rewind — sample</span>
-            <h3>{SAMPLE_REWIND.headline}</h3>
-            <p className="story">{SAMPLE_REWIND.story}</p>
-            <ul>{SAMPLE_REWIND.highlights.map((h, i) => <li key={i}>{h}</li>)}</ul>
-            <p className="stamp">{SAMPLE_REWIND.stamp}</p>
-          </section>
-        </div>
       );
     }
 

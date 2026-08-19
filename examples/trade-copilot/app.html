@@ -645,6 +645,12 @@ const TWAP_SLICE_STATUS_LABEL = {
 };
 
 const TWAP_DDL = [
+  // Tiny key/value meta store (TASK-20260819 sample mode): `connected_once` = '1'
+  // is written on the FIRST successful Coinbase fetch and read back at boot, giving
+  // sample mode a durable never-connected signal instead of guessing from error
+  // states. Additive — IF NOT EXISTS leaves existing DBs untouched. (`key` and
+  // `value` are legal unquoted SQLite identifiers — neither is a reserved word.)
+  'CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)',
   // Backfill: the ported v1 code reads/writes these three tables but never created
   // them (the hub had made them out-of-band). IF NOT EXISTS keeps any real data.
   'CREATE TABLE IF NOT EXISTS watchlist (product_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)',
@@ -721,9 +727,11 @@ const TWAP_CSS = `
 // finished TWAP run whose slice fills prove the point of slicing — instead of a
 // wall of empty states. It is render-only: nothing here may touch the bridge,
 // the network, the database, or a clock, and the App renders it only while
-// `isSample` holds (no successful fetch, no journal rows, no notes, no orders,
-// no active plan). The first real Coinbase load flips those signals and every
-// sample panel unmounts wholesale.
+// `isSample` holds: the durable `connected_once` flag is hydrated-and-unset AND
+// there is no local data (no ticker, accounts, products, journal rows, notes,
+// orders, watchlist rows, or active plan). The first successful Coinbase fetch
+// persists that flag, so every sample panel unmounts wholesale — for good, even
+// through a later API outage.
 // ============================================================
 
 // The banner's CSS lives here (a second style element), NOT in the head style
@@ -751,9 +759,7 @@ const SAMPLE_PORTFOLIO = [
   { currency: 'USD', name: 'Cash (USD)', qty: '2410.55', usd: 2410.55 },
 ];
 
-function samplePortfolioTotal() {
-  return SAMPLE_PORTFOLIO.reduce((sum, a) => sum + a.usd, 0);
-}
+const SAMPLE_PORTFOLIO_TOTAL = SAMPLE_PORTFOLIO.reduce((sum, a) => sum + a.usd, 0);
 
 const SAMPLE_MARKETS = [
   { productId: 'BTC-USD', price: 67850.2, change24h: 2.34 },
@@ -799,9 +805,9 @@ const SAMPLE_BOOK = {
   ],
 };
 
-function sampleBookMax(levels) {
-  return Math.max(1e-9, ...levels.map((l) => l.size));
-}
+// Precomputed once — the depth bars scale every row against these maxima.
+const SAMPLE_BID_MAX = Math.max(...SAMPLE_BOOK.bids.map((l) => l.size));
+const SAMPLE_ASK_MAX = Math.max(...SAMPLE_BOOK.asks.map((l) => l.size));
 
 // The centrepiece: one COMPLETED smart order whose per-slice fills tell the whole
 // story. The market dipped mid-run, the time-spaced slices caught the dip, and the
@@ -847,6 +853,9 @@ function sampleTwapStats(plan) {
   const avgFill = qty > 0 ? cost / qty : 0;
   return { qty, avgFill, saved: (plan.oneShotPrice - avgFill) * qty };
 }
+
+// Computed once; the verdict JSX reads avgFill and saved from this one summary.
+const SAMPLE_TWAP_SUMMARY = sampleTwapStats(SAMPLE_TWAP_DONE);
 
 // And one plan mid-flight, so the journal reads like a living tool, not a museum.
 const SAMPLE_TWAP_RUNNING = {
@@ -950,6 +959,12 @@ function App() {
   const [ordersLog, setOrdersLog] = useState([]);
   const [copilotNotes, setCopilotNotes] = useState([]);
 
+  // Durable never-connected signal (app_meta.connected_once): null = not yet
+  // hydrated from the DB, false = this install has never completed a Coinbase
+  // fetch, true = it has (now or in any past session). Only an explicit false
+  // enables sample mode, so a connected install never flashes sample at boot.
+  const [connectedOnce, setConnectedOnce] = useState(null);
+
   const [placingOrder, setPlacingOrder] = useState(false);
   const [orderNotice, setOrderNotice] = useState(null);
   const [copilotBusy, setCopilotBusy] = useState(false);
@@ -988,6 +1003,19 @@ function App() {
     return next;
   }, []);
 
+  // First successful Coinbase fetch: flip state now and persist the durable
+  // connected_once flag so sample mode never renders again on this install —
+  // even during a later outage/revocation with an empty journal. The write is
+  // best-effort; the DDL effect normally creates app_meta first, but a fast
+  // first fetch can beat it, so create-if-missing here too.
+  const markConnectedOnce = useCallback(async () => {
+    setConnectedOnce(true);
+    try {
+      await db.exec('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)', []);
+      await db.exec("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('connected_once', '1')", []);
+    } catch (e) { /* best-effort — this session's state is already flipped */ }
+  }, [db]);
+
   // ---- Data loaders --------------------------------------------------
   const loadProducts = useCallback(async () => {
     setProductsLoading(true);
@@ -1011,7 +1039,8 @@ function App() {
     }
     setProductsError(null);
     setProducts(list.filter((p) => (p.quote_currency_id === 'USD' || p.quote_display_symbol === 'USD') && p.status !== 'delisted'));
-  }, [connectedFetch]);
+    markConnectedOnce();
+  }, [connectedFetch, markConnectedOnce]);
 
   const loadAccounts = useCallback(async () => {
     setAccountsLoading(true);
@@ -1029,7 +1058,8 @@ function App() {
     const list = (parsed && Array.isArray(parsed.accounts)) ? parsed.accounts : [];
     setAccountsError(null);
     setAccounts(list.filter((a) => safeNum(a.available_balance && a.available_balance.value) > 0 || a.default));
-  }, [connectedFetch]);
+    markConnectedOnce();
+  }, [connectedFetch, markConnectedOnce]);
 
   const loadTickerAndBook = useCallback(async (productId) => {
     if (!productId || pollingRef.current.inFlight) return;
@@ -1149,6 +1179,16 @@ function App() {
           if (!cancelled) setTwapNotice({ type: 'info', text: 'A previous run was interrupted when the app closed. Nothing executes in the background, so its unsent slices were marked skipped — the journal below has the details.' });
         }
       } catch (e) { /* schema is best-effort — the planner still renders */ }
+      // Hydrate the durable never-connected signal AFTER the DDL above has run
+      // (same sequencing as the journal load below: the table must exist before
+      // the read). `prev === true ||` keeps a true already set by a first fetch
+      // that raced ahead of this read; if the read fails, connectedOnce stays
+      // null and sample mode simply never turns on.
+      try {
+        const { rows } = await db.exec("SELECT value FROM app_meta WHERE key = 'connected_once'", []);
+        const seen = (rows || []).some((r) => r[0] === '1');
+        if (!cancelled) setConnectedOnce((prev) => prev === true || seen);
+      } catch (e) { /* meta unreadable — leave the signal unknown */ }
       if (!cancelled) loadTwapJournal();
     })();
     return () => { cancelled = true; };
@@ -1660,14 +1700,23 @@ function App() {
   const isMarketConnected = !productsError;
   const isPortfolioConnected = !accountsError;
 
-  // Sample mode (render-only, see the SAMPLE block above): only a never-connected
-  // install qualifies. Any real signal — a successful fetch, a journal row, a
-  // copilot note, a logged order, an active plan — wins, and every sample panel
-  // unmounts. Connected phase logic below is untouched.
+  // Sample mode (render-only, see the SAMPLE block above): only an install that
+  // has NEVER completed a Coinbase fetch qualifies. The durable signal is the
+  // app_meta `connected_once` flag — written on the first successful accounts or
+  // products load, hydrated at boot (connectedOnce: null until read, so a
+  // connected install never flashes sample while its data loads). There is
+  // deliberately NO dependence on the error states: a fresh install shows the
+  // sample immediately instead of waiting for fetches to reject, and a
+  // previously-connected user mid-outage sees real empty/error states, never
+  // fiction. Any real signal — the flag, a live ticker, an account, a product
+  // list, a logged order, a copilot note, a journal row, a watchlist row, an
+  // active plan — wins, and every sample panel unmounts. Connected phase logic
+  // below is untouched.
   const isSample =
-    !isPortfolioConnected && !isMarketConnected && !ticker &&
+    connectedOnce === false && !ticker &&
     accounts.length === 0 && products.length === 0 && ordersLog.length === 0 &&
-    copilotNotes.length === 0 && twapJournal.length === 0 && !activePlan;
+    copilotNotes.length === 0 && twapJournal.length === 0 &&
+    watchlist.length === 0 && !activePlan;
 
   const journalRows = twapJournal.filter((p) => !activePlan || p.planId !== activePlan.planId);
   const twapSettled = activePlan
@@ -1728,7 +1777,7 @@ function App() {
 
           {isSample ? (
             <React.Fragment>
-              <div className="portfolio-total">{fmtUSD(samplePortfolioTotal())}</div>
+              <div className="portfolio-total">{fmtUSD(SAMPLE_PORTFOLIO_TOTAL)}</div>
               <div className="portfolio-total-label">estimated total value · sample</div>
               {SAMPLE_PORTFOLIO.map((a) => (
                 <div className="holding-row" key={a.currency}>
@@ -1892,7 +1941,7 @@ function App() {
                 <h3>Bids · sample</h3>
                 {SAMPLE_BOOK.bids.map((b, i) => (
                   <div key={i} className="book-row bid">
-                    <div className="bar" style={{ width: (b.size / sampleBookMax(SAMPLE_BOOK.bids) * 100) + '%' }}></div>
+                    <div className="bar" style={{ width: (b.size / SAMPLE_BID_MAX * 100) + '%' }}></div>
                     <span>{fmtUSD(b.price, { decimals: 2 })}</span>
                     <span>{fmtQty(b.size)}</span>
                   </div>
@@ -1902,7 +1951,7 @@ function App() {
                 <h3>Asks · sample</h3>
                 {SAMPLE_BOOK.asks.map((a, i) => (
                   <div key={i} className="book-row ask">
-                    <div className="bar" style={{ width: (a.size / sampleBookMax(SAMPLE_BOOK.asks) * 100) + '%' }}></div>
+                    <div className="bar" style={{ width: (a.size / SAMPLE_ASK_MAX * 100) + '%' }}></div>
                     <span>{fmtUSD(a.price, { decimals: 2 })}</span>
                     <span>{fmtQty(a.size)}</span>
                   </div>
@@ -2180,8 +2229,8 @@ function App() {
                   </div>
                   <div className="twap-verdict">
                     <strong>Ledger: looks sound.</strong> The market dipped mid-run and the slices caught it: average
-                    fill {fmtUSD(sampleTwapStats(SAMPLE_TWAP_DONE).avgFill)} against {fmtUSD(SAMPLE_TWAP_DONE.oneShotPrice)} for
-                    a one-shot market buy at arm time — patience saved ≈ {fmtUSD(sampleTwapStats(SAMPLE_TWAP_DONE).saved)} on
+                    fill {fmtUSD(SAMPLE_TWAP_SUMMARY.avgFill)} against {fmtUSD(SAMPLE_TWAP_DONE.oneShotPrice)} for
+                    a one-shot market buy at arm time — patience saved ≈ {fmtUSD(SAMPLE_TWAP_SUMMARY.saved)} on
                     the same {SAMPLE_TWAP_DONE.totalSize} {SAMPLE_TWAP_DONE.sizeUnit}.
                   </div>
                   <div className="twap-rail">

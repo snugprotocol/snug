@@ -932,7 +932,7 @@
       },
     };
 
-    // Deterministic chart tables — twelve authored weeks with the dip-and-rebound planted.
+    // Deterministic chart tables — thirteen authored weeks with the dip-and-rebound planted.
     const SAMPLE_CHARTS = {
       // conversation openings across the window: the who-texts-first asymmetry
       starters: { labels: ['You', 'Maya'], counts: [22, 9] },
@@ -947,12 +947,12 @@
 
     // What tapping ✨ drafts in this thread — the measured register above, applied.
     const SAMPLE_DRAFT = 'obviously 😂 congrats on the report!! 10:30 at the pistachio place — loser pays';
-    // ===== WHATSAPP-SAMPLE-END =====
 
-    // Sample-mode render components. They sit OUTSIDE the sample markers because they are
-    // React and share the app's chrome (useChart, css classes) — but they read ONLY the
-    // constants above and render ONLY inside the helper-unreachable branch. They hold their
-    // own tab/draft state, so no real state (ui.openJid, thread, analysis) ever sees a
+    // Sample-mode render components. They live INSIDE the sample markers so the suite's
+    // render-only scan covers the code that actually executes in sample mode. They are
+    // React and share the app's chrome (useChart, css classes), read ONLY the constants
+    // above, and render ONLY inside the helper-unreachable branch. They hold their own
+    // tab/draft state, so no real state (ui.openJid, thread, analysis) ever sees a
     // sample value, and the moment the helper answers they unmount without a trace.
     function SampleAvatar({ chat, size }) {
       return (
@@ -1136,6 +1136,7 @@
         </section>
       );
     }
+    // ===== WHATSAPP-SAMPLE-END =====
 
     // ---- time formatting (list + thread), WhatsApp-style
     const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -1286,6 +1287,12 @@
       // Sample mode only (helper unreachable / never linked): which SAMPLE chat is open.
       // Deliberately separate from ui.openJid so sample jids never touch persisted state.
       const [sampleJid, setSampleJid] = useState(null);
+      // The moment the helper answers, the sample thread is forgotten — otherwise a
+      // pre-link tap on the sample thread would resurface Maya over a user's REAL open
+      // conversation on a later helper blip (review 2026-08-19, F2).
+      useEffect(() => {
+        if (helper.phase !== 'down') setSampleJid(null);
+      }, [helper.phase]);
       const msgsEndRef = useRef(null);
       const openJidRef = useRef(null);
       openJidRef.current = ui.openJid;
@@ -1688,30 +1695,37 @@
                   <div style={{ fontSize: 12 }}>trying again also starts the helper if it is installed</div>
                 </div>
                 {/* Sample mode (ADR-0038): a populated surface instead of a bare status
-                    screen. Render-only constants — see the WHATSAPP-SAMPLE block. */}
-                <SampleBanner />
-                {SAMPLE_CHATS.map((chat) => (
-                  <button
-                    key={chat.jid}
-                    className="chat-row"
-                    aria-current={sampleJid === chat.jid}
-                    data-unread={chat.unread > 0}
-                    onClick={() => {
-                      if (chat.openable) setSampleJid(chat.jid);
-                      else say('sample data — only the top conversation opens. Link your phone for the real thing');
-                    }}
-                  >
-                    <SampleAvatar chat={chat} />
-                    <span className="mid">
-                      <span className="name">{chat.name}</span>
-                      <span className="preview">{chat.preview}</span>
-                    </span>
-                    <span className="side">
-                      <span className="when">{chat.when}</span>
-                      {chat.unread > 0 && <span className="unread-badge">{chat.unread}</span>}
-                    </span>
-                  </button>
-                ))}
+                    screen — but ONLY when no real chats are known. A linked user whose
+                    helper blips down must never see fictional contacts beside their real
+                    list (review 2026-08-19, F1). Render-only constants — see the
+                    WHATSAPP-SAMPLE block. */}
+                {chats.length === 0 && (
+                  <React.Fragment>
+                    <SampleBanner />
+                    {SAMPLE_CHATS.map((chat) => (
+                      <button
+                        key={chat.jid}
+                        className="chat-row"
+                        aria-current={sampleJid === chat.jid}
+                        data-unread={chat.unread > 0}
+                        onClick={() => {
+                          if (chat.openable) setSampleJid(chat.jid);
+                          else say('sample data — only the top conversation opens. Link your phone for the real thing');
+                        }}
+                      >
+                        <SampleAvatar chat={chat} />
+                        <span className="mid">
+                          <span className="name">{chat.name}</span>
+                          <span className="preview">{chat.preview}</span>
+                        </span>
+                        <span className="side">
+                          <span className="when">{chat.when}</span>
+                          {chat.unread > 0 && <span className="unread-badge">{chat.unread}</span>}
+                        </span>
+                      </button>
+                    ))}
+                  </React.Fragment>
+                )}
               </React.Fragment>
             )}
             {helper.phase === 'starting' && <div className="center-state"><div className="spin big">◌</div><div>starting the helper…</div></div>}
@@ -1795,9 +1809,10 @@
       const openMessages = thread.jid === ui.openJid ? thread.messages : [];
       let lastDay = '';
 
-      // Sample thread (render-only, helper unreachable only) — unmounts the moment the
-      // helper answers, because every branch below keys off helper.phase.
-      const sampleOpen = helper.phase === 'down' && sampleJid !== null;
+      // Sample thread (render-only, helper unreachable AND no real chats known) — a
+      // linked session with real chats never mounts the sample pane, and it unmounts
+      // the moment the helper answers, because every branch below keys off helper.phase.
+      const sampleOpen = helper.phase === 'down' && chats.length === 0 && sampleJid !== null;
 
       const threadPane = sampleOpen ? (
         <SampleThreadPane onBack={() => setSampleJid(null)} theme={theme} />

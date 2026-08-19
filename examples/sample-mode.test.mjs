@@ -81,8 +81,38 @@ for (const folder of SAMPLE_APPS) {
   test(`${folder}: shows a labelled sample banner`, () => {
     const html = appHtml(folder);
     assert.match(html, /sample-note/, `${folder}: no .sample-note banner styling/markup`);
-    assert.match(html, /data-sample-banner/, `${folder}: banner not tagged data-sample-banner`);
-    assert.match(html, /sample/i, `${folder}: banner copy never says "sample"`);
+    // Non-vacuous copy check (review 2026-08-19): a whole-file /sample/i match is
+    // trivially satisfied by the marker comments, so require the wording NEAR each
+    // banner tag — every data-sample-banner must have "sample" in the copy that
+    // follows it, or the label the honesty contract depends on is missing.
+    let at = html.indexOf('data-sample-banner');
+    assert.notEqual(at, -1, `${folder}: banner not tagged data-sample-banner`);
+    while (at !== -1) {
+      const vicinity = html.slice(at, at + 600);
+      assert.match(
+        vicinity,
+        /sample/i,
+        `${folder}: the banner at offset ${at} has no "sample" wording within its copy`,
+      );
+      at = html.indexOf('data-sample-banner', at + 1);
+    }
+  });
+
+  test(`${folder}: sample identifiers outside the markers stay render-only too`, () => {
+    // Review 2026-08-19: the block scan alone leaves the executing sample components
+    // unguarded when they sit outside the markers. Belt: any line ANYWHERE in the
+    // file that touches a SAMPLE_ constant or a Sample-prefixed component must be as
+    // inert as the block itself — no bridge, net, db, or clock on that line.
+    const html = appHtml(folder);
+    const forbidden = /Math\.random\s*\(|Date\.now\s*\(|new Date\s*\(\s*\)|SnugBridge|net\.fetch|netPending|db\.exec|dbPending/;
+    const lines = html.split('\n');
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!/\bSAMPLE_|\bSample[A-Z]/.test(lines[i])) continue;
+      assert.ok(
+        !forbidden.test(lines[i]),
+        `${folder}: line ${i + 1} mixes a sample identifier with a bridge/net/db/clock call: ${lines[i].trim()}`,
+      );
+    }
   });
 
   test(`${folder}: README mentions sample mode`, () => {
