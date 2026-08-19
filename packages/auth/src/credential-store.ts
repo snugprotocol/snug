@@ -73,6 +73,18 @@ export interface AuthConnectionState {
    * rows get, rather than a data migration.
    */
   linkVerifiedAt?: number;
+  /**
+   * Epoch ms when the ADR-0025 verify read last PROVED a TOKEN-CLAIM credential against
+   * the provider (ADR-0038). The third member of the verify-marker family, its own
+   * field for the family's standing reason: each marker describes a different proof
+   * about a different transport, and collapsing them would let a stale marker from one
+   * family vouch for another.
+   *
+   * Written by the claim's write-together commit and NOTHING else. Its presence on a
+   * `connected` row is what tells the wizard the claim already ran — re-opening the
+   * wizard must never re-claim (a setup token works exactly once).
+   */
+  claimVerifiedAt?: number;
 }
 
 /** The secrets quartet — the structural slice of UserDb the store consumes. */

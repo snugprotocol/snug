@@ -107,7 +107,16 @@ export {
   // exchange, and a locally re-declared shape here would be a second definition
   // of a contract the registry owns.
   type WellKnownPairingExchange,
+  type WellKnownTokenClaimPairing,
 } from './well-known-providers.js';
+
+export {
+  performTokenClaim,
+  type TokenClaimError,
+  type TokenClaimErrorReason,
+  type TokenClaimRequest,
+  type TokenClaimResult,
+} from './token-claim.js';
 
 export {
   AUTH_ENGINE_HELPER_NAMES,
