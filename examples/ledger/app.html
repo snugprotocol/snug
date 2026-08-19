@@ -422,6 +422,7 @@ function useConnectedFetch() {
       rules: "array (kind=rules): [{ pattern: 'lowercase merchant substring', category: 'one of the provided category names' }] — at most 8, only for the merchants provided",
       plan: "object (kind=plan): { name: 'short scenario name', monthlySteps: [{ category, monthlyDelta: 'negative number = spend less per month' }], monthlyTotal: number, note: 'one sentence on the tradeoff' }",
       leaks: "array (kind=leaks): [{ merchant: 'one of the provided merchants', verdict: 'keep'|'consider'|'cut', why: 'one short sentence naming the overlap, disuse signal, or price change' }]",
+      playbook: "object (kind=playbook): { merchant: 'the provided merchant key', steps: ['3-6 short imperative steps to cancel, warning about retention offers where they are known'], cancelUrl: 'the provider's own https cancellation/account page, or null when unsure — NEVER invent a domain', emailDraft: 'a short polite cancellation email when email is the provider's mechanism, else null' }",
     };
 
     // ============================================================
@@ -1142,7 +1143,7 @@ function useConnectedFetch() {
       );
     }
 
-    function LeakList({ leaks, verdicts, cancels, onMarkCancelled, onAskVerdicts, asking, agentNote }) {
+    function LeakList({ leaks, verdicts, cancels, onMarkCancelled, onAskVerdicts, asking, agentNote, playbooks, playbookBusy, onAskPlaybook, onOpenCancelPage }) {
       const verdictFor = (merchant) => (verdicts || []).find((v) => v.merchant === merchant);
       const cancelFor = (merchant) => cancels.find((c) => c.merchant === merchant);
       const flaggable = leaks.filter((l) => l.overlap || l.priceCreep || l.lapsed);
@@ -1181,11 +1182,48 @@ function useConnectedFetch() {
                     ) : null}
                   </div>
                 </div>
-                {cancel === undefined ? (
-                  <button className="btn quiet" style={{ minHeight: 34, fontSize: 12 }} onClick={() => onMarkCancelled(leak)}>
-                    I cancelled this
-                  </button>
+                {playbooks && playbooks[leak.merchant] ? (
+                  <div className="planbox" data-playbook={leak.merchant}>
+                    <strong>how to cancel</strong>
+                    {playbooks[leak.merchant].steps.map((step, i) => (
+                      <div className="step" key={i}>{(i + 1) + '. ' + step}</div>
+                    ))}
+                    {playbooks[leak.merchant].emailDraft ? (
+                      <div className="sub" style={{ marginTop: 6 }}>
+                        email draft (copy it): <em>{playbooks[leak.merchant].emailDraft}</em>
+                      </div>
+                    ) : null}
+                    {playbooks[leak.merchant].cancelUrl ? (
+                      playbooks[leak.merchant].openFallback ? (
+                        <div className="sub" style={{ marginTop: 6 }}>
+                          open this address in your browser: <code>{playbooks[leak.merchant].cancelUrl}</code>
+                        </div>
+                      ) : (
+                        <button className="btn" style={{ marginTop: 8, minHeight: 34, fontSize: 12.5 }}
+                          onClick={() => onOpenCancelPage(leak.merchant)}>
+                          open the cancellation page
+                        </button>
+                      )
+                    ) : null}
+                    <div className="sub" style={{ marginTop: 6 }}>
+                      you sign in there yourself — Snug never sees those credentials. When it's done, tap “I cancelled
+                      this” and the feed will verify it.
+                    </div>
+                  </div>
                 ) : null}
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {cancel === undefined ? (
+                    <button className="btn quiet" style={{ minHeight: 34, fontSize: 12 }} onClick={() => onMarkCancelled(leak)}>
+                      I cancelled this
+                    </button>
+                  ) : null}
+                  {(!playbooks || !playbooks[leak.merchant]) && cancel === undefined ? (
+                    <button className="btn quiet" style={{ minHeight: 34, fontSize: 12 }} onClick={() => onAskPlaybook(leak)}
+                      disabled={playbookBusy === leak.merchant}>
+                      {playbookBusy === leak.merchant ? 'thinking…' : 'help me cancel'}
+                    </button>
+                  ) : null}
+                </span>
               </div>
             );
           })}
@@ -1228,6 +1266,64 @@ function useConnectedFetch() {
     }
 
     // ------------------------------------------------------------
+    // The open-url bridge (ADR-0038 D5) — hand-rolled OUTSIDE the byte-locked hooks
+    // block (the Telepath doorbell precedent): posts `snug:open-url-request` and waits
+    // for the host's answer. The HOST shows the full URL in its own confirm dialog and
+    // only a real user gesture opens anything; `refused`/`declined` here simply means
+    // the app renders its copy-the-link fallback. Capability truth comes from the
+    // host-ready frame — absent means this route (a read-only starter, an older host)
+    // cannot open windows, which is a fact to design for, not an error.
+    // ------------------------------------------------------------
+    const openUrlWaiters = new Map();
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || data.v !== 1 || data.type !== 'snug:open-url-result') return;
+      const waiter = openUrlWaiters.get(data.requestId);
+      if (!waiter) return;
+      openUrlWaiters.delete(data.requestId);
+      waiter({ status: data.status, reason: data.reason });
+    });
+    function canOpenUrls() {
+      return SnugBridge.capabilities && SnugBridge.capabilities.openUrl === true;
+    }
+    function requestOpenUrl(url) {
+      if (!canOpenUrls()) return Promise.resolve({ status: 'refused', reason: 'no capability' });
+      const requestId = 'ou-' + Math.random().toString(36).slice(2);
+      return new Promise((resolve) => {
+        openUrlWaiters.set(requestId, resolve);
+        SnugBridge.post({ type: 'snug:open-url-request', requestId, url });
+        // The user may sit on the host dialog; be patient, but never leak the waiter.
+        setTimeout(() => {
+          if (openUrlWaiters.delete(requestId)) resolve({ status: 'refused', reason: 'no answer' });
+        }, 180000);
+      });
+    }
+
+    /** App-side gate on an LLM-proposed URL: https, no userinfo, parseable — or no button. */
+    function safeCancelUrl(candidate) {
+      if (typeof candidate !== 'string') return null;
+      try {
+        const url = new URL(candidate);
+        if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return null;
+        return url.href;
+      } catch { return null; }
+    }
+
+    function validPlaybook(data, merchants) {
+      if (!data || data.kind !== 'playbook' || !data.playbook || typeof data.playbook !== 'object') return null;
+      const p = data.playbook;
+      if (!merchants.includes(p.merchant) || !Array.isArray(p.steps)) return null;
+      const steps = p.steps.filter((s) => typeof s === 'string' && s.trim().length > 0).slice(0, 6);
+      if (steps.length === 0) return null;
+      return {
+        merchant: p.merchant,
+        steps,
+        cancelUrl: safeCancelUrl(p.cancelUrl),
+        emailDraft: typeof p.emailDraft === 'string' && p.emailDraft.trim().length > 0 ? p.emailDraft.slice(0, 800) : null,
+      };
+    }
+
+    // ------------------------------------------------------------
     // The app shell
     // ------------------------------------------------------------
     const ASK_SUGGESTIONS = [
@@ -1258,6 +1354,8 @@ function useConnectedFetch() {
       const [question, setQuestion] = useState('');
       const [askState, setAskState] = useState({ status: 'idle' });
       const [leakVerdicts, setLeakVerdicts] = useState(null);
+      const [playbooks, setPlaybooks] = useState({});
+      const [playbookBusy, setPlaybookBusy] = useState(null);
       const [leakAsking, setLeakAsking] = useState(false);
       const [leakNote, setLeakNote] = useState(null);
       const [ruleProposals, setRuleProposals] = useState(null);
@@ -1411,6 +1509,32 @@ function useConnectedFetch() {
         await reload();
       };
 
+      const askPlaybook = async (leak) => {
+        setPlaybookBusy(leak.merchant);
+        const result = await sendMessage('cancel_playbook', {
+          merchant: leak.merchant,
+          display: leak.display,
+          monthly: leak.monthly,
+          cadence: leak.cadence,
+        }, { responseSchema: RESPONSE_SCHEMA });
+        setPlaybookBusy(null);
+        if (!result.ok) { setLeakNote('the agent went quiet — you can still cancel on the provider\u2019s site'); return; }
+        const playbook = validPlaybook(result.data, [leak.merchant]);
+        if (!playbook) { setLeakNote('the agent answered off-script — you can still cancel on the provider\u2019s site'); return; }
+        setPlaybooks((prev) => ({ ...prev, [leak.merchant]: playbook }));
+      };
+
+      const openCancelPage = async (merchant) => {
+        const playbook = playbooks[merchant];
+        if (!playbook || !playbook.cancelUrl) return;
+        const outcome = await requestOpenUrl(playbook.cancelUrl);
+        // Declined is the user's call — leave the button. Refused (no capability, no
+        // answer) means this route cannot open windows: show the honest fallback.
+        if (outcome.status === 'refused') {
+          setPlaybooks((prev) => ({ ...prev, [merchant]: { ...prev[merchant], openFallback: true } }));
+        }
+      };
+
       const markCancelled = async (leak) => {
         await db.exec('INSERT OR REPLACE INTO cancels (merchant, marked_at, monthly_cost, verified) VALUES (?, ?, ?, 0)',
           [leak.merchant, nowSec, leak.monthly]);
@@ -1554,7 +1678,9 @@ function useConnectedFetch() {
                 trials get flags{savingsVerified > 0 ? <> · <strong style={{ color: 'var(--up)' }}>verified savings so far: {fmtMoney(-savingsVerified)}/mo</strong></> : null}
               </p>
               <LeakList leaks={leaks} verdicts={leakVerdicts} cancels={cancels}
-                onMarkCancelled={markCancelled} onAskVerdicts={askLeakVerdicts} asking={leakAsking} agentNote={leakNote} />
+                onMarkCancelled={markCancelled} onAskVerdicts={askLeakVerdicts} asking={leakAsking} agentNote={leakNote}
+                playbooks={playbooks} playbookBusy={playbookBusy} onAskPlaybook={askPlaybook}
+                onOpenCancelPage={(merchant) => void openCancelPage(merchant)} />
             </div>
           ) : null}
 
