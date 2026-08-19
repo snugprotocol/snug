@@ -29,6 +29,7 @@ import { authConnectionCredentialSecretKey } from '@snugprotocol/db';
 
 import { ConnectionWizardSheet } from '../connections/ConnectionWizardSheet.js';
 import { DEMO_STARTER_REQUIREMENTS } from '../agent/demoRequirement.js';
+import { authShapedFailureStore } from '../state/net.js';
 import {
   __resetConnectionWizardForTests,
   connectionFlowStatusStore,
@@ -36,6 +37,7 @@ import {
   connectionWizardStepStore,
   connectionWizardStore,
   openConnectionWizard,
+  openConnectionWizardForFailure,
   saveConnectionCredentials,
   testConnection,
   type ConnectionWizardStep,
@@ -701,6 +703,125 @@ describe('P3 fold — a staged widening shows its diff at EVERY entry point, not
 
     expect(container.querySelector('[data-testid="reapproval-diff"]')).toBeNull();
     expect(button(/approve this connection/i)).toBeDefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// TASK-20260819 — the attention gate (Step 0) and its precedence
+// ---------------------------------------------------------------------------
+
+describe('TASK-20260819 AC4/AC5/AC12 — the attention gate is DERIVED, and the diff outranks it', () => {
+  /**
+   * WHY A GATE AND NOT A STEP (owner decision D5, from the fresh-context plan review).
+   *
+   * The first plan proposed adding `'attention'` to `ConnectionWizardStep`. This file's
+   * own subject rejects that shape ("WHY NOT NEW STEPS", ConnectionWizardSheet.tsx), and
+   * it would have broken three ways at once: `showDiff` is keyed on `step === 'review'`
+   * and would have gone false the moment the wizard opened on the new step; `nextStep`
+   * early-returns 'done' for a LAN requirement ABOVE its switch, so a LAN row with a live
+   * 403 would have skipped the review screen entirely; and three unproven-row catch-alls
+   * key on `step !== 'review'`, so all of them would have fired underneath the attention
+   * screen, inverting the ADR-0025 doctrine that they sit above every step-keyed branch.
+   *
+   * A gate derived from the SESSION's failure copy has none of those interactions — it is
+   * the same "condition on the current row" shape as `showDiff`, `lanNeedsHost` and the
+   * pairing gates.
+   */
+  const failure = { status: 403, detail: 'Insufficient client scope' } as const;
+
+  it('AC4: ConnectionWizardStep gained NO member — the step machine is untouched', async () => {
+    // A SOURCE assertion, because the whole point is the absence of a thing: a DOM test
+    // cannot see an enum member that exists but is never routed to, and a type-level test
+    // would pass against a union that grew a member nothing reads.
+    const source = await readRepoSource('apps/playground/src/state/connectionWizard.ts');
+    const union = /export type ConnectionWizardStep =([^;]*);/.exec(source)?.[1] ?? '';
+    expect(union, 'the step union must still be the five-screen machine').not.toContain('attention');
+    expect(union).toContain('review');
+    expect(union).toContain('done');
+  });
+
+  it('AC5/AC6: a live failure with NO staged diff renders the attention screen, naming provider, status and detail', async () => {
+    declare(oauthRequirement, { approve: true });
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'error_cta', failure });
+    await renderSheet();
+
+    const screen = container.querySelector('[data-testid="connection-attention"]');
+    expect(screen, 'a live failure must open on the attention screen').not.toBeNull();
+    // The provider name comes from the ROW — the user's vocabulary, not the executor's.
+    expect(text()).toContain('Tunecast');
+    expect(text()).toContain('403');
+    expect(text()).toContain('Insufficient client scope');
+  });
+
+  it('AC12 THE COLLISION: a live failure AND a staged diff — the DIFF wins, attention is suppressed', async () => {
+    // THE HIGHEST-VALUE TEST IN THIS TASK. Adding a registry scope puts EVERY existing
+    // Spotify user into exactly this state on their next launch: the 403 fires (old token,
+    // old consent) and the drift migration stages the new scope. Owner decision D3 — the
+    // diff is the CURE, so leading with the diagnosis would hand the user an unexplained
+    // consent delta one tap later.
+    declare(oauthRequirement, { approve: true });
+    db.stagePendingRequirement(APP, 'spotify', {
+      ...oauthRequirement,
+      scopes: ['user-read-recently-played'],
+    });
+
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'error_cta', failure });
+    await renderSheet();
+
+    expect(
+      container.querySelector('[data-testid="reapproval-diff"]'),
+      'the staged re-approval is what fixes this failure — it must lead',
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="connection-attention"]'),
+      'the diagnosis must not preempt its own cure',
+    ).toBeNull();
+  });
+
+  it('AC5: no live failure means no attention screen, whatever the source', async () => {
+    declare(oauthRequirement, { approve: true });
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'settings' });
+    await renderSheet();
+
+    expect(container.querySelector('[data-testid="connection-attention"]')).toBeNull();
+  });
+
+  it('AC7: the failure is HANDED OFF — copied onto the session, and the store is cleared', async () => {
+    // Decision D4. Clearing without copying was the AC contradiction the plan review
+    // caught: the store is the banner's channel, and a Step 0 that read it after the CTA
+    // cleared it would render blank.
+    declare(oauthRequirement, { approve: true });
+    authShapedFailureStore.set({ appId: APP, slot: 'spotify', status: 403, detail: 'Insufficient client scope' });
+
+    expect(openConnectionWizardForFailure(APP)).toBe(true);
+
+    expect(connectionWizardStore.get()?.failure?.status, 'the session carries the copy').toBe(403);
+    expect(authShapedFailureStore.get(), 'the store is cleared — one owner at a time').toBeNull();
+  });
+
+  it('AC9 (the v3 lesson): a REFUSED open neither copies nor clears — the user keeps their route back', async () => {
+    // `openConnectionWizard` refuses when another wizard is parked. The v3 defect this
+    // pins: a CTA that treated a refusal as success dismissed the only surface offering
+    // the repair, stranding the user with a broken connection and no door.
+    declare(oauthRequirement, { approve: true });
+    declare(bearerRequirement, { approve: true });
+    openConnectionWizard({ appId: APP, slot: 'openweather', source: 'settings' });
+
+    authShapedFailureStore.set({ appId: APP, slot: 'spotify', status: 403 });
+    expect(openConnectionWizardForFailure(APP), 'one wizard at a time').toBe(false);
+    expect(authShapedFailureStore.get(), 'a refused open must leave the failure standing').not.toBeNull();
+  });
+
+  it('AC11: continuing past the attention screen lands on the ordinary review, failure cleared', async () => {
+    declare(oauthRequirement, { approve: true });
+    openConnectionWizard({ appId: APP, slot: 'spotify', source: 'error_cta', failure });
+    await renderSheet();
+
+    await click(/check this connection/i);
+
+    expect(container.querySelector('[data-testid="connection-attention"]'), 'the gate closes behind you').toBeNull();
+    expect(button(/approve this connection/i), 'and the ordinary review is what follows').toBeDefined();
   });
 });
 

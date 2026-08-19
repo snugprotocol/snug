@@ -760,6 +760,69 @@ describe('ADR-0028 rule 3 — scope drift stages, re-approval re-consents, the o
     });
   }
 
+  /**
+   * TASK-20260819 AC2 — the OLD SET, HARDCODED. Deliberately not derived from the
+   * registry and deliberately not scope-less.
+   *
+   * The scope-less fixture above proves ADR-0028 rule 3 GENERICALLY: it stages whenever
+   * the registry pins anything at all, so it would keep passing verbatim if this task's
+   * eighth scope were never added. That makes it worthless as a regression pin for THIS
+   * change. A row frozen at the exact seven-scope consent the owner actually granted on
+   * 2026-08-15 is the only fixture that fails when `user-read-recently-played` is absent
+   * from the registry — which is precisely the bug this task exists to prevent recurring.
+   */
+  const OLD_SEVEN_SCOPES = [
+    'playlist-read-private',
+    'playlist-read-collaborative',
+    'user-read-private',
+    'user-library-read',
+    'user-top-read',
+    'user-read-playback-state',
+    'user-modify-playback-state',
+  ];
+
+  const sevenScopeShape = (): Record<string, unknown> => ({
+    ...(requirementFromRegistryEntry(spotifyEntry, 'Spotify', SPOTIFY_SLOT) as unknown as Record<string, unknown>),
+    scopes: [...OLD_SEVEN_SCOPES],
+  });
+
+  it('TASK-20260819 AC2: a row consented under the OLD SEVEN stages a diff that ADDS user-read-recently-played', async () => {
+    db = await installDbWithLegacyRow(sevenScopeShape(), {
+      slot: SPOTIFY_SLOT,
+      secrets: {
+        [ACCESS_KEY]: 'seven-scope-access-token',
+        [REFRESH_KEY]: 'seven-scope-refresh-token',
+        [CLIENT_KEY]: 'legacy-client-id',
+        [STATE_KEY]: JSON.stringify({ status: 'connected', obtainedAt: Date.now(), expiresIn: 3600 }),
+      },
+    });
+
+    expect(await migrateConnectionRegistryDrift(APP, SPOTIFY_SLOT)).toBe('staged');
+
+    const row = db.getConnection(APP, SPOTIFY_SLOT)!;
+    // The DELTA is the assertion — the added scope by name, and the seven the user
+    // already granted still present (a stage that silently dropped consent would be a
+    // different and worse bug than the one this task fixes).
+    expect(row.pendingRequirement?.scopes).toContain('user-read-recently-played');
+    for (const granted of OLD_SEVEN_SCOPES) {
+      expect(row.pendingRequirement?.scopes, `the already-granted ${granted} survives the stage`).toContain(granted);
+    }
+    // Until the user approves, the SERVED requirement is still the seven they consented to.
+    expect(row.requirement.scopes).toEqual(OLD_SEVEN_SCOPES);
+  });
+
+  it('TASK-20260819 AC2 (set-based, ADR-0028 rule 3): a pure REORDER of the same seven stages NOTHING', async () => {
+    // Guards the fixture above from proving too much: if the comparison were
+    // order-sensitive, the test above would pass for the wrong reason (any difference
+    // stages) and this task would look correct while every reordered row nagged its user
+    // through a consent ceremony with no visible delta.
+    db = await installDbWithLegacyRow(
+      { ...sevenScopeShape(), scopes: [...[...spotifyEntry.scopes!].reverse()] },
+      { slot: SPOTIFY_SLOT, secrets: { [CLIENT_KEY]: 'legacy-client-id' } },
+    );
+    expect(await migrateConnectionRegistryDrift(APP, SPOTIFY_SLOT)).toBe('none');
+  });
+
   it("store-level: a scope gain is STAGED — never 'none', never a silent repersist — approval and secrets untouched at stage time", async () => {
     await mintScopelessConnectedRow();
     expect(SPOTIFY_SCOPES.length, 'fixture: the registry must pin scopes for this drift to exist').toBeGreaterThan(0);
