@@ -451,3 +451,23 @@ C4. Ledger app: money-leaks view, cancel playbook LLM lane (responseSchema'd), o
 - Owner path on the running desktop (tauri dev): restart the dev process (vite's dep
   cache holds the stale auth dist), delete the installed Ledger app, reinstall from the
   shelf, connect → paste the SAME token (never consumed) or a fresh one.
+
+### 2026-08-18 — Claude (Fable 5) — session (owner's walk, defect 2: first-sync timeout)
+- Owner report: claim + wizard test both SUCCEEDED (the host fix verified on hardware),
+  but the app's first sync failed with "request failed: Request canceled" and sample
+  data stayed (correct — the swap keys on a successful sync).
+- Root cause, read from the artifacts (never guessed): "Request canceled" is
+  `tauri-plugin-http`'s Rust error for an aborted request (`error.rs:32`), and the ONE
+  armed signal on the path is the executor's gate-9 `AbortSignal.timeout(15_000)`.
+  The wizard probe (`balances-only=1`) is fast; the first real sync asks the bridge
+  for ~13 months across all accounts, which legitimately outlives 15 s.
+- Fixed: `REQUEST_TIMEOUT_MS` 15 s → 60 s (documented — still a bound; a hung provider
+  must never hold the executor open); the timeout NAMES ITSELF — the executor armed
+  the signal, so on `timeoutSignal.aborted` it answers "the provider did not answer
+  within 60s…" instead of surfacing per-transport noise; `requestTimeoutMs` is a
+  DEPS-level override (host policy — a timeout an app could set is a timeout an app
+  can disable), used by the new test that replays the tauri abort spelling. The
+  sidecar call site's catch deliberately unchanged (it arms no timeout).
+- Suites: auth 879 green; root `turbo run test --force` 23/23, 0 cached.
+- Owner path: restart `tauri dev` (stale auth dist in vite's dep cache — third deploy
+  target), then ↻ sync; the first pull may take up to a minute.

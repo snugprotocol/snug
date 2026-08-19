@@ -140,6 +140,13 @@ interface ConnectedFetchBaseDeps {
   credentialStore: CredentialStore;
   fetchImpl: FetchLike;
   /**
+   * HOST-POLICY override of the per-request wall clock (default
+   * REQUEST_TIMEOUT_MS). Deps-level on purpose: a timeout an app or a
+   * requirement could set is a timeout an app can effectively disable. Tests
+   * inject a small value to drive the armed-signal path without waiting.
+   */
+  requestTimeoutMs?: number;
+  /**
    * DESKTOP-ONLY, and absent on web (AC10: absence is byte-identical to today).
    * Supplied by the shell's platform seam; routed to by the executor — and ONLY
    * by the executor — for an RFC-1918 IPv4 literal that is already inside the
@@ -228,7 +235,16 @@ export interface ConnectedFetch {
 
 // -------------------------------------------------------------------- internals
 
-const REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * Per-request wall clock. 60 s, raised from 15 s on the owner's first real SimpleFIN
+ * walk (TASK-20260818): an aggregate provider's first wide-range read (13 months of
+ * transactions, the bridge gathering from institutions) legitimately outlives 15 s,
+ * and the abort surfaced as the transport's own noise ("Request canceled"). Still a
+ * BOUND, deliberately — a hung provider must never hold the executor open forever —
+ * and overridable per DEPS (host policy), never per request or per requirement:
+ * a timeout an app could set is a timeout an app can effectively disable.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_URL_CHARS = 4096;
 const MAX_HEADER_NAME_CHARS = 128;
 const MAX_HEADER_VALUE_CHARS = 4096;
@@ -1189,12 +1205,14 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
 
         // Gate 9 — the fetch itself: injected headers win over app headers; redirects
         // are returned, never followed.
+        const timeoutMs = deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+        const timeoutSignal = AbortSignal.timeout(timeoutMs);
         const init: RequestInit = {
           method,
           headers: { ...appHeaders, ...injected.headers },
           ...(body !== undefined ? { body } : {}),
           redirect: 'manual',
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: timeoutSignal,
         };
 
         // GATE 9a — TRANSPORT SELECTION (ADR-0023 D3; P0 amendment 6). The
@@ -1230,6 +1248,18 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
             response = await deps.fetchImpl(outboundHref, init);
           }
         } catch (err) {
+          // THE TIMEOUT NAMES ITSELF (TASK-20260818, owner report): every transport
+          // spells an armed-signal abort differently (DOMException TimeoutError in a
+          // browser, "Request canceled" from the tauri plugin's Rust half), and the
+          // transport's spelling reaches the user as noise pointing nowhere. The
+          // executor ARMED the signal, so the executor owns the sentence.
+          if (timeoutSignal.aborted) {
+            return failure(
+              NET_ERROR_CODES.NET_FETCH_FAILED,
+              `the provider did not answer within ${Math.round(timeoutMs / 1000)}s — it may be busy gathering data; try again in a moment`,
+              true,
+            );
+          }
           const message = err instanceof Error ? err.message : String(err);
           // Scrubbed with the FULL candidate set (amendment 14): fetch errors routinely
           // embed the request URL — query string included — and this message reaches
