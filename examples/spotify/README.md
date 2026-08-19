@@ -16,14 +16,18 @@ demonstrate governed writes, not to replace the real player.
 
 **Connection posture:** slot `spotify`, kind `oauth2_auth_code` with PKCE (Client ID
 only — no client secret ever). Fields, walkthrough, and scopes arrive registry-pinned
-at install review (ADR-0028): the 7 read+playback scopes
+at install review (ADR-0028): the 8 read+playback scopes
 (`playlist-read-private`, `playlist-read-collaborative`, `user-read-private`,
 `user-library-read`, `user-top-read`, `user-read-playback-state`,
-`user-modify-playback-state`). Works on web and desktop (desktop uses the registry's
-fixed-port loopback redirect posture). Note the pin deliberately omits
-`user-read-recently-played`: the app attempts that read once per session, treats the
-403 as a labeled degrade, and derives discovery from top-list drift instead — see
-[`authoring/docs/plan.md`](authoring/docs/plan.md).
+`user-modify-playback-state`, `user-read-recently-played`). Works on web and desktop
+(desktop uses the registry's fixed-port loopback redirect posture).
+
+`user-read-recently-played` joined the pin on 2026-08-19 (ADR-0028 amendment): it powers
+the play-by-play chips and the discovery metric's precise form. The app still treats a
+refusal of that read as a **labeled degrade** rather than assuming the grant — a
+connection consented under the older seven-scope set keeps working and simply measures
+discovery from top-list drift instead, which is what a user who declines the scope sees
+too. See [`authoring/docs/plan.md`](authoring/docs/plan.md).
 
 ## Sample mode
 

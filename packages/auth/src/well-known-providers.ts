@@ -505,6 +505,17 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     // consent screen renders them. A scope-less Spotify token can read only public data:
     // the starter's own `GET /v1/me/playlists` answered 403, surfaced as "the key may be
     // wrong, expired, or revoked". `user-read-email` deliberately excluded.
+    //
+    // AMENDED 2026-08-19 (TASK-20260819-connection-failure-ux, ADR-0028 §4 amendment):
+    // `user-read-recently-played` joins the set. Rewind ships a COMPLETE recently-played
+    // lane — `recentMetrics`, the recent-chips row, the second branch of the discovery
+    // caption — that the original pin left unreachable, so the app made one read per
+    // session that could only 403. The host's auth-shaped-failure observer cannot know a
+    // refusal was expected, so a perfectly healthy connection raised the repair alarm on
+    // every launch. Widening the pin is the honest fix: it makes shipped functionality
+    // reachable rather than teaching the host to tolerate refusals. The tradeoff is the
+    // ordinary one and the consent screen states it — listening history is readable by
+    // any Snug app connected to Spotify.
     scopes: [
       'playlist-read-private',
       'playlist-read-collaborative',
@@ -513,6 +524,7 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       'user-top-read',
       'user-read-playback-state',
       'user-modify-playback-state',
+      'user-read-recently-played',
     ],
     // KEY IS `client_id`, matching the oauth2_auth_code shape used at
     // demoRequirement.ts:265. A PKCE flow needs the Client ID and NOTHING else from the

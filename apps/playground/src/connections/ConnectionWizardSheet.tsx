@@ -82,6 +82,7 @@ import {
   findRevokedBefore,
   migrateConnectionRegistryDrift,
   needsReapproval,
+  acknowledgeConnectionWizardFailure,
   openBlankConnectionOAuthPopup,
   reapproveFromDiff,
   saveConnectionCredentials,
@@ -90,6 +91,7 @@ import {
   unexpectedTestOutcome,
   type ConnectionTestOutcome,
   type ConnectionWizardSession,
+  type ConnectionWizardFailure,
   type DesktopOAuthAlternative,
   type DesktopOAuthRefusal,
   type RevokedBefore,
@@ -1686,6 +1688,62 @@ function ReapprovalDiffScreen({
 }
 
 // ---------------------------------------------------------------------------
+// The attention gate — Step 0 (TASK-20260819)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE DIAGNOSIS SCREEN a provider refusal opens onto.
+ *
+ * WHERE IT CAME FROM. Until 2026-08-19 this content was a full-bleed maroon block
+ * rendered INSIDE the running app (`AuthRepairBanner`). It displaced the app's own UI,
+ * and because the host cannot tell an expected refusal from a broken credential, it
+ * greeted the owner on every launch of a perfectly healthy Spotify connection. Owner
+ * decision D2 moved the diagnosis here — where a connection is already the subject and a
+ * full screen is not an intrusion — and left the run surface a quiet chip.
+ *
+ * WHY IT IS A GATE AND NOT A STEP (D5). See the derivation at the call site: `nextStep`
+ * early-returns for LAN rows, `showDiff` is step-keyed, and three unproven-row catch-alls
+ * key on `step !== 'review'` — a new step member would have interacted with all three.
+ * This is a condition on the session, exactly like `showDiff` is a condition on the row.
+ *
+ * C1 — `detail` is the provider's own error sentence, extracted host-side from the
+ * gate-10-scrubbed delivered body and capped at 160 chars. No credential, no URL, no raw
+ * response bytes can reach it, and it renders as TEXT ONLY: never markup, never a link
+ * (the hostile-copy rule the registration steps carry, pinned by test).
+ */
+function AttentionScreen({
+  provider,
+  failure,
+  onContinue,
+  onDismiss,
+}: {
+  provider: string;
+  failure: ConnectionWizardFailure;
+  onContinue: () => void;
+  onDismiss: () => void;
+}): ReactElement {
+  return (
+    <div className="field" data-testid="connection-attention">
+      <label>{provider} isn’t accepting this app’s key</label>
+      <p className="hint">
+        The app keeps running — only the parts that need {provider} are affected. The key may be wrong, expired, or
+        revoked ({failure.status}).
+      </p>
+      {failure.detail !== undefined ? (
+        <p className="hint" data-testid="auth-repair-detail">
+          {/* The provider's own diagnosis, verbatim — plain text by construction. */}
+          {provider} says: “{failure.detail}”
+        </p>
+      ) : null}
+      <Button variant="primary" onClick={onContinue}>
+        check this connection
+      </Button>
+      <Button onClick={onDismiss}>dismiss</Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Missing-row fallback (AC6)
 // ---------------------------------------------------------------------------
 
@@ -1824,6 +1882,22 @@ export function ConnectionWizardSheet(): ReactElement | null {
    * one place that had drifted from it.
    */
   const showDiff = useMemo(() => needsReapproval(row) && step === 'review', [row, step]);
+  /**
+   * THE ATTENTION GATE (TASK-20260819) — derived from the SESSION's failure copy, exactly
+   * as `showDiff` is derived from the row. Not a step: `nextStep` early-returns 'done' for
+   * a LAN requirement, `showDiff` is keyed on `step === 'review'`, and the three
+   * unproven-row catch-alls below key on `step !== 'review'` — a new step member would
+   * have collided with all three (the fresh-context plan review walked each one).
+   *
+   * `!showDiff` IS THE PRECEDENCE RULE (owner decision D3), and it is the case this task
+   * creates for every existing Spotify user: adding a registry scope means their next
+   * launch both 403s on the old token AND stages a re-approval. The staged diff is the
+   * CURE for that failure, so it leads; showing the diagnosis first would hand the user an
+   * unexplained consent delta one tap later. Keyed on `step === 'review'` for the same
+   * reason `showDiff` is — once the user walks into the credential half, the gate is
+   * behind them.
+   */
+  const showAttention = session?.failure !== undefined && step === 'review' && !showDiff;
 
   /**
    * The AC6 refusal gate, derived from the ROW (this file's doctrine) and the platform.
@@ -1977,6 +2051,13 @@ export function ConnectionWizardSheet(): ReactElement | null {
           connection it still is (ADR-0023 D1's portability rule).
         */
         <LanDesktopWallScreen row={row} onClose={requestClose} />
+      ) : showAttention ? (
+        <AttentionScreen
+          provider={row?.requirement.provider.name ?? session.slot}
+          failure={session.failure!}
+          onContinue={() => acknowledgeConnectionWizardFailure()}
+          onDismiss={requestClose}
+        />
       ) : showDiff ? (
         <ReapprovalDiffScreen
           row={row}

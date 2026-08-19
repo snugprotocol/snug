@@ -856,6 +856,43 @@
   color: var(--danger);
 }
 
+/* THE AUTH-REPAIR CHIP (TASK-20260819) — the run header's standing note that a provider
+   refused this app's key. Deliberately the QUIETEST thing that cannot be missed: it sits
+   in the header's control cluster, so it must read as chrome rather than as an alarm
+   dropped into the app. The ember accent is the only colour it spends — the danger
+   temperature belongs to the wizard screen that explains the failure, not to the surface
+   that merely points at it. */
+.auth-repair-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 22ch;
+  padding: 0 var(--space-2);
+  height: 28px;
+  border: 1px solid var(--ember);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ember);
+  font: inherit;
+  font-size: var(--text-xs);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.auth-repair-chip:hover {
+  /* A tint on hover rather than a colour change: the chip's meaning does not change when
+     you point at it, only its affordance. */
+  background: color-mix(in srgb, var(--ember) 12%, transparent);
+}
+
+.auth-repair-chip:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+}
+
 /* ---------------------------------------------------------------- run view */
 
 .run-layout {

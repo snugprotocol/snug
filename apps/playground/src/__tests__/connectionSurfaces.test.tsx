@@ -22,7 +22,8 @@ const read = (rel: string): string => readFileSync(resolve(appRoot, rel), 'utf8'
 const css = read('src/theme/app.css');
 const runView = read('src/run/RunView.tsx');
 const headerActions = read('src/run/RunHeaderActions.tsx');
-const repairBanner = read('src/run/AuthRepairBanner.tsx');
+const repairChip = read('src/run/AuthRepairChip.tsx');
+const wizardSheet = read('src/connections/ConnectionWizardSheet.tsx');
 
 /** One CSS rule body, anchored so `.connection-note` ≠ `.connection-note-title`. */
 function rule(selector: string): string {
@@ -126,30 +127,60 @@ describe('AC10 — needing a connection is not styled as a failure', () => {
     expect(cta).not.toContain('className="error-note"');
   });
 
-  it('a REJECTED credential still reads as a failure', () => {
-    // The one connection surface that genuinely is one keeps the danger accent —
-    // otherwise AC10 would have flattened a real error into routine chrome.
-    expect(repairBanner).toContain('className="connection-note is-error"');
+  it('a REJECTED credential still reads as a failure — but on the SCREEN, not across the app', () => {
+    /*
+     * A DECISION CHANGING, NOT A GUARD ERODING (TASK-20260819, owner decision D2).
+     *
+     * TASK-20260813 AC10 gave the run-surface repair banner the danger accent, reasoning
+     * that "the one connection surface that genuinely IS a failure keeps it — otherwise
+     * AC10 would have flattened a real error into routine chrome". That reasoning still
+     * holds and is still enforced below. What changed is WHERE the alarm is spent.
+     *
+     * The banner rendered inside the running app, so a failing connection displaced the
+     * app's own UI — and because the host cannot tell an expected refusal from a broken
+     * credential, it greeted the owner on every launch of a HEALTHY Spotify connection.
+     * An alarm that fires on every launch is one users learn to click past, which costs
+     * exactly the failures it exists to report.
+     *
+     * So the danger temperature moved to the wizard's attention gate, which the user
+     * opens deliberately and where a connection is already the subject. The run surface
+     * keeps a quiet ember chip: enough that a failure is never invisible, little enough
+     * that it is not an alarm.
+     */
+    expect(repairChip, 'the chip is chrome — it must not wear the danger palette').not.toMatch(/var\(--danger/);
+    expect(rule('.auth-repair-chip')).toMatch(/var\(--ember\)/);
+    // And the failure still reads AS a failure where it is explained.
+    expect(wizardSheet).toContain('data-testid="connection-attention"');
+    expect(wizardSheet, 'Step 0 names the provider and the status').toMatch(/isn.t accepting this app.s key/);
   });
 
   it('both surfaces keep one primary action and a quiet dismiss', () => {
     for (const [name, source] of [
       ['net-auth-cta', runView],
-      ['auth-repair-banner', repairBanner],
+      // The auth-shaped failure's actions moved with its copy: Step 0 in the wizard owns
+      // the primary/dismiss pair now (the chip is a single control, so it has neither).
+      ['connection-attention', wizardSheet],
     ] as const) {
       const at = source.indexOf(`data-testid="${name}"`);
       // Wide enough to reach the dismiss at the end of the actions row — the net-error
       // CTA's two conditional copy branches push it out past 1900 characters.
       const region = source.slice(at, at + 2400);
       expect(region, `${name} lost its primary action`).toMatch(/variant="primary"/);
-      expect(region, `${name} lost its dismiss`).toMatch(/variant="ghost"/);
+      // The quiet action is the DEFAULT variant on the wizard sheet and `ghost` in the
+      // run view — the two surfaces have always differed here, and the banner-era test
+      // only ever saw the run-view side. What must hold is that a second, visibly
+      // quieter action exists beside the primary one, not which class name it carries.
+      expect(region, `${name} lost its dismiss`).toMatch(/onClick=\{onDismiss\}|variant="ghost"/);
     }
   });
 
-  it('keeps role="alert" on both, so the change is visual only', () => {
-    // Restyling must not quietly drop assistive-tech semantics that existing suites
-    // and real screen readers depend on.
+  it('keeps assistive-tech semantics on every surface — restyling never costs a screen reader', () => {
     expect(runView).toMatch(/className="connection-note" role="alert"/);
-    expect(repairBanner).toMatch(/className="connection-note is-error" role="alert"/);
+    // The chip is role="status", NOT role="alert", and that is the deliberate half of
+    // this change: `alert` interrupts a screen-reader user mid-task, which is precisely
+    // the over-loud behaviour D2 removed for sighted users. `status` announces at the
+    // next opportunity — a standing note, which is what the chip is.
+    expect(repairChip).toMatch(/role="status"/);
+    expect(repairChip).not.toMatch(/role="alert"/);
   });
 });

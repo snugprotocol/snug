@@ -31,9 +31,10 @@ import {
   connectionWizardStore,
   connectionWizardSlotStore,
   openConnectionWizard,
+  openConnectionWizardForFailure,
   testConnection,
 } from '../state/connectionWizard.js';
-import { AuthRepairChip } from '../run/AuthRepairBanner.js';
+import { AuthRepairChip } from '../run/AuthRepairChip.js';
 import { ConnectionWizardSheet } from '../connections/ConnectionWizardSheet.js';
 import { getUserDb } from '../state/userdb.js';
 
@@ -269,7 +270,12 @@ describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, 
    * load-bearing: the provider's own sentence must reach the user, and it must reach them
    * as TEXT. Only the surface that shows it changed (owner decision D2).
    */
-  async function renderAttentionStep(appId: string): Promise<void> {
+  async function renderAttentionStep(appId: string, failure: { status: number; detail?: string }): Promise<void> {
+    // Routed through the REAL handoff (store → chip door → session copy) rather than by
+    // constructing a session by hand: what these tests pin is that the provider's own
+    // sentence survives the whole trip to the screen, and a hand-built session would
+    // prove only that the screen can render a prop.
+    authShapedFailureStore.set({ appId, slot: SLOT, ...failure });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -279,14 +285,8 @@ describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, 
     await act(async () => {
       await Promise.resolve();
     });
-    const live = authShapedFailureStore.get();
-    openConnectionWizard({
-      appId,
-      slot: SLOT,
-      source: 'error_cta',
-      ...(live !== null ? { failure: { status: live.status, ...(live.detail !== undefined ? { detail: live.detail } : {}) } } : {}),
-    });
     await act(async () => {
+      openConnectionWizardForFailure(appId);
       await Promise.resolve();
     });
   }
@@ -340,11 +340,7 @@ describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, 
 
   it("TASK-20260815 AC4 / TASK-20260819 AC6: Step 0 renders the provider's own reason", async () => {
     await seedApprovedApp();
-    await renderAttentionStep(APP);
-    await act(async () => {
-      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403, detail: 'Insufficient client scope' });
-      await Promise.resolve();
-    });
+    await renderAttentionStep(APP, { status: 403, detail: 'Insufficient client scope' });
     const detail = container.querySelector('[data-testid="auth-repair-detail"]');
     expect(detail, 'the provider-says line must render when a detail exists').not.toBeNull();
     expect(detail!.textContent).toContain('Insufficient client scope');
@@ -355,11 +351,7 @@ describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, 
 
   it('TASK-20260815 AC4 NEGATIVE: no detail → no provider-says line (the guess copy stands alone)', async () => {
     await seedApprovedApp();
-    await renderAttentionStep(APP);
-    await act(async () => {
-      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403 });
-      await Promise.resolve();
-    });
+    await renderAttentionStep(APP, { status: 403 });
     expect(container.querySelector('[data-testid="auth-repair-detail"]')).toBeNull();
     expect(text()).toContain('403');
   });
@@ -371,11 +363,7 @@ describe('AuthRepairChip — the quiet run-surface trace of the failing (appId, 
     // or a linkifier.
     const hostile = '<a href="https://evil.example/fix">click here to fix</a> or visit https://evil.example/fix now';
     await seedApprovedApp();
-    await renderAttentionStep(APP);
-    await act(async () => {
-      authShapedFailureStore.set({ appId: APP, slot: SLOT, status: 403, detail: hostile });
-      await Promise.resolve();
-    });
+    await renderAttentionStep(APP, { status: 403, detail: hostile });
     const detail = container.querySelector('[data-testid="auth-repair-detail"]')!;
     expect(detail.querySelector('a'), 'markup must never become an element').toBeNull();
     expect(detail.querySelector('img')).toBeNull();

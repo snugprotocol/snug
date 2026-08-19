@@ -459,11 +459,14 @@ function useConnectedFetch() {
     // OAuth PKCE, scopes pinned by the hub's registry) — the app never sees a
     // token, and playback writes stop at the host's confirm sheet.
     //
-    // Scope honesty (the registry pin, ADR-0028): the pinned scope set carries
-    // top-lists + playback but NOT user-read-recently-played. Rewind attempts
-    // the recently-played read ONCE per session, expects the 403, says so in
-    // the UI, and derives its discovery metric from top-list drift instead —
-    // an honest degrade, not a silent one.
+    // Scope honesty (the registry pin, ADR-0028 as amended 2026-08-19): the
+    // pinned set carries top-lists, playback AND user-read-recently-played.
+    // Rewind still attempts the recently-played read exactly ONCE per session
+    // and still treats a refusal as a labeled degrade rather than assuming the
+    // grant — a connection consented under the older seven-scope set keeps
+    // working, and so does a user who declines. The app never sees the scope
+    // list (C1: no token, scopes are host-side), so "did we get it?" is only
+    // ever answered by trying once and believing the answer.
     //
     // Agent posture (ADR-0011): agent-driven. The "weekly rewind" card is the
     // model's turn — the APP does the reading and sends compact stats; the
@@ -949,7 +952,7 @@ function useConnectedFetch() {
                     : disc == null
                       ? 'needs your all-time artist canon to compare against — it hasn’t loaded yet.'
                       : recent && recent.status === 'unavailable'
-                        ? 'of this period’s top 20 artists are new against your all-time canon. (Play-by-play history needs a scope this connection doesn’t carry, so Rewind measures drift between your top lists instead.)'
+                        ? 'of this period’s top 20 artists are new against your all-time canon. (Play-by-play history isn’t available on this connection, so Rewind measures drift between your top lists instead — reconnect to add it.)'
                         : 'of this period’s top 20 artists are new faces against your all-time canon.'}
                 />
               </div>
@@ -1367,8 +1370,9 @@ function useConnectedFetch() {
         getJson('/v1/me').then((me) => {
           if (!me.fail && me.data && typeof me.data.display_name === 'string') setProfile({ name: me.data.display_name });
         });
-        // …and ONE attempt at recently-played. The registry pin omits its scope, so the
-        // expected answer is 403 — handled as a labeled degrade, never retried in a loop.
+        // …and ONE attempt at recently-played. The pin now carries its scope, so the
+        // expected answer is data — but a refusal is still handled as a labeled degrade
+        // (old consents, declined scopes), and never retried in a loop.
         getJson('/v1/me/player/recently-played?limit=50').then((rp) => {
           if (rp.fail) {
             setRecent({ status: rp.fail.kind === 'refused' ? 'unavailable' : 'failed' });
