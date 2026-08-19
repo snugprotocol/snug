@@ -135,6 +135,12 @@ duplicated QR read and creds-material read; store-owned `onChange` persistence t
 - Next step: on approval → Phase A tests first (`linkedDeviceWizard.test.ts` QR poll deadline + named timeout state).
 - Open questions: none blocking; residual for AC2 noted (a group member who never spoke, has no 1:1 chat, and no PUSH_NAME chunk stays unresolved — allowed by AC wording).
 
+### 2026-08-18 (hardware walk 5) — Claude (with Jeetu) — session
+- Done: rosters WERE climbing on the backoff helper (127→129 observed live) but the pill hid after 20 s of no movement — the stall guard was tuned for the old aggressive cadence while backoff gaps are minute-plus by design, and a retired poll never restarts short of an app relaunch. Fixed (`fd871b6`): guard waits ~3 min of true silence and treats a shrinking total (write-offs) as movement; roster attempts tuned to 5×20s-doubling (~10 min coverage) so convergence lands in minutes; failure classes now aggregate into `rosterDiagnostics` in the cache (a failing-only steady state previously wrote nothing, making stalls undiagnosable from disk). Sidecar 144 + playground affected 40 green; helper reinstalled (18:02). Owner told: do NOT re-pair — link and data are healthy.
+- State: awaiting owner restart; the cache's `rosterDiagnostics.errors` will name the failure classes for the ~100 hard groups.
+- Next step: owner restarts; read diagnostics; expect Names to climb with a shrinking denominator and converge; then merge.
+- Open questions: none.
+
 ### 2026-08-18 (hardware walk 4) — Claude (with Jeetu) — session
 - Done: pill climbed to 127/233 then froze and (correctly) hid via the stall guard; cache sampling 35 s apart confirmed the helper was idle — the retry-per-sweep-beat cadence had burned all 5 attempts per group inside one throttle window, writing off 106 rosters. Fixed (`bfce7e5`): exponential backoff per group (30 s base doubling, 8 attempts, ~1 h coverage — a throttle now costs one attempt, not all), `rostersGivenUp` reported in the sync detail, and the playground subtracts it from the pill's target so "Names n/m" converges on the achievable count and retires honestly. Sidecar 143, playground affected suites 39 green; helper rebuilt + reinstalled.
 - State: a fresh helper process resets attempt counters, so the next desktop restart re-tries all 106 on the gentle cadence; genuinely dead groups (left/community containers) will be written off and leave the target.
