@@ -135,6 +135,12 @@ duplicated QR read and creds-material read; store-owned `onChange` persistence t
 - Next step: on approval → Phase A tests first (`linkedDeviceWizard.test.ts` QR poll deadline + named timeout state).
 - Open questions: none blocking; residual for AC2 noted (a group member who never spoke, has no 1:1 chat, and no PUSH_NAME chunk stays unresolved — allowed by AC wording).
 
+### 2026-08-18 (close-session, Gate 6) — Claude — session
+- Done: lessons ×3 (second-deploy-target; failure classification vs retry budgets incl. cadence-coupled guards and persist-the-failure-classes; alias mappings propagate values both ways), next-steps walk entry updated (verified vs remaining), code-map row updated (sweep/cooldown/capsule/safety-net), final forced root run green, PR #71 merged on the owner's explicit ask in this session.
+- State: merged to main. Task stays ACTIVE (not done/): three verification items remain — DM names post-`6af7364`, the 🧠 pseudonymization spot-check, and the ADR-0034 push-seam hardware confirmation now masked by the polling safety net.
+- Next step: owner confirms the three remaining walk items → move this file to done/ + INDEX line; ADR-0037 status flips to accepted (merged).
+- Open questions: none beyond the three verification items above.
+
 ### 2026-08-18 (hardware walk 6) — Claude (with Jeetu) — session
 - Done: roster phase CONVERGED honestly (162 loaded + 71 written off = 233; diagnostics named the classes: item-not-found 110, forbidden 14 — dead/left groups — and rate-overlimit 287, Meta's throttle). Three fixes (`6af7364`): (1) a pairing copies a known name across BOTH spellings — push names from group rows live under the LID while the DM is keyed by phone number, so known people rendered as +numbers (the owner's "no DM has a name"); (2) error-class retry policy — definitive refusals write off after ONE attempt, throttles pause the whole sweep on an escalating cooldown and never charge the group; (3) the app polls as a safety net (list 25 s, thread delta 10 s) beside the doorbell — live-push delivery has never been hardware-confirmed on Telepath and remains an OPEN VERIFICATION — and a notice explains why inaccessible groups stay anonymous. Sidecar 146, examples 204 green; helper reinstalled (18:21).
 - State: awaiting owner restart. Expected: recent DMs pick up names as pairings re-arrive via rosters/live rows; throttled groups reload over subsequent cooldown windows; new messages appear within ≤10 s (thread) / ≤25 s (list) even if the doorbell is dead.
