@@ -156,6 +156,8 @@ export interface BaileysSocketDeps {
   resumeHistoryGraceMs?: number;
   /** Beat of the background roster sweep; injectable so tests need not wait twenty seconds. */
   rosterSweepMs?: number;
+  /** First retry delay after a roster fetch fails; doubles per failure. Injectable for tests. */
+  rosterRetryBaseMs?: number;
 }
 
 /**
@@ -440,10 +442,24 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
    * retry-on-next-list-read scheme left 98 of 233 rosters unloaded after 14 minutes —
    * which the user experiences as names that simply stop arriving (2026-08-18).
    */
-  const ROSTER_MAX_ATTEMPTS = 5;
+  const ROSTER_MAX_ATTEMPTS = 8;
   const rosterLoaded = new Set<string>();
   const rosterInFlight = new Set<string>();
-  const rosterAttempts = new Map<string, number>();
+  /**
+   * Retry bookkeeping with EXPONENTIAL BACKOFF (hardware walk 4, 2026-08-18): a retry per
+   * sweep beat burned every attempt inside one ~2-minute throttle window and wrote off 106
+   * of 233 groups. Doubling the spacing (30 s base → ~an hour across 8 attempts) means a
+   * throttle costs one attempt, not all of them.
+   */
+  const rosterAttempts = new Map<string, { attempts: number; nextAt: number }>();
+  const rosterRetryBaseMs = deps.rosterRetryBaseMs ?? 30_000;
+  const rostersGivenUp = (): number => {
+    let count = 0;
+    for (const [jid, tries] of rosterAttempts) {
+      if (tries.attempts >= ROSTER_MAX_ATTEMPTS && !rosterLoaded.has(jid)) count += 1;
+    }
+    return count;
+  };
 
   /**
    * Fetch a group's subject and participants (owner-reported 2026-08-17: group senders
@@ -454,7 +470,8 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   const ensureGroupRoster = (jid: string): void => {
     if (!jid.endsWith('@g.us') || sock === undefined || link !== 'linked') return;
     if (rosterLoaded.has(jid) || rosterInFlight.has(jid)) return;
-    if ((rosterAttempts.get(jid) ?? 0) >= ROSTER_MAX_ATTEMPTS) return;
+    const tries = rosterAttempts.get(jid);
+    if (tries !== undefined && (tries.attempts >= ROSTER_MAX_ATTEMPTS || now() < tries.nextAt)) return;
     rosterInFlight.add(jid);
     void (async () => {
       await acquireRosterSlot();
@@ -471,7 +488,11 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         });
         rosterLoaded.add(jid);
       } catch {
-        rosterAttempts.set(jid, (rosterAttempts.get(jid) ?? 0) + 1);
+        const attempts = (rosterAttempts.get(jid)?.attempts ?? 0) + 1;
+        rosterAttempts.set(jid, {
+          attempts,
+          nextAt: now() + rosterRetryBaseMs * 2 ** (attempts - 1),
+        });
       } finally {
         rosterInFlight.delete(jid);
         releaseRosterSlot();
@@ -693,6 +714,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       const detail = {
         groups: stats.groups,
         rostersLoaded: rosterLoaded.size,
+        rostersGivenUp: rostersGivenUp(),
         names: stats.names,
         messages: stats.messages,
       };

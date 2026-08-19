@@ -101,6 +101,8 @@ export interface WaHistoryState {
   detail?: {
     groups: number;
     rostersLoaded: number;
+    /** Groups whose roster is unfetchable (attempts exhausted) — subtracted from targets. */
+    rostersGivenUp: number;
     names: number;
     messages: number;
   };

@@ -263,13 +263,25 @@ export function syncStateFromChatsBody(body: string): SidecarSyncState | undefin
     };
     const sync = parsed.sync;
     if (sync === undefined || sync === null || typeof sync !== 'object') return undefined;
-    const detail = sync.detail;
+    const detail = sync.detail as
+      | { groups?: unknown; rostersLoaded?: unknown; rostersGivenUp?: unknown; names?: unknown }
+      | null
+      | undefined;
+    // Given-up groups (unfetchable rosters — left groups, community containers, exhausted
+    // retries) come OFF the target: the pill converges on what is achievable instead of
+    // stalling three short of a total that includes the unreachable.
     const rosters =
       detail !== null &&
       typeof detail === 'object' &&
       typeof detail.groups === 'number' &&
       typeof detail.rostersLoaded === 'number'
-        ? { loaded: detail.rostersLoaded, total: detail.groups }
+        ? {
+            loaded: detail.rostersLoaded,
+            total: Math.max(
+              detail.rostersLoaded,
+              detail.groups - (typeof detail.rostersGivenUp === 'number' ? detail.rostersGivenUp : 0),
+            ),
+          }
         : undefined;
     return {
       progress: typeof sync.progress === 'number' ? sync.progress : 0,

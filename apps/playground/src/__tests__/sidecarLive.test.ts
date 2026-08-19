@@ -487,7 +487,7 @@ describe('the sync poll through the names phase', () => {
         complete: true,
         explicit: true,
         progress: 100,
-        detail: { groups: 233, rostersLoaded: 98, names: 1561, messages: 16627 },
+        detail: { groups: 233, rostersLoaded: 98, rostersGivenUp: 0, names: 1561, messages: 16627 },
       },
     });
     expect(syncStateFromChatsBody(body)).toEqual({
@@ -496,6 +496,20 @@ describe('the sync poll through the names phase', () => {
       rosters: { loaded: 98, total: 233 },
       names: 1561,
     });
+  });
+
+  it('subtracts GIVEN-UP rosters from the target, so the pill can converge', () => {
+    // Hardware walk 4: 106 of 233 rosters were permanently unfetchable and the pill sat
+    // at 127/233 until the stall guard hid it. With the write-off reported, the target
+    // becomes what is achievable — and loaded >= total retires the poll honestly.
+    const body = JSON.stringify({
+      sync: {
+        complete: true,
+        progress: 100,
+        detail: { groups: 233, rostersLoaded: 127, rostersGivenUp: 106, names: 1563, messages: 1 },
+      },
+    });
+    expect(syncStateFromChatsBody(body)?.rosters).toEqual({ loaded: 127, total: 127 });
   });
 
   it('tolerates a helper with NO detail seat — the old shape retires on complete', () => {

@@ -437,7 +437,7 @@ describe('resume without history', () => {
  */
 describe('roster sweep and sync detail', () => {
   it('retries a failed roster on the sweep beat, without waiting for another list read', async () => {
-    const { adapter, fake } = await linkedAdapter({ rosterSweepMs: 10 });
+    const { adapter, fake } = await linkedAdapter({ rosterSweepMs: 10, rosterRetryBaseMs: 5 });
     fake.groupMetadata
       .mockRejectedValueOnce(new Error('rate limited'))
       .mockResolvedValue({ subject: 'Healed', participants: [{ id: '555@s.whatsapp.net' }] });
@@ -453,13 +453,30 @@ describe('roster sweep and sync detail', () => {
     expect(fake.groupMetadata.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('gives up on a roster after bounded attempts — a dead group must not burn iqs forever', async () => {
-    const { adapter, fake } = await linkedAdapter({ rosterSweepMs: 5 });
-    fake.groupMetadata.mockRejectedValue(new Error('forbidden'));
-    fake.emit('messaging-history.set', { chats: [{ id: 'g2@g.us', name: 'Dead' }], contacts: [], messages: [] });
+  it('BACKS OFF between retries — a throttle window must not burn every attempt', async () => {
+    // On real hardware, retry-per-sweep-beat spent all attempts inside ~2 minutes of rate
+    // limiting and wrote off 106 of 233 groups (hardware walk 4, 2026-08-18). Retries now
+    // double their spacing per failure, so attempts outlive any plausible throttle window.
+    const { adapter, fake } = await linkedAdapter({ rosterSweepMs: 5, rosterRetryBaseMs: 40 });
+    fake.groupMetadata.mockRejectedValue(new Error('rate limited'));
+    fake.emit('messaging-history.set', { chats: [{ id: 'g2@g.us', name: 'Slow' }], contacts: [], messages: [] });
     adapter.listChats();
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(5);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 100 ms with base 40: the initial try, one retry at ~40, one at ~120 (not yet) — the
+    // sweep beat alone (every 5 ms) would have made twenty.
+    expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(3);
+  });
+
+  it('gives up after bounded attempts and REPORTS the write-off in the sync detail', async () => {
+    const { adapter, fake } = await linkedAdapter({ rosterSweepMs: 2, rosterRetryBaseMs: 1 });
+    fake.groupMetadata.mockRejectedValue(new Error('forbidden'));
+    fake.emit('messaging-history.set', { chats: [{ id: 'g3@g.us', name: 'Dead' }], contacts: [], messages: [] });
+    adapter.listChats();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(fake.groupMetadata.mock.calls.length).toBeLessThanOrEqual(8);
+    // The consumer subtracts given-up groups from the target, so the pill CONVERGES on
+    // what is achievable instead of stalling at n/m forever.
+    expect(adapter.historyState().detail?.rostersGivenUp).toBe(1);
   });
 
   it('treats a cache-restored roster as loaded — no refetch burst at every boot', async () => {
