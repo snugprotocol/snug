@@ -1,6 +1,6 @@
 # 0028 — Registry-pinned OAuth scopes: reviewed registry data, never silent defaults
 
-- **Status:** accepted (2026-08-15, at merge; owner approved the plan, verified the live Spotify round trip on hardware — playlists load with the pinned scopes — and commissioned the merge explicitly) · **AMENDED 2026-08-19** (TASK-20260819, PR #78): rule 4's Spotify set gains `user-read-recently-played` — see the amendment block at the foot of this file. Rules 1–3 and 5 stand unchanged.
+- **Status:** accepted (2026-08-15, at merge; owner approved the plan, verified the live Spotify round trip on hardware — playlists load with the pinned scopes — and commissioned the merge explicitly) · **AMENDED 2026-08-19** (TASK-20260819, PR #78): rule 4's Spotify set gains `user-read-recently-played` — see the amendment block at the foot of this file. Rules 1–3 and 5 stand unchanged. · **AMENDED 2026-08-19** (TASK-20260819-gmail-starter, ADR-0039): `gmail` becomes the SECOND scope-pinned entry — see the second amendment block at the foot of this file. Rules 1–5 stand unchanged; the pin is an application of rule 1, not a change to it.
 - **Date:** 2026-08-15
 - **Task:** TASK-20260815-spotify-scopes-wizard-links
 
@@ -129,3 +129,44 @@ Static-kind Spotify rows and non-registry provenance gain no scopes at all (rule
 kind guard), so they are in the same position permanently. Rewind cannot self-gate: C1
 means it never sees the token, and granted scopes are host-side. The task file records
 this as an accepted residual rather than a closed defect.
+
+---
+
+## Amendment — 2026-08-19 (TASK-20260819-gmail-starter, ADR-0039): the second pinned entry
+
+The `gmail` entry pins three scopes: `gmail.modify`, `gmail.settings.basic`,
+`gmail.send`. Recorded here because rule 1 requires it — a pin is only legitimate as
+reviewed registry data with an ADR behind it, and this file is the roster. The full
+argument (why these three, why not `https://mail.google.com/`, the probed
+`client_secret`, the walkthrough's provider caveats) lives in
+[ADR-0039](0039-gmail-starter-scopes-and-governed-cleanup.md).
+
+**What this amendment adds to the ADR-0028 doctrine, beyond a second row:**
+
+**A pin can be load-bearing for what an app CANNOT do.** The Spotify pin was
+subtractive-by-omission — `user-read-email` excluded because nothing needed it. The
+Gmail pin uses omission as a *mechanism*: withholding the full-access
+`https://mail.google.com/` scope is what makes "Inbox Copilot never permanently
+deletes mail" a property of the minted token rather than a promise kept by app code.
+Rule 1's "a scope the user never sees" harm has a mirror image worth naming — **a
+scope the user grants that the app promises not to use**. Both are silent-privilege
+smells. A scope set should be the smallest that makes the shipped functionality
+reachable (the 2026-08-19 Spotify amendment) *and* the smallest that leaves the
+app's stated limits enforceable rather than merely intended.
+
+**The wizard-completeness lesson.** Gmail had been resolvable since the well-known
+sweep — right endpoints, right hosts, PKCE, loopback — and was still unconnectable:
+no scopes meant a token that reads nothing, and no `fields` meant a credential screen
+with zero inputs (the wizard renders `fields ?? []` and `generateAuthUrl` has no
+stored-`client_id` fallback). `docs/next-steps.md` item (7) had recorded the dead-end;
+nothing failed, because nothing tested that a registry entry is *sufficient* rather
+than merely *present*. An entry is connectable only when scopes, fields, and
+walkthrough are all pinned together.
+
+**Consent tradeoff, stated:** every Gmail-connected Snug app's token can read, modify,
+trash, and mark-spam mail, create filters, and send mail as the user. The consent
+screen lists all three scopes and the review screen renders them before any approval.
+Permanent deletion is not grantable through this entry.
+
+**Consequence:** rule 3 applies unchanged — any existing `gmail` row (none known
+pre-launch) stages a diff and re-consents once, tokens invalidated before promotion.

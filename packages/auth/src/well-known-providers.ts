@@ -583,6 +583,75 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     desktopRedirectPosture: 'loopback',
     apiHosts: ['gmail.googleapis.com'],
     authorizeParams: { ...GOOGLE_AUTHORIZE_PARAMS },
+    // ADR-0039 (TASK-20260819-gmail-starter) — the SECOND ADR-0028 pin, and the entry
+    // that turned this row from "resolvable" into "connectable": before this change the
+    // Gmail journey dead-ended (no scopes → a token that reads nothing; no fields → a
+    // wizard credential screen with zero inputs, since it renders `fields ?? []`).
+    //
+    // Three scopes, each load-bearing for the Inbox Copilot starter:
+    //   gmail.modify        — the cleanup core: read, label, trash, mark-spam.
+    //   gmail.settings.basic — auto-trash rules and sender blocking ARE Gmail FILTERS,
+    //                          a settings resource; gmail.modify cannot create one.
+    //   gmail.send          — the mailto: half of List-Unsubscribe, as a confirmed write.
+    //
+    // NOT pinned, deliberately: `https://mail.google.com/`. It is the only Gmail scope
+    // that permits permanent deletion (`messages.delete`/`batchDelete`). Withholding it
+    // makes "your mail is only ever moved to Trash" a property of the MINTED TOKEN
+    // rather than a promise kept by app code (ADR-0039 D3).
+    scopes: [
+      'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/gmail.settings.basic',
+      'https://www.googleapis.com/auth/gmail.send',
+    ],
+    // BOTH credentials, unlike the Spotify entry above — and the difference is probed,
+    // not assumed. PROBED 2026-08-19: Google's native-app documentation lists
+    // `client_secret` as "Optional" in the code-exchange parameter table, but the token
+    // endpoint REFUSES a Desktop-client exchange without it (`client_secret is missing.`)
+    // even when a valid `code_verifier` is present. Google's own position is that an
+    // installed app's secret "is not treated as a secret" — it ships inside every
+    // distributed desktop binary — so collecting it is the provider's intended posture,
+    // not a C1 compromise: it lives in the user's own file beside their tokens, never
+    // enters the iframe, the LLM, or a publisher. GitHub's `oauth_app` option is the
+    // in-repo precedent for a secret-collecting field. (The Coinbase lesson — a stale
+    // docs page read as truth — is exactly why this was probed before the copy below
+    // was written.)
+    fields: [
+      {
+        key: 'client_id',
+        label: 'Client ID',
+        type: 'text',
+        description: 'From the OAuth client you create below. Long, ends in .apps.googleusercontent.com.',
+      },
+      {
+        key: 'client_secret',
+        label: 'Client secret',
+        type: 'password',
+        description:
+          'Shown beside the Client ID. Google issues one even for desktop apps and refuses sign-in without it. It stays in your own file.',
+      },
+    ],
+    // Wizard-grade walkthrough — registry data, never wizard component copy (AL-04 D5).
+    // Written for someone who has never opened Google Cloud Console: every step names
+    // the screen, and the two provider traps are disclosed rather than discovered
+    // (Spotify development-mode precedent).
+    registration: {
+      // VERIFIED 2026-08-19: Google's consolidated Auth Platform clients page — the
+      // Cloud Console redirects the older /apis/credentials path here.
+      consoleUrl: 'https://console.cloud.google.com/auth/clients',
+      instructions: [
+        'Open the Google Cloud console (link above) and sign in with the SAME Google account whose mail you want to manage. If you have never used it before, accept the terms — it is free.',
+        'Create a project: click the project dropdown in the top bar, choose "New project", give it any name (e.g. "My Snug Inbox"), and create it. This is YOUR project; Snug never sees it.',
+        'Enable the Gmail API: search "Gmail API" in the console search bar, open it, and click "Enable". Without this step sign-in succeeds and every request is refused.',
+        'Set up the consent screen: choose "External" user type, fill in an app name and your own email where asked, and add YOUR OWN email address under "Test users". Skip every optional field.',
+        'Create the credentials: on the Clients page, click "Create client", choose application type "Desktop app", name it anything, and create. Copy the Client ID and the Client secret into the fields below — Google shows both, and desktop sign-in needs both.',
+        'When you first sign in, Google shows an "unverified app" warning — this is expected for a project only you use. Click "Advanced", then "Continue" to your app.',
+        // VERIFIED 2026-08-19 against Google's OAuth refresh-token expiration rules: a
+        // project left in "Testing" publishing status issues refresh tokens that expire
+        // after 7 days. This is the one trap that presents as "Snug broke for no
+        // reason" a week after a successful setup, so it is disclosed here with its fix.
+        'One thing to know: while your project stays in "Testing" status, Google expires the connection after 7 days and you will be asked to sign in again. To avoid that, open the consent screen page and click "Publish app" — for a project only you use, no Google review is required.',
+      ],
+    },
   },
   googledrive: {
     displayName: 'Google Drive',

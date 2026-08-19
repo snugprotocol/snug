@@ -43,6 +43,22 @@ const SPOTIFY_SCOPES = [
   'user-read-recently-played',
 ];
 
+// The ADR-0039 set — the SECOND ADR-0028 pin (TASK-20260819-gmail-starter). Ordered:
+// the review and consent screens render them in this order, widest-first.
+//
+// Three scopes, each load-bearing for Inbox Copilot: `gmail.modify` is the cleanup core
+// (read, label, trash, mark-spam); `gmail.settings.basic` is what auto-trash rules and
+// sender blocking actually ARE (Gmail filters are a settings resource, not a message
+// op); `gmail.send` sends the mailto: half of List-Unsubscribe as a confirmed write.
+const GMAIL_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/gmail.settings.basic',
+  'https://www.googleapis.com/auth/gmail.send',
+];
+
+/** The full-access scope ADR-0039 D3 REFUSES — the only Gmail scope that can permanently delete. */
+const GMAIL_FULL_ACCESS_SCOPE = 'https://mail.google.com/';
+
 /**
  * The shipped starter manifest — READ from the file that ships, not retyped (Gate-5
  * review: a hand copy claiming "byte-shaped" keeps passing after the real manifest
@@ -196,5 +212,179 @@ describe('AC1 — the WHOLE production chain: manifest → admission → spec �
     expect(url.searchParams.get('scope')).toBe(SPOTIFY_SCOPES.join(' '));
     // PKCE stays active through the same chain — the scope seat must not displace it.
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────────
+// TASK-20260819-gmail-starter (ADR-0039) — the SECOND ADR-0028 pin.
+//
+// RED-FIRST at Gate 3 against a `gmail` entry that pins no scopes, no fields, and no
+// registration walkthrough — recorded in next-steps item (7) as a wizard journey that
+// dead-ends. The starter cannot connect until all three land, so all three are pinned
+// here rather than left to the app.
+// ───────────────────────────────────────────────────────────────────────────────
+
+describe('ADR-0039 AC1 — the Gmail entry pins its reviewed scope set', () => {
+  it('pins exactly the ADR-0039 set, in its recorded order', () => {
+    expect(lookupWellKnownProvider('Gmail')?.scopes).toEqual(GMAIL_SCOPES);
+  });
+
+  it('NEGATIVE (ADR-0039 D3): never pins https://mail.google.com/ — trash-only is STRUCTURAL', () => {
+    // The load-bearing negative of the whole starter. `messages.delete`/`batchDelete`
+    // require the full-access scope; withholding it means the minted token CANNOT
+    // permanently delete a user's mail no matter what the app code asks for. If a later
+    // edit adds this scope, "your mail is only ever moved to Trash" stops being a
+    // property of the token and becomes a promise made by app code — a demotion the
+    // ADR forbids, and one no app-side test could catch.
+    expect(lookupWellKnownProvider('Gmail')?.scopes).not.toContain(GMAIL_FULL_ACCESS_SCOPE);
+  });
+
+  it('pins gmail.settings.basic — auto-trash rules and sender blocking ARE filters', () => {
+    // Named explicitly: it is the least obvious of the three (a reader reasonably
+    // assumes gmail.modify covers "block this sender"), so a future trim should fail
+    // with a sentence naming the feature that dies rather than an array diff.
+    expect(lookupWellKnownProvider('Gmail')?.scopes).toContain(
+      'https://www.googleapis.com/auth/gmail.settings.basic',
+    );
+  });
+
+  it('the sibling Google entries stay unpinned — this pin is Gmail-shaped, not Google-wide', () => {
+    expect(lookupWellKnownProvider('Google')?.scopes).toBeUndefined();
+    expect(lookupWellKnownProvider('Google Drive')?.scopes).toBeUndefined();
+  });
+});
+
+describe('ADR-0039 AC2 — the Gmail entry ships the credential fields the wizard renders', () => {
+  it('pins BOTH client_id and client_secret — Google refuses the exchange without the secret', () => {
+    // PROBED 2026-08-19 (task step 0). Google's native-app parameter table lists
+    // `client_secret` as "Optional", but the token endpoint REFUSES a Desktop-client
+    // code exchange without it — `client_secret is missing.` — even with a valid
+    // `code_verifier`. Google's own guidance is that an installed app's secret "is not
+    // treated as a secret"; the Coinbase lesson (a stale docs page read as truth) is
+    // exactly why this was probed before the walkthrough copy was written. Pinning only
+    // `client_id` here would ship a wizard that completes consent and then dies at the
+    // exchange with a provider error the user cannot act on.
+    const fields = lookupWellKnownProvider('Gmail')?.fields;
+    expect(fields?.map((field) => field.key)).toEqual(['client_id', 'client_secret']);
+  });
+
+  it('every pinned field is renderable — a key, a label, and a type the wizard understands', () => {
+    for (const field of lookupWellKnownProvider('Gmail')?.fields ?? []) {
+      expect(field.key, 'a field with no key cannot be stored').toMatch(/^\S+$/);
+      expect(field.label.length, `${field.key}: needs a human label`).toBeGreaterThan(0);
+      expect(['text', 'password'], `${field.key}: unknown input type`).toContain(field.type);
+    }
+  });
+
+  it('the client_secret field is masked — a pasted secret never renders in clear text', () => {
+    const secret = lookupWellKnownProvider('Gmail')?.fields?.find((f) => f.key === 'client_secret');
+    expect(secret?.type).toBe('password');
+  });
+});
+
+describe('ADR-0039 AC2 — the Gmail walkthrough is layman-grade and provider-honest', () => {
+  it('links the Google Cloud console', () => {
+    expect(lookupWellKnownProvider('Gmail')?.registration?.consoleUrl).toBe(
+      'https://console.cloud.google.com/auth/clients',
+    );
+  });
+
+  it('walks the whole journey — project, Gmail API, consent screen, Desktop client, credentials', () => {
+    const steps = lookupWellKnownProvider('Gmail')?.registration?.instructions ?? [];
+    expect(steps.length, 'a five-stop journey cannot be four steps').toBeGreaterThanOrEqual(5);
+    const walkthrough = steps.join('\n').toLowerCase();
+    for (const beat of ['project', 'gmail api', 'desktop', 'client id', 'client secret']) {
+      expect(walkthrough, `the walkthrough never mentions: ${beat}`).toContain(beat);
+    }
+  });
+
+  it('discloses the 7-day Testing-mode expiry — the Spotify development-mode precedent', () => {
+    // Spotify's entry documents its development-mode traps (five users, Premium owner)
+    // because a silent provider limit surfaces as "Snug is broken". Google's equivalent
+    // is harsher and time-delayed: a project left in Testing status mints refresh tokens
+    // that expire after SEVEN DAYS, so a connection that worked all week dies on day
+    // eight and the user has no way to know why.
+    const walkthrough = (lookupWellKnownProvider('Gmail')?.registration?.instructions ?? []).join('\n');
+    expect(walkthrough).toMatch(/7 days|seven days/i);
+    expect(walkthrough.toLowerCase()).toContain('testing');
+  });
+
+  it('never promises "no client secret" — the copy must match the probed exchange', () => {
+    // The Spotify walkthrough legitimately says "PKCE needs no secret". Transplanting
+    // that sentence onto Google would be a lie the user discovers at the exchange.
+    const walkthrough = (lookupWellKnownProvider('Gmail')?.registration?.instructions ?? []).join('\n');
+    expect(walkthrough).not.toMatch(/no (client )?secret|never needs? (a )?(client )?secret/i);
+  });
+});
+
+describe('ADR-0039 AC1 — the whole production chain for Gmail: entry → spec → authorize URL', () => {
+  it('the authorize URL carries the pinned scopes, PKCE, and Google offline consent', async () => {
+    const entry = WELL_KNOWN_PROVIDERS_REGISTRY['gmail']!;
+    const requirement = requirementFromRegistryEntry(entry, 'Gmail', 'gmail');
+    expect(requirement.scopes).toEqual(GMAIL_SCOPES);
+    expect(requirement.scopes, 'the registry is a module singleton — emit copies').not.toBe(
+      entry.scopes,
+    );
+
+    const spec = requirementToSpec(requirement);
+    expect(spec, 'an oauth requirement must produce a spec').not.toBeNull();
+
+    const service = new OAuthService({
+      store: new UserDbCredentialStore(memoryQuartet()),
+      redirectUriProvider: { redirectUri: () => 'http://127.0.0.1:41420/callback' },
+      fetch: async () => new Response('{}', { status: 200 }),
+    });
+    const start = await service.generateAuthUrl({
+      appId: 'app-gmail-starter',
+      spec: spec!,
+      clientCreds: { client_id: 'CID' },
+    });
+    const url = new URL(start.authorizeUrl);
+    expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(url.searchParams.get('scope')).toBe(GMAIL_SCOPES.join(' '));
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    // The refresh token the whole connection depends on only arrives with both of these
+    // — they are why the entry carries GOOGLE_AUTHORIZE_PARAMS.
+    expect(url.searchParams.get('access_type')).toBe('offline');
+    expect(url.searchParams.get('prompt')).toBe('consent');
+  });
+
+  it('a bare starter manifest under the Gmail brand receives the pinned scopes and fields', () => {
+    // The manifest examples/gmail/connection.json ships BARE (hue precedent); admission's
+    // registry substitution is what turns it into a connectable requirement. Declared
+    // inline here rather than read from disk: this suite is RED before the starter
+    // exists, and Slice A must be able to go green on its own.
+    const bare: ConnectionRequirement = {
+      slot: 'gmail',
+      provider: { name: 'Gmail' },
+      kind: 'oauth2_auth_code',
+      declaredApiHosts: ['gmail.googleapis.com'],
+    };
+    const admitted = admitConnectionRequirement(bare, { channel: 'starter' });
+    expect(admitted.ok, 'the shipped manifest must stay admissible').toBe(true);
+    if (!admitted.ok) return;
+    expect(admitted.requirement.scopes).toEqual(GMAIL_SCOPES);
+    expect(admitted.requirement.fields?.map((f) => f.key)).toEqual(['client_id', 'client_secret']);
+    expect(admitted.requirement.registration?.consoleUrl).toBe(
+      'https://console.cloud.google.com/auth/clients',
+    );
+  });
+
+  it('REPLACES an authored widening — a borrower cannot smuggle in full mail access', () => {
+    // The ADR-0028 rule-2 REPLACE semantics, exercised on the scope this starter most
+    // needs kept out. A future app declaring `https://mail.google.com/` under the Gmail
+    // brand gets the pinned three and nothing else.
+    const greedy: ConnectionRequirement = {
+      slot: 'gmail',
+      provider: { name: 'Gmail' },
+      kind: 'oauth2_auth_code',
+      declaredApiHosts: ['gmail.googleapis.com'],
+      scopes: [GMAIL_FULL_ACCESS_SCOPE],
+    };
+    const admitted = admitConnectionRequirement(greedy, { channel: 'starter' });
+    expect(admitted.ok).toBe(true);
+    if (!admitted.ok) return;
+    expect(admitted.requirement.scopes).toEqual(GMAIL_SCOPES);
+    expect(admitted.requirement.scopes).not.toContain(GMAIL_FULL_ACCESS_SCOPE);
   });
 });

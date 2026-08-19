@@ -48,7 +48,8 @@ describe('registry entries', () => {
   // read) may pin a human-reviewed, ADR-recorded list. Everything NOT recorded in an
   // ADR still pins nothing, and that half of the old rule survives verbatim below.
   it('only ADR-0028-recorded entries pin scopes; every other entry still pins none', () => {
-    const ADR_0028_SCOPE_ENTRIES = new Set(['spotify']);
+    // `gmail` joins 2026-08-19 (TASK-20260819-gmail-starter, ADR-0039) — the second pin.
+    const ADR_0028_SCOPE_ENTRIES = new Set(['spotify', 'gmail']);
     for (const [key, entry] of Object.entries(WELL_KNOWN_PROVIDERS_REGISTRY)) {
       if (ADR_0028_SCOPE_ENTRIES.has(key)) {
         expect(entry.scopes, `${key}: an ADR-recorded scope pin must be a non-empty list`).toBeDefined();
