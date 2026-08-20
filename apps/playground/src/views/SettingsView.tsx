@@ -357,7 +357,11 @@ function DataCard(): ReactElement {
     setDataError(undefined);
     // Desktop names the portable file `.snug` (Decision 8) — same sqlite bytes, same
     // magic, only the suggested name changes; the web download keeps `.sqlite`.
-    const filename = getPlatform().kind === 'desktop' ? 'snug-user.snug' : 'snug-user.sqlite';
+    // ONE name on every platform (AC3). The old split — `.snug` on desktop, `.sqlite`
+    // on web — meant the same artifact arrived under two names, and the web import
+    // picker below did not even list `.snug`, so a file exported on desktop was greyed
+    // out when its owner tried to import it in a browser.
+    const filename = 'snug-user.snug';
     void exportUserFile(includeSecrets)
       .then((blob) => downloadBlob(blob, filename))
       .catch((err: unknown) => setDataError(err instanceof Error ? err.message : String(err)));
@@ -456,7 +460,7 @@ function DataCard(): ReactElement {
             import snug file
             <input
               type="file"
-              accept=".sqlite,application/x-sqlite3,application/octet-stream"
+              accept=".snug,.sqlite,application/x-sqlite3,application/octet-stream"
               style={{ display: 'none' }}
               onChange={(event) => onImport(event.target.files?.[0])}
             />

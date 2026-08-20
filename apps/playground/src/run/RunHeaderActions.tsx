@@ -1,5 +1,5 @@
 // RunHeaderActions.tsx — the per-app controls in the run header: which model this app
-// uses, its connections, and the .sqlite export.
+// uses, its connections, and the .snug export.
 //
 // Extracted from RunView so the cluster can be tested as a unit (RunView itself needs a
 // route, a user DB, a runner and an iframe to render at all). RunView keeps the
@@ -11,7 +11,7 @@
 //   1. A glyph is not a name. `🔌` announces as "electric plug" or as nothing, so each
 //      button carries an explicit `aria-label` — which is also what test and e2e
 //      locators find (`e2e/starters.spec.ts` looks up the export control by the
-//      accessible name "export .sqlite", so that string is load-bearing, not cosmetic).
+//      accessible name "export .snug", so that string is load-bearing, not cosmetic).
 //   2. `title` is the hover tooltip and NOTHING else. A title alone would leave the
 //      control unnamed to a screen reader — the same distinction the rail toggle in
 //      RunView already documents.
@@ -155,8 +155,8 @@ export function RunHeaderActions({
           className="btn-icon"
           data-testid="export-sqlite"
           // Kept verbatim: two e2e specs locate this button by this exact name.
-          aria-label="export .sqlite"
-          title="download this app’s database as a real .sqlite file"
+          aria-label="export .snug"
+          title="download this app’s database as a real .snug file"
         >
           ⤓
         </Button>

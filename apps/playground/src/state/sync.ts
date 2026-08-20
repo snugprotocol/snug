@@ -211,13 +211,28 @@ export function useSyncStatus(): SyncStatus {
 
 // ------------------------------------------------------------------ export/import
 
-/** Mandatory hub behavior (ADR-0009): one-click canonical `.sqlite` download. */
+/**
+ * Mandatory hub behavior (ADR-0009): one-click canonical `.snug` download.
+ *
+ * A PROTECTED file exports protected (D5): the artifact a user hands around, mails to
+ * themselves, or drops in cloud storage is the one most likely to end up somewhere they
+ * did not intend, so it carries the same protection the file on disk has.
+ *
+ * The MIME type follows the bytes (review S4). Labelling a container
+ * `application/x-sqlite3` would tell every tool on the user's machine it is an
+ * openable database, which it is not.
+ */
 export async function exportUserFile(includeSecrets: boolean): Promise<Blob> {
   const db = await getUserDb();
-  const bytes = await db.exportUserDb({ includeSecrets });
+  // Strip + VACUUM run on plaintext; sealing happens after, never before.
+  const plain = await db.exportUserDb({ includeSecrets });
+  const seal = db.sealForOrigin;
+  const bytes = seal === undefined ? plain : await seal(plain);
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
-  return new Blob([buffer], { type: 'application/x-sqlite3' });
+  return new Blob([buffer], {
+    type: seal === undefined ? 'application/x-sqlite3' : 'application/octet-stream',
+  });
 }
 
 /** Import replaces local state; imported settings are executable config (F15). */

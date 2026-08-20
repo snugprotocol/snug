@@ -536,7 +536,7 @@ export default function RunView(): ReactElement {
       return;
     }
     const name = reveal.phase === 'live' ? reveal.meta.displayName : 'snug-app';
-    downloadBlob(result.blob, `${name.replace(/[^a-z0-9-_ ]/gi, '').trim() || 'snug-app'}.sqlite`);
+    downloadBlob(result.blob, `${name.replace(/[^a-z0-9-_ ]/gi, '').trim() || 'snug-app'}.snug`);
   }, [db, id, reveal]);
 
   const onReset = useCallback((): void => {
