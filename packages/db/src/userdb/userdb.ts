@@ -27,6 +27,7 @@ import {
   USERDB_CONNECTIONS_TABLE,
   USERDB_DDL,
   USERDB_FILE,
+  USERDB_LEGACY_FILE,
   USERDB_INDEX_DDL,
   USERDB_LIMITS,
   USERDB_OPFS_DIR,
@@ -1121,7 +1122,22 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
   const config = options.locateWasm !== undefined ? { locateFile: (f: string) => options.locateWasm!(f) } : undefined;
   const SQL = await initSqlJs(config);
 
-  const stored = await backend.load(file);
+  // ADOPT-FORWARD (ADR-0042, AC1/AC2/AC22). The canonical name moved from
+  // `user.sqlite` to `user.snug`; a user upgrading has bytes only under the old name.
+  // Reading the legacy file when the canonical one is absent is the ONLY thing
+  // standing between them and a pristine empty database opening over real data —
+  // which throws nothing, logs nothing, and shows them an empty hub.
+  //
+  // Both reads go through `backend.load`, deliberately. It is the only slot-aware
+  // reader: on OPFS the bytes never live under a bare filename but in `<file>.slot-a`
+  // / `.slot-b` behind a `.ptr`, so a "cheap existence probe" on the raw name is
+  // silently wrong on the web path, where every existing user is.
+  //
+  // Adoption is READ-ONLY: nothing renames, copies or deletes the legacy file here.
+  // The next ordinary persist writes the canonical name, and the old file stays put
+  // as the user's own backup. Once the canonical file exists it always wins, so a
+  // stale legacy copy can never roll a user back.
+  const stored = (await backend.load(file)) ?? (file === USERDB_FILE ? await backend.load(USERDB_LEGACY_FILE) : undefined);
   if (stored !== undefined) {
     let candidate: Database | undefined;
     try {
