@@ -29,7 +29,8 @@ Two changes to the one artifact that *is* the product — the user's portable fi
 | **D5** | Encryption boundary | **At rest AND exports AND personal-origin sync** | *At-rest only* — the Dropbox copy is the most likely one to "fall into the wrong hands", which is the stated purpose. |
 | **D6** | Hub sync while encrypted | **Hub origin keeps receiving secrets-stripped PLAINTEXT; server untouched** | *Teach the hub `SNUGENC1`* — a real `apps/server` + spec-contract change for the LEAST sensitive copy (ADR-0014 already guarantees hub copies are secrets-free). *Disable hub sync* — removes a working feature. |
 | **D7** | Spec | **Both spec'd**: ADR-0042 (`.snug`) + ADR-0043 (container), plus staged amendment text in `spec-v0.2-userdb.md` | Container format is genuinely interop-normative: another hub MUST be able to detect an encrypted file and prompt, not treat it as corrupt. |
-| **D8** | Review depth | **Full High-tier walk**: fresh-context plan review before code, multi-angle diff review before merge | Precedent: the last High-tier task's plan review caught 2 blockers and its diff review caught 3 confirmed defects. |
+| **D8** | Review depth | **Full High-tier walk**: fresh-context plan review before code, multi-angle diff review before merge | Precedent: the last High-tier task's plan review caught 2 blockers and its diff review caught 3 confirmed defects. **It earned its cost again: 9 blockers, 3 of them data-loss.** |
+| **D9** | Re-scope after the review (2026-08-20) | **Keep D4 + D5 unchanged; fix all 9 blockers.** | The review recommended splitting the encrypted-sync half (removes B4, shrinks B2/B3). Owner re-affirmed the full scope with the blockers now known and specified. Recorded per the standing rule that a re-affirmed request is the owner's decision. |
 
 ### Acceptance criteria (each becomes at least one test)
 
@@ -53,6 +54,21 @@ Two changes to the one artifact that *is* the product — the user's portable fi
 15. An encrypted export is `SNUGENC1`; a hub-origin sync push is still **plaintext, secrets-stripped** (D6), and the sync content-hash gate still short-circuits an unchanged file (hash the plaintext, encrypt after).
 16. Importing a `SNUGENC1` file the user cannot unlock fails with a clear, non-destructive error — it must not clobber the current file.
 17. Negative/C-constraint tests: the passphrase and derived keys are **never** written into `snug_secrets`, never leave the host page, never enter an LLM payload, and never cross the runner bridge.
+
+**Acceptance criteria added by the plan review (Part 1 & 2)**
+21. **(B2)** On legacy adoption the sync sidecar migrates too (`<legacy>.sync.json` → `<canonical>.sync.json`) in the SAME adopt-forward step, idempotently — an upgraded sync user sees **no divergence banner** and no re-push on first launch.
+22. **(B1)** The legacy probe goes through `PersistenceBackend.load` (the only slot-aware reader). Test on a real `createOpfsBackend`: legacy bytes stored in `user.sqlite.slot-*` are found, and a later-saved `user.snug` wins on the next open.
+23. **(B3)** Dropbox migrates by a one-time `mode:'add'` copy of legacy→canonical, capturing the new revision and anchoring the sidecar to it — never a pull-legacy/push-canonical mismatch. A mixed-version second device is a **documented** consequence, stated in the ADR.
+24. **(B4)** `restoreFromOrigin` (`recovery.ts:54`) handles an encrypted container on the same seam as `pullMerge` — no second code path.
+25. **(B6)** The payload IV and every slot-wrap IV are **12 fresh CSPRNG bytes per operation** — never a counter, never derived. Two encryptions of identical plaintext differ in IV and ciphertext.
+26. **(B5)** The container header (magic → end of slot table) is bound as GCM **AAD** for both slot unwraps and the payload; a flipped header byte fails as a **specific damaged-file error**, never as "wrong passphrase".
+27. **(S2)** A structurally-invalid or truncated container reports **`corrupt`**, distinct from **`locked`** (wrong secret) — a damaged file must never tell the user their passphrase is wrong forever.
+28. **(B7)** `unlockUserDb(secret)` re-runs the open and resolves the **pending** ready-promise, so all four hung boot callers proceed. A `.snug` double-click while locked gives an explicit message — never a hang, never a restore-from-backup prompt.
+29. **(B8)** Protection is offered via its own `protectionOffered` setting key, **never** entangled with `desktopWelcomeDone`; the offer reaches web and desktop; "not now" is re-offered (not permanent).
+30. **(B9)** A database near `MAX_USERDB_BYTES` stays exportable **and importable** once encrypted — the cap accounts for ciphertext expansion (header + slots + IV + tag) rather than rejecting at `importUserDb`'s pre-check.
+31. **(S1)** The Recovery Key carries **≥128 bits** of entropy.
+32. **(S3)** All four `exportPayload()` call sites go through ONE `payloadFor(provider)` helper returning `{plaintextHash, wireBytes}`; the hash gate short-circuits on an **encrypted** origin.
+33. **(S4)** An encrypted export is not labelled `application/x-sqlite3`.
 
 **Out of scope**
 - Swapping the SQLite engine (no SQLCipher/wa-sqlite migration).
