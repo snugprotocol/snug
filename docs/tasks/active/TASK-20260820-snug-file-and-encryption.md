@@ -359,3 +359,20 @@ Settles two of the three open questions with numbers rather than guesses.
 - State: **full root suite green — 23/23 tasks.** playground 1337 · auth 915 · db 383 · knowledge 184 · sidecar 152 · desktop 140 · server 126 · adapters 130 · sdk 41 · protocol 344 · threat-model 139/139 · whitepaper 70/70. ~90 new tests.
 - Next step: `pnpm gate:local`, then the Gate 5 multi-angle diff review (D8), then PR.
 - Open questions: none. The `tauri.conf.json` mimeType question is resolved (now `application/octet-stream`, pinned by a test).
+
+### 2026-08-20 — Jeetu — session (Gate 5 diff review)
+
+**Fresh-context adversarial diff review (D8, second of two).** Two angles: cryptographic correctness and data loss. Every finding verified against the code before acceptance.
+
+**Crypto angle — no defect found**, and it was attacked rather than surveyed: 50 consecutive reseals produced 50 distinct IVs; the A/B slot scheme writes one seal to two slots (a copy, not a second encryption under a repeated nonce); AAD survives `rewrapPassphrase` byte-identically; the header checksum is computed and verified over the same bytes; `parse()` held under 200 fuzz rounds, forged slot counts, recomputed-checksum headers and truncation at every 7-byte step, always returning `locked`/`corrupt` and never `ok`; no key material reaches a log or an error message.
+
+**Four data-loss/wiring defects, all fixed and pinned:**
+- **D-2 (HIGH, the serious one).** `state/sync.ts` never passed `sealForOrigin` to `createSyncLoop`, so **ADR-0043's D5 promise did not hold in the shipping app** — a protected file synced to the user's own Dropbox as a readable database. `encrypted-sync.test.ts` passed because it wires the sealer itself: it proved the loop, not the product. New test asserts against the call the shipping code makes; lesson recorded.
+- **D-1 (HIGH).** `sealForOrigin` was a construction-time snapshot, stale in BOTH directions (enable → exports stay plaintext; disable → exports stay ciphertext keyed to a now-plaintext file). Now a getter, plus `resyncAfterProtectionChange()` to rebuild a running loop.
+- **D-3 (MEDIUM).** The corrupt-branch `openFresh` dropped the sealer, so "start fresh" over a damaged protected file silently rewrote `user.snug` as plaintext. Fresh db is now born protected; a corrupt non-container still starts plaintext.
+- **D-4 (MEDIUM).** `restoreFromOrigin` never forwarded secrets, killing corruption recovery from a protected origin at the moment it is most needed.
+
+**Also self-caught before the review returned:** the Recovery Key was 127.6 bits (26 symbols × log2(**30**), not 32) against a spec floor of 128 — and the test hid it by hardcoding `log2(32)`. Now 27 symbols = 132.5 bits, with entropy derived from the observed alphabet.
+
+- State: db **391/391**, playground **1341/1341**. `gate:local` **4/6 legs green** across two runs (workspace, smoke, rust, desktop — including the in-shell C2 checks and the no-secrets-in-DOM canary); `e2e` and `release` deselected.
+- Next step: full root suite, then PR.
