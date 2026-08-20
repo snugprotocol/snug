@@ -1,6 +1,6 @@
 # TASK-20260820-local-ci-gate: `gate:local` — one command that replaces the blind CI, plus the close-session automation
 
-- **Status**: planned (Gate-2 approved 2026-08-20; 3 owner decisions recorded below)
+- **Status**: in-review (Gate 3–5 done; `gate:local --all` verification running)
 - **Owner**: Jeetu
 - **Risk tier**: **HIGH** — auto-escalated. Touches CI/release config (`.github/workflows/ci.yml` is the reference this replaces) and creates the artifact that becomes the *sole* merge gate for a solo developer. A false green here is undetectable by construction: nothing downstream re-checks it.
 - **Branch**: `feat/TASK-20260820-local-ci-gate`
