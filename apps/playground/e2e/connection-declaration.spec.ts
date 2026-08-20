@@ -86,7 +86,14 @@ const sheet = (page: Page): ReturnType<Page['locator']> => page.locator('.sheet'
 /** Hub → the read-only starter → Install → the user's own copy. */
 async function installDemo(page: Page): Promise<FrameLocator> {
   await page.goto('/');
-  await page.getByRole('button', { name: `open ${FOLDER.replace(/-/g, ' ')}` }).click();
+  // Key on the tile's FOLDER identity, never on its rendered label. TASK-20260817
+  // gave starters display names (weather renders as "Should I?"), so the old
+  // `open ${FOLDER}` accessible-name lookup matched nothing and every T8/T8b test
+  // died at this line. Same defect and same fix as the 2026-08-18 starters-connect
+  // repair — `data-starter-name` is the identity key those specs already use.
+  await page
+    .locator(`[data-testid="starter-tile"][data-starter-name="${FOLDER.replace(/-/g, ' ')}"] .tile-card-button`)
+    .click();
   await expect(page).toHaveURL(new RegExp(`/run/starter--${FOLDER}`));
 
   await page.getByTestId('starter-install').click();

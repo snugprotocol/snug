@@ -332,7 +332,17 @@ test('the run surface carries NO inference affordance in any wizard session (P3-
   // Open the wizard from the RUN surface's connect CTA — the session Q5 names.
   await page.getByRole('link', { name: /run it/i }).click();
   await expect(page).toHaveURL(/\/run\//);
-  await page.getByRole('button', { name: /connect/i }).first().click();
+  // WAIT for the connect CTA before clicking it. The run surface mounts its
+  // connection banner ~500 ms after the URL settles (measured), so an immediate
+  // `.first().click()` raced it: strict mode resolved against an empty set and
+  // the wizard never opened, failing the assertion below with the misleading
+  // "element(s) not found" for the WIZARD rather than for the button.
+  //
+  // This passed alone and failed after its five siblings — the shape of a race,
+  // not of a broken assertion: a warm page won the race, a loaded one lost it.
+  const connectCta = page.getByRole('button', { name: /connect/i }).first();
+  await expect(connectCta).toBeVisible({ timeout: 20_000 });
+  await connectCta.click();
   await expect(wizard(page)).toBeVisible();
 
   await expect(wizard(page).getByRole('button', { name: /infer from docs/i })).toHaveCount(0);

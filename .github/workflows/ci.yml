@@ -8,13 +8,45 @@
 #              not "first-class" until this leg is green (roadmap A6 vs L6).
 #
 # High-tier surface (CI config): changes here need the full process gates.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# DORMANT since 2026-08-20 (TASK-20260820-local-ci-gate, owner decision).
+#
+# GitHub Actions is billing-blocked: since ~2026-08-18 every run failed in ~2 s
+# with ZERO steps executed and the annotation "The job was not started because
+# recent account payments have failed or your spending limit needs to be
+# increased". The owner has decided NOT to restore billing before launch; as the
+# solo developer he runs the equivalent locally via `pnpm run gate:local`.
+#
+# WHY THE TRIGGERS ARE REMOVED RATHER THAN THE FILE. A blocked run renders as an
+# ordinary red X on the PR page — indistinguishable from a real break without
+# opening the check annotation. That is worse than no gate: it trains the one
+# person reading it to merge past reds. Note it never actually BLOCKED anything —
+# this repo is private on a free org plan, so branch protection / required status
+# checks were never available (the API returns 403 "Upgrade to GitHub Pro").
+# The red X was pure noise with no enforcement behind it.
+#
+# THIS FILE IS STILL LOAD-BEARING. `scripts/gate-local.mjs` derives its leg list
+# from the jobs below and a test FAILS if a step here has no local counterpart
+# (AC3) — so this stays the contract the local gate is graded against, not dead
+# weight. Keeping it also makes restoration a one-line revert.
+#
+# TO RESTORE (do this before flip-public — an outside contributor's PR cannot be
+# gated by a command that only runs on the owner's Mac):
+#   1. Fix billing in Settings → Billing & plans.
+#   2. Restore the `on:` block below.
+#   3. Re-run a few recent PRs' workflows to confirm the suites actually pass in
+#      CI — no post-2026-08-18 merge has been machine-verified on Windows at all,
+#      which is exactly the leg ADR-0021 D8 depends on staying red for the RIGHT
+#      reason.
+# ────────────────────────────────────────────────────────────────────────────
 
 name: ci
 
+# Manual-only. Push/PR triggers are deliberately absent — see the block above.
+# Restoring them is the whole of step 2 in TO RESTORE.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

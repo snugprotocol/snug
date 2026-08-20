@@ -29,3 +29,9 @@ internal/
 # location depends on the working directory the server was launched from.
 data/
 apps/server/data/
+
+# Playwright run artifacts (traces, screenshots, .last-run.json). Regenerated on
+# every e2e run — the `gate:local` e2e leg would otherwise dirty the tree each time,
+# and a stray 1.5 MB trace.zip was committed this way on 2026-08-20.
+test-results/
+playwright-report/
