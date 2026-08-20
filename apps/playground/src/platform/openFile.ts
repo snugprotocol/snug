@@ -7,12 +7,15 @@
 // import, ever.
 
 import { importUserFile } from '../state/sync.js';
-import { restoreUserDbFromBytes, userDbNeedsRestore } from '../state/userdb.js';
+import { isEncryptedContainer } from '@snugprotocol/db';
+
+import { restoreUserDbFromBytes, userDbNeedsRestore, userDbStatusStore } from '../state/userdb.js';
 import { createStore, type Store } from '../state/store.js';
 import { getPlatform } from './platform.js';
 
-// The import gate wants EXACTLY the sqlite magic — deliberately narrower than the db
-// package's `looksComplete`, which also admits the sync-sidecar envelope.
+// The import gate wants a real user file: plain SQLite bytes, or a protected
+// `SNUGENC1` container (ADR-0043). Deliberately narrower than the db package's
+// `looksComplete`, which also admits the sync-sidecar envelope.
 const SQLITE_MAGIC = 'SQLite format 3' + String.fromCharCode(0);
 
 const hasSqliteMagic = (bytes: Uint8Array): boolean => {
@@ -22,6 +25,13 @@ const hasSqliteMagic = (bytes: Uint8Array): boolean => {
   }
   return true;
 };
+
+/**
+ * Without this, double-clicking a PROTECTED `.snug` was silently inert: no dialog, no
+ * error, nothing — the single worst way to fail, because the user cannot tell a broken
+ * app from a broken file.
+ */
+const isUserFilePayload = (bytes: Uint8Array): boolean => hasSqliteMagic(bytes) || isEncryptedContainer(bytes);
 
 /**
  * A plausible user-file path: not flag-shaped, not URL-shaped, and named `.snug`
@@ -52,7 +62,14 @@ export async function handleOpenedUserFile(
   confirm: (info: { path: string; needsRestore: boolean }) => Promise<boolean>,
 ): Promise<void> {
   if (!looksLikeUserFilePath(path)) return;
-  if (!hasSqliteMagic(bytes)) return;
+  if (!isUserFilePayload(bytes)) return;
+  // A LOCKED database cannot import (importUserFile awaits getUserDb(), which never
+  // resolves while locked) and must not be offered restore-from-backup either — that
+  // would answer a forgotten passphrase by overwriting good data. Say so and stop.
+  if (userDbStatusStore.get().state === 'locked') {
+    openUserFileErrorStore.set('unlock this Snug file first, then open the one you want to import');
+    return;
+  }
   const needsRestore = userDbNeedsRestore();
   if (!(await confirm({ path, needsRestore }))) return;
   // Copy into a fresh ArrayBuffer-backed view — importUserFile wants an ArrayBuffer

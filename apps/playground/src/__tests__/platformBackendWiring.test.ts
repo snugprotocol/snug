@@ -61,7 +61,11 @@ describe('platform userdb backend — bootUserDb (W2b item 1)', () => {
     const userdb = await import('../state/userdb.js');
     await userdb.bootUserDb();
 
-    expect(recording.calls, 'the userdb open must read through the platform backend').toContain('load:user.sqlite');
+    expect(recording.calls, 'the userdb open must read through the platform backend').toContain('load:user.snug');
+    // ADR-0042: when the canonical file is absent the open ALSO probes the pre-rename
+    // name through the same backend, which is what carries an upgrading user's data
+    // forward instead of silently handing them an empty database.
+    expect(recording.calls, 'the legacy name must be probed through the backend too').toContain('load:user.sqlite');
     expect(userdb.userDbStatusStore.get()).toEqual({ state: 'ready' });
     vi.doUnmock('../run/wasm.js');
   });
@@ -95,8 +99,8 @@ describe('platform userdb backend — the sync sidecar (W2b item 1)', () => {
 
     await sync.setSyncOrigin('hub');
 
-    expect(recording.calls, 'sidecar read must hit the platform backend').toContain('load:user.sqlite.sync.json');
-    expect(recording.calls, 'sidecar write must hit the platform backend').toContain('save:user.sqlite.sync.json');
+    expect(recording.calls, 'sidecar read must hit the platform backend').toContain('load:user.snug.sync.json');
+    expect(recording.calls, 'sidecar write must hit the platform backend').toContain('save:user.snug.sync.json');
     vi.restoreAllMocks();
   });
 });

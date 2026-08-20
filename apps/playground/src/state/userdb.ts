@@ -6,6 +6,7 @@
 import {
   openUserDb,
   type ConnectionAdmissionGate,
+  type ContainerSecrets,
   type OpenUserDbResult,
   type UserDb,
 } from '@snugprotocol/db';
@@ -39,6 +40,12 @@ export type UserDbStatus =
   | { state: 'corrupt'; quarantinedFile: string; message: string }
   | { state: 'unsupported'; foundVersion: number; message: string }
   /**
+   * The file is protected and no secret has opened it yet (ADR-0043). Unlike every
+   * other non-ready state this one is meant to be RESOLVED rather than recovered from:
+   * the file is healthy, nothing was quarantined, and `unlockUserDb` is the way out.
+   */
+  | { state: 'locked'; message: string }
+  /**
    * `openUserDb` REJECTED (TASK-20260812 P3 item 7) — the desktop file backend's
    * `load` throws for magic-less/torn bytes, deliberately distinct from the
    * quarantining status:'corrupt' path. The file on disk was NOT touched; the UI
@@ -60,11 +67,16 @@ function ensureReadyPromise(): Promise<UserDb> {
   return readyPromise;
 }
 
-function attemptOpen(): void {
+function attemptOpen(secrets?: ContainerSecrets): void {
   // Desktop installs its file backend through the platform seam (Decision 7); web
   // passes nothing and keeps the package's OPFS detection byte-for-byte (AC10).
   const backend = getPlatform().userdbBackend;
-  void openUserDb({ locateWasm, admissionGate, ...(backend !== undefined ? { backend } : {}) })
+  void openUserDb({
+    locateWasm,
+    admissionGate,
+    ...(backend !== undefined ? { backend } : {}),
+    ...(secrets !== undefined ? { secrets } : {}),
+  })
     .then((result) => {
       if (result.status === 'ok') {
         userDbStatusStore.set({ state: 'ready' });
@@ -72,8 +84,10 @@ function attemptOpen(): void {
       } else if (result.status === 'corrupt') {
         corruptResult = result;
         userDbStatusStore.set({ state: 'corrupt', quarantinedFile: result.quarantinedFile, message: result.message });
-      } else {
+      } else if (result.status === 'unsupported') {
         userDbStatusStore.set({ state: 'unsupported', foundVersion: result.foundVersion, message: result.message });
+      } else {
+        userDbStatusStore.set({ state: 'locked', message: result.message });
       }
     })
     .catch((err: unknown) => {
@@ -107,6 +121,38 @@ export function retryUserDbBoot(): void {
 }
 
 /**
+ * Hand a secret to a locked file and re-run the SAME open (AC28, review B7).
+ *
+ * This exists because there was otherwise no door. `retryUserDbBoot` only fires on
+ * 'load-failed', and `bootUserDb` latches after its first call — so an unlock screen
+ * would have had nowhere to send the passphrase, and the four boot callers awaiting
+ * `getUserDb()` would have hung forever behind a screen that could not release them.
+ *
+ * The pending ready-promise is deliberately PRESERVED across the attempt, so those
+ * waiters resolve the moment an attempt succeeds rather than being abandoned.
+ *
+ * Resolves `true` when the file opened, `false` when the secret did not fit. A wrong
+ * secret is not an error to throw about — it is the expected outcome of a typo, and
+ * the user simply tries again. There is deliberately NO attempt limit: an attacker
+ * holding the file can guess offline as fast as they like, so a lockout would punish
+ * only the honest owner who has no reset link and no support desk.
+ */
+export async function unlockUserDb(secrets: ContainerSecrets): Promise<boolean> {
+  if (userDbStatusStore.get().state !== 'locked') return userDbStatusStore.get().state === 'ready';
+  ensureReadyPromise();
+  userDbStatusStore.set({ state: 'opening' });
+  return new Promise<boolean>((resolve) => {
+    const stop = userDbStatusStore.subscribe(() => {
+      const status = userDbStatusStore.get();
+      if (status.state === 'opening') return;
+      stop();
+      resolve(status.state === 'ready');
+    });
+    attemptOpen(secrets);
+  });
+}
+
+/**
  * Is the database in a state where the normal import path CANNOT run?
  *
  * `importUserFile` starts by awaiting `getUserDb()`, and that promise deliberately
@@ -117,6 +163,10 @@ export function retryUserDbBoot(): void {
  */
 export function userDbNeedsRestore(): boolean {
   const state = userDbStatusStore.get().state;
+  // 'locked' is deliberately ABSENT (AC28). This predicate drives "your file is
+  // unreadable — restore a backup", and offering that to someone who mistyped a
+  // passphrase would coach them into overwriting perfectly good data with an older
+  // copy. A locked file is healthy; the unlock screen owns it.
   return state === 'corrupt' || state === 'unsupported' || state === 'load-failed';
 }
 
