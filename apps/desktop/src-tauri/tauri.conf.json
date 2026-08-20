@@ -38,7 +38,7 @@
         "ext": ["snug"],
         "name": "Snug data file",
         "description": "Snug portable data file",
-        "mimeType": "application/x-sqlite3",
+        "mimeType": "application/octet-stream",
         "role": "Editor",
         "rank": "Owner"
       }

@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 424" role="img" aria-label="The user database layout: hub-namespace tables and native per-app tables inside one SQLite file">
   <!-- file outline -->
   <rect x="16" y="34" width="688" height="342" rx="10" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.8"/>
-  <text x="32" y="58" class="f-title">user.sqlite</text>
+  <text x="32" y="58" class="f-title">user.snug</text>
   <text x="122" y="58" class="f-tiny">— one file per user · PRAGMA user_version = 2 · cap MAX_USERDB_BYTES (64 MiB)</text>
 
   <!-- hub namespace -->

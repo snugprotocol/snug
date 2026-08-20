@@ -639,7 +639,7 @@ their own cost model.</p>
 </div>
 
 <p>If applications are the user's, their data must be too — and in a form that outlives any
-particular host. Snug's answer is a single SQLite file per user, <code>user.sqlite</code>,
+particular host. Snug's answer is a single SQLite file per user, <code>user.snug</code>,
 which is the canonical artifact. <code>PRAGMA user_version</code> carries the schema version;
 migrations are forward-only; total size is bounded by <code>MAX_USERDB_BYTES</code>, 64 MiB in
 the current draft. Figure 5 shows what that file contains.</p>
@@ -727,7 +727,7 @@ fragile and injection-prone, and the embedded engine exposes no authorizer with 
 validate the result.</p>
 
 <p>Per-application export follows directly: materialise, then export. The user receives a
-standalone <code>.sqlite</code> file with natural table names — their application's data, in a
+standalone <code>.snug</code> file with natural table names — their application's data, in a
 form with no dependency on Snug at all.</p>
 
 <h3>Host obligations</h3>

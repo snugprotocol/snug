@@ -184,7 +184,7 @@ function checkRemapAbsentFromBundle() {
 /**
  * THE CLOSE-FLUSH PROOF (ADR-0021 §5, whole-surface review finding 4).
  *
- * Two shell processes over ONE `~/Snug/user.sqlite` in a fresh throwaway home:
+ * Two shell processes over ONE `~/Snug/user.snug` in a fresh throwaway home:
  *
  *   persist-write   mutates the db and leaves the write in the 250ms debounce
  *                   (never calls flush), then closes the window — which fires
@@ -316,7 +316,7 @@ async function main() {
   await waitForStub();
 
   // 4. Launch the shell in gate mode, isolated: a throwaway HOME so the
-  // journey's user.sqlite never touches the real ~/Snug.
+  // journey's user.snug never touches the real ~/Snug.
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'snug-shell-gate-'));
   const resultsPath = path.join(workDir, 'gate-results.json');
   const fakeHome = path.join(workDir, 'home');

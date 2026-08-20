@@ -13,7 +13,7 @@
   <text x="360" y="145" text-anchor="middle" class="f-title">End user</text>
   <text x="360" y="165" text-anchor="middle" class="f-sub">owns apps, data, and chats</text>
   <rect x="292" y="178" width="136" height="36" rx="5" fill="#fff" stroke="#a8712a" stroke-width="1.2"/>
-  <text x="360" y="196" text-anchor="middle" class="f-mono">user.sqlite</text>
+  <text x="360" y="196" text-anchor="middle" class="f-mono">user.snug</text>
   <text x="360" y="208" text-anchor="middle" class="f-tiny">ONE portable file</text>
 
   <!-- LLM provider -->
