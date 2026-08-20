@@ -26,6 +26,7 @@ import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
 import { NetConfirmDialog } from './run/NetConfirmDialog.js';
 import { OpenUrlConfirmDialog } from './run/OpenUrlConfirmDialog.js';
 import { Button } from './ui/Button.js';
+import { UnlockScreen } from './vault/UnlockScreen.js';
 import { Logo } from './ui/Logo.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { BuilderView } from './views/BuilderView.js';
@@ -60,6 +61,13 @@ export function App(): ReactElement {
     void initSync();
     void refreshAuth();
   }, []);
+
+  if (dbStatus.state === 'locked') {
+    // Before the shell renders anything else. A protected file is healthy and waiting
+    // for a secret — so this is a door, not an error screen, and the rest of the hub
+    // simply does not exist until it opens.
+    return <UnlockScreen />;
+  }
 
   if (dbStatus.state === 'load-failed') {
     // P3 item 7 — the boot open REJECTED (torn/magic-less file refused by the file
