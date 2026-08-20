@@ -1,0 +1,406 @@
+# Snug — Threat Model
+
+- **Version:** 1.0 · **Date:** 2026-08-20 · **Task:** TASK-20260820-threat-model-v1
+- **Status:** current as of commit-time. This document is audited, not transcribed — every
+  enforcement claim below was checked against the code by an adversarial pass that tried to
+  break it, and two defects that pass found were fixed before this file was written.
+- **Reporting:** [SECURITY.md](../SECURITY.md) · **security@snugprotocol.org**
+
+---
+
+## How to read this
+
+Snug's security claims are meant to be falsifiable, so this document is organised to make
+falsifying them cheap. Two rules govern it:
+
+**A promise with no named enforcement point is not an invariant.** §5 gives every enforced
+invariant a file that enforces it and a test that fails if it regresses. Anything that could
+not carry both was moved to §6 — the residuals — rather than being softened into a sentence
+that sounds reassuring and commits to nothing.
+
+**§6 has equal standing with §5.** A threat model that lists only wins reads as marketing.
+The residuals are the part a reviewer deciding whether to trust this system should read
+first, and several of them are sharp. Two are known defects on a platform we therefore do
+not ship; one is a guard documented at a higher altitude than it is implemented.
+
+If you are evaluating whether to rely on Snug, read §2 (what is actually protected), then
+§6 (what is not).
+
+---
+
+## 1. Scope
+
+**In scope: the reference implementation in this repository** — the protocol bindings, the
+iframe runner, the SDK, the per-app database, the connected-fetch executor, the credential
+store, the Playground, the reference server, and the macOS desktop shell.
+
+**The shipped desktop surface is macOS only.** This is not a roadmap gap; it is a security
+decision recorded in [ADR-0021 D8's addendum](decisions/0021-desktop-shell-transports.md).
+Windows is a platform on which C2 is *known to be false* — see R-5 in §6. We would rather a
+Windows user learn that here than from an install that quietly breaks the sandbox.
+
+**Out of scope:** vulnerabilities in LLM providers, browsers, or OS/WebView internals
+(reported upstream; mitigated where we can); a user deliberately exporting with secrets
+included, or pasting their own key into an unrelated malicious site; secrets present in a
+personal sync origin the user connected — that is [ADR-0014](decisions/0014-credentials-local-first.md)
+custody working as designed; denial of service against the user's own browser tab or own
+self-hosted server; and third-party self-hosted infrastructure misconfiguration.
+
+**This document consolidates eight per-change threat-model deltas** (§8). A delta is written
+for someone who already knows the system and is reading one change; this is written for a
+stranger deciding whether to trust the whole thing. Where a delta's residual is restated
+here it is marked as inherited, because a model that re-sells an old residual as new is as
+misleading as one that hides it.
+
+---
+
+## 2. Assets
+
+What an attacker would actually want, in rough order of severity:
+
+| Asset | Where it lives | What its loss means |
+|---|---|---|
+| **Credentials** — API keys, OAuth access/refresh tokens, client secrets, signing keys, minted helper tokens | `snug_secrets` in the user's own SQLite file, under the `auth:` namespace | Access to the user's connected accounts. The severity anchor for C1. |
+| **The user's app data** | Per-app SQLite namespaces in the same file | Personal records: finances, messages, journals. |
+| **Other people's messages** | The WhatsApp helper's own store, and thread content reaching an LLM | Third parties who never consented and cannot opt out. See §6 R-9. |
+| **The user file itself** (`~/Snug/user.sqlite`) | Plaintext on disk, OS user account is the perimeter | Everything above at once. |
+| **The host page's execution context** | The browser tab / the shell's main window | Total compromise — it holds every credential and calls fetch. See §6 R-1. |
+| **The user's attention at a consent gate** | The wizard's review screen; the confirm dialog | The last wall behind several accepted residuals. If review copy degrades, those trades stop paying. |
+
+---
+
+## 3. Adversaries
+
+| # | Adversary | Capability assumed | Primary defence |
+|---|---|---|---|
+| **A1** | **A hostile micro app** — LLM-authored or user-installed, running in the iframe | Arbitrary JavaScript, including `eval`; full control of its own document | C2: opaque origin, `connect-src 'none'`, no IPC reach |
+| **A2** | **A hostile or compromised provider** on a host the user approved | Chooses every response byte; may echo submitted parameters; may run a debug/echo endpoint | Frozen host ceiling; response scrub; bounded error extraction |
+| **A3** | **A prompt injector** — text arriving via provider bodies, app rows, or other people's WhatsApp messages | Writes text the model reads as though it were instruction | Fenced untrusted blocks; confirm gate on every mutating call; lane asymmetry (§6 R-7) |
+| **A4** | **A hostile connection requirement** — authored by an LLM steered by A3 | Proposes provider name, hosts, field labels, header templates | Admission's borrow ban; template lint; verbatim human review |
+| **A5** | **A hostile file** — an import, a `.snug` double-click, a sync image from an untrusted donor | Chooses every byte of a user database | Import demotes to `declared`; contract reconciliation; single-use open allowlist |
+| **A6** | **A local process** running as the same user | Reads any file the user can read | Explicitly *not* defended — see §6 R-3. The OS user account is the perimeter. |
+| **A7** | **A LAN-local attacker**, present at first device pairing | Answers at the typed address before the real bridge | TOFU pin; physical button press. Residual R-6. |
+
+**Deliberately not an adversary: the hub.** [ADR-0013](decisions/0013-hosted-hub-static-zero-backend.md)
+removes the backend and [ADR-0014](decisions/0014-credentials-local-first.md) puts custody
+in the user's file, so there is no server-side vault to compromise. The honest claim, and
+the only one made anywhere: **"your keys never reach our servers; your file, including keys,
+goes only to storage you choose."** Never the absolute "keys never leave your file" — a
+personal Dropbox the user connects legitimately carries them.
+
+---
+
+## 4. Trust boundaries
+
+Five boundaries. Everything security-relevant happens at one of them.
+
+1. **App iframe ↔ host page.** The strongest boundary. The app has an opaque origin, no
+   network of its own, and no capability it was not handed. Crossings are `postMessage`
+   frames, zod-validated at the envelope boundary, routed by `contentWindow` identity
+   (never `event.origin` — a sandboxed frame's origin is the string `"null"` and would
+   accept *any* sandboxed frame on the page).
+2. **Host page ↔ provider network.** One seat: the connected-fetch executor and its ten
+   gates. It is the only host-side caller that both reads a credential and calls fetch.
+3. **Host page ↔ LLM.** What reaches a model is assembled host-side; credentials never do.
+   Untrusted content that must reach it is fenced and the instruction restated after.
+4. **Webview ↔ native shell** (desktop only). The Tauri IPC bridge, which CSP does not
+   govern. Capabilities are main-window-scoped and the invoke key is absent in subframes —
+   *on macOS*. On Windows it is not, which is why Windows does not ship.
+5. **The user's device ↔ everywhere else.** The custody line. Hub origins never receive
+   secrets; personal sync origins carry the full file by explicit opt-in; default exports
+   strip secrets and VACUUM.
+
+---
+
+## 5. Enforced invariants
+
+Each row: what is promised, the file that enforces it, and the test that would fail if it
+regressed. A row that could not name both is not here — it is in §6.
+
+Paths are repo-relative. A mechanical check (`pnpm run check-threat-model`) verifies that
+every path in this table still exists, so a refactor that moves an enforcement point cannot
+silently leave this document citing a file that is gone.
+
+### C1 — the token boundary
+
+Credentials never enter the app iframe, never reach the LLM, never reach a publisher.
+
+| Invariant | Enforcement | Test |
+|---|---|---|
+| An app cannot send a credential-shaped header across the bridge | `packages/protocol/src/frames.ts` — `netRequestSchema` refuses `STRIP_HEADERS` names; the whole frame is malformed | `packages/runner/src/__tests__/host-net.test.ts` — a credential-carrying request is answered MALFORMED, handler never called |
+| The runner is value-blind — it never imports the credential layer | `packages/runner/src/host.ts` relays; no `@snugprotocol/auth` dependency exists | `packages/runner/src/__tests__/net-value-blind.test.ts` — source-walking lint over shipped sources |
+| Injected credential values are scrubbed from response bodies, headers and error messages | `packages/auth/src/scrub.ts`, applied at the executor's delivery seat in `packages/auth/src/connected-fetch.ts` | `packages/auth/src/__tests__/scrub.test.ts` |
+| A provider's error body cannot carry credential material out of the OAuth seat | `packages/auth/src/provider-error-detail.ts` — an allowlist of recognized error envelopes, not a redaction pass | `packages/auth/src/__tests__/oauth-error-echo.test.ts` |
+| Host-bound injection is strict always — no bypass flag exists | `packages/auth/src/app-host-freeze.ts` (exact-hostname, punycode-normalized both sides) | `packages/auth/src/__tests__/browser-safe.test.ts` — source lint **plus a runtime signature walk** over real exports |
+| Hub-bound sync and default exports carry no secrets | `packages/db/src/userdb/userdb.ts` — strip then VACUUM | `packages/db/src/userdb/__tests__/auth-custody.test.ts` |
+| Credentials never reach the LLM's context | `apps/playground/src/agent/providerTools.ts` renders the already-scrubbed result | `apps/playground/src/__tests__/providerTools.test.ts` — asserts the credential reached the *wire* and is absent from the *model-bound string* |
+
+### C2 — sandbox integrity
+
+| Invariant | Enforcement | Test |
+|---|---|---|
+| App iframes are `sandbox="allow-scripts"`, never `allow-same-origin` | `packages/runner/src/react/SnugAppFrame.tsx` — static literal on the only production frame | `packages/runner/src/__tests__/source-guard.test.ts` (package) and `scripts/check-sandbox-guard.test.mjs` (workspace-wide — a widened frame in any app directory fails) |
+| Apps have no network of their own (`connect-src 'none'`) | `packages/runner/src/csp.ts` — frozen `RUNNER_CSP`, injected via DOM parse | `packages/runner/src/__tests__/csp.test.ts`; real-browser probes in `apps/desktop/src/gate/csp.ts` |
+| The CDN allowlist is fixed and the policy is not parameterizable | `packages/protocol/src/constants.ts` — module-level `as const`; `injectCsp` has arity 1 | `packages/runner/src/__tests__/source-guard.test.ts` |
+| A self-navigating app is permanently cut off | `packages/runner/src/host.ts` — navigation credits, consumed in full, fail closed | `packages/runner/src/__tests__/host-lifecycle.test.ts` |
+| Shell IPC is unreachable from a sandboxed subframe (macOS) | `apps/desktop/src-tauri/capabilities/main.json` + the invoke-key gate | `apps/desktop/src/gate/ipc.ts`, run by the in-shell gate — **see R-11 on cadence** |
+
+### The network ceiling
+
+| Invariant | Enforcement | Test |
+|---|---|---|
+| An app reaches only hosts the user approved into that connection's frozen ceiling | `packages/auth/src/app-host-freeze.ts` — exact hostname; empty set fails closed | `packages/auth/src/__tests__/connected-fetch.test.ts` — suffix tricks, case, userinfo |
+| SSRF literals are refused even when present in a ceiling | `packages/auth/src/net-guards.ts` — loopback, RFC-1918, link-local/metadata, CGNAT, IPv6 forms; malformed fails closed | `packages/auth/src/__tests__/net-guards.test.ts` |
+| Redirects are never followed on any transport | `packages/auth/src/connected-fetch.ts` (`redirect: 'manual'` + status check); `apps/desktop/src/platform-desktop.ts` (`maxRedirections: 0`) | `packages/auth/src/__tests__/connected-fetch.test.ts`; `apps/desktop/src/__tests__/netTransport.test.ts` |
+| Mutating methods require the user's confirmation **before** any credential is read | `packages/auth/src/connected-fetch.ts` — gate 6 precedes gate 8 | `packages/auth/src/__tests__/connected-fetch.test.ts` — a denied POST performs no fetch and resolves no credential |
+| …including sends to the WhatsApp helper | `packages/auth/src/connected-fetch.ts` — gate 6a, after gate 6 | `packages/auth/src/__tests__/sidecar-transport.test.ts` — confirmed-first, denied-never-sends, GET positive twin |
+| Two approved rows claiming one host refuse rather than tiebreak | `packages/auth/src/connected-fetch.ts` — `NET_AMBIGUOUS_CONNECTION` | `packages/auth/src/__tests__/slot-routing-regression.test.ts` |
+| An app cannot mutate the ceiling, and a staged edit cannot widen it pre-approval | `packages/db/src/userdb/userdb.ts` — reserved table prefixes; frozen `allowed_hosts` | `packages/auth/src/__tests__/connected-fetch.test.ts` |
+| Imported connection rows cannot serve traffic | `packages/db/src/userdb/userdb.ts` — demote to `declared` + `imported=1` | `packages/auth/src/__tests__/connected-fetch.test.ts` |
+
+### Authoring and consent
+
+| Invariant | Enforcement | Test |
+|---|---|---|
+| An LLM-authored requirement cannot borrow a registry provider's identity to author its own credential prompts | `packages/auth/src/requirement-admission.ts` — borrow ban with boundary-aware segment matching | `packages/auth/src/__tests__/channel-admission.test.ts` |
+| A header template may only reference pinned helpers and declared fields, and lint and engine agree on every quoting shape | `packages/auth/src/template-lint.ts` + `packages/auth/src/template-engine.ts` — enforced at the render seat | `packages/auth/src/__tests__/template-parity.test.ts` |
+| An app cannot forge starter authoring provenance | `apps/playground/src/starter/starterDeclaration.ts` — install source **and** both HTML versions must match bundled bytes | `apps/playground/src/__tests__/starterDeclaration.test.ts` |
+| An app cannot claim a runtime contract, and an untrusted import cannot dictate one | `packages/db/src/userdb/userdb.ts` — canonical-bytes reconciliation, `trustedOrigin` keyed on the caller | `packages/db/src/userdb/__tests__/userdb.test.ts` |
+| LLM-authored SQL cannot reach hub tables or other apps' data | `packages/db/src/driver.ts` — physical namespace separation; the bytes were never there | `packages/db/src/userdb/__tests__/scratch-run.test.ts` |
+| Sidecar routes are admitted by an enumerated table in Rust, traversal checked on the decoded form | `apps/desktop/src-tauri/src/sidecar.rs` | cargo tests in the same file + `apps/desktop/src/__tests__/sidecarContract.test.ts` (parses the Rust source for drift) |
+| The desktop shell has no generic path-read command | `apps/desktop/src-tauri/src/userfile.rs` (bare-name charset, `~/Snug` only); `apps/desktop/src-tauri/src/openfile.rs` (single-use, OS-delivered) | in-file cargo tests: `apps/desktop/src-tauri/src/userfile.rs`, `apps/desktop/src-tauri/src/openfile.rs` |
+
+---
+
+## 6. Residuals — accepted and NOT mitigated
+
+These are real. Several are sharp. None is mitigated by anything below its "bounded by" line.
+
+### The two known defects
+
+**R-5 — Windows: the invoke key is injected into sandboxed app iframes.** wry's WebView2
+backend discards `for_main_frame_only`, so tauri's key-bearing `ipc-protocol.js` — with the
+invoke key as a plaintext literal — executes inside `sandbox="allow-scripts"` app iframes.
+Any app the user runs can read it. **This is a C1 *and* C2 break, not a weakening.** No
+off-switch exists at the wry, tauri, or WebView2 SDK layer.
+*Disposition:* **Windows desktop is not shipped.** macOS is unaffected — WKWebView honors
+the flag. No Windows build has ever been distributed and none may ship in this
+configuration ([ADR-0021 D8 addendum](decisions/0021-desktop-shell-transports.md); root
+cause: [`docs/solutions/2026-08-13-webview2-subframe-ipc-injection.md`](solutions/2026-08-13-webview2-subframe-ipc-injection.md)).
+
+**R-5b — and "we don't ship Windows" is enforced by documentation, not by the build.**
+`apps/desktop/src-tauri/tauri.conf.json` still carries `"targets": "all"` and ships
+`icons/icon.ico`, so a Windows bundle remains producible. The only regression detector is
+the CI Windows leg staying red *for the right reason* — and CI has been billing-blocked
+since ~2026-08-18, failing in seconds with zero steps, so a red X from billing is
+indistinguishable from a red X from R-5. Restricting the bundle targets and pinning them
+by test is queued in `docs/next-steps.md`. Stated rather than implied because R-5's
+severity makes the strength of its enforcement part of the claim.
+
+### Where the walls genuinely end
+
+**R-1 — Host-page compromise means total credential compromise.** The host page holds every
+credential and calls fetch; that has always been true and no gate below it helps. On
+desktop this is *worse than in the browser*, and the deltas did not say so: the shell's main
+window ships with `"csp": null`, so the layer a browser host page has is absent. Any XSS in
+the host page is immediate full IPC plus `snug_secrets`.
+*Bounded by:* the app-iframe boundary (C2) being the thing that keeps app code out of that
+context in the first place.
+
+**R-2 — A scrubber that matches values cannot survive re-encoding.** `scrubAuthValues` is
+exact-substring over injected values, in raw and percent-encoded form. A provider that
+echoes a credential base64'd, hex'd, or split across fields defeats it — *by design*, and
+the code documents its own boundary. Sharper still: when a template sends
+`{{base64(secret)}}`, the candidate set holds the base64 form only, so a cooperating
+endpoint that decodes and reflects the *underlying* secret reflects it in the clear.
+*Bounded by:* the frozen host ceiling, which was always the primary wall. Inherited from the
+Dynamic Auth v2 delta.
+
+**R-3 — The OS user account is the perimeter.** `~/Snug/user.sqlite` is a plaintext file;
+any process running as the user can read it, and the WhatsApp helper's socket and key store
+with it. This is exactly the custody [ADR-0014](decisions/0014-credentials-local-first.md)
+promises — the user owns the file — not an oversight. Full-disk encryption and OS keychain
+wrapping are out of scope pre-1.0; the KeyProvider/KMS track is the roadmap answer.
+
+**R-4 — An approved-but-hostile header template routes a secret to an odd header of an
+already-allowed host.** The lint bounds *what* a template references, never whether
+referencing it *there* is sensible. `X-Debug: {{api_key}}` lints clean and renders the live
+secret.
+*Bounded by:* the frozen ceiling (who receives it) and the human who read the template
+verbatim in review. **There is no third control** — which is why review renders templates
+uncollapsed and host lists uncapped. If the review screen ever degrades, this trade stops
+paying. Inherited.
+
+**R-6 — TOFU pairing window.** An attacker already on the user's network at the moment of
+first pairing is pinned instead of the real bridge, and every later request is faithfully
+delivered to them. Signify-CA pinning is deferred for structural reasons (gated CA material;
+old bridges are self-signed).
+*Bounded by:* attacker presence at that exact moment; a user-typed address; and once pinned,
+a later MITM fails closed. Inherited.
+
+**R-7 — The feature lane has no pre-write gate.** A prompt injection that flips a data
+question into an app change writes a new app version without a confirm. The data lane's
+writes end at a human gate; the feature lane's land on model authority.
+*Bounded by:* versioning, a visible in-place reload, and revert — so the outcome is a
+reviewable version write, not a silent mutation. An explicit owner decision, revisitable.
+
+**R-8 — Untrusted text reaching a model can steer it, and bounding cannot remove that.**
+App rows, provider bodies, and other people's messages are untrusted prompt input by
+construction — showing the model the user's data is the entire feature. Fenced blocks with
+defanged closing tags, the instruction restated after the block, bounded results, per-turn
+call caps, and fail-closed classification narrow the window; none closes it. The wall that
+actually holds is the confirm dialog naming host, method and URL on every mutating call.
+*One sharpening this document adds:* replayed conversation history reaches the intent
+classifier as bare list items **outside** the fence the rest of the pipeline uses, and the
+defang covers one tag spelling. Same class as the above, weaker containment than the
+provider-chat-lane delta's wording implies.
+
+**R-9 — Third-party consent, and a guard that is not where the docs put it.** The other
+participants in an analysed WhatsApp thread never consented, are not Snug users, and cannot
+opt out; under BYOK their messages reach the user's configured model provider. The
+whatsapp-sidecar delta presents pseudonymisation as happening "at the turn's altitude,"
+which reads as host-enforced. **It is not.** There is no pseudonymisation anywhere in
+`packages/` or `apps/` — the implementation lives inside the sandboxed example app's HTML
+(`examples/whatsapp/app.html`). Consequences: the host performs no scrub of app-supplied
+LLM payloads; any *other* app holding an approved sidecar connection can forward raw names
+and phone numbers to a model; and even for the shipped app the guard is bytes the LLM wrote,
+rewritable by the feature lane, which is the weakest write gate in the system (R-7).
+*Honest statement:* third-party pseudonymisation is an **app-layer convention, not a
+boundary.** Moving it into the host pump would bind every app; that is queued, not done.
+This is the residual a reviewer should weigh most heavily.
+
+**R-10 — ToS and account-ban risk.** Unofficial WhatsApp automation violates WhatsApp's
+terms and accounts have been banned for it. Pacing and rate caps are harm reduction, never
+detection evasion, and are not a guarantee. Disclosed in the wizard consent copy and the
+starter README before the user connects.
+
+### Enforcement cadence — where "tested" is weaker than it sounds
+
+**R-11 — Several C2 guarantees are proven only by a job that is not currently running.**
+AC3 asks for "the test that would fail if it regressed"; for these rows the honest answer is
+"a CI job that has not executed since ~2026-08-18." Specifically: the in-shell hard gate is
+not part of `pnpm test` (separate `gate` script, CI-only); the 14 real-browser CSP checks
+never run in CI on the **web** path at all (no `e2e` turbo task) — they run in WKWebView and
+WebView2 but not Chromium, which is the engine the hosted Playground ships to; and
+`apps/server`'s CSP-header assertion lives in `smoke.ts`, which CI never invokes. The
+unit-level pins (policy text, decision functions) do run everywhere; what is CI-bound is
+proof of *actual webview behaviour*.
+
+**R-12 — Per-command IPC proof is a rule with a current exception.** The gate identifies
+commands individually, precisely so a new command inherits nothing. Ten commands ship;
+three carry per-command checks. The gap worth naming: `sidecar_wizard_fetch` has none,
+though it fronts `GET /pair/status` — the token-releasing route the whatsapp delta says is
+closed "at its source" — while its lower-privilege sibling `sidecar_fetch` does. Mitigating:
+the three key-absence checks are shared, so if the invoke key is absent no command is
+reachable.
+
+### Smaller, stated rather than discovered
+
+- **R-13 — DNS rebinding for public hostnames.** The LAN policy keys on IP literals; a
+  public name rebinding to a private IP mid-flight is refused only as a *name*. Native
+  resolve-then-connect-by-IP is deferred. The ceiling still bounds which names are reachable.
+- **R-14 — The ceiling does not bound ports, paths, methods or query strings.** Any path on
+  an approved host is reachable, including a debug/echo endpoint — the precondition R-2
+  depends on. Port is deliberately not part of host identity.
+- **R-15 — Credentials in URLs reach surfaces we do not own** — server logs, proxies,
+  referrers, history. Every site we own is scrubbed; theirs cannot be. Inherited.
+- **R-16 — No per-app rate limit on the net executor.** Concurrency is capped at 8 and the
+  ceiling bounds reachable hosts, but serial requests are unlimited — an app can burn the
+  user's provider quota.
+- **R-17 — The BYOK browser-CORS advisory.** Some providers refuse browser-origin calls;
+  the registry's `browserCallable` flag is human-authored and *absent means unknown*, which
+  is disclosed as unknown rather than assumed callable. The desktop shell's native fetch is
+  the answer for those providers — which on a macOS-only shell means some BYOK providers
+  are unreachable from the web Playground and have no desktop path for Windows users.
+- **R-18 — Installed-starter staleness.** Sample-mode and authoring-provenance improvements
+  reach **new installs only**; an already-installed copy reports `html_mismatch` against new
+  factory bytes and keeps its old behaviour. A user's installed shelf is not the shelf the
+  repo describes.
+- **R-19 — Pure-ASCII lookalike provider names** (`5potify`, `Spotlfy`) that share no
+  segment with a registry key are admitted; the brand-adjacent family (`Spotify Inc`) is
+  caught. Bounded by the host-intersection ban and the review's provenance copy — reopen if
+  that copy softens. Inherited.
+- **R-20 — An untrusted import can carry an attacker's pin and secret under a row.**
+  Pre-existing and general — it carries OAuth tokens and API secrets too, not just LAN pins.
+  Bounded by local-secrets-win-the-merge and imported rows demoting to `declared`, requiring
+  fresh human approval. Queued as its own task.
+- **R-21 — `'unsafe-eval'` and `'unsafe-inline'` in the app CSP.** Babel-standalone compiles
+  JSX in-browser, so eval *is* the execution model; nonces are meaningless when the document
+  author is the untrusted LLM. The CDN allowlist is a supply-*availability* control, not an
+  integrity one: anything on those CDNs can run in the sandbox. Accepted because the sandbox
+  has nothing to steal and nowhere to send it — which is exactly why the C2 rows in §5 are
+  load-bearing. Revisit trigger: apps shipping precompiled.
+
+---
+
+## 7. What this model does not claim
+
+- **No cryptographic custody claim.** Not zero-knowledge, not end-to-end encrypted, not
+  host-blind. The honest term is **publisher-blind**, and it stays that way until a
+  KeyProvider/KMS ships ([ADR-0003](decisions/0003-v1-scope-and-security-constraints.md),
+  [ADR-0014](decisions/0014-credentials-local-first.md) §5).
+- **No claim that prompt injection is solved.** It is contained, at named points, with the
+  residual stated (R-8).
+- **No claim of formal verification, external audit, or a bug bounty.** This is a
+  solo-maintained project; §5's tests and the adversarial pass behind this document are the
+  evidence, and both are re-runnable by anyone who clones the repo.
+
+---
+
+## 8. The deltas this consolidates
+
+Each per-change delta remains the detailed record for its change. The hashes below are
+pinned by `pnpm run check-threat-model`: a new delta, or an edit to an existing one, fails
+that check until this model has been re-read against it. That is the mechanism keeping a
+consolidation from silently falling behind the changes it consolidates.
+
+<!-- DELTA-LEDGER:BEGIN -->
+
+| Delta | Pinned hash | Consolidated into |
+|---|---|---|
+| `docs/security/threat-model-delta-connection-addressing.md` | `22f12227195b` | §5 ceiling · R-14 |
+| `docs/security/threat-model-delta-desktop-auth.md` | `09bb0a6570ef` | §4 · R-1, R-2, R-5, R-6, R-15, R-20 |
+| `docs/security/threat-model-delta-desktop-shell.md` | `ebd06c7635f5` | §5 C2 · R-1, R-3, R-13 |
+| `docs/security/threat-model-delta-dynamic-auth-v2.md` | `8bae299b6bb2` | §5 authoring · R-2, R-4, R-19 |
+| `docs/security/threat-model-delta-lean-runtime-data-chat.md` | `bec065ca9633` | §5 authoring · R-7, R-8 |
+| `docs/security/threat-model-delta-provider-chat-lane.md` | `6f92151dad7c` | §5 ceiling · R-8 |
+| `docs/security/threat-model-delta-simplefin-token-claim.md` | `e8cb2f9a8acd` | §5 ceiling · R-1 |
+| `docs/security/threat-model-delta-whatsapp-sidecar.md` | `772b1bc18edb` | §5 ceiling · R-3, R-9, R-10, R-12 |
+
+<!-- DELTA-LEDGER:END -->
+
+---
+
+## 9. Audit record
+
+This document was written after an adversarial pass, not from the deltas alone. Five
+fresh-context audits ran in parallel — the sandbox/CSP seam, the credential boundary, the
+net executor and allowlist, the desktop shell, and the app-authoring/prompt-injection
+surface — each returning claim → enforcement point → test → verdict with file:line evidence,
+and each instructed to try to break what it read.
+
+**Result:** roughly fifty claims checked; the large majority held, with negative tests that
+assert *zero fetches* rather than merely a failed result. Around a dozen file:line citations
+drawn from the deltas were spot-checked and all were accurate. Two defects were found and
+**fixed before this document was written** rather than described as residuals:
+
+1. **The sidecar send skipped the mutating-confirm gate** — it returned 28 lines before
+   gate 6, under a comment asserting the gate had answered. Fixed; three tests now pin
+   confirmed-first, denied-never-sends, and a GET positive twin. The suite had been green
+   because every sidecar test hardcoded a granting gate, making a gate that was never
+   consulted indistinguishable from one that granted.
+2. **OAuth token-endpoint error bodies reached both the iframe and the LLM unscrubbed** —
+   500 raw chars of a provider's non-2xx response, on the path where the executor's own
+   refresh POSTs `refresh_token` and `client_secret`. Fixed by bounding at the seat, reusing
+   the existing recognized-envelope extraction discipline.
+
+Both were reachable, both are the shape a delta would not catch — one because the comment
+asserted the ordering the code did not have, the other because every relevant assertion
+read `code` and never `message`. That is the argument for auditing rather than transcribing,
+and it is why §6 above should be read as a genuine list rather than a formality.
+
+---
+
+*Reporting: [SECURITY.md](../SECURITY.md). Good-faith research under that policy is
+authorized. Anything that makes C1 or C2 false is a critical finding, and we want to hear
+it.*

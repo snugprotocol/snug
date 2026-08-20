@@ -11,7 +11,9 @@
     "lint": "turbo run lint",
     "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke",
     "update-code-map": "node --test scripts/update-code-map-counts.test.mjs && node scripts/update-code-map-counts.mjs",
-    "check-whitepaper": "node scripts/check-whitepaper.mjs"
+    "check-whitepaper": "node scripts/check-whitepaper.mjs",
+    "check-threat-model": "node --test scripts/check-threat-model.test.mjs && node scripts/check-threat-model.mjs",
+    "check-sandbox-guard": "node --test scripts/check-sandbox-guard.test.mjs"
   },
   "devDependencies": {
     "jsdom": "^30.0.1",

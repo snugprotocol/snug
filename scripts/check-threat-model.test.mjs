@@ -1,0 +1,142 @@
+// Unit tests for the threat-model conformance checker (node:test — dependency-free,
+// runs as part of `pnpm run check-threat-model` so it cannot rot unexercised).
+//
+// The checker's own value depends on it failing for the RIGHT reasons, so these tests
+// drive the pure parsers directly rather than the filesystem: a ledger that agrees, one
+// that has drifted, one missing a delta entirely, and one pinning a file that is gone.
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import {
+  backtickedPaths,
+  checkDeltaLedger,
+  hashPrefix,
+  LEDGER_BEGIN,
+  LEDGER_END,
+  parseInvariantRows,
+  parseLedger,
+  sectionOf,
+} from './check-threat-model.mjs';
+
+const ledgerDoc = (rows) =>
+  [
+    '## The deltas this consolidates',
+    '',
+    LEDGER_BEGIN,
+    '',
+    '| Delta | Pinned hash | Consolidated into |',
+    '|---|---|---|',
+    ...rows,
+    '',
+    LEDGER_END,
+  ].join('\n');
+
+test('hashPrefix is a stable 12-hex prefix', () => {
+  const a = hashPrefix('hello');
+  assert.match(a, /^[0-9a-f]{12}$/);
+  assert.equal(a, hashPrefix('hello'));
+  assert.notEqual(a, hashPrefix('hello '));
+});
+
+test('parseLedger reads path → hash rows between the markers', () => {
+  const md = ledgerDoc(['| `docs/security/threat-model-delta-x.md` | `abc123def456` | §4 |']);
+  const ledger = parseLedger(md);
+  assert.equal(ledger.get('docs/security/threat-model-delta-x.md'), 'abc123def456');
+  assert.equal(ledger.size, 1);
+});
+
+test('parseLedger returns null when the markers are absent', () => {
+  assert.equal(parseLedger('# a document with no ledger at all'), null);
+});
+
+test('checkDeltaLedger: an agreeing ledger yields no failures', () => {
+  const ledger = new Map([['docs/security/a.md', 'aaaaaaaaaaaa']]);
+  const actual = new Map([['docs/security/a.md', 'aaaaaaaaaaaa']]);
+  assert.deepEqual(checkDeltaLedger(ledger, actual), []);
+});
+
+test('checkDeltaLedger: an EDITED delta fails — the model must be re-read against it', () => {
+  const ledger = new Map([['docs/security/a.md', 'aaaaaaaaaaaa']]);
+  const actual = new Map([['docs/security/a.md', 'bbbbbbbbbbbb']]);
+  const failures = checkDeltaLedger(ledger, actual);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /changed since consolidation/);
+});
+
+test('checkDeltaLedger: a NEW delta fails — adding one beside the model is not consolidating it', () => {
+  const ledger = new Map();
+  const actual = new Map([['docs/security/new.md', 'cccccccccccc']]);
+  const failures = checkDeltaLedger(ledger, actual);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /not consolidated/);
+});
+
+test('checkDeltaLedger: a STALE row fails — a pin whose file is gone', () => {
+  const ledger = new Map([['docs/security/deleted.md', 'dddddddddddd']]);
+  const failures = checkDeltaLedger(ledger, new Map());
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /stale ledger row/);
+});
+
+test('checkDeltaLedger: a missing ledger is itself the failure, not a crash', () => {
+  const failures = checkDeltaLedger(null, new Map([['docs/security/a.md', 'aaaaaaaaaaaa']]));
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /no delta ledger/);
+});
+
+test('backtickedPaths keeps repo paths and drops prose, stripping :line suffixes', () => {
+  assert.deepEqual(
+    backtickedPaths('| `packages/auth/src/scrub.ts:12` — exact substring, `never` a regex |'),
+    ['packages/auth/src/scrub.ts'],
+  );
+  // Prose in backticks is not a path and must not be demanded to exist.
+  assert.deepEqual(backtickedPaths('| `connect-src \'none\'` |'), []);
+});
+
+test('sectionOf extracts one ## section and stops at the next', () => {
+  const md = ['## Enforced invariants', 'row text', '', '## Residuals', 'other text'].join('\n');
+  assert.match(sectionOf(md, /enforced invariants/i), /row text/);
+  assert.doesNotMatch(sectionOf(md, /enforced invariants/i), /other text/);
+  assert.equal(sectionOf(md, /nothing like this/i), null);
+});
+
+test('parseInvariantRows finds enforcement and test columns by HEADER, not position', () => {
+  const md = [
+    '## Enforced invariants',
+    '',
+    '| Invariant | Enforcement | Test |',
+    '|---|---|---|',
+    '| a promise | `packages/auth/src/scrub.ts` | `packages/auth/src/__tests__/scrub.test.ts` |',
+  ].join('\n');
+  const rows = parseInvariantRows(md);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].enforcement, ['packages/auth/src/scrub.ts']);
+  assert.deepEqual(rows[0].test, ['packages/auth/src/__tests__/scrub.test.ts']);
+});
+
+test('parseInvariantRows: a REORDERED table still resolves the right columns', () => {
+  const md = [
+    '## Enforced invariants',
+    '',
+    '| Invariant | Test | Enforcement |',
+    '|---|---|---|',
+    '| a promise | `packages/auth/src/__tests__/scrub.test.ts` | `packages/auth/src/scrub.ts` |',
+  ].join('\n');
+  const rows = parseInvariantRows(md);
+  assert.deepEqual(rows[0].enforcement, ['packages/auth/src/scrub.ts']);
+  assert.deepEqual(rows[0].test, ['packages/auth/src/__tests__/scrub.test.ts']);
+});
+
+test('parseInvariantRows surfaces a row with NO enforcement path — the AC3 case', () => {
+  // A promise with no named enforcement belongs in residuals; the checker must be able
+  // to see the difference rather than accepting confident prose.
+  const md = [
+    '## Enforced invariants',
+    '',
+    '| Invariant | Enforcement | Test |',
+    '|---|---|---|',
+    '| we are careful about this | it is handled throughout | `packages/auth/src/__tests__/scrub.test.ts` |',
+  ].join('\n');
+  const rows = parseInvariantRows(md);
+  assert.deepEqual(rows[0].enforcement, []);
+});

@@ -10,7 +10,9 @@ Snug is an open protocol that lets users of any web app build **tiny AI-native a
 2. **Users own their apps and their data.** Each app gets an isolated database, exportable as a real `.sqlite` file you can download, back up, or move. Not a vendor's cloud rows — a file you own.
 3. **It's embeddable.** Any product can drop the runner + SDK in and let *their* users build micro apps powered by *their* existing AI assistant.
 
-Security is architectural, not policy: apps run in a locked-down iframe sandbox with no network of their own, credentials live in `snug_secrets` inside your own file — never in the iframe, never sent to the hub — and there is no telemetry. Details and reporting: [SECURITY.md](SECURITY.md).
+Security is architectural, not policy: apps run in a locked-down iframe sandbox with no network of their own, credentials live in `snug_secrets` inside your own file — never in the iframe, never sent to the hub — and there is no telemetry. The written [threat model](docs/threat-model.md) states what is enforced, where, and which test would catch a regression — and, with equal prominence, what is **accepted and not mitigated**. Reporting: [SECURITY.md](SECURITY.md).
+
+> **Desktop is macOS-only, for a security reason** — on Windows, WebView2 injects the shell's IPC key into app iframes and no off-switch exists. See threat model R-5. The browser Playground runs everywhere.
 
 This is the **reference implementation monorepo**: protocol bindings, iframe runner, in-app SDK, per-app database, LLM knowledge base, agent adapters, the hosted Playground, and example apps. The protocol specification lives in [`snugprotocol/spec`](https://github.com/snugprotocol/spec).
 
