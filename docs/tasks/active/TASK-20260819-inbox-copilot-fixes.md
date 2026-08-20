@@ -1,6 +1,6 @@
 # TASK-20260819-inbox-copilot-fixes: connection-live refresh prompt + Inbox Copilot fixes
 
-- **Status**: in-progress
+- **Status**: in-review (all four fixes implemented and browser-verified; gates green)
 - **Owner**: Jeetu
 - **Risk tier**: **Medium** — `apps/playground` wizard/run logic + `examples/`. NOT High: no `packages/protocol` schema change (the `connection-event` host-event already exists with an open `event` namespace), no `packages/auth` change, no sandbox/CSP change. Escalate if the SDK hooks block is touched (byte-locked across every starter).
 - **Branch**: `feat/TASK-20260819-gmail-starter` (continues the Gmail starter branch — these are owner-reported defects against work not yet merged)
@@ -111,3 +111,42 @@ Tests first per TDD.md.
   `RunnerHost` lives only in `RunView`'s ref, so the wizard has no path to `notifyEvent`.
 - State: plan written; implementing.
 - Next step: RED tests for the emit path and the app-side fixes.
+
+### 2026-08-19 (later) — Claude (Fable 5) — session
+- Done: **all four owner-reported issues, plus one found while verifying.**
+  - **(1) Stale sample data after a verified connection.** New `appHosts` registry
+    (8 RED-first cases) is the seam between the wizard and the running frame — they are
+    siblings, so `RunnerHost` was unreachable. The Done screen now offers "load my real
+    data" once the connection is VERIFIED (probe passed, or an OAuth kind whose token
+    round trip already proved it), and only when an app is actually on screen. Confirming
+    emits the EXISTING `connection-event` — open namespace, no protocol change, no
+    spec-sync. Inbox Copilot listens (slot-filtered, outside the sample markers) and
+    re-syncs; the sample banner goes with the data.
+  - **(2) Bouncing unsubscribes.** `From:` now resolved from `users/me/profile` and
+    REQUIRED — `buildUnsubscribeRaw` returns null rather than building a header-less
+    message Gmail accepts and the remote MTA rejects. Header values truncate at the first
+    CRLF: a List-Unsubscribe header is attacker-controlled, and a break would turn an
+    unsubscribe into a Bcc.
+  - **(3) Hard-wired 90 days.** Selector: 1 week / 90 days (default) / 6 months / 1 year /
+    everything. `everything` omits the date clause rather than faking one; an unknown
+    window narrows to the default rather than widening to a full-mailbox scan. Page
+    ceilings scale with the window; the chart axis and its caption follow it.
+  - **(4) Prose-only answers.** `answerShape` picks the rendering and PROVES the rows:
+    a table is only promised when every named sender matches the app's own data, so a
+    hallucinated address degrades the reply to prose instead of drawing authoritative
+    empty rows. `AnswerView` renders senders, verdicts, or prose.
+  - **(found in the browser pass) `[object Object]` on every failure.** Bridge errors are
+    objects, so `error || 'fallback'` rendered the literal string where the reason
+    belongs. `netErrorText` fixes all six sites, guarded by a source sweep so a new call
+    site cannot reintroduce it.
+- Browser-verified against a stub host: the `connection-event` triggers a real sync; the
+  window picker drives the query (`newer_than:7d`, and no clause for everything); the
+  answer lane renders rows with the app's own counts; the error banner now reads
+  "stub host: no Gmail credentials (NET_AUTH_FAILED)".
+- State: examples 270/270, playground 1265/1265, full uncached `turbo run test` 23/23.
+- Deferred DELIBERATELY, both recorded in next-steps: the `useHostEvents` SDK hook (this
+  is the third hand-rolled consumer — the trigger its own entry names — but promoting it
+  bumps the byte-locked block in all 13 starters), and adopting the signal in the other
+  five sample-mode starters (two lines each, and it should ride the hook).
+- Next step: human review. The owner manual test is still the real gate: connect a live
+  Gmail account on desktop, take the refresh prompt, and send one real unsubscribe.

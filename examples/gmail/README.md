@@ -45,6 +45,18 @@ a naive rule gets wrong — a bank's receipts and a starred newsletter), both un
 channels, and a mass-cleanup dry run that reports what it *would* do. Connect Gmail and
 the same code runs against your own mail.
 
+## How far back it reads
+
+Refresh defaults to the **last 90 days** — long enough for a pattern, short enough to
+finish. Widen it to a year or to everything when you want the full picture; each message
+is its own metadata read, so the wider windows genuinely take longer, and the labels say
+so rather than hiding it behind a spinner. The trend chart's axis follows the window, so
+a one-week pull is drawn as one week rather than as eleven empty columns.
+
+When you finish the connection wizard, it offers to swap the sample data for your real
+mail there and then — the app is listening for that, so you never have to work out why
+it is still showing the demo.
+
 ## Connecting
 
 The connection wizard drives it. Gmail is a well-known provider, so the walkthrough,

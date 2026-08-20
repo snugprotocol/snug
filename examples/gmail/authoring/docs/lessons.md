@@ -46,3 +46,24 @@
   broadcasters, so the legend explained a colour the chart never showed. Ranking now
   reserves a slot for the loudest sender the user actually answers, which is also the
   contrast the chart exists to draw.
+
+- **A bridge error is an object, so `error || 'fallback'` prints "[object Object]".** The
+  app recovered from a refused sync exactly as designed and then described the failure
+  uselessly — replacing the one thing the user needs (what went wrong, and whether
+  retrying helps) with noise, at the moment they are wondering whether their mail is
+  safe. Six call sites had it. The unit test for the formatter would not have caught it,
+  because the defect was in the CALL SITES; the regression guard is a source sweep for
+  `.error ||` in the authored region.
+
+- **A demo harness that stays silent is not a stand-in for a host that always answers.**
+  The stub used for the browser pass ignored `snug:net-request`, so the app hung on
+  "reading 0" and looked wedged. The real host always posts a terminal frame — success or
+  a `NET_*` error — so the hang was pure harness artifact and nearly sent me looking for a
+  timeout bug in shipping code. A stub must reproduce the contract's GUARANTEES, not just
+  its happy path, or it manufactures failures that do not exist.
+
+- **The axis has to follow the query.** Making Refresh window-selectable silently left a
+  hardcoded "Twelve weeks of arrivals" caption and a 12-bucket chart, so a one-week pull
+  would have drawn eleven empty columns — a collapse the data never showed, told by the
+  axis. Any control that changes how much data is fetched has to be traced through
+  everything that describes the amount.
