@@ -12,12 +12,22 @@
  *      anyway (they are POST BODY parameters — `refresh_token`, `client_secret` — which
  *      were never injected headers). See TASK-20260820 audit finding D2.
  *
- * Seat 2 is the sharper one and it is why the shape-recognition below is the security
- * control rather than a formatting nicety: it is an ALLOWLIST of recognized error
- * envelopes, not a redaction pass. Nothing is searched for and removed — only a named
- * field of a recognized shape is ever forwarded, and every other body yields NOTHING.
- * That direction matters: a redaction pass fails open on the value it did not think of,
- * while an extraction pass fails closed on the shape it does not recognize.
+ * THIS FUNCTION IS HALF OF THE BOUND, NEVER THE WHOLE OF IT. It is an allowlist of
+ * recognized error-envelope SHAPES: it decides which FIELD is forwarded, and it does not
+ * and cannot decide what that field CONTAINS. A provider that echoes a submitted secret
+ * inside `error_description` — the very field a reader wants — is forwarded verbatim.
+ * That was a real Gate-5 finding against the first cut of seat 2, where the shape
+ * allowlist was mistaken for a value guard.
+ *
+ * So EVERY caller must scrub values before calling, and each does it with the candidate
+ * set only it can build:
+ *   - seat 1 receives a body gate 10 already scrubbed against that request's injected
+ *     credentials;
+ *   - seat 2 scrubs against the `URLSearchParams` it just submitted, which is the one
+ *     place those POST-body values are known at all.
+ * Scrub first, extract second — a secret straddling the 160-char cut must be redacted
+ * rather than half-forwarded. Removing either bound on the belief that the other covers
+ * it reopens the leak; they cover different value sets, not the same one twice.
  */
 
 /** TASK-20260815 AC4: max chars of provider error text forwarded to a caller. */
