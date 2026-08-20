@@ -97,6 +97,7 @@ import {
   type RevokedBefore,
 } from '../state/connectionWizard.js';
 import { chooseAuthOption } from '../state/authKindChoice.js';
+import { hasLiveAppHost, notifyAppRefresh } from '../state/appHosts.js';
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
 import { Sheet } from '../ui/Sheet.js';
@@ -1395,6 +1396,13 @@ function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => Pr
 function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void }): ReactElement {
   const [testing, setTesting] = useState(false);
   const [outcome, setOutcome] = useState<ConnectionTestOutcome | undefined>(undefined);
+  /**
+   * The refresh prompt's own state (TASK-20260819 AC1). `declined` covers BOTH honest
+   * exits — the user said "not now", or the frame turned out to be unreachable — because
+   * from this screen they mean the same thing: there is nothing more to offer, and the
+   * prompt must not sit there implying otherwise.
+   */
+  const [refresh, setRefresh] = useState<'idle' | 'sent' | 'declined'>('idle');
 
   /**
    * Q7 — the probe, offered ONLY when the requirement declares one.
@@ -1502,6 +1510,59 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
                 ? `it works — ${row.requirement.provider.name} answered (${outcome.status}).`
                 : `that didn't work: ${outcome.message}`}
             </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/*
+        TASK-20260819 AC1 — the refresh prompt. Until this existed, the wizard proved a
+        connection worked and then discarded that knowledge: the user returned to an app
+        still rendering its sample data, with nothing on screen admitting it had not
+        caught up. Two things make it honest:
+
+        GATED ON VERIFIED, NOT SAVED. `awaitingProbe` is the same derivation the heading
+        uses (TASK-20260815 AC6 — "connected" is earned, not declared), so a probeable
+        row must PASS its probe first. Offering to replace real data on the strength of an
+        unproven credential would teach exactly the misplaced trust AC6 prevents. OAuth
+        kinds are unprobeable by design because the minted token IS the round trip, so
+        they qualify on arrival — which matters, since that is the kind Inbox Copilot uses.
+
+        OFFERED ONLY WHEN THERE IS SOMETHING TO TELL. `hasLiveAppHost` is asked because
+        this sheet also opens from Settings, where no frame is mounted; promising a
+        refresh into a void would be a button that lies.
+      */}
+      {!awaitingProbe && hasLiveAppHost(row.appId) && refresh !== 'declined' ? (
+        <div className="field" data-testid="connection-refresh-prompt">
+          <span className="hint">
+            {refresh === 'sent' ? (
+              <>
+                asked the app to load your real data — the sample data it was showing is on its way out.
+              </>
+            ) : (
+              <>
+                <strong>This app is still showing sample data.</strong> Load your real{' '}
+                {row.requirement.provider.name} data now? It replaces the example data on screen —
+                nothing in your {row.requirement.provider.name} account is changed.
+              </>
+            )}
+          </span>
+          {refresh === 'idle' ? (
+            <div className="row">
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setRefresh(notifyAppRefresh(row.appId, row.slot) ? 'sent' : 'declined');
+                }}
+              >
+                load my real data
+              </Button>
+              {/*
+                Declining is a real choice with its own button, not "close the sheet and
+                hope". Someone who wants to keep exploring the demo before pointing the
+                app at their own account is doing something legitimate.
+              */}
+              <Button onClick={() => setRefresh('declined')}>not now</Button>
+            </div>
           ) : null}
         </div>
       ) : null}
