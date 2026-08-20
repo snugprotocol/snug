@@ -31,6 +31,8 @@ import {
 } from '@snugprotocol/protocol';
 import { authFlowSecretKey, AUTH_FLOW_SECRET_PREFIX } from '@snugprotocol/db';
 import { isUrlWithinHosts } from './app-host-freeze.js';
+import { extractProviderErrorDetail } from './provider-error-detail.js';
+import { scrubAuthValues } from './scrub.js';
 import { base64UrlToUtf8, bytesToBase64Url, bytesToHex, randomBase64Url, utf8ToBase64Url } from './base64url.js';
 import type { CredentialStore, SecretsQuartet } from './credential-store.js';
 
@@ -42,6 +44,29 @@ const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const REFRESH_SKEW_MS = 60 * 1000; // refresh when <60s of access-token life remains
 const POST_TIMEOUT_MS = 15_000; // AbortSignal.timeout — browser-OK
 const REVOKE_TIMEOUT_MS = 5_000;
+
+/**
+ * The form parameters that carry SECRET material on a credential POST. Named explicitly
+ * rather than scrubbing every submitted value, because over-scrubbing costs honesty in
+ * the other direction: `grant_type=refresh_token` and `client_id` are diagnostic, and a
+ * failure message that redacts them is a row of asterisks where a reason should be.
+ *
+ * `code` and `code_verifier` earn their place alongside the obvious two — a one-time
+ * authorization code is still a credential until it is redeemed, and the PKCE verifier is
+ * the secret half of the challenge. Extend this when a new credential-bearing parameter
+ * is added; `token` covers the revoke path.
+ */
+const SECRET_FORM_PARAMS = ['client_secret', 'refresh_token', 'code', 'code_verifier', 'token'] as const;
+
+/** The submitted secret values, shaped as the scrubber's candidate record. */
+function submittedSecrets(body: URLSearchParams): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of SECRET_FORM_PARAMS) {
+    const value = body.get(name);
+    if (value !== null && value.length > 0) out[name] = value;
+  }
+  return out;
+}
 
 export type SnugAuthErrorCode =
   | 'invalid_state'
@@ -624,8 +649,54 @@ export class OAuthService {
       );
     }
     if (!response.ok) {
+      // THE ERROR BODY IS RAW PROVIDER BYTES AND THIS MESSAGE TRAVELS (audit D2).
+      //
+      // It does not stop here: the caller wraps it in a SnugAuthError, the executor turns
+      // that into `NET_AUTH_FAILED` prose, the playground relays that verbatim into the
+      // net-response frame (the app IFRAME), and the provider lane renders it into the
+      // model's context. So a slice of this body reaches both readers C1 names.
+      //
+      // It previously forwarded `text.slice(0, 500)` unmodified. The request that produced
+      // it is a credential POST — `refresh_token` and `client_secret` are in the body we
+      // just sent — and a provider that echoes submitted parameters in its error envelope
+      // (ordinary debugging behaviour) puts them straight into that slice.
+      //
+      // The scrubber cannot cover this and it is worth saying why, so nobody "fixes" it by
+      // reaching for one: on this path injection throws before a candidate set is built,
+      // and the leaking values are POST BODY parameters that were never injected headers,
+      // so they would fall outside the candidate set even if one existed. Bounding must
+      // therefore happen HERE, at the seat that reads the bytes.
+      //
+      // THE VALUE SCRUB IS THE CONTROL HERE. `extractProviderErrorDetail` bounds volume
+      // and shape — useful, and not a credential guard.
+      //
+      // `scrubAuthValues` runs over the values WE JUST SUBMITTED, and this seat is the one
+      // place they are known exactly: `body` is the very URLSearchParams that went out.
+      // That is precisely what the downstream response scrubber lacks — these are POST
+      // body params, never injected headers, so they are absent from its candidate set.
+      //
+      // The first cut of this fix relied on the extractor alone and leaked, in an
+      // instructive way: an allowlist of SHAPES decides which FIELD is forwarded, never
+      // what that field CONTAINS. Measured against the shipped extractor, all three of
+      // `invalid_grant for token rt-…`, `error=…&refresh_token=rt-…`, and
+      // `{"error_description":"bad token rt-…"}` carried the live token through the
+      // 160-char cap untouched. The third defeats the tempting narrower fix of "forward
+      // only recognized JSON fields": a provider puts the echo inside `error_description`,
+      // which is exactly the field a reader wants to see.
+      //
+      // Scrub on BOTH sides of the extract, and the second pass is not belt-and-braces:
+      // `JSON.parse` DECODES `\u` escapes and it runs INSIDE the extractor, so a provider
+      // that escapes its echo defeats an exact-substring scrub of the raw text and the
+      // secret is reconstituted character-for-character in the extracted field. That is
+      // not the documented re-encoding boundary (`scrub.ts:16-19`) — the value arrives in
+      // the SAME form, after a decode step we perform ourselves; the scrub was simply on
+      // the wrong side of it. The first pass still earns its place: it catches the
+      // plain-text and form-encoded heads, where no decode happens, and it redacts a value
+      // straddling the 160-char cut rather than letting half of it through.
       const text = await response.text().catch(() => '');
-      throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
+      const secrets = submittedSecrets(body);
+      const detail = extractProviderErrorDetail(scrubAuthValues(text, secrets), secrets);
+      throw new Error(detail !== undefined ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`);
     }
     return (await response.json()) as TokenResponse;
   }

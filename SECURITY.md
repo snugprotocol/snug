@@ -44,7 +44,13 @@ Please include a reproduction — a Playground sequence, a single-file app HTML,
 
 ## Threat model
 
-A full written threat model is landing at `docs/threat-model.md`. Until it merges, the hard constraints in [`docs/conventions.md`](docs/conventions.md) are the authoritative statement of what the system promises.
+The full written threat model is **[`docs/threat-model.md`](docs/threat-model.md)**: scope, assets, adversaries, trust boundaries, the enforced invariants with the file that enforces each and the test that would fail if it regressed — and, with equal prominence, the residuals that are **accepted and not mitigated**. If you are deciding whether to trust this system, read its §6 before its §5.
+
+## Platform
+
+**The desktop shell ships macOS only — through alpha, beta and 1.0 — and the reason is a security one.** On Windows, wry's WebView2 backend discards `for_main_frame_only`, so Tauri's IPC invoke key is injected into `sandbox="allow-scripts"` app iframes — a C1 *and* C2 break that any installed app could exploit, with no off-switch available at the wry, Tauri, or WebView2 layer. macOS is unaffected (WKWebView honors the flag). No Windows build has ever been distributed and none will ship in this configuration. **Windows desktop is reconsidered post-1.0**, as its own decision — if you need it, that is the honest timeline rather than "soon". Details: threat model R-5, [ADR-0021 D8's addendum](docs/decisions/0021-desktop-shell-transports.md), and the [root-cause note](docs/solutions/2026-08-13-webview2-subframe-ipc-injection.md).
+
+The browser Playground is unaffected by the above and runs everywhere.
 
 ## Safe harbor
 

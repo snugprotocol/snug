@@ -56,6 +56,7 @@ import { utf8ToBase64 } from './base64url.js';
 import type { AuthConnectionState, CredentialStore } from './credential-store.js';
 import { isForbiddenNetHost, isPrivateRfc1918Ipv4Literal } from './net-guards.js';
 import { OAuthService, SnugAuthError, type FetchLike } from './oauth-service.js';
+import { extractProviderErrorDetail } from './provider-error-detail.js';
 import { scrubAuthValues } from './scrub.js';
 import { AuthTemplateError, renderAuthRequestTemplates } from './template-engine.js';
 import { AuthTemplateLintError, assertLintedTemplate } from './template-lint.js';
@@ -1081,23 +1082,6 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         }
       }
 
-      // Gate 5a — THE SIDECAR CLASS (ADR-0032), decided BEFORE the SSRF guard.
-      //
-      // `isForbiddenNetHost` refuses `.localhost` — correctly, and that refusal is left
-      // untouched, because it exists to stop a NETWORK request reaching a local service. This
-      // host is never dialled at all: the helper listens on a unix socket, and
-      // `whatsapp.sidecar.localhost` is an IDENTITY the frozen ceiling can hold (hosts are
-      // the ceiling's unit) rather than an address. RFC 6761 reserves `.localhost` precisely
-      // so it can never resolve publicly.
-      //
-      // Everything that protects the USER has already run above: the row is approved, the
-      // host is within the frozen ceiling, and the mutating-confirm gate has answered. What
-      // is skipped below is only the machinery for choosing and hardening a NETWORK
-      // transport, which has nothing to decide when there is no network involved.
-      if (host === SIDECAR_SYMBOLIC_HOST) {
-        return await sendViaSidecar();
-      }
-
       // Gate 5 — SSRF literal guard (defense in depth: runs even for ceiling members).
       // The desktop policy stands this gate down for exactly the RFC-1918 IPv4-literal
       // class computed above: such a host is forbidden for no reason BEYOND being
@@ -1106,7 +1090,16 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // ADR-0026 §3: the symbolic branch is HOST-CLEAN — on that path this message
       // reaches an app that must never learn the resolved address, and on web (no
       // transport policy) this is exactly where a resolved LAN host lands.
-      if (!lanPrivateHost && isForbiddenNetHost(host)) {
+      // THE SIDECAR CLASS (ADR-0032) stands this gate down — and ONLY this gate.
+      //
+      // `isForbiddenNetHost` refuses `.localhost` correctly, and that refusal is left
+      // untouched, because it exists to stop a NETWORK request reaching a local service.
+      // This host is never dialled at all: the helper listens on a unix socket, and
+      // `whatsapp.sidecar.localhost` is an IDENTITY the frozen ceiling can hold (hosts are
+      // the ceiling's unit) rather than an address. RFC 6761 reserves `.localhost` precisely
+      // so it can never resolve publicly.
+      const sidecarClass = host === SIDECAR_SYMBOLIC_HOST;
+      if (!sidecarClass && !lanPrivateHost && isForbiddenNetHost(host)) {
         return failure(
           NET_ERROR_CODES.NET_SSRF_BLOCKED,
           symbolic !== undefined
@@ -1136,6 +1129,23 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         }
       }
 
+      // Gate 6a — THE SIDECAR SEND, placed AFTER the confirm gate.
+      //
+      // It sat BEFORE gate 6 until the TASK-20260820 audit, under a comment asserting that
+      // "the mutating-confirm gate has answered" — it had not. Every send reached the helper
+      // with credentials injected and no confirmation. The gate is not transport machinery
+      // that a unix socket makes moot: it carries `slot` and `body` precisely so ADR-0033's
+      // standing gate can decide on WHAT is being sent (it derives a chat thread from them),
+      // and the whatsapp delta's impersonation bound — "every send is read and confirmed by
+      // the user first" — is this gate and nothing else. Speech in the user's name is the
+      // one effect that must never ride on transport-shape reasoning.
+      //
+      // What is still skipped below is only the machinery for choosing and hardening a
+      // NETWORK transport, which has nothing to decide when there is no network involved.
+      if (sidecarClass) {
+        return await sendViaSidecar();
+      }
+
       // Gate 7 — app-supplied credential-shaped headers are ALWAYS stripped (C1).
       const appHeaders = stripCredentialShapedHeaders(input.headers ?? {});
 
@@ -1143,6 +1153,14 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // Written by every performFetch pass; the retry pass injects the same way, so the
       // last write always describes the delivered result.
       let credentialsInjected = false;
+
+      // The last pass's scrub candidates, for the observer's detail extraction only.
+      // `scrubCandidates` stays performFetch-local (each pass injects its own values);
+      // this mirrors `credentialsInjected` — last write describes the delivered result.
+      // The observer needs them because `extractProviderErrorDetail` PARSES the body, and
+      // `JSON.parse` decodes `\u` escapes, so a credential that gate 10 correctly scrubbed
+      // out of the raw delivered body can be reconstituted inside a recognized field.
+      let scrubCandidatesForDetail: Record<string, string> = {};
 
       const performFetch = async (forceRefresh: boolean): Promise<ConnectedFetchResult> => {
         // Gate 8 — injection (per kind; OAuth paths are ceiling-checked internally, N2b).
@@ -1190,6 +1208,9 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           const encoded = new URLSearchParams({ [key]: value }).toString().slice(key.length + 1);
           if (encoded !== value) scrubCandidates[`query:${key}:encoded`] = encoded;
         }
+        // Hand the WHOLE set to the observer's extractor — query values included, since a
+        // `queryTemplate` credential is a credential in a URL and an echo can carry it.
+        scrubCandidatesForDetail = scrubCandidates;
 
         // QUERY INJECTION — into the OUTBOUND URL only, and only HERE, after every gate:
         // the ceiling/host/SSRF gates matched on the app's own URL, the confirm gate
@@ -1322,7 +1343,7 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           // only when someone is LISTENING: the wizard probe strips the seat, so its
           // 401/403 outcomes must not pay for an extraction nobody reads. A 2-arg call
           // when no detail exists keeps empty-body behavior byte-identical.
-          const detail = extractAuthFailureDetail(result.body);
+          const detail = extractProviderErrorDetail(result.body, scrubCandidatesForDetail);
           if (detail !== undefined) {
             deps.onAuthShapedFailure(grant.slot, result.status, detail);
           } else {
@@ -1356,63 +1377,6 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       return deliver(first);
     },
   };
-}
-
-/** TASK-20260815 AC4: max chars of provider error text forwarded to the observer. */
-const MAX_AUTH_FAILURE_DETAIL_CHARS = 160;
-
-/**
- * Bodies above this size yield no detail at all. A real provider error envelope is a
- * few hundred bytes; the delivered body can be up to the 1 MiB gate-10 cap, and parsing
- * a megabyte of JSON to pull 160 chars on every credentialed 401/403 is work an
- * adversarial or verbose provider gets to bill us for (Gate-5 review, efficiency).
- */
-const MAX_AUTH_FAILURE_BODY_CHARS = 8_192;
-
-/**
- * Extract a short human-readable reason from an auth-shaped failure body.
- *
- * INPUT CONTRACT: the DELIVERED `result.body` — already scrubbed of every injected
- * credential form and 1 MiB-capped at gate 10. This function must never be handed raw
- * transport bytes; it adds bounding and shape-recognition, not scrubbing.
- *
- * Recognized shapes, in order: Spotify's `{"error":{"message":…}}`, RFC 6749
- * `error_description`, a bare `message` string, a bare `error` string. Everything
- * structured-but-unrecognized yields NOTHING — raw JSON in a banner is noise, not
- * diagnosis — and the Gate-5 review found the first cut leaking exactly that: a
- * MALFORMED `{` body (a >1 MiB JSON error truncated mid-token by gate 10 no longer
- * parses) fell through to the text head, and JSON ARRAYS (Hue CLIP v1 errors),
- * JSON strings and `)]}'`-guarded bodies skipped the JSON branch entirely. So: a `{`
- * body parses or yields nothing, and a body opening with `[`, `<`, `"` or `)` is
- * structure/markup, never prose. Plain text becomes the head, hard-capped — a
- * plain-text reason like "quota exceeded" is exactly the honesty the banner wants.
- */
-function extractAuthFailureDetail(body: string): string | undefined {
-  if (body.length > MAX_AUTH_FAILURE_BODY_CHARS) return undefined;
-  const trimmed = body.trim();
-  if (trimmed.length === 0) return undefined;
-  const cap = (text: string): string => text.slice(0, MAX_AUTH_FAILURE_DETAIL_CHARS);
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      const error = parsed['error'];
-      const candidates: unknown[] = [
-        typeof error === 'object' && error !== null ? (error as Record<string, unknown>)['message'] : undefined,
-        parsed['error_description'],
-        parsed['message'],
-        typeof error === 'string' ? error : undefined,
-      ];
-      const hit = candidates.find(
-        (candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0,
-      );
-      return hit !== undefined ? cap(hit.trim()) : undefined;
-    } catch {
-      // Malformed or truncated JSON: brace noise is not a diagnosis.
-      return undefined;
-    }
-  }
-  if ('[<")'.includes(trimmed[0]!)) return undefined;
-  return cap(trimmed);
 }
 
 // ------------------------------------------------------- the testRequest probe (Q7)

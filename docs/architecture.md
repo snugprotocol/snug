@@ -115,8 +115,9 @@ the 14 browser CSP checks + IPC-unreachability-from-iframe checks + one wizard e
 journey, run by the shell-gate harness (`pnpm --filter desktop gate`): macOS GREEN
 2026-08-12; Windows RAN 2026-08-13 and FAILED deliberately — wry's WebView2 backend
 ignores `for_main_frame_only`, so `__TAURI_INTERNALS__` reaches app iframes: ADR-0021 D8
-trigger MET, gate stays RED pending the owner's platform decision (Electron / macOS-only
-/ upstream fix).
+trigger MET. **Resolved 2026-08-20 — the shell ships macOS-only through alpha, beta and
+1.0 (ADR-0021 D8 addendum); Windows desktop is reconsidered post-1.0. The Windows leg
+stays RED by design for that whole run and must not be softened.**
 Threat surface: `docs/security/threat-model-delta-desktop-shell.md`.
 
 ### Desktop-aware dynamic auth (TASK-20260812-desktop-auth-awareness, ADR-0022 + ADR-0023)

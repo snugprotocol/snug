@@ -36,6 +36,16 @@ jobs:
       # --force: the turbo cache must never vouch for this gate (lessons 2026-08-10).
       - run: pnpm exec turbo run build --force
       - run: pnpm exec turbo run test --force
+      # The threat model is a public security claim, so it is graded like code: every
+      # delta pinned by hash (a new or edited one fails until the model is re-read
+      # against it), and every enforcement/test path it cites proven to still exist.
+      # Cheap and dependency-free — it runs here rather than only on a doc-touching PR.
+      - run: pnpm run check-threat-model
+      # C2, workspace-wide: the runner's own source guard roots at packages/runner/src and
+      # cannot see the app directories where a new iframe is most likely to appear. The
+      # whitepaper tells implementers a frame carrying `allow-same-origin` fails the BUILD;
+      # this is what makes that claim true across the repo rather than in one package.
+      - run: pnpm run check-sandbox-guard
 
   desktop-shell:
     strategy:
