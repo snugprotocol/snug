@@ -210,3 +210,68 @@ inside a documentation task, per the spec's out-of-scope list):
 
 **Remaining for this task:** Gate 5 review, then Gate 6 close. No code path is left
 half-done; the branch is coherent at every commit.
+
+### 2026-08-20 — Claude (Fable 5) — session 3 (owner scope + Gates 5 & 6)
+
+**Owner sharpened the platform decision:** macOS-only holds through alpha, beta AND 1.0;
+Windows desktop is reconsidered post-1.0. Firmer than what I had recorded — "macOS-only at
+1.0" reads as a fact about one release and invites relitigating it each milestone, and
+invites treating an upstream wry fix mid-beta as automatically reopening it. It does not:
+what is deferred is the reconsideration, not the constraint. Propagated to all eight
+surfaces; the ADR now also enumerates the post-1.0 preconditions (upstream fix + green
+Windows gate leg + `cdp_jwt` native-ECDSA verified there — that last is separately
+unverified and easy to lose behind the louder R-5).
+
+**Gate 5.** Full suite green uncached, then two fresh-context adversarial reviewers (code
+diff, and document/claims). Both confirmed **D1 clean** — closure validity, the two
+statements between old and new branch positions, and the constant comparison under
+case/fullwidth/punycode/trailing-dot normalisation (fail-closed both ways). The document
+review verified §5 rows beyond the eight requested, independently re-derived R-9, R-11,
+R-12, R-14 and R-5b, and found §4/§6/§7 sound.
+
+**What the reviews found, and what I did:**
+
+1. **My D2 fix was incomplete — I caught this myself mid-review, and the code reviewer
+   confirmed it independently.** `extractProviderErrorDetail` bounds VOLUME and SHAPE; I
+   had treated it as a value guard. A shape allowlist picks which FIELD is forwarded and
+   never vouches for its CONTENTS, so `{"error_description":"bad token rt-…"}` sailed
+   through — and that case also kills the tempting narrower fix, since that IS the
+   recognized field. Fixed by scrubbing the submitted `URLSearchParams` (this seat knows
+   them exactly), with `SECRET_FORM_PARAMS` explicit so `grant_type`/`client_id` stay
+   readable rather than becoming asterisks.
+2. **Then the `\u`-escape bypass** (reviewer's find, verified myself): `JSON.parse` decodes
+   escapes and runs INSIDE the extractor, i.e. after the caller's scrub — reconstituting
+   the secret character-for-character. **I checked the observer seat too and it had the
+   same hole**, reaching the wizard's attention gate. Fixed in the shared module (the
+   decode is that function's own act) rather than twice at call sites; the executor passes
+   its full candidate set including query values.
+3. **Three delta residuals had silently vanished** → R-22..R-25 (SimpleFIN wrong-account
+   binding; SimpleFIN bank-credential custody; `^`-anchored C1 scanner missing keys in
+   prose; drift comparing COUNTS not ROWS — a real consent-integrity gap). **This exposed a
+   limit in my own AC2 checker**, now stated in §8 against its own interest: a hash proves a
+   delta has not MOVED, never that its residuals were CARRIED. It was green throughout.
+4. **R-11 no longer excludes this task's own checks** — instead of admitting they were
+   CI-only, `pnpm test` now runs them, removing the residual rather than documenting it.
+5. R-16 attribution corrected (`MAX_IN_FLIGHT` is the runner host, all frame types, one
+   instance); R-26 added for the plain-text head; the §5 row and two doc-comments rewritten
+   to credit the value scrub rather than the allowlist, since a future "simplification" back
+   to extraction-only would reopen the leak.
+
+**One review finding rejected, on evidence.** The document reviewer reported `turbo run
+test` passing 23/23 while auth was red, and called the harness unreliable. I probed it
+directly with a deliberately failing auth test: turbo reports `Failed:
+@snugprotocol/auth#test` and exits 1. It had sampled a mid-edit tree between a red test and
+its fix, then compared against a journal line from an earlier commit. Its other five
+findings were all real — worth recording that the ratio was 5:1 in favour of believing it.
+
+**Gate 6.** Five lessons distilled into the existing sections (shape-vs-value allowlists;
+scrub both sides of a decode; a comment asserting an ordering is a claim reviewers believe;
+a hardcoded permissive stub makes never-called indistinguishable from granted; assert on
+the field that carries the LEAK, not only the one carrying the verdict — plus the two
+process rules about a mechanical check's reach and reviewing a mid-edit tree).
+
+**Final state:** root `pnpm test` green uncached — 23/23 turbo tasks + 130 threat-model
+checks + 4 sandbox-guard checks; auth 915. All seven ACs met. Every code change on this
+branch was found by adversarial review rather than planned: three credential-leak paths
+(one confirm-gate bypass, two error-body echoes) that eight per-change deltas and their
+green suites had all missed.
