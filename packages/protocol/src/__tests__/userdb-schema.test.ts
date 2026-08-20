@@ -12,10 +12,14 @@ import {
   APP_RESERVED_PREFIXES,
   appDataToken,
   appRestTableName,
+  CONTAINER,
   isValidAppObjectName,
   STANDARD_APP_DOC_SLUGS,
   USERDB_DDL,
+  USERDB_EXTENSION,
   USERDB_FILE,
+  USERDB_LEGACY_EXTENSION,
+  USERDB_LEGACY_FILE,
   USERDB_INDEX_DDL,
   USERDB_LIMITS,
   USERDB_OPFS_DIR,
@@ -61,7 +65,34 @@ describe('userdb schema constants (spec surface)', () => {
   it('lives in a distinct OPFS directory that can never collide with per-app files (F13)', () => {
     expect(USERDB_OPFS_DIR).toBe('snug-userdb');
     expect(USERDB_OPFS_DIR).not.toBe('snug-db');
-    expect(USERDB_FILE).toBe('user.sqlite');
+  });
+
+  it('names the canonical user file `.snug`, keeping the legacy name for adopt-forward (AC1, ADR-0042)', () => {
+    expect(USERDB_FILE).toBe('user.snug');
+    expect(USERDB_EXTENSION).toBe('.snug');
+    // The legacy name must survive as a CONSTANT, not as a memory. It is the only
+    // thing standing between an upgrading user and a fresh empty database opening
+    // beside their real one — the single highest-severity risk in this whole change.
+    expect(USERDB_LEGACY_FILE).toBe('user.sqlite');
+    expect(USERDB_LEGACY_EXTENSION).toBe('.sqlite');
+    expect(USERDB_FILE).not.toBe(USERDB_LEGACY_FILE);
+    expect(USERDB_FILE.endsWith(USERDB_EXTENSION)).toBe(true);
+  });
+
+  it('pins the SNUGENC1 container constants as normative spec surface (ADR-0043)', () => {
+    // These are interop-normative: a hub that cannot recognise the magic will treat a
+    // protected user file as CORRUPT and quarantine it, which is data loss by
+    // misidentification. The magic must never drift, and it must not collide with the
+    // two magics already living at this seam.
+    expect(CONTAINER.MAGIC).toBe('SNUGENC1\n');
+    // The sidecar magic is spelled out rather than imported: it lives in
+    // @snugprotocol/db, and protocol must not depend on its own dependent.
+    expect(CONTAINER.MAGIC).not.toBe('SNUGSYNC1\n');
+    expect(CONTAINER.MAGIC.startsWith('SQLite')).toBe(false);
+    expect(CONTAINER.VERSION).toBe(1);
+    // A security parameter, not a tuning knob: measured at ~175 ms, OWASP baseline.
+    expect(CONTAINER.KDF_ITERATIONS).toBeGreaterThanOrEqual(600_000);
+    expect(CONTAINER.SLOT_KIND.passphrase).not.toBe(CONTAINER.SLOT_KIND.recoveryKey);
   });
 
   it('declares the complete hub-namespace table set, all snug_-prefixed (dynamic app_* rest tables are deliberately NOT enumerated here)', () => {

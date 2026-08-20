@@ -57,7 +57,48 @@ export const USERDB_LIMITS = {
  * `namespaceToFileName` output (plan F13).
  */
 export const USERDB_OPFS_DIR = 'snug-userdb';
-export const USERDB_FILE = 'user.sqlite';
+/**
+ * The canonical user-file name. `.snug` is the Snug Protocol's own extension for the
+ * one portable file a user owns (ADR-0042, completing ADR-0021 D6 which already
+ * registered the OS association). The bytes are unchanged — a plain `.snug` IS a
+ * SQLite database, and every validation site in this repo sniffs CONTENT, not the
+ * name. Only a protected file differs, and it declares itself with CONTAINER.MAGIC.
+ */
+export const USERDB_FILE = 'user.snug';
+/**
+ * The pre-ADR-0042 name. Retained because renaming a file nobody looks for is how a
+ * user silently gets an empty database beside their real one: the open path reads
+ * this when the canonical file is absent, then adopts forward. NEVER deleted — the
+ * legacy file stays on disk as the user's own backup.
+ */
+export const USERDB_LEGACY_FILE = 'user.sqlite';
+
+/** The canonical extension, single-homed so the six historical spellings cannot drift again. */
+export const USERDB_EXTENSION = '.snug';
+export const USERDB_LEGACY_EXTENSION = '.sqlite';
+
+/**
+ * The `SNUGENC1` encrypted-container format (ADR-0043) — NORMATIVE, because a hub
+ * that cannot recognise a protected file will treat a user's data as corrupt and
+ * quarantine it. Conforming hubs MUST detect the magic and prompt for a secret.
+ *
+ * The bytes are: magic | version | kdf id | iterations | salt | slot count |
+ * slot table | wrapped file keys | payload IV | AES-256-GCM payload. The header
+ * (through the slot table) is bound as GCM additional authenticated data, so header
+ * damage is reported as damage rather than as a wrong passphrase.
+ */
+export const CONTAINER = {
+  MAGIC: 'SNUGENC1\n',
+  VERSION: 1,
+  KDF_PBKDF2_SHA256: 0x0001,
+  /**
+   * PBKDF2-SHA256 iterations (OWASP baseline). Measured at 175 ms — a deliberate,
+   * once-per-unlock cost. Stored in the header so it can be raised later without
+   * orphaning existing files.
+   */
+  KDF_ITERATIONS: 600_000,
+  SLOT_KIND: { passphrase: 0x01, recoveryKey: 0x02 },
+} as const;
 
 /** Hub-namespace table names. Dynamic `app_<token>__*` rest tables are NOT listed here. */
 export const USERDB_TABLES = {
