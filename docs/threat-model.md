@@ -133,7 +133,7 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | An app cannot send a credential-shaped header across the bridge | `packages/protocol/src/frames.ts` — `netRequestSchema` refuses `STRIP_HEADERS` names; the whole frame is malformed | `packages/runner/src/__tests__/host-net.test.ts` — a credential-carrying request is answered MALFORMED, handler never called |
 | The runner is value-blind — it never imports the credential layer | `packages/runner/src/host.ts` relays; no `@snugprotocol/auth` dependency exists | `packages/runner/src/__tests__/net-value-blind.test.ts` — source-walking lint over shipped sources |
 | Injected credential values are scrubbed from response bodies, headers and error messages | `packages/auth/src/scrub.ts`, applied at the executor's delivery seat in `packages/auth/src/connected-fetch.ts` | `packages/auth/src/__tests__/scrub.test.ts` |
-| A provider's error body cannot carry credential material out of the OAuth seat | `packages/auth/src/oauth-service.ts` — the submitted secret values are scrubbed (this seat knows them exactly), **then** `packages/auth/src/provider-error-detail.ts` bounds the shape to a recognized error envelope. Both are needed: a shape allowlist decides which field is forwarded, never what that field contains | `packages/auth/src/__tests__/oauth-error-echo.test.ts` |
+| A provider's error body cannot carry credential material out of the OAuth seat | `packages/auth/src/oauth-service.ts` — **the value scrub is the control**: the submitted secret values are known exactly here (`postForm` holds the `URLSearchParams` it sent) and are scrubbed on both sides of the extraction. `packages/auth/src/provider-error-detail.ts` bounds *volume and shape* only, and re-scrubs its own output because `JSON.parse` decodes `\u` escapes | `packages/auth/src/__tests__/oauth-error-echo.test.ts`, `packages/auth/src/__tests__/provider-error-detail.test.ts` |
 | Host-bound injection is strict always — no bypass flag exists | `packages/auth/src/app-host-freeze.ts` (exact-hostname, punycode-normalized both sides) | `packages/auth/src/__tests__/browser-safe.test.ts` — source lint **plus a runtime signature walk** over real exports |
 | Hub-bound sync and default exports carry no secrets | `packages/db/src/userdb/userdb.ts` — strip then VACUUM | `packages/db/src/userdb/__tests__/auth-custody.test.ts` |
 | Credentials never reach the LLM's context | `apps/playground/src/agent/providerTools.ts` renders the already-scrubbed result | `apps/playground/src/__tests__/providerTools.test.ts` — asserts the credential reached the *wire* and is absent from the *model-bound string* |
@@ -302,17 +302,58 @@ reachable.
 
 ### Smaller, stated rather than discovered
 
+- **R-22 — A pasted setup token can bind a connection to someone ELSE's account.** The
+  SimpleFIN claim URL inside a token names a *bridge account*, not a user. A user
+  social-engineered into pasting an attacker's token binds the connection to the attacker's
+  bridge: the app then renders the attacker's transaction feed as though it were the user's.
+  No user credential or user data crosses in either direction — **the harm is deception,
+  not disclosure** — and single-use token semantics bound replay. Bounded by wizard copy
+  telling the user the token comes from *their own* SimpleFIN Bridge account. Worth stating
+  because it is the only residual here whose payload is a false picture of the user's own
+  finances rather than a leak.
+- **R-23 — A pinned third party custodies real bank credentials.** SimpleFIN Bridge holds
+  the user's bank logins server-side — that is its product — and mints read-only feeds.
+  Snug's boundary starts at the minted access URL; a Bridge compromise is outside it and
+  no control here reaches it. Disclosed to the user in the registration walkthrough ("your
+  bank passwords stay with SimpleFIN — they never touch Snug"). Called out separately from
+  §1's out-of-scope line about third-party infrastructure, because this is a *first-party
+  pinned dependency*, not a deployment the user chose.
+- **R-24 — The C1 credential scanner misses keys embedded in prose.** `KNOWN_KEY_PREFIX` is
+  `^`-anchored, so a payload reading `"Use key sk-ant-…"` passes the envelope-boundary scan.
+  This applies to the `payload`/`state` envelope path and the runtime-contract seat alike —
+  the contract seat is therefore *no weaker* than the envelope seat, which is the only claim
+  it makes; it is not airtight. Widening the pattern is a scanner-level change with its own
+  false-positive budget. A test pins the limit honestly rather than implying otherwise.
+- **R-25 — Write-approval drift detection compares COUNTS, not rows.** A concurrent change
+  that leaves the affected-row count identical while changing *which* rows match passes the
+  check — row 5 rewritten in place, or one row deleted while another starts matching the
+  same predicate. The window is between preview and approval, and the writer would have to
+  be the app itself or a concurrent sync. Closing it means hashing the affected rows at
+  preview and re-checking at execute. This is a consent-integrity residual: the user
+  approved a specific change, and what executes can differ from what they read.
 - **R-13 — DNS rebinding for public hostnames.** The LAN policy keys on IP literals; a
   public name rebinding to a private IP mid-flight is refused only as a *name*. Native
   resolve-then-connect-by-IP is deferred. The ceiling still bounds which names are reachable.
 - **R-14 — The ceiling does not bound ports, paths, methods or query strings.** Any path on
   an approved host is reachable, including a debug/echo endpoint — the precondition R-2
   depends on. Port is deliberately not part of host identity.
+- **R-26 — Provider error prose is forwarded on a bounded, best-effort basis.** When a
+  provider's error body is not a recognized envelope, up to 160 characters of its head are
+  forwarded so a human sees *some* reason. Nothing keeps credential material out of that
+  head except the value scrub at the calling seat — the extractor bounds volume and shape,
+  never content. The scrub covers what the caller can name (the submitted OAuth params; the
+  injected credentials for that request), so a secret the caller never sent and never
+  injected — say, a *different* credential the provider chose to mention — would pass. The
+  same exact-substring limit as R-2 applies to what it does cover.
 - **R-15 — Credentials in URLs reach surfaces we do not own** — server logs, proxies,
   referrers, history. Every site we own is scrubbed; theirs cannot be. Inherited.
-- **R-16 — No per-app rate limit on the net executor.** Concurrency is capped at 8 and the
-  ceiling bounds reachable hosts, but serial requests are unlimited — an app can burn the
-  user's provider quota.
+- **R-16 — No per-app rate limit on the net executor.** Serial requests are unlimited — an
+  app can burn the user's provider quota. The ceiling bounds *which* hosts are reachable,
+  so this is not an open amplifier. The one concurrency bound is `MAX_IN_FLIGHT = 8` in
+  `packages/runner/src/host.ts` — note it lives in the **runner host**, not the executor,
+  and covers all in-flight frames (db and net together) for one runner instance rather than
+  net requests per app. Stated precisely because "capped at 8" invites an auditor to go
+  looking for a cap in the executor, where there is none.
 - **R-17 — The BYOK browser-CORS advisory.** Some providers refuse browser-origin calls;
   the registry's `browserCallable` flag is human-authored and *absent means unknown*, which
   is disclosed as unknown rather than assumed callable. The desktop shell's native fetch is
@@ -357,8 +398,16 @@ reachable.
 
 Each per-change delta remains the detailed record for its change. The hashes below are
 pinned by `pnpm run check-threat-model`: a new delta, or an edit to an existing one, fails
-that check until this model has been re-read against it. That is the mechanism keeping a
-consolidation from silently falling behind the changes it consolidates.
+that check until this model has been re-read against it.
+
+**What that mechanism does and does not prove.** It proves a delta has not moved beneath
+this document — it forces a human to *look* again. It cannot prove the looking was any
+good: a hash says nothing about whether a delta's residuals were actually carried into §6.
+The Gate-5 review of this very document found three that were not (SimpleFIN's
+wrong-account binding and bank-credential custody, and the count-vs-row drift limit), and
+the checker was perfectly green while they were missing. They are now R-22 through R-25.
+The "consolidated into" column below is human-maintained prose, not a verified mapping —
+treat it as a reading aid, and read the delta itself when the answer matters.
 
 <!-- DELTA-LEDGER:BEGIN -->
 
@@ -368,9 +417,9 @@ consolidation from silently falling behind the changes it consolidates.
 | `docs/security/threat-model-delta-desktop-auth.md` | `f7e88cee2235` | §4 · R-1, R-2, R-5, R-6, R-15, R-20 |
 | `docs/security/threat-model-delta-desktop-shell.md` | `ebd06c7635f5` | §5 C2 · R-1, R-3, R-13 |
 | `docs/security/threat-model-delta-dynamic-auth-v2.md` | `8bae299b6bb2` | §5 authoring · R-2, R-4, R-19 |
-| `docs/security/threat-model-delta-lean-runtime-data-chat.md` | `bec065ca9633` | §5 authoring · R-7, R-8 |
+| `docs/security/threat-model-delta-lean-runtime-data-chat.md` | `bec065ca9633` | §5 authoring · R-7, R-8, R-24, R-25 |
 | `docs/security/threat-model-delta-provider-chat-lane.md` | `6f92151dad7c` | §5 ceiling · R-8 |
-| `docs/security/threat-model-delta-simplefin-token-claim.md` | `e8cb2f9a8acd` | §5 ceiling · R-1 |
+| `docs/security/threat-model-delta-simplefin-token-claim.md` | `e8cb2f9a8acd` | §5 ceiling · R-1, R-22, R-23 |
 | `docs/security/threat-model-delta-whatsapp-sidecar.md` | `772b1bc18edb` | §5 ceiling · R-3, R-9, R-10, R-12 |
 
 <!-- DELTA-LEDGER:END -->

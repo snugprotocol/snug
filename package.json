@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "test": "turbo run test",
+    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard",
     "lint": "turbo run lint",
     "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke",
     "update-code-map": "node --test scripts/update-code-map-counts.test.mjs && node scripts/update-code-map-counts.mjs",

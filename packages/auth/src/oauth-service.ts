@@ -667,29 +667,35 @@ export class OAuthService {
       // so they would fall outside the candidate set even if one existed. Bounding must
       // therefore happen HERE, at the seat that reads the bytes.
       //
-      // TWO bounds, and both are needed — the Gate-5 review found that either alone leaks:
+      // THE VALUE SCRUB IS THE CONTROL HERE. `extractProviderErrorDetail` bounds volume
+      // and shape — useful, and not a credential guard.
       //
-      //   1. `scrubAuthValues` over the values WE JUST SUBMITTED. This seat is the one
-      //      place those values are known exactly (`body` is the very URLSearchParams that
-      //      went out), which is precisely what the response scrubber lacks downstream.
-      //   2. `extractProviderErrorDetail` — an allowlist of recognized error-envelope
-      //      SHAPES. A shape it does not recognize yields no prose at all: the status
-      //      alone, which is what a caller needs to tell 400 from 503 and all a stranger's
-      //      bytes have earned.
+      // `scrubAuthValues` runs over the values WE JUST SUBMITTED, and this seat is the one
+      // place they are known exactly: `body` is the very URLSearchParams that went out.
+      // That is precisely what the downstream response scrubber lacks — these are POST
+      // body params, never injected headers, so they are absent from its candidate set.
       //
-      // Bound 2 alone was the first cut of this fix, and it was wrong in an instructive
-      // way: an allowlist of shapes decides which FIELD is forwarded, never what that
-      // field CONTAINS. Measured against the shipped extractor, all three of
+      // The first cut of this fix relied on the extractor alone and leaked, in an
+      // instructive way: an allowlist of SHAPES decides which FIELD is forwarded, never
+      // what that field CONTAINS. Measured against the shipped extractor, all three of
       // `invalid_grant for token rt-…`, `error=…&refresh_token=rt-…`, and
       // `{"error_description":"bad token rt-…"}` carried the live token through the
       // 160-char cap untouched. The third defeats the tempting narrower fix of "forward
       // only recognized JSON fields": a provider puts the echo inside `error_description`,
       // which is exactly the field a reader wants to see.
       //
-      // Scrub BEFORE extract, so a value straddling the 160-char cut is redacted rather
-      // than half-forwarded.
+      // Scrub on BOTH sides of the extract, and the second pass is not belt-and-braces:
+      // `JSON.parse` DECODES `\u` escapes and it runs INSIDE the extractor, so a provider
+      // that escapes its echo defeats an exact-substring scrub of the raw text and the
+      // secret is reconstituted character-for-character in the extracted field. That is
+      // not the documented re-encoding boundary (`scrub.ts:16-19`) — the value arrives in
+      // the SAME form, after a decode step we perform ourselves; the scrub was simply on
+      // the wrong side of it. The first pass still earns its place: it catches the
+      // plain-text and form-encoded heads, where no decode happens, and it redacts a value
+      // straddling the 160-char cut rather than letting half of it through.
       const text = await response.text().catch(() => '');
-      const detail = extractProviderErrorDetail(scrubAuthValues(text, submittedSecrets(body)));
+      const secrets = submittedSecrets(body);
+      const detail = extractProviderErrorDetail(scrubAuthValues(text, secrets), secrets);
       throw new Error(detail !== undefined ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`);
     }
     return (await response.json()) as TokenResponse;

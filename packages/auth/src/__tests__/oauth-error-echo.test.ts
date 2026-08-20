@@ -235,6 +235,33 @@ describe('a provider error body never carries credential material out of the oau
     expect(message).not.toContain(CLIENT_SECRET);
   });
 
+  /**
+   * GATE-5 REVIEW, SECOND FINDING — scrub-before-extract is not sufficient on its own.
+   *
+   * `JSON.parse` DECODES `\u` escapes, and it runs inside `extractProviderErrorDetail` —
+   * i.e. AFTER the scrub. So a provider that escapes its echo defeats an exact-substring
+   * scrub of the raw text and the token is recovered character-for-character, in
+   * cleartext, in the extracted field:
+   *
+   *   {"error_description":"bad token rt-…"}  ->  "bad token rt-USER-…"
+   *
+   * This is NOT the documented re-encoding boundary (`scrub.ts:16-19`). That boundary is
+   * about a value arriving in a DIFFERENT form (base64, hex) which no exact-substring
+   * matcher can be expected to catch. Here the value arrives in the SAME form after a
+   * decode step we ourselves perform — the scrub simply ran on the wrong side of it.
+   *
+   * Fixed by scrubbing the EXTRACTED string as well. Both passes are kept: the pre-scrub
+   * still handles the plain-text and form-encoded heads (where no decode happens), and
+   * the post-scrub catches anything a decode reconstituted.
+   */
+  it('scrubs a JSON \\u-ESCAPED echo — the decode happens inside the extractor, after the first scrub', async () => {
+    const escaped = [...REFRESH_TOKEN].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
+    const message = await refreshMessage(400, `{"error_description":"bad token ${escaped}"}`);
+
+    expect(message).not.toContain(REFRESH_TOKEN);
+    expect(message, 'the reason still survives the double scrub').toContain('bad token');
+  });
+
   it('does not scrub NON-secret submitted values — grant_type must still be readable', async () => {
     // Non-vacuity in the other direction: scrubbing every submitted parameter would
     // redact `grant_type=refresh_token` and turn honest diagnoses into a row of asterisks.

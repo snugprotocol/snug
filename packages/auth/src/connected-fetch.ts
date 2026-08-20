@@ -1154,6 +1154,14 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // last write always describes the delivered result.
       let credentialsInjected = false;
 
+      // The last pass's scrub candidates, for the observer's detail extraction only.
+      // `scrubCandidates` stays performFetch-local (each pass injects its own values);
+      // this mirrors `credentialsInjected` — last write describes the delivered result.
+      // The observer needs them because `extractProviderErrorDetail` PARSES the body, and
+      // `JSON.parse` decodes `\u` escapes, so a credential that gate 10 correctly scrubbed
+      // out of the raw delivered body can be reconstituted inside a recognized field.
+      let scrubCandidatesForDetail: Record<string, string> = {};
+
       const performFetch = async (forceRefresh: boolean): Promise<ConnectedFetchResult> => {
         // Gate 8 — injection (per kind; OAuth paths are ceiling-checked internally, N2b).
         let injected: InjectedCredentials;
@@ -1200,6 +1208,9 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           const encoded = new URLSearchParams({ [key]: value }).toString().slice(key.length + 1);
           if (encoded !== value) scrubCandidates[`query:${key}:encoded`] = encoded;
         }
+        // Hand the WHOLE set to the observer's extractor — query values included, since a
+        // `queryTemplate` credential is a credential in a URL and an echo can carry it.
+        scrubCandidatesForDetail = scrubCandidates;
 
         // QUERY INJECTION — into the OUTBOUND URL only, and only HERE, after every gate:
         // the ceiling/host/SSRF gates matched on the app's own URL, the confirm gate
@@ -1332,7 +1343,7 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           // only when someone is LISTENING: the wizard probe strips the seat, so its
           // 401/403 outcomes must not pay for an extraction nobody reads. A 2-arg call
           // when no detail exists keeps empty-body behavior byte-identical.
-          const detail = extractProviderErrorDetail(result.body);
+          const detail = extractProviderErrorDetail(result.body, scrubCandidatesForDetail);
           if (detail !== undefined) {
             deps.onAuthShapedFailure(grant.slot, result.status, detail);
           } else {
