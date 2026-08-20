@@ -1,6 +1,6 @@
 # TASK-20260820-snug-file-and-encryption: `.snug` as the canonical file + passphrase encryption at rest
 
-- **Status**: in-progress — implementation COMPLETE and green; Gate 5 (diff review) pending
+- **Status**: in-review — **PR #89** (https://github.com/snugprotocol/snug/pull/89); both mandatory reviews done, all findings fixed, full root suite green
 - **Owner**: Jeetu
 - **Risk tier**: **HIGH** (auto-escalated three ways: `packages/protocol` schema surface (`USERDB_FILE` is spec-normative); `packages/db` is widely depended on; the change rewrites an *accepted* threat-model residual — R-3 / adversary A6)
 - **Branch**: `feat/TASK-20260820-snug-file-and-encryption` (off `main` @ `d25a282`)
@@ -376,3 +376,9 @@ Settles two of the three open questions with numbers rather than guesses.
 
 - State: db **391/391**, playground **1341/1341**. `gate:local` **4/6 legs green** across two runs (workspace, smoke, rust, desktop — including the in-shell C2 checks and the no-secrets-in-DOM canary); `e2e` and `release` deselected.
 - Next step: full root suite, then PR.
+
+### 2026-08-20 — Jeetu — session (Gate 5 complete, PR opened)
+- Done: all four diff-review defects fixed and pinned; full root suite re-run **23/23 tasks green** (playground 1341 · auth 915 · db 391 · knowledge 184 · sidecar 152 · desktop 140 · adapters 130 · server 126 · runner 119 · sdk 41 · protocol 344; threat-model 139/139; whitepaper 70/70). Branch pushed, **PR #89** opened with the full honest verification record — including the two gate legs that did NOT run.
+- State: in review. 28 commits, 73 files, +4116/-101.
+- Next step: owner review of PR #89 → merge on local evidence (CI billing-blocked) → `/close-session` Gate 6 (done-index entry, retire this task file per ADR-0027).
+- Open questions: whether to run the `e2e` leg before merge — it is the lane that owns the export-button locator this task changed, and it does not run in CI. Offered and deselected for now.
