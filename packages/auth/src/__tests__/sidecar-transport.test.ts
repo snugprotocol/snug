@@ -60,12 +60,20 @@ const row: NetConnectionRow = {
   allowedHosts: [SIDECAR_SYMBOLIC_HOST],
 };
 
-function harness(opts: { sidecarFetch?: unknown; withToken?: boolean } = {}) {
+function harness(opts: { sidecarFetch?: unknown; withToken?: boolean; confirm?: boolean } = {}) {
   const quartet = memoryQuartet();
   if (opts.withToken !== false) {
     quartet.setSecret(authConnectionCredentialSecretKey(APP, SLOT, 'sidecar_token'), TOKEN);
   }
   const networkCalls: string[] = [];
+  // The gate is a SPY, not a literal `() => true`. A hardcoded grant makes a gate that is
+  // never consulted indistinguishable from one that grants — which is exactly how the
+  // ordering defect below survived a green suite.
+  const confirmCalls: Array<Record<string, unknown>> = [];
+  const confirm = vi.fn((req: Record<string, unknown>) => {
+    confirmCalls.push(req);
+    return opts.confirm ?? true;
+  });
   const executor = createConnectedFetch({
     credentialStore: new UserDbCredentialStore(quartet),
     connectionReader: { listConnections: () => [row] },
@@ -73,10 +81,10 @@ function harness(opts: { sidecarFetch?: unknown; withToken?: boolean } = {}) {
       networkCalls.push(url);
       throw new TypeError('getaddrinfo ENOTFOUND whatsapp.sidecar.localhost');
     },
-    confirmGate: { confirm: () => true },
+    confirmGate: { confirm },
     ...(opts.sidecarFetch !== undefined ? { sidecarFetch: opts.sidecarFetch } : {}),
   } as never);
-  return { executor, networkCalls };
+  return { executor, networkCalls, confirm, confirmCalls };
 }
 
 describe('an app reaches the helper through the sidecar transport, never the network', () => {
@@ -119,6 +127,67 @@ describe('an app reaches the helper through the sidecar transport, never the net
 
     expect(sidecarFetch.mock.calls[0]?.[0]).toBe('POST');
     expect(sidecarFetch.mock.calls[0]?.[2]).toBe(JSON.stringify({ text: 'hi' }));
+  });
+
+  /**
+   * GATE 6 ON THE SIDECAR PATH (TASK-20260820-threat-model-v1, audit finding D1).
+   *
+   * The executor's own comment above the sidecar branch claimed "the mutating-confirm gate
+   * has answered" — it had not. The branch returned at gate 5a, 28 lines BEFORE gate 6, so
+   * every send reached the helper with credentials injected and no user confirmation.
+   *
+   * This is not a transport concern that a socket makes moot. Gate 6 deliberately carries
+   * `slot` and `body` so ADR-0033's standing-approval gate can decide on WHAT is being sent
+   * — a chat thread, derived from exactly those two fields. Skipping it voids that
+   * governance for the one connection class ADR-0033 exists to govern, and "speech in the
+   * user's name" (the whatsapp delta's impersonation residual) is bounded by this gate and
+   * nothing else.
+   *
+   * Why the suite was green: every case here hardcoded `confirm: () => true`, so a gate
+   * that was never consulted looked identical to one that granted. The harness now spies.
+   */
+  it('a mutating sidecar send is CONFIRMED first — the gate runs before the helper is reached', async () => {
+    const sidecarFetch = vi.fn(async (_m: string, _p: string, _b?: string, _h?: Record<string, string>) => ({ status: 200, body: '{"id":"m1"}' }));
+    const { executor, confirm, confirmCalls } = harness({ sidecarFetch });
+
+    await executor.execute(APP, {
+      url: `snug-connection://${SLOT}/chats/x@g.us/messages`,
+      method: 'POST',
+      body: JSON.stringify({ text: 'hi' }),
+    });
+
+    expect(confirm, 'the confirm gate is consulted for a sidecar POST').toHaveBeenCalledTimes(1);
+    // ADR-0033 derives the thread from these two seats; asserting only "it was called"
+    // would pass against a gate handed nothing to decide with.
+    expect(confirmCalls[0]).toMatchObject({ appId: APP, slot: SLOT, method: 'POST', body: JSON.stringify({ text: 'hi' }) });
+  });
+
+  it('a DENIED sidecar send never reaches the helper and never reads the credential', async () => {
+    const sidecarFetch = vi.fn(async () => ({ status: 200, body: '{"id":"m1"}' }));
+    const { executor, networkCalls } = harness({ sidecarFetch, confirm: false });
+
+    const result = await executor.execute(APP, {
+      url: `snug-connection://${SLOT}/chats/x@g.us/messages`,
+      method: 'POST',
+      body: JSON.stringify({ text: 'hi' }),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('NET_CONFIRM_DENIED');
+    // The load-bearing half: a denial must stop the SEND, not merely fail the result.
+    expect(sidecarFetch, 'a denied send never reaches the helper').not.toHaveBeenCalled();
+    expect(networkCalls).toEqual([]);
+  });
+
+  it('a GET still needs no confirmation — the gate is for mutating methods only', async () => {
+    const sidecarFetch = vi.fn(async () => ({ status: 200, body: '{}' }));
+    const { executor, confirm } = harness({ sidecarFetch });
+
+    await executor.execute(APP, { url: `snug-connection://${SLOT}/chats` });
+
+    expect(confirm, 'reads are not gated — the positive twin, so the fix cannot over-gate').not.toHaveBeenCalled();
+    expect(sidecarFetch).toHaveBeenCalledTimes(1);
   });
 
   it('REFUSES by name when the seat is absent — never falls back to the network', async () => {

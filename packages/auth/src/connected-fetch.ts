@@ -1081,23 +1081,6 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         }
       }
 
-      // Gate 5a — THE SIDECAR CLASS (ADR-0032), decided BEFORE the SSRF guard.
-      //
-      // `isForbiddenNetHost` refuses `.localhost` — correctly, and that refusal is left
-      // untouched, because it exists to stop a NETWORK request reaching a local service. This
-      // host is never dialled at all: the helper listens on a unix socket, and
-      // `whatsapp.sidecar.localhost` is an IDENTITY the frozen ceiling can hold (hosts are
-      // the ceiling's unit) rather than an address. RFC 6761 reserves `.localhost` precisely
-      // so it can never resolve publicly.
-      //
-      // Everything that protects the USER has already run above: the row is approved, the
-      // host is within the frozen ceiling, and the mutating-confirm gate has answered. What
-      // is skipped below is only the machinery for choosing and hardening a NETWORK
-      // transport, which has nothing to decide when there is no network involved.
-      if (host === SIDECAR_SYMBOLIC_HOST) {
-        return await sendViaSidecar();
-      }
-
       // Gate 5 — SSRF literal guard (defense in depth: runs even for ceiling members).
       // The desktop policy stands this gate down for exactly the RFC-1918 IPv4-literal
       // class computed above: such a host is forbidden for no reason BEYOND being
@@ -1106,7 +1089,16 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       // ADR-0026 §3: the symbolic branch is HOST-CLEAN — on that path this message
       // reaches an app that must never learn the resolved address, and on web (no
       // transport policy) this is exactly where a resolved LAN host lands.
-      if (!lanPrivateHost && isForbiddenNetHost(host)) {
+      // THE SIDECAR CLASS (ADR-0032) stands this gate down — and ONLY this gate.
+      //
+      // `isForbiddenNetHost` refuses `.localhost` correctly, and that refusal is left
+      // untouched, because it exists to stop a NETWORK request reaching a local service.
+      // This host is never dialled at all: the helper listens on a unix socket, and
+      // `whatsapp.sidecar.localhost` is an IDENTITY the frozen ceiling can hold (hosts are
+      // the ceiling's unit) rather than an address. RFC 6761 reserves `.localhost` precisely
+      // so it can never resolve publicly.
+      const sidecarClass = host === SIDECAR_SYMBOLIC_HOST;
+      if (!sidecarClass && !lanPrivateHost && isForbiddenNetHost(host)) {
         return failure(
           NET_ERROR_CODES.NET_SSRF_BLOCKED,
           symbolic !== undefined
@@ -1134,6 +1126,23 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
         if (granted !== true) {
           return failure(NET_ERROR_CODES.NET_CONFIRM_DENIED, `the user declined this ${method} request`);
         }
+      }
+
+      // Gate 6a — THE SIDECAR SEND, placed AFTER the confirm gate.
+      //
+      // It sat BEFORE gate 6 until the TASK-20260820 audit, under a comment asserting that
+      // "the mutating-confirm gate has answered" — it had not. Every send reached the helper
+      // with credentials injected and no confirmation. The gate is not transport machinery
+      // that a unix socket makes moot: it carries `slot` and `body` precisely so ADR-0033's
+      // standing gate can decide on WHAT is being sent (it derives a chat thread from them),
+      // and the whatsapp delta's impersonation bound — "every send is read and confirmed by
+      // the user first" — is this gate and nothing else. Speech in the user's name is the
+      // one effect that must never ride on transport-shape reasoning.
+      //
+      // What is still skipped below is only the machinery for choosing and hardening a
+      // NETWORK transport, which has nothing to decide when there is no network involved.
+      if (sidecarClass) {
+        return await sendViaSidecar();
       }
 
       // Gate 7 — app-supplied credential-shaped headers are ALWAYS stripped (C1).
