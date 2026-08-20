@@ -325,6 +325,27 @@ export function resolveSidecarSlot(db: UserDb, appId: string): string | undefine
 }
 
 /**
+ * The R-9 SCRUB population (TASK-20260820-host-pseudonymisation): any row whose host set
+ * names the sidecar, in ANY status. Deliberately WIDER than `resolveSidecarSlot` above —
+ * the pump reads on the app's behalf, so it needs the user's approval; the scrub only
+ * redacts, so it must keep binding an app whose row is `declared` (the state every
+ * IMPORTED connection lands in — the app's imported SQLite still holds replayable thread
+ * content, Gate-5 review cross-file finding 1) or `revoked` (the tombstone survives and
+ * so does the app's data). `allowedHosts` answers for every status: the frozen ceiling
+ * when approved, the requirement-derived preview otherwise.
+ */
+export function appHasSidecarFact(db: UserDb, appId: string): boolean {
+  return db.listConnections(appId).some((row) => (row.allowedHosts ?? []).includes(SIDECAR_SYMBOLIC_HOST));
+}
+
+/** Same fact, scoped to ONE slot — the provider lane's per-call classification. */
+export function isSidecarSlotFact(db: UserDb, appId: string, slot: string): boolean {
+  return db
+    .listConnections(appId)
+    .some((row) => row.slot === slot && (row.allowedHosts ?? []).includes(SIDECAR_SYMBOLIC_HOST));
+}
+
+/**
  * The RunView wire: start the pump for `appId` if (and only if) the platform has a sidecar
  * seat and the app holds an eligible connection. Returns a stop handle either way — the
  * ineligible case hands back a no-op so the caller's cleanup has one shape.

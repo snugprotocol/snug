@@ -160,7 +160,7 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | Two approved rows claiming one host refuse rather than tiebreak | `packages/auth/src/connected-fetch.ts` — `NET_AMBIGUOUS_CONNECTION` | `packages/auth/src/__tests__/slot-routing-regression.test.ts` |
 | An app cannot mutate the ceiling, and a staged edit cannot widen it pre-approval | `packages/db/src/userdb/userdb.ts` — reserved table prefixes; frozen `allowed_hosts` | `packages/auth/src/__tests__/connected-fetch.test.ts` |
 | Imported connection rows cannot serve traffic | `packages/db/src/userdb/userdb.ts` — demote to `declared` + `imported=1` | `packages/auth/src/__tests__/connected-fetch.test.ts` |
-| A sidecar-connected app's LLM-bound payloads have observed third-party identities and jid/dialable primitives redacted, on BOTH transports and the provider lane; unreadable directory fails closed; malformed envelopes take the scrubbed raw path, not a bypass (anti-naive class — see R-9's residuals) | `apps/playground/src/agent/pseudonymizeEgress.ts` (per-send guard at the transport seam) + `apps/playground/src/state/sidecarIdentity.ts` (harvest at the `sidecarAppFetch` seat) + `apps/playground/src/agent/providerTools.ts` (sidecar-class results); directory revoke-wipe in `packages/db/src/userdb/userdb.ts` | `apps/playground/src/agent/__tests__/pseudonymizeEgress.test.ts` (18, incl. scope negative + fail-closed + stale-predicate) + `apps/playground/src/__tests__/sidecarIdentityHarvest.test.ts` (6, incl. C1 negative) + `providerToolsSidecarScrub.test.ts` (3) + `packages/db/src/userdb/__tests__/sidecar-identity-wipe.test.ts` (6) |
+| An app holding a sidecar connection FACT (any status — a `declared` imported row binds too) has its LLM-bound payloads scrubbed of observed third-party identities and jid/dialable primitives, guarded inside BOTH leaf transports and the provider lane's sidecar-class results (classified by the canonical `parseConnectionUrl` grammar with the executor's own normalization); the app-message guard fails closed on an unreadable directory, the provider lane surfaces scrub failures as tool errors, malformed envelopes take the scrubbed raw path. NOT covered, by design: the chat data lane's replay of app-persisted rows (R-9 disclosed residual) | `apps/playground/src/agent/pseudonymizeEgress.ts` (per-send guard in `createDirectAppTransport` + `createServerAppTransport`) + `apps/playground/src/state/sidecarIdentity.ts` (harvest at the `sidecarAppFetch` seat; session-scoped memory reset on import/restore/revoke/delete) + `apps/playground/src/agent/providerTools.ts`; directory revoke-wipe in `packages/db/src/userdb/userdb.ts` | `apps/playground/src/agent/__tests__/pseudonymizeEgress.test.ts` (27, incl. scope negative, fail-closed, stale-predicate, declared-row, id-preservation) + `apps/playground/src/__tests__/sidecarIdentityHarvest.test.ts` (7, incl. C1 negative + session reset) + `providerToolsSidecarScrub.test.ts` (4, incl. non-canonical spellings) + `packages/db/src/userdb/__tests__/sidecar-identity-wipe.test.ts` (7, incl. import-survival) |
 
 ### Authoring and consent
 
@@ -288,17 +288,22 @@ convention: the host harvests identities (contact names, jids) from sidecar `/ch
 responses at the one seat every governed sidecar read crosses
 (`apps/playground/src/state/sidecarIdentity.ts`, fed from `sidecarAppFetch`), persists them
 in `snug_settings` (a **third-party-PII asset** in its own right — wiped when the last
-approved sidecar-ceiling connection is revoked or its app deleted, and it rides the `.snug`
-export until then), and redacts them plus the jid/dialable-digit-run primitives from every
-LLM-bound surface of every app holding an approved sidecar-ceiling connection: the WHOLE
-app-message envelope (`state`, `payload`, `action`, `responseSchema`, keys and values
-alike) before both the BYOK and `/invoke` transports
-(`apps/playground/src/agent/pseudonymizeEgress.ts`), and sidecar-class tool results on the
-provider chat lane (`renderProviderResult`). The guard fails CLOSED — an unreadable
-directory refuses the send — and a malformed envelope is unescape-normalised and scrubbed
-as a raw string rather than passed through. The shipped app's own stable-label scrub
-remains on top as defense in depth, so a feature-lane rewrite of the app (R-7) no longer
-removes the boundary.
+approved sidecar-ceiling connection is revoked or its app deleted; it deliberately
+SURVIVES an import, whose demoted-to-`declared` rows still travel with the replayable app
+data the scrub exists for, and it rides the `.snug` export until the wipe), and redacts
+them plus the jid/dialable-digit-run primitives from every LLM-bound surface of every app
+holding a sidecar connection FACT in any status — approved, declared-by-import, or
+revoked-with-data-left-behind: the app-message envelope (`state`, `payload`, `action`,
+`responseSchema` — envelope ids pass verbatim so the model's echo still correlates, a
+disclosed ≤128-char residual channel) before both the BYOK and `/invoke` transports
+(`apps/playground/src/agent/pseudonymizeEgress.ts`, guarded inside both leaf producers),
+and sidecar-class tool results on the provider chat lane, classified by the canonical
+connection-URL grammar with the executor's own normalization. The app-message guard fails
+CLOSED — an unreadable directory refuses the send; the provider lane surfaces a scrub
+failure as a tool error string, never the raw body. A malformed envelope is scrubbed as a
+raw string with an unescape-normalised shadow pass. The shipped app's own stable-label
+scrub remains on top as defense in depth, so a feature-lane rewrite of the app (R-7) no
+longer removes the boundary.
 *Honest statement of class:* the backstop is **anti-default and anti-naive, not
 anti-adversarial.** Disclosed residuals: an app that obfuscates (homoglyphs, base64, phone
 numbers smuggled as JSON *numbers* — `ts` is legitimately a 10-digit number, so numerics

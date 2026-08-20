@@ -173,3 +173,21 @@ describe('the sidecar ingress harvest (AC1) — names and jids from /chats, noth
     expect(identity.readIdentityDirectory(db)).toContain('Priya Sharma');
   });
 });
+
+describe('review fold — the session reset (Gate-5 altitude finding 2 / line-scan finding 3)', () => {
+  it('resetSidecarIdentitySession drops the in-memory harvest so a wiped directory stays wiped', async () => {
+    const { db, net, identity } = await setup(CHATS_BODY);
+    // Nothing persists in this test — the memory set is the thing under test.
+    vi.spyOn(db, 'setSetting').mockImplementation(() => {
+      throw new Error('persistence off');
+    });
+
+    await net.__sidecarAppFetchForTests('GET', '/chats');
+    expect(identity.readIdentityDirectory(db)).toContain('Priya Sharma');
+
+    // The revoke/import seams call this: names the db-level wipe destroyed (or another
+    // user file's names) must not survive in memory and re-persist on the next poll.
+    identity.resetSidecarIdentitySession();
+    expect(identity.readIdentityDirectory(db)).toHaveLength(0);
+  });
+});

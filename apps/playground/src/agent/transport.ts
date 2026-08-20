@@ -32,10 +32,22 @@ export function createServerAppTransport(model?: string, appId?: string): AgentT
   // The runtime contract IS forwarded (ADR-0018 D3): the hub cannot look one up, so an
   // app running in subscription mode would otherwise silently lose the framing its
   // byok/local twin gets. Read per send, like every other value on this path.
-  return createHttpTransport('/invoke', {
+  const inner = createHttpTransport('/invoke', {
     ...(model !== undefined ? { model } : {}),
     ...(appId !== undefined ? { getContract: () => readRuntimeContract(appId) } : {}),
   });
+  // R-9 EGRESS SCRUB (TASK-20260820), guarded at the LEAF producer so any caller of this
+  // export is bound — the /invoke body is provider-bound exactly like the BYOK wire.
+  // Per send, fail closed (see guardWireForApp).
+  return {
+    async send(wire, options) {
+      const guarded = await guardWireForApp(appId, wire);
+      if (!guarded.ok) {
+        return { ok: false, code: guarded.code, message: guarded.message, retryable: guarded.retryable };
+      }
+      return inner.send(guarded.wire, options);
+    },
+  };
 }
 
 export interface DirectTransportOptions {
@@ -109,6 +121,16 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
           retryable: false,
         };
       }
+      // R-9 EGRESS SCRUB (TASK-20260820), guarded at the LEAF producer so any caller of
+      // this export is bound — not only the RunView wrapper (Gate-5 review, altitude
+      // finding 5). Per send, like the brain and contract reads below and for the same
+      // stale-capture reason: a sidecar connection approved while RunView is mounted
+      // must bind the very next send. Fails closed — a refusal, never a raw wire.
+      const guarded = await guardWireForApp(options.appId, wire);
+      if (!guarded.ok) {
+        return { ok: false, code: guarded.code, message: guarded.message, retryable: guarded.retryable };
+      }
+      const outbound = guarded.wire;
       // local talks to an unauthenticated endpoint; webllm runs IN the page — neither
       // reads a provider key (webllm must not touch snug_secrets at all).
       const key = options.mode === 'local' || options.mode === 'webllm' ? undefined : await readKey(options.provider);
@@ -134,12 +156,12 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
       // bound by the contract's maxOutputTokens — a structured reply cut off mid-JSON
       // is unparseable, and the bridge would blame the model for the host's cap. The
       // wire self-describes, so the seam that applies the cap decides here.
-      const parsedWire = parseAppRequest(wire);
+      const parsedWire = parseAppRequest(outbound);
       const schemaBound = parsedWire.ok && parsedWire.envelope.responseSchema !== undefined;
       const result = await runAgentTurn({
         adapter,
         system,
-        messages: [{ role: 'user', content: wire }],
+        messages: [{ role: 'user', content: outbound }],
         // Contract-driven output bound (D4). OPT-IN: absent leaves today's default
         // exactly, so a contract-less legacy app is never silently truncated.
         ...(!schemaBound && contract?.maxOutputTokens !== undefined
@@ -198,22 +220,12 @@ export function createAppTransport(
   onTurnStart?: () => void,
 ): AgentTransport {
   return {
-    async send(wire, options) {
+    send(wire, options) {
       onTurnStart?.();
-      // R-9 EGRESS SCRUB (TASK-20260820), at the seam BOTH transports share — the
-      // subscription hub's /invoke body is provider-bound exactly like the BYOK wire.
-      // Guarded PER SEND, like the brain and contract reads above and for the same
-      // stale-capture reason: a sidecar connection approved while RunView is mounted
-      // must bind the very next send. Fails closed — a refusal, never a raw wire.
-      let outbound = wire;
-      if (appId !== undefined) {
-        const guarded = await guardWireForApp(appId, wire);
-        if (!guarded.ok) {
-          return { ok: false, code: guarded.code, message: guarded.message, retryable: guarded.retryable };
-        }
-        outbound = guarded.wire;
-      }
-      return resolveAppTransport(mode, provider, onLlmEvent, appId).send(outbound, options);
+      // The R-9 egress scrub deliberately does NOT live here: it guards inside BOTH leaf
+      // producers (`createDirectAppTransport`, `createServerAppTransport`), so a caller
+      // reaching a lower export is bound too (Gate-5 review, altitude finding 5).
+      return resolveAppTransport(mode, provider, onLlmEvent, appId).send(wire, options);
     },
   };
 }

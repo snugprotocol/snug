@@ -108,6 +108,18 @@ describe('R-9 — sidecar-class results are pseudonymised before re-entering the
     expect(result).toContain('[contact]');
   });
 
+  it('non-canonical spellings the executor accepts are still sidecar-class (review fold: line-scan finding 1)', async () => {
+    // parseConnectionUrl lowercases the scheme and connected-fetch strips \t\n\r + trims
+    // BEFORE parsing, so both of these EXECUTE as sidecar reads. A predicate that
+    // re-spelled the grammar said "not sidecar" and returned the raw body to the model.
+    const run = buildTool();
+    for (const spelling of [`SNUG-CONNECTION://${WA_SLOT}/chats`, `  snug-connection://${WA_SLOT}/chats`]) {
+      const result = await run({ url: spelling, method: 'GET' });
+      expect(result, `spelling: ${JSON.stringify(spelling)}`).not.toContain('Priya Sharma');
+      if (result.includes('<api_result>')) expect(result).toContain('[contact]');
+    }
+  });
+
   it('an ordinary API result stays raw — names an app is entitled to fetch are not redacted', async () => {
     const run = buildTool(() => new Response('{"organizer":"Priya Sharma"}', { status: 200 }));
     const result = await run({ url: `https://${API_HOST}/v1/guests`, method: 'GET' });

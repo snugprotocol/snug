@@ -1457,11 +1457,14 @@ function construct(
    * ceiling carries the sidecar symbolic host (TASK-20260820-host-pseudonymisation,
    * owner decision 2026-08-20). The directory is a persisted third-party-PII asset —
    * contact names and jids harvested for the R-9 egress scrub — and must not outlive the
-   * last connection that justified holding it. Called from the ONLY two seams that take
-   * an approved sidecar row away: `revokeConnection` (tombstone; status leaves
-   * `approved`) and `deleteApp` (cascade removes the rows). `target` lets deleteApp run
-   * the check INSIDE its transaction, so the wipe commits or rolls back with the very
-   * rows it reasons about.
+   * last connection that justified holding it. Called from the two EXPLICIT-WITHDRAWAL
+   * seams: `revokeConnection` (tombstone; status leaves `approved`) and `deleteApp`
+   * (cascade removes the rows). Import reconciliation ALSO demotes approved rows — to
+   * `declared` — and deliberately does NOT wipe: the app data the directory scrubs
+   * against rides the same import, so wiping there would strip the scrub exactly where
+   * the replay risk travels (Gate-5 review, cross-file finding 1). `target` lets
+   * deleteApp run the check INSIDE its transaction, so the wipe commits or rolls back
+   * with the very rows it reasons about.
    */
   function wipeSidecarIdentityDirectoryIfOrphaned(target: Database = db): void {
     const rows = selectFrom(target, `SELECT allowed_hosts FROM ${USERDB_CONNECTIONS_TABLE} WHERE status = ?`, [
@@ -1481,6 +1484,12 @@ function construct(
       target.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [
         SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY,
       ] as never);
+      // The raw `target.run` bypasses the dirty-tracking `run()` wrapper (a transaction
+      // handle must be usable here), so durability is THIS function's job, not each
+      // caller's — a wipe that lands only in the in-memory image resurrects third-party
+      // PII on the next open (Gate-5 review). Idempotent and debounced, so the extra
+      // call inside deleteApp's transaction costs nothing.
+      markDirty();
     }
   }
 
@@ -2617,7 +2626,6 @@ function construct(
       // And if that was the LAST approved sidecar-ceiling connection anywhere, the
       // harvested identity directory goes with it (TASK-20260820, R-9 lifecycle).
       wipeSidecarIdentityDirectoryIfOrphaned();
-      markDirty();
       return readConnectionRow(appId, slot)!;
     },
 

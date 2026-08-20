@@ -4,10 +4,18 @@
 // valid JSON-only agent replies.
 
 import { parseAgentReply } from '@snugprotocol/protocol';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEMO_APP_REPLY } from '../agent/demoApp.js';
 import { createDirectAppTransport } from '../agent/transport.js';
+import { installTestUserDb } from './userdbTestHelper.js';
+
+// The transport now carries the R-9 egress guard (TASK-20260820), which reads the page
+// user DB per send — a db-less send would wait on a boot that never comes, exactly like
+// the default getKey (see appTransportRoundTrips.test.ts).
+beforeEach(async () => {
+  await installTestUserDb();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

@@ -12,6 +12,9 @@
 // appTransportRoundTrips convention: "assert at the seam rather than trusting the
 // downstream redactor."
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentRoundTrip } from '@snugprotocol/adapters';
@@ -22,6 +25,7 @@ import { createAppTransport } from '../transport.js';
 import {
   CONTACT_TOKEN,
   guardWireForApp,
+  JID_PATTERN_SOURCE,
   NUMBER_TOKEN,
   scrubAppWire,
   scrubText,
@@ -278,5 +282,114 @@ describe('guardWireForApp — fail closed, never fail open (AC8c)', () => {
     const wire = wireWithName();
     const result = await guardWireForApp('app-plain', wire);
     expect(result).toEqual({ ok: true, wire });
+  });
+});
+
+// ---------------------------------------------------------------------------------
+// Gate-5 review fold (2026-08-20): the eight-angle diff review confirmed defects in the
+// first implementation; each test below pins one of those fixes.
+
+describe('review fold — envelope ids are never mangled (line-scan finding 2)', () => {
+  it('UUID-shaped requestId/instanceId/appId pass byte-identical through the scrub', () => {
+    // ~35% of real crypto.randomUUID() values carry a ≥7-digit run the phone pattern
+    // would have eaten, silently breaking the id the model echoes back.
+    const wire = buildAppRequest({
+      appId: 'app-telepath',
+      instanceId: 'ins-550e8400-e29b-41d4-a716-446655440000',
+      requestId: '3f8a1234-5678-90ab-cdef-1234567890ab',
+      action: 'profile_thread',
+      state: { note: 'clean' },
+    });
+    expect(scrubAppWire(wire, DIRECTORY)).toBe(wire);
+  });
+});
+
+describe('review fold — a DECLARED sidecar row still scrubs (cross-file finding 1)', () => {
+  it('an imported-shaped (declared, never approved) connection binds the egress scrub', async () => {
+    const db = await getUserDb();
+    db.putDeclaredConnection(APP, 'whatsapp', sidecarRequirement, 'starter');
+    // NO approveConnection — this is the state every imported connection lands in,
+    // and the app's imported SQLite still holds replayable thread content.
+    db.setSetting(SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY, [...DIRECTORY]);
+
+    const { trips, onLlmEvent } = collectTrips();
+    const transport = createAppTransport('byok', 'mock', onLlmEvent, APP);
+    await transport.send(wireWithName(), { signal: new AbortController().signal });
+
+    const sent = JSON.stringify(trips[0]?.request.messages ?? []);
+    expect(sent, 'import demotes to declared; the scrub must keep binding').not.toContain('Priya Sharma');
+  });
+});
+
+describe('review fold — responseSchema stays parseable (cross-file finding 2)', () => {
+  it('a contact called "Home" does not case-fold onto a `home` schema property', () => {
+    const wire = buildAppRequest({
+      appId: APP,
+      instanceId: 'inst-1',
+      requestId: 'req-1',
+      action: 'summarize',
+      state: { note: 'ok' },
+      responseSchema: {
+        type: 'object',
+        properties: { home: { type: 'string' }, summary: { type: 'string' } },
+        required: ['home'],
+      },
+    });
+    // Schema keys and required entries define the reply shape the app parses.
+    expect(scrubAppWire(wire, ['Home'])).toBe(wire);
+  });
+
+  it('exact-spelling identities in schema description strings still redact', () => {
+    const wire = buildAppRequest({
+      appId: APP,
+      instanceId: 'inst-1',
+      requestId: 'req-1',
+      action: 'summarize',
+      responseSchema: { type: 'object', description: 'about Priya Sharma' },
+    });
+    expect(scrubAppWire(wire, DIRECTORY)).not.toContain('Priya Sharma');
+  });
+});
+
+describe('review fold — the raw fallback never corrupts benign escapes (line-scan finding 4)', () => {
+  it('a malformed wire whose \\uXXXX escapes hide nothing keeps its bytes', () => {
+    // Valid JSON, invalid envelope (missing required ids) — takes the raw path.
+    const raw = `${SNUG_APP_REQUEST_TAG}\n{"snug":1,"note":"she said \\u0022hello\\u0022 at C:\\\\u0041dmin"}`;
+    expect(scrubAppWire(raw, DIRECTORY)).toBe(raw);
+  });
+
+  it('escapes that DO hide an identity are still unmasked and redacted', () => {
+    const raw = `${SNUG_APP_REQUEST_TAG}\n{"snug":1,"note":"ping \\u0050riya Sharma"`;
+    const out = scrubAppWire(raw, DIRECTORY);
+    expect(out).not.toContain('riya Sharma');
+    expect(out).toContain(CONTACT_TOKEN);
+  });
+});
+
+describe('review fold — documented over-redactions and pattern parity', () => {
+  it('separated numeric sequences collapse to one token (documented, safe direction)', () => {
+    expect(scrubText('scores 1 2 3 4 5 6 7 8 9 10 done', [])).toBe(`scores ${NUMBER_TOKEN} done`);
+  });
+
+  it('the host jid pattern is byte-equal to the reference scrub in app.html', () => {
+    // vitest's module URLs are not file: URLs here; the runner's cwd is apps/playground.
+    const appHtml = readFileSync(resolve(process.cwd(), '../../examples/whatsapp/app.html'), 'utf8');
+    const literal = /var JID_PATTERN = \/(.*)\/gi;/.exec(appHtml)?.[1];
+    expect(literal, 'the reference pattern must be findable').toBeTruthy();
+    expect(JID_PATTERN_SOURCE).toBe(literal);
+  });
+});
+
+describe('review fold — the guard resolves the app from the wire when the transport has no id (line-scan finding 6)', () => {
+  it('a transport built WITHOUT an appId still scrubs when the envelope names a sidecar-bound app', async () => {
+    await seedSidecarApp();
+    const { trips, onLlmEvent } = collectTrips();
+    // The uninstalled-starter mode: no appId threaded to the transport.
+    const transport = createAppTransport('byok', 'mock', onLlmEvent, undefined);
+
+    await transport.send(wireWithName(), { signal: new AbortController().signal });
+
+    const sent = JSON.stringify(trips[0]?.request.messages ?? []);
+    expect(sent, 'the envelope appId is authoritative when the transport has none').not.toContain('Priya Sharma');
   });
 });

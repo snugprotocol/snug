@@ -127,3 +127,22 @@ describe('the directory persists like any settings row (AC1, persistence half)',
     expect(reopened.getSetting(SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY)).toEqual(DIRECTORY);
   });
 });
+
+describe('review fold — import does NOT wipe (Gate-5 cross-file finding 1)', () => {
+  it('the directory rides an import whose rows demote to declared — the replayable app data rides too', async () => {
+    db.putDeclaredConnection('app-1', 'whatsapp', sidecarRequirement('whatsapp'), 'starter');
+    db.approveConnection('app-1', 'whatsapp');
+    db.setSetting(SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY, DIRECTORY);
+    const bytes = await db.exportUserDb();
+
+    const second = await open(createMemoryBackend());
+    await second.importUserDb(bytes);
+
+    const row = second.listConnections('app-1').find((entry) => entry.slot === 'whatsapp');
+    expect(row?.status, 'import demotes — that is the reconciliation working').toBe(CONNECTION_STATUS.declared);
+    expect(
+      second.getSetting(SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY),
+      'the scrub directory must survive import: the egress guard binds declared rows',
+    ).toEqual(DIRECTORY);
+  });
+});

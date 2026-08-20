@@ -34,7 +34,7 @@ import type { AgentTool } from '@snugprotocol/adapters';
 import { createConnectedFetch, type ConnectedFetchResult } from '@snugprotocol/auth';
 import type { UserDb } from '@snugprotocol/db';
 import { getToolPrompt } from '@snugprotocol/knowledge';
-import { NET_METHODS, SIDECAR_SYMBOLIC_HOST, type NetMethod } from '@snugprotocol/protocol';
+import { NET_METHODS, SIDECAR_SYMBOLIC_HOST, parseConnectionUrl, type NetMethod } from '@snugprotocol/protocol';
 
 import {
   authShapedFailureStore,
@@ -43,6 +43,7 @@ import {
   tagConfirmOrigin,
 } from '../state/net.js';
 import { readIdentityDirectory } from '../state/sidecarIdentity.js';
+import { isSidecarSlotFact } from '../state/sidecarLive.js';
 import { scrubText } from './pseudonymizeEgress.js';
 
 export const PROVIDER_REQUEST_TOOL_NAME = 'provider_request';
@@ -117,23 +118,25 @@ export function renderProviderResult(
 }
 
 /**
- * Whether one tool call's result came from the sidecar (R-9's population). Covers both
- * URL spellings the executor can route to the sidecar seat: `snug-connection://<slot>/…`
- * where the slot's frozen ceiling is the symbolic host, and the literal
- * `https://<symbolic-host>/…` form. Anything unparseable is NOT sidecar-class — the
- * executor would have refused it before a body existed.
+ * Whether one tool call's result came from the sidecar (R-9's population). Built from
+ * the SAME normalization the executor applies (`connected-fetch.ts` trims and strips
+ * `\t\n\r` before parsing) and the SAME grammar (`parseConnectionUrl` — case-insensitive
+ * scheme, `CONNECTION_SLOT_RULE`, literal slot comparison), because a predicate that
+ * re-spells either diverges on exactly the inputs the grammar handles: the Gate-5 review
+ * verified `SNUG-CONNECTION://whatsapp/chats` and a whitespace-padded URL both EXECUTED
+ * as sidecar reads while the hand-rolled regex said "not sidecar" — an unscrubbed body
+ * into the model context. The slot check rides `isSidecarSlotFact` (any status: the
+ * executor already enforced approval before a body existed, and over-classifying only
+ * over-scrubs). A throw anywhere past this point is caught by the tool's outer catch and
+ * returned as an error string — the fail-closed direction, never the raw body.
  */
 function isSidecarClassUrl(url: unknown, db: UserDb, appId: string): boolean {
   if (typeof url !== 'string') return false;
-  const symbolic = url.match(/^snug-connection:\/\/([^/]+)/);
-  if (symbolic !== null) {
-    const slot = decodeURIComponent(symbolic[1] ?? '');
-    return db
-      .listConnections(appId)
-      .some((row) => row.slot === slot && (row.allowedHosts ?? []).includes(SIDECAR_SYMBOLIC_HOST));
-  }
+  const normalized = url.trim().replace(/[\t\n\r]/g, '');
+  const parsed = parseConnectionUrl(normalized);
+  if (parsed.ok) return isSidecarSlotFact(db, appId, parsed.slot);
   try {
-    return new URL(url).hostname === SIDECAR_SYMBOLIC_HOST;
+    return new URL(normalized).hostname.toLowerCase() === SIDECAR_SYMBOLIC_HOST;
   } catch {
     return false;
   }
