@@ -34,12 +34,20 @@ WebView2 SDK layer. macOS is unaffected: WKWebView honors the flag
 (`src/wkwebview/mod.rs:643-644`), gate 40/40 green. Root cause and citations:
 [`docs/solutions/2026-08-13-webview2-subframe-ipc-injection.md`](../solutions/2026-08-13-webview2-subframe-ipc-injection.md).
 
-**Decision: option (b) — the desktop shell ships macOS-only at 1.0.** Not (a) Electron,
-which trades a known-good platform for a rewrite of the shell folder to buy a platform
-1.0 does not need; not (c) upstream-and-wait, which puts the ship date inside someone
-else's review queue. Windows is not "unsupported pending work" — it is a platform on
-which C2 is known to be false, and the honest posture is to say so rather than to leave
-it looking merely unfinished.
+**Decision: option (b) — the desktop shell ships macOS-only through alpha, beta and 1.0.**
+Not (a) Electron, which trades a known-good platform for a rewrite of the shell folder to
+buy a platform 1.0 does not need; not (c) upstream-and-wait, which puts the ship date
+inside someone else's review queue. Windows is not "unsupported pending work" — it is a
+platform on which C2 is known to be false, and the honest posture is to say so rather than
+to leave it looking merely unfinished.
+
+**Scope of the decision, exactly (owner, 2026-08-20).** macOS-only is settled for the whole
+pre-1.0 run and for 1.0 itself — it is not a per-release question to be reopened at alpha
+or beta, and no release in that window ships a Windows desktop build. **Windows desktop is
+reconsidered post-1.0**, as its own decision with its own ADR. Stating the window matters
+because "macOS-only at 1.0" alone reads as a fact about one release that someone could
+reasonably relitigate at each milestone; it is not. What is deferred is the reconsideration,
+not the constraint.
 
 **This decision is a claim about what we ship, and it is currently enforced by
 documentation alone.** Recorded plainly because the threat model must not overstate it:
@@ -58,13 +66,20 @@ them (a build-target restriction with a test pinning it, mirroring
 task documents the system as built, and a build-config change is its own task with its own
 tier.
 
-**Consequences.** The Windows gate leg stays red and must NOT be softened — the
-`keyReachable` conjunction is the only check that reasons about key reachability rather
-than transport presence. The Electron fallback stays available on the same pre-committed
-terms (the platform seams are shell-agnostic; the fallback swaps the shell folder, not the
-architecture) should Windows become a requirement before an upstream fix lands. Revisit
-trigger: wry honoring `for_main_frame_only` on WebView2, or an equivalent SDK-level
-off-switch.
+**Consequences.** The Windows gate leg stays red for the entire pre-1.0 run and must NOT be
+softened — the `keyReachable` conjunction is the only check that reasons about key
+reachability rather than transport presence, and a leg that is *expected* to stay red for
+a year is exactly the kind that erodes by someone "fixing the failing job". The Electron
+fallback stays available on its pre-committed terms (the platform seams are shell-agnostic;
+the fallback swaps the shell folder, not the architecture).
+
+**Revisit: post-1.0, as its own ADR.** Not before, and not automatically even then — a
+wry fix landing mid-beta does not reopen this by itself, because shipping a second desktop
+platform is a support-surface decision as much as a security one. The technical
+preconditions for a Windows build to be *possible* are: wry honoring `for_main_frame_only`
+on WebView2 (or an equivalent SDK-level off-switch), plus a green Windows leg of the
+in-shell hard gate, plus `cdp_jwt`'s native-ECDSA requirement verified there — that last
+one is separately unverified on Windows and is easy to forget behind the louder R-5.
 
 ## Alternatives considered
 

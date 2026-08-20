@@ -34,10 +34,13 @@ If you are evaluating whether to rely on Snug, read §2 (what is actually protec
 iframe runner, the SDK, the per-app database, the connected-fetch executor, the credential
 store, the Playground, the reference server, and the macOS desktop shell.
 
-**The shipped desktop surface is macOS only.** This is not a roadmap gap; it is a security
-decision recorded in [ADR-0021 D8's addendum](decisions/0021-desktop-shell-transports.md).
-Windows is a platform on which C2 is *known to be false* — see R-5 in §6. We would rather a
-Windows user learn that here than from an install that quietly breaks the sandbox.
+**The shipped desktop surface is macOS only, through alpha, beta and 1.0.** This is not a
+roadmap gap; it is a security decision recorded in
+[ADR-0021 D8's addendum](decisions/0021-desktop-shell-transports.md). Windows is a platform
+on which C2 is *known to be false* — see R-5 in §6 — so no release in that window ships a
+Windows desktop build. Windows desktop is reconsidered **post-1.0**, as its own decision.
+We would rather a Windows user learn that here than from an install that quietly breaks the
+sandbox.
 
 **Out of scope:** vulnerabilities in LLM providers, browsers, or OS/WebView internals
 (reported upstream; mitigated where we can); a user deliberately exporting with secrets
@@ -183,10 +186,13 @@ backend discards `for_main_frame_only`, so tauri's key-bearing `ipc-protocol.js`
 invoke key as a plaintext literal — executes inside `sandbox="allow-scripts"` app iframes.
 Any app the user runs can read it. **This is a C1 *and* C2 break, not a weakening.** No
 off-switch exists at the wry, tauri, or WebView2 SDK layer.
-*Disposition:* **Windows desktop is not shipped.** macOS is unaffected — WKWebView honors
-the flag. No Windows build has ever been distributed and none may ship in this
-configuration ([ADR-0021 D8 addendum](decisions/0021-desktop-shell-transports.md); root
-cause: [`docs/solutions/2026-08-13-webview2-subframe-ipc-injection.md`](solutions/2026-08-13-webview2-subframe-ipc-injection.md)).
+*Disposition:* **Windows desktop is not shipped, through alpha, beta and 1.0.** macOS is
+unaffected — WKWebView honors the flag. No Windows build has ever been distributed and none
+may ship in this configuration. Windows desktop is reconsidered **post-1.0**, as its own
+decision; the preconditions are an upstream fix plus a green Windows gate leg plus
+`cdp_jwt`'s native-ECDSA requirement verified there
+([ADR-0021 D8 addendum](decisions/0021-desktop-shell-transports.md); root cause:
+[`docs/solutions/2026-08-13-webview2-subframe-ipc-injection.md`](solutions/2026-08-13-webview2-subframe-ipc-injection.md)).
 
 **R-5b — and "we don't ship Windows" is enforced by documentation, not by the build.**
 `apps/desktop/src-tauri/tauri.conf.json` still carries `"targets": "all"` and ships
@@ -359,7 +365,7 @@ consolidation from silently falling behind the changes it consolidates.
 | Delta | Pinned hash | Consolidated into |
 |---|---|---|
 | `docs/security/threat-model-delta-connection-addressing.md` | `22f12227195b` | §5 ceiling · R-14 |
-| `docs/security/threat-model-delta-desktop-auth.md` | `09bb0a6570ef` | §4 · R-1, R-2, R-5, R-6, R-15, R-20 |
+| `docs/security/threat-model-delta-desktop-auth.md` | `f7e88cee2235` | §4 · R-1, R-2, R-5, R-6, R-15, R-20 |
 | `docs/security/threat-model-delta-desktop-shell.md` | `ebd06c7635f5` | §5 C2 · R-1, R-3, R-13 |
 | `docs/security/threat-model-delta-dynamic-auth-v2.md` | `8bae299b6bb2` | §5 authoring · R-2, R-4, R-19 |
 | `docs/security/threat-model-delta-lean-runtime-data-chat.md` | `bec065ca9633` | §5 authoring · R-7, R-8 |

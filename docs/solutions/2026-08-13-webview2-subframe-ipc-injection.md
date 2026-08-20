@@ -81,10 +81,15 @@ verdict does not depend on it. The security posture must not rest on this link.
 2. **Windows desktop is BLOCKED**, upgraded from "unverified" to "known structurally
    broken". No Windows build has ever been distributed; none may ship in this configuration.
 3. **macOS is unaffected** and its 40/40 pass remains trustworthy.
-4. ~~**ADR-0021 D8 is now a live decision**~~ — **DECIDED 2026-08-20: ship macOS-only at
-   1.0** (ADR-0021 D8 addendum; TASK-20260820-threat-model-v1). The Electron fallback and
-   an upstream `for_main_frame_only` fix both remain available; the revisit trigger is wry
-   honoring the flag on WebView2, or an equivalent SDK-level off-switch.
+4. ~~**ADR-0021 D8 is now a live decision**~~ — **DECIDED 2026-08-20: ship macOS-only
+   through alpha, beta and 1.0; reconsider Windows desktop post-1.0** (ADR-0021 D8
+   addendum; TASK-20260820-threat-model-v1). No release in that window ships a Windows
+   desktop build, so this gate stays red for the whole run — a wry fix landing mid-beta
+   does not reopen the decision by itself. The Electron fallback stays available. The
+   technical preconditions for a post-1.0 Windows build are: wry honoring
+   `for_main_frame_only` on WebView2 (or an equivalent SDK-level off-switch), a green
+   Windows leg of the in-shell gate, and `cdp_jwt`'s native-ECDSA requirement verified
+   there — that last is separately unverified and easy to forget behind the louder R-5.
 
 ## Optional confirmatory probe (does not change the verdict)
 
