@@ -9,7 +9,7 @@
 // pagehide network push a lie for real images — pagehide flushes OPFS only (the UserDb
 // does that itself); a local copy newer than the origin pushes via reconcileOnStart()
 // on the next session.
-import { USERDB_FILE } from '@snugprotocol/protocol';
+import { USERDB_FILE, USERDB_LEGACY_FILE } from '@snugprotocol/protocol';
 import type { PersistenceBackend } from '../persistence.js';
 import {
   SYNC_ERROR_CODES,
@@ -17,7 +17,7 @@ import {
   type SyncProvider,
   type SyncPullResult,
 } from './provider.js';
-import { loadSidecar, saveSidecar, sha256Hex, type SyncSidecarState } from './sidecar.js';
+import { adoptLegacySidecar, loadSidecar, saveSidecar, sha256Hex, type SyncSidecarState } from './sidecar.js';
 
 /** The subset of UserDb the loop needs — structural, so tests can stub it. */
 export interface SyncableUserDb {
@@ -115,7 +115,14 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
 
   // Cached under the single-writer rule (F12): this loop is the only sidecar writer.
   let sidecar: SyncSidecarState | undefined;
-  const state = async (): Promise<SyncSidecarState> => (sidecar ??= await loadSidecar(backend, file));
+  const state = async (): Promise<SyncSidecarState> => {
+    if (sidecar !== undefined) return sidecar;
+    // Carry an anchor across the user.sqlite -> user.snug rename BEFORE the first
+    // read (AC21). Without it the loop sees "never pushed", concludes both sides
+    // moved, and shows every existing sync user a divergence that never happened.
+    if (file === USERDB_FILE) await adoptLegacySidecar(backend, file, USERDB_LEGACY_FILE);
+    return (sidecar = await loadSidecar(backend, file));
+  };
 
   const anchor = async (revision: string, hash: string): Promise<void> => {
     sidecar = { lastPushedRevision: revision, lastPushedHash: hash, lastSyncAt: new Date().toISOString() };

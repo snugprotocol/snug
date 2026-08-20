@@ -121,6 +121,7 @@ export {
   loadSidecar,
   saveSidecar,
   sha256Hex,
+  adoptLegacySidecar,
   sidecarFileFor,
   type SyncSidecarState,
 } from './sync/sidecar.js';
