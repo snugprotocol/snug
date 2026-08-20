@@ -386,3 +386,51 @@ export async function rewrapPassphrase(
   out.set(sealed, slot.wrappedAt);
   return { status: 'ok', bytes: out };
 }
+
+/**
+ * Re-seal NEW contents into an EXISTING container, preserving its header and every
+ * slot exactly as they are — only the payload is replaced.
+ *
+ * This is what every write-back uses, and the reason it exists is a correctness
+ * requirement rather than an optimisation. A session that unlocked with the passphrase
+ * alone does not hold the Recovery Key and cannot derive it; rebuilding the container
+ * from "the secrets we have" on each save would therefore drop the recovery slot and
+ * strand the user the first time they forgot their passphrase — the exact failure this
+ * whole feature exists to prevent (ADR-0014's named cost).
+ *
+ * Keeping the header identical also keeps the AAD identical, so the untouched slots
+ * stay valid; only the payload IV is fresh (AC25 — never a counter, never derived).
+ */
+export async function resealContainer(
+  container: Uint8Array,
+  fileKey: Uint8Array,
+  bytes: Uint8Array,
+): Promise<Uint8Array> {
+  const parsed = parse(container);
+  if ('error' in parsed) throw new Error(`cannot re-seal: ${parsed.error}`);
+  const iv = randomBytes(IV_LEN);
+  const contentKey = await subtle().importKey('raw', fileKey as BufferSource, { name: 'AES-GCM' }, false, ['encrypt']);
+  const payload = new Uint8Array(
+    await subtle().encrypt(
+      { name: 'AES-GCM', iv: iv as BufferSource, additionalData: aadFor(parsed.header) as BufferSource },
+      contentKey,
+      bytes as BufferSource,
+    ),
+  );
+  const headAndSlots = parsed.header.length + parsed.slots.length * WRAPPED_LEN;
+  const out = new Uint8Array(headAndSlots + IV_LEN + payload.length);
+  out.set(container.slice(0, headAndSlots), 0);
+  out.set(iv, headAndSlots);
+  out.set(payload, headAndSlots + IV_LEN);
+  return out;
+}
+
+/** Unwrap just the file key, so a session can re-seal without re-deriving every save. */
+export async function openFileKey(
+  container: Uint8Array,
+  secrets: Secrets,
+): Promise<{ status: 'ok'; fileKey: Uint8Array } | { status: 'locked' } | { status: 'corrupt'; reason: string }> {
+  const parsed = parse(container);
+  if ('error' in parsed) return { status: 'corrupt', reason: parsed.error };
+  return unwrapFileKey(parsed, secrets);
+}

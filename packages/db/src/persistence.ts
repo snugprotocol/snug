@@ -1,6 +1,7 @@
 // Persistence backends behind one small interface (dependency injection via plain
 // interfaces — no frameworks). Auto-detect order: OPFS → IndexedDB → in-memory.
 // All backends store whole serialized SQLite files keyed by sanitized filename.
+import { CONTAINER } from '@snugprotocol/protocol';
 
 export type PersistenceKind = 'opfs' | 'idb' | 'file' | 'memory';
 
@@ -25,8 +26,20 @@ const startsWithAscii = (bytes: Uint8Array, prefix: string): boolean => {
   }
   return true;
 };
+/**
+ * The third magic (ADR-0043): a protected user file. THIS LINE IS LOAD-BEARING. Every
+ * storage path here treats first-bytes as the completeness signal, so without the
+ * container magic listed, an encrypted file reads as never-complete: the OPFS A/B
+ * recovery retries eight times and throws "exists but stayed unreadable", and the
+ * desktop file backend refuses the load outright. A user who turned on protection
+ * would be told their data was corrupt. Adding a format here is not optional — it is
+ * the price of storing anything through these backends.
+ */
 export const looksComplete = (bytes: Uint8Array | undefined): bytes is Uint8Array =>
-  bytes !== undefined && (startsWithAscii(bytes, SQLITE_MAGIC) || startsWithAscii(bytes, SYNC_SIDECAR_MAGIC));
+  bytes !== undefined &&
+  (startsWithAscii(bytes, SQLITE_MAGIC) ||
+    startsWithAscii(bytes, SYNC_SIDECAR_MAGIC) ||
+    startsWithAscii(bytes, CONTAINER.MAGIC));
 
 export interface PersistenceBackend {
   readonly kind: PersistenceKind;
