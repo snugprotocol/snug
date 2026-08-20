@@ -7,7 +7,7 @@
 Snug is an open protocol that lets users of any web app build **tiny AI-native apps** ("micro apps" — games, trackers, tools) through conversation with the app's own AI assistant. Snug apps are different from anything a code generator produces:
 
 1. **The app's brain is the host agent.** A Snug chess game doesn't embed a chess engine — it sends moves to the host LLM through a standard postMessage envelope and animates the reply. The app is a *body*; the agent is the *mind*.
-2. **Users own their apps and their data.** Each app gets an isolated database, exportable as a real `.sqlite` file you can download, back up, or move. Not a vendor's cloud rows — a file you own.
+2. **Users own their apps and their data.** Each app gets an isolated database, exportable as a real `.snug` file you can download, back up, or move. Not a vendor's cloud rows — a file you own.
 3. **It's embeddable.** Any product can drop the runner + SDK in and let *their* users build micro apps powered by *their* existing AI assistant.
 
 Security is architectural, not policy: apps run in a locked-down iframe sandbox with no network of their own, credentials live in `snug_secrets` inside your own file — never in the iframe, never sent to the hub — and there is no telemetry. The written [threat model](docs/threat-model.md) states what is enforced, where, and which test would catch a regression — and, with equal prominence, what is **accepted and not mitigated**. Reporting: [SECURITY.md](SECURITY.md).
@@ -25,7 +25,7 @@ This is the **reference implementation monorepo**: protocol bindings, iframe run
 | `packages/protocol` | `@snugprotocol/protocol` — typed envelope bindings; **source of truth for spec schemas** |
 | `packages/runner` | `@snugprotocol/runner` — sandboxed iframe runner + bridge host |
 | `packages/sdk` | `@snugprotocol/sdk` — in-app hooks: `useSnugApp`, `usePersistedState`, `useAppDB` (embedded + module forms) |
-| `packages/db` | `@snugprotocol/db` — sql.js + OPFS per-app isolated database, `.sqlite` export/import |
+| `packages/db` | `@snugprotocol/db` — sql.js + OPFS per-app isolated database, `.snug` export/import, optional passphrase encryption at rest |
 | `packages/auth` | `@snugprotocol/auth` — Dynamic Auth core: local-first credential handling (in development) |
 | `packages/knowledge` | `@snugprotocol/knowledge` — the LLM app-authoring knowledge base |
 | `packages/adapters` | `@snugprotocol/adapters` — anthropic, openai, mock |

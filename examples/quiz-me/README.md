@@ -14,7 +14,7 @@ runs it and keeps every score in a real SQLite table.
   mixed round for unknown ones — with a visible "question robot is offline" note. A
   keyless first visit still gets a complete quiz.
 - **Scores in YOUR file**: results land in `quiz_scores` via `useAppDB` and render as a
-  little history chart; the host's **export .sqlite** button takes the whole record home.
+  little history chart; the host's **export .snug** button takes the whole record home.
 - **Kid-first**: topic chips, one question at a time, instant feedback with a fun fact,
   encouraging results copy, both themes.
 

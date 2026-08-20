@@ -54,7 +54,7 @@ which is why this is an ADR rather than a quiet edit.
    and its `onFrame` wiring stay **byte-for-byte unchanged**, because three unrelated
    features read that reducer's state:
    - `inspector.inFlight` drives the app-frame "thinking" pulse,
-   - `inspector.sawDbOp` gates the `export .sqlite` button,
+   - `inspector.sawDbOp` gates the `export .snug` button,
    - `readySeen` (set from the same `onFrame` hook) drives the header announce fallback.
 
    Deleting the feed alongside its view would silently kill all three. The obvious

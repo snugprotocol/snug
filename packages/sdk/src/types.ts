@@ -60,7 +60,7 @@ export interface DbExecResult {
 /** Host-brokered SQL surface (useAppDB). Failures THROW here — unlike sendMessage. */
 export interface AppDb {
   exec(sql: string, params?: unknown[]): Promise<DbExecResult>;
-  /** Base64 of the real `.sqlite` file bytes (5 MiB cap, host-enforced). */
+  /** Base64 of the real `.snug` file bytes (5 MiB cap, host-enforced). */
   exportDb(): Promise<string>;
   importDb(bytesBase64: string): Promise<void>;
 }

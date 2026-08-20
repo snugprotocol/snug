@@ -12,7 +12,7 @@ user's own SQLite file**.
   scene graph, and clamps the agent's deltas hard (hearts −3..3, gold −5..8, hearts never
   below 1 — kid-safe by construction).
 - **Own-your-data**: the pack (`aq_inventory`) and travel journal (`aq_journal`) are real
-  SQLite tables written through `useAppDB` — the host's **export .sqlite** button
+  SQLite tables written through `useAppDB` — the host's **export .snug** button
   downloads the whole adventure.
 - **Graceful no-LLM stance (ADR-0011)**: an off-schema or failed reply (the demo brain's
   canned answer is exactly that) hands the leg to a local narrator with a visible note —

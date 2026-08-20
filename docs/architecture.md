@@ -54,6 +54,21 @@
      construction). Wizard/UI shipped in AL-04 (`apps/playground/src/connections/`).
 ```
 
+**The user file is named `.snug` and may be PROTECTED (2026-08-20, ADR-0042 + ADR-0043).**
+`.snug` became canonical on every platform (it was already the desktop OS association and
+half-shipped: web exported `.sqlite` and its import picker did not even list `.snug`).
+Renaming is read-only — `user.sqlite`, its sync sidecar and the Dropbox path are all read
+when the canonical name is absent and adopted forward on the next write, never renamed or
+deleted, because the alternative is a fresh empty database opening silently over real data.
+Encryption is OPT-IN whole-file AES-256-GCM in a `SNUGENC1` container at the ONE persistence
+seam (`PersistenceBackend.load/save`), key-wrapped so the passphrase and a mandatory
+≥128-bit Recovery Key are independent unlock paths and a passphrase change rewraps 48 bytes
+instead of 64 MiB. A protected file opens as `locked` (never quarantined; damage still
+reports `corrupt`, separated by a header checksum). Protection follows exports and
+PERSONAL-origin sync; **hub origins keep receiving secrets-stripped plaintext**, so
+`apps/server` and the `/userdb` contract are untouched. Threat-model R-3/A6 rewritten;
+R-14 (losing both secrets loses the data) is a named, unmitigable residual.
+
 Key invariants: the user DB is the single source of truth in EVERY mode (subscription
 artifacts are fetched client-side and written into it — hub stores are transient
 caches); LLM calls originate from the host page only; secrets never reach the hub
@@ -101,7 +116,7 @@ in a Tauri 2 shell — BYOK/local only, no subscription surface. The playground 
 seam: `src/platform/platform.ts` (`SnugPlatform`, set-once before boot; web default =
 prior behavior byte-for-byte). Desktop supplies: native fetch (`tauri-plugin-http`,
 CORS-free) through the connected-fetch `fetchImpl` seam AND the LLM adapters; a `'file'`
-`PersistenceBackend` persisting `~/Snug/user.sqlite` via atomic Rust commands (userdb +
+`PersistenceBackend` persisting `~/Snug/user.snug` via atomic Rust commands (userdb +
 sync sidecar share it); loopback OAuth (`RedirectUriProvider`/`CallbackSink` seams,
 `tauri-plugin-oauth`, fixed port 41420 for exact-match providers, system browser only per
 RFC 8252); Ollama autodetect; `.snug` file association through a single-use Rust
