@@ -36,21 +36,29 @@ replacement text must say so.
    directory updates **synchronously before the body is handed back** (no first-wire race);
    persistence may lag. The wrapper reads the **response body only** — never the argument
    tuple, which carries injected credential headers (C1 hygiene).
-2. **Egress redaction — app-message lane.** Before any LLM-bound app-message wire from an
-   app whose approved connection ceiling contains `SIDECAR_SYMBOLIC_HOST` (owner-chosen
-   scope: exactly R-9's population; predicate is the **connection fact**, never platform
-   seat presence, and is evaluated **per send**, not at transport creation) reaches a
-   provider — BYOK **and** subscription `/invoke`, wrapped at the transport seam both paths
-   share — the host parses the envelope and redacts **every string field AND every object
-   key across the whole parsed envelope** (`state`, `payload`, `action`, `responseSchema`,
-   ids — a well-formed `responseSchema` must not be an in-band smuggling channel):
-   (a) every directory identity, case-insensitively, name identities word-boundary-matched,
-   longest-first, as one compiled alternation pass → `[contact]`; (b) jid pattern →
+2. **Egress redaction — app-message lane** *(as amended by the Gate-5 review fold — see
+   Decisions for each change's defect)*. Before any LLM-bound app-message wire from an
+   app holding a **sidecar connection FACT in any status** (fold: `approved`-only left
+   every imported `.snug` unscrubbed — import demotes rows to `declared`; the predicate
+   is the connection fact, never platform seat presence, evaluated **per send** inside
+   **both leaf transports** — BYOK/local/webllm and subscription `/invoke`) reaches a
+   provider, the host parses the envelope and redacts every string field AND object key
+   of `state`, `payload`, `action` and the `responseSchema` values (a well-formed schema
+   must not be an in-band smuggling channel) — with two fold-mandated carve-outs:
+   **envelope ids pass verbatim** (the phone pattern rewrote ~35% of real UUIDs, breaking
+   the model's requestId echo; ids stay a disclosed ≤128-char residual channel) and
+   **`responseSchema` keys/`required` stay untouched with case-sensitive directory
+   matching** (a contact saved as "Home" must not break a `home` property):
+   (a) every directory identity, case-insensitively elsewhere, word-boundary-matched,
+   longest-first, one compiled memoized alternation → `[contact]`; (b) jid pattern →
    `[contact]`; (c) digit runs ≥ 7 → `[number]`. P-labels (`P\d+`, `YOU`) are never
-   touched. A wire that fails `parseAppRequest` is **unescape-normalised (`\uXXXX` → chars)
-   then redacted as a raw string** — malformed envelopes must not become the weaker path.
-   If the directory cannot be read at send time the send **fails closed** with a named
-   refusal (never raw-to-provider, never silent pattern-only degradation).
+   touched. A wire that fails `parseAppRequest` is redacted as a raw string with an
+   **unescape-normalised shadow pass under a commutation test** (escapes hiding
+   identities are unmasked; benign `\uXXXX` data is never corrupted). If the directory
+   cannot be read at send time the send **fails closed** with a named refusal. The app's
+   identity falls back to the envelope's host-stamped `appId` when the transport carries
+   none (uninstalled-starter mode); a wire with no resolvable identity is scrubbed
+   unconditionally.
 3. **Egress redaction — provider chat lane (review blocker 2).** ADR-0031's agent loop
    returns sidecar tool-result bodies to the model raw today
    (`providerTools.ts:195-212`). The same redaction module is applied to **sidecar-class
@@ -67,7 +75,7 @@ replacement text must say so.
 1. **Harvest:** after a sidecar `/chats` response crosses `sidecarAppFetch`, the directory holds the names+jids from it — observable to an egress scrub **on the very next call** (no settle race) — and holds them after a UserDb export/import round-trip (persistence).
 2. **Harvest is the scrub:** the directory stores only identity strings from known fields of known routes — message bodies, previews and unknown keys never enter it; malformed bodies are skipped, not repaired; re-harvesting an unchanged `/chats` body is a no-op write (the 4 s sync-poll re-crosses this seat). The harvest wrapper never touches request arguments/headers (C1 negative test).
 3. **Egress — directory hit:** a wire from a sidecar-connected app whose `state` contains a harvested name or jid reaches the adapter with those spans replaced by `[contact]` (asserted at the seam: the string the adapter receives, per the `appTransportRoundTrips` C1-test convention). Case-variant spellings (`PRIYA`) are caught; word-boundary matching leaves `"Newsworthy"` intact when the directory holds `"News"`.
-4. **Egress — whole envelope (review blocker 1):** identities placed in `responseSchema` (description/enum strings), `action`, or as **object keys** anywhere in the envelope are redacted the same as `state` fields.
+4. **Egress — whole envelope (review blocker 1, amended by the Gate-5 fold):** identities placed in `responseSchema` description/enum strings, `action`, or as object keys in `state`/`payload` are redacted like `state` values. Fold carve-outs, each with its own pinning test: envelope ids pass verbatim; schema keys/`required` survive a case-folded contact collision.
 5. **Egress — primitives:** jid-shaped tokens and ≥7-digit runs are redacted even with an empty directory; digit runs < 7 (prices, times) survive. Fixture documents the accepted over-redactions: dash-separated dates (`2026-08-20` → `[number]`) redact — over-redaction is the safe direction.
 6. **Scope negative:** an app with no sidecar-ceiling connection has its wire delivered byte-identical — no redaction of names or numbers it is entitled to send.
 7. **Cooperating app unharmed:** a wire containing only P-labels/`YOU` and clean text passes byte-identical for canonical `JSON.stringify` wires (parse→re-stringify normalisation is disclosed, not hidden); labels are never rewritten.
