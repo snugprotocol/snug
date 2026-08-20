@@ -142,6 +142,6 @@ export/import); removing one of two sidecar-ceiling rows does NOT wipe.
 ### 2026-08-20 (review fold) — Claude — session
 - Done: eight-angle AI diff review (/code-review high) ran to completion; 3 confirmed defects + lifecycle gaps folded with 14 new pinning tests (see Decisions). Suites after fold: playground 1303/1303 (125 files), db `sidecar-identity-wipe` 7/7, root `pnpm test` 23/23 (one non-reproducing playground failure in a single root run — did not recur across two subsequent full runs; consistent with the known playground-flake open thread), `whatsapp-analysis` 34/34, threat-model checker 139/139. R-9, §5 row, and code-map row updated to the post-fold truth (fact-population, id passthrough, provider-lane classification, import survival, session reset).
 - **High-tier self-sign-off**: I attest the plan was owner-approved before implementation; tests preceded implementation for the original ACs and for every review-fold fix; C1/C2 negative tests exist and pass; no `packages/protocol`, `packages/runner`, or `packages/auth` source was touched; the docs' claims were re-narrowed to match the shipped behavior rather than the other way around.
-- State: ready for PR + human review
-- Next step: PR; owner review of diff AND task file
+- State: PR open — https://github.com/snugprotocol/snug/pull/86
+- Next step: owner review of diff AND task file; merge; Gate 6 close-session
 - Open questions: none
