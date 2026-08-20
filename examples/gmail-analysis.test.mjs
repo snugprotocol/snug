@@ -33,7 +33,7 @@ function loadCore() {
   const source = script.slice(script.indexOf('\n', start), end);
   assert.ok(source.trim().length > 400, 'the extracted core is substantial, not an empty slice');
   const factory = new Function(
-    `${source}\nreturn { mulberry32, buildSampleInbox, senderKey, senderStats, neverRepliedFlags, unsubscribeCandidates, unsubscribeChannel, safeUnsubUrl, volumeByWeek, topSenders, categoryMix, planCleanupBatch, BATCH_MODIFY_LIMIT, SAMPLE_SENDERS, buildUnsubscribeRaw, decodeRawForTest, SYNC_WINDOWS, DEFAULT_WINDOW, windowQuery, chartWeeks, answerShape, netErrorText };`,
+    `${source}\nreturn { mulberry32, buildSampleInbox, senderKey, senderStats, neverRepliedFlags, unsubscribeCandidates, unsubscribeChannel, safeUnsubUrl, volumeByWeek, topSenders, categoryMix, planCleanupBatch, BATCH_MODIFY_LIMIT, SAMPLE_SENDERS, buildUnsubscribeRaw, decodeRawForTest, SYNC_WINDOWS, DEFAULT_WINDOW, windowQuery, chartWeeks, answerShape, netErrorText, DDL, messageToRow, rowToMessage, isSampleRows, shouldCommitSync };`,
   );
   return factory();
 }
@@ -569,4 +569,95 @@ test('NEGATIVE: no error path in the app renders a raw object', () => {
   const authored = html.slice(html.indexOf('5. RESPONSE SCHEMA'));
   const raw = [...authored.matchAll(/(\w+)\.error\s*\|\|/g)].map((m) => m[0]);
   assert.deepEqual(raw, [], `these error sites bypass netErrorText: ${raw.join(', ')}`);
+});
+
+// ───────────────────────────────────────────────────────────────────────────────
+// TASK-20260819-inbox-copilot-persistence — the synced mailbox survives a relaunch
+// ───────────────────────────────────────────────────────────────────────────────
+//
+// Owner-reported: connect, sync, close the app, reopen — and it is showing the demo
+// inbox again. The app had no persistence at all: every synced message lived in React
+// state, and `isSample` was derived from a TRANSIENT sync phase, so an app with no rows
+// fell back to the sample data. That is wrong on Snug's own terms — the premise is that
+// a person owns their data in one portable file (ADR-0007) — and it makes every relaunch
+// cost hundreds of metadata reads against a quota.
+//
+// The Ledger pattern (ADR-0038): real rows in the app's namespace, provenance-flagged so
+// demo data is evicted wholesale rather than mixed with real mail.
+
+test('AC1: the schema declares the two tables the app needs, idempotently', () => {
+  const ddl = core.DDL.join('\n');
+  assert.match(ddl, /CREATE TABLE IF NOT EXISTS messages/, 'the synced mailbox');
+  assert.match(ddl, /CREATE TABLE IF NOT EXISTS sync_runs/, 'when it was last read, and over what');
+  // IF NOT EXISTS on every statement: the bootstrap runs on EVERY launch, and a DDL that
+  // is not idempotent would either throw on the second run or drop what it found.
+  for (const statement of core.DDL) {
+    assert.match(statement, /IF NOT EXISTS/, `not idempotent: ${statement.slice(0, 60)}`);
+  }
+  // The provenance column is what makes the sample evictable rather than entangled.
+  assert.match(ddl, /sample INTEGER NOT NULL DEFAULT 0/);
+  // Gmail's own id is the key, so a re-sync UPDATES rather than duplicating.
+  assert.match(ddl, /id TEXT PRIMARY KEY/);
+});
+
+test('AC2: a message survives the round trip through a row unchanged', () => {
+  const message = {
+    id: 'm-1',
+    from: 'news@shop.example',
+    fromName: 'Shop News',
+    to: null,
+    at: NOW_MS - 3 * DAY,
+    labels: ['INBOX', 'UNREAD'],
+    listUnsubscribe: '<mailto:stop@shop.example>',
+    subject: 'Your weekly deals',
+    fromMe: false,
+  };
+  const restored = core.rowToMessage(core.messageToRow(message, 0));
+  assert.deepEqual(restored, message, 'nothing the lanes read may be lost in storage');
+});
+
+test('AC2: labels round-trip as a list, not as a mangled string', () => {
+  // Labels drive the whole app — STARRED and IMPORTANT are the never-replied exclusions,
+  // SENT is what marks the user's own replies. A label list that comes back as "INBOX,UNREAD"
+  // or as a single element would silently break the flags rather than throw.
+  const row = core.messageToRow({ id: 'm-2', from: 'a@b.example', at: 1, labels: ['INBOX', 'STARRED'], fromMe: false }, 0);
+  const restored = core.rowToMessage(row);
+  assert.deepEqual(restored.labels, ['INBOX', 'STARRED']);
+  assert.ok(Array.isArray(restored.labels));
+});
+
+test('AC2: a message with no labels and no unsubscribe header round-trips as empty, not as junk', () => {
+  const row = core.messageToRow({ id: 'm-3', from: 'a@b.example', at: 1, labels: [], fromMe: false }, 0);
+  const restored = core.rowToMessage(row);
+  assert.deepEqual(restored.labels, []);
+  assert.equal(restored.listUnsubscribe, null);
+});
+
+test("AC2: the user's own sent mail round-trips with its recipient — replies drive every flag", () => {
+  const sent = { id: 'm-4', from: 'me@example.com', fromName: 'You', to: 'friend@example.org', at: 5, labels: ['SENT'], listUnsubscribe: null, subject: 'Re: hi', fromMe: true };
+  const restored = core.rowToMessage(core.messageToRow(sent, 0));
+  assert.equal(restored.fromMe, true, 'losing this would turn a reply into a received message');
+  assert.equal(restored.to, 'friend@example.org', 'and losing this would orphan it from its sender');
+});
+
+test('AC3/AC4: sample-ness is a fact about the ROWS, never about a transient phase', () => {
+  // The actual bug. `isSample` used to read a sync phase that resets to idle on error and
+  // starts idle on every launch, so a fully-synced mailbox rendered as the demo after a
+  // close. Rows carry their own provenance, which survives a relaunch by construction.
+  assert.equal(core.isSampleRows([]), false, 'an empty DB is not "sample" — it is empty');
+  assert.equal(core.isSampleRows([{ sample: 1 }, { sample: 1 }]), true);
+  assert.equal(core.isSampleRows([{ sample: 0 }, { sample: 0 }]), false);
+  // The mixed case is the one that matters: ANY real mail means this is the user's
+  // mailbox, and calling it "sample" would put a demo banner over their own email.
+  assert.equal(core.isSampleRows([{ sample: 1 }, { sample: 0 }]), false);
+});
+
+test('AC5: a sync that returns nothing is refused rather than allowed to empty the mailbox', () => {
+  // The dangerous case. A quota refusal or a network blip returning zero messages must
+  // never be committed as "your inbox is empty now" — that would delete a real mailbox
+  // from the user's own file and silently fall back to the demo on the next launch.
+  assert.equal(core.shouldCommitSync({ collected: 0, hadRows: true }), false);
+  assert.equal(core.shouldCommitSync({ collected: 0, hadRows: false }), false);
+  assert.equal(core.shouldCommitSync({ collected: 120, hadRows: true }), true);
+  assert.equal(core.shouldCommitSync({ collected: 120, hadRows: false }), true);
 });

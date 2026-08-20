@@ -67,3 +67,24 @@
   would have drawn eleven empty columns — a collapse the data never showed, told by the
   axis. Any control that changes how much data is fetched has to be traced through
   everything that describes the amount.
+
+- **An app that keeps its data in React state does not keep it.** Inbox Copilot shipped
+  with no `useAppDB` call at all: every synced message lived in the component and died
+  with the frame, so closing the app threw the whole mailbox away and the next launch
+  fell back to the demo. Nothing caught it because the suites test pure functions and the
+  browser pass never relaunched — the one action that exposes it. On a platform whose
+  premise is that the user owns their data in a portable file (ADR-0007), "did this
+  survive a close?" belongs in the verification of any app that fetches anything.
+
+- **Derive "is this the demo?" from the DATA, never from a session phase.** The flip had
+  two causes and the second outlived the first fix: `isSample` read a sync phase that
+  starts idle on every launch, and `connected` did the same — so even after rows loaded
+  correctly from the file, a returning user was told "Sample inbox, connect Gmail". Row
+  provenance (Ledger's `sample` column, ADR-0038) survives a relaunch by construction;
+  a phase cannot.
+
+- **Zero results are never worth committing.** A refused or throttled sync returning no
+  messages would, written naively, delete a real mailbox out of the user's own file and
+  silently revert them to the demo next launch — a transient failure turned permanent.
+  The commit gate is explicit and tested, and a failed sync now writes only its
+  `sync_runs` row.

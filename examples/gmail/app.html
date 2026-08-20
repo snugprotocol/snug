@@ -831,6 +831,98 @@ function useConnectedFetch() {
       return fallback;
     }
 
+    // ── Storage ───────────────────────────────────────────────────────────────
+    // The user owns their mail in their own file (ADR-0007). Before this the app kept
+    // everything in React state, so closing it threw the whole synced mailbox away and
+    // the next launch fell back to the demo — the owner-reported flip. Rows are
+    // provenance-flagged the way Ledger's are (ADR-0038): the sample inbox lives in the
+    // same table as real mail and is evicted WHOLESALE on the first real sync, so a
+    // mailbox is never half demo and half real.
+
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        sender TEXT NOT NULL DEFAULT '',
+        sender_name TEXT NOT NULL DEFAULT '',
+        recipient TEXT,
+        at INTEGER NOT NULL DEFAULT 0,
+        labels TEXT NOT NULL DEFAULT '',
+        list_unsubscribe TEXT,
+        subject TEXT NOT NULL DEFAULT '',
+        from_me INTEGER NOT NULL DEFAULT 0,
+        sample INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS sync_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        window_id TEXT NOT NULL DEFAULT '',
+        collected INTEGER NOT NULL DEFAULT 0,
+        ok INTEGER NOT NULL DEFAULT 1,
+        note TEXT NOT NULL DEFAULT ''
+      )`,
+    ];
+
+    /**
+     * A message → its row. Labels are stored TAB-separated rather than as JSON: they are
+     * a flat list of tokens that never contain whitespace, and a delimiter that cannot
+     * occur in a Gmail label id makes the round trip total without a parse that can throw
+     * on a malformed cell.
+     */
+    function messageToRow(message, sample) {
+      return [
+        String(message.id),
+        String(message.from || ''),
+        String(message.fromName || ''),
+        message.to == null ? null : String(message.to),
+        Number(message.at) || 0,
+        (message.labels || []).join('\t'),
+        message.listUnsubscribe == null ? null : String(message.listUnsubscribe),
+        String(message.subject || ''),
+        message.fromMe ? 1 : 0,
+        sample ? 1 : 0,
+      ];
+    }
+
+    /** The inverse. Every lane reads these fields, so nothing may be lost in storage. */
+    function rowToMessage(row) {
+      return {
+        id: row[0],
+        from: row[1],
+        fromName: row[2],
+        to: row[3] == null ? null : row[3],
+        at: Number(row[4]) || 0,
+        labels: row[5] ? String(row[5]).split('\t') : [],
+        listUnsubscribe: row[6] == null ? null : row[6],
+        subject: row[7] || '',
+        fromMe: Number(row[8]) === 1,
+      };
+    }
+
+    /**
+     * Is what we are holding the demo inbox?
+     *
+     * THE ANSWER IS A FACT ABOUT THE ROWS, not about a sync phase — that was the bug. A
+     * phase resets to idle on error and starts idle on every launch, so a fully synced
+     * mailbox rendered as the demo after a close. Any real mail at all means this is the
+     * user's mailbox: calling a partially-synced inbox "sample" would put a demo banner
+     * over someone's actual email.
+     */
+    function isSampleRows(rows) {
+      return rows.length > 0 && rows.every((row) => Number(row.sample) === 1);
+    }
+
+    /**
+     * May a completed sync be committed?
+     *
+     * A refusal, a quota block or a network blip can return zero messages, and committing
+     * that would delete a real mailbox out of the user's own file and fall back to the
+     * demo on the next launch — turning a transient failure into permanent data loss.
+     * Zero is never a result worth writing.
+     */
+    function shouldCommitSync(input) {
+      return Number(input && input.collected) > 0;
+    }
+
     // ── Sending: the From header ──────────────────────────────────────────────
 
     /**
@@ -1312,8 +1404,14 @@ function useConnectedFetch() {
         iconColor: '#c2410c',
       });
       const net = useConnectedFetch();
+      const db = useAppDB();
       const [tab, setTab] = useState('pulse');
       const [messages, setMessages] = useState(null);   // null = not loaded yet
+      // Whether what we are holding is the demo inbox — a fact about the ROWS, loaded
+      // with them, so it survives a relaunch instead of resetting to "sample" every boot.
+      const [sampleRows, setSampleRows] = useState(true);
+      const [lastRun, setLastRun] = useState(null);
+      const [storageReady, setStorageReady] = useState(false);
       const [syncState, setSyncState] = useState({ phase: 'idle', fetched: 0, error: null });
       // How far back Refresh reaches. Persisted through the host so the choice survives a
       // reload — a person who works in six-month windows should not re-pick every time.
@@ -1328,18 +1426,68 @@ function useConnectedFetch() {
       const [question, setQuestion] = useState('');
       const [answer, setAnswer] = useState(null);
 
-      const isSample = messages !== null && syncState.phase !== 'live';
+      // Provenance, not phase. The old derivation read a transient sync phase that resets
+      // on error and starts idle on every launch — which is exactly why a synced mailbox
+      // reverted to the demo after a close.
+      const isSample = messages !== null && sampleRows;
       // The live clock and the sample's fixed clock are read on separate lines: sample
       // constants must never share a line with a clock call, so that the render-only
       // guarantee stays checkable by reading rather than by trusting.
       const liveNow = Date.now();
       const now = isSample ? SAMPLE_NOW : liveNow;
 
-      // Sample data renders IMMEDIATELY — before any connection, before any key. The
-      // whole argument for installing this app is visible in the first second.
+      /**
+       * Schema, then load, then seed the demo ONLY if the file is empty.
+       *
+       * The order is the whole fix for the owner-reported flip: a returning user's own
+       * mail comes out of their file before anything is fetched, and the sample inbox is
+       * only ever written when there is nothing to show. A first-run user still sees the
+       * full showcase in the first second, because seeding is local and immediate.
+       */
       useEffect(() => {
-        if (messages === null) setMessages(buildSampleInbox(SAMPLE_NOW));
-      }, [messages]);
+        if (!app.isReady) return;
+        let alive = true;
+        (async () => {
+          for (const statement of DDL) await db.exec(statement);
+
+          let rows = await db.exec('SELECT * FROM messages ORDER BY at DESC');
+          if (rows.rows.length === 0) {
+            // Empty file: seed the demo so the app is never a blank screen. sample=1 marks
+            // every row, which is what lets the first real sync evict them wholesale.
+            const seeded = buildSampleInbox(SAMPLE_NOW);
+            for (const message of seeded) {
+              await db.exec(
+                'INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?)',
+                messageToRow(message, 1),
+              );
+            }
+            rows = await db.exec('SELECT * FROM messages ORDER BY at DESC');
+          }
+          if (!alive) return;
+
+          const runs = await db.exec('SELECT at, window_id, collected, ok, note FROM sync_runs ORDER BY at DESC LIMIT 1');
+          if (!alive) return;
+
+          setMessages(rows.rows.map(rowToMessage));
+          setSampleRows(isSampleRows(rows.rows.map((row) => ({ sample: row[9] }))));
+          setLastRun(runs.rows.length ? {
+            at: Number(runs.rows[0][0]),
+            windowId: runs.rows[0][1],
+            collected: Number(runs.rows[0][2]),
+            ok: Number(runs.rows[0][3]) === 1,
+          } : null);
+          setStorageReady(true);
+        })().catch(() => {
+          if (!alive) return;
+          // Storage trouble must never be a blank screen: fall back to the in-memory
+          // demo so the app still works, and say so rather than pretending.
+          setMessages(buildSampleInbox(SAMPLE_NOW));
+          setSampleRows(true);
+          setStorageReady(true);
+          setSyncState({ phase: 'idle', fetched: 0, error: 'Could not open local storage — showing sample data for now.' });
+        });
+        return () => { alive = false; };
+      }, [app.isReady, db]);
 
       const rows = messages || [];
       const weeks = useMemo(
@@ -1437,15 +1585,48 @@ function useConnectedFetch() {
             pageToken = body.nextPageToken;
             if (!pageToken) break;
           }
-          if (collected.length === 0) throw new Error('No messages came back from Gmail.');
+          // Zero is never committed. A refusal or a blip returning nothing would
+          // otherwise delete a real mailbox out of the user's own file and fall back to
+          // the demo on the next launch — a transient failure turned into data loss.
+          if (!shouldCommitSync({ collected: collected.length })) {
+            throw new Error('No messages came back from Gmail.');
+          }
+
+          // The eviction: the demo rows go wholesale, in the same pass that writes the
+          // real ones, so the mailbox is never half sample and half real.
+          await db.exec('DELETE FROM messages WHERE sample = 1');
+          for (const message of collected) {
+            await db.exec(
+              'INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?)',
+              messageToRow(message, 0),
+            );
+          }
+          const runAt = Math.floor(Date.now() / 1000);
+          await db.exec(
+            'INSERT INTO sync_runs (at, window_id, collected, ok, note) VALUES (?,?,?,?,?)',
+            [runAt, useWindow, collected.length, 1, ''],
+          );
+
           setMessages(collected);
+          setSampleRows(false);
+          setLastRun({ at: runAt, windowId: useWindow, collected: collected.length, ok: true });
           setSyncState({ phase: 'live', fetched: collected.length, error: null });
           setSelected(new Set());
         } catch (error) {
-          // The sample stays on screen: a failed sync should never blank the app.
-          setSyncState({ phase: 'idle', fetched: 0, error: String(error.message || error) });
+          // Whatever was already stored STAYS. A failed sync reports over the last good
+          // mailbox; it never empties it and never reverts real mail to the demo.
+          const message = netErrorText(error.message || error, 'Gmail did not answer.');
+          setSyncState({ phase: 'idle', fetched: 0, error: message });
+          try {
+            await db.exec(
+              'INSERT INTO sync_runs (at, window_id, collected, ok, note) VALUES (?,?,?,?,?)',
+              [Math.floor(Date.now() / 1000), useWindow, 0, 0, String(message).slice(0, 200)],
+            );
+          } catch (ignored) {
+            // A storage failure while recording a sync failure is not worth a second banner.
+          }
         }
-      }, [net, windowId]);
+      }, [net, windowId, db]);
 
       /**
        * The host says a connection was VERIFIED and this app's data is stale
@@ -1516,6 +1697,11 @@ function useConnectedFetch() {
             }
           }
           const touched = pendingPlan.messageIds.length;
+          // Delete locally as well as at Gmail. Without this a cleanup looked right until
+          // the next launch, when 400 trashed emails came back out of the file.
+          for (const id of pendingPlan.messageIds) {
+            await db.exec('DELETE FROM messages WHERE id = ?', [id]);
+          }
           setMessages((current) =>
             (current || []).filter((message) => pendingPlan.messageIds.indexOf(message.id) === -1));
           setSelected(new Set());
@@ -1530,7 +1716,7 @@ function useConnectedFetch() {
         } catch (error) {
           setRunState({ busy: false, note: null, error: String(error.message || error) });
         }
-      }, [pendingPlan, isSample, net]);
+      }, [pendingPlan, isSample, net, db]);
 
       const runUnsubscribe = useCallback(async (candidate) => {
         if (candidate.channel === 'open-url') {
@@ -1682,7 +1868,7 @@ function useConnectedFetch() {
 
       const displayedSuggestions = agent.suggestions || LOCAL_SUGGESTIONS(flags, unsubs);
 
-      if (!app.isReady || messages === null) {
+      if (!app.isReady || !storageReady || messages === null) {
         return (
           <div className="wrap">
             <div className="card">
@@ -1693,7 +1879,13 @@ function useConnectedFetch() {
         );
       }
 
-      const connected = syncState.phase === 'live';
+      /**
+       * "Connected" is a fact about the DATA, not about this session's sync phase. Keying
+       * it to the phase meant a returning user — whose real mail had just loaded out of
+       * their own file — was told "Sample inbox, connect Gmail" until they synced again.
+       * Real rows on screen ARE the evidence of a connection that worked.
+       */
+      const connected = !isSample && messages !== null && messages.length > 0;
       const busySync = syncState.phase === 'listing' || syncState.phase === 'reading';
 
       return (
@@ -1705,7 +1897,7 @@ function useConnectedFetch() {
                 <h1>Inbox Copilot</h1>
                 <div className="sub">
                   {connected
-                    ? syncState.fetched + ' emails from the ' + (SYNC_WINDOWS.find((w) => w.id === windowId) || {}).label +
+                    ? rows.filter((message) => !message.fromMe).length + ' emails from the ' + (SYNC_WINDOWS.find((w) => w.id === (lastRun ? lastRun.windowId : windowId)) || {}).label +
                       (account ? ' · ' + account : '')
                     : 'Sample inbox — connect Gmail to run this on your own mail'}
                 </div>
@@ -2015,7 +2207,18 @@ function useConnectedFetch() {
 
           <div className="foot">
             <span className="faint">
-              {connected ? 'Reading metadata only — never the contents of your emails.' : 'Nothing has been connected yet.'}
+              {/*
+                When the mailbox was last read, and over which window. Once mail is stored
+                rather than re-fetched every launch, "is this stale?" becomes a real
+                question — and it should be answerable without spending a sync to find out.
+              */}
+              {lastRun !== null
+                ? (lastRun.ok ? 'Last read ' : 'Last attempt failed ') +
+                  new Date(lastRun.at * 1000).toLocaleString() +
+                  (lastRun.ok ? ' · ' + (SYNC_WINDOWS.find((w) => w.id === lastRun.windowId) || {}).label : '')
+                : isSample
+                  ? 'Nothing has been connected yet — this is sample data.'
+                  : 'Reading metadata only — never the contents of your emails.'}
             </span>
             <span className="faint">
               {isSample ? 'Sample data · ' + SAMPLE_SAVED_MINUTES + ' minutes of tidying, shown before you connect anything' : 'Your data stays in your own file.'}
