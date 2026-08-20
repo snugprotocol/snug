@@ -90,17 +90,22 @@ describe('SNUGENC1 container — the two unlock paths (AC11, AC18)', () => {
 
   it('carries ≥128 bits of entropy in the Recovery Key (AC31)', () => {
     // Pinned as a property of the generator, not of one sample: an implementer who
-    // shortens the key to be "friendlier" must fail this, because 60-bit keys are
+    // shortens the key to be "friendlier" must fail this, because a 60-bit key is
     // brute-forceable offline against a stolen file.
     const keys = new Set(Array.from({ length: 200 }, () => generateRecoveryKey()));
     expect(keys.size).toBe(200); // no collisions, i.e. not a tiny space
-    const key = generateRecoveryKey();
-    const alphabet = new Set(key.replace(/-/g, '').split(''));
-    // Reject visually ambiguous characters outright: a key that cannot be transcribed
-    // off a screen or a printout is not a recovery mechanism.
-    for (const ambiguous of ['0', 'O', '1', 'l', 'I']) expect(alphabet.has(ambiguous)).toBe(false);
-    const symbols = key.replace(/-/g, '').length;
-    expect(symbols * Math.log2(32)).toBeGreaterThanOrEqual(128);
+
+    // Entropy is derived from the OBSERVED alphabet, never from a base-32 assumption.
+    // The alphabet is 30 glyphs (0/O/1/l/I are excluded), so each symbol carries
+    // log2(30) ≈ 4.907 bits, not 5. An earlier version of this test hardcoded
+    // log2(32) and would have happily passed a 26-symbol key at 127.6 bits — under
+    // the floor, and invisibly so.
+    const observed = new Set<string>();
+    for (const key of keys) for (const ch of key.replace(/-/g, '')) observed.add(ch);
+    for (const ambiguous of ['0', 'O', '1', 'l', 'I']) expect(observed.has(ambiguous)).toBe(false);
+
+    const symbols = [...keys][0]!.replace(/-/g, '').length;
+    expect(symbols * Math.log2(observed.size)).toBeGreaterThanOrEqual(128);
   });
 
   it('a second device opens the container with the passphrase ALONE (AC18)', async () => {

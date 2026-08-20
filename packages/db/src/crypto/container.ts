@@ -87,12 +87,21 @@ export function isEncryptedContainer(bytes: Uint8Array | undefined): boolean {
 }
 
 /**
- * The Recovery Key: 26 Crockford-style symbols = 130 bits, grouped for transcription.
+ * The Recovery Key: 27 symbols from a 30-glyph alphabet = **132.5 bits**
+ * (27 × log2(30) = 27 × 4.907), grouped in fives for transcription.
+ *
  * The alphabet excludes 0/O/1/l/I because this key's whole job is to be copied off a
- * screen or a printout by a worried human, possibly years later.
+ * screen or a printout by a worried human, possibly years later — an unreadable key is
+ * not a recovery mechanism.
+ *
+ * MIND THE ARITHMETIC. The alphabet is 30 symbols, not 32, so each carries log2(30) ≈
+ * 4.907 bits rather than a tidy 5. At 26 symbols this key would be 127.6 bits — just
+ * under the 128-bit floor the spec requires, and exactly the kind of shortfall a
+ * base-32 assumption hides. The test derives the entropy from the alphabet itself for
+ * that reason: a hardcoded log2(32) would have called 127.6 bits a pass.
  */
 const RECOVERY_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789'; // 30 symbols, no ambiguous glyphs
-const RECOVERY_SYMBOLS = 26;
+const RECOVERY_SYMBOLS = 27;
 
 export function generateRecoveryKey(): string {
   // Rejection sampling keeps the distribution uniform: taking `byte % 30` would make
