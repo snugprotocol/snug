@@ -31,6 +31,7 @@ import {
 } from '@snugprotocol/protocol';
 import { authFlowSecretKey, AUTH_FLOW_SECRET_PREFIX } from '@snugprotocol/db';
 import { isUrlWithinHosts } from './app-host-freeze.js';
+import { extractProviderErrorDetail } from './provider-error-detail.js';
 import { base64UrlToUtf8, bytesToBase64Url, bytesToHex, randomBase64Url, utf8ToBase64Url } from './base64url.js';
 import type { CredentialStore, SecretsQuartet } from './credential-store.js';
 
@@ -624,8 +625,31 @@ export class OAuthService {
       );
     }
     if (!response.ok) {
+      // THE ERROR BODY IS RAW PROVIDER BYTES AND THIS MESSAGE TRAVELS (audit D2).
+      //
+      // It does not stop here: the caller wraps it in a SnugAuthError, the executor turns
+      // that into `NET_AUTH_FAILED` prose, the playground relays that verbatim into the
+      // net-response frame (the app IFRAME), and the provider lane renders it into the
+      // model's context. So a slice of this body reaches both readers C1 names.
+      //
+      // It previously forwarded `text.slice(0, 500)` unmodified. The request that produced
+      // it is a credential POST — `refresh_token` and `client_secret` are in the body we
+      // just sent — and a provider that echoes submitted parameters in its error envelope
+      // (ordinary debugging behaviour) puts them straight into that slice.
+      //
+      // The scrubber cannot cover this and it is worth saying why, so nobody "fixes" it by
+      // reaching for one: on this path injection throws before a candidate set is built,
+      // and the leaking values are POST BODY parameters that were never injected headers,
+      // so they would fall outside the candidate set even if one existed. Bounding must
+      // therefore happen HERE, at the seat that reads the bytes.
+      //
+      // `extractProviderErrorDetail` is an allowlist, not a redaction pass: a named field
+      // of a recognized error envelope, or nothing. A shape it does not recognize yields
+      // no prose at all — the status alone, which is what a caller needs to tell 400 from
+      // 503 and all a stranger's bytes have earned.
       const text = await response.text().catch(() => '');
-      throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
+      const detail = extractProviderErrorDetail(text);
+      throw new Error(detail !== undefined ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`);
     }
     return (await response.json()) as TokenResponse;
   }

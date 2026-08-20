@@ -56,6 +56,7 @@ import { utf8ToBase64 } from './base64url.js';
 import type { AuthConnectionState, CredentialStore } from './credential-store.js';
 import { isForbiddenNetHost, isPrivateRfc1918Ipv4Literal } from './net-guards.js';
 import { OAuthService, SnugAuthError, type FetchLike } from './oauth-service.js';
+import { extractProviderErrorDetail } from './provider-error-detail.js';
 import { scrubAuthValues } from './scrub.js';
 import { AuthTemplateError, renderAuthRequestTemplates } from './template-engine.js';
 import { AuthTemplateLintError, assertLintedTemplate } from './template-lint.js';
@@ -1331,7 +1332,7 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
           // only when someone is LISTENING: the wizard probe strips the seat, so its
           // 401/403 outcomes must not pay for an extraction nobody reads. A 2-arg call
           // when no detail exists keeps empty-body behavior byte-identical.
-          const detail = extractAuthFailureDetail(result.body);
+          const detail = extractProviderErrorDetail(result.body);
           if (detail !== undefined) {
             deps.onAuthShapedFailure(grant.slot, result.status, detail);
           } else {
@@ -1365,63 +1366,6 @@ export function createConnectedFetch(deps: ConnectedFetchDeps): ConnectedFetch {
       return deliver(first);
     },
   };
-}
-
-/** TASK-20260815 AC4: max chars of provider error text forwarded to the observer. */
-const MAX_AUTH_FAILURE_DETAIL_CHARS = 160;
-
-/**
- * Bodies above this size yield no detail at all. A real provider error envelope is a
- * few hundred bytes; the delivered body can be up to the 1 MiB gate-10 cap, and parsing
- * a megabyte of JSON to pull 160 chars on every credentialed 401/403 is work an
- * adversarial or verbose provider gets to bill us for (Gate-5 review, efficiency).
- */
-const MAX_AUTH_FAILURE_BODY_CHARS = 8_192;
-
-/**
- * Extract a short human-readable reason from an auth-shaped failure body.
- *
- * INPUT CONTRACT: the DELIVERED `result.body` — already scrubbed of every injected
- * credential form and 1 MiB-capped at gate 10. This function must never be handed raw
- * transport bytes; it adds bounding and shape-recognition, not scrubbing.
- *
- * Recognized shapes, in order: Spotify's `{"error":{"message":…}}`, RFC 6749
- * `error_description`, a bare `message` string, a bare `error` string. Everything
- * structured-but-unrecognized yields NOTHING — raw JSON in a banner is noise, not
- * diagnosis — and the Gate-5 review found the first cut leaking exactly that: a
- * MALFORMED `{` body (a >1 MiB JSON error truncated mid-token by gate 10 no longer
- * parses) fell through to the text head, and JSON ARRAYS (Hue CLIP v1 errors),
- * JSON strings and `)]}'`-guarded bodies skipped the JSON branch entirely. So: a `{`
- * body parses or yields nothing, and a body opening with `[`, `<`, `"` or `)` is
- * structure/markup, never prose. Plain text becomes the head, hard-capped — a
- * plain-text reason like "quota exceeded" is exactly the honesty the banner wants.
- */
-function extractAuthFailureDetail(body: string): string | undefined {
-  if (body.length > MAX_AUTH_FAILURE_BODY_CHARS) return undefined;
-  const trimmed = body.trim();
-  if (trimmed.length === 0) return undefined;
-  const cap = (text: string): string => text.slice(0, MAX_AUTH_FAILURE_DETAIL_CHARS);
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      const error = parsed['error'];
-      const candidates: unknown[] = [
-        typeof error === 'object' && error !== null ? (error as Record<string, unknown>)['message'] : undefined,
-        parsed['error_description'],
-        parsed['message'],
-        typeof error === 'string' ? error : undefined,
-      ];
-      const hit = candidates.find(
-        (candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0,
-      );
-      return hit !== undefined ? cap(hit.trim()) : undefined;
-    } catch {
-      // Malformed or truncated JSON: brace noise is not a diagnosis.
-      return undefined;
-    }
-  }
-  if ('[<")'.includes(trimmed[0]!)) return undefined;
-  return cap(trimmed);
 }
 
 // ------------------------------------------------------- the testRequest probe (Q7)
