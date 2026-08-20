@@ -150,3 +150,15 @@ Tests first per TDD.md.
   five sample-mode starters (two lines each, and it should ride the hook).
 - Next step: human review. The owner manual test is still the real gate: connect a live
   Gmail account on desktop, take the refresh prompt, and send one real unsubscribe.
+
+### 2026-08-19 (close) — Claude (Fable 5) — session close
+- Done: no further work; complete and green. One thing this file predicted correctly and
+  one it under-called. Correct: D4's judgement that the HOST half being app-agnostic is
+  what delivers "all apps", with per-app listeners as cheap follow-on. Under-called: the
+  `[object Object]` defect found while verifying was repo-shaped, not app-shaped — it is
+  now a lesson with a source-sweep guard rather than a one-app fix.
+- State: merged into the branch's 11 commits; docs/code-map wizard row updated at close
+  to name `state/appHosts.ts` and the verified-connection gate.
+- Next step: PR and merge.
+- Open questions: none. Deferred-by-design items (the `useHostEvents` SDK hook, now DUE
+  by its own trigger; adoption in the other five sample-mode starters) are in next-steps.

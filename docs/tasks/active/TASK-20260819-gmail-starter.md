@@ -239,3 +239,22 @@ green as files land → playground suites → root `pnpm test` at Gate 5.
 - Open questions: none blocking. Deferred by design and recorded in the app's
   `authoring/docs/next-tasks.md`: web-playground support, incremental `historyId` sync,
   batch undo, label taxonomy, storage view.
+
+### 2026-08-19 (close) — Claude (Fable 5) — session close
+- Done: nothing further on this task itself; it is complete and green. Recording here
+  that TWO follow-on tasks landed on this same branch from owner testing, and that they
+  changed conclusions this file states:
+  - **TASK-20260819-inbox-copilot-fixes** — the verified-connection refresh prompt
+    (host-side, app-agnostic), the `From:` header that unsubscribes were bouncing
+    without, the selectable sync window, structured answers, and a repo-wide
+    `[object Object]` error-rendering bug.
+  - **TASK-20260819-inbox-copilot-persistence** — the app had NO persistence at all.
+    That is the sharpest correction to this file: the starter shipped "done" while
+    throwing away every synced message on close. Both the shelf validator and the
+    extracted-core suite were honestly green; neither relaunches.
+- State: 11 commits on `feat/TASK-20260819-gmail-starter`, working tree clean, full
+  uncached `turbo run test` 23/23 (examples 343, auth 895, playground 1265).
+- Next step: PR and merge (owner asked for it at close).
+- Open questions: none blocking. The owner manual tests remain the real gate — a live
+  Gmail connect on desktop, one governed cleanup batch, one real unsubscribe, and a
+  full close/reopen to confirm the mailbox persists.
