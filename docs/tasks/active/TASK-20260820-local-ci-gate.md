@@ -1,6 +1,6 @@
 # TASK-20260820-local-ci-gate: `gate:local` — one command that replaces the blind CI, plus the close-session automation
 
-- **Status**: in-review (Gate 3–5 done; `gate:local --all` verification running)
+- **Status**: in-review (Gate 3–5 done; `gate:local --all` FULL PASS 6/6 on this branch)
 - **Owner**: Jeetu
 - **Risk tier**: **HIGH** — auto-escalated. Touches CI/release config (`.github/workflows/ci.yml` is the reference this replaces) and creates the artifact that becomes the *sole* merge gate for a solo developer. A false green here is undetectable by construction: nothing downstream re-checks it.
 - **Branch**: `feat/TASK-20260820-local-ci-gate`
@@ -118,3 +118,13 @@ The consequence worth stating plainly: **`gate:local` green no longer implies "C
 - **State**: Plan approved and amended through decision 5. **No branch cut, no implementation code.** Working tree clean on `main` at `a8bad77` apart from this task file.
 - **Next step**: Cut `feat/TASK-20260820-local-ci-gate` and write the RED tests first — AC3 (ci.yml superset parse), AC4 (injected failing leg + injected skipped leg), AC10/AC11 (verdict strings for full, partial, and deselected runs).
 - **Open questions**: none blocking. Two deferred to implementation: (a) the exact diagnosis of the 4 undocumented e2e failures is unknown until they are opened — if one proves to be a genuine product defect rather than a test-fixture issue, it gets its own task rather than expanding this one; (b) whether `--all` should be the default for a `main`-touching merge specifically, revisit once the real cadence is felt.
+
+### 2026-08-20 (cont.) — Claude (Opus 5) — Gate 3–5
+
+- **Done**: Cut the branch. `ci.yml` → `workflow_dispatch`-only with a restore block (verified: push fired ZERO runs and the workflow still lists `active`, so GitHub parsed it). Wrote `scripts/gate-local.test.mjs` RED first (14 tests), then `gate-local.mjs`: six selectable legs, narrow ci.yml extractor, three-state statuses, honest verdicts. **Mutation-tested — and it caught a real defect in my own test**: the first `commandsMatch` used substring comparison and a mutant survived it (a local command whose operative verb was replaced still "matched" the CI step it mirrors), which would have made AC3 decorative. Token-set equality kills all four mutants.
+  AC9: diagnosed the 4 undocumented e2e failures — all TEST defects. Three were `installDemo` clicking a tile by accessible name (`open weather`) after TASK-20260817 gave starters display names (weather renders as "Should I?"); one was a ~500 ms race on the run surface's connect CTA that surfaced misleadingly as "wizard not found". Fixed both. Quarantined the 4 documented DEGRADED rows with `test.fail()`, verified self-policing (adding a passing row breaks the suite). E2e: 8 red → 0 red, 68 passing.
+  Wrote ADR-0041, five lessons (+ amended the 2026-08-19 flake lesson rather than leaving a superseded diagnosis standing), next-steps rewrites, code-map row, and the `/close-session` automation.
+  **Found and fixed a bug of my own making**: `test-results/` was tracked and my quarantine commit swept in a 1.5 MB `trace.zip` via `git add -A`. Untracked + gitignored; a full e2e run now leaves the tree clean (verified).
+- **State**: `gate:local --all` → **FULL PASS, 6/6 legs, exit 0**, run on the branch that builds it. Threat-model 139/139, sandbox guard 4/4, gate tests 14/14. Working tree clean. Five commits pushed to `origin/feat/TASK-20260820-local-ci-gate`.
+- **Next step**: open the PR, then merge — this task's own `/close-session` automation is what it is testing, so the first real use is this task itself.
+- **Open questions**: none blocking. Deferred: (a) whether `--all` should be forced for `main`-touching merges, revisit once the cadence is felt; (b) the 4 quarantined DEGRADED rows still need their per-app cold-boot fix (tracked in next-steps 2026-08-18).
