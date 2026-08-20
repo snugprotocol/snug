@@ -24,6 +24,7 @@ import {
 import { getUserDb } from '../state/userdb.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
+import { guardWireForApp } from './pseudonymizeEgress.js';
 
 export function createServerAppTransport(model?: string, appId?: string): AgentTransport {
   // App-path requests are self-contained envelopes — no threadId, no history.
@@ -197,9 +198,22 @@ export function createAppTransport(
   onTurnStart?: () => void,
 ): AgentTransport {
   return {
-    send(wire, options) {
+    async send(wire, options) {
       onTurnStart?.();
-      return resolveAppTransport(mode, provider, onLlmEvent, appId).send(wire, options);
+      // R-9 EGRESS SCRUB (TASK-20260820), at the seam BOTH transports share — the
+      // subscription hub's /invoke body is provider-bound exactly like the BYOK wire.
+      // Guarded PER SEND, like the brain and contract reads above and for the same
+      // stale-capture reason: a sidecar connection approved while RunView is mounted
+      // must bind the very next send. Fails closed — a refusal, never a raw wire.
+      let outbound = wire;
+      if (appId !== undefined) {
+        const guarded = await guardWireForApp(appId, wire);
+        if (!guarded.ok) {
+          return { ok: false, code: guarded.code, message: guarded.message, retryable: guarded.retryable };
+        }
+        outbound = guarded.wire;
+      }
+      return resolveAppTransport(mode, provider, onLlmEvent, appId).send(outbound, options);
     },
   };
 }

@@ -23,8 +23,9 @@ import type { NetHandler, NetHandlerResult } from '@snugprotocol/runner';
 import type { NetRequestFrame } from '@snugprotocol/protocol';
 import type { UserDb } from '@snugprotocol/db';
 
-import { getUserDb } from './userdb.js';
+import { getUserDb, userDbStatusStore } from './userdb.js';
 import { createStore } from './store.js';
+import { harvestSidecarBody, persistIdentityDirectory } from './sidecarIdentity.js';
 import { getPlatform } from '../platform/platform.js';
 
 /**
@@ -270,7 +271,26 @@ async function sidecarAppFetch(
   if (platform.sidecarCtl !== undefined) {
     await platform.sidecarCtl('start');
   }
-  return seat(method, pathAndQuery, body, headers);
+  const answered = await seat(method, pathAndQuery, body, headers);
+  // R-9 INGRESS HARVEST (TASK-20260820): every sidecar response crosses THIS seat, so the
+  // identity directory the LLM egress scrub reads is fed here — from the RESPONSE BODY
+  // ONLY. The argument tuple above carries the injected credential headers (C1); it must
+  // never reach the harvest. The memory harvest is synchronous-before-return, so the very
+  // next call — which may be the LLM wire — already sees what this response revealed.
+  // Persistence is fire-and-forget and ONLY when the user DB is already ready: awaiting
+  // `getUserDb()` here would BOOT one, hanging this read in any db-less context — the
+  // exact hostage-taking the sidecarAutostart contract forbids.
+  if (answered.status === 200) {
+    harvestSidecarBody(pathAndQuery, answered.body);
+    if (userDbStatusStore.get().state === 'ready') {
+      void getUserDb()
+        .then((db) => persistIdentityDirectory(db))
+        .catch(() => {
+          /* best-effort persistence; the session scrubs from memory regardless */
+        });
+    }
+  }
+  return answered;
 }
 
 /** Test seam for the autostart ordering — not part of the app-facing surface. */

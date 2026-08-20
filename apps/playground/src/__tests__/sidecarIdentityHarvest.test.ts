@@ -78,6 +78,9 @@ async function setup(body: string | ((path: string) => string)) {
   return { db, net, identity, calls };
 }
 
+/** Persistence is fire-and-forget behind the memory set — settle it before asserting. */
+const settlePersist = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe('the sidecar ingress harvest (AC1) — names and jids from /chats, nothing else', () => {
   it('holds names + jids immediately after the /chats response returns, and persists them', async () => {
     const { db, net, identity } = await setup(CHATS_BODY);
@@ -94,6 +97,7 @@ describe('the sidecar ingress harvest (AC1) — names and jids from /chats, noth
     expect(directory).toContain('922222222222@s.whatsapp.net');
 
     // Persisted under the one settings key, so a fresh session scrubs replayed data.
+    await settlePersist();
     const persisted = db.getSetting(SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY);
     expect(persisted).toContain('Priya Sharma');
     expect(persisted).toContain('Rahul Verma');
@@ -103,6 +107,7 @@ describe('the sidecar ingress harvest (AC1) — names and jids from /chats, noth
     const { db, net, identity } = await setup(CHATS_BODY);
 
     await net.__sidecarAppFetchForTests('GET', '/chats');
+    await settlePersist();
 
     const everything = JSON.stringify([
       ...identity.readIdentityDirectory(db),
@@ -133,8 +138,10 @@ describe('the sidecar ingress harvest (AC1) — names and jids from /chats, noth
     const writes = vi.spyOn(db, 'setSetting');
 
     await net.__sidecarAppFetchForTests('GET', '/chats');
+    await settlePersist();
     await net.__sidecarAppFetchForTests('GET', '/chats');
     await net.__sidecarAppFetchForTests('GET', '/chats');
+    await settlePersist();
 
     const directoryWrites = writes.mock.calls.filter(([key]) => key === SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY);
     expect(directoryWrites, 'an unchanged /chats body must not rewrite the row per poll').toHaveLength(1);
@@ -145,6 +152,7 @@ describe('the sidecar ingress harvest (AC1) — names and jids from /chats, noth
     const { db, net, identity } = await setup(CHATS_BODY);
 
     await net.__sidecarAppFetchForTests('GET', '/chats', undefined, { authorization: `Bearer ${TOKEN}` });
+    await settlePersist();
 
     const everything = JSON.stringify([
       ...identity.readIdentityDirectory(db),

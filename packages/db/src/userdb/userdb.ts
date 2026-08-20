@@ -23,6 +23,7 @@ import {
   CONNECTION_STATUS,
   FRAME_TYPES,
   PROTOCOL_VERSION,
+  SIDECAR_SYMBOLIC_HOST,
   USERDB_CONNECTIONS_TABLE,
   USERDB_DDL,
   USERDB_FILE,
@@ -52,6 +53,7 @@ import {
 } from '@snugprotocol/protocol';
 import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
 import { appIdFromModelSettingKey, appModelSettingKey } from './app-settings-keys.js';
+import { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './sidecar-identity-keys.js';
 import { base64ToBytes } from '../base64.js';
 import {
   KV_TABLE_DDL,
@@ -1451,6 +1453,38 @@ function construct(
   }
 
   /**
+   * Delete the harvested sidecar identity directory once NO approved connection's frozen
+   * ceiling carries the sidecar symbolic host (TASK-20260820-host-pseudonymisation,
+   * owner decision 2026-08-20). The directory is a persisted third-party-PII asset —
+   * contact names and jids harvested for the R-9 egress scrub — and must not outlive the
+   * last connection that justified holding it. Called from the ONLY two seams that take
+   * an approved sidecar row away: `revokeConnection` (tombstone; status leaves
+   * `approved`) and `deleteApp` (cascade removes the rows). `target` lets deleteApp run
+   * the check INSIDE its transaction, so the wipe commits or rolls back with the very
+   * rows it reasons about.
+   */
+  function wipeSidecarIdentityDirectoryIfOrphaned(target: Database = db): void {
+    const rows = selectFrom(target, `SELECT allowed_hosts FROM ${USERDB_CONNECTIONS_TABLE} WHERE status = ?`, [
+      CONNECTION_STATUS.approved,
+    ]);
+    const stillHeld = rows.some((row) => {
+      try {
+        const hosts = JSON.parse(String(row[0])) as unknown;
+        return Array.isArray(hosts) && hosts.includes(SIDECAR_SYMBOLIC_HOST);
+      } catch {
+        // A malformed ceiling grants nothing — treating it as "still held" would let a
+        // corrupted row pin third-party PII forever.
+        return false;
+      }
+    });
+    if (!stillHeld) {
+      target.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [
+        SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY,
+      ] as never);
+    }
+  }
+
+  /**
    * `requirement_version` for a persisted replacement (fold T-mn3): the SAME number when
    * the canonical hash matches, one higher when it differs.
    *
@@ -2015,6 +2049,11 @@ function construct(
         //     one row per app, and equality needs no metacharacter escaping and cannot
         //     over-match a sibling id (the caveat noted for the secrets prefix above).
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [appModelSettingKey(appId)]);
+        // 3d. The sidecar identity directory, when this app held the LAST approved
+        //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the
+        //     transaction: the check reads the connection rows step 3 just deleted, so
+        //     it must commit or roll back with them.
+        wipeSidecarIdentityDirectoryIfOrphaned(db);
         // 4. The app row last, so a failure above leaves a consistent, still-installed app.
         db.run(`DELETE FROM ${USERDB_TABLES.apps} WHERE app_id = ?`, [appId]);
         db.run('COMMIT');
@@ -2575,6 +2614,10 @@ function construct(
       // The VALUES go, and only this slot's. Metadata is a tombstone; credentials are
       // not — a revoked connection that kept working is the failure this closes.
       wipeConnectionSecrets(appId, slot);
+      // And if that was the LAST approved sidecar-ceiling connection anywhere, the
+      // harvested identity directory goes with it (TASK-20260820, R-9 lifecycle).
+      wipeSidecarIdentityDirectoryIfOrphaned();
+      markDirty();
       return readConnectionRow(appId, slot)!;
     },
 

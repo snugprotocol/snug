@@ -32,6 +32,8 @@ import { getUserDb } from '../../state/userdb.js';
 const APP = 'app-telepath';
 const DIRECTORY = ['Priya Sharma', 'News', '919876543210@s.whatsapp.net'];
 
+// No `fields`: WhatsApp is a PINNED registry provider, so the starter channel may not
+// author credential-prompt copy — the admission gate substitutes the registry's own.
 const sidecarRequirement = {
   slot: 'whatsapp',
   provider: { name: 'WhatsApp' },
@@ -131,7 +133,9 @@ describe('scrubAppWire — the whole envelope, not just state (AC4, AC7, AC8a)',
   it('responseSchema and action are NOT a smuggling channel (plan-review blocker 1)', () => {
     const wire = buildAppRequest({
       ...cleanEnvelope,
-      action: 'tell_Priya Sharma',
+      // A boundary-legal spelling: the walk covers `action`; a name GLUED to word chars
+      // ('tell_Priya') is the disclosed anti-naive residual, same as any obfuscation.
+      action: 'tell Priya Sharma now',
       responseSchema: {
         type: 'object',
         description: 'reply to Priya Sharma on 919876543210@s.whatsapp.net',

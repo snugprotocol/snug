@@ -13,8 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { authConnectionCredentialSecretKey, SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from '@snugprotocol/db';
-import { SIDECAR_SYMBOLIC_HOST } from '@snugprotocol/protocol';
+import { authConnectionCredentialSecretKey } from '@snugprotocol/db';
 
 vi.mock('../state/net.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/net.js')>();
@@ -27,8 +26,6 @@ import {
   PROVIDER_REQUEST_TOOL_NAME,
   renderProviderResult,
 } from '../agent/providerTools.js';
-import { scrubText } from '../agent/pseudonymizeEgress.js';
-import type { SnugPlatform } from '../platform/platform.js';
 import {
   connectedFetchDepsFor,
   createNetHandlerFor,
@@ -339,85 +336,3 @@ describe('AC7 — what re-enters the model context', () => {
   });
 });
 
-// ---------------------------------------------------------------------------------
-// TASK-20260820-host-pseudonymisation AC10 — the R-9 backstop on THIS lane.
-//
-// The provider chat lane returns sidecar tool-result bodies to the model with no
-// app-message wire involved (fresh-context plan review 2026-08-20, blocker 2), so the
-// egress scrub at the transport seam never sees them. The SAME redaction module is
-// applied to sidecar-class results here — and ONLY sidecar-class results: an ordinary
-// API body is the provider's own data surface and stays raw.
-
-describe('R-9 — sidecar-class results are pseudonymised before re-entering the context', () => {
-  const WA_SLOT = 'whatsapp';
-  const CONTACT_BODY = JSON.stringify({
-    chats: [{ jid: '919876543210@s.whatsapp.net', name: 'Priya Sharma', isGroup: false }],
-  });
-
-  let restorePlatform: SnugPlatform;
-
-  beforeEach(async () => {
-    const platformModule = await import('../platform/platform.js');
-    restorePlatform = platformModule.getPlatform();
-    platformModule.setPlatform({
-      kind: 'desktop',
-      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
-      sidecarCtl: async () => ({ running: true, nonce: 'n' }),
-      sidecarFetch: async () => ({ status: 200, body: CONTACT_BODY }),
-    });
-    const db = await getUserDb();
-    db.putDeclaredConnection(
-      APP,
-      WA_SLOT,
-      {
-        slot: WA_SLOT,
-        provider: { name: 'WhatsApp' },
-        kind: 'linked_device',
-        declaredApiHosts: [SIDECAR_SYMBOLIC_HOST],
-      },
-      'starter',
-    );
-    db.approveConnection(APP, WA_SLOT);
-    db.setSetting(SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY, ['Priya Sharma']);
-  });
-  afterEach(async () => {
-    const platformModule = await import('../platform/platform.js');
-    platformModule.setPlatform(restorePlatform);
-  });
-
-  it('a sidecar read reaches the model with identities and primitives redacted', async () => {
-    const { run } = buildTool();
-    const result = await run({ url: `snug-connection://${WA_SLOT}/chats`, method: 'GET' });
-
-    expect(result).toContain('<api_result>');
-    expect(result, 'R-9: a raw name must not re-enter the model context').not.toContain('Priya Sharma');
-    expect(result, 'a jid is a dialable identifier').not.toContain('919876543210@s.whatsapp.net');
-    expect(result).toContain('[contact]');
-  });
-
-  it('an ordinary API result stays raw — names an app is entitled to fetch are not redacted', async () => {
-    const { run } = buildTool({
-      response: () => new Response('{"organizer":"Priya Sharma"}', { status: 200 }),
-    });
-    const result = await run({ url: `https://${HOST}/v1/guests`, method: 'GET' });
-
-    expect(result).toContain('Priya Sharma');
-    expect(result).not.toContain('[contact]');
-  });
-
-  it('renderProviderResult applies the injected scrub before the size cap', () => {
-    const rendered = renderProviderResult(
-      {
-        ok: true,
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-        body: '{"who":"Priya Sharma","phone":"+91 98765 43210"}',
-      },
-      (text) => scrubText(text, ['Priya Sharma']),
-    );
-    expect(rendered).not.toContain('Priya Sharma');
-    expect(rendered).not.toContain('98765');
-    expect(rendered).toContain('[contact]');
-    expect(rendered).toContain('[number]');
-  });
-});

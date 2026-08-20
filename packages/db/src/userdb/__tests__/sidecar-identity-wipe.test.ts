@@ -26,11 +26,14 @@ const open = async (backend: MemoryBackend): Promise<UserDb> => {
   return result.userDb;
 };
 
+// The whatsapp starter's requirement shape (examples/whatsapp/connection.json):
+// linked_device must declare exactly the field its minted session token fills.
 const sidecarRequirement = (slot: string) =>
   ({
     slot,
     provider: { name: 'WhatsApp' },
     kind: 'linked_device',
+    fields: [{ key: 'sidecar_token', label: 'Helper access token', type: 'secret' }],
     declaredApiHosts: [SIDECAR_SYMBOLIC_HOST],
   }) as const;
 
