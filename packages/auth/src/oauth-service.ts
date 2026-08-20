@@ -32,6 +32,7 @@ import {
 import { authFlowSecretKey, AUTH_FLOW_SECRET_PREFIX } from '@snugprotocol/db';
 import { isUrlWithinHosts } from './app-host-freeze.js';
 import { extractProviderErrorDetail } from './provider-error-detail.js';
+import { scrubAuthValues } from './scrub.js';
 import { base64UrlToUtf8, bytesToBase64Url, bytesToHex, randomBase64Url, utf8ToBase64Url } from './base64url.js';
 import type { CredentialStore, SecretsQuartet } from './credential-store.js';
 
@@ -43,6 +44,29 @@ const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const REFRESH_SKEW_MS = 60 * 1000; // refresh when <60s of access-token life remains
 const POST_TIMEOUT_MS = 15_000; // AbortSignal.timeout — browser-OK
 const REVOKE_TIMEOUT_MS = 5_000;
+
+/**
+ * The form parameters that carry SECRET material on a credential POST. Named explicitly
+ * rather than scrubbing every submitted value, because over-scrubbing costs honesty in
+ * the other direction: `grant_type=refresh_token` and `client_id` are diagnostic, and a
+ * failure message that redacts them is a row of asterisks where a reason should be.
+ *
+ * `code` and `code_verifier` earn their place alongside the obvious two — a one-time
+ * authorization code is still a credential until it is redeemed, and the PKCE verifier is
+ * the secret half of the challenge. Extend this when a new credential-bearing parameter
+ * is added; `token` covers the revoke path.
+ */
+const SECRET_FORM_PARAMS = ['client_secret', 'refresh_token', 'code', 'code_verifier', 'token'] as const;
+
+/** The submitted secret values, shaped as the scrubber's candidate record. */
+function submittedSecrets(body: URLSearchParams): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of SECRET_FORM_PARAMS) {
+    const value = body.get(name);
+    if (value !== null && value.length > 0) out[name] = value;
+  }
+  return out;
+}
 
 export type SnugAuthErrorCode =
   | 'invalid_state'
@@ -643,12 +667,29 @@ export class OAuthService {
       // so they would fall outside the candidate set even if one existed. Bounding must
       // therefore happen HERE, at the seat that reads the bytes.
       //
-      // `extractProviderErrorDetail` is an allowlist, not a redaction pass: a named field
-      // of a recognized error envelope, or nothing. A shape it does not recognize yields
-      // no prose at all — the status alone, which is what a caller needs to tell 400 from
-      // 503 and all a stranger's bytes have earned.
+      // TWO bounds, and both are needed — the Gate-5 review found that either alone leaks:
+      //
+      //   1. `scrubAuthValues` over the values WE JUST SUBMITTED. This seat is the one
+      //      place those values are known exactly (`body` is the very URLSearchParams that
+      //      went out), which is precisely what the response scrubber lacks downstream.
+      //   2. `extractProviderErrorDetail` — an allowlist of recognized error-envelope
+      //      SHAPES. A shape it does not recognize yields no prose at all: the status
+      //      alone, which is what a caller needs to tell 400 from 503 and all a stranger's
+      //      bytes have earned.
+      //
+      // Bound 2 alone was the first cut of this fix, and it was wrong in an instructive
+      // way: an allowlist of shapes decides which FIELD is forwarded, never what that
+      // field CONTAINS. Measured against the shipped extractor, all three of
+      // `invalid_grant for token rt-…`, `error=…&refresh_token=rt-…`, and
+      // `{"error_description":"bad token rt-…"}` carried the live token through the
+      // 160-char cap untouched. The third defeats the tempting narrower fix of "forward
+      // only recognized JSON fields": a provider puts the echo inside `error_description`,
+      // which is exactly the field a reader wants to see.
+      //
+      // Scrub BEFORE extract, so a value straddling the 160-char cut is redacted rather
+      // than half-forwarded.
       const text = await response.text().catch(() => '');
-      const detail = extractProviderErrorDetail(text);
+      const detail = extractProviderErrorDetail(scrubAuthValues(text, submittedSecrets(body)));
       throw new Error(detail !== undefined ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`);
     }
     return (await response.json()) as TokenResponse;

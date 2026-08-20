@@ -181,6 +181,70 @@ describe('a provider error body never carries credential material out of the oau
     expect(message).toMatch(/502/);
   });
 
+  /**
+   * GATE-5 REVIEW FINDING — the first fix bounded VOLUME, not CONTENT.
+   *
+   * `extractProviderErrorDetail` is an allowlist of error-envelope SHAPES, and the first
+   * cut of this fix leaned on that as though it were an allowlist of VALUES. It is not:
+   * the shape decides which FIELD is forwarded, and the field's own content is still
+   * chosen by the provider. Measured against the shipped extractor, all three of these
+   * carried the live refresh token straight through the 160-char cap:
+   *
+   *   'invalid_grant for token rt-…'                    -> forwarded verbatim (plain-text head)
+   *   'error=invalid_grant&refresh_token=rt-…'          -> forwarded verbatim (form-encoded)
+   *   {"error_description":"bad token rt-…"}            -> forwarded verbatim (RECOGNIZED field)
+   *
+   * The third is the one that matters most, because it defeats the tempting narrower fix
+   * of "only forward recognized JSON fields" — a hostile or merely verbose provider puts
+   * the echo INSIDE `error_description`, which is exactly the field a reader wants.
+   *
+   * So the bound has to be a value-scrub as well as a shape-allowlist, and this seat can
+   * build a real candidate set: `postForm` holds the `URLSearchParams` it just submitted,
+   * so the secrets at risk are known EXACTLY rather than guessed at. That is the
+   * difference from the response-scrub path, where the candidate set genuinely does not
+   * contain these values (they were POST body params, never injected headers).
+   */
+  it('scrubs a submitted secret out of a PLAIN-TEXT error body', async () => {
+    const message = await refreshMessage(400, `invalid_grant for token ${REFRESH_TOKEN}`);
+
+    expect(message).not.toContain(REFRESH_TOKEN);
+    // The surrounding reason survives — scrubbing replaces the value, not the diagnosis.
+    expect(message).toContain('invalid_grant');
+  });
+
+  it('scrubs a submitted secret out of a FORM-ENCODED error body', async () => {
+    const message = await refreshMessage(400, `error=invalid_grant&refresh_token=${REFRESH_TOKEN}`);
+
+    expect(message).not.toContain(REFRESH_TOKEN);
+  });
+
+  it('scrubs a submitted secret echoed INSIDE a recognized JSON field', async () => {
+    // The sharpest case: the echo rides `error_description`, the very field a reader
+    // wants. A shape-only allowlist forwards this happily.
+    const body = JSON.stringify({ error_description: `bad refresh token ${REFRESH_TOKEN}` });
+    const message = await refreshMessage(400, body);
+
+    expect(message).not.toContain(REFRESH_TOKEN);
+    expect(message, 'the useful half of the reason still survives').toContain('bad refresh token');
+  });
+
+  it('scrubs the CLIENT SECRET too — every submitted value is a candidate, not just the token', async () => {
+    const body = JSON.stringify({ error_description: `client ${CLIENT_SECRET} rejected` });
+    const message = await refreshMessage(400, body);
+
+    expect(message).not.toContain(CLIENT_SECRET);
+  });
+
+  it('does not scrub NON-secret submitted values — grant_type must still be readable', async () => {
+    // Non-vacuity in the other direction: scrubbing every submitted parameter would
+    // redact `grant_type=refresh_token` and turn honest diagnoses into a row of asterisks.
+    // Only the values that are actually secret belong in the candidate set.
+    const message = await refreshMessage(400, JSON.stringify({ error_description: 'grant_type refresh_token is unsupported' }));
+
+    expect(message).toContain('grant_type');
+    expect(message).toContain('refresh_token');
+  });
+
   it('still throws the TYPED cause, so host surfaces can tell failures apart (N1)', async () => {
     const { service } = await connectedWithFailingRefresh(400, ECHOING_ERROR_BODY);
 
