@@ -130,7 +130,8 @@ Every AC above gets a failing test before the corresponding implementation. High
 |---|---|
 | `apps/playground/src/state/sync.ts` (:215 `exportUserFile`, :224 `importUserFile`) | Encrypt after the secrets-strip+VACUUM (never before — the strip needs plaintext); detect+decrypt on import. |
 | `packages/db/src/sync/loop.ts` (:126,:162) | **Order is load-bearing**: `exportPayload()` → `sha256Hex(plaintext)` for the change gate → *then* encrypt for personal origins only. Hub origins keep pushing plaintext (D6), so `apps/server` and `/userdb`'s magic check are untouched. |
-| `apps/playground/src/state/userdb.ts` (:136 `restoreUserDbFromBytes`) | Format-detect before writing raw bytes. |
+| `apps/playground/src/state/userdb.ts` (:136 `restoreUserDbFromBytes`) | Format-detect before writing raw bytes; it hardcodes `backend.save(USERDB_FILE, bytes)` (:148) so it must write the **canonical** name, not the legacy one. |
+| `apps/playground/src/state/userdb.ts` (:118 `userDbNeedsRestore`) | **Verified by hand**: this is a hardcoded three-state list (`corrupt`/`unsupported`/`load-failed`). `'locked'` must NOT join it — a locked file is not a torn file, and offering "restore from backup" as the answer to a forgotten passphrase would talk a user into overwriting good data. The unlock screen owns that state instead. |
 
 **Stage 5 — Hub UI/UX (the flagship flow)**
 | File | Change |
@@ -200,6 +201,44 @@ Run per Gate 5: every touched package **plus dependents** (`protocol` → `db` �
 
 ## Decisions & surprises
 
+### Self-found gap in this plan (2026-08-20, before implementation) — the second-device pull
+
+Verifying Stage 4 against `packages/db/src/sync/loop.ts` exposed a hole in my own plan that the ACs did not cover.
+
+**The bug.** `pullMerge` (`loop.ts:148`) calls `userDb.importUserDb(remote.bytes)`. Under D5 those bytes are now ciphertext. A **second device** pulling them must decrypt before it can read anything — but if the file key were a per-device random stored inside the local file, the pulling device has no way to obtain the key for the *remote* container. ADR-0009 explicitly promises the file is "restorable on a new device after login", so this is a first-class flow, not an edge case. Left unfixed it would brick cross-device sync the moment a user turns encryption on — the exact "don't lock the user out" failure the owner named.
+
+**The fix, folded into the design.** The container is **self-opening**: every `SNUGENC1` artifact carries its own header (salt, KDF params, slot table) and its slots wrap that artifact's own file key. So *anything* that can be unlocked with the passphrase or the Recovery Key can be opened by any device, with **no shared state outside the file**. Concretely:
+
+- **Never** persist the file key, the passphrase, or any derived key into `snug_secrets` (already AC17) — the key must be re-derivable from passphrase + header alone, or cross-device breaks by construction.
+- `pullMerge` gains a decrypt step keyed on `isEncryptedContainer(remote.bytes)`; a container the device cannot unlock becomes an explicit **`locked-remote` divergence event** (surfaced, never auto-resolved, per ADR-0009's "pull is a merge, never a swap"), and **must not** clobber local state.
+- **Re-encrypting on each push does NOT re-key**: pushes reuse the same file key with a fresh payload nonce, so a second device that unlocked yesterday's copy still unlocks today's.
+- **Nonce discipline (see E in the crypto review angle)**: a fresh random 12-byte payload IV per encryption, never derived from content, and the file key is rotated only on an explicit user action (turn-off/turn-on), never silently.
+
+**New acceptance criteria (added to Part 2):**
+18. A container encrypted on device A is unlockable on device B **with the passphrase alone** — no shared state beyond the file itself.
+19. A pulled container the device cannot unlock surfaces a `locked-remote` divergence and leaves local state **untouched** (never clobbered, never quarantined).
+20. Repeated pushes of an unchanged database do not re-key: a container captured after push N still unlocks after push N+1 with the same passphrase.
+
+### Measured: crypto cost (2026-08-20, Node 22 WebCrypto — same engine the webview uses)
+
+Settles two of the three open questions with numbers rather than guesses.
+
+| Operation | Cost |
+|---|---|
+| PBKDF2-SHA256 100k iters | 27 ms |
+| PBKDF2-SHA256 310k iters | 84 ms |
+| **PBKDF2-SHA256 600k iters** | **175 ms** |
+| PBKDF2-SHA256 1M iters | 306 ms |
+| AES-256-GCM encrypt 1 MiB | 2 ms |
+| AES-256-GCM encrypt 8 MiB | 6 ms |
+| AES-256-GCM encrypt 32 MiB | 23 ms |
+| **AES-256-GCM encrypt 64 MiB (the `MAX_USERDB_BYTES` cap)** | **88 ms** |
+| AES-256-GCM decrypt 64 MiB | 88 ms |
+
+**Conclusions.**
+1. **PBKDF2 iterations: pin 600_000.** 175 ms is a deliberate, once-per-launch cost the user experiences as instant, and it is the OWASP baseline. Store the count in the header so it can be raised later without breaking old files (re-derive-and-rewrap on unlock when the stored count is below the current floor).
+2. **Whole-file AES-GCM on every save is NOT a performance problem** — 6 ms on a realistic file, 88 ms at the 64 MiB hard cap, against a 250 ms debounce. **No worker and no chunking are needed**; the plan's Stage 3 stays a simple decorator. (AES-NI hardware acceleration is why. Re-measure in the actual WKWebView during Gate 5 rather than assuming parity.)
+
 ### Answering the owner's two framing questions directly
 
 **"Does moving to `.snug` make sense?"** — Yes, and it is less of a change than it looks: ADR-0021 D6 already decided it (*"same sqlite byte format; a filename convention, not a new format"*), the OS association already claims `.snug` at `rank: Owner`, and desktop already exports it. What exists today is an unfinished migration, not a green field.
@@ -228,4 +267,4 @@ Run per Gate 5: every touched package **plus dependents** (`protocol` → `db` �
 - Done: Gate 1 research (two parallel code surveys: rename inventory + engine/persistence/crypto feasibility); owner interview, 8 decisions recorded (D1–D8); branch created off `main` @ `d25a282`; Gate 2 plan written.
 - State: **planned — awaiting owner approval. No implementation code written.**
 - Next step: on approval → fresh-context plan review (D8), then Gate 3 (tests first), starting with the legacy-fallback and never-fails-open negatives.
-- Open questions: PBKDF2 iteration count to pin (600k baseline proposed — worth a measured decision on the slowest shipping target, since it runs on every unlock); Recovery Key alphabet/length (proposal: 24 chars, Crockford-style, no `0/O`/`1/l/I`); whether `tauri.conf.json`'s `mimeType` should stop claiming `application/x-sqlite3` once a `.snug` may be an encrypted container.
+- Open questions: **PBKDF2 iterations SETTLED at 600k by measurement (175 ms) and whole-file AES-GCM measured harmless (88 ms at the 64 MiB cap) — no worker needed**; Recovery Key alphabet/length (proposal: 24 chars, Crockford-style, no `0/O`/`1/l/I`); whether `tauri.conf.json`'s `mimeType` should stop claiming `application/x-sqlite3` once a `.snug` may be an encrypted container.
