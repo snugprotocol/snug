@@ -1,6 +1,6 @@
 # TASK-20260820-snug-file-and-encryption: `.snug` as the canonical file + passphrase encryption at rest
 
-- **Status**: planned — **awaiting owner plan approval (Gate 2)**
+- **Status**: in-progress (Gates 3–4; plan approved 2026-08-20, D8 plan review done)
 - **Owner**: Jeetu
 - **Risk tier**: **HIGH** (auto-escalated three ways: `packages/protocol` schema surface (`USERDB_FILE` is spec-normative); `packages/db` is widely depended on; the change rewrites an *accepted* threat-model residual — R-3 / adversary A6)
 - **Branch**: `feat/TASK-20260820-snug-file-and-encryption` (off `main` @ `d25a282`)
@@ -323,3 +323,15 @@ Settles two of the three open questions with numbers rather than guesses.
 - State: **planned — awaiting owner approval. No implementation code written.**
 - Next step: on approval → fresh-context plan review (D8), then Gate 3 (tests first), starting with the legacy-fallback and never-fails-open negatives.
 - Open questions: **PBKDF2 iterations SETTLED at 600k by measurement (175 ms) and whole-file AES-GCM measured harmless (88 ms at the 64 MiB cap) — no worker needed**; Recovery Key alphabet/length (proposal: 24 chars, Crockford-style, no `0/O`/`1/l/I`); whether `tauri.conf.json`'s `mimeType` should stop claiming `application/x-sqlite3` once a `.snug` may be an encrypted container.
+
+### 2026-08-20 — Jeetu — session (Gates 3–4, part 1)
+- Done:
+  - **D8 fresh-context plan review** — 9 blockers. Each verified against the code before acceptance; **B5's stated mechanism was tested and REFUTED** (a KDF-parameter flip breaks the unwrap → DoS, not a silent downgrade). AAD adopted anyway for the honest reason. B9's CPU half refuted by measurement; its memory concern and the un-importable-at-cap boundary accepted. Owner re-affirmed full scope (D9).
+  - **Measured** PBKDF2 (600k = 175 ms) and AES-GCM (64 MiB = 88 ms, 8 MiB = 6 ms) → iteration count pinned; no worker/chunking needed.
+  - **SNUGENC1 container** shipped, tests first: 21/21. AES-256-GCM, key-wrapped file key, two independent slots, 130-bit Recovery Key (rejection-sampled, ambiguous glyphs excluded), header bound as AAD **plus an unkeyed header checksum** so damage reports as damage instead of "wrong passphrase" (review S2/B5). Passphrase change rewraps 48 bytes and leaves the Recovery Key working.
+  - **Protocol**: `USERDB_FILE` → `user.snug`, `USERDB_LEGACY_FILE` retained, extension constants single-homed, `CONTAINER` pinned as normative spec surface. 344/344.
+  - **Adopt-forward** (AC1/AC2/AC22): 6/6. Both reads go through `backend.load` — the only slot-aware reader — with a test proving the ordering, since a filename probe is silently wrong on OPFS where every existing web user is.
+  - **Sidecar adoption** (AC21 / review B2): 5/5, wired into the loop before the first anchor read.
+- State: `packages/db` 350/350, `packages/protocol` 344/344. Container, legacy adoption and sidecar migration are done and green.
+- Next step: encrypted persistence backend (`looksComplete` + `'locked'` open path), then the Dropbox path migration (B3), then the export/sync boundary and the Hub UI.
+- Open questions: none blocking; `tauri.conf.json` `mimeType` still to decide (an encrypted `.snug` is not `application/x-sqlite3`).
