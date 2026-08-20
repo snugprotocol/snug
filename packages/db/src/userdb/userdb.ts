@@ -81,6 +81,12 @@ export const USERDB_ERROR_CODES = {
   TOO_LARGE: 'USERDB_TOO_LARGE',
   /** Import payload is not an openable Snug user DB (magic/open-check/version failed). */
   BAD_IMPORT: 'USERDB_BAD_IMPORT',
+  /**
+   * The payload is a protected container and no supplied secret opened it. Distinct
+   * from BAD_IMPORT because the file is FINE — it needs a passphrase, and telling the
+   * user their backup is broken would be both false and frightening.
+   */
+  LOCKED_IMPORT: 'USERDB_LOCKED_IMPORT',
   /** The referenced app/version/thread does not exist. */
   NOT_FOUND: 'USERDB_NOT_FOUND',
   /** The UserDb was closed. */
@@ -431,6 +437,13 @@ export interface ConnectionRow {
  */
 export interface UserDbImportOptions {
   trustedOrigin?: boolean;
+  /**
+   * Secrets for a PROTECTED payload (ADR-0043). Every path that admits foreign bytes
+   * — sync pull-merge, applyRemote, recovery restore, and the UI's file import —
+   * arrives here, so this one seam is what makes a protected file portable between
+   * devices. Absent or non-matching secrets REJECT; they never clobber local state.
+   */
+  secrets?: ContainerSecrets;
 }
 
 /** What `importUserDb` surfaces about the auth reconciliation passes (plan D5/N1). */
@@ -686,6 +699,15 @@ export interface UserDb {
    * applyRemote, recovery restore, and UI import all inherit it through here.
    */
   importUserDb(bytes: Uint8Array, options?: UserDbImportOptions): Promise<UserDbImportReport>;
+
+  /**
+   * Seals bytes into this file's container, or `undefined` when the file is not
+   * protected. Exposed so the sync loop can encrypt personal-origin payloads with the
+   * SAME session key the write-back uses (ADR-0043, D5) — the loop therefore never
+   * holds a passphrase, and pushes never re-key, so a second device that learned the
+   * secret once keeps opening every later copy (AC20).
+   */
+  readonly sealForOrigin?: (bytes: Uint8Array) => Promise<Uint8Array>;
 
   flush(): Promise<void>;
   close(): Promise<void>;
@@ -2994,8 +3016,29 @@ function construct(
       }
     },
 
-    async importUserDb(bytes, options) {
+    async importUserDb(incoming, options) {
       assertOpen();
+      // Unwrap a protected payload FIRST, so every guard below — the cap, the magic
+      // check, the open-check, the reconciliation passes — sees ordinary SQLite bytes.
+      // Doing it here rather than at each call site is what gives sync pull-merge,
+      // applyRemote, recovery restore and the UI import identical behavior for free.
+      let bytes = incoming;
+      if (isEncryptedContainer(incoming)) {
+        const opened = await decryptContainer(incoming, options?.secrets ?? {});
+        if (opened.status === 'locked') {
+          throw new UserDbError(
+            USERDB_ERROR_CODES.LOCKED_IMPORT,
+            'this Snug file is protected — enter its passphrase or Recovery Key to import it',
+          );
+        }
+        if (opened.status === 'corrupt') {
+          throw new UserDbError(USERDB_ERROR_CODES.BAD_IMPORT, `this Snug file is damaged: ${opened.reason}`);
+        }
+        bytes = opened.bytes;
+      }
+      // The cap applies to the PLAINTEXT: a container adds a header, wrapped keys, an
+      // IV and a tag, so charging the user for that overhead would make a database
+      // that fits become un-importable the moment they protected it (review B9).
       if (bytes.byteLength > maxBytes) {
         throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `import is ${bytes.byteLength} bytes — cap is ${maxBytes}`);
       }
@@ -3102,6 +3145,8 @@ function construct(
       markDirty();
       return report;
     },
+
+    ...(sealer !== undefined ? { sealForOrigin: sealer } : {}),
 
     async flush() {
       await inner.flush();
