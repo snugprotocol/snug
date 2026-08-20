@@ -266,3 +266,35 @@ than a supplement.
 - Open questions: none blocking. The owner's 2026-08-14 "icon never seen on a real dock" item is
   *adjacent* — this build produces the artifact that would settle it — but it wants a human look,
   so it is not claimed here.
+
+### 2026-08-20 — Claude — session (Gate 6 close)
+
+- Done: PR **#84** opened (`feat/TASK-20260820-desktop-bundle-targets-macos` → `main`), carrying
+  the two commits (Gates 1–2 plan; Gates 3–5 implementation).
+- Done — **lessons** (two, both `## Tests that can fail`, both earned in this session):
+  (1) verify a RED by restoring the old bytes with `git show HEAD:<path>`, never `git stash` — a
+  stash that silently does not take runs the suite against the ALREADY-FIXED tree and reports
+  green, which is exactly the reassuring output a RED check exists to rule out; (2) scope a
+  "this string must not appear" assertion to the construct it governs (the `SHIP` array), never
+  the whole file, or the belt forbids DOCUMENTING the thing it forbids.
+- Done — **doc drift** found and fixed in-branch beyond the planned set: `docs/architecture.md`'s
+  D8 paragraph stated the platform resolution but still implied documentation-only enforcement.
+  It now names the build restriction, the pinning test, and the request-vs-refuse distinction.
+  (The planned doc edits — threat-model R-5b, ADR-0021 D8 dated update, next-steps prune,
+  code-map's two rows — landed with the implementation commit.)
+- Checked and NOT changed, each for a stated reason: `SECURITY.md` (its platform claim is
+  unchanged; only enforcement strength moved, which that document does not characterise) ·
+  `.github/workflows/ci.yml` (ADR-0021 requires the red Windows leg to stay exactly as it is) ·
+  `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` (untouched, so the sync rule is satisfied trivially) ·
+  `docs/spec-changelog.md` + SPEC_SYNC (no `packages/protocol` change — spec impact is none).
+- **No ADR written**, deliberately: ADR-0021 D8 already decided macOS-only and queued this
+  enforcement as follow-up. A second ADR would restate a decision rather than record one, so the
+  landing is a dated `**Update 2026-08-20**` under D8's addendum with the original text standing.
+- State: **Gate 6 complete.** Branch pushed, PR #84 open, everything committed. The task file
+  moves to `done/` when the PR merges.
+- Next step: merge PR #84, then add the `tasks/done/INDEX.md` line and delete this file (ADR-0027
+  — git history is the archive).
+- Open questions: none for this task. Two adjacent items remain OTHERS' work and are untouched
+  here — the CI billing block (owner action; it is still the only detector for an actual R-5
+  shell-behaviour regression) and the owner's 2026-08-14 "icon never seen on a real dock" walk,
+  for which this session did produce a bundled `Snug.app` but no human has looked at it.
