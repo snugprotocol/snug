@@ -20,7 +20,51 @@ Provider redirect capabilities genuinely differ (Spotify: loopback literals only
 6. **`.snug` file association.** Desktop registers `.snug` (same sqlite byte format; a filename convention, not a new format). Opened files (macOS `RunEvent::Opened`; Windows/Linux argv via single-instance) route through an explicit user confirmation into `importUserFile`, arming the F15 endpoint-confirm guard. No silent import.
 7. **Desktop ships BYOK/local only.** No subscription surface in the shell (consistent with ADR-0013's posture); desktop remains a public PKCE client per ADR-0014 — BYO dev registration, no client secrets held for the user.
 
-8. **C2's shell gate covers the IPC channel, not just CSP.** The 14 browser CSP checks are complete for a browser, where every iframe escape is CSP-governed; a native shell adds exactly one new channel — the Tauri IPC bridge — which CSP does not govern and which fronts the user-file commands and native fetch. The in-shell hard gate therefore asserts, from INSIDE a sandboxed srcdoc iframe, that the IPC handles are unreachable (or invocation is refused), with Tauri capabilities scoped to the main window only. A platform that injects IPC into subframes with no off-switch is structural breakage → Electron fallback. The custom `snug` deep-link scheme is **reserved by name here only** — no OS handler is registered until the custom-scheme posture ships.
+8. **C2's shell gate covers the IPC channel, not just CSP.** The 14 browser CSP checks are complete for a browser, where every iframe escape is CSP-governed; a native shell adds exactly one new channel — the Tauri IPC bridge — which CSP does not govern and which fronts the user-file commands and native fetch. The in-shell hard gate therefore asserts, from INSIDE a sandboxed srcdoc iframe, that the IPC handles are unreachable (or invocation is refused), with Tauri capabilities scoped to the main window only. A platform that injects IPC into subframes with no off-switch is structural breakage → Electron fallback. **(RESOLVED 2026-08-20 — the trigger fired on WebView2 and the owner chose macOS-only over the Electron fallback; see the D8 addendum below.)** The custom `snug` deep-link scheme is **reserved by name here only** — no OS handler is registered until the custom-scheme posture ships.
+
+## Addendum — D8 resolved: macOS-only at 1.0 (2026-08-20)
+
+- **Status:** accepted (owner decision, 2026-08-20) · **Task:** TASK-20260820-threat-model-v1
+
+D8's trigger fired. wry's WebView2 backend discards `for_main_frame_only`
+(`wry-0.55.1/src/webview2/mod.rs:492-494`), so tauri's key-bearing `ipc-protocol.js` — with
+the invoke key as a plaintext literal — executes inside `sandbox="allow-scripts"` app
+iframes. Any app a user runs can read it. No off-switch exists at the wry, tauri, or
+WebView2 SDK layer. macOS is unaffected: WKWebView honors the flag
+(`src/wkwebview/mod.rs:643-644`), gate 40/40 green. Root cause and citations:
+[`docs/solutions/2026-08-13-webview2-subframe-ipc-injection.md`](../solutions/2026-08-13-webview2-subframe-ipc-injection.md).
+
+**Decision: option (b) — the desktop shell ships macOS-only at 1.0.** Not (a) Electron,
+which trades a known-good platform for a rewrite of the shell folder to buy a platform
+1.0 does not need; not (c) upstream-and-wait, which puts the ship date inside someone
+else's review queue. Windows is not "unsupported pending work" — it is a platform on
+which C2 is known to be false, and the honest posture is to say so rather than to leave
+it looking merely unfinished.
+
+**This decision is a claim about what we ship, and it is currently enforced by
+documentation alone.** Recorded plainly because the threat model must not overstate it:
+
+- `tauri.conf.json` still carries `"targets": "all"` and ships `icons/icon.ico`, so
+  `pnpm --filter desktop bundle` on a Windows host still produces an artifact. Nothing in
+  the build refuses.
+- The only mechanism that would catch a Windows regression is the CI gate's Windows leg
+  staying red for the right reason — and CI has been billing-blocked since ~2026-08-18,
+  failing in ~2s with zero steps. A red X from billing is visually indistinguishable from
+  a red X from R-5.
+
+Both are stated as residuals in `docs/threat-model.md` rather than papered over. Closing
+them (a build-target restriction with a test pinning it, mirroring
+`netTransportCapability.test.ts`'s discipline) is queued in next-steps, not done here: this
+task documents the system as built, and a build-config change is its own task with its own
+tier.
+
+**Consequences.** The Windows gate leg stays red and must NOT be softened — the
+`keyReachable` conjunction is the only check that reasons about key reachability rather
+than transport presence. The Electron fallback stays available on the same pre-committed
+terms (the platform seams are shell-agnostic; the fallback swaps the shell folder, not the
+architecture) should Windows become a requirement before an upstream fix lands. Revisit
+trigger: wry honoring `for_main_frame_only` on WebView2, or an equivalent SDK-level
+off-switch.
 
 ## Alternatives considered
 

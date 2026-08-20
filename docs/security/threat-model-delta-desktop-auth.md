@@ -130,8 +130,13 @@ key GATE works against a keyless post — it says nothing about a frame that can
 
 **Disposition:** macOS unaffected (40/40 green, WKWebView honors the flag). No Windows build
 has ever been distributed and none may ship in this configuration. `cdp_jwt`'s native-ECDSA
-requirement remains separately unverified there. ADR-0021 D8 is now a **live owner decision**
-— Electron fallback, macOS-only, or upstream a `for_main_frame_only` fix.
+requirement remains separately unverified there. ~~ADR-0021 D8 is now a **live owner
+decision**~~ — **RESOLVED 2026-08-20: the shell ships macOS-only at 1.0** (ADR-0021 D8
+addendum; TASK-20260820-threat-model-v1). The Electron fallback stays available on its
+pre-committed terms if Windows becomes a requirement before an upstream fix lands. Note the
+residual the decision does NOT close: macOS-only is enforced by documentation, not by the
+build (`tauri.conf.json` still targets all platforms) — stated as a residual in
+[`docs/threat-model.md`](../threat-model.md) rather than implied away.
 
 ---
 

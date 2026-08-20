@@ -81,8 +81,10 @@ verdict does not depend on it. The security posture must not rest on this link.
 2. **Windows desktop is BLOCKED**, upgraded from "unverified" to "known structurally
    broken". No Windows build has ever been distributed; none may ship in this configuration.
 3. **macOS is unaffected** and its 40/40 pass remains trustworthy.
-4. **ADR-0021 D8 is now a live decision** (owner's call): Electron fallback, ship
-   macOS-only, or upstream a `for_main_frame_only` fix to wry/WebView2.
+4. ~~**ADR-0021 D8 is now a live decision**~~ — **DECIDED 2026-08-20: ship macOS-only at
+   1.0** (ADR-0021 D8 addendum; TASK-20260820-threat-model-v1). The Electron fallback and
+   an upstream `for_main_frame_only` fix both remain available; the revisit trigger is wry
+   honoring the flag on WebView2, or an equivalent SDK-level off-switch.
 
 ## Optional confirmatory probe (does not change the verdict)
 
