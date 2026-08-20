@@ -13,6 +13,7 @@ import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { locateWasm } from '../run/wasm.js';
+import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { createStore, useStore } from './store.js';
 
 /**
@@ -143,7 +144,9 @@ export async function restoreUserDbFromBytes(bytes: Uint8Array): Promise<void> {
       'this copy of Snug cannot restore a backup while the database is unreadable — open the app on a working file first',
     );
   }
-  // Overwrite the stored file, then re-run the real open over the new bytes.
+  // Overwrite the stored file, then re-run the real open over the new bytes. The
+  // sidecar identity harvest is scoped to one user-file identity (TASK-20260820).
+  resetSidecarIdentitySession();
   await backend.save(USERDB_FILE, bytes);
   corruptResult = undefined;
   userDbStatusStore.set({ state: 'opening' });
@@ -189,6 +192,7 @@ export function setUserDbForTests(db: UserDb): void {
 
 /** Test seam: reset module state between tests. */
 export function resetUserDbForTests(): void {
+  resetSidecarIdentitySession();
   opened = false;
   corruptResult = undefined;
   readyPromise = undefined;

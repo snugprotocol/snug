@@ -21,7 +21,7 @@ that sounds reassuring and commits to nothing.
 **§6 has equal standing with §5.** A threat model that lists only wins reads as marketing.
 The residuals are the part a reviewer deciding whether to trust this system should read
 first, and several of them are sharp. Two are known defects on a platform we therefore do
-not ship; one is a guard documented at a higher altitude than it is implemented.
+not ship.
 
 If you are evaluating whether to rely on Snug, read §2 (what is actually protected), then
 §6 (what is not).
@@ -160,6 +160,7 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | Two approved rows claiming one host refuse rather than tiebreak | `packages/auth/src/connected-fetch.ts` — `NET_AMBIGUOUS_CONNECTION` | `packages/auth/src/__tests__/slot-routing-regression.test.ts` |
 | An app cannot mutate the ceiling, and a staged edit cannot widen it pre-approval | `packages/db/src/userdb/userdb.ts` — reserved table prefixes; frozen `allowed_hosts` | `packages/auth/src/__tests__/connected-fetch.test.ts` |
 | Imported connection rows cannot serve traffic | `packages/db/src/userdb/userdb.ts` — demote to `declared` + `imported=1` | `packages/auth/src/__tests__/connected-fetch.test.ts` |
+| An app holding a sidecar connection FACT (any status — a `declared` imported row binds too) has its LLM-bound payloads scrubbed of observed third-party identities and jid/dialable primitives, guarded inside BOTH leaf transports and the provider lane's sidecar-class results (classified by the canonical `parseConnectionUrl` grammar with the executor's own normalization); the app-message guard fails closed on an unreadable directory, the provider lane surfaces scrub failures as tool errors, malformed envelopes take the scrubbed raw path. NOT covered, by design: the chat data lane's replay of app-persisted rows (R-9 disclosed residual) | `apps/playground/src/agent/pseudonymizeEgress.ts` (per-send guard in `createDirectAppTransport` + `createServerAppTransport`) + `apps/playground/src/state/sidecarIdentity.ts` (harvest at the `sidecarAppFetch` seat; session-scoped memory reset on import/restore/revoke/delete) + `apps/playground/src/agent/providerTools.ts`; directory revoke-wipe in `packages/db/src/userdb/userdb.ts` | `apps/playground/src/agent/__tests__/pseudonymizeEgress.test.ts` (27, incl. scope negative, fail-closed, stale-predicate, declared-row, id-preservation) + `apps/playground/src/__tests__/sidecarIdentityHarvest.test.ts` (7, incl. C1 negative + session reset) + `providerToolsSidecarScrub.test.ts` (4, incl. non-canonical spellings) + `packages/db/src/userdb/__tests__/sidecar-identity-wipe.test.ts` (7, incl. import-survival) |
 
 ### Authoring and consent
 
@@ -278,19 +279,41 @@ classifier as bare list items **outside** the fence the rest of the pipeline use
 defang covers one tag spelling. Same class as the above, weaker containment than the
 provider-chat-lane delta's wording implies.
 
-**R-9 — Third-party consent, and a guard that is not where the docs put it.** The other
-participants in an analysed WhatsApp thread never consented, are not Snug users, and cannot
-opt out; under BYOK their messages reach the user's configured model provider. The
-whatsapp-sidecar delta presents pseudonymisation as happening "at the turn's altitude,"
-which reads as host-enforced. **It is not.** There is no pseudonymisation anywhere in
-`packages/` or `apps/` — the implementation lives inside the sandboxed example app's HTML
-(`examples/whatsapp/app.html`). Consequences: the host performs no scrub of app-supplied
-LLM payloads; any *other* app holding an approved sidecar connection can forward raw names
-and phone numbers to a model; and even for the shipped app the guard is bytes the LLM wrote,
-rewritable by the feature lane, which is the weakest write gate in the system (R-7).
-*Honest statement:* third-party pseudonymisation is an **app-layer convention, not a
-boundary.** Moving it into the host pump would bind every app; that is queued, not done.
-This is the residual a reviewer should weigh most heavily.
+**R-9 — Third-party consent, now behind a host-enforced backstop that is honest about its
+class.** The other participants in an analysed WhatsApp thread never consented, are not
+Snug users, and cannot opt out; under BYOK their messages reach the user's configured model
+provider — pseudonymised or not, the CONTENT goes, and that is the part no scrub removes.
+Since TASK-20260820-host-pseudonymisation the scrub is no longer only an app-layer
+convention: the host harvests identities (contact names, jids) from sidecar `/chats`
+responses at the one seat every governed sidecar read crosses
+(`apps/playground/src/state/sidecarIdentity.ts`, fed from `sidecarAppFetch`), persists them
+in `snug_settings` (a **third-party-PII asset** in its own right — wiped when the last
+approved sidecar-ceiling connection is revoked or its app deleted; it deliberately
+SURVIVES an import, whose demoted-to-`declared` rows still travel with the replayable app
+data the scrub exists for, and it rides the `.snug` export until the wipe), and redacts
+them plus the jid/dialable-digit-run primitives from every LLM-bound surface of every app
+holding a sidecar connection FACT in any status — approved, declared-by-import, or
+revoked-with-data-left-behind: the app-message envelope (`state`, `payload`, `action`,
+`responseSchema` — envelope ids pass verbatim so the model's echo still correlates, a
+disclosed ≤128-char residual channel) before both the BYOK and `/invoke` transports
+(`apps/playground/src/agent/pseudonymizeEgress.ts`, guarded inside both leaf producers),
+and sidecar-class tool results on the provider chat lane, classified by the canonical
+connection-URL grammar with the executor's own normalization. The app-message guard fails
+CLOSED — an unreadable directory refuses the send; the provider lane surfaces a scrub
+failure as a tool error string, never the raw body. A malformed envelope is scrubbed as a
+raw string with an unescape-normalised shadow pass. The shipped app's own stable-label
+scrub remains on top as defense in depth, so a feature-lane rewrite of the app (R-7) no
+longer removes the boundary.
+*Honest statement of class:* the backstop is **anti-default and anti-naive, not
+anti-adversarial.** Disclosed residuals: an app that obfuscates (homoglyphs, base64, phone
+numbers smuggled as JSON *numbers* — `ts` is legitimately a 10-digit number, so numerics
+pass), or glues an identity to word characters, defeats substring redaction; identities
+never surfaced through the sidecar seam (a nickname typed only inside message text) are
+invisible to the directory; raw rows an app persisted in its own tables can still reach a
+model through the data lane (`data_read` results and replayed chat turns), which is
+app-shaped and not scrubbable at this seam; and message content itself reaches the provider
+by design. Third-party consent therefore remains a real residual — but the "guard not
+where the docs put it" defect this section previously recorded is closed.
 
 **R-10 — ToS and account-ban risk.** Unofficial WhatsApp automation violates WhatsApp's
 terms and accounts have been banned for it. Pacing and rate caps are harm reduction, never
@@ -437,7 +460,7 @@ treat it as a reading aid, and read the delta itself when the answer matters.
 | `docs/security/threat-model-delta-lean-runtime-data-chat.md` | `bec065ca9633` | §5 authoring · R-7, R-8, R-24, R-25 |
 | `docs/security/threat-model-delta-provider-chat-lane.md` | `6f92151dad7c` | §5 ceiling · R-8 |
 | `docs/security/threat-model-delta-simplefin-token-claim.md` | `e8cb2f9a8acd` | §5 ceiling · R-1, R-22, R-23 |
-| `docs/security/threat-model-delta-whatsapp-sidecar.md` | `772b1bc18edb` | §5 ceiling · R-3, R-9, R-10, R-12 |
+| `docs/security/threat-model-delta-whatsapp-sidecar.md` | `080e64034de0` | §5 ceiling · R-3, R-9, R-10, R-12 |
 
 <!-- DELTA-LEDGER:END -->
 

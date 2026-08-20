@@ -6,6 +6,7 @@
 
 import type { UserDb } from '@snugprotocol/db';
 
+import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { getUserDb } from './userdb.js';
 
 export interface LibraryEntry {
@@ -78,6 +79,9 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
     async delete(id) {
       const db = await getDb();
       await db.deleteApp(id);
+      // deleteApp's cascade may have wiped the persisted identity directory; drop the
+      // session's in-memory harvest with it (TASK-20260820, Gate-5 review).
+      resetSidecarIdentitySession();
     },
     async findByInstallSource(source) {
       const db = await getDb();

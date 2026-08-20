@@ -26,6 +26,7 @@ import type { ConnectionRow } from '@snugprotocol/db';
 
 import { getUserDb } from '../state/userdb.js';
 import { invalidateNetGrants } from '../state/net.js';
+import { resetSidecarIdentitySession } from '../state/sidecarIdentity.js';
 import { useStore } from '../state/store.js';
 import {
   connectionWizardRevisionStore,
@@ -141,6 +142,10 @@ export function ConnectionSlotsCard(): ReactElement | null {
       .then((db) => {
         db.revokeConnection(row.appId, row.slot);
         invalidateNetGrants(row.appId); // R3 — every grant transition
+        // The db-level wipe may have just destroyed the persisted identity directory;
+        // the session's in-memory harvest must not outlive it and re-persist the names
+        // on the next poll (TASK-20260820, Gate-5 review line-scan finding 3).
+        resetSidecarIdentitySession();
         setEpoch((current) => current + 1);
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));

@@ -92,6 +92,8 @@ export {
   appModelSettingKey,
 } from './userdb/app-settings-keys.js';
 
+export { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './userdb/sidecar-identity-keys.js';
+
 export {
   acquireUserDbWriterLock,
   createUserDbChannel,

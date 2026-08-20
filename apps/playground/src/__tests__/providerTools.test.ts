@@ -335,3 +335,4 @@ describe('AC7 — what re-enters the model context', () => {
     expect(rendered.length).toBeLessThan(9000);
   });
 });
+
