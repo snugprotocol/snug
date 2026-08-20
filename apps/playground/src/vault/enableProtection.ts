@@ -11,6 +11,7 @@
 // That is the right failure: annoying, recoverable, and never a lost database.
 import { generateRecoveryKey } from '@snugprotocol/db';
 
+import { resyncAfterProtectionChange } from '../state/sync.js';
 import { getUserDb } from '../state/userdb.js';
 
 export interface ProtectionResult {
@@ -25,5 +26,16 @@ export async function enableProtection(passphrase: string): Promise<ProtectionRe
   // contract, and keeping it there means there is no public "overwrite the whole file"
   // seam for some future caller to point at a user's database.
   await db.protect({ passphrase, recoveryKey });
+  // The sync loop captured its sealer when it started, so a loop already running would
+  // keep pushing PLAINTEXT to the user's own Dropbox after they turned protection on
+  // (diff review D-2). Rebuild it.
+  await resyncAfterProtectionChange();
   return { recoveryKey };
+}
+
+/** Turn protection OFF. Re-wires sync for the same reason `enableProtection` does. */
+export async function disableProtection(): Promise<void> {
+  const db = await getUserDb();
+  await db.protect(undefined);
+  await resyncAfterProtectionChange();
 }

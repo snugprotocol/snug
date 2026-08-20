@@ -247,6 +247,89 @@ describe('turning protection on and off (AC13, AC14)', () => {
   });
 });
 
+describe('starting fresh over a damaged PROTECTED file (diff review D-3)', () => {
+  it('the fresh database is born protected, not silently plaintext', async () => {
+    // The scenario: a protected file's payload is damaged (a torn sync, bit rot). The
+    // user picks "start fresh". Before this fix the empty database's first flush
+    // overwrote user.snug with an UNENCRYPTED file while they still believed they were
+    // protected — recoverable (the .bak holds the ciphertext) but they would be writing
+    // plaintext and never know.
+    const recoveryKey = generateRecoveryKey();
+    const backend = await seedProtected(recoveryKey);
+    const sealed = (await backend.load(USERDB_FILE))!;
+    // Damage the PAYLOAD, leaving the header (and its checksum) intact, so the secret
+    // unwraps the slots and only the contents fail — the realistic corruption shape.
+    const damaged = Uint8Array.from(sealed);
+    damaged[damaged.length - 5] ^= 0xff;
+    await backend.save(USERDB_FILE, damaged);
+
+    const result = await openUserDb({ backend, locateWasm, secrets: { passphrase: PASS, recoveryKey } });
+    expect(result.status).toBe('corrupt');
+    if (result.status !== 'corrupt') return;
+
+    const fresh = await result.openFresh();
+    fresh.installApp({ displayName: 'Rebuilt', html: '<!doctype html><title>r</title>' });
+    await fresh.flush();
+    await fresh.close();
+
+    expect(new TextDecoder().decode((await backend.load(USERDB_FILE))!.slice(0, 8))).toBe('SNUGENC1');
+    // And it is genuinely openable with the SAME secrets the user already holds.
+    const reopened = await openUserDb({ backend, locateWasm, secrets: { passphrase: PASS } });
+    expect(reopened.status).toBe('ok');
+    if (reopened.status !== 'ok') return;
+    expect(reopened.userDb.listApps().map((a) => a.displayName)).toEqual(['Rebuilt']);
+    await reopened.userDb.close();
+  });
+
+  it('a corrupt NON-container still starts fresh as plaintext', async () => {
+    // The guard must not over-reach: an ordinary corrupt file was never protected, so
+    // recovering it must not demand a passphrase the user does not have.
+    const backend = createMemoryBackend();
+    await backend.save(USERDB_FILE, new TextEncoder().encode('SQLite format 3\0garbage'));
+    const result = await openUserDb({ backend, locateWasm });
+    expect(result.status).toBe('corrupt');
+    if (result.status !== 'corrupt') return;
+    const fresh = await result.openFresh();
+    await fresh.flush();
+    await fresh.close();
+    expect(new TextDecoder().decode((await backend.load(USERDB_FILE))!.slice(0, 6))).toBe('SQLite');
+  });
+});
+
+describe('sealForOrigin tracks protection changes (diff review D-1)', () => {
+  it('appears when protection is enabled mid-session', async () => {
+    // It was a construction-time SNAPSHOT. Enabling protection sealed the file on disk
+    // but left this undefined, so the very next export wrote PLAINTEXT while the user
+    // believed — correctly, of the file on disk — that they were protected.
+    const backend = createMemoryBackend();
+    const opened = await openUserDb({ backend, locateWasm });
+    expect(opened.status).toBe('ok');
+    if (opened.status !== 'ok') return;
+    expect(opened.userDb.sealForOrigin).toBeUndefined();
+
+    await opened.userDb.protect({ passphrase: PASS, recoveryKey: generateRecoveryKey() });
+    expect(opened.userDb.sealForOrigin).toBeDefined();
+    const sealed = await opened.userDb.sealForOrigin!(new TextEncoder().encode('payload'));
+    expect(new TextDecoder().decode(sealed.slice(0, 8))).toBe('SNUGENC1');
+    await opened.userDb.close();
+  });
+
+  it('disappears when protection is removed mid-session', async () => {
+    // The mirror failure, and the more surprising one: a stale sealer kept encrypting
+    // exports with a key derived from a file that is now plaintext, producing an
+    // artifact nobody has a reason to think needs a passphrase.
+    const backend = createMemoryBackend();
+    const opened = await openUserDb({ backend, locateWasm });
+    if (opened.status !== 'ok') return;
+    await opened.userDb.protect({ passphrase: PASS, recoveryKey: generateRecoveryKey() });
+    expect(opened.userDb.sealForOrigin).toBeDefined();
+
+    await opened.userDb.protect(undefined);
+    expect(opened.userDb.sealForOrigin).toBeUndefined();
+    await opened.userDb.close();
+  });
+});
+
 describe('a plaintext file still opens with no secret (AC-D3 opt-in)', () => {
   it('unprotected files are untouched by any of this', async () => {
     const backend = createMemoryBackend();

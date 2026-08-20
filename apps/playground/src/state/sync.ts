@@ -129,6 +129,13 @@ async function startLoop(kind: SyncOriginKind): Promise<void> {
     intervalMs: SYNC_INTERVAL_MS,
     // Secrets ride only to personal origins the user explicitly opted into.
     includeSecrets: kind === 'dropbox',
+    // ADR-0043 D5 lives or dies HERE. The loop seals personal-origin payloads only if
+    // the composition root hands it a sealer; without this line a protected file syncs
+    // to the user's own Dropbox as a readable database, and every package-level test
+    // still passes because they wire the sealer themselves (diff review D-2).
+    // Read through the getter at loop-construction time, and `resyncAfterProtection`
+    // rebuilds the loop when protection is toggled — a captured value would go stale.
+    ...(userDb.sealForOrigin !== undefined ? { sealForOrigin: userDb.sealForOrigin } : {}),
     onEvent: onSyncEvent,
   });
   syncStatusStore.set({ origin: kind, state: 'syncing' });
@@ -202,6 +209,20 @@ export async function syncNow(): Promise<void> {
  */
 export async function signOut(): Promise<void> {
   await logout();
+  await initSync();
+}
+
+/**
+ * Rebuild the sync loop after protection is turned on or off.
+ *
+ * The loop captures its sealer when it is constructed, so a loop started before
+ * `protect()` would keep pushing plaintext to a personal origin (or, after
+ * un-protecting, keep pushing ciphertext). Cheap and idempotent: it re-reads the
+ * configured origin and starts a fresh loop, or does nothing when sync is off.
+ */
+export async function resyncAfterProtectionChange(): Promise<void> {
+  const current = syncStatusStore.get().origin;
+  if (current === 'none') return;
   await initSync();
 }
 

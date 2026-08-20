@@ -1205,6 +1205,8 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
   // format across five call sites and made 'locked' reachable from four of them.
   let stored = loaded;
   let sealer: ((bytes: Uint8Array) => Promise<Uint8Array>) | undefined;
+  /** Used only by the corrupt branch's `openFresh` — see its comment. */
+  let freshSealer: ((bytes: Uint8Array) => Promise<Uint8Array>) | undefined;
   if (loaded !== undefined && isEncryptedContainer(loaded)) {
     const opened = await decryptContainer(loaded, options.secrets ?? {});
     if (opened.status === 'locked') {
@@ -1214,6 +1216,15 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
     if (opened.status === 'corrupt') {
       // Damage, and we can say so specifically instead of blaming the user's memory.
       stored = loaded; // fall through to the existing quarantine path with the raw bytes
+      // The bytes WERE a container, so a "start fresh" here must not silently drop the
+      // user's protection (D-3). We cannot reuse the damaged file's key, so mint a new
+      // container from the secrets they just supplied — same passphrase, same recovery
+      // key, new salt and slots. Only possible when both were given.
+      const secrets = options.secrets;
+      if (secrets?.passphrase !== undefined && secrets.recoveryKey !== undefined) {
+        freshSealer = (next: Uint8Array) =>
+          encryptContainer(next, { passphrase: secrets.passphrase!, recoveryKey: secrets.recoveryKey! });
+      }
     } else {
       stored = opened.bytes;
       // Unwrap the file key ONCE, here, and close over it. Every later write re-seals
@@ -1249,7 +1260,19 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
         status: 'corrupt',
         quarantinedFile,
         message: `user DB bytes were unreadable and were quarantined to "${quarantinedFile}": ${errorMessage(err)}`,
-        openFresh: () => Promise.resolve(construct(SQL, new SQL.Database(), backend, file, options)),
+        /**
+         * A fresh database over a quarantined one — and it must be born PROTECTED when
+         * the file it replaces was (diff review D-3). Otherwise: a protected file's
+         * payload is damaged, the user picks "start fresh", and the empty database's
+         * first flush overwrites `user.snug` with an UNENCRYPTED file while they still
+         * believe they are protected. The `.bak` keeps the ciphertext, so it is
+         * recoverable — but they would be writing plaintext and never know.
+         *
+         * `freshSealer` is non-undefined only when the damaged bytes were a container
+         * AND a supplied secret opened its slots (see the open path above), so a
+         * genuinely corrupt non-container quarantine still starts plaintext.
+         */
+        openFresh: () => Promise.resolve(construct(SQL, new SQL.Database(), backend, file, options, freshSealer)),
       };
     }
     const foundVersion = readUserVersion(candidate);
@@ -3163,7 +3186,14 @@ function construct(
       return report;
     },
 
-    ...(sealer !== undefined ? { sealForOrigin: sealer } : {}),
+    // A GETTER, not a snapshot. `protect()` reassigns `sealer` mid-session, and a
+    // captured value would go stale in BOTH directions: enable protection and exports
+    // keep writing plaintext while the on-disk file is sealed; disable it and exports
+    // keep writing ciphertext keyed to a file that is now plaintext — an artifact its
+    // owner has no reason to think needs a passphrase.
+    get sealForOrigin() {
+      return sealer;
+    },
 
     async protect(secrets) {
       assertOpen();
