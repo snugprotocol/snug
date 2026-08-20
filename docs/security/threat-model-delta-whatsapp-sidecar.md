@@ -48,12 +48,22 @@ confirm seat (below); `isForbiddenNetHost`, `isPrivateRfc1918Ipv4Literal` and
 - **C2:** both IPC commands join the gate scope with per-command checks
   (`ipc-sidecar-fetch-refused`), and two isolation tests pin that neither command's refusal
   can grant the other's verdict.
-- **New-reader scrub (ADR-0032 §B4).** Every LLM-bound payload derived from thread content is
-  pseudonymised at the turn's altitude: participants become stable per-thread labels, and
-  phone numbers and JIDs are redacted from message BODIES as well as author fields. Phone
-  numbers are matched on the primitive (a dialable digit run, however spaced or punctuated),
-  not on one spelling. `scrubAuthValues` does not cover this — it protects a different reader
-  (credentials entering the iframe) at a different altitude.
+- **New-reader scrub (ADR-0032 §B4), now TWO layers (TASK-20260820-host-pseudonymisation).**
+  The shipped app pseudonymises its own LLM-bound payloads — participants become stable
+  per-thread labels, and phone numbers and JIDs are redacted from message BODIES as well as
+  author fields, matched on the primitive (a dialable digit run, however spaced), not one
+  spelling. On top of that app-layer scrub, the HOST enforces a backstop that binds EVERY
+  app holding an approved sidecar-ceiling connection: identities harvested from `/chats`
+  bodies at the `sidecarAppFetch` seat (persisted in `snug_settings`, wiped with the last
+  sidecar connection) are redacted — with the jid/phone primitives — from the whole
+  app-message envelope before EITHER transport (BYOK or `/invoke`) and from sidecar-class
+  provider-lane tool results (`renderProviderResult`). The backstop is **anti-default and
+  anti-naive, not anti-adversarial**: it fails closed when the directory is unreadable, but
+  a deliberately obfuscating app (homoglyphs, base64, numbers-as-JSON-numbers, identities
+  glued to word characters) still defeats substring redaction, and identities never
+  surfaced through the sidecar seam are invisible to it. `scrubAuthValues` does not cover
+  this — it protects a different reader (credentials entering the iframe) at a different
+  altitude.
 - **Honest sync state.** History is pushed in chunks and completion is sometimes only
   INFERRED; `explicit: false` rides with every page and the app renders it as partial. An app
   that showed an inferred completion as the whole record would be misdescribing the evidence
@@ -74,9 +84,10 @@ confirm seat (below); `isForbiddenNetHost`, `isPrivateRfc1918Ipv4Literal` and
 - **Third-party consent (distinct from impersonation — different people, different harm).**
   The other participants in an analysed thread never consented, are not Snug users, and
   cannot opt out. Under BYOK their messages reach the user's configured model provider under
-  the user's own key. Mitigated in degree by pseudonymisation and the cascading
-  "forget this thread" control; not eliminated. This is the residual a reviewer should weigh
-  most heavily.
+  the user's own key. Mitigated in degree by the two-layer pseudonymisation above and the
+  cascading "forget this thread" control; not eliminated — the message CONTENT still reaches
+  the provider, pseudonymised or not. This is the residual a reviewer should weigh most
+  heavily.
 - **Impersonation.** Drafted replies are speech in the user's name. In this version every
   send is read and confirmed by the user first, which bounds it; when arming lands, the
   activity journal and the tagged-only group default become the honesty controls.

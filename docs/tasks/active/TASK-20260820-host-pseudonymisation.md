@@ -129,3 +129,11 @@ export/import); removing one of two sidecar-ceiling rows does NOT wipe.
 - State: plan awaiting owner approval — **no implementation started**
 - Next step: owner approves plan + decides directory lifecycle → Gate 3 (tests first)
 - Open questions: directory lifecycle (revoke-wipe recommended vs kept-and-disclosed)
+
+### 2026-08-20 (later) — Claude (with Jeetu) — session
+- Done: plan approved + revoke-wipe decided (owner). Gate 3: failing tests committed (`c9871b2`). Gate 4: implementation (`fef5c2d`) — db key module + revoke/delete wipe hooks, `pseudonymizeEgress`, `sidecarIdentity`, transport guard, provider-lane scrub, net.ts harvest wiring. Gate 5 verify: playground 1292/1292 (125 files), root `pnpm test` 23/23 tasks, `examples/whatsapp-analysis` 34/34, threat-model checker 139/139 after docs. Docs: R-9 rewritten (anti-naive claim + disclosed residuals + directory named as asset), new §5 invariant row, delta bullets rewritten + hash re-pinned (`080e64034de0`), next-steps item (1) marked done, code-map row added.
+- Implementation deviations from plan, all recorded in Decisions: settings-KV instead of new accessors pair (a `snug_` table = spec-normative format change; `app-settings-keys.ts` precedent followed, key single-homed in `packages/db/src/userdb/sidecar-identity-keys.ts`); harvest persistence is ready-gated fire-and-forget (awaiting `getUserDb()` at the seat BOOTS a db — hung `sidecarAutostart`'s db-less contract); phone pattern widened to consume a leading `(`.
+- Two stale untracked scratch files (`zzRace*.test.ts`, referencing the long-gone `state/wizard.js`) blocked the playground typecheck; moved to the session scratchpad, not deleted.
+- State: implementation + docs complete and green; AI diff review next
+- Next step: Gate 5 AI review of the diff → fold findings → self-sign-off → PR
+- Open questions: none
