@@ -335,3 +335,12 @@ Settles two of the three open questions with numbers rather than guesses.
 - State: `packages/db` 350/350, `packages/protocol` 344/344. Container, legacy adoption and sidecar migration are done and green.
 - Next step: encrypted persistence backend (`looksComplete` + `'locked'` open path), then the Dropbox path migration (B3), then the export/sync boundary and the Hub UI.
 - Open questions: none blocking; `tauri.conf.json` `mimeType` still to decide (an encrypted `.snug` is not `application/x-sqlite3`).
+
+### 2026-08-20 — Jeetu — session (Gates 3–4, part 2)
+- Done:
+  - **Encrypted persistence + `'locked'` open path** (AC9/10/11/13/27): 11 tests. `looksComplete` widened; decryption happens once before every existing guard so the magic/open/quarantine/version checks see ordinary SQLite bytes; protected files are never quarantined.
+  - **DESIGN FLAW found and fixed mid-implementation.** The first version rebuilt the container from "the secrets this session holds" on every save. A passphrase-only session cannot produce the Recovery Key, so **every write silently dropped the recovery slot** — the user would have discovered it the day they forgot their passphrase. It surfaced as a persist throwing inside its catch-all and retrying forever (nothing reached disk while the app looked healthy), found by counting `backend.save` calls. Writes now RESEAL into the existing container: same header, same slots, fresh payload IV. Two regression tests pin both halves (the recovery slot surviving writes, and a write actually reaching the backend).
+  - **Dropbox path migration** (AC23 / review B3): 5 tests, plus the loop honoring `migratedFromLegacy` so the first push provisions rather than sending a conditional update against a foreign revision.
+- State: `packages/db` **366/366**, `packages/protocol` **344/344**. Blockers closed: **B1, B2, B3, B6** (+ B5's AAD/checksum, S1, part of S2).
+- Next step: B4 second-device flow (`pullMerge`/`recovery.ts` decrypt seam) + the export/sync boundary (S3's single `payloadFor` helper, S4's Blob type), then B7/B8 (the `'locked'` boot deadlock, `unlockUserDb`, first-run latch) and the Hub UI, then B9's cap boundary, then docs/ADRs/spec.
+- Open questions: none blocking.
