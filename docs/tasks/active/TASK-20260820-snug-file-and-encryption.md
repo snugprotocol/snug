@@ -1,6 +1,6 @@
 # TASK-20260820-snug-file-and-encryption: `.snug` as the canonical file + passphrase encryption at rest
 
-- **Status**: in-progress (Gates 3–4; plan approved 2026-08-20, D8 plan review done)
+- **Status**: in-progress — implementation COMPLETE and green; Gate 5 (diff review) pending
 - **Owner**: Jeetu
 - **Risk tier**: **HIGH** (auto-escalated three ways: `packages/protocol` schema surface (`USERDB_FILE` is spec-normative); `packages/db` is widely depended on; the change rewrites an *accepted* threat-model residual — R-3 / adversary A6)
 - **Branch**: `feat/TASK-20260820-snug-file-and-encryption` (off `main` @ `d25a282`)
@@ -344,3 +344,18 @@ Settles two of the three open questions with numbers rather than guesses.
 - State: `packages/db` **366/366**, `packages/protocol` **344/344**. Blockers closed: **B1, B2, B3, B6** (+ B5's AAD/checksum, S1, part of S2).
 - Next step: B4 second-device flow (`pullMerge`/`recovery.ts` decrypt seam) + the export/sync boundary (S3's single `payloadFor` helper, S4's Blob type), then B7/B8 (the `'locked'` boot deadlock, `unlockUserDb`, first-run latch) and the Hub UI, then B9's cap boundary, then docs/ADRs/spec.
 - Open questions: none blocking.
+
+### 2026-08-20 — Jeetu — session (Gates 3–4 complete)
+- Done — **all nine plan-review blockers closed**, plus every should-fix:
+  - **B4 second-device import** at the ONE seam every foreign-bytes path already crosses (`importUserDb`) — sync pull-merge, applyRemote, recovery restore and UI import inherit it together. A container the device cannot open raises `LOCKED_IMPORT` and leaves local state untouched.
+  - **B9 cap boundary**: the cap applies to the PLAINTEXT, so a database that fits does not become un-importable the moment its owner protects it.
+  - **S3 `payloadFor()`**: one helper replaces four independent `exportPayload()` call sites. **D5/D6 both hold** — personal origins get ciphertext, hub origins keep secrets-stripped plaintext, `apps/server` untouched.
+  - **B7 `'locked'` state + `unlockUserDb`** — the door that did not exist; `userDbNeedsRestore` deliberately excludes `locked`; the open-with gate admits containers and refuses while locked instead of hanging.
+  - **B8 protect-offer latch** with its own key and lifecycle (never entangled with the desktop welcome), reaching web AND desktop.
+  - **UI**: `UnlockScreen` and `ProtectSetupFlow` (three steps; the cost stated on the same screen as the offer; typed acknowledgement on the Recovery Key; no destructive escape anywhere).
+  - **Naming surface** (AC3/4/5/33): one export name on both platforms, picker accepts `.snug` + `.sqlite`, per-app exports `.snug`, MIME follows the bytes, both e2e locators updated in the same commit.
+  - **Docs**: ADR-0042, ADR-0043, ADR-0027 status lines on 0007/0009/0014/0021, threat-model v2 (R-3 rewritten, A6 defended, **R-14 added as a named unmitigable residual**, §7 claim scoped), spec v0.2-userdb §5+§6 staged, spec-changelog entry, whitepaper + 3 figures, README/glossary/architecture/code-map, examples, KB regenerated.
+  - **TM3 fired exactly as the review predicted** when the desktop delta was edited, forcing the re-consolidation it exists to force; ledger re-pinned.
+- State: **full root suite green — 23/23 tasks.** playground 1337 · auth 915 · db 383 · knowledge 184 · sidecar 152 · desktop 140 · server 126 · adapters 130 · sdk 41 · protocol 344 · threat-model 139/139 · whitepaper 70/70. ~90 new tests.
+- Next step: `pnpm gate:local`, then the Gate 5 multi-angle diff review (D8), then PR.
+- Open questions: none. The `tauri.conf.json` mimeType question is resolved (now `application/octet-stream`, pinned by a test).
