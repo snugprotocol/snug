@@ -1,6 +1,6 @@
 # TASK-20260820-desktop-bundle-targets-macos: restrict the desktop bundle to macOS targets and pin them by test
 
-- **Status**: planned
+- **Status**: in-review
 - **Owner**: Jeetu
 - **Risk tier**: medium (owner decision — `apps/desktop` config change; see [engineering/PROCESS.md](../engineering/PROCESS.md#risk-tiers). Not auto-escalated: it touches no `packages/protocol` schema, no `packages/runner` sandbox/CSP, no `packages/auth`, and no CI/release workflow file — `.github/workflows/ci.yml` is deliberately untouched, see Out of scope)
 - **Branch**: `feat/TASK-20260820-desktop-bundle-targets-macos`
@@ -207,3 +207,62 @@ than a supplement.
   current `"targets": "all"` config, then work items 2–9 in order.
 - Open questions: the Tauri host-filtering behaviour noted under Risks — affects only the *wording*
   of the R-5b rewrite, not the change itself. Default is the weaker, provable wording.
+
+### 2026-08-20 — Claude — session (Gates 3–5)
+
+- Done — **Gate 3 (tests first)**: wrote `apps/desktop/src/__tests__/bundleTargets.test.ts` (11
+  tests) and confirmed it RED against the real pre-change tree — not by trusting the run order,
+  but by restoring `tauri.conf.json`, `generate-icons.mjs` and `icon.ico` from `HEAD` and
+  re-running: **7 failed / 4 passed**, each failure naming a fact this task changes. (First
+  attempt at that verification used `git stash`, which silently did not take and produced a
+  misleading all-green run; the copy-from-`HEAD` method is what the RED claim rests on. Nothing
+  was lost — stash list stayed empty and the config was intact throughout.)
+- Done — **Gate 4 (implement)**, in plan order: `bundle.targets` → `["app","dmg"]`; `icon.ico`
+  dropped from `bundle.icon` and deleted from the tree; `generate-icons.mjs` SHIP list + three
+  comments updated; `appIcon.test.ts` header note updated (comment-only, zero assertions moved).
+- Done — **docs**: threat-model **R-5b rewritten**, ADR-0021 D8 addendum given a dated
+  `**Update 2026-08-20**` paragraph (original text left standing, per ADR-0027 append-only),
+  next-steps item (1) pruned + the DECIDED line's "Still OPEN" clause narrowed to the CI
+  detector only, code-map's two desktop rows updated.
+- Done — **Gate 5 (verify)**: `pnpm --filter desktop test` **139/139 green** (128 + 11 new),
+  tsc gate passed · `test:rust` **97 passed / 1 ignored** · `check-threat-model` **130/130** ·
+  `check-sandbox-guard` green. No dependents to run — `apps/desktop` is a graph leaf.
+
+**Two findings worth carrying, both of which changed the work:**
+
+1. **The plan's AC3 was wrong about the contract it was pinning.** I planned to assert the
+   generator's SHIP list set-EQUALS `bundle.icon`'s basenames. It does not and must not:
+   `icon.png` is shipped by the generator and read by tauri as the implicit macOS master, but
+   is *not* named in `bundle.icon`. The test now pins the exact relationship (`bundle.icon` +
+   `icon.png`), which is strictly stronger than the equality I planned — it still catches a
+   sixth file appearing. Caught by the test failing on its first run for a reason I had not
+   predicted, which is the argument for writing it first.
+2. **A first draft of the "no longer emits icon.ico" test asserted over the WHOLE generator
+   file** and so failed on the explanatory comment I had just added — a comment whose entire
+   job is to tell a post-1.0 reader which line to restore. Scoped to the `SHIP` block instead.
+   A belt that forbids *documenting* the thing it forbids is the wrong belt.
+   Also fixed: the non-macOS-target assertions used `.not.toContain` against a value that is a
+   STRING (`"all"`) before this change — a substring check that passed vacuously against
+   exactly the config this task removes. Now normalised to an array first, and verified failing.
+
+- **Open question RESOLVED** (the one the plan flagged): tauri does *not* reject a foreign
+  bundle target at config-parse time — `pnpm exec tauri build --bundles nsis` on this macOS host
+  was accepted and proceeded into the build. So the weaker, provable wording is the correct one
+  and is what the docs now say: the shipped config **requests** macOS targets only; it is not a
+  build-level **refusal**, because an explicit `--bundles` flag overrides config. Both R-5b and
+  the ADR update state this distinction outright rather than letting "enforced by the build"
+  imply a hard stop. This is also why the out-of-scope host-guard stays out of scope: adding a
+  second half-mechanism would imply the hard stop that neither provides.
+- Done — **the real bundle, on this macOS host**: `pnpm exec tauri build` exit **0**, reporting
+  **"Finished 2 bundles"** — `Snug.app` and `Snug_0.1.0_aarch64.dmg`, and nothing else. The app's
+  `Contents/Resources/` carries `icon.icns` alone, and `find`ing the whole bundle tree for `*.ico`
+  returns nothing. So the restricted target list still produces both macOS artifacts (the failure
+  mode the "keeps both macOS targets" test guards against is not hypothetical — a typo'd list
+  would have produced zero) and the dropped icon really is gone from the shipped output, not just
+  from the config.
+- State: **Gate 5 complete — implementation green and the bundle verified.** Committed on
+  `feat/TASK-20260820-desktop-bundle-targets-macos`; no PR opened yet.
+- Next step: open the PR (AI review first, then human). Then `/close-session` for Gate 6.
+- Open questions: none blocking. The owner's 2026-08-14 "icon never seen on a real dock" item is
+  *adjacent* — this build produces the artifact that would settle it — but it wants a human look,
+  so it is not claimed here.

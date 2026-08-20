@@ -194,14 +194,31 @@ decision; the preconditions are an upstream fix plus a green Windows gate leg pl
 ([ADR-0021 D8 addendum](decisions/0021-desktop-shell-transports.md); root cause:
 [`docs/solutions/2026-08-13-webview2-subframe-ipc-injection.md`](solutions/2026-08-13-webview2-subframe-ipc-injection.md)).
 
-**R-5b — and "we don't ship Windows" is enforced by documentation, not by the build.**
-`apps/desktop/src-tauri/tauri.conf.json` still carries `"targets": "all"` and ships
-`icons/icon.ico`, so a Windows bundle remains producible. The only regression detector is
-the CI Windows leg staying red *for the right reason* — and CI has been billing-blocked
-since ~2026-08-18, failing in seconds with zero steps, so a red X from billing is
-indistinguishable from a red X from R-5. Restricting the bundle targets and pinning them
-by test is queued in `docs/next-steps.md`. Stated rather than implied because R-5's
-severity makes the strength of its enforcement part of the claim.
+**R-5b — the build now states macOS-only, and a test holds it; what remains is narrower.**
+Until 2026-08-20 this residual read "enforced by documentation, not by the build":
+`tauri.conf.json` carried `"targets": "all"` and shipped `icons/icon.ico`. Both are now
+gone — `bundle.targets` is `["app", "dmg"]`, the `.ico` is deleted, and
+`apps/desktop/src/__tests__/bundleTargets.test.ts` pins all three facts (including the icon
+generator, which writes that directory and would otherwise restore the file on the next
+regeneration) in the manner of `netTransportCapability.test.ts`
+(TASK-20260820-desktop-bundle-targets-macos).
+
+*What that does and does not buy, stated exactly.* The build no longer **requests** a
+Windows target, so no Windows artifact is produced by an ordinary `pnpm --filter desktop
+bundle` on any host. It is **not** a refusal: an operator who passes `--bundles nsis`
+overrides the config on the command line, and tauri accepts that flag on a foreign host
+rather than rejecting it at config-parse time (verified 2026-08-20 on macOS — it proceeds
+into the build). So the honest claim is *the shipped configuration requests macOS targets
+only*, not *the build refuses Windows*. Deliberately no second mechanism (a host guard) was
+added: the decision is a distribution policy, and one clearly-stated, tested config is
+better than two half-mechanisms implying a hard stop that no build system here provides.
+
+*The remaining detector gap is unchanged and is not this residual's to close.* The only
+thing that would catch an actual R-5 regression in shell behaviour is the CI Windows leg
+staying red *for the right reason* — and CI has been billing-blocked since ~2026-08-18,
+failing in seconds with zero steps, so a red X from billing is indistinguishable from a red
+X from R-5. That is an owner action tracked in `docs/next-steps.md`. Stated rather than
+implied because R-5's severity makes the strength of its enforcement part of the claim.
 
 ### Where the walls genuinely end
 

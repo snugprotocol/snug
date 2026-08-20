@@ -19,7 +19,7 @@
 //                                       or inset icons — shape and margin must be
 //                                       baked into the pixels, or the dock shows an
 //                                       oversized square with baked-background chips.
-//   win master  → icon.ico, 32x32.png,  Full-bleed and fully opaque on a dark plate
+//   win master  → 32x32.png,            Full-bleed and fully opaque on a dark plate
 //                 128x128.png,          (Windows expects no margin); the tile keeps
 //                 128x128@2x.png        the mark's own corner radius.
 // In BOTH masters the arched niche is painted the dark ground #171310 — matching how
@@ -27,6 +27,13 @@
 // dark is a solid single-subpath layer underneath; the previous revision drew the
 // full mark path nonzero as the backing and the inner subpath's opposite winding
 // knocked the niche out of THAT too, so the page background (white) showed through.
+//
+// TASK-20260820: `icon.ico` is NO LONGER SHIPPED — ADR-0021 D8 restricted the bundle
+// to macOS targets, and a Windows-only container in a macOS-only bundle reads as
+// intent. The win master stays: these three PNGs are generic sizes tauri reads on
+// every platform, not Windows-only assets. If Windows is reconsidered post-1.0 (its
+// own ADR), re-adding `['icon.ico', winOut]` to SHIP below is the whole change —
+// the master that produces it is untouched. Pinned by bundleTargets.test.ts.
 //
 // Usage:  node scripts/generate-icons.mjs
 // Then:   pnpm --filter desktop test   (src/__tests__/appIcon.test.ts locks the result)
@@ -173,13 +180,13 @@ try {
     });
   }
 
-  // tauri.conf.json's bundle.icon lists exactly six files; `tauri icon` also writes a
-  // full mobile + Windows-Store matrix nobody reads. Copy the six, never the rest.
+  // tauri.conf.json's bundle.icon lists four files and tauri reads `icon.png` as the
+  // macOS master implicitly — five in all; `tauri icon` also writes a full mobile +
+  // Windows-Store matrix nobody reads. Copy the five, never the rest.
   const iconsDir = resolve(desktopRoot, 'src-tauri/icons');
   const SHIP = [
     ['icon.icns', macOut],
     ['icon.png', macOut],
-    ['icon.ico', winOut],
     ['32x32.png', winOut],
     ['128x128.png', winOut],
     ['128x128@2x.png', winOut],
@@ -194,7 +201,7 @@ try {
   console.log(
     `\nicons regenerated from two ${SIZE}px masters:` +
       `\n  mac (icon.icns, icon.png): Apple-grid squircle, transparent margin, #171310 niche` +
-      `\n  win (icon.ico, 32/128px):  full-bleed brand tile on an opaque #171310 plate` +
+      `\n  win master (32/128px):     full-bleed brand tile on an opaque #171310 plate` +
       `\nshipped ${SHIP.length} files; mobile/store variants never copied`,
   );
 } finally {

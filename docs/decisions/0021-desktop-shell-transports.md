@@ -66,6 +66,18 @@ them (a build-target restriction with a test pinning it, mirroring
 task documents the system as built, and a build-config change is its own task with its own
 tier.
 
+**Update 2026-08-20 (TASK-20260820-desktop-bundle-targets-macos): the first of those two is
+closed.** `bundle.targets` is now `["app", "dmg"]` and `icons/icon.ico` is deleted (with the
+icon generator's SHIP list following, since that script rewrites the icons directory and
+would otherwise restore the file); `apps/desktop/src/__tests__/bundleTargets.test.ts` pins
+all of it. The paragraph above stands as the record of what was true when D8 was decided —
+what changed is the enforcement, not the decision. Two things stay true and are worth not
+overreading: the config **requests** macOS targets only, which is not the same as the build
+**refusing** a Windows one (an explicit `--bundles nsis` still overrides it — see
+threat-model R-5b for the exact wording), and the CI-detector half of the gap is untouched,
+still waiting on the billing fix. Re-adding Windows post-1.0 remains a one-line change to
+each of the config, the generator and that test — the win icon master was deliberately kept.
+
 **Consequences.** The Windows gate leg stays red for the entire pre-1.0 run and must NOT be
 softened — the `keyReachable` conjunction is the only check that reasons about key
 reachability rather than transport presence, and a leg that is *expected* to stay red for
