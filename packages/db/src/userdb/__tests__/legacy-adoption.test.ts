@@ -15,8 +15,11 @@ import { describe, expect, it } from 'vitest';
 import { USERDB_FILE, USERDB_LEGACY_FILE } from '@snugprotocol/protocol';
 
 import { createMemoryBackend, type PersistenceBackend } from '../../persistence.js';
+import { encryptContainer, generateRecoveryKey } from '../../crypto/container.js';
 import { openUserDb } from '../userdb.js';
 import { locateWasm } from '../../__tests__/helpers.js';
+
+const PASS = 'the passphrase on a file protected before the rename';
 
 /** A backend that records every load, so we can prove HOW the legacy file was found. */
 function watched(): { backend: PersistenceBackend; loads: string[]; files: Map<string, Uint8Array> } {
@@ -111,6 +114,39 @@ describe('legacy `user.sqlite` adoption (AC1)', () => {
     await reopened.userDb.flush();
     expect(files.has(USERDB_LEGACY_FILE)).toBe(true);
     await reopened.userDb.close();
+  });
+});
+
+describe('the two migrations compose (rename × protection)', () => {
+  it('a PROTECTED legacy file locks, unlocks, and adopts forward STILL protected', async () => {
+    // Both migrations can be in flight for the same user: they protected their file on
+    // an older build, then upgraded into the rename. If adopt-forward treated the
+    // container as unreadable they would be told their data was corrupt; if it adopted
+    // forward as PLAINTEXT it would silently strip the protection they asked for —
+    // arguably the worse of the two, because nothing would look wrong.
+    const { backend, files } = watched();
+    const scratch = watched();
+    const seed = await open(scratch.backend);
+    expect(seed.status).toBe('ok');
+    if (seed.status !== 'ok') return;
+    seed.userDb.installApp({ displayName: 'Protected', html: '<!doctype html><title>p</title>' });
+    const plain = await seed.userDb.exportUserDb({ includeSecrets: true });
+    await seed.userDb.close();
+    files.set(USERDB_LEGACY_FILE, await encryptContainer(plain, { passphrase: PASS, recoveryKey: generateRecoveryKey() }));
+
+    // No secret: locked, and NOT reported as corrupt or opened fresh.
+    expect((await open(backend)).status).toBe('locked');
+
+    const opened = await openUserDb({ backend, locateWasm, secrets: { passphrase: PASS } });
+    expect(opened.status).toBe('ok');
+    if (opened.status !== 'ok') return;
+    expect(opened.userDb.listApps().map((a) => a.displayName)).toEqual(['Protected']);
+    await opened.userDb.flush();
+    await opened.userDb.close();
+
+    const adopted = files.get(USERDB_FILE);
+    expect(adopted).toBeDefined();
+    expect(new TextDecoder().decode(adopted!.slice(0, 8))).toBe('SNUGENC1');
   });
 });
 
