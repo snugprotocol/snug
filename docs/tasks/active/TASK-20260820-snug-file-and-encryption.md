@@ -164,6 +164,20 @@ Every AC above gets a failing test before the corresponding implementation. High
 - `docs/architecture.md`, `docs/code-map.md`, `docs/glossary.md`, `README.md`, `SECURITY.md`, `docs/whitepaper/src/paper.html` (:642,:730) + figures `fig1`/`fig5`/`fig6` (SVG text), `examples/*/README.md`, and `packages/knowledge/prompts/knowledge-base/app-authoring/40-persistence-and-db.md` → **regenerate** `packages/knowledge/src/generated/content.ts` (generated file — never hand-edit).
 - **Claim discipline (ADR-0014 §5)**: the public claim may strengthen only to *"your file can be encrypted with a passphrase only you hold"* — never to "zero-knowledge" or "end-to-end encrypted". `docs/threat-model.md:425` ("no cryptographic custody claim") needs a careful, scoped correction rather than deletion.
 
+### Enforcement gates this plan must satisfy (verified by reading `scripts/`, 2026-08-20)
+
+The repo mechanically enforces the doc work in Stage 7 — these are not optional prose edits, and each is wired into `pnpm test` at root.
+
+| Gate | What it enforces | What this task must do |
+|---|---|---|
+| **TM3** (`check-threat-model.mjs`) | Every `docs/security/threat-model-delta-*.md` is pinned in a delta ledger **by content hash**; an edited delta fails until the model re-consolidates | Editing `threat-model-delta-desktop-shell.md:32` (the "plaintext file" claim) **breaks the ledger hash by design** → `docs/threat-model.md` must re-consolidate and the ledger row be re-pinned in the same change |
+| **TM4** | Every invariant row names an enforcement point **and** a test, as repo paths **that must exist** | Any new encryption invariant added to the table must ship with a real test path — no promise without named enforcement |
+| **TM5** | The residuals section carries the named accepted residuals | R-3 is rewritten, not deleted; the forgotten-passphrase residual is **added** as a named residual |
+| **TM6** | The macOS-only shipped surface is stated | Unchanged — but the capability probe (Stage 6) must not imply Windows support |
+| **AC1/AC2** (`check-whitepaper.mjs`) | The whitepaper **PDF** exists, is non-trivial, and carries exact embedded metadata | Editing `paper.html` (:642,:730) + figures means **rebuilding the PDF** via `docs/whitepaper/build.mjs`, not just editing source |
+| **AC6** | No unbuilt claim, no anti-positioning language | The encryption claim must not outrun what ships (ADR-0014 §5 claim discipline) |
+| `check-gate-local`, `check-sandbox-guard` | Local merge gate (ADR-0041) + C2 sandbox guard | Run `pnpm gate:local` at root; CI remains billing-blocked, so merges proceed on local evidence recorded in the journal |
+
 ### Test plan (tests FIRST)
 
 | Layer | Suite | Covers |
