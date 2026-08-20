@@ -117,7 +117,12 @@ journey, run by the shell-gate harness (`pnpm --filter desktop gate`): macOS GRE
 ignores `for_main_frame_only`, so `__TAURI_INTERNALS__` reaches app iframes: ADR-0021 D8
 trigger MET. **Resolved 2026-08-20 — the shell ships macOS-only through alpha, beta and
 1.0 (ADR-0021 D8 addendum); Windows desktop is reconsidered post-1.0. The Windows leg
-stays RED by design for that whole run and must not be softened.**
+stays RED by design for that whole run and must not be softened.** Since 2026-08-20 the
+BUILD states it too: `bundle.targets` is `["app","dmg"]` and `icon.ico` is gone, pinned by
+`apps/desktop/src/__tests__/bundleTargets.test.ts` (config + tree + icon generator). Note
+the exact strength — the shipped config *requests* macOS targets only; an explicit
+`--bundles nsis` still overrides it, so this is not a build-level refusal (threat-model
+R-5b carries the wording).
 Threat surface: `docs/security/threat-model-delta-desktop-shell.md`.
 
 ### Desktop-aware dynamic auth (TASK-20260812-desktop-auth-awareness, ADR-0022 + ADR-0023)

@@ -15,11 +15,14 @@
 // The set is therefore split per platform (owner decision 2026-08-19):
 //   mac-facing  (icon.png, icon.icns): transparent margin, Apple-radius squircle
 //                filled ember, niche painted the dark ground #171310.
-//   win-facing  (32x32.png, 128x128.png, 128x128@2x.png, icon.ico): full-bleed and
+//   win-facing  (32x32.png, 128x128.png, 128x128@2x.png): full-bleed and
 //                fully opaque (Windows expects no margin) on a dark plate — corners
 //                are the PLATE, never white — with the same dark niche.
-//   icon.ico is generated from the same win master as the win PNGs; it is not
-//   re-parsed here (ICO entries may be BMP DIBs), the PNGs stand evidence for it.
+//   TASK-20260820: `icon.ico` is no longer shipped at all — ADR-0021 D8 restricted the
+//   bundle to macOS targets (`bundleTargets.test.ts` pins that). It was never parsed
+//   here anyway (ICO entries may be BMP DIBs; the PNGs stood evidence for it), so its
+//   removal costs this suite no assertion. These three PNGs STAY: they come from the
+//   win master but are generic sizes tauri reads on every platform.
 //
 // Why pixels and not a snapshot: an icon is a binary asset no component test can
 // reach, and these defects are spatial/chromatic — a hash comparison would say
