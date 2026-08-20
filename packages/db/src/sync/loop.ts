@@ -193,6 +193,15 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
         if (localChanged) await push(bytes, hash, known.lastPushedRevision);
         return;
       }
+      if (remote.migratedFromLegacy === true) {
+        // The origin's bytes came from the PRE-RENAME path (ADR-0042). Its revision
+        // belongs to that older object, so it must never be echoed back as a
+        // conditional update — that targets an object the canonical path does not have
+        // yet and 409s forever, wedging sync with no user-visible way out. Provision
+        // the canonical path instead; the legacy copy stays where it is.
+        await push(bytes, hash, undefined);
+        return;
+      }
       if (!localChanged) {
         // Origin moved, local pristine since the last push — safe to pull-merge.
         await pullMerge(remote);
