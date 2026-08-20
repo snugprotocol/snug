@@ -17,6 +17,7 @@
 import initSqlJs from 'sql.js';
 import {
   decryptContainer,
+  encryptContainer,
   isEncryptedContainer,
   openFileKey,
   resealContainer,
@@ -709,6 +710,20 @@ export interface UserDb {
    */
   readonly sealForOrigin?: (bytes: Uint8Array) => Promise<Uint8Array>;
 
+  /**
+   * Turn protection ON for this file, or change/remove it (ADR-0043, AC13/AC14).
+   *
+   * Owned by the UserDb rather than exposed as a generic "overwrite the stored bytes"
+   * seam, deliberately: a public whole-file write is a foot-gun that any future caller
+   * could point at the user's database. Here the conversion is the only thing it can
+   * do, and it reuses the SAME atomic write every ordinary save uses — desktop
+   * temp+fsync+rename, OPFS A/B slot commit — so a crash mid-conversion leaves the
+   * previous complete file in place. No bespoke second atomicity contract.
+   *
+   * Passing `undefined` removes protection and writes plaintext back.
+   */
+  protect(secrets: { passphrase: string; recoveryKey: string } | undefined): Promise<void>;
+
   flush(): Promise<void>;
   close(): Promise<void>;
 }
@@ -1271,8 +1286,10 @@ function construct(
    * If this were ever dropped, the next save would rewrite a protected file as
    * plaintext while its owner believed it protected — so it is threaded explicitly.
    */
-  sealer?: (bytes: Uint8Array) => Promise<Uint8Array>,
+  initialSealer?: (bytes: Uint8Array) => Promise<Uint8Array>,
 ): UserDb {
+  // Mutable: `protect()` installs or removes it when the user turns protection on/off.
+  let sealer = initialSealer;
   let db = initial;
   const debounceMs = options.persistDebounceMs ?? DEFAULT_PERSIST_DEBOUNCE_MS;
   const maxBytes = options.maxBytes ?? USERDB_LIMITS.MAX_USERDB_BYTES;
@@ -3147,6 +3164,30 @@ function construct(
     },
 
     ...(sealer !== undefined ? { sealForOrigin: sealer } : {}),
+
+    async protect(secrets) {
+      assertOpen();
+      await inner.flush();
+      await persistNow();
+      // Secrets INCLUDED: this is the user's own file being protected in place, not an
+      // export being handed to someone. Stripping credentials here would silently log
+      // them out of every connected account the moment they turned protection on.
+      const plain = db.export();
+      if (secrets === undefined) {
+        sealer = undefined;
+        await backend.save(file, plain);
+        return;
+      }
+      const sealed = await encryptContainer(plain, secrets);
+      await backend.save(file, sealed);
+      // Every LATER write re-seals into this container, so the recovery slot survives
+      // a session that only ever knew the passphrase (see resealContainer).
+      const keyed = await openFileKey(sealed, secrets);
+      if (keyed.status === 'ok') {
+        const fileKey = keyed.fileKey;
+        sealer = (next: Uint8Array) => resealContainer(sealed, fileKey, next);
+      }
+    },
 
     async flush() {
       await inner.flush();

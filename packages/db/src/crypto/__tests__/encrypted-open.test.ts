@@ -188,6 +188,65 @@ describe('re-sealing preserves the OTHER slot (regression, found during implemen
   });
 });
 
+describe('turning protection on and off (AC13, AC14)', () => {
+  it('converts a plaintext file in place, and it opens only with the secret afterwards', async () => {
+    const backend = createMemoryBackend();
+    const first = await openUserDb({ backend, locateWasm });
+    expect(first.status).toBe('ok');
+    if (first.status !== 'ok') return;
+    first.userDb.installApp({ displayName: 'Before', html: '<!doctype html><title>b</title>' });
+    const recoveryKey = generateRecoveryKey();
+    await first.userDb.protect({ passphrase: PASS, recoveryKey });
+    await first.userDb.close();
+
+    expect(new TextDecoder().decode((await backend.load(USERDB_FILE))!.slice(0, 8))).toBe('SNUGENC1');
+    expect((await openUserDb({ backend, locateWasm })).status).toBe('locked');
+
+    const opened = await openUserDb({ backend, locateWasm, secrets: { passphrase: PASS } });
+    expect(opened.status).toBe('ok');
+    if (opened.status !== 'ok') return;
+    // Conversion must not lose anything that was already there.
+    expect(opened.userDb.listApps().map((a) => a.displayName)).toEqual(['Before']);
+    await opened.userDb.close();
+  });
+
+  it('keeps writing sealed after conversion, with the recovery slot intact', async () => {
+    const backend = createMemoryBackend();
+    const first = await openUserDb({ backend, locateWasm });
+    if (first.status !== 'ok') return;
+    const recoveryKey = generateRecoveryKey();
+    await first.userDb.protect({ passphrase: PASS, recoveryKey });
+    first.userDb.installApp({ displayName: 'After', html: '<!doctype html><title>a</title>' });
+    await first.userDb.flush();
+    await first.userDb.close();
+
+    // Same class of bug as the reseal regression: a session that converted with both
+    // secrets must not lose the recovery slot on its very next write.
+    const viaRecovery = await openUserDb({ backend, locateWasm, secrets: { recoveryKey } });
+    expect(viaRecovery.status).toBe('ok');
+    if (viaRecovery.status !== 'ok') return;
+    expect(viaRecovery.userDb.listApps().map((a) => a.displayName)).toEqual(['After']);
+    await viaRecovery.userDb.close();
+  });
+
+  it('removes protection and writes plaintext back (AC14)', async () => {
+    const backend = createMemoryBackend();
+    const first = await openUserDb({ backend, locateWasm });
+    if (first.status !== 'ok') return;
+    first.userDb.installApp({ displayName: 'Kept', html: '<!doctype html><title>k</title>' });
+    await first.userDb.protect({ passphrase: PASS, recoveryKey: generateRecoveryKey() });
+    await first.userDb.protect(undefined);
+    await first.userDb.close();
+
+    expect(new TextDecoder().decode((await backend.load(USERDB_FILE))!.slice(0, 6))).toBe('SQLite');
+    const plain = await openUserDb({ backend, locateWasm });
+    expect(plain.status).toBe('ok');
+    if (plain.status !== 'ok') return;
+    expect(plain.userDb.listApps().map((a) => a.displayName)).toEqual(['Kept']);
+    await plain.userDb.close();
+  });
+});
+
 describe('a plaintext file still opens with no secret (AC-D3 opt-in)', () => {
   it('unprotected files are untouched by any of this', async () => {
     const backend = createMemoryBackend();
