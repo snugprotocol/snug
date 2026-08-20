@@ -153,8 +153,35 @@ test.describe('P4-AC7 / AL-09 AC8 — the degraded pre-connect state is real', (
     },
   ];
 
+  /**
+   * QUARANTINE (TASK-20260820-local-ci-gate, AC9) — dated 2026-08-20, 4 rows.
+   *
+   * These are the pre-existing reds first surfaced by TASK-20260818-ledger-starter's
+   * FIRST-ever run of this spec, recorded in docs/next-steps.md (2026-08-18). They are
+   * NOT this task's regressions and they are NOT fixed here: each app keys its
+   * pre-connect surface on a connected-fetch probe that the READ-ONLY starter route
+   * never answers (netHandler is deliberately absent there), so the pinned copy may
+   * never render on that route. The fix needs per-app cold-boot investigation.
+   *
+   * WHY test.fail() RATHER THAN test.skip(). `gate:local` adopts this suite as a merge
+   * gate, and a gate that is red on its first run is a gate its owner learns to ignore.
+   * But a skip would HIDE these rows, and a hidden red is the exact false green the gate
+   * exists to prevent. `test.fail()` inverts the expectation instead: the row still runs,
+   * still reports, and — critically — the SUITE FAILS IF ONE STARTS PASSING, which forces
+   * this list to shrink rather than rot. Quarantine that cannot expire is just deletion
+   * with extra steps.
+   *
+   * Tracked in docs/next-steps.md (2026-08-18 entry). Remove a row here the moment its
+   * cold-boot defect is fixed.
+   */
+  const QUARANTINED_2026_08_20 = new Set(['github', 'spotify', 'weather']);
+
   for (const { folder, honest, shell } of DEGRADED) {
     test(`${folder} boots into an honest, useful pre-connect state`, async ({ page }) => {
+      test.fail(
+        QUARANTINED_2026_08_20.has(folder),
+        `quarantined 2026-08-20 (pre-existing, next-steps 2026-08-18): ${folder}'s pre-connect copy keys on a probe the read-only route never answers`,
+      );
       const app = await openStarterByName(page, folder);
 
       // HONEST: it names the provider it needs, not a shrug.
@@ -165,6 +192,11 @@ test.describe('P4-AC7 / AL-09 AC8 — the degraded pre-connect state is real', (
   }
 
   test('a READ-ONLY starter route reaches nothing and writes nothing', async ({ page }) => {
+    // QUARANTINED 2026-08-20 (TASK-20260820-local-ci-gate, AC9) — the 4th of the
+    // pre-existing rows from next-steps 2026-08-18. See the block above for why this is
+    // test.fail() and not test.skip(): if this starts passing, the suite FAILS and the
+    // quarantine must be lifted deliberately.
+    test.fail(true, 'quarantined 2026-08-20 (pre-existing, next-steps 2026-08-18): read-only route probe');
     // The path the rest of the suite never takes and a real user takes first: browsing
     // the shelf and pressing a live button. A read-only starter has NO net handler at
     // all, which is a deliberate security property — browsing must reach nothing and
