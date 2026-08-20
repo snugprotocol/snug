@@ -1,6 +1,6 @@
 # TASK-20260820-host-pseudonymisation: Host-enforced pseudonymisation backstop on the LLM egress seam
 
-- **Status**: planned (awaiting Gate-2 owner approval)
+- **Status**: in-progress (plan owner-approved 2026-08-20; directory lifecycle: revoke-wipe)
 - **Owner**: Jeetu
 - **Risk tier**: **High** (owner-set, interview 2026-08-20) — constructs the security boundary threat-model R-9 names the residual a reviewer weighs most heavily; High obligations apply: tests first incl. negative tests, fresh-context AI review of this plan before implementation (**done 2026-08-20, findings folded in — see Decisions**), journal self-sign-off
 - **Branch**: `feat/TASK-20260820-host-pseudonymisation`
@@ -83,11 +83,10 @@ replay lane (rows are app-shaped — disclosed residual, candidate follow-up tas
 (`sidecar_wizard_fetch` gate row); R-8 classifier fencing; harvesting from pump hints
 (jid-only, covered by the egress jid pattern); any `packages/protocol` or Rust change.
 
-**Owner decision needed at approval — directory lifecycle (review finding 9):** the
-directory is a new persisted third-party-PII asset riding the `.snug` export.
-Recommendation: **wipe it when the last sidecar-ceiling connection row is removed**
-(small hook at the revoke path) — else choose "kept until DB delete, disclosed" and it
-goes into R-9's residuals verbatim.
+**Directory lifecycle (owner-decided 2026-08-20): revoke-wipe** — the directory is wiped
+when the last sidecar-ceiling connection row is removed. Becomes AC13: after the last
+sidecar-ceiling connection is removed, the directory is empty (and stays empty across
+export/import); removing one of two sidecar-ceiling rows does NOT wipe.
 
 ## Plan
 
