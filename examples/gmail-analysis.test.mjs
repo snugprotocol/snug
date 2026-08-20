@@ -33,7 +33,7 @@ function loadCore() {
   const source = script.slice(script.indexOf('\n', start), end);
   assert.ok(source.trim().length > 400, 'the extracted core is substantial, not an empty slice');
   const factory = new Function(
-    `${source}\nreturn { mulberry32, buildSampleInbox, senderKey, senderStats, neverRepliedFlags, unsubscribeCandidates, unsubscribeChannel, safeUnsubUrl, volumeByWeek, topSenders, categoryMix, planCleanupBatch, BATCH_MODIFY_LIMIT, SAMPLE_SENDERS };`,
+    `${source}\nreturn { mulberry32, buildSampleInbox, senderKey, senderStats, neverRepliedFlags, unsubscribeCandidates, unsubscribeChannel, safeUnsubUrl, volumeByWeek, topSenders, categoryMix, planCleanupBatch, BATCH_MODIFY_LIMIT, SAMPLE_SENDERS, buildUnsubscribeRaw, decodeRawForTest, SYNC_WINDOWS, DEFAULT_WINDOW, windowQuery, chartWeeks, answerShape, netErrorText };`,
   );
   return factory();
 }
@@ -393,4 +393,180 @@ test('AC5: the sample inbox demonstrates BOTH unsubscribe channels', () => {
   );
   assert.ok(channels.has('mailto'), 'sample data includes a mailto: unsubscribe');
   assert.ok(channels.has('open-url'), 'sample data includes an https unsubscribe');
+});
+
+// ───────────────────────────────────────────────────────────────────────────────
+// TASK-20260819-inbox-copilot-fixes — owner-reported defects
+// ───────────────────────────────────────────────────────────────────────────────
+
+// AC5 — the From header. Reported by the owner: unsubscribe emails bounced, because the
+// raw RFC 822 message carried To and Subject but no From, so Gmail sent with an envelope
+// the receiving MTA rejected. The connected account's own address is the only correct
+// value, and the app must READ it (users/me/profile) rather than guess.
+
+test('AC5: a raw unsubscribe message carries a From header with the connected address', () => {
+  const raw = core.buildUnsubscribeRaw({
+    from: 'someone@gmail.example',
+    to: 'unsub@shop.example',
+    subject: 'unsubscribe',
+  });
+  const decoded = core.decodeRawForTest(raw);
+  assert.match(decoded, /^From: someone@gmail\.example$/m, 'the sender must be stated');
+  assert.match(decoded, /^To: unsub@shop\.example$/m);
+  assert.match(decoded, /^Subject: unsubscribe$/m);
+});
+
+test('AC5 NEGATIVE: no raw message can be built without a sender — the bounce is unrecoverable', () => {
+  // The load-bearing negative. A message with no From does not fail loudly: Gmail accepts
+  // the send, the remote MTA bounces it, and the user believes they unsubscribed. Better
+  // to refuse to build the message at all than to send one that silently does nothing.
+  assert.equal(core.buildUnsubscribeRaw({ from: '', to: 'x@y.example', subject: 's' }), null);
+  assert.equal(core.buildUnsubscribeRaw({ from: null, to: 'x@y.example', subject: 's' }), null);
+  assert.equal(core.buildUnsubscribeRaw({ from: 'me@a.example', to: '', subject: 's' }), null);
+});
+
+test('AC5: header values are sanitised — a crafted address cannot inject extra headers', () => {
+  // A List-Unsubscribe header is attacker-controlled data. CRLF inside it would end the
+  // To line and start one the app never intended (a Bcc, a Reply-To), turning an
+  // unsubscribe into a mail-injection primitive.
+  const raw = core.buildUnsubscribeRaw({
+    from: 'me@a.example',
+    to: 'x@y.example\r\nBcc: victim@z.example',
+    subject: 'unsub\r\nX-Evil: 1',
+  });
+  const decoded = raw === null ? '' : core.decodeRawForTest(raw);
+  assert.ok(!/Bcc:/i.test(decoded), 'a CRLF in an address must never reach the message');
+  assert.ok(!/X-Evil/i.test(decoded), 'a CRLF in a subject must never reach the message');
+});
+
+test('AC5: base64url encoding carries no padding or wire-unsafe characters', () => {
+  const raw = core.buildUnsubscribeRaw({ from: 'me@a.example', to: 'x@y.example', subject: 'unsubscribe' });
+  assert.ok(!/[+/=]/.test(raw), `Gmail wants base64url without padding; got ${raw}`);
+});
+
+// AC6 — the sync window. Reported by the owner: Refresh was hard-wired to 90 days.
+
+test('AC6: the default window is 90 days, and every offered window maps to a Gmail query', () => {
+  assert.equal(core.DEFAULT_WINDOW, '90d');
+  const offered = core.SYNC_WINDOWS.map((w) => w.id);
+  assert.deepEqual(offered, ['7d', '90d', '6m', '1y', 'all']);
+  assert.equal(core.windowQuery('7d'), 'newer_than:7d');
+  assert.equal(core.windowQuery('90d'), 'newer_than:90d');
+  assert.equal(core.windowQuery('6m'), 'newer_than:6m');
+  assert.equal(core.windowQuery('1y'), 'newer_than:1y');
+});
+
+test('AC6: "everything" omits the date clause rather than sending a bogus one', () => {
+  // Gmail has no "newer_than:forever". Sending a huge number would be a lie that also
+  // silently caps the result; the honest query is no date clause at all.
+  assert.equal(core.windowQuery('all'), '');
+});
+
+test('AC6: an unknown window falls back to the default rather than querying everything', () => {
+  // Fail SAFE: a corrupted persisted setting must narrow to the default, never widen to
+  // a full-mailbox scan the user did not ask for.
+  assert.equal(core.windowQuery('nonsense'), 'newer_than:90d');
+});
+
+test('AC6: the chart window follows the sync window — a 1-week pull is not drawn as 12 weeks', () => {
+  // Twelve empty buckets beside one populated one reads as "my mail collapsed", which is
+  // a lie told by the axis rather than the data.
+  assert.equal(core.chartWeeks('7d'), 1);
+  assert.equal(core.chartWeeks('90d'), 12);
+  assert.equal(core.chartWeeks('6m'), 26);
+  assert.equal(core.chartWeeks('1y'), 52);
+  assert.ok(core.chartWeeks('all') >= 52, 'an unbounded pull still needs a bounded axis');
+});
+
+// AC7 — structured answers. Reported by the owner: the ask lane returned a wall of prose.
+
+test('AC7: an answer naming senders renders as a sender list, not a paragraph', () => {
+  const shape = core.answerShape(
+    { kind: 'answer', answer: 'These three are your loudest.', evidence: ['a@x.example', 'b@x.example'] },
+    { senderStats: [
+      { sender: 'a@x.example', name: 'A', received: 40, replied: 0 },
+      { sender: 'b@x.example', name: 'B', received: 12, replied: 0 },
+    ] },
+  );
+  assert.equal(shape.kind, 'senders');
+  assert.equal(shape.rows.length, 2);
+  assert.equal(shape.rows[0].sender, 'a@x.example');
+  assert.equal(shape.rows[0].received, 40, 'the row carries the real count, not just the name');
+  assert.equal(shape.text, 'These three are your loudest.', 'the prose survives alongside the table');
+});
+
+test('AC7: evidence naming a sender the app does not know is dropped, never rendered blank', () => {
+  // The agent can hallucinate an address. A row with a name and no numbers looks like
+  // data and is not — dropping it is the honest degradation.
+  const shape = core.answerShape(
+    { kind: 'answer', answer: 'ok', evidence: ['ghost@nowhere.example'] },
+    { senderStats: [{ sender: 'a@x.example', name: 'A', received: 5, replied: 0 }] },
+  );
+  assert.equal(shape.kind, 'prose', 'no verifiable rows means no table');
+});
+
+test('AC7: an answer with no evidence renders as prose', () => {
+  const shape = core.answerShape({ kind: 'answer', answer: 'Tuesday mornings.' }, { senderStats: [] });
+  assert.equal(shape.kind, 'prose');
+  assert.equal(shape.text, 'Tuesday mornings.');
+});
+
+test('AC7: a verdicts reply renders as verdict rows', () => {
+  const shape = core.answerShape(
+    {
+      kind: 'classify',
+      verdicts: [
+        { sender: 'a@x.example', verdict: 'drop', why: 'never opened' },
+        { sender: 'b@x.example', verdict: 'keep', why: 'you reply often' },
+      ],
+    },
+    { senderStats: [
+      { sender: 'a@x.example', name: 'A', received: 40, replied: 0 },
+      { sender: 'b@x.example', name: 'B', received: 12, replied: 1 },
+    ] },
+  );
+  assert.equal(shape.kind, 'verdicts');
+  assert.equal(shape.rows.length, 2);
+  assert.equal(shape.rows[0].verdict, 'drop');
+});
+
+test('AC7 NEGATIVE: a malformed reply degrades to prose and never throws', () => {
+  // The keyless demo brain returns exactly this shape of nothing.
+  for (const reply of [null, undefined, {}, { kind: 'answer' }, { evidence: 'not-an-array' }]) {
+    const shape = core.answerShape(reply, { senderStats: [] });
+    assert.equal(shape.kind, 'prose');
+    assert.equal(typeof shape.text, 'string');
+    assert.ok(shape.text.length > 0, 'a fallback sentence is always rendered');
+  }
+});
+
+// A bridge failure is an OBJECT, and rendering it naively puts "[object Object]" on
+// screen where the reason should be. Found in a browser pass, not by a suite — the app
+// recovered correctly from a refused sync and then described it uselessly.
+
+test('bridge errors render as sentences, never as [object Object]', () => {
+  assert.equal(
+    core.netErrorText({ code: 'NET_AUTH_FAILED', message: 'the key was refused', retryable: false }, 'fallback'),
+    'the key was refused (NET_AUTH_FAILED)',
+    'both halves are useful: what happened, and the code to search for',
+  );
+  assert.equal(core.netErrorText({ message: 'plain message' }, 'fallback'), 'plain message');
+  assert.equal(core.netErrorText({ code: 'NET_TIMEOUT' }, 'fallback'), 'NET_TIMEOUT');
+  assert.equal(core.netErrorText('already a string', 'fallback'), 'already a string');
+});
+
+test('an unusable error falls back to the caller sentence rather than to noise', () => {
+  for (const bad of [null, undefined, {}, 42, [], { message: '   ' }]) {
+    assert.equal(core.netErrorText(bad, 'Gmail did not answer.'), 'Gmail did not answer.');
+  }
+});
+
+test('NEGATIVE: no error path in the app renders a raw object', () => {
+  // A source-level sweep, because this bug is invisible to a unit test of the formatter:
+  // the defect was a CALL SITE that never used it. Any `.error ||` fallback is the exact
+  // shape that produced "[object Object]" on screen.
+  const html = readFileSync(APP_HTML, 'utf8');
+  const authored = html.slice(html.indexOf('5. RESPONSE SCHEMA'));
+  const raw = [...authored.matchAll(/(\w+)\.error\s*\|\|/g)].map((m) => m[0]);
+  assert.deepEqual(raw, [], `these error sites bypass netErrorText: ${raw.join(', ')}`);
 });

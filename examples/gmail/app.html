@@ -169,6 +169,22 @@
     .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 9px; }
     .legend span { display: inline-flex; align-items: center; gap: 5px; }
     .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+    .windowpick { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+    .windowpick .btn { border-radius: 8px; }
+    .windowpick .btn[aria-pressed="true"] {
+      background: var(--chip); border-color: var(--accent); color: var(--accent); font-weight: 600;
+    }
+
+    .answer { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .answer .prose { font-size: 13.5px; line-height: 1.55; }
+    .answerrow {
+      display: flex; align-items: center; gap: 10px; padding: 9px 0;
+      border-top: 1px solid var(--border); font-size: 13px;
+    }
+    .answerrow:first-of-type { border-top: none; }
+    .answerrow .bar { height: 7px; border-radius: 999px; background: var(--chip); flex: 1 1 60px; min-width: 40px; overflow: hidden; }
+    .answerrow .bar i { display: block; height: 100%; border-radius: 999px; }
   </style>
 </head>
 <body>
@@ -793,6 +809,181 @@ function useConnectedFetch() {
     }
 
     // ===== GMAIL-SAMPLE-BEGIN =====
+    /**
+     * Turn a bridge failure into a sentence a person can act on.
+     *
+     * The bridge returns `error` as an OBJECT (`{code, message, retryable}`), not a
+     * string — so the obvious `error || 'fallback'` renders the literal text
+     * "[object Object]" on screen. That is not a cosmetic slip: it replaces the one piece
+     * of information the user needs (what went wrong, and whether retrying helps) with
+     * noise, at exactly the moment they are trying to work out whether their mail is
+     * safe. Every failure path in this app goes through here.
+     */
+    function netErrorText(error, fallback) {
+      if (typeof error === 'string' && error.trim()) return error;
+      if (error && typeof error === 'object') {
+        const message = typeof error.message === 'string' ? error.message.trim() : '';
+        const code = typeof error.code === 'string' ? error.code : '';
+        if (message && code) return message + ' (' + code + ')';
+        if (message) return message;
+        if (code) return code;
+      }
+      return fallback;
+    }
+
+    // ── Sending: the From header ──────────────────────────────────────────────
+
+    /**
+     * Make a header value single-line, TRUNCATING at the first line break rather than
+     * flattening it.
+     *
+     * A List-Unsubscribe header is attacker-controlled data, so a CRLF inside an address
+     * is a mail-injection primitive: `x@y.example\r\nBcc: victim@z.example` would turn an
+     * unsubscribe into a blind copy. Replacing the break with a SPACE defuses the
+     * injection but keeps the attacker's text in the message, where it is at best
+     * confusing and at worst a phishing string rendered inside a header the user's own
+     * account sent. Everything after the first break was never part of the value the
+     * sender legitimately published, so dropping it loses nothing real.
+     */
+    function headerSafe(value) {
+      const raw = String(value == null ? '' : value);
+      const break_ = raw.search(/[\r\n]/);
+      return (break_ === -1 ? raw : raw.slice(0, break_)).trim();
+    }
+
+    /**
+     * Build the RFC 822 message for a mailto: unsubscribe, base64url-encoded for
+     * `users.messages.send`.
+     *
+     * THE FROM HEADER IS THE WHOLE POINT (owner-reported bounce). Without it Gmail accepts
+     * the send and the receiving MTA rejects the message, so the user believes they have
+     * unsubscribed and nothing happened — a silent failure with a success message on
+     * screen. Returns null rather than a header-less message when the sender is unknown:
+     * refusing to build it surfaces as "we could not send that", which is recoverable,
+     * where sending it produces a bounce nobody sees.
+     */
+    function buildUnsubscribeRaw(input) {
+      const from = headerSafe(input && input.from);
+      const to = headerSafe(input && input.to);
+      if (!from || !to) return null;
+      const subject = headerSafe((input && input.subject) || 'unsubscribe') || 'unsubscribe';
+      const raw = [
+        'From: ' + from,
+        'To: ' + to,
+        'Subject: ' + subject,
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset="UTF-8"',
+        '',
+        'Please unsubscribe this address from this mailing list.',
+      ].join('\r\n');
+      // base64url, unpadded — what the Gmail API expects on the `raw` field.
+      return btoa(unescape(encodeURIComponent(raw)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+    }
+
+    /** Test seam: the suite asserts on header lines, not on an opaque blob. */
+    function decodeRawForTest(raw) {
+      const padded = String(raw).replace(/-/g, '+').replace(/_/g, '/');
+      return decodeURIComponent(escape(atob(padded + '==='.slice((padded.length + 3) % 4))));
+    }
+
+    // ── The sync window ───────────────────────────────────────────────────────
+
+    /** Offered windows, widest-last. `all` is deliberately last: it is the slow one. */
+    const SYNC_WINDOWS = [
+      { id: '7d', label: 'last week', query: 'newer_than:7d', weeks: 1 },
+      { id: '90d', label: 'last 90 days', query: 'newer_than:90d', weeks: 12 },
+      { id: '6m', label: 'last 6 months', query: 'newer_than:6m', weeks: 26 },
+      { id: '1y', label: 'last year', query: 'newer_than:1y', weeks: 52 },
+      // Gmail has no "newer_than:forever": the honest unbounded query is NO date clause.
+      // A huge number would read as precision and silently cap the result instead.
+      { id: 'all', label: 'everything', query: '', weeks: 104 },
+    ];
+    const DEFAULT_WINDOW = '90d';
+
+    /**
+     * A window id → its Gmail `q` clause. An unknown id falls back to the DEFAULT rather
+     * than to `all`: a corrupted setting must narrow to what the user expects, never
+     * silently widen into a full-mailbox scan nobody asked for.
+     */
+    function windowQuery(id) {
+      const found = SYNC_WINDOWS.find((w) => w.id === id);
+      return found ? found.query : windowQueryFallback();
+    }
+    function windowQueryFallback() {
+      return SYNC_WINDOWS.find((w) => w.id === DEFAULT_WINDOW).query;
+    }
+
+    /**
+     * How many weekly buckets the trend chart draws for a window. The axis has to follow
+     * the pull: twelve buckets beside a one-week fetch draws eleven empty columns, which
+     * reads as "my mail collapsed" — a lie told by the axis rather than by the data.
+     */
+    function chartWeeks(id) {
+      const found = SYNC_WINDOWS.find((w) => w.id === id);
+      return found ? found.weeks : SYNC_WINDOWS.find((w) => w.id === DEFAULT_WINDOW).weeks;
+    }
+
+    // ── Answer shapes ─────────────────────────────────────────────────────────
+
+    /**
+     * Decide how an agent reply should be RENDERED, and prove the rows before promising
+     * a table (owner report: the ask lane returned a wall of prose).
+     *
+     * The rule that matters: a row is only rendered when the app can independently
+     * confirm the sender exists in its own data. The agent can name an address that was
+     * never in the mailbox, and a row carrying a name with no numbers behind it looks
+     * exactly like data while being none — so unverifiable evidence degrades the whole
+     * reply to prose rather than rendering a table the user cannot trust.
+     */
+    function answerShape(reply, context) {
+      const stats = (context && context.senderStats) || [];
+      const byKey = new Map(stats.map((stat) => [senderKey(stat.sender), stat]));
+      const prose = (text) => ({
+        kind: 'prose',
+        text: text && String(text).trim()
+          ? String(text).trim()
+          : 'I could not answer that from the inbox summary I have. Try asking about your top senders, what to unsubscribe from, or what is filling your inbox.',
+      });
+      if (!reply || typeof reply !== 'object') return prose(null);
+
+      if (Array.isArray(reply.verdicts) && reply.verdicts.length > 0) {
+        const rows = reply.verdicts
+          .filter((verdict) => verdict && byKey.has(senderKey(verdict.sender)))
+          .map((verdict) => {
+            const stat = byKey.get(senderKey(verdict.sender));
+            return {
+              sender: stat.sender,
+              name: stat.name,
+              received: stat.received,
+              replied: stat.replied,
+              verdict: verdict.verdict,
+              why: verdict.why,
+            };
+          });
+        if (rows.length > 0) return { kind: 'verdicts', rows, text: reply.answer || '' };
+      }
+
+      if (Array.isArray(reply.evidence) && reply.evidence.length > 0) {
+        const rows = reply.evidence
+          .filter((entry) => byKey.has(senderKey(entry)))
+          .map((entry) => {
+            const stat = byKey.get(senderKey(entry));
+            return {
+              sender: stat.sender,
+              name: stat.name,
+              received: stat.received,
+              replied: stat.replied,
+            };
+          });
+        if (rows.length > 0) return { kind: 'senders', rows, text: String(reply.answer || '').trim() };
+      }
+
+      return prose(reply.answer);
+    }
+
     // ── The sample inbox ──────────────────────────────────────────────────────
     // Every address sits in an RFC 2606 reserved domain, so nothing here can ever be
     // mistaken for the reader's real mail. The shape is the point: this is what a normal
@@ -900,7 +1091,7 @@ function useConnectedFetch() {
       const resolve = openUrlPending.get(data.requestId);
       if (!resolve) return;
       openUrlPending.delete(data.requestId);
-      resolve(data.ok ? { ok: true } : { ok: false, error: data.error });
+      resolve(data.ok ? { ok: true } : { ok: false, error: netErrorText(data.error, 'The host refused to open that link.') });
     });
     function requestOpenUrl(url) {
       const safe = safeUnsubUrl(url);
@@ -968,7 +1159,7 @@ function useConnectedFetch() {
                     stroke="var(--accent)" strokeWidth="1.5" />
           ))}
           <text x={pad.left} y={height - 5} fontSize="10.5" fill="var(--faint)">
-            {weeks.length} weeks ago
+            {weeks.length === 1 ? 'a week ago' : weeks.length + ' weeks ago'}
           </text>
           <text x={width - pad.right} y={height - 5} fontSize="10.5" fill="var(--faint)" textAnchor="end">
             this week
@@ -1048,6 +1239,60 @@ function useConnectedFetch() {
       );
     }
 
+    /**
+     * Renders whatever shape `answerShape` decided on. The point of the split: the
+     * DECISION about what can honestly be shown is a pure function the suite can pin,
+     * and this component only draws it. A reply that names senders becomes rows with the
+     * app's own counts beside them; a reply that judges senders becomes verdicts with
+     * their reasons; anything else is prose. Nothing here can invent a row, because rows
+     * only exist if `answerShape` matched them against the mailbox.
+     */
+    function AnswerView({ shape }) {
+      if (!shape) return null;
+      if (shape.kind === 'prose') return <div className="prose">{shape.text}</div>;
+
+      const max = Math.max(1, ...shape.rows.map((row) => row.received));
+      return (
+        <React.Fragment>
+          {shape.text ? <div className="prose">{shape.text}</div> : null}
+          <div>
+            {shape.rows.map((row) => (
+              <div className="answerrow" key={row.sender}>
+                <div className="avatar" style={{ background: swatchFor(row.sender), width: 28, height: 28, fontSize: 12 }}>
+                  {initials(row.name)}
+                </div>
+                <div className="grow">
+                  <div className="sname">{row.name}</div>
+                  <div className="saddr">{row.sender}</div>
+                </div>
+                {shape.kind === 'verdicts' ? (
+                  <span className={'tag ' + (row.verdict === 'drop' ? 'alert' : row.verdict === 'keep' ? 'calm' : 'warn')}>
+                    {row.verdict}
+                  </span>
+                ) : (
+                  <div className="bar" aria-hidden="true">
+                    <i style={{
+                      width: ((row.received / max) * 100).toFixed(1) + '%',
+                      background: row.replied ? 'var(--calm)' : swatchFor(row.sender),
+                    }} />
+                  </div>
+                )}
+                <span className="tag">{row.received}</span>
+                {row.replied ? <span className="tag calm">you reply</span> : null}
+              </div>
+            ))}
+          </div>
+          {shape.kind === 'verdicts' ? (
+            <div className="legend">
+              {shape.rows.filter((row) => row.why).slice(0, 4).map((row) => (
+                <span key={row.sender}>{row.name}: {row.why}</span>
+              ))}
+            </div>
+          ) : null}
+        </React.Fragment>
+      );
+    }
+
     function Checkbox({ checked, onToggle, label }) {
       return (
         <button className="check" role="checkbox" aria-checked={checked} aria-label={label} onClick={onToggle}>
@@ -1070,6 +1315,12 @@ function useConnectedFetch() {
       const [tab, setTab] = useState('pulse');
       const [messages, setMessages] = useState(null);   // null = not loaded yet
       const [syncState, setSyncState] = useState({ phase: 'idle', fetched: 0, error: null });
+      // How far back Refresh reaches. Persisted through the host so the choice survives a
+      // reload — a person who works in six-month windows should not re-pick every time.
+      const [windowId, setWindowId] = usePersistedState('sync_window', DEFAULT_WINDOW);
+      // The connected account's own address, read from users/me/profile. Load-bearing for
+      // sending: without it every unsubscribe email leaves with no From and bounces.
+      const [account, setAccount] = useState(null);
       const [selected, setSelected] = useState(() => new Set());
       const [pendingPlan, setPendingPlan] = useState(null);
       const [runState, setRunState] = useState({ busy: false, note: null, error: null });
@@ -1091,7 +1342,10 @@ function useConnectedFetch() {
       }, [messages]);
 
       const rows = messages || [];
-      const weeks = useMemo(() => volumeByWeek(rows, { now, weeks: 12 }), [rows, now]);
+      const weeks = useMemo(
+        () => volumeByWeek(rows, { now, weeks: chartWeeks(isSample ? '90d' : windowId) }),
+        [rows, now, windowId, isSample],
+      );
       // Top six by volume, plus the loudest sender the user actually writes back to.
       // Volume alone would show seven broadcasters and no correspondents — which makes
       // the "you have replied" legend describe a colour nothing on screen is wearing,
@@ -1103,6 +1357,7 @@ function useConnectedFetch() {
         return replied ? [...head, replied] : ranked.slice(0, 7);
       }, [rows]);
       const mix = useMemo(() => categoryMix(rows), [rows]);
+      const allSenderStats = useMemo(() => senderStats(rows), [rows]);
       const flags = useMemo(() => neverRepliedFlags(rows, { now }), [rows, now]);
       const unsubs = useMemo(() => unsubscribeCandidates(rows, { now }), [rows, now]);
 
@@ -1122,16 +1377,33 @@ function useConnectedFetch() {
       // Metadata only: this app never asks for message bodies. It needs who wrote, when,
       // the subject line and the List-Unsubscribe header — and nothing it does not need
       // is a thing that can leak.
-      const sync = useCallback(async () => {
+      const sync = useCallback(async (requestedWindow) => {
+        const useWindow = typeof requestedWindow === 'string' ? requestedWindow : windowId;
         setSyncState({ phase: 'listing', fetched: 0, error: null });
         try {
+          // WHO AM I — resolved first, because sending depends on it. `users/me/profile`
+          // returns the connected account's own address, which is the only correct From
+          // for an unsubscribe email. A failure here is not fatal to the sync: reading the
+          // inbox still works, and the send path refuses rather than bouncing.
+          const profile = await net.fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile');
+          if (profile.ok) {
+            const parsedProfile = typeof profile.body === 'string' ? JSON.parse(profile.body) : profile.body;
+            if (parsedProfile && parsedProfile.emailAddress) setAccount(parsedProfile.emailAddress);
+          }
+
           const collected = [];
           let pageToken = null;
-          for (let page = 0; page < 5; page += 1) {
-            const url = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100&q=' +
-              encodeURIComponent('newer_than:90d') + (pageToken ? '&pageToken=' + pageToken : '');
+          // A wider window needs more pages; `all` needs the most. Each page is 100 ids
+          // and each id costs a metadata read, so this is the honest ceiling on a single
+          // Refresh rather than an unbounded walk of someone's entire mail history.
+          const maxPages = useWindow === 'all' ? 20 : useWindow === '1y' ? 12 : useWindow === '6m' ? 8 : 5;
+          for (let page = 0; page < maxPages; page += 1) {
+            const clause = windowQuery(useWindow);
+            const url = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100' +
+              (clause ? '&q=' + encodeURIComponent(clause) : '') +
+              (pageToken ? '&pageToken=' + pageToken : '');
             const listed = await net.fetch(url);
-            if (!listed.ok) throw new Error(listed.error || 'Gmail did not answer the message list.');
+            if (!listed.ok) throw new Error(netErrorText(listed.error, 'Gmail did not answer the message list.'));
             const body = typeof listed.body === 'string' ? JSON.parse(listed.body) : listed.body;
             const ids = (body.messages || []).map((entry) => entry.id);
             setSyncState({ phase: 'reading', fetched: collected.length, error: null });
@@ -1173,7 +1445,34 @@ function useConnectedFetch() {
           // The sample stays on screen: a failed sync should never blank the app.
           setSyncState({ phase: 'idle', fetched: 0, error: String(error.message || error) });
         }
-      }, [net]);
+      }, [net, windowId]);
+
+      /**
+       * The host says a connection was VERIFIED and this app's data is stale
+       * (TASK-20260819-inbox-copilot-fixes). Fires when someone finishes the connection
+       * wizard and asks for their real data — the moment where, before this, the app kept
+       * rendering sample data with nothing admitting it had not caught up.
+       *
+       * Hand-rolled OUTSIDE the byte-locked hooks block, the same way the open-url bridge
+       * is, and shape-gated defensively: a host-event frame carries no `instanceId`, so
+       * the listener cannot verify the sender and must treat the frame as a HINT. It
+       * carries no data and none is read — the only response is to re-fetch through the
+       * governed seam, where the host's own rules still apply.
+       */
+      useEffect(() => {
+        const onHostEvent = (event) => {
+          const data = event.data;
+          if (!data || data.v !== 1 || data.type !== 'snug:host-event') return;
+          if (data.event !== 'connection-event') return;
+          const payload = data.data;
+          // Slot-filtered: an app can hold more than one connection, and a signal about
+          // someone else's is not a reason to re-read the mailbox.
+          if (!payload || payload.slot !== 'gmail' || !payload.requestRefresh) return;
+          void sync();
+        };
+        window.addEventListener('message', onHostEvent);
+        return () => window.removeEventListener('message', onHostEvent);
+      }, [sync]);
 
       // ── Governed writes ─────────────────────────────────────────────────────
       // Nothing here runs without a plan on screen first. `pendingPlan` is both the
@@ -1205,7 +1504,7 @@ function useConnectedFetch() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(pendingPlan.body),
             });
-            if (!created.ok) throw new Error(created.error || 'Gmail refused the filter.');
+            if (!created.ok) throw new Error(netErrorText(created.error, 'Gmail refused the filter.'));
           } else {
             for (const chunk of pendingPlan.chunks) {
               const done = await net.fetch('https://gmail.googleapis.com' + pendingPlan.path, {
@@ -1213,7 +1512,7 @@ function useConnectedFetch() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(Object.assign({ ids: chunk }, pendingPlan.body)),
               });
-              if (!done.ok) throw new Error(done.error || 'Gmail refused part of the cleanup.');
+              if (!done.ok) throw new Error(netErrorText(done.error, 'Gmail refused part of the cleanup.'));
             }
           }
           const touched = pendingPlan.messageIds.length;
@@ -1242,7 +1541,7 @@ function useConnectedFetch() {
           const opened = await requestOpenUrl(candidate.target);
           setRunState(opened.ok
             ? { busy: false, error: null, note: 'Opened ' + candidate.name + '’s unsubscribe page in your browser.' }
-            : { busy: false, note: null, error: opened.error });
+            : { busy: false, note: null, error: netErrorText(opened.error, 'The link could not be opened.') });
           return;
         }
         if (candidate.channel === 'mailto') {
@@ -1252,20 +1551,39 @@ function useConnectedFetch() {
           }
           setRunState({ busy: true, note: null, error: null });
           try {
-            const raw = ['To: ' + candidate.target, 'Subject: ' + (candidate.subject || 'unsubscribe'), '', 'Unsubscribe.'].join('\r\n');
-            const encoded = btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+            // The From header is what makes this deliverable. Without the connected
+            // account's own address Gmail accepts the send and the receiving server
+            // bounces it — the user believes they unsubscribed and nothing happened.
+            // `buildUnsubscribeRaw` returns null rather than building a header-less
+            // message, so the failure is visible here instead of silent in a mailbox.
+            const encoded = buildUnsubscribeRaw({
+              from: account,
+              to: candidate.target,
+              subject: candidate.subject || 'unsubscribe',
+            });
+            if (encoded === null) {
+              throw new Error(
+                account
+                  ? 'That unsubscribe address does not look like a real address.'
+                  : 'Still working out which account you are signed in as — hit Refresh once, then try again.',
+              );
+            }
             const sent = await net.fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ raw: encoded }),
             });
-            if (!sent.ok) throw new Error(sent.error || 'Gmail refused to send the unsubscribe email.');
-            setRunState({ busy: false, error: null, note: 'Unsubscribe email sent to ' + candidate.target + '.' });
+            if (!sent.ok) throw new Error(netErrorText(sent.error, 'Gmail refused to send the unsubscribe email.'));
+            setRunState({
+              busy: false,
+              error: null,
+              note: 'Unsubscribe email sent to ' + candidate.target + ' from ' + account + '.',
+            });
           } catch (error) {
             setRunState({ busy: false, note: null, error: String(error.message || error) });
           }
         }
-      }, [isSample, net]);
+      }, [isSample, net, account]);
 
       // ── The agent ───────────────────────────────────────────────────────────
       const askAgent = useCallback(async (kind, extra) => {
@@ -1284,7 +1602,7 @@ function useConnectedFetch() {
           responseSchema: RESPONSE_SCHEMA,
         });
         if (!result.ok) {
-          setAgent((current) => Object.assign({}, current, { busy: false, error: result.error || 'The assistant could not be reached.' }));
+          setAgent((current) => Object.assign({}, current, { busy: false, error: netErrorText(result.error, 'The assistant could not be reached.') }));
           return null;
         }
         const data = result.data || {};
@@ -1322,15 +1640,15 @@ function useConnectedFetch() {
       const runAnswer = useCallback(async () => {
         const text = question.trim();
         if (!text) return;
-        setAnswer({ pending: true, text: null });
+        setAnswer({ pending: true, shape: null });
         const data = await askAgent('answer', { text });
-        setAnswer({
-          pending: false,
-          text: data && typeof data.answer === 'string' && data.answer
-            ? data.answer
-            : 'I could not answer that one from the inbox summary I have. Try asking about your top senders, what to unsubscribe from, or what is filling your inbox.',
-        });
-      }, [askAgent, question]);
+        // The reply is turned into a RENDERABLE SHAPE against the app's own numbers, not
+        // pasted as prose. `answerShape` will only promise a table when it can confirm
+        // every row against the mailbox it already read — an agent naming an address that
+        // was never there degrades the whole reply to prose rather than rendering
+        // authoritative-looking rows with nothing behind them.
+        setAnswer({ pending: false, shape: answerShape(data, { senderStats: allSenderStats }) });
+      }, [askAgent, question, allSenderStats]);
 
       // Local fallback suggestions — the app is useful with no agent at all (ADR-0011).
       const LOCAL_SUGGESTIONS = (flagged, unsubscribable) => {
@@ -1376,6 +1694,7 @@ function useConnectedFetch() {
       }
 
       const connected = syncState.phase === 'live';
+      const busySync = syncState.phase === 'listing' || syncState.phase === 'reading';
 
       return (
         <div className="wrap">
@@ -1386,17 +1705,39 @@ function useConnectedFetch() {
                 <h1>Inbox Copilot</h1>
                 <div className="sub">
                   {connected
-                    ? syncState.fetched + ' emails from the last 90 days'
+                    ? syncState.fetched + ' emails from the ' + (SYNC_WINDOWS.find((w) => w.id === windowId) || {}).label +
+                      (account ? ' · ' + account : '')
                     : 'Sample inbox — connect Gmail to run this on your own mail'}
                 </div>
               </div>
             </div>
             <div className="spacer" />
-            <button className="btn primary" onClick={sync} disabled={syncState.phase === 'listing' || syncState.phase === 'reading'}>
-              {syncState.phase === 'listing' || syncState.phase === 'reading'
-                ? <span><span className="spin">{'◌'}</span> reading {syncState.fetched}</span>
-                : connected ? 'Refresh' : 'Connect Gmail'}
-            </button>
+            {/*
+              How far back Refresh reaches. Ninety days is the default because it is long
+              enough for a pattern and short enough to finish; the wider windows cost real
+              time (each message is its own metadata read), so the label says what it is
+              rather than hiding the tradeoff behind a spinner.
+            */}
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <div className="windowpick" role="group" aria-label="How far back to read">
+                {SYNC_WINDOWS.map((option) => (
+                  <button
+                    key={option.id}
+                    className="btn small"
+                    aria-pressed={windowId === option.id}
+                    onClick={() => setWindowId(option.id)}
+                    disabled={busySync}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <button className="btn primary" onClick={() => sync()} disabled={busySync}>
+                {busySync
+                  ? <span><span className="spin">{'◌'}</span> reading {syncState.fetched}</span>
+                  : connected ? 'Refresh' : 'Connect Gmail'}
+              </button>
+            </div>
           </div>
 
           {isSample ? (
@@ -1479,7 +1820,10 @@ function useConnectedFetch() {
 
               <div className="card">
                 <h2>Where your inbox is heading</h2>
-                <p className="hint">Twelve weeks of arrivals. The line is what a person feels as "my inbox is getting worse".</p>
+                <p className="hint">
+                  {weeks.length} {weeks.length === 1 ? 'week' : 'weeks'} of arrivals — the line is what a
+                  person feels as "my inbox is getting worse".
+                </p>
                 <TrendChart weeks={weeks} />
               </div>
 
@@ -1523,8 +1867,8 @@ function useConnectedFetch() {
                   <button className="btn" onClick={runAnswer} disabled={agent.busy || !question.trim()}>Ask</button>
                 </div>
                 {answer ? (
-                  <div className="hint" style={{ marginTop: 10, marginBottom: 0 }}>
-                    {answer.pending ? <span className="spin">{'◌'}</span> : answer.text}
+                  <div className="answer">
+                    {answer.pending ? <span className="spin">{'◌'}</span> : <AnswerView shape={answer.shape} />}
                   </div>
                 ) : null}
                 {agent.error ? <div className="hint" style={{ marginTop: 8, color: 'var(--alert)' }}>{agent.error}</div> : null}
