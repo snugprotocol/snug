@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-const SAMPLE_APPS = ['spotify', 'trade-copilot', 'hue', 'whatsapp'];
+const SAMPLE_APPS = ['spotify', 'trade-copilot', 'hue', 'whatsapp', 'gmail'];
 
 // Ledger predates the marker convention (its sample seam is locked by
 // ledger-analysis.test.mjs), but its authoring set is the docs floor for everyone.

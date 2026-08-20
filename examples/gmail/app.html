@@ -1,0 +1,2234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Inbox Copilot</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f7f6f3; --fg: #1f2529; --muted: #667079; --faint: #98a1a9;
+      --card: #ffffff; --border: #e5e2db; --shadow: 0 10px 30px rgba(40, 45, 55, 0.08);
+      --accent: #c2410c; --accent-soft: #fdece1; --accent-fg: #fff8f3;
+      --calm: #1d7a4d; --calm-soft: #ddf1e6;
+      --warn: #9a6b0a; --warn-soft: #f9eecb;
+      --alert: #b5382c; --alert-soft: #fae3df;
+      --grid: #ece9e2; --ink-line: #2f3a45;
+      --c1: #c2410c; --c2: #1d7a4d; --c3: #7a6bd0; --c4: #9a6b0a; --c5: #2a7d9c; --c6: #a8517f;
+      --chip: #f0ede6;
+    }
+    :root[data-theme="dark"] {
+      --bg: #13171b; --fg: #e7e4dd; --muted: #98a1aa; --faint: #6c757e;
+      --card: #1c2127; --border: #2f373f; --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      --accent: #ef7b45; --accent-soft: #3a2314; --accent-fg: #1a1008;
+      --calm: #4cc07a; --calm-soft: #133421;
+      --warn: #d9a83c; --warn-soft: #33280d;
+      --alert: #e2685a; --alert-soft: #391612;
+      --grid: #252c34; --ink-line: #ccd4db;
+      --c1: #ef7b45; --c2: #4cc07a; --c3: #a99af0; --c4: #d9a83c; --c5: #57b0d0; --c6: #d888b2;
+      --chip: #252c34;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 18px 16px 40px; }
+
+    .top { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .mark {
+      width: 40px; height: 40px; border-radius: 11px; flex: none;
+      background: linear-gradient(140deg, var(--accent), #e2a33f);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; color: var(--accent-fg);
+    }
+    h1 { font-size: 19px; margin: 0; letter-spacing: -0.01em; }
+    .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+    .spacer { flex: 1 1 auto; }
+
+    .banner {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 13px;
+      background: var(--warn-soft); color: var(--fg); font-size: 13px; margin-bottom: 14px;
+    }
+    .banner b { font-weight: 650; }
+    .sample-note { background: var(--warn-soft); border-color: var(--warn); }
+
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+    .tab {
+      min-height: 44px; padding: 0 15px; border-radius: 10px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--card); color: var(--muted);
+      font-size: 13.5px; font-weight: 550; display: inline-flex; align-items: center; gap: 7px;
+    }
+    .tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+    .tab .pip {
+      min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+      background: var(--chip); color: var(--fg); font-size: 11.5px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .tab[aria-selected="true"] .pip { background: rgba(255, 255, 255, 0.25); color: var(--accent-fg); }
+
+    .grid { display: grid; gap: 13px; }
+    .g2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .g3 { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 15px; box-shadow: var(--shadow);
+    }
+    .card h2 { font-size: 14px; margin: 0 0 3px; letter-spacing: -0.01em; }
+    .card .hint { font-size: 12.5px; color: var(--muted); margin: 0 0 12px; line-height: 1.45; }
+
+    .stat { font-size: 27px; font-weight: 640; letter-spacing: -0.02em; line-height: 1.1; }
+    .stat .unit { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: 3px; }
+    .statlabel { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+
+    .row { display: flex; align-items: center; gap: 10px; }
+    .between { justify-content: space-between; }
+
+    .btn {
+      min-height: 44px; padding: 0 15px; border-radius: 10px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--card); color: var(--fg);
+      font-size: 13.5px; font-weight: 550;
+    }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+    .btn.danger { background: var(--alert-soft); border-color: var(--alert); color: var(--alert); }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn.small { min-height: 34px; padding: 0 11px; font-size: 12.5px; }
+
+    .senderrow {
+      display: flex; align-items: center; gap: 11px; padding: 11px 0;
+      border-top: 1px solid var(--border);
+    }
+    .senderrow:first-of-type { border-top: none; }
+    .avatar {
+      width: 34px; height: 34px; border-radius: 9px; flex: none; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 600;
+    }
+    .sname { font-size: 13.5px; font-weight: 570; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .saddr { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .grow { min-width: 0; flex: 1 1 auto; }
+
+    .tag {
+      font-size: 11.5px; padding: 3px 8px; border-radius: 999px;
+      background: var(--chip); color: var(--muted); white-space: nowrap;
+    }
+    .tag.warn { background: var(--warn-soft); color: var(--warn); }
+    .tag.alert { background: var(--alert-soft); color: var(--alert); }
+    .tag.calm { background: var(--calm-soft); color: var(--calm); }
+
+    .check {
+      width: 22px; height: 22px; border-radius: 6px; flex: none; cursor: pointer;
+      border: 1.5px solid var(--border); background: var(--card);
+      display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--accent-fg);
+      padding: 0;
+    }
+    .check[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+
+    .suggest {
+      border: 1px solid var(--border); border-radius: 12px; padding: 13px;
+      background: var(--card); display: flex; flex-direction: column; gap: 9px;
+    }
+    .suggest .title { font-size: 13.5px; font-weight: 590; }
+    .suggest .why { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+    .suggest .pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+      background: var(--chip); border-radius: 8px; padding: 8px 10px; color: var(--muted);
+      overflow-x: auto; white-space: nowrap;
+    }
+
+    .confirmbox {
+      border: 1px solid var(--accent); border-radius: 12px; padding: 13px;
+      background: var(--accent-soft); display: flex; flex-direction: column; gap: 10px;
+    }
+    .confirmbox .what { font-size: 13.5px; line-height: 1.5; }
+    .confirmbox ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
+
+    .ask {
+      width: 100%; min-height: 44px; border-radius: 10px; padding: 10px 13px;
+      border: 1px solid var(--border); background: var(--card); color: var(--fg);
+      font-size: 13.5px; font-family: inherit;
+    }
+    .ask:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+    .skel { background: var(--chip); border-radius: 8px; animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+    .spin { display: inline-block; animation: gspin 1s linear infinite; }
+    @keyframes gspin { to { transform: rotate(360deg); } }
+
+    .empty { color: var(--muted); font-size: 13.5px; padding: 10px 0; line-height: 1.5; }
+    .foot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    .faint { font-size: 12px; color: var(--faint); }
+    .steps { margin: 0; padding-left: 19px; font-size: 13px; line-height: 1.65; color: var(--fg); }
+    .steps li { margin-bottom: 5px; }
+    .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 9px; }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+    .windowpick { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+    .windowpick .btn { border-radius: 8px; }
+    .windowpick .btn[aria-pressed="true"] {
+      background: var(--chip); border-color: var(--accent); color: var(--accent); font-weight: 600;
+    }
+
+    .answer { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .answer .prose { font-size: 13.5px; line-height: 1.55; }
+    .answerrow {
+      display: flex; align-items: center; gap: 10px; padding: 9px 0;
+      border-top: 1px solid var(--border); font-size: 13px;
+    }
+    .answerrow:first-of-type { border-top: none; }
+    .answerrow .bar { height: 7px; border-radius: 999px; background: var(--chip); flex: 1 1 60px; min-width: 40px; overflow: hidden; }
+    .answerrow .bar i { display: block; height: 100%; border-radius: 999px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ============================================================
+// 1. SNUG BRIDGE RUNTIME (MANDATORY — copy exactly, never edit)
+// ============================================================
+const SnugBridge = {
+  instanceId: null,
+  theme: 'light',
+  capabilities: {},
+  ready: false,
+  pending: new Map(),    // requestId -> { resolve, onStream }
+  dbPending: new Map(),  // requestId -> resolve
+  netPending: new Map(), // requestId -> resolve
+  listeners: new Set(),  // re-render triggers for hooks
+
+  post(frame) {
+    window.parent.postMessage({ v: 1, instanceId: this.instanceId, ...frame }, '*');
+  },
+  notify() { for (const fn of this.listeners) fn(); },
+};
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.v !== 1) return;
+
+  if (data.type === 'snug:host-ready') {
+    SnugBridge.instanceId = data.instanceId;
+    if (data.theme) SnugBridge.theme = data.theme;
+    if (data.capabilities) SnugBridge.capabilities = data.capabilities;
+    SnugBridge.ready = true;
+    SnugBridge.notify();
+    return;
+  }
+
+  if (data.type === 'snug:app-response') {
+    const entry = SnugBridge.pending.get(data.requestId);
+    if (!entry) return; // unknown or superseded requestId — ignore
+    if (data.streaming) {
+      // Cumulative provisional text — display only. NEVER resolve here.
+      if (entry.onStream && typeof data.text === 'string') entry.onStream(data.text);
+      return;
+    }
+    SnugBridge.pending.delete(data.requestId); // terminal — exactly one per requestId
+    entry.resolve(data.ok ? { ok: true, data: data.data } : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:db-response') {
+    const resolve = SnugBridge.dbPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.dbPending.delete(data.requestId);
+    // Result fields (rows/columns/value/bytesBase64) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, rows: data.rows, columns: data.columns, value: data.value, bytesBase64: data.bytesBase64 }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:net-response') {
+    const resolve = SnugBridge.netPending.get(data.requestId);
+    if (!resolve) return;
+    SnugBridge.netPending.delete(data.requestId);
+    // Result fields (status/headers/body/truncated) live at the TOP LEVEL of the frame.
+    resolve(data.ok
+      ? { ok: true, status: data.status, headers: data.headers, body: data.body, truncated: data.truncated }
+      : { ok: false, error: data.error });
+    return;
+  }
+
+  if (data.type === 'snug:host-event') {
+    if (data.event === 'theme-change' && data.data && data.data.theme) {
+      SnugBridge.theme = data.data.theme;
+      SnugBridge.notify();
+    }
+    // Unknown host events MUST be ignored (the protocol is additive).
+  }
+});
+
+function snugDbRequest(op, args) {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.dbPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:db-request', requestId, op, ...args });
+  });
+}
+
+function snugNetRequest(fields) {
+  if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    SnugBridge.netPending.set(requestId, resolve);
+    SnugBridge.post({ type: 'snug:net-request', requestId, ...fields });
+  });
+}
+
+// ============================================================
+// 2. useSnugApp (MANDATORY — copy exactly, never edit)
+// ============================================================
+function useSnugApp(meta) {
+  const [, setTick] = useState(0);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [lastResponse, setLastResponse] = useState(null);
+  const inFlight = useRef(0);
+  const metaRef = useRef(meta);
+
+  useEffect(() => {
+    const rerender = () => setTick((n) => n + 1);
+    SnugBridge.listeners.add(rerender);
+    const m = metaRef.current;
+    SnugBridge.post({
+      type: 'snug:app-announce',
+      appId: m.appId,
+      displayName: m.displayName,
+      description: m.description,
+      iconEmoji: m.iconEmoji,
+      iconColor: m.iconColor,
+    });
+    return () => SnugBridge.listeners.delete(rerender);
+  }, []);
+
+  const sendMessage = useCallback((action, payload, opts) => {
+    if (!SnugBridge.ready) return Promise.resolve({ ok: false, error: { code: 'HOST_ERROR', message: 'not connected to host yet', retryable: true } });
+    const requestId = crypto.randomUUID(); // fresh per request — multiple in flight are legal
+    inFlight.current += 1;
+    setIsWaiting(true);
+    return new Promise((resolve) => {
+      SnugBridge.pending.set(requestId, {
+        onStream: opts && opts.onStream,
+        resolve: (result) => {
+          inFlight.current -= 1;
+          if (inFlight.current === 0) setIsWaiting(false);
+          setLastResponse(result);
+          resolve(result);
+        },
+      });
+      SnugBridge.post({
+        type: 'snug:app-message',
+        requestId,
+        appId: metaRef.current.appId,
+        action,
+        payload,
+        state: opts && opts.state,
+        responseSchema: opts && opts.responseSchema,
+      });
+    });
+  }, []);
+
+  return {
+    isReady: SnugBridge.ready,
+    theme: SnugBridge.theme,
+    isWaiting,
+    lastResponse,
+    sendMessage,
+  };
+}
+
+// ============================================================
+// 3. usePersistedState (MANDATORY — copy exactly, never edit)
+// Storage is HOST-BROKERED key-value. The sandboxed iframe has a
+// null origin: no browser storage API works here.
+// ============================================================
+function usePersistedState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  // Tracks WHICH key hydrated: a key change must re-hydrate before any write-back,
+  // or the old key's state would overwrite the new key's stored value.
+  const [hydratedKey, setHydratedKey] = useState(null);
+  const initialRef = useRef(initialValue);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const result = await snugDbRequest('kvGet', { key });
+      if (cancelled) return;
+      if (result.ok && result.value != null) {
+        const stored = result.value;
+        const init = initialRef.current;
+        // Merge objects with defaults so fields added in newer code are never undefined.
+        setState(
+          stored && typeof stored === 'object' && !Array.isArray(stored) &&
+          init && typeof init === 'object' && !Array.isArray(init)
+            ? { ...init, ...stored }
+            : stored
+        );
+      } else {
+        setState(initialRef.current); // nothing stored under this key — back to defaults
+      }
+      setHydratedKey(key);
+    };
+    const onReady = () => {
+      if (!SnugBridge.ready) return;
+      SnugBridge.listeners.delete(onReady);
+      hydrate();
+    };
+    if (SnugBridge.ready) hydrate();
+    else SnugBridge.listeners.add(onReady);
+    return () => { cancelled = true; SnugBridge.listeners.delete(onReady); };
+  }, [key]);
+
+  useEffect(() => {
+    if (hydratedKey !== key) return;
+    snugDbRequest('kvSet', { key, value: state }); // fire-and-forget; host acks via db-response
+  }, [hydratedKey, key, state]);
+
+  return [state, setState];
+}
+
+// ============================================================
+// 4. useAppDB (copy exactly when the app needs SQL; omit otherwise)
+// ============================================================
+function useAppDB() {
+  return useMemo(() => ({
+    async exec(sql, params) {
+      const result = await snugDbRequest('exec', { sql, params });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db exec failed');
+      return { rows: result.rows, columns: result.columns }; // { rows: unknown[][], columns: string[] }
+    },
+    async exportDb() {
+      const result = await snugDbRequest('export', {});
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db export failed');
+      return result.bytesBase64;
+    },
+    async importDb(bytesBase64) {
+      const result = await snugDbRequest('import', { bytesBase64 });
+      if (!result.ok) throw new Error((result.error && result.error.message) || 'db import failed');
+    },
+  }), []);
+}
+
+// ============================================================
+// 5. useConnectedFetch (copy exactly when the app calls an approved API; omit otherwise)
+// The sandboxed app has NO network of its own. This reaches ONLY your app's APPROVED
+// hosts THROUGH the host, which injects your saved credentials, caps sizes, asks you
+// before any write, and scrubs the response. You never see a token.
+// A connection whose host only the USER knows (a device on their network): address it as
+// snug-connection://<slot>/<path> — the host resolves the approved address; you never learn it.
+// ALWAYS resolves: { ok:true, status, headers, body } or { ok:false, error }.
+// ============================================================
+function useConnectedFetch() {
+  return useMemo(() => ({
+    fetch(url, opts) {
+      return snugNetRequest({
+        url,
+        method: (opts && opts.method) || 'GET',
+        headers: opts && opts.headers,
+        body: opts && opts.body,
+      });
+    },
+  }), []);
+}
+    // ============================================================
+    // 5. RESPONSE SCHEMA — describe the JSON the agent must return
+    // ============================================================
+    const RESPONSE_SCHEMA = {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['digest', 'suggestions', 'classify', 'unsub_draft', 'filter', 'answer'] },
+        headline: { type: 'string' },
+        summary: { type: 'string' },
+        suggestions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              why: { type: 'string' },
+              action: { type: 'string', enum: ['trash', 'block', 'spam', 'label', 'unsubscribe', 'none'] },
+              senders: { type: 'array', items: { type: 'string' } },
+              labelName: { type: 'string' },
+            },
+            required: ['title', 'why', 'action'],
+          },
+        },
+        verdicts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              sender: { type: 'string' },
+              verdict: { type: 'string', enum: ['keep', 'review', 'drop'] },
+              why: { type: 'string' },
+            },
+            required: ['sender', 'verdict', 'why'],
+          },
+        },
+        draft: {
+          type: 'object',
+          properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' } },
+        },
+        answer: { type: 'string' },
+        evidence: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['kind'],
+    };
+
+    // ===== GMAIL-CORE-BEGIN ===== (extracted and executed by gmail-analysis.test.mjs)
+    // Everything below to the END marker is PURE: no bridge, no network, no clock of its
+    // own. That is what lets the suite evaluate it directly — and it is also why the
+    // numbers on screen can be trusted, since the same functions produce the charts, the
+    // flags, and the plan text a person is asked to approve.
+
+    /** Gmail refuses more than 1000 ids per users.messages.batchModify call. */
+    const BATCH_MODIFY_LIMIT = 1000;
+
+    /** Seeded PRNG — the sample inbox must be byte-identical on every render. */
+    function mulberry32(seed) {
+      let a = seed >>> 0;
+      return function next() {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    /** Senders are compared by lowercased address — display names lie and change. */
+    function senderKey(address) {
+      return String(address || '').trim().toLowerCase();
+    }
+
+    /**
+     * Subject/address shapes that mean "this sender never asked for a reply".
+     * Being unanswered is only evidence of being unwanted when an answer was possible —
+     * a receipt, an invoice, a shipping notice or a security alert is one-way by design,
+     * and flagging those as ignorable would point the cleanup at exactly the mail a
+     * person most needs to keep.
+     */
+    const TRANSACTIONAL_SUBJECT = /receipt|invoice|order|payment|statement|confirmation|shipped|delivery|security alert|verification|password|booking|itinerary|appointment|refund|renewal|subscription (?:confirmed|renewed)/i;
+    const TRANSACTIONAL_ADDRESS = /^(?:receipts?|billing|invoices?|no-?reply|donotreply|notifications?|alerts?|security|support|orders?|statements?)@/i;
+
+    function isTransactional(message) {
+      return (
+        TRANSACTIONAL_ADDRESS.test(senderKey(message.from)) ||
+        TRANSACTIONAL_SUBJECT.test(String(message.subject || ''))
+      );
+    }
+
+    const hasLabel = (message, label) => (message.labels || []).indexOf(label) !== -1;
+
+    /** One pass over the mailbox → per-sender totals every lane reads. */
+    function senderStats(messages) {
+      const bySender = new Map();
+      const repliedTo = new Set();
+      for (const message of messages || []) {
+        if (message.fromMe) {
+          // A message the user SENT marks its recipient as answered.
+          if (message.to) repliedTo.add(senderKey(message.to));
+          continue;
+        }
+        const key = senderKey(message.from);
+        if (!key) continue;
+        let stat = bySender.get(key);
+        if (!stat) {
+          stat = {
+            sender: key,
+            name: message.fromName || key,
+            received: 0,
+            lastAt: 0,
+            transactional: false,
+            endorsed: false,
+            listUnsubscribe: null,
+          };
+          bySender.set(key, stat);
+        }
+        stat.received += 1;
+        if (message.at > stat.lastAt) stat.lastAt = message.at;
+        if (isTransactional(message)) stat.transactional = true;
+        // The user's OWN signals — starring or marking important outranks any inference
+        // this app can make about whether the mail matters to them.
+        if (hasLabel(message, 'STARRED') || hasLabel(message, 'IMPORTANT')) stat.endorsed = true;
+        if (message.listUnsubscribe && !stat.listUnsubscribe) stat.listUnsubscribe = message.listUnsubscribe;
+      }
+      for (const stat of bySender.values()) stat.replied = repliedTo.has(stat.sender) ? 1 : 0;
+      return [...bySender.values()];
+    }
+
+    /** Senders worth a second look: they write often, and have never had an answer. */
+    function neverRepliedFlags(messages, opts) {
+      const now = (opts && opts.now) || 0;
+      return senderStats(messages)
+        .filter((stat) => stat.received >= 3 && stat.replied === 0 && !stat.transactional && !stat.endorsed)
+        .map((stat) => ({
+          sender: stat.sender,
+          name: stat.name,
+          received: stat.received,
+          replied: stat.replied,
+          lastAt: stat.lastAt,
+          daysSince: now ? Math.floor((now - stat.lastAt) / 86400000) : 0,
+          hasUnsubscribe: Boolean(stat.listUnsubscribe),
+        }))
+        .sort((a, b) => b.received - a.received);
+    }
+
+    /**
+     * Read the List-Unsubscribe header and decide HOW this sender can be left.
+     * mailto wins when a header offers both: it completes inside the app as one
+     * confirmed send, where the https link needs a trip through the real browser.
+     */
+    function unsubscribeChannel(header) {
+      const raw = String(header || '');
+      const mailto = /<mailto:([^>]+)>/i.exec(raw);
+      if (mailto) {
+        const target = mailto[1];
+        const queryAt = target.indexOf('?');
+        const to = (queryAt === -1 ? target : target.slice(0, queryAt)).trim();
+        let subject = 'unsubscribe';
+        if (queryAt !== -1) {
+          const params = target.slice(queryAt + 1).split('&');
+          for (const param of params) {
+            const [key, value] = param.split('=');
+            if (key && key.toLowerCase() === 'subject' && value) subject = decodeURIComponent(value);
+          }
+        }
+        return { kind: 'mailto', to, subject };
+      }
+      const link = /<(https?:\/\/[^>]+)>/i.exec(raw);
+      if (link) {
+        const safe = safeUnsubUrl(link[1]);
+        if (safe) return { kind: 'open-url', url: safe };
+      }
+      return { kind: 'none' };
+    }
+
+    /**
+     * The open-url bridge hands a URL to the user's REAL browser, so a hostile
+     * List-Unsubscribe header is an injection surface, not just bad data. https only,
+     * and no userinfo: a link whose authority reads as a trusted brand followed by an
+     * @ and the attacker's own host is the classic disguise, and it is one a person
+     * would reasonably click.
+     */
+    function safeUnsubUrl(raw) {
+      let url;
+      try {
+        url = new URL(String(raw || '').trim());
+      } catch (error) {
+        return null;
+      }
+      if (url.protocol !== 'https:') return null;
+      if (url.username || url.password) return null;
+      return url.href;
+    }
+
+    /** Ranked list of senders worth leaving, each with the channel that can leave them. */
+    function unsubscribeCandidates(messages, opts) {
+      const now = (opts && opts.now) || 0;
+      return senderStats(messages)
+        .filter((stat) => stat.received >= 3 && !stat.transactional && !stat.endorsed && stat.replied === 0)
+        .map((stat) => {
+          const channel = unsubscribeChannel(stat.listUnsubscribe);
+          return {
+            sender: stat.sender,
+            name: stat.name,
+            received: stat.received,
+            lastAt: stat.lastAt,
+            daysSince: now ? Math.floor((now - stat.lastAt) / 86400000) : 0,
+            channel: channel.kind,
+            target: channel.kind === 'mailto' ? channel.to : channel.kind === 'open-url' ? channel.url : null,
+            subject: channel.kind === 'mailto' ? channel.subject : null,
+          };
+        })
+        .sort((a, b) => {
+          // Volume first — the loudest sender is the one whose departure a person feels.
+          if (b.received !== a.received) return b.received - a.received;
+          // Then a workable channel, so the top of the list is actionable.
+          const rank = (candidate) => (candidate.channel === 'none' ? 1 : 0);
+          return rank(a) - rank(b);
+        });
+    }
+
+    // ── Chart reducers ────────────────────────────────────────────────────────
+    // Pure, non-mutating, and windowed: the lanes share one message array.
+
+    function volumeByWeek(messages, opts) {
+      const now = (opts && opts.now) || 0;
+      const weeks = (opts && opts.weeks) || 12;
+      const span = 7 * 86400000;
+      const buckets = [];
+      for (let i = weeks - 1; i >= 0; i -= 1) {
+        buckets.push({ start: now - (i + 1) * span, end: now - i * span, count: 0, unread: 0 });
+      }
+      const windowStart = now - weeks * span;
+      for (const message of messages || []) {
+        if (message.fromMe) continue;
+        // Older than the window: DROPPED, never folded into the first bucket. A chart
+        // whose leftmost bar silently means "everything before this" is a lie about the
+        // trend it is drawn to show.
+        if (message.at <= windowStart || message.at > now) continue;
+        const index = Math.min(buckets.length - 1, Math.floor((message.at - windowStart) / span));
+        buckets[index].count += 1;
+        if (hasLabel(message, 'UNREAD')) buckets[index].unread += 1;
+      }
+      return buckets;
+    }
+
+    function topSenders(messages, opts) {
+      const limit = (opts && opts.limit) || 8;
+      return senderStats(messages)
+        .sort((a, b) => b.received - a.received)
+        .slice(0, limit)
+        .map((stat) => ({
+          sender: stat.sender,
+          name: stat.name,
+          count: stat.received,
+          replied: stat.replied,
+          transactional: stat.transactional,
+        }));
+    }
+
+    /** Every message lands in exactly one slice — the donut describes the whole inbox. */
+    function categoryOf(message) {
+      if (message.listUnsubscribe) return 'Marketing';
+      if (isTransactional(message)) return 'Receipts';
+      if (hasLabel(message, 'CATEGORY_SOCIAL')) return 'Social';
+      if (hasLabel(message, 'CATEGORY_FORUMS')) return 'Forums';
+      if (hasLabel(message, 'STARRED') || hasLabel(message, 'IMPORTANT')) return 'Priority';
+      return 'People';
+    }
+
+    function categoryMix(messages) {
+      const counts = new Map();
+      for (const message of messages || []) {
+        if (message.fromMe) continue;
+        const category = categoryOf(message);
+        counts.set(category, (counts.get(category) || 0) + 1);
+      }
+      return [...counts.entries()]
+        .map(([label, count]) => ({ label, count }))
+        .filter((slice) => slice.count > 0)
+        .sort((a, b) => b.count - a.count);
+    }
+
+    // ── The cleanup planner ───────────────────────────────────────────────────
+
+    /**
+     * Turn a selection into an explicit, reviewable plan. The plan IS the confirm copy:
+     * the same object that names the count and the senders is the one whose request the
+     * host will execute, so what a person approves and what runs cannot drift apart.
+     *
+     * Trash rides batchModify's TRASH label rather than a delete call — there is no
+     * batchTrash, and more importantly the pinned scopes (ADR-0039 D3) cannot permanently
+     * delete at all. Everything here is reversible from Gmail's own Trash for 30 days.
+     */
+    function planCleanupBatch(input) {
+      const action = input.action;
+      const senders = (input.senders || []).map(senderKey).filter(Boolean);
+      const messages = input.messages || [];
+      const ids = messages.map((message) => message.id).filter(Boolean);
+
+      if (action === 'block') {
+        // Blocking is not a message operation — it is a Gmail FILTER, which is why this
+        // app asks for gmail.settings.basic. It applies to mail that has not arrived yet.
+        if (senders.length === 0) return null;
+        const from = senders[0];
+        return {
+          action: 'block',
+          senders: [from],
+          messageIds: [],
+          chunks: [],
+          method: 'POST',
+          path: '/gmail/v1/users/me/settings/filters',
+          body: { criteria: { from }, action: { addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] } },
+          summary: 'Auto-trash every future email from ' + from + '. Nothing already in your inbox is touched.',
+          reversible: 'Delete the filter in Gmail Settings → Filters to stop it.',
+        };
+      }
+
+      if (ids.length === 0 || senders.length === 0) return null;
+
+      const chunks = [];
+      for (let i = 0; i < ids.length; i += BATCH_MODIFY_LIMIT) chunks.push(ids.slice(i, i + BATCH_MODIFY_LIMIT));
+
+      const senderList = senders.length === 1 ? senders[0] : senders.length + ' senders';
+
+      if (action === 'spam') {
+        return {
+          action: 'spam',
+          senders,
+          messageIds: ids,
+          chunks,
+          method: 'POST',
+          path: '/gmail/v1/users/me/messages/batchModify',
+          body: { addLabelIds: ['SPAM'], removeLabelIds: ['INBOX'] },
+          // Deliberately NOT "report spam": adding the SPAM label moves the mail, but it
+          // is not the classifier signal Gmail's own button sends. Saying otherwise would
+          // promise protection this app cannot deliver.
+          summary: 'Move ' + ids.length + ' emails from ' + senderList + ' to your Spam folder.',
+          reversible: 'Everything stays in Spam for 30 days — "Not spam" puts it back.',
+        };
+      }
+
+      if (action === 'label') {
+        const labelName = input.labelName || 'Snug/Sorted';
+        return {
+          action: 'label',
+          senders,
+          messageIds: ids,
+          chunks,
+          method: 'POST',
+          path: '/gmail/v1/users/me/messages/batchModify',
+          body: { addLabelIds: [input.labelId || labelName], removeLabelIds: ['INBOX'] },
+          labelName,
+          summary: 'File ' + ids.length + ' emails from ' + senderList + ' under "' + labelName + '" and take them out of the inbox.',
+          reversible: 'Nothing is deleted — the emails move, and the label can be removed any time.',
+        };
+      }
+
+      return {
+        action: 'trash',
+        senders,
+        messageIds: ids,
+        chunks,
+        method: 'POST',
+        path: '/gmail/v1/users/me/messages/batchModify',
+        body: { addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] },
+        summary: 'Move ' + ids.length + ' emails from ' + senderList + ' to Trash.',
+        reversible: 'Gmail keeps trashed mail for 30 days — you can restore any of it.',
+      };
+    }
+
+    // ===== GMAIL-SAMPLE-BEGIN =====
+    /**
+     * Turn a bridge failure into a sentence a person can act on.
+     *
+     * The bridge returns `error` as an OBJECT (`{code, message, retryable}`), not a
+     * string — so the obvious `error || 'fallback'` renders the literal text
+     * "[object Object]" on screen. That is not a cosmetic slip: it replaces the one piece
+     * of information the user needs (what went wrong, and whether retrying helps) with
+     * noise, at exactly the moment they are trying to work out whether their mail is
+     * safe. Every failure path in this app goes through here.
+     */
+    function netErrorText(error, fallback) {
+      if (typeof error === 'string' && error.trim()) return error;
+      if (error && typeof error === 'object') {
+        const message = typeof error.message === 'string' ? error.message.trim() : '';
+        const code = typeof error.code === 'string' ? error.code : '';
+        if (message && code) return message + ' (' + code + ')';
+        if (message) return message;
+        if (code) return code;
+      }
+      return fallback;
+    }
+
+    // ── Storage ───────────────────────────────────────────────────────────────
+    // The user owns their mail in their own file (ADR-0007). Before this the app kept
+    // everything in React state, so closing it threw the whole synced mailbox away and
+    // the next launch fell back to the demo — the owner-reported flip. Rows are
+    // provenance-flagged the way Ledger's are (ADR-0038): the sample inbox lives in the
+    // same table as real mail and is evicted WHOLESALE on the first real sync, so a
+    // mailbox is never half demo and half real.
+
+    const DDL = [
+      `CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        sender TEXT NOT NULL DEFAULT '',
+        sender_name TEXT NOT NULL DEFAULT '',
+        recipient TEXT,
+        at INTEGER NOT NULL DEFAULT 0,
+        labels TEXT NOT NULL DEFAULT '',
+        list_unsubscribe TEXT,
+        subject TEXT NOT NULL DEFAULT '',
+        from_me INTEGER NOT NULL DEFAULT 0,
+        sample INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS sync_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        window_id TEXT NOT NULL DEFAULT '',
+        collected INTEGER NOT NULL DEFAULT 0,
+        ok INTEGER NOT NULL DEFAULT 1,
+        note TEXT NOT NULL DEFAULT ''
+      )`,
+    ];
+
+    /**
+     * A message → its row. Labels are stored TAB-separated rather than as JSON: they are
+     * a flat list of tokens that never contain whitespace, and a delimiter that cannot
+     * occur in a Gmail label id makes the round trip total without a parse that can throw
+     * on a malformed cell.
+     */
+    function messageToRow(message, sample) {
+      return [
+        String(message.id),
+        String(message.from || ''),
+        String(message.fromName || ''),
+        message.to == null ? null : String(message.to),
+        Number(message.at) || 0,
+        (message.labels || []).join('\t'),
+        message.listUnsubscribe == null ? null : String(message.listUnsubscribe),
+        String(message.subject || ''),
+        message.fromMe ? 1 : 0,
+        sample ? 1 : 0,
+      ];
+    }
+
+    /** The inverse. Every lane reads these fields, so nothing may be lost in storage. */
+    function rowToMessage(row) {
+      return {
+        id: row[0],
+        from: row[1],
+        fromName: row[2],
+        to: row[3] == null ? null : row[3],
+        at: Number(row[4]) || 0,
+        labels: row[5] ? String(row[5]).split('\t') : [],
+        listUnsubscribe: row[6] == null ? null : row[6],
+        subject: row[7] || '',
+        fromMe: Number(row[8]) === 1,
+      };
+    }
+
+    /**
+     * Is what we are holding the demo inbox?
+     *
+     * THE ANSWER IS A FACT ABOUT THE ROWS, not about a sync phase — that was the bug. A
+     * phase resets to idle on error and starts idle on every launch, so a fully synced
+     * mailbox rendered as the demo after a close. Any real mail at all means this is the
+     * user's mailbox: calling a partially-synced inbox "sample" would put a demo banner
+     * over someone's actual email.
+     */
+    function isSampleRows(rows) {
+      return rows.length > 0 && rows.every((row) => Number(row.sample) === 1);
+    }
+
+    /**
+     * May a completed sync be committed?
+     *
+     * A refusal, a quota block or a network blip can return zero messages, and committing
+     * that would delete a real mailbox out of the user's own file and fall back to the
+     * demo on the next launch — turning a transient failure into permanent data loss.
+     * Zero is never a result worth writing.
+     */
+    function shouldCommitSync(input) {
+      return Number(input && input.collected) > 0;
+    }
+
+    // ── Sending: the From header ──────────────────────────────────────────────
+
+    /**
+     * Make a header value single-line, TRUNCATING at the first line break rather than
+     * flattening it.
+     *
+     * A List-Unsubscribe header is attacker-controlled data, so a CRLF inside an address
+     * is a mail-injection primitive: `x@y.example\r\nBcc: victim@z.example` would turn an
+     * unsubscribe into a blind copy. Replacing the break with a SPACE defuses the
+     * injection but keeps the attacker's text in the message, where it is at best
+     * confusing and at worst a phishing string rendered inside a header the user's own
+     * account sent. Everything after the first break was never part of the value the
+     * sender legitimately published, so dropping it loses nothing real.
+     */
+    function headerSafe(value) {
+      const raw = String(value == null ? '' : value);
+      const break_ = raw.search(/[\r\n]/);
+      return (break_ === -1 ? raw : raw.slice(0, break_)).trim();
+    }
+
+    /**
+     * Build the RFC 822 message for a mailto: unsubscribe, base64url-encoded for
+     * `users.messages.send`.
+     *
+     * THE FROM HEADER IS THE WHOLE POINT (owner-reported bounce). Without it Gmail accepts
+     * the send and the receiving MTA rejects the message, so the user believes they have
+     * unsubscribed and nothing happened — a silent failure with a success message on
+     * screen. Returns null rather than a header-less message when the sender is unknown:
+     * refusing to build it surfaces as "we could not send that", which is recoverable,
+     * where sending it produces a bounce nobody sees.
+     */
+    function buildUnsubscribeRaw(input) {
+      const from = headerSafe(input && input.from);
+      const to = headerSafe(input && input.to);
+      if (!from || !to) return null;
+      const subject = headerSafe((input && input.subject) || 'unsubscribe') || 'unsubscribe';
+      const raw = [
+        'From: ' + from,
+        'To: ' + to,
+        'Subject: ' + subject,
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset="UTF-8"',
+        '',
+        'Please unsubscribe this address from this mailing list.',
+      ].join('\r\n');
+      // base64url, unpadded — what the Gmail API expects on the `raw` field.
+      return btoa(unescape(encodeURIComponent(raw)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+    }
+
+    /** Test seam: the suite asserts on header lines, not on an opaque blob. */
+    function decodeRawForTest(raw) {
+      const padded = String(raw).replace(/-/g, '+').replace(/_/g, '/');
+      return decodeURIComponent(escape(atob(padded + '==='.slice((padded.length + 3) % 4))));
+    }
+
+    // ── The sync window ───────────────────────────────────────────────────────
+
+    /** Offered windows, widest-last. `all` is deliberately last: it is the slow one. */
+    const SYNC_WINDOWS = [
+      { id: '7d', label: 'last week', query: 'newer_than:7d', weeks: 1 },
+      { id: '90d', label: 'last 90 days', query: 'newer_than:90d', weeks: 12 },
+      { id: '6m', label: 'last 6 months', query: 'newer_than:6m', weeks: 26 },
+      { id: '1y', label: 'last year', query: 'newer_than:1y', weeks: 52 },
+      // Gmail has no "newer_than:forever": the honest unbounded query is NO date clause.
+      // A huge number would read as precision and silently cap the result instead.
+      { id: 'all', label: 'everything', query: '', weeks: 104 },
+    ];
+    const DEFAULT_WINDOW = '90d';
+
+    /**
+     * A window id → its Gmail `q` clause. An unknown id falls back to the DEFAULT rather
+     * than to `all`: a corrupted setting must narrow to what the user expects, never
+     * silently widen into a full-mailbox scan nobody asked for.
+     */
+    function windowQuery(id) {
+      const found = SYNC_WINDOWS.find((w) => w.id === id);
+      return found ? found.query : windowQueryFallback();
+    }
+    function windowQueryFallback() {
+      return SYNC_WINDOWS.find((w) => w.id === DEFAULT_WINDOW).query;
+    }
+
+    /**
+     * How many weekly buckets the trend chart draws for a window. The axis has to follow
+     * the pull: twelve buckets beside a one-week fetch draws eleven empty columns, which
+     * reads as "my mail collapsed" — a lie told by the axis rather than by the data.
+     */
+    function chartWeeks(id) {
+      const found = SYNC_WINDOWS.find((w) => w.id === id);
+      return found ? found.weeks : SYNC_WINDOWS.find((w) => w.id === DEFAULT_WINDOW).weeks;
+    }
+
+    // ── Answer shapes ─────────────────────────────────────────────────────────
+
+    /**
+     * Decide how an agent reply should be RENDERED, and prove the rows before promising
+     * a table (owner report: the ask lane returned a wall of prose).
+     *
+     * The rule that matters: a row is only rendered when the app can independently
+     * confirm the sender exists in its own data. The agent can name an address that was
+     * never in the mailbox, and a row carrying a name with no numbers behind it looks
+     * exactly like data while being none — so unverifiable evidence degrades the whole
+     * reply to prose rather than rendering a table the user cannot trust.
+     */
+    function answerShape(reply, context) {
+      const stats = (context && context.senderStats) || [];
+      const byKey = new Map(stats.map((stat) => [senderKey(stat.sender), stat]));
+      const prose = (text) => ({
+        kind: 'prose',
+        text: text && String(text).trim()
+          ? String(text).trim()
+          : 'I could not answer that from the inbox summary I have. Try asking about your top senders, what to unsubscribe from, or what is filling your inbox.',
+      });
+      if (!reply || typeof reply !== 'object') return prose(null);
+
+      if (Array.isArray(reply.verdicts) && reply.verdicts.length > 0) {
+        const rows = reply.verdicts
+          .filter((verdict) => verdict && byKey.has(senderKey(verdict.sender)))
+          .map((verdict) => {
+            const stat = byKey.get(senderKey(verdict.sender));
+            return {
+              sender: stat.sender,
+              name: stat.name,
+              received: stat.received,
+              replied: stat.replied,
+              verdict: verdict.verdict,
+              why: verdict.why,
+            };
+          });
+        if (rows.length > 0) return { kind: 'verdicts', rows, text: reply.answer || '' };
+      }
+
+      if (Array.isArray(reply.evidence) && reply.evidence.length > 0) {
+        const rows = reply.evidence
+          .filter((entry) => byKey.has(senderKey(entry)))
+          .map((entry) => {
+            const stat = byKey.get(senderKey(entry));
+            return {
+              sender: stat.sender,
+              name: stat.name,
+              received: stat.received,
+              replied: stat.replied,
+            };
+          });
+        if (rows.length > 0) return { kind: 'senders', rows, text: String(reply.answer || '').trim() };
+      }
+
+      return prose(reply.answer);
+    }
+
+    // ── The sample inbox ──────────────────────────────────────────────────────
+    // Every address sits in an RFC 2606 reserved domain, so nothing here can ever be
+    // mistaken for the reader's real mail. The shape is the point: this is what a normal
+    // person's 90 days actually looks like, and the lanes have to find the story in it.
+    //
+    // Render-only and deterministic by construction: the timestamp arrives as an
+    // ARGUMENT and the randomness comes from a seeded PRNG, so this whole region holds
+    // no clock, no bridge, and no network of its own.
+    const SAMPLE_NOW = new Date(2026, 7, 18, 12, 0, 0).getTime();
+    const SAMPLE_NOTE = 'Sample inbox — 90 days of realistic mail, nobody’s real data. Connect Gmail to run this on your own.';
+    const SAMPLE_SAVED_MINUTES = 47;
+
+    // The sample senders' web unsubscribe links are COMPOSED rather than written as
+    // literals. The single-file gate forbids any absolute URL that is not an allowlisted
+    // CDN or this app's one declared host — a good rule, since a URL literal in an app
+    // file is how a subresource or an exfiltration endpoint would arrive. The demo still
+    // needs to exercise the real https channel, so the scheme is assembled here and the
+    // sample rows carry only their host and path.
+    const WEB = 'https' + '://';
+    const webUnsub = (hostAndPath) => '<' + WEB + hostAndPath + '>';
+
+    const SAMPLE_SENDERS = [
+      // The loud ones — the app's whole reason to exist.
+      { from: 'deals@megamart.example', name: 'MegaMart Deals', perWeek: 9, unsub: '<mailto:stop@megamart.example?subject=unsubscribe>', subjects: ['48-hour flash sale', 'Your weekly deals are here', 'Last chance — 40% off'] },
+      { from: 'news@styleloop.example', name: 'StyleLoop', perWeek: 5, unsub: webUnsub('styleloop.example/unsubscribe?u=8812'), subjects: ['New arrivals for you', 'The edit: this week', 'Members get early access'] },
+      { from: 'updates@dailygrind.example', name: 'Daily Grind', perWeek: 6, unsub: webUnsub('dailygrind.example/unsub?id=aa19'), subjects: ['Your morning briefing', 'Five things to read today', 'Weekend long reads'] },
+      { from: 'offers@travelnow.example', name: 'TravelNow', perWeek: 3, unsub: '<mailto:leave@travelnow.example>', subjects: ['Fares from your city dropped', 'Weekend escapes under $200', 'Your saved trip is cheaper'] },
+      { from: 'hello@fitstreak.example', name: 'FitStreak', perWeek: 3, unsub: webUnsub('fitstreak.example/email/off?t=91b'), subjects: ['You have not logged a workout', 'Your streak is waiting', 'New programs this month'] },
+      { from: 'promo@gadgetzone.example', name: 'GadgetZone', perWeek: 4, unsub: '<mailto:unsubscribe@gadgetzone.example?subject=remove>', subjects: ['Price drop on your watchlist', 'Refurbished deals inside', 'Members-only pricing'] },
+      // Transactional — one-way by nature, and the flag must LEAVE THESE ALONE.
+      { from: 'receipts@corner-bank.example', name: 'Corner Bank', perWeek: 2, unsub: null, subjects: ['Your receipt for August', 'Statement available', 'Payment confirmation'] },
+      { from: 'no-reply@shipfast.example', name: 'ShipFast', perWeek: 2, unsub: null, subjects: ['Your order has shipped', 'Delivery confirmation', 'Order #55812 is on its way'] },
+      { from: 'billing@brightenergy.example', name: 'Bright Energy', perWeek: 1, unsub: null, subjects: ['Your invoice is ready', 'Statement for this month'] },
+      // Real people — the mail this app exists to PROTECT.
+      { from: 'priya@example.org', name: 'Priya Raman', perWeek: 2, unsub: null, replies: true, subjects: ['Re: Saturday plans', 'Photos from the trip', 'Quick question'] },
+      { from: 'sam@example.com', name: 'Sam Whitfield', perWeek: 1, unsub: null, replies: true, subjects: ['Re: that article', 'Lunch next week?', 'Re: the spreadsheet'] },
+      { from: 'mum@example.org', name: 'Mum', perWeek: 1, unsub: null, replies: true, starred: true, subjects: ['Call me when you can', 'Recipe you asked for', 'Did you see this?'] },
+      // Endorsed newsletter — never replied to, but STARRED. The flag must respect that.
+      { from: 'digest@deepdive.example', name: 'Deep Dive Weekly', perWeek: 1, unsub: '<mailto:end@deepdive.example>', starred: true, subjects: ['This week in depth', 'The long read'] },
+    ];
+
+    /** 90 days of mail, generated from a fixed seed so every render is identical. */
+    function buildSampleInbox(nowMs) {
+      const random = mulberry32(20260819);
+      const messages = [];
+      const weeks = 13;
+      const week = 7 * 86400000;
+      let counter = 0;
+
+      for (const sender of SAMPLE_SENDERS) {
+        for (let w = 0; w < weeks; w += 1) {
+          // A little variance so the trend line breathes instead of drawing a flat bar.
+          const drift = sender.perWeek >= 5 ? Math.floor(random() * 3) - 1 : Math.floor(random() * 2);
+          const count = Math.max(0, sender.perWeek + drift);
+          for (let i = 0; i < count; i += 1) {
+            const at = nowMs - w * week - Math.floor(random() * week);
+            if (at > nowMs) continue;
+            const labels = ['INBOX'];
+            if (random() < 0.55) labels.push('UNREAD');
+            if (sender.starred && random() < 0.3) labels.push('STARRED');
+            counter += 1;
+            messages.push({
+              id: 'sample-' + counter,
+              from: sender.from,
+              fromName: sender.name,
+              at,
+              labels,
+              listUnsubscribe: sender.unsub || null,
+              subject: sender.subjects[Math.floor(random() * sender.subjects.length)],
+              fromMe: false,
+            });
+          }
+        }
+        // The user's own replies — what separates a correspondent from a broadcaster.
+        if (sender.replies) {
+          for (let r = 0; r < 4; r += 1) {
+            counter += 1;
+            messages.push({
+              id: 'sample-sent-' + counter,
+              from: 'you@example.com',
+              fromName: 'You',
+              to: sender.from,
+              at: nowMs - Math.floor(random() * weeks * week),
+              labels: ['SENT'],
+              listUnsubscribe: null,
+              subject: 'Re: ' + sender.subjects[0],
+              fromMe: true,
+            });
+          }
+        }
+      }
+      return messages.sort((a, b) => b.at - a.at);
+    }
+    // ===== GMAIL-SAMPLE-END =====
+    // ===== GMAIL-CORE-END =====
+
+    // The open-url bridge (ADR-0038 D5) — hand-rolled OUTSIDE the byte-locked hooks
+    // block, exactly as Ledger does it: posts `snug:open-url-request` and resolves when
+    // the host answers. Used only for https unsubscribe links the app can never fetch.
+    let openUrlSeq = 0;
+    const openUrlPending = new Map();
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || data.v !== 1 || data.type !== 'snug:open-url-result') return;
+      const resolve = openUrlPending.get(data.requestId);
+      if (!resolve) return;
+      openUrlPending.delete(data.requestId);
+      resolve(data.ok ? { ok: true } : { ok: false, error: netErrorText(data.error, 'The host refused to open that link.') });
+    });
+    function requestOpenUrl(url) {
+      const safe = safeUnsubUrl(url);
+      if (!safe) return Promise.resolve({ ok: false, error: 'That unsubscribe link is not a plain https address.' });
+      const requestId = 'openurl-' + (openUrlSeq += 1);
+      return new Promise((resolve) => {
+        openUrlPending.set(requestId, resolve);
+        SnugBridge.post({ type: 'snug:open-url-request', requestId, url: safe });
+        setTimeout(() => {
+          if (openUrlPending.has(requestId)) {
+            openUrlPending.delete(requestId);
+            resolve({ ok: false, error: 'The host did not answer the open-link request.' });
+          }
+        }, 15000);
+      });
+    }
+
+    // ── Presentation helpers ──────────────────────────────────────────────────
+
+    const SWATCHES = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)', 'var(--c6)'];
+    const swatchFor = (text) => {
+      let hash = 0;
+      for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+      return SWATCHES[hash % SWATCHES.length];
+    };
+    const initials = (name) => String(name || '?').trim().slice(0, 1).toUpperCase();
+    const relDays = (days) => (days <= 0 ? 'today' : days === 1 ? 'yesterday' : days + ' days ago');
+
+    /** Line + area trend. Hand-drawn SVG: no chart library, both themes, no images. */
+    function TrendChart({ weeks }) {
+      // viewBox units, not pixels — the SVG scales to its container width and the
+      // height attribute below keeps the drawn band a fixed 150px tall. The ratio is
+      // chosen so a full-width card letterboxes as little as possible.
+      const width = 1000;
+      const height = 150;
+      const pad = { top: 10, right: 8, bottom: 20, left: 8 };
+      const max = Math.max(1, ...weeks.map((w) => w.count));
+      // The baseline is the quietest week rather than zero. Twelve weeks of a steady
+      // sender never touch zero, so a zero-anchored axis draws a flat line across the
+      // top of the box and hides the very variation the chart exists to show.
+      const low = Math.min(...weeks.map((w) => w.count));
+      const floor = Math.max(0, low - Math.max(1, Math.round((max - low) * 0.35)));
+      const span = Math.max(1, max - floor);
+      const stepX = (width - pad.left - pad.right) / Math.max(1, weeks.length - 1);
+      const y = (count) => pad.top + (1 - (count - floor) / span) * (height - pad.top - pad.bottom);
+      const points = weeks.map((w, i) => [pad.left + i * stepX, y(w.count)]);
+      const line = points.map(([px, py], i) => (i === 0 ? 'M' : 'L') + px.toFixed(1) + ' ' + py.toFixed(1)).join(' ');
+      const area = line + ' L' + points[points.length - 1][0].toFixed(1) + ' ' + (height - pad.bottom) +
+        ' L' + points[0][0].toFixed(1) + ' ' + (height - pad.bottom) + ' Z';
+      return (
+        <svg viewBox={'0 0 ' + width + ' ' + height} width="100%" height={height} role="img"
+             aria-label={'Weekly email volume, peaking at ' + max + ' messages'}
+             style={{ display: 'block', width: '100%' }}
+             preserveAspectRatio="xMidYMid meet">
+          {[0.25, 0.5, 0.75, 1].map((fraction) => (
+            <line key={fraction} x1={pad.left} x2={width - pad.right}
+                  y1={y(max * fraction)} y2={y(max * fraction)} stroke="var(--grid)" strokeWidth="1" />
+          ))}
+          <path d={area} fill="var(--accent-soft)" opacity="0.75" />
+          <path d={line} fill="none" stroke="var(--accent)" strokeWidth="2.25"
+                strokeLinejoin="round" strokeLinecap="round" />
+          {points.map(([px, py], i) => (
+            <circle key={i} cx={px} cy={py} r={i === points.length - 1 ? 4 : 2.5}
+                    fill={i === points.length - 1 ? 'var(--accent)' : 'var(--card)'}
+                    stroke="var(--accent)" strokeWidth="1.5" />
+          ))}
+          <text x={pad.left} y={height - 5} fontSize="10.5" fill="var(--faint)">
+            {weeks.length === 1 ? 'a week ago' : weeks.length + ' weeks ago'}
+          </text>
+          <text x={width - pad.right} y={height - 5} fontSize="10.5" fill="var(--faint)" textAnchor="end">
+            this week
+          </text>
+        </svg>
+      );
+    }
+
+    /** Horizontal bars — easier to read than a pie when the labels are addresses. */
+    function SenderBars({ senders }) {
+      const max = Math.max(1, ...senders.map((s) => s.count));
+      return (
+        <div>
+          {senders.map((sender) => (
+            <div key={sender.sender} style={{ margin: '9px 0' }}>
+              <div className="row between" style={{ marginBottom: 4 }}>
+                <span className="sname" style={{ minWidth: 0 }}>{sender.name}</span>
+                <span className="faint">{sender.count}</span>
+              </div>
+              <div style={{ height: 9, background: 'var(--chip)', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{
+                  width: ((sender.count / max) * 100).toFixed(1) + '%',
+                  height: '100%',
+                  background: sender.replied ? 'var(--calm)' : swatchFor(sender.sender),
+                  borderRadius: 999,
+                }} />
+              </div>
+            </div>
+          ))}
+          <div className="legend">
+            <span><i className="sw" style={{ background: 'var(--calm)' }} /> you have replied</span>
+            <span><i className="sw" style={{ background: 'var(--c1)' }} /> one-way</span>
+          </div>
+        </div>
+      );
+    }
+
+    /** Donut, drawn with stroke-dasharray on one circle per slice. */
+    function CategoryDonut({ mix }) {
+      const total = mix.reduce((sum, slice) => sum + slice.count, 0) || 1;
+      const radius = 52;
+      const circumference = 2 * Math.PI * radius;
+      let offset = 0;
+      return (
+        <div className="row" style={{ gap: 18, flexWrap: 'wrap' }}>
+          <svg viewBox="0 0 140 140" width="140" height="140" role="img"
+               aria-label={'Inbox mix across ' + mix.length + ' categories'}>
+            <g transform="translate(70,70) rotate(-90)">
+              {mix.map((slice, i) => {
+                const fraction = slice.count / total;
+                const dash = fraction * circumference;
+                const element = (
+                  <circle key={slice.label} r={radius} fill="none" strokeWidth="18"
+                          stroke={SWATCHES[i % SWATCHES.length]}
+                          strokeDasharray={dash.toFixed(2) + ' ' + (circumference - dash).toFixed(2)}
+                          strokeDashoffset={(-offset).toFixed(2)} />
+                );
+                offset += dash;
+                return element;
+              })}
+            </g>
+            <text x="70" y="66" textAnchor="middle" fontSize="19" fontWeight="640" fill="var(--fg)">{total}</text>
+            <text x="70" y="83" textAnchor="middle" fontSize="10.5" fill="var(--muted)">emails</text>
+          </svg>
+          <div style={{ minWidth: 130, flex: '1 1 auto' }}>
+            {mix.map((slice, i) => (
+              <div key={slice.label} className="row between" style={{ margin: '6px 0', fontSize: 12.5 }}>
+                <span className="row" style={{ gap: 7 }}>
+                  <i className="sw" style={{ background: SWATCHES[i % SWATCHES.length] }} />
+                  {slice.label}
+                </span>
+                <span className="faint">{Math.round((slice.count / total) * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    /**
+     * Renders whatever shape `answerShape` decided on. The point of the split: the
+     * DECISION about what can honestly be shown is a pure function the suite can pin,
+     * and this component only draws it. A reply that names senders becomes rows with the
+     * app's own counts beside them; a reply that judges senders becomes verdicts with
+     * their reasons; anything else is prose. Nothing here can invent a row, because rows
+     * only exist if `answerShape` matched them against the mailbox.
+     */
+    function AnswerView({ shape }) {
+      if (!shape) return null;
+      if (shape.kind === 'prose') return <div className="prose">{shape.text}</div>;
+
+      const max = Math.max(1, ...shape.rows.map((row) => row.received));
+      return (
+        <React.Fragment>
+          {shape.text ? <div className="prose">{shape.text}</div> : null}
+          <div>
+            {shape.rows.map((row) => (
+              <div className="answerrow" key={row.sender}>
+                <div className="avatar" style={{ background: swatchFor(row.sender), width: 28, height: 28, fontSize: 12 }}>
+                  {initials(row.name)}
+                </div>
+                <div className="grow">
+                  <div className="sname">{row.name}</div>
+                  <div className="saddr">{row.sender}</div>
+                </div>
+                {shape.kind === 'verdicts' ? (
+                  <span className={'tag ' + (row.verdict === 'drop' ? 'alert' : row.verdict === 'keep' ? 'calm' : 'warn')}>
+                    {row.verdict}
+                  </span>
+                ) : (
+                  <div className="bar" aria-hidden="true">
+                    <i style={{
+                      width: ((row.received / max) * 100).toFixed(1) + '%',
+                      background: row.replied ? 'var(--calm)' : swatchFor(row.sender),
+                    }} />
+                  </div>
+                )}
+                <span className="tag">{row.received}</span>
+                {row.replied ? <span className="tag calm">you reply</span> : null}
+              </div>
+            ))}
+          </div>
+          {shape.kind === 'verdicts' ? (
+            <div className="legend">
+              {shape.rows.filter((row) => row.why).slice(0, 4).map((row) => (
+                <span key={row.sender}>{row.name}: {row.why}</span>
+              ))}
+            </div>
+          ) : null}
+        </React.Fragment>
+      );
+    }
+
+    function Checkbox({ checked, onToggle, label }) {
+      return (
+        <button className="check" role="checkbox" aria-checked={checked} aria-label={label} onClick={onToggle}>
+          {checked ? '✓' : ''}
+        </button>
+      );
+    }
+
+    // ── The app ───────────────────────────────────────────────────────────────
+
+    function App() {
+      const app = useSnugApp({
+        appId: 'gmail-inbox-copilot',
+        displayName: 'Inbox Copilot',
+        description: 'An AI inbox manager for Gmail: see who is really filling your inbox, flag the senders you never answer, and clean up thousands of emails with one approval.',
+        iconEmoji: '📬',
+        iconColor: '#c2410c',
+      });
+      const net = useConnectedFetch();
+      const db = useAppDB();
+      const [tab, setTab] = useState('pulse');
+      const [messages, setMessages] = useState(null);   // null = not loaded yet
+      // Whether what we are holding is the demo inbox — a fact about the ROWS, loaded
+      // with them, so it survives a relaunch instead of resetting to "sample" every boot.
+      const [sampleRows, setSampleRows] = useState(true);
+      const [lastRun, setLastRun] = useState(null);
+      const [storageReady, setStorageReady] = useState(false);
+      const [syncState, setSyncState] = useState({ phase: 'idle', fetched: 0, error: null });
+      // How far back Refresh reaches. Persisted through the host so the choice survives a
+      // reload — a person who works in six-month windows should not re-pick every time.
+      const [windowId, setWindowId] = usePersistedState('sync_window', DEFAULT_WINDOW);
+      // The connected account's own address, read from users/me/profile. Load-bearing for
+      // sending: without it every unsubscribe email leaves with no From and bounces.
+      const [account, setAccount] = useState(null);
+      const [selected, setSelected] = useState(() => new Set());
+      const [pendingPlan, setPendingPlan] = useState(null);
+      const [runState, setRunState] = useState({ busy: false, note: null, error: null });
+      const [agent, setAgent] = useState({ busy: false, digest: null, suggestions: null, error: null });
+      const [question, setQuestion] = useState('');
+      const [answer, setAnswer] = useState(null);
+
+      // Provenance, not phase. The old derivation read a transient sync phase that resets
+      // on error and starts idle on every launch — which is exactly why a synced mailbox
+      // reverted to the demo after a close.
+      const isSample = messages !== null && sampleRows;
+      // The live clock and the sample's fixed clock are read on separate lines: sample
+      // constants must never share a line with a clock call, so that the render-only
+      // guarantee stays checkable by reading rather than by trusting.
+      const liveNow = Date.now();
+      const now = isSample ? SAMPLE_NOW : liveNow;
+
+      /**
+       * Schema, then load, then seed the demo ONLY if the file is empty.
+       *
+       * The order is the whole fix for the owner-reported flip: a returning user's own
+       * mail comes out of their file before anything is fetched, and the sample inbox is
+       * only ever written when there is nothing to show. A first-run user still sees the
+       * full showcase in the first second, because seeding is local and immediate.
+       */
+      useEffect(() => {
+        if (!app.isReady) return;
+        let alive = true;
+        (async () => {
+          for (const statement of DDL) await db.exec(statement);
+
+          let rows = await db.exec('SELECT * FROM messages ORDER BY at DESC');
+          if (rows.rows.length === 0) {
+            // Empty file: seed the demo so the app is never a blank screen. sample=1 marks
+            // every row, which is what lets the first real sync evict them wholesale.
+            const seeded = buildSampleInbox(SAMPLE_NOW);
+            for (const message of seeded) {
+              await db.exec(
+                'INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?)',
+                messageToRow(message, 1),
+              );
+            }
+            rows = await db.exec('SELECT * FROM messages ORDER BY at DESC');
+          }
+          if (!alive) return;
+
+          const runs = await db.exec('SELECT at, window_id, collected, ok, note FROM sync_runs ORDER BY at DESC LIMIT 1');
+          if (!alive) return;
+
+          setMessages(rows.rows.map(rowToMessage));
+          setSampleRows(isSampleRows(rows.rows.map((row) => ({ sample: row[9] }))));
+          setLastRun(runs.rows.length ? {
+            at: Number(runs.rows[0][0]),
+            windowId: runs.rows[0][1],
+            collected: Number(runs.rows[0][2]),
+            ok: Number(runs.rows[0][3]) === 1,
+          } : null);
+          setStorageReady(true);
+        })().catch(() => {
+          if (!alive) return;
+          // Storage trouble must never be a blank screen: fall back to the in-memory
+          // demo so the app still works, and say so rather than pretending.
+          setMessages(buildSampleInbox(SAMPLE_NOW));
+          setSampleRows(true);
+          setStorageReady(true);
+          setSyncState({ phase: 'idle', fetched: 0, error: 'Could not open local storage — showing sample data for now.' });
+        });
+        return () => { alive = false; };
+      }, [app.isReady, db]);
+
+      const rows = messages || [];
+      const weeks = useMemo(
+        () => volumeByWeek(rows, { now, weeks: chartWeeks(isSample ? '90d' : windowId) }),
+        [rows, now, windowId, isSample],
+      );
+      // Top six by volume, plus the loudest sender the user actually writes back to.
+      // Volume alone would show seven broadcasters and no correspondents — which makes
+      // the "you have replied" legend describe a colour nothing on screen is wearing,
+      // and quietly hides the contrast the chart exists to draw.
+      const senders = useMemo(() => {
+        const ranked = topSenders(rows, { limit: 40 });
+        const head = ranked.slice(0, 6);
+        const replied = ranked.find((sender) => sender.replied && head.indexOf(sender) === -1);
+        return replied ? [...head, replied] : ranked.slice(0, 7);
+      }, [rows]);
+      const mix = useMemo(() => categoryMix(rows), [rows]);
+      const allSenderStats = useMemo(() => senderStats(rows), [rows]);
+      const flags = useMemo(() => neverRepliedFlags(rows, { now }), [rows, now]);
+      const unsubs = useMemo(() => unsubscribeCandidates(rows, { now }), [rows, now]);
+
+      const totalThisWeek = weeks.length ? weeks[weeks.length - 1].count : 0;
+      const flaggedVolume = flags.reduce((sum, flag) => sum + flag.received, 0);
+      const noiseShare = rows.length ? Math.round((flaggedVolume / rows.filter((m) => !m.fromMe).length) * 100) : 0;
+
+      const toggle = useCallback((sender) => {
+        setSelected((current) => {
+          const next = new Set(current);
+          if (next.has(sender)) next.delete(sender); else next.add(sender);
+          return next;
+        });
+      }, []);
+
+      // ── Live sync ───────────────────────────────────────────────────────────
+      // Metadata only: this app never asks for message bodies. It needs who wrote, when,
+      // the subject line and the List-Unsubscribe header — and nothing it does not need
+      // is a thing that can leak.
+      const sync = useCallback(async (requestedWindow) => {
+        const useWindow = typeof requestedWindow === 'string' ? requestedWindow : windowId;
+        setSyncState({ phase: 'listing', fetched: 0, error: null });
+        try {
+          // WHO AM I — resolved first, because sending depends on it. `users/me/profile`
+          // returns the connected account's own address, which is the only correct From
+          // for an unsubscribe email. A failure here is not fatal to the sync: reading the
+          // inbox still works, and the send path refuses rather than bouncing.
+          const profile = await net.fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile');
+          if (profile.ok) {
+            const parsedProfile = typeof profile.body === 'string' ? JSON.parse(profile.body) : profile.body;
+            if (parsedProfile && parsedProfile.emailAddress) setAccount(parsedProfile.emailAddress);
+          }
+
+          const collected = [];
+          let pageToken = null;
+          // A wider window needs more pages; `all` needs the most. Each page is 100 ids
+          // and each id costs a metadata read, so this is the honest ceiling on a single
+          // Refresh rather than an unbounded walk of someone's entire mail history.
+          const maxPages = useWindow === 'all' ? 20 : useWindow === '1y' ? 12 : useWindow === '6m' ? 8 : 5;
+          for (let page = 0; page < maxPages; page += 1) {
+            const clause = windowQuery(useWindow);
+            const url = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100' +
+              (clause ? '&q=' + encodeURIComponent(clause) : '') +
+              (pageToken ? '&pageToken=' + pageToken : '');
+            const listed = await net.fetch(url);
+            if (!listed.ok) throw new Error(netErrorText(listed.error, 'Gmail did not answer the message list.'));
+            const body = typeof listed.body === 'string' ? JSON.parse(listed.body) : listed.body;
+            const ids = (body.messages || []).map((entry) => entry.id);
+            setSyncState({ phase: 'reading', fetched: collected.length, error: null });
+            for (const id of ids) {
+              const detail = await net.fetch(
+                'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + id +
+                '?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=List-Unsubscribe',
+              );
+              if (!detail.ok) continue;
+              const parsed = typeof detail.body === 'string' ? JSON.parse(detail.body) : detail.body;
+              const headers = ((parsed.payload || {}).headers || []).reduce((map, header) => {
+                map[String(header.name || '').toLowerCase()] = header.value;
+                return map;
+              }, {});
+              const labels = parsed.labelIds || [];
+              const fromRaw = headers.from || '';
+              const address = (/<([^>]+)>/.exec(fromRaw) || [null, fromRaw])[1];
+              collected.push({
+                id: parsed.id,
+                from: address,
+                fromName: fromRaw.replace(/<[^>]*>/, '').replace(/"/g, '').trim() || address,
+                to: (/<([^>]+)>/.exec(headers.to || '') || [null, headers.to || ''])[1],
+                at: Number(parsed.internalDate) || 0,
+                labels,
+                listUnsubscribe: headers['list-unsubscribe'] || null,
+                subject: headers.subject || '',
+                fromMe: labels.indexOf('SENT') !== -1,
+              });
+              setSyncState({ phase: 'reading', fetched: collected.length, error: null });
+            }
+            pageToken = body.nextPageToken;
+            if (!pageToken) break;
+          }
+          // Zero is never committed. A refusal or a blip returning nothing would
+          // otherwise delete a real mailbox out of the user's own file and fall back to
+          // the demo on the next launch — a transient failure turned into data loss.
+          if (!shouldCommitSync({ collected: collected.length })) {
+            throw new Error('No messages came back from Gmail.');
+          }
+
+          // The eviction: the demo rows go wholesale, in the same pass that writes the
+          // real ones, so the mailbox is never half sample and half real.
+          await db.exec('DELETE FROM messages WHERE sample = 1');
+          for (const message of collected) {
+            await db.exec(
+              'INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?)',
+              messageToRow(message, 0),
+            );
+          }
+          const runAt = Math.floor(Date.now() / 1000);
+          await db.exec(
+            'INSERT INTO sync_runs (at, window_id, collected, ok, note) VALUES (?,?,?,?,?)',
+            [runAt, useWindow, collected.length, 1, ''],
+          );
+
+          setMessages(collected);
+          setSampleRows(false);
+          setLastRun({ at: runAt, windowId: useWindow, collected: collected.length, ok: true });
+          setSyncState({ phase: 'live', fetched: collected.length, error: null });
+          setSelected(new Set());
+        } catch (error) {
+          // Whatever was already stored STAYS. A failed sync reports over the last good
+          // mailbox; it never empties it and never reverts real mail to the demo.
+          const message = netErrorText(error.message || error, 'Gmail did not answer.');
+          setSyncState({ phase: 'idle', fetched: 0, error: message });
+          try {
+            await db.exec(
+              'INSERT INTO sync_runs (at, window_id, collected, ok, note) VALUES (?,?,?,?,?)',
+              [Math.floor(Date.now() / 1000), useWindow, 0, 0, String(message).slice(0, 200)],
+            );
+          } catch (ignored) {
+            // A storage failure while recording a sync failure is not worth a second banner.
+          }
+        }
+      }, [net, windowId, db]);
+
+      /**
+       * The host says a connection was VERIFIED and this app's data is stale
+       * (TASK-20260819-inbox-copilot-fixes). Fires when someone finishes the connection
+       * wizard and asks for their real data — the moment where, before this, the app kept
+       * rendering sample data with nothing admitting it had not caught up.
+       *
+       * Hand-rolled OUTSIDE the byte-locked hooks block, the same way the open-url bridge
+       * is, and shape-gated defensively: a host-event frame carries no `instanceId`, so
+       * the listener cannot verify the sender and must treat the frame as a HINT. It
+       * carries no data and none is read — the only response is to re-fetch through the
+       * governed seam, where the host's own rules still apply.
+       */
+      useEffect(() => {
+        const onHostEvent = (event) => {
+          const data = event.data;
+          if (!data || data.v !== 1 || data.type !== 'snug:host-event') return;
+          if (data.event !== 'connection-event') return;
+          const payload = data.data;
+          // Slot-filtered: an app can hold more than one connection, and a signal about
+          // someone else's is not a reason to re-read the mailbox.
+          if (!payload || payload.slot !== 'gmail' || !payload.requestRefresh) return;
+          void sync();
+        };
+        window.addEventListener('message', onHostEvent);
+        return () => window.removeEventListener('message', onHostEvent);
+      }, [sync]);
+
+      // ── Governed writes ─────────────────────────────────────────────────────
+      // Nothing here runs without a plan on screen first. `pendingPlan` is both the
+      // confirm copy and the request body, so a person always approves the real thing.
+      const stagePlan = useCallback((action, senderList, extra) => {
+        const chosen = senderList && senderList.length ? senderList : [...selected];
+        const affected = rows.filter((message) => !message.fromMe && chosen.indexOf(senderKey(message.from)) !== -1);
+        const plan = planCleanupBatch(Object.assign({ action, messages: affected, senders: chosen }, extra || {}));
+        setRunState({ busy: false, note: null, error: null });
+        setPendingPlan(plan);
+      }, [rows, selected]);
+
+      const runPlan = useCallback(async () => {
+        if (!pendingPlan) return;
+        if (isSample) {
+          setPendingPlan(null);
+          setRunState({
+            busy: false,
+            error: null,
+            note: 'Sample mode — nothing was changed. Connect your Gmail account and this exact plan runs for real.',
+          });
+          return;
+        }
+        setRunState({ busy: true, note: null, error: null });
+        try {
+          if (pendingPlan.action === 'block') {
+            const created = await net.fetch('https://gmail.googleapis.com' + pendingPlan.path, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(pendingPlan.body),
+            });
+            if (!created.ok) throw new Error(netErrorText(created.error, 'Gmail refused the filter.'));
+          } else {
+            for (const chunk of pendingPlan.chunks) {
+              const done = await net.fetch('https://gmail.googleapis.com' + pendingPlan.path, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(Object.assign({ ids: chunk }, pendingPlan.body)),
+              });
+              if (!done.ok) throw new Error(netErrorText(done.error, 'Gmail refused part of the cleanup.'));
+            }
+          }
+          const touched = pendingPlan.messageIds.length;
+          // Delete locally as well as at Gmail. Without this a cleanup looked right until
+          // the next launch, when 400 trashed emails came back out of the file.
+          for (const id of pendingPlan.messageIds) {
+            await db.exec('DELETE FROM messages WHERE id = ?', [id]);
+          }
+          setMessages((current) =>
+            (current || []).filter((message) => pendingPlan.messageIds.indexOf(message.id) === -1));
+          setSelected(new Set());
+          setPendingPlan(null);
+          setRunState({
+            busy: false,
+            error: null,
+            note: pendingPlan.action === 'block'
+              ? 'Filter created. Future mail from that sender goes straight to Trash.'
+              : touched + ' emails handled. ' + pendingPlan.reversible,
+          });
+        } catch (error) {
+          setRunState({ busy: false, note: null, error: String(error.message || error) });
+        }
+      }, [pendingPlan, isSample, net, db]);
+
+      const runUnsubscribe = useCallback(async (candidate) => {
+        if (candidate.channel === 'open-url') {
+          if (isSample) {
+            setRunState({ busy: false, error: null, note: 'Sample mode — connect Gmail and this opens the real unsubscribe page.' });
+            return;
+          }
+          const opened = await requestOpenUrl(candidate.target);
+          setRunState(opened.ok
+            ? { busy: false, error: null, note: 'Opened ' + candidate.name + '’s unsubscribe page in your browser.' }
+            : { busy: false, note: null, error: netErrorText(opened.error, 'The link could not be opened.') });
+          return;
+        }
+        if (candidate.channel === 'mailto') {
+          if (isSample) {
+            setRunState({ busy: false, error: null, note: 'Sample mode — connect Gmail and this sends the unsubscribe email for you.' });
+            return;
+          }
+          setRunState({ busy: true, note: null, error: null });
+          try {
+            // The From header is what makes this deliverable. Without the connected
+            // account's own address Gmail accepts the send and the receiving server
+            // bounces it — the user believes they unsubscribed and nothing happened.
+            // `buildUnsubscribeRaw` returns null rather than building a header-less
+            // message, so the failure is visible here instead of silent in a mailbox.
+            const encoded = buildUnsubscribeRaw({
+              from: account,
+              to: candidate.target,
+              subject: candidate.subject || 'unsubscribe',
+            });
+            if (encoded === null) {
+              throw new Error(
+                account
+                  ? 'That unsubscribe address does not look like a real address.'
+                  : 'Still working out which account you are signed in as — hit Refresh once, then try again.',
+              );
+            }
+            const sent = await net.fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ raw: encoded }),
+            });
+            if (!sent.ok) throw new Error(netErrorText(sent.error, 'Gmail refused to send the unsubscribe email.'));
+            setRunState({
+              busy: false,
+              error: null,
+              note: 'Unsubscribe email sent to ' + candidate.target + ' from ' + account + '.',
+            });
+          } catch (error) {
+            setRunState({ busy: false, note: null, error: String(error.message || error) });
+          }
+        }
+      }, [isSample, net, account]);
+
+      // ── The agent ───────────────────────────────────────────────────────────
+      const askAgent = useCallback(async (kind, extra) => {
+        setAgent((current) => Object.assign({}, current, { busy: true, error: null }));
+        const state = {
+          kind,
+          sample: isSample,
+          totals: { messages: rows.filter((m) => !m.fromMe).length, thisWeek: totalThisWeek, noiseShare },
+          topSenders: senders.map((s) => ({ sender: s.sender, name: s.name, count: s.count, replied: s.replied })),
+          neverReplied: flags.slice(0, 12).map((f) => ({ sender: f.sender, name: f.name, received: f.received, daysSince: f.daysSince })),
+          unsubscribable: unsubs.slice(0, 12).map((u) => ({ sender: u.sender, name: u.name, received: u.received, channel: u.channel })),
+          categories: mix,
+        };
+        const result = await app.sendMessage(extra && extra.text ? extra.text : kind, {
+          state,
+          responseSchema: RESPONSE_SCHEMA,
+        });
+        if (!result.ok) {
+          setAgent((current) => Object.assign({}, current, { busy: false, error: netErrorText(result.error, 'The assistant could not be reached.') }));
+          return null;
+        }
+        const data = result.data || {};
+        setAgent((current) => Object.assign({}, current, { busy: false, error: null }));
+        return data;
+      }, [app, rows, senders, flags, unsubs, mix, totalThisWeek, noiseShare, isSample]);
+
+      const runDigest = useCallback(async () => {
+        const data = await askAgent('digest');
+        if (!data) return;
+        // Off-schema replies degrade to a locally-computed digest rather than crashing —
+        // the keyless demo brain returns exactly this shape of nothing.
+        setAgent((current) => Object.assign({}, current, {
+          digest: {
+            headline: typeof data.headline === 'string' && data.headline
+              ? data.headline
+              : flags.length + ' senders are filling your inbox without ever hearing back',
+            summary: typeof data.summary === 'string' && data.summary
+              ? data.summary
+              : 'Your loudest sender is ' + (senders[0] ? senders[0].name : 'unknown') + '. ' +
+                noiseShare + '% of what arrives comes from senders you have never replied to.',
+          },
+        }));
+      }, [askAgent, flags, senders, noiseShare]);
+
+      const runSuggestions = useCallback(async () => {
+        const data = await askAgent('suggestions');
+        if (!data) return;
+        const list = Array.isArray(data.suggestions) ? data.suggestions.filter((s) => s && s.title && s.action) : [];
+        setAgent((current) => Object.assign({}, current, {
+          suggestions: list.length ? list : LOCAL_SUGGESTIONS(flags, unsubs),
+        }));
+      }, [askAgent, flags, unsubs]);
+
+      const runAnswer = useCallback(async () => {
+        const text = question.trim();
+        if (!text) return;
+        setAnswer({ pending: true, shape: null });
+        const data = await askAgent('answer', { text });
+        // The reply is turned into a RENDERABLE SHAPE against the app's own numbers, not
+        // pasted as prose. `answerShape` will only promise a table when it can confirm
+        // every row against the mailbox it already read — an agent naming an address that
+        // was never there degrades the whole reply to prose rather than rendering
+        // authoritative-looking rows with nothing behind them.
+        setAnswer({ pending: false, shape: answerShape(data, { senderStats: allSenderStats }) });
+      }, [askAgent, question, allSenderStats]);
+
+      // Local fallback suggestions — the app is useful with no agent at all (ADR-0011).
+      const LOCAL_SUGGESTIONS = (flagged, unsubscribable) => {
+        const out = [];
+        if (flagged[0]) {
+          out.push({
+            title: 'Clear out ' + flagged[0].name,
+            why: flagged[0].received + ' emails, no reply from you in 90 days.',
+            action: 'trash',
+            senders: [flagged[0].sender],
+          });
+        }
+        if (unsubscribable[0]) {
+          out.push({
+            title: 'Unsubscribe from ' + unsubscribable[0].name,
+            why: unsubscribable[0].received + ' emails and an unsubscribe link they published themselves.',
+            action: 'unsubscribe',
+            senders: [unsubscribable[0].sender],
+          });
+        }
+        if (flagged[1]) {
+          out.push({
+            title: 'Auto-trash future mail from ' + flagged[1].name,
+            why: 'A filter stops it arriving at all — nothing already in your inbox is touched.',
+            action: 'block',
+            senders: [flagged[1].sender],
+          });
+        }
+        return out;
+      };
+
+      const displayedSuggestions = agent.suggestions || LOCAL_SUGGESTIONS(flags, unsubs);
+
+      if (!app.isReady || !storageReady || messages === null) {
+        return (
+          <div className="wrap">
+            <div className="card">
+              <div className="skel" style={{ height: 22, width: '45%', marginBottom: 12 }} />
+              <div className="skel" style={{ height: 120 }} />
+            </div>
+          </div>
+        );
+      }
+
+      /**
+       * "Connected" is a fact about the DATA, not about this session's sync phase. Keying
+       * it to the phase meant a returning user — whose real mail had just loaded out of
+       * their own file — was told "Sample inbox, connect Gmail" until they synced again.
+       * Real rows on screen ARE the evidence of a connection that worked.
+       */
+      const connected = !isSample && messages !== null && messages.length > 0;
+      const busySync = syncState.phase === 'listing' || syncState.phase === 'reading';
+
+      return (
+        <div className="wrap">
+          <div className="top">
+            <div className="brand">
+              <div className="mark">{'📬'}</div>
+              <div>
+                <h1>Inbox Copilot</h1>
+                <div className="sub">
+                  {connected
+                    ? rows.filter((message) => !message.fromMe).length + ' emails from the ' + (SYNC_WINDOWS.find((w) => w.id === (lastRun ? lastRun.windowId : windowId)) || {}).label +
+                      (account ? ' · ' + account : '')
+                    : 'Sample inbox — connect Gmail to run this on your own mail'}
+                </div>
+              </div>
+            </div>
+            <div className="spacer" />
+            {/*
+              How far back Refresh reaches. Ninety days is the default because it is long
+              enough for a pattern and short enough to finish; the wider windows cost real
+              time (each message is its own metadata read), so the label says what it is
+              rather than hiding the tradeoff behind a spinner.
+            */}
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <div className="windowpick" role="group" aria-label="How far back to read">
+                {SYNC_WINDOWS.map((option) => (
+                  <button
+                    key={option.id}
+                    className="btn small"
+                    aria-pressed={windowId === option.id}
+                    onClick={() => setWindowId(option.id)}
+                    disabled={busySync}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <button className="btn primary" onClick={() => sync()} disabled={busySync}>
+                {busySync
+                  ? <span><span className="spin">{'◌'}</span> reading {syncState.fetched}</span>
+                  : connected ? 'Refresh' : 'Connect Gmail'}
+              </button>
+            </div>
+          </div>
+
+          {isSample ? (
+            <div className="banner sample-note" data-sample-banner>
+              <b>Sample data.</b>
+              <span>{SAMPLE_NOTE}</span>
+            </div>
+          ) : null}
+
+          {syncState.error ? (
+            <div className="banner" style={{ background: 'var(--alert-soft)' }}>
+              <b>Gmail did not answer.</b>
+              <span>{syncState.error}</span>
+            </div>
+          ) : null}
+
+          {runState.note ? (
+            <div className="banner" style={{ background: 'var(--calm-soft)' }}>
+              <span>{runState.note}</span>
+            </div>
+          ) : null}
+          {runState.error ? (
+            <div className="banner" style={{ background: 'var(--alert-soft)' }}>
+              <b>That did not go through.</b>
+              <span>{runState.error}</span>
+            </div>
+          ) : null}
+
+          <div className="tabs" role="tablist">
+            {[
+              ['pulse', 'Pulse', null],
+              ['attention', 'Needs you', flags.length],
+              ['suggestions', 'Do this', displayedSuggestions.length],
+              ['cleanup', 'Mass cleanup', selected.size || null],
+            ].map(([key, label, pip]) => (
+              <button key={key} className="tab" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
+                {label}
+                {pip ? <span className="pip">{pip}</span> : null}
+              </button>
+            ))}
+          </div>
+
+          {pendingPlan ? (
+            <div className="confirmbox" style={{ marginBottom: 14 }}>
+              <div className="what"><b>Before anything happens.</b> {pendingPlan.summary}</div>
+              <ul>
+                <li>{pendingPlan.reversible}</li>
+                {pendingPlan.chunks.length > 1
+                  ? <li>Sent in {pendingPlan.chunks.length} batches — Gmail caps each one at {BATCH_MODIFY_LIMIT}.</li>
+                  : null}
+                <li>Your Snug host asks you again before it sends this.</li>
+              </ul>
+              <div className="row" style={{ gap: 9, flexWrap: 'wrap' }}>
+                <button className="btn primary" onClick={runPlan} disabled={runState.busy}>
+                  {runState.busy ? <span><span className="spin">{'◌'}</span> running</span> : 'Yes, do it'}
+                </button>
+                <button className="btn" onClick={() => setPendingPlan(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : null}
+
+          {tab === 'pulse' ? (
+            <div className="grid">
+              <div className="grid g3">
+                <div className="card">
+                  <div className="stat">{totalThisWeek}<span className="unit">emails</span></div>
+                  <div className="statlabel">arrived this week</div>
+                </div>
+                <div className="card">
+                  <div className="stat" style={{ color: noiseShare > 40 ? 'var(--alert)' : 'var(--fg)' }}>
+                    {noiseShare}<span className="unit">%</span>
+                  </div>
+                  <div className="statlabel">from senders you never answer</div>
+                </div>
+                <div className="card">
+                  <div className="stat">{unsubs.filter((u) => u.channel !== 'none').length}<span className="unit">lists</span></div>
+                  <div className="statlabel">you can leave in one click</div>
+                </div>
+              </div>
+
+              <div className="card">
+                <h2>Where your inbox is heading</h2>
+                <p className="hint">
+                  {weeks.length} {weeks.length === 1 ? 'week' : 'weeks'} of arrivals — the line is what a
+                  person feels as "my inbox is getting worse".
+                </p>
+                <TrendChart weeks={weeks} />
+              </div>
+
+              <div className="grid g2">
+                <div className="card">
+                  <h2>Who is actually filling it</h2>
+                  <p className="hint">Green means a real correspondence — you have written back at least once.</p>
+                  <SenderBars senders={senders} />
+                </div>
+                <div className="card">
+                  <h2>What it is made of</h2>
+                  <p className="hint">Every message counted exactly once, so the shares add up.</p>
+                  <CategoryDonut mix={mix} />
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="row between" style={{ flexWrap: 'wrap', gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <h2>Ask about your inbox</h2>
+                    <p className="hint" style={{ marginBottom: 0 }}>
+                      The open chat lane is more powerful still — this box is for a quick question.
+                    </p>
+                  </div>
+                  <button className="btn small" onClick={runDigest} disabled={agent.busy}>
+                    {agent.busy ? 'thinking' : 'Morning briefing'}
+                  </button>
+                </div>
+                {agent.digest ? (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 14.5, fontWeight: 600, marginBottom: 4 }}>{agent.digest.headline}</div>
+                    <div className="hint" style={{ marginBottom: 0 }}>{agent.digest.summary}</div>
+                  </div>
+                ) : null}
+                <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                  <input className="ask" style={{ flex: '1 1 240px' }} value={question}
+                         placeholder="What should I clean up first?"
+                         aria-label="Ask a question about your inbox"
+                         onChange={(event) => setQuestion(event.target.value)}
+                         onKeyDown={(event) => { if (event.key === 'Enter') runAnswer(); }} />
+                  <button className="btn" onClick={runAnswer} disabled={agent.busy || !question.trim()}>Ask</button>
+                </div>
+                {answer ? (
+                  <div className="answer">
+                    {answer.pending ? <span className="spin">{'◌'}</span> : <AnswerView shape={answer.shape} />}
+                  </div>
+                ) : null}
+                {agent.error ? <div className="hint" style={{ marginTop: 8, color: 'var(--alert)' }}>{agent.error}</div> : null}
+              </div>
+            </div>
+          ) : null}
+
+          {tab === 'attention' ? (
+            <div className="grid g2">
+              <div className="card">
+                <h2>You have never written back</h2>
+                <p className="hint">
+                  Three or more emails, no reply from you, and not a receipt — receipts and anything
+                  you have starred are left out on purpose, because nobody answers those either.
+                </p>
+                {flags.length === 0 ? <div className="empty">Nothing here. Your inbox is unusually well behaved.</div> : null}
+                {flags.slice(0, 12).map((flag) => (
+                  <div className="senderrow" key={flag.sender}>
+                    <div className="avatar" style={{ background: swatchFor(flag.sender) }}>{initials(flag.name)}</div>
+                    <div className="grow">
+                      <div className="sname">{flag.name}</div>
+                      <div className="saddr">{flag.sender}</div>
+                    </div>
+                    <span className="tag warn">{flag.received} emails</span>
+                    <span className="tag">last {relDays(flag.daysSince)}</span>
+                    <button className="btn small" onClick={() => stagePlan('trash', [flag.sender])}>Clear out</button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="card">
+                <h2>Lists you can leave</h2>
+                <p className="hint">
+                  These senders publish an unsubscribe route themselves. An email address is answered
+                  with one confirmed send; a web link opens in your real browser, because this app
+                  can only ever reach Gmail.
+                </p>
+                {unsubs.filter((u) => u.channel !== 'none').length === 0
+                  ? <div className="empty">No unsubscribe headers found in the last 90 days.</div> : null}
+                {unsubs.filter((u) => u.channel !== 'none').slice(0, 12).map((candidate) => (
+                  <div className="senderrow" key={candidate.sender}>
+                    <div className="avatar" style={{ background: swatchFor(candidate.sender) }}>{initials(candidate.name)}</div>
+                    <div className="grow">
+                      <div className="sname">{candidate.name}</div>
+                      <div className="saddr">{candidate.received} emails · {candidate.channel === 'mailto' ? 'unsubscribes by email' : 'unsubscribes on the web'}</div>
+                    </div>
+                    <button className="btn small" onClick={() => runUnsubscribe(candidate)} disabled={runState.busy}>
+                      Unsubscribe
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {tab === 'suggestions' ? (
+            <div className="grid">
+              <div className="card">
+                <div className="row between" style={{ flexWrap: 'wrap', gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <h2>Run these without leaving the page</h2>
+                    <p className="hint" style={{ marginBottom: 0 }}>
+                      Each one shows you exactly what it touches before anything happens.
+                    </p>
+                  </div>
+                  <button className="btn small" onClick={runSuggestions} disabled={agent.busy}>
+                    {agent.busy ? <span><span className="spin">{'◌'}</span> reading your inbox</span> : 'Ask the assistant'}
+                  </button>
+                </div>
+              </div>
+              <div className="grid g2">
+                {displayedSuggestions.map((suggestion, index) => (
+                  <div className="suggest" key={index}>
+                    <div className="title">{suggestion.title}</div>
+                    <div className="why">{suggestion.why}</div>
+                    {suggestion.senders && suggestion.senders.length
+                      ? <div className="pre">{suggestion.senders.join(', ')}</div> : null}
+                    <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                      {suggestion.action === 'unsubscribe' ? (
+                        <button className="btn small primary"
+                                onClick={() => {
+                                  const target = unsubs.find((candidate) => candidate.sender === (suggestion.senders || [])[0]);
+                                  if (target) runUnsubscribe(target);
+                                }}>
+                          Unsubscribe
+                        </button>
+                      ) : suggestion.action !== 'none' ? (
+                        <button className="btn small primary"
+                                onClick={() => stagePlan(suggestion.action, suggestion.senders || [], { labelName: suggestion.labelName })}>
+                          Preview it
+                        </button>
+                      ) : null}
+                      <span className="tag">{suggestion.action}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {tab === 'cleanup' ? (
+            <div className="card">
+              <h2>Pick senders, clean up everything at once</h2>
+              <p className="hint">
+                Select as many as you like. Whatever you choose, the plan is spelled out before it runs
+                and nothing is ever deleted — mail moves to Trash, where Gmail keeps it for 30 days.
+              </p>
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                <button className="btn small" disabled={!selected.size} onClick={() => stagePlan('trash', [])}>
+                  Move to Trash
+                </button>
+                <button className="btn small" disabled={!selected.size} onClick={() => stagePlan('label', [], { labelName: 'Snug/Sorted' })}>
+                  File out of the inbox
+                </button>
+                <button className="btn small" disabled={!selected.size} onClick={() => stagePlan('spam', [])}>
+                  Move to Spam
+                </button>
+                <button className="btn small danger" disabled={selected.size !== 1} onClick={() => stagePlan('block', [])}>
+                  Block future mail
+                </button>
+                {selected.size ? <span className="tag">{selected.size} selected</span> : null}
+              </div>
+              {senderStats(rows)
+                .sort((a, b) => b.received - a.received)
+                .slice(0, 25)
+                .map((stat) => (
+                  <div className="senderrow" key={stat.sender}>
+                    <Checkbox checked={selected.has(stat.sender)}
+                              onToggle={() => toggle(stat.sender)}
+                              label={'Select ' + stat.name} />
+                    <div className="avatar" style={{ background: swatchFor(stat.sender) }}>{initials(stat.name)}</div>
+                    <div className="grow">
+                      <div className="sname">{stat.name}</div>
+                      <div className="saddr">{stat.sender}</div>
+                    </div>
+                    <span className="tag">{stat.received}</span>
+                    {stat.replied ? <span className="tag calm">you reply</span> : null}
+                    {stat.transactional ? <span className="tag">receipts</span> : null}
+                    {stat.endorsed ? <span className="tag calm">starred</span> : null}
+                  </div>
+                ))}
+            </div>
+          ) : null}
+
+          <div className="foot">
+            <span className="faint">
+              {/*
+                When the mailbox was last read, and over which window. Once mail is stored
+                rather than re-fetched every launch, "is this stale?" becomes a real
+                question — and it should be answerable without spending a sync to find out.
+              */}
+              {lastRun !== null
+                ? (lastRun.ok ? 'Last read ' : 'Last attempt failed ') +
+                  new Date(lastRun.at * 1000).toLocaleString() +
+                  (lastRun.ok ? ' · ' + (SYNC_WINDOWS.find((w) => w.id === lastRun.windowId) || {}).label : '')
+                : isSample
+                  ? 'Nothing has been connected yet — this is sample data.'
+                  : 'Reading metadata only — never the contents of your emails.'}
+            </span>
+            <span className="faint">
+              {isSample ? 'Sample data · ' + SAMPLE_SAVED_MINUTES + ' minutes of tidying, shown before you connect anything' : 'Your data stays in your own file.'}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

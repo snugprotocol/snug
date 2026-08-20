@@ -1,0 +1,9 @@
+{
+  "slot": "gmail",
+  "provider": {
+    "name": "Gmail",
+    "docsUrl": "https://developers.google.com/gmail/api/reference/rest"
+  },
+  "kind": "oauth2_auth_code",
+  "declaredApiHosts": ["gmail.googleapis.com"]
+}

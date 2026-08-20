@@ -57,3 +57,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0036 — Per-app model selection](0036-per-app-model-selection.md)
 - [0037 — Sidecar durable thread cache and launch-time sync resume](0037-sidecar-durable-sync-resume.md)
 - [0038 — SimpleFIN rides plain connected-fetch via a token-claim pairing; Ledger ships the open-url concierge capability](0038-simplefin-token-claim-and-ledger.md)
+- [0039 — Gmail starter: pinned modify/settings/send scopes and governed inbox cleanup](0039-gmail-starter-scopes-and-governed-cleanup.md)

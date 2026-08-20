@@ -21,6 +21,7 @@ import type { ChatCardState } from '../agent/cards.js';
 import { createOpenUrlHandlerFor } from '../state/openUrl.js';
 import { createNetHandlerFor } from '../state/net.js';
 import { startSidecarLiveForApp, type SidecarSyncState } from '../state/sidecarLive.js';
+import { registerAppHost } from '../state/appHosts.js';
 import {
   connectionWizardRevisionStore,
   isConnectionRepairableNetError,
@@ -236,6 +237,16 @@ export default function RunView(): ReactElement {
 
   // Linked-device history-sync state for the header indicator (ADR-0037 §4).
   const [sidecarSync, setSidecarSync] = useState<SidecarSyncState | undefined>(undefined);
+
+  // Publish this app's frame handle so the connection wizard can tell it, on a VERIFIED
+  // connection, that its data is stale (TASK-20260819-inbox-copilot-fixes). The wizard is
+  // a sibling of this view, so the registry is the seam rather than a prop path: it keeps
+  // the wizard from holding a frame reference and this view from knowing wizards exist.
+  // Same per-emit ref read as the pump above — a frameEpoch remount needs no
+  // re-registration because the ref always points at the live host.
+  useEffect(() => {
+    return registerAppHost(id, (event, data) => controlsRef.current?.notifyEvent(event, data));
+  }, [id]);
 
   // THE LIVE PUMP (ADR-0034 §2): while THIS view has an app with an approved
   // sidecar-symbolic-host connection mounted, long-poll the helper's hint stream through

@@ -96,6 +96,11 @@ const MANIFEST_APPS = [
   // naming SimpleFIN; the borrow hit substitutes the registry's pinned fields,
   // walkthrough and host, and the claim mints the credentials.
   'ledger',
+  // The eighth: Inbox Copilot (TASK-20260819-gmail-starter, ADR-0039) — also BARE.
+  // The registry's Gmail entry supplies the pinned scopes, the two credential fields
+  // and the console walkthrough on the borrow hit; the manifest names only the brand,
+  // the kind and the single host it will ever reach.
+  'gmail',
 ];
 
 /** The full set of starter folders SURVEYED for a manifest — all declarers now. */
@@ -110,6 +115,7 @@ const P4_STARTER_FOLDERS = [
   'github',
   'whatsapp',
   'ledger',
+  'gmail',
 ];
 
 const readManifest = (app) => JSON.parse(readFileSync(path.join(HERE, app, 'connection.json'), 'utf8'));

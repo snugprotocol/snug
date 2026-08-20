@@ -43,6 +43,7 @@ import {
   type ConnectionWizardStep,
 } from '../state/connectionWizard.js';
 import { installTestUserDb } from './userdbTestHelper.js';
+import { registerAppHost, __resetAppHostsForTest } from '../state/appHosts.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -191,6 +192,9 @@ afterEach(async () => {
   });
   container?.remove();
   __resetConnectionWizardForTests();
+  // Module-level registry: a registration leaking into the next test would make the
+  // refresh prompt appear in suites that never stood an app up.
+  __resetAppHostsForTest();
 });
 
 // ---------------------------------------------------------------------------
@@ -1151,5 +1155,124 @@ describe('AC3b — scopes render on the review screen and as a reapproval delta 
 
     expect(container.querySelector('[data-testid="reapproval-diff"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="reapproval-scope-diff"]')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260819-inbox-copilot-fixes AC1/AC2 — the verified-connection refresh prompt
+// ---------------------------------------------------------------------------
+
+/**
+ * The wizard proves a connection works and then throws that knowledge away: the probe
+ * outcome dies with the sheet, and the app the user came from is still showing sample
+ * data with nothing admitting it has not caught up. This suite pins the prompt that
+ * closes that gap, and — more importantly — pins WHEN it may appear.
+ *
+ * The gate is VERIFIED, not "saved". `awaitingProbe` already encodes that distinction
+ * for the heading (TASK-20260815 AC6: "connected" is earned, not declared), and the
+ * prompt inherits it: offering to load real data off an unproven credential would teach
+ * exactly the misplaced trust that AC6 exists to prevent.
+ */
+describe('TASK-20260819 — the verified-connection refresh prompt', () => {
+  // A provider name that resolves to NO registry entry: a borrowed brand may not author
+  // its own `fields`/`testRequest` (the registry's pinned values are substituted), and
+  // this suite needs a probeable row it fully controls.
+  const bearer = {
+    provider: { name: 'Probe Fixture Co' },
+    kind: 'bearer_token',
+    declaredApiHosts: ['api.probe-fixture.example'],
+    fields: [{ key: 'token', label: 'Token', type: 'password' }],
+  };
+  const probeRow = {
+    ...bearer,
+    slot: 'refresh-probe',
+    testRequest: { method: 'GET', pathAndQuery: '/v1/ping' },
+  };
+
+  async function walkToDone(requirement: Record<string, unknown>): Promise<void> {
+    declare(requirement, { approve: true });
+    openConnectionWizard({ appId: APP, slot: requirement['slot'] as string, source: 'settings' });
+    await renderSheet();
+    await click(/approve this connection/i);
+    const token = container.querySelector<HTMLInputElement>('input[data-field-key="token"]');
+    await act(async () => {
+      token!.value = 'a-token-value';
+      token!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click(/save (my )?credentials/i);
+  }
+
+  it('AC1: a probeable row offers NO refresh prompt until the probe passes', async () => {
+    // The load-bearing negative. Credentials are saved and the row is approved — but
+    // nothing has proven the credential works, so offering to replace real data on the
+    // strength of it would be the host asserting something it does not know.
+    //
+    // A live host is registered FIRST so this fails for the right reason: without it the
+    // assertion would pass merely because there was no app to tell.
+    registerAppHost(APP, () => {});
+    await walkToDone(probeRow);
+    expect(
+      container.querySelector('[data-testid="connection-refresh-prompt"]'),
+      'an unproven credential must not invite a data replacement',
+    ).toBeNull();
+  });
+
+  it('AC1: an OAuth row offers the prompt on arrival — the token round trip already proved it', async () => {
+    // OAuth kinds are deliberately unprobeable (a minted token IS the proof), so the
+    // prompt must not wait for a probe that will never be offered. Without this branch
+    // the feature would be dead for exactly the connection kind Inbox Copilot uses.
+    declare(
+      {
+        provider: { name: 'Gmail' },
+        slot: 'gmail',
+        kind: 'oauth2_auth_code',
+        declaredApiHosts: ['gmail.googleapis.com'],
+        endpoints: {
+          authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+          tokenUrl: 'https://oauth2.googleapis.com/token',
+        },
+      },
+      { approve: true },
+    );
+    // The prompt is only offered when there IS a running app to tell — this suite must
+    // stand one up, exactly as RunView does when the app is on screen.
+    registerAppHost(APP, () => {});
+    openConnectionWizard({ appId: APP, slot: 'gmail', source: 'settings' });
+    await renderSheet();
+    await act(async () => {
+      connectionWizardStepStore.set('done');
+    });
+    await settle();
+
+    expect(container.querySelector('[data-testid="connection-refresh-prompt"]')).not.toBeNull();
+  });
+
+  it('AC1: the prompt says what it replaces, and declining is a first-class choice', async () => {
+    declare(
+      {
+        provider: { name: 'Gmail' },
+        slot: 'gmail-copy',
+        kind: 'oauth2_auth_code',
+        declaredApiHosts: ['gmail.googleapis.com'],
+        endpoints: {
+          authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+          tokenUrl: 'https://oauth2.googleapis.com/token',
+        },
+      },
+      { approve: true },
+    );
+    registerAppHost(APP, () => {});
+    openConnectionWizard({ appId: APP, slot: 'gmail-copy', source: 'settings' });
+    await renderSheet();
+    await act(async () => {
+      connectionWizardStepStore.set('done');
+    });
+    await settle();
+
+    const prompt = container.querySelector('[data-testid="connection-refresh-prompt"]');
+    expect(prompt?.textContent ?? '').toMatch(/sample|example|demo/i);
+    // Declining must be a visible button, not "close the sheet and hope": a person who
+    // wants to keep looking at the demo is making a legitimate choice.
+    expect(button(/not now|keep|later/i), 'declining must be an explicit affordance').toBeDefined();
   });
 });
