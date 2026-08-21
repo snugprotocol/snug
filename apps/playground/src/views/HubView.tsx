@@ -3,6 +3,8 @@ import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { parseBuildPrompt } from '../agent/chips.js';
+import { ProtectSetupFlow } from '../vault/ProtectSetupFlow.js';
+import { useProtectOffer } from '../vault/protectOffer.js';
 import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
 import { useDesktopFirstRun } from '../desktop/firstRun.js';
 import { getPlatform } from '../platform/platform.js';
@@ -63,14 +65,25 @@ const STARTER_LOOKS: Readonly<
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };
 
 /**
- * The hub route. On a desktop first run (TASK-20260812 P3 item 1) the welcome takes the
- * whole screen — one idea per screen — and the shelf waits until the person has chosen
- * (or skipped). A wrapper component rather than an early return so the two branches
- * keep their own hook lists.
+ * The hub route. Two full-screen gates sit in front of the shelf, in this order:
+ *
+ *   1. the desktop welcome (TASK-20260812 P3 item 1) — "how should your apps think?"
+ *   2. the protection offer (TASK-20260820, D3) — "protect this file?"
+ *
+ * Order matters and is not arbitrary. The welcome asks a question the user must answer
+ * to get a working hub at all; protection is a decision about the file that question
+ * just created, so asking it second means the file exists and the person has already
+ * seen one screen of context. Stacking them would violate the one-idea-per-screen rule
+ * both were written to follow.
+ *
+ * A wrapper component rather than early returns so each branch keeps its own hook list.
  */
 export function HubView(): ReactElement {
   const firstRun = useDesktopFirstRun();
-  return firstRun ? <DesktopWelcome /> : <HubHome />;
+  const offerProtection = useProtectOffer();
+  if (firstRun) return <DesktopWelcome />;
+  if (offerProtection) return <ProtectSetupFlow onDone={() => undefined} />;
+  return <HubHome />;
 }
 
 function HubHome(): ReactElement {

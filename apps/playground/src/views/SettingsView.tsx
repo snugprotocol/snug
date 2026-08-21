@@ -19,6 +19,9 @@ import {
   type PlaygroundMode,
 } from '../state/mode.js';
 import { useOllama } from '../state/ollama.js';
+import { ProtectSetupFlow } from '../vault/ProtectSetupFlow.js';
+import { disableProtection } from '../vault/enableProtection.js';
+import { SETTING_PROTECTION_ENABLED, markProtectionDisabled } from '../vault/protectOffer.js';
 import { getPlatform } from '../platform/platform.js';
 import { login, useAuth } from '../state/auth.js';
 import {
@@ -247,6 +250,7 @@ export function SettingsView(): ReactElement {
 
       <AccountCard />
       <DataCard />
+      <ProtectionCard />
       {/*
         P3 (fold B1): the v4 slot-aware card replaces AL-03's app-keyed ConnectionsCard.
         One row per (app, SLOT) rather than one per app — the same provider connected in
@@ -341,6 +345,95 @@ export function AccountCard(): ReactElement | null {
             <Button onClick={() => login()}>sign in with google</Button>
           </>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * Protection (children 3b/4): turning the passphrase on, changing it, turning it off.
+ *
+ * This is the door for everyone who is not on their first run — the person who said
+ * "not now", and the person who now wants out. D3 promised both, and without them the
+ * feature would be reachable exactly once in a file's life.
+ */
+function ProtectionCard(): ReactElement {
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [protectedNow, setProtectedNow] = useState<boolean | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [confirmOff, setConfirmOff] = useState(false);
+
+  useEffect(() => {
+    void getUserDb().then((db) => setProtectedNow(db.getSetting(SETTING_PROTECTION_ENABLED) === true));
+  }, [setupOpen]);
+
+  const turnOff = (): void => {
+    setBusy(true);
+    setError(undefined);
+    void disableProtection()
+      .then(() => {
+        markProtectionDisabled();
+        setProtectedNow(false);
+        setConfirmOff(false);
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setBusy(false));
+  };
+
+  if (setupOpen) {
+    return <ProtectSetupFlow onDone={() => setSetupOpen(false)} />;
+  }
+
+  return (
+    <Card>
+      <div className="field">
+        <label>protection</label>
+        {protectedNow === true ? (
+          <>
+            <span className="hint">
+              this file is protected. it opens only with your passphrase or Recovery Key — here, and anywhere you
+              carry it.
+            </span>
+            <div className="field-row">
+              {/* Re-running setup mints a NEW Recovery Key alongside the new
+                  passphrase, so the screen that shows it is the same one, with the
+                  same typed acknowledgement. Nothing about a change is quieter than
+                  the original decision was. */}
+              <Button onClick={() => setSetupOpen(true)}>change passphrase</Button>
+              <Button onClick={() => setConfirmOff(true)}>turn protection off</Button>
+            </div>
+            {confirmOff ? (
+              <div className="error-note" role="alert">
+                turning protection off writes your file back as an ordinary database — anything that can read your
+                disk can read it again. your apps and data are untouched.
+                <div className="field-row" style={{ marginTop: 'var(--space-2)' }}>
+                  <Button variant="primary" disabled={busy} onClick={turnOff}>
+                    {busy ? 'removing…' : 'yes, turn it off'}
+                  </Button>
+                  <Button onClick={() => setConfirmOff(false)}>keep it on</Button>
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <span className="hint">
+              your file is not protected. anything running on this computer can read it — your apps, their data, your
+              chats and your keys. a passphrase scrambles it so only you can open it.
+            </span>
+            <div className="field-row">
+              <Button variant="primary" onClick={() => setSetupOpen(true)}>
+                protect my file
+              </Button>
+            </div>
+          </>
+        )}
+        {error !== undefined ? (
+          <p className="error-note" role="alert">
+            {error}
+          </p>
+        ) : null}
       </div>
     </Card>
   );

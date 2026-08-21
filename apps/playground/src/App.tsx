@@ -26,6 +26,7 @@ import { OAuthCallbackPage } from './connections/OAuthCallbackPage.js';
 import { NetConfirmDialog } from './run/NetConfirmDialog.js';
 import { OpenUrlConfirmDialog } from './run/OpenUrlConfirmDialog.js';
 import { Button } from './ui/Button.js';
+import { initProtectOffer } from './vault/protectOffer.js';
 import { UnlockScreen } from './vault/UnlockScreen.js';
 import { Logo } from './ui/Logo.js';
 import { Skeleton } from './ui/Skeleton.js';
@@ -52,7 +53,11 @@ export function App(): ReactElement {
     // same settings, so it follows hydration.
     void refreshOllama()
       .then(() => initSettings())
-      .then(() => initDesktopFirstRun());
+      .then(() => initDesktopFirstRun())
+      // AFTER settings hydrate: the offer latch reads its keys out of the user file,
+      // so it cannot run before the file is open and read. Web AND desktop (D3) —
+      // unlike the desktop-only welcome latch above.
+      .then(() => initProtectOffer());
     // AL-07: the experimental webllm flag + WebGPU probe (idempotent, flag-gated).
     void initWebllm();
     // W2b: platform-only seam — a no-op on web (no open handler).

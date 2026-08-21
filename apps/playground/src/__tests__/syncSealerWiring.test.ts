@@ -17,6 +17,35 @@ import { fileURLToPath } from 'node:url';
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..');
 const syncSource = readFileSync(join(SRC, 'state/sync.ts'), 'utf8');
 
+// The SAME defect class bit twice: components built and unit-tested in isolation, never
+// rendered by the app. Owner found it by running the desktop client and never being asked
+// for a passphrase. These assertions are deliberately about REACHABILITY — "is this
+// component mounted by something the user can get to" — because that is the question
+// component tests structurally cannot answer.
+describe('the protection flow is REACHABLE by a real user', () => {
+  const appSource = readFileSync(join(SRC, 'App.tsx'), 'utf8');
+  const hubSource = readFileSync(join(SRC, 'views/HubView.tsx'), 'utf8');
+  const settingsSource = readFileSync(join(SRC, 'views/SettingsView.tsx'), 'utf8');
+
+  it('the offer latch is initialised at boot', () => {
+    // Without this the store is false forever and the offer never appears, no matter
+    // how correct protectOffer.ts is.
+    expect(appSource).toContain('initProtectOffer');
+  });
+
+  it('something actually RENDERS ProtectSetupFlow', () => {
+    const rendered = `${appSource}${hubSource}${settingsSource}`;
+    expect(rendered).toContain('ProtectSetupFlow');
+  });
+
+  it('Settings can turn protection on and off after first run', () => {
+    // D3 said the offer is prominent at first run AND changeable in Settings. A user
+    // who said "not now" needs a door, and a protected user needs a way back out.
+    expect(settingsSource).toMatch(/enableProtection|ProtectSetupFlow/);
+    expect(settingsSource).toContain('disableProtection');
+  });
+});
+
 describe('the sync loop is constructed WITH the sealer (D-2)', () => {
   it('passes sealForOrigin from the user db into createSyncLoop', () => {
     const call = /createSyncLoop\(\{[\s\S]*?\n  \}\);/.exec(syncSource)?.[0] ?? '';
