@@ -6,6 +6,7 @@
 
 import type { UserDb } from '@snugprotocol/db';
 
+import { markAppRenamed } from './appMeta.js';
 import { forgetSidecarSession } from './sidecarForget.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { appHoldsLastSidecarFact } from './sidecarLive.js';
@@ -31,6 +32,13 @@ export interface LibraryStore {
    * its `installSource` for reinstall. Irreversible — there is no trash (out of scope).
    */
   delete(id: string): Promise<void>;
+  /**
+   * Rename to any UNIQUE name (TASK-20260821 AC1/AC2): trimmed, case-insensitive
+   * uniqueness against every other installed app (self-rename allowed), and the
+   * `appRenamed` marker so the announce path stops refreshing `display_name` over it.
+   * Throws with a user-renderable message on refusal; writes nothing then.
+   */
+  rename(id: string, name: string): Promise<void>;
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -91,6 +99,22 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
       // AFTER the committed cascade, so a dead helper can never fail the delete: logout
       // the linked device and erase the helper's on-disk session store.
       if (unlinkDevice) await forgetSidecarSession();
+    },
+    async rename(id, name) {
+      const db = await getDb();
+      // Same 80-char bound the install-time naming rule applies (deriveDisplayName).
+      const trimmed = name.trim().slice(0, 80);
+      if (trimmed === '') throw new Error('an app needs a name');
+      const lowered = trimmed.toLowerCase();
+      const clash = db
+        .listApps()
+        .some((app) => app.appId !== id && app.displayName.trim().toLowerCase() === lowered);
+      if (clash) throw new Error(`you already have an app called “${trimmed}” — names must be unique`);
+      db.updateAppMeta(id, { displayName: trimmed });
+      db.setAppRenamed(id, true);
+      // The store half, synchronous: tiles and headers show the new name immediately,
+      // and the announce merge starts respecting it this session.
+      markAppRenamed(id, trimmed);
     },
     async findByInstallSource(source) {
       const db = await getDb();

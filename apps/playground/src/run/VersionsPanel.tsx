@@ -27,6 +27,8 @@ export function VersionsPanel({ appId, refreshToken, onReverted }: VersionsPanel
   const [versions, setVersions] = useState<AppVersionMeta[]>([]);
   const [currentVersion, setCurrentVersion] = useState<number | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  /** Which version row shows its inline delete confirm (TASK-20260821 AC3/AC4). */
+  const [confirmingDelete, setConfirmingDelete] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +69,28 @@ export function VersionsPanel({ appId, refreshToken, onReverted }: VersionsPanel
       .then((db) => afterChange(db.resetToFactory(appId).version))
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, [appId, afterChange]);
+
+  /**
+   * Delete ONE version (TASK-20260821 AC3). The DB refuses pinned and current rows with
+   * named errors; the UI additionally never OFFERS the action there (AC4) — the guard
+   * exists at both altitudes because this list can go stale under the panel. No
+   * `onReverted` call: nothing about the RUNNING app changed, so remounting the frame
+   * would be churn.
+   */
+  const deleteVersion = useCallback(
+    (version: number): void => {
+      setError(undefined);
+      setConfirmingDelete(undefined);
+      void getUserDb()
+        .then((db) => {
+          db.deleteAppVersion(appId, version);
+          setVersions(db.listAppVersions(appId));
+          setCurrentVersion(db.getApp(appId)?.currentVersion);
+        })
+        .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+    },
+    [appId],
+  );
 
   if (versions.length === 0) {
     return <EmptyState glyph="⧉" title="no versions yet" lesson="chat edits create versions — ask for a change and it lands here." />;
@@ -112,6 +136,36 @@ export function VersionsPanel({ appId, refreshToken, onReverted }: VersionsPanel
             <Button onClick={() => revert(version.version)} title={`make v${version.version} the current version`}>
               revert
             </Button>
+          ) : null}
+          {/* Deletable = not pinned (every pin is a factory snapshot — owner decision
+              2026-08-21: ALL pins protected) and not running. Inline two-step confirm,
+              matching the hub tile's pattern — window.confirm is design-forbidden. */}
+          {!version.pinned && version.version !== currentVersion ? (
+            confirmingDelete === version.version ? (
+              <span className="version-delete-confirm" role="group" aria-label={`delete v${version.version}?`}>
+                <Button
+                  variant="danger"
+                  data-testid="version-delete-confirm"
+                  onClick={() => deleteVersion(version.version)}
+                  title={`permanently delete v${version.version}`}
+                >
+                  delete
+                </Button>
+                <Button variant="ghost" data-testid="version-delete-cancel" onClick={() => setConfirmingDelete(undefined)}>
+                  keep
+                </Button>
+              </span>
+            ) : (
+              <Button
+                variant="ghost"
+                data-testid="version-delete"
+                onClick={() => setConfirmingDelete(version.version)}
+                title={`delete v${version.version} — the pinned factory and the running version can’t be deleted`}
+                aria-label={`delete v${version.version}`}
+              >
+                delete
+              </Button>
+            )
           ) : null}
         </div>
       ))}
