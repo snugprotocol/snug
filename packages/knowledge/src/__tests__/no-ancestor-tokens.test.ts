@@ -62,6 +62,30 @@ function findHashedToken(text: string): string | null {
   return null;
 }
 
+/**
+ * Recover ONE forbidden token by brute force over a small alphabet, so the planted-token
+ * test below can prove the scanner still fires without this file containing the plaintext.
+ * Bounded to the shortest published length and lowercase letters — a few hundred thousand
+ * hashes, well under a second, and it either finds one or returns null (which fails the
+ * test rather than silently skipping it).
+ */
+function recoverOneToken(): string | null {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz';
+  const shortest = Math.min(...TOKEN_LENGTHS);
+  // Depth-first over candidate strings, pruning nothing — correctness over speed, and the
+  // search space at the shortest length is small enough that speed is not a concern.
+  const stack: string[] = [''];
+  while (stack.length > 0) {
+    const prefix = stack.pop() as string;
+    if (prefix.length === shortest) {
+      if (FORBIDDEN_TOKEN_HASHES.has(sha256(prefix))) return prefix;
+      continue;
+    }
+    for (const ch of alphabet) stack.push(prefix + ch);
+  }
+  return null;
+}
+
 describe('no ancestor tokens in the rendered store', () => {
   it('rendered store contains no ancestor identifiers, dead hooks, or sandbox escapes', () => {
     const violations: string[] = [];
@@ -79,13 +103,16 @@ describe('no ancestor tokens in the rendered store', () => {
   it('the hashed guard still CATCHES a planted token — a scanner that cannot fail proves nothing', () => {
     // The mutation check, kept as a permanent test because the hashing indirection is
     // exactly the kind of change that can silently become a no-op (a wrong length list, a
-    // case mismatch, an empty set). It plants a known-forbidden token inside ordinary
-    // prose and asserts the scanner finds it — without either side naming the token: the
-    // planted value is recovered from the hash set by brute force over the corpus below,
-    // so this test contains no plaintext codename either.
-    const planted = 'guardian'; // 8 chars — a common English word, and safe to name.
-    expect(FORBIDDEN_TOKEN_HASHES.has(sha256(planted)), 'the sample must really be forbidden').toBe(true);
-    expect(findHashedToken(`the ${planted} pattern is discussed here`)).not.toBeNull();
+    // case mismatch, an empty set).
+    //
+    // The planted token is RECOVERED, never written down: we search a small alphabet for
+    // a string whose hash is in the forbidden set. That keeps this file free of the very
+    // plaintext the hashing exists to remove — including for the flip-public scrub grep,
+    // which must be able to reach zero. If the search fails the test fails, so a broken
+    // hash set cannot masquerade as "nothing to plant".
+    const planted = recoverOneToken();
+    expect(planted, 'a forbidden token must be recoverable, or the hash set is broken').not.toBeNull();
+    expect(findHashedToken(`the ${planted!} pattern is discussed here`)).not.toBeNull();
     expect(findHashedToken('ordinary prose about apps, storage and bridges')).toBeNull();
   });
 
