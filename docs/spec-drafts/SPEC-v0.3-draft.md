@@ -351,11 +351,25 @@ offset  size      field
 16      16        salt
 32      2         slot count       u16 big-endian
 34      4         header checksum  FNV-1a/32 over the header with this field zeroed
-38      …         slot table       slot count × { kind:u8, iv:12 }
+38      …         slot table       slot count × 61 (see below)
 …       …         wrapped keys     slot count × 48 (AES-256-GCM of the 32-byte file key)
 …       12        payload IV
 …       …         payload          AES-256-GCM of the SQLite bytes of §8
 ```
+
+**Each slot-table entry is 61 bytes and only the first 13 are written**: `{ kind:u8,
+iv:12 }` followed by **48 reserved bytes that MUST be zero**. The stride is stated
+explicitly because it is load-bearing for interoperability rather than cosmetic: the header
+*through the end of the slot table* is the GCM additional authenticated data (rule 4
+below), so an implementation that packs entries at 13 bytes computes a different AAD span
+and **cannot open a conforming file at all** — the failure is a wrong-secret error on a
+perfectly good container, which rule 6 exists to prevent misreporting. For two slots the
+header is 38 + 2×61 = **160 bytes**, and the wrapped keys begin there.
+
+The reserved region is where each slot's wrapped key would sit if the two were interleaved;
+the reference implementation stores the wrapped keys contiguously after the header instead,
+so the space is carried and zeroed rather than reclaimed. It is not a version-negotiation
+seat — a future revision that uses it takes a new magic string.
 
 Slot kinds: `0x01` passphrase, `0x02` recovery key. The iteration count lives in the
 header so it can be raised later without orphaning old files.
