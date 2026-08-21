@@ -1,6 +1,6 @@
 # TASK-20260821-launch-security-review: Final pre-launch security review & threat model v3
 
-- **Status**: planned (awaiting Gate 2 approval)
+- **Status**: in-review (all phases executed; awaiting owner review + merge ask)
 - **Owner**: Jeetu
 - **Risk tier**: **high** — reviews and may patch `packages/protocol`, `packages/runner`, `packages/auth`, C1/C2 surfaces (auto-escalated per [PROCESS.md](../engineering/PROCESS.md#risk-tiers))
 - **Branch**: `feat/TASK-20260821-launch-security-review`
@@ -129,6 +129,52 @@ Rewrite `docs/threat-model.md` to 3.0:
 None expected. If AC3 finds a spec claim the code does not enforce, the decision is *correct the code* (preferred, if it is a real invariant) or *correct the draft* (if the claim overreached). Only the latter touches `docs/spec-drafts/` and it gets a `docs/spec-changelog.md` entry. **No push to `snugprotocol/spec` in this task** — the owner regenerates and publishes in the follow-on session.
 
 ---
+
+## Launch-readiness verdict (AC8)
+
+**PASS WITH CONDITIONS.**
+
+C1 and C2 were both re-attacked and **neither is false**. The credential-never-enters-the-
+iframe design held on every path seven lanes could reach; the sandbox, the CSP freeze, the
+navigation cutoff and the Rust command handlers all held under probing; the executor's ten
+gates run in the documented order, with the mutating-confirm gate genuinely preceding
+credential resolution on every branch including the sidecar path. Storage custody — the CAS
+endpoint, the OIDC binding, session cookies, namespace separation, the hub-bound secrets
+strip, and the `SNUGENC1` crypto — held under direct probing, including cross-user read and
+write attempts.
+
+Four defects were found and **fixed** rather than described, one of them a real credential
+leak (§Findings). Two of the eight findings were defects in *checks* rather than code.
+
+### The conditions, in the order they bind
+
+1. **The in-shell gate has not been run.** The two new IPC rows are unit-pinned only; no
+   real WKWebView has executed them. `pnpm --filter desktop gate` on macOS hardware is the
+   only thing that proves the refusal, and it is owed before the flip.
+2. **CI is billing-blocked** and has been since ~2026-08-18, so nothing here was verified by
+   an independent runner. This is already recorded as a hard flip-public blocker: an outside
+   contributor's PR cannot be gated by a command that only runs on the owner's Mac.
+3. **No Windows verification of any kind**, so R-5's only regression detector is dark. The
+   decision to ship macOS-only stands and is now stated in the build, the README, SECURITY.md
+   and the threat model — the condition is that this stays true, not that it be changed.
+4. **The reference server's missing authorization** (filed, item 1) needs at minimum the
+   runbook caveat before anyone self-hosts with SSO on. The shipped hub is unaffected.
+5. **Owner hardware walks remain owed** and no suite substitutes for them.
+
+### What was NOT checked — stated because a pass that hides its gaps is the failure mode
+
+- **`packages/adapters` and `packages/sdk` had no reviewer.** A deliberate scoping call.
+- **`never`/`always` claims were sampled, not traced.** Full tracing covered all 73
+  MUST/MUST NOT tokens; roughly 200 further lines were sampled by the rule recorded in AC3.
+- **SHOULD/MAY tokens were not examined at all**, nor the 48 ADRs, nor the whitepaper body
+  prose beyond its MUST tokens, nor the 12 per-delta security files' contents (only their
+  existence and hashes).
+- **Stage 0 of the flip runbook** (purging pre-scrub objects from the GitHub remote) was
+  **not executed** — it is owner-destructive. It remains an open flip blocker, and its
+  verification probe must FAIL before the repo goes public.
+- **The `internal/` reference scrub is not done** — 36 files still reference a path that
+  will 404 publicly. Measured, not fixed; the prompt-corpus subset was fixed because it
+  ships compiled.
 
 ## Findings and dispositions
 
