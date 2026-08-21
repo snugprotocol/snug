@@ -144,4 +144,10 @@ After owner plan approval: dispatch a **fresh-context AI plan review** (committe
 
 - **Process slip, logged for lessons**: during Phase 1 mutation-checking I restored a mutated file with `git checkout -- <file>` while the same file carried UNCOMMITTED implementation — wiping it (recovered by re-applying from context). The 2026-08-20 lesson ("restore from HEAD, not stash") assumes the tree is otherwise clean; the sharper rule: **mutation-check only files whose correct state is committed, or restore the mutation by inverse edit, never by checkout.**
 - The component tests initially raced the update act by waiting on the FIRST db write (html) instead of the completion callback — same family as "element not found names the wrong element"; fixed by waiting on the outcome (`onUpdated`).
-- A doc comment containing the literal glob pattern `examples/*/app.html` terminates the block comment at `*/` — esbuild parse error. Spell glob patterns in prose inside block comments.
+- A doc comment containing the literal glob pattern (examples, star, app.html) terminates the block comment at star-slash — esbuild parse error. Spell glob patterns in prose inside block comments.
+
+### 2026-08-21 — Claude — close-session (Gate 6)
+- Done: lessons ×3 appended (checkout-wipes-uncommitted-mutation-restore; wait-on-completion-signal; glob-ends-block-comment); docs drift fixed in-branch (architecture, code-map, next-steps, ADR index); no protocol change ⇒ no spec-changelog. Owner asked: open PR + merge (`/close-session , open PR, merge it`).
+- State: all 11 ACs implemented + tested; root force run 23/23 exit 0; real-browser walk complete with screenshots delivered to owner; `gate:local --legs=workspace,smoke,e2e` running for the merge (verdict goes in the PR body verbatim per ADR-0041; rust/desktop/release DESELECTED — no Rust/desktop/release surface touched).
+- Next step: on gate green — push, PR, merge on local evidence (CI billing-blocked, standing condition), done-INDEX line + this file deleted in the same PR (ADR-0027).
+- Open questions: none. Follow-ups already queued in next-steps (:47 html_mismatch renderer; trivia-night removal will delete one starter.json with the folder).
