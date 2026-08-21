@@ -17,6 +17,8 @@
     },
     "oauth:allow-start",
     "oauth:allow-cancel",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "http:default",
       "allow": [

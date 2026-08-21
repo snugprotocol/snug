@@ -46,6 +46,19 @@ const NEEDLES = [
   'SNUG_SHELL_GATE',
 ];
 
+/**
+ * ADR-0047 §11 (TASK-20260821): strings that MUST be present in the release binary.
+ * The production updater endpoint is baked in from tauri.conf.json; a release built
+ * with the dev `--config` endpoint overlay (updater-dev.json) REPLACES it, so this
+ * must-appear check is simultaneously the "no dev endpoint shipped" check — one
+ * mechanism, self-controlling (a broken scan fails loudly instead of passing). Keep
+ * byte-identical to `plugins.updater.endpoints[0]` / the playground releaseChannel
+ * constant; updaterConfig.test.ts pins those two against each other.
+ */
+const MUST_APPEAR = [
+  'https://github.com/snugprotocol/snug/releases/latest/download/latest.json',
+];
+
 function log(msg) {
   console.log(`[release-gate] ${msg}`);
 }
@@ -108,7 +121,22 @@ function main() {
     );
   }
 
+  // 4. MUST-APPEAR (ADR-0047 §11): the shipped client points at the PRODUCTION
+  //    update channel. Absence means either the config lost its endpoint or the
+  //    binary was built with the dev overlay — both unshippable.
+  const releaseBuffer = fs.readFileSync(releaseBinary);
+  const missingMustAppear = MUST_APPEAR.filter((n) => !containsNeedle(releaseBuffer, n));
+  if (missingMustAppear.length > 0) {
+    failures.push(
+      `RELEASE BINARY LACKS THE PRODUCTION UPDATE ENDPOINT: ${missingMustAppear.join(', ')} — ` +
+        'built with a dev endpoint overlay, or plugins.updater.endpoints was dropped (ADR-0047 §11).',
+    );
+  }
   console.log('\n═══ release inertness ═══');
+  for (const needle of MUST_APPEAR) {
+    const ok = !missingMustAppear.includes(needle);
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  must-appear release=${ok ? 'present' : 'ABSENT'}  ${needle}`);
+  }
   for (const needle of NEEDLES) {
     const d = inDebug.includes(needle) ? 'present' : 'ABSENT';
     const r = inRelease.includes(needle) ? 'PRESENT' : 'absent';
