@@ -37,3 +37,26 @@ export function appIdFromModelSettingKey(key: string): string | undefined {
   const appId = key.slice(APP_MODEL_SETTING_PREFIX.length);
   return appId.length === 0 ? undefined : appId;
 }
+
+/** The `starterVersion:` namespace prefix (TASK-20260820-starter-updates, ADR-0045 §6). */
+export const STARTER_VERSION_SETTING_PREFIX = 'starterVersion:';
+
+/**
+ * `starterVersion:<appId>` — the starter version an installed starter copy is on,
+ * written by the install and update acts. Absent means the copy predates versioning and
+ * readers derive: newest-pinned bytes equal to the bundle ⇒ the current bundled version,
+ * else 1. The same per-app-row-in-a-shared-namespace shape as `appModel:` above, with
+ * the same obligation: `deleteApp`'s cascade removes it, or a missed key silently
+ * applies to a REUSED app id.
+ */
+export function starterVersionSettingKey(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${STARTER_VERSION_SETTING_PREFIX}${appId}`;
+}
+
+/** The appId a settings key names, or `undefined` if the key is not a starter-version row. */
+export function appIdFromStarterVersionSettingKey(key: string): string | undefined {
+  if (!key.startsWith(STARTER_VERSION_SETTING_PREFIX)) return undefined;
+  const appId = key.slice(STARTER_VERSION_SETTING_PREFIX.length);
+  return appId.length === 0 ? undefined : appId;
+}
