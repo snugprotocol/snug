@@ -1,6 +1,6 @@
 # TASK-20260820-starter-updates: Starter app versioning & in-place updates
 
-- **Status**: planned
+- **Status**: in-review
 - **Owner**: Jeetu
 - **Risk tier**: **high** — touches the two-fact declaration vouch in `starterDeclaration.ts` (connection-trust surface, C1-adjacent) and `packages/db` version/delete semantics. Per PROCESS auto-escalation, High: plan gets a fresh-context AI review before implementation + negative tests + journal self-sign-off.
 - **Branch**: `feat/TASK-20260820-starter-updates`
@@ -129,3 +129,19 @@ After owner plan approval: dispatch a **fresh-context AI plan review** (committe
 - Notes adopted: glob pin actually lives in `examples/validate.test.mjs:448` (add a sibling pin for starterMeta's glob); export `normalize`; hub badge defaults to "installed" while async status resolves; header chip after a manual revert intentionally keeps showing the keyed starter version (copy decision, documented here).
 - Consciously rejected findings: none — all six accepted.
 - Next step: Phase 0 (validator tests red → starter.json ×13).
+
+### 2026-08-21 — Claude — implementation (Phases 0–4) + Gate 5
+- Done, tests-first throughout:
+  - **Phase 0** (`e095e3f`): starter.json ×13 (v1, initial notes) + the ADR-0045 validator block (shape + `appHash` byte-binding) + the authoring rule in examples/README. RED first (13 fails), then green; hash guard mutation-checked (html edit without release → red naming the paste-in fix).
+  - **Phase 1** (`ef3075f`): `saveAppVersion` opts `{pinned, contract}` (contract validated BEFORE any write; nothing stranded on refusal), `resetToFactory` MIN→MAX pinned, `deleteApp` sweeps `starterVersion:<appId>`, key helpers. db 401/401. Mutations: MAX-revert reds 2 tests; sweep-removal reds 1. (Process slip logged in Decisions below.)
+  - **Phase 2** (`c2a8f55`): `starterMeta.ts` (own glob + validator sibling pin; parse-and-drop; seam-OFF real-glob probe per lessons 2026-08-08), `starterUpdate.ts` (detection matrix; idempotent act with key self-heal; contract landed atomically; declared-only/absent-only refreshes), vouch fact 1 → newest pinned (empty set refuses; doctrine comments rewritten; `normalizeStarterHtml` exported). 17+4 new tests; existing vouch suites (31+16) untouched-green. Mutation: v1-revert reds exactly the update-pass + zero-pin twins.
+  - **Phase 3** (`584508e`): `StarterUpdateControls` (chip + release-notes sheet + one-click/confirmed update; cancel asserted as version COUNT), `ReleaseNotesSheet`, RunView mount + install-time key write (AC5b), VersionsPanel plural-pin comment + test, HubView `update · vN` badge (own class; "installed" default while async status resolves), CSS. Playground 1381/1381.
+  - **Phase 4** (`853f9c4`): architecture.md (newest-pin vouch; rebuild claim; corrected the stale "reported in Settings" sentence), code-map row, next-steps pruned by CONTENT (the two installed-starter items; :20 caveat softened; the AL-10/11 block untouched per review finding 2), ADR index backfilled 0041–0045.
+- **Gate 5 evidence**: root `turbo run test --force` — 23/23 tasks, `Cached: 0`, exit 0 (read from the process, not the summary). **Real-browser walk** (vite dev + agent-browser, screenshots in session scratchpad walk-01…09): installed trivia-night at v1 → header `v1` chip + Tesla-style notes sheet ("v1 — Initial release · INSTALLED") → throwaway bump to v2 (visible html marker + starter.json) → hub tile flipped to `UPDATE · V2` replacing "installed" → header showed `update to v2` → ONE click → frame reloaded live with the new bytes RUNNING (the probe marker on screen) → chip `v2`, update button gone → versions panel: v2 CURRENT+FACTORY ("starter update to v2") above v1 FACTORY with revert → notes sheet marks v2 installed → hub badge cleared, plain "installed" restored. Throwaway bump reverted; validator green after restore; tree clean.
+- **High-tier self-sign-off**: the vouch change shipped with its negative twins (current-only, pinned-only, zero-pin) plus the untouched 47 pre-existing declaration/install-act tests; the fresh-context plan review's six findings are all folded in and none rejected; C1/C2 surfaces (runner, auth, credential paths) untouched by construction — the update act writes only version rows, declared-only connection rows, absent-only docs, and one settings key. Signed: the implementing agent, 2026-08-21.
+
+## Decisions & surprises (implementation)
+
+- **Process slip, logged for lessons**: during Phase 1 mutation-checking I restored a mutated file with `git checkout -- <file>` while the same file carried UNCOMMITTED implementation — wiping it (recovered by re-applying from context). The 2026-08-20 lesson ("restore from HEAD, not stash") assumes the tree is otherwise clean; the sharper rule: **mutation-check only files whose correct state is committed, or restore the mutation by inverse edit, never by checkout.**
+- The component tests initially raced the update act by waiting on the FIRST db write (html) instead of the completion callback — same family as "element not found names the wrong element"; fixed by waiting on the outcome (`onUpdated`).
+- A doc comment containing the literal glob pattern `examples/*/app.html` terminates the block comment at `*/` — esbuild parse error. Spell glob patterns in prose inside block comments.
