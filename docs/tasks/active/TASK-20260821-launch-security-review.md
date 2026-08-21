@@ -130,10 +130,50 @@ None expected. If AC3 finds a spec claim the code does not enforce, the decision
 
 ---
 
+## Findings and dispositions
+
+Seven lanes, all read-only against committed tree `de7c40a`/`002984a`. Every accepted
+finding was re-verified against primary sources before action (2026-08-13 rule).
+
+### Fixed in this branch (test-first, red recorded, each mutation-checked)
+
+| # | Finding | Severity | Commit |
+|---|---|---|---|
+| 1 | **The OAuth error seat leaked the ENCODED spelling of submitted secrets.** `body.get()` returns decoded; `URLSearchParams.toString()` percent-encodes on the wire; `scrubAuthValues` is exact-substring. A provider echoing what it received returns a spelling the candidate set could not match. Reaches the iframe, the LLM, and `snug_secrets` (`lastError`, which rides personal-origin sync). The existing tests were structurally blind: fixtures were pure `[A-Za-z0-9-]`, for which encoding is the identity. | **C1 leak** | `615dcec` |
+| 2 | **R-8's load-bearing claim was false** — the confirm dialog never rendered the URL it is documented to name, so `POST /notes` and `POST /transfer?to=attacker` were indistinguishable. Also disclosed that the session grant is path-blind. | **MAJOR** | `446f8af` |
+| 3 | **A knowledge guard test hardcoded the real ancestor codenames** as a plaintext list annotated as such — the test written to prevent the leak *was* the leak, in the most rewarding file in the tree for a curious reader. Now SHA-256 hashed with substring semantics preserved; the planted sample is recovered by brute force, so no plaintext remains and the scrub gate can reach zero. | **BLOCKER (flip)** | `4cffa01`, `1ce55ff` |
+| 4 | **R-12's per-command IPC row for `sidecar_wizard_fetch`** — the command fronts `GET /pair/status` (releases the helper's access token) and auto-injects the spawn nonce, while its *lower*-privilege sibling was probed and it was not. | **MAJOR** | `4c5b7ea` |
+| 5 | **20 prompt front-matter lines cited a gitignored path** (`internal/05`), two named the codenames outright, and all of it had been compiled into `src/generated/content.ts`. | MAJOR (flip) | `4cffa01` |
+| 6 | **Threat model §1 said "eight deltas" against a twelve-row ledger**, and `check-threat-model.mjs` was *structurally blind* to it (`actual.size >= 8` — a floor that passes at twelve and never reads the prose). New TM8 assertion + TM3 tightened to exact. Mutation-checked. | MAJOR (doc) | `d9c9e97` |
+| 7 | **R-12's census was stale in both numbers** and compared handler-registered against plugin commands. Replaced with a table; the six still-uncovered release commands are named. | RESIDUAL-WORDING | `d9c9e97` |
+| 8 | **SECURITY.md told researchers the connected-fetch runtime "is landing next"** — it shipped and is the C1 enforcement seat, i.e. the highest-value target was reading as out-of-scope. README said spec v0.2, called `packages/auth` "in development", and omitted `apps/desktop` + `apps/whatsapp-sidecar`. | MAJOR (public) | `d9c9e97` |
+
+### Filed, not fixed (evidence + severity in `docs/next-steps.md`)
+
+Seven items, led by the reference server's missing authorization on `/invoke`+`/artifacts`
+(bounded by ADR-0013 — the shipped hub has no backend) and the breadth of untrusted `.snug`
+import. Also: three IPv6-embedding SSRF forms, a stale LAN timeout that silences the
+self-naming abort, `healMissingTables` false-missing on every open, the `SNUGENC1`
+spec-vs-code layout divergence, and five smaller measured items.
+
+### Consciously rejected
+
+- **Lane E's F4** claimed `sidecarWizardCallbackFired` was a dead sensor. It read the tree
+  mid-edit, between my probe wiring and the decision functions — the known
+  fresh-context-reviewer hazard. Verified complete and green afterwards; the finding was an
+  artifact of timing, not of code.
+- **Lane A's `scanForCredentialValues` asymmetry** (the direct BYOK lane has no
+  credential-shape scan while the server lane does) — not filed, because the doc is explicit
+  that this scanner is defense-in-depth and the load-bearing enforcement is
+  `stripCredentialHeaders` plus the token-boundary design.
+
 ## Decisions & surprises
 
 - **2026-08-21 — Scope set by owner interview:** full sweep (code + spec conformance + threat-model consolidation + flip-public hygiene); fix blockers in-branch and file the rest; deliverable is threat model v3 + an explicit verdict; accepted residuals re-read through the HN lens without reversing owner decisions.
 - **2026-08-21 — v2's own limitation is this task's mandate.** The threat model states its v2 pass re-attacked only four surfaces and mechanically re-checked the rest. A launch review that inherited that boundary would ship v1's audit as though it were current.
+- **2026-08-21 — owner decisions at Gate 2 approval:** (1) the R-12 `sidecar_wizard_fetch` gate row is an **in-scope fix**, not a follow-up; (2) **no ADR** for the launch-readiness posture — the task-file verdict, the next-steps entry and threat-model §9 are the three records, and a fourth copy earns nothing.
+- **2026-08-21 — the pattern across the four security fixes is one shape: a control that existed in one seat and was never carried to its sibling.** The encoded-spelling scrub existed in `connected-fetch.ts` with a comment explaining exactly why, and `oauth-service.ts` never inherited it. The URL was rendered by the chat-lane card and not by the modal. The per-command IPC probe existed for `sidecar_fetch` and not for the more dangerous `sidecar_wizard_fetch`. In every case the *reasoning* was already written down in the codebase — the gap was that nobody re-asked "which other seat has this shape?". That question is cheaper than any of the audits that found these.
+- **2026-08-21 — two of the eight findings were defects in the CHECKS rather than the code**, and both had the same failure mode: a mechanism credited with a claim it could not make. `check-threat-model.mjs` was cited as the guard against delta drift while its only count assertion was a floor; the OAuth echo tests were cited as the guard against error-body leaks while their fixtures made the encoded case unrepresentable. A green check is evidence only for the claim its mechanism actually supports.
 - **2026-08-21 — the fresh-context plan review returned 2 blockers + 4 majors, all independently re-verified before acceptance** (per the 2026-08-13 rule: re-derive consequential agent claims from primary sources). What it changed:
   - **AC6 was unsatisfiable as written.** Neither `gitleaks` nor `trufflehog` is installed, and `scrub-terms.txt` does not exist because the runbook's stage 1.4 *creates* it after stage 1.1 moves `internal/` off-disk — a destructive step out of this task's scope. Rewritten into four explicitly-classified sub-items.
   - **AC3 was unbounded.** Measured 73 MUST/MUST NOT tokens (58 spec + 15 whitepaper) and ~200 further `never`/`always` lines. Full tracing now binds the 73; the rest is a sampled sweep with the remainder named in the verdict. Also: the whitepaper source is `paper.html`, not markdown — the plan's `src/**` glob contains no `.md` at all.
