@@ -39,3 +39,43 @@ exports[`AC1 — auth schemas stay OUT of the published export set (plan D1) > l
   ],
 }
 `;
+
+exports[`AC1 — auth schemas stay OUT of the published export set (plan D1; list updated to the v0.3 line, TASK-20260820-spec-v03-whitepaper) > locks the internal shape with an in-package snapshot instead 1`] = `
+{
+  "kinds": [
+    "api_key",
+    "bearer_token",
+    "basic_auth",
+    "oauth2_client_creds",
+    "oauth2_auth_code",
+    "linked_device",
+  ],
+  "samples": [
+    {
+      "kind": "api_key",
+      "parses": true,
+    },
+    {
+      "kind": "bearer_token",
+      "parses": true,
+    },
+    {
+      "kind": "basic_auth",
+      "parses": true,
+    },
+    {
+      "kind": "oauth2_client_creds",
+      "parses": true,
+    },
+    {
+      "kind": "oauth2_auth_code",
+      "parses": true,
+    },
+  ],
+  "statuses": [
+    "unapproved",
+    "approved",
+    "imported_unapproved",
+  ],
+}
+`;

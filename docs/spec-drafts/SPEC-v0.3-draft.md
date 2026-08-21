@@ -57,9 +57,10 @@ version 1 and has been additively extended, never broken, since v0.1.
 
 ## 2. Frames
 
-Thirteen frame types are defined. The nine core frames are published as JSON Schemas; the
-net pair and the open-url pair are specified here at v0.3 and join the published schema set
-when v0.3 is pushed (Appendix C).
+Thirteen frame types are defined, and all thirteen are published as JSON Schemas — the
+nine core frames since v0.1, the net pair and the open-url pair with v0.3 (Appendix C).
+The strict pairs' refinement rules are carried by this prose, not by the schemas, which
+JSON Schema cannot express (§3).
 
 | Type | Direction | Purpose |
 |---|---|---|
@@ -1367,19 +1368,27 @@ unparseable frame, not a member of this list.)
 | data-lane result bounds | 200 rows / 32 KiB |
 | helper token entropy | ≥256 bits |
 
-# Appendix C — Published schemas and the v0.3 publication checklist
+# Appendix C — Published schemas and publication lines
 
-Published today (byte-identical from `packages/protocol`, `io: 'input'`):
+**Fourteen schema files** are published, byte-identical from `packages/protocol`
+(`io: 'input'` for the tolerant set):
 `app-announce` · `app-cancel` · `app-event` · `app-message` · `app-request-envelope` ·
-`app-response` · `db-request` · `db-response` · `host-event` · `host-ready`.
+`app-response` · `db-request` · `db-response` · `host-event` · `host-ready` ·
+`net-request` · `net-response` · `open-url-request` · `open-url-result`.
 
-A v0.3 push additionally requires (each an explicit owner act under C3):
+Two publication-line facts, decided at v0.3 (owner ask 2026-08-20):
 
-1. Adding the net pair and open-url pair to the schema publication line
-   (`json-schemas.ts` SOURCES) and regenerating.
-2. Carrying the already-drifted `host-ready.json` (`capabilities.net`, `capabilities.openUrl`)
-   to the spec repo — recorded drift from AL-03 / TASK-20260818.
-3. Deciding the publication line for the Part III/IV/V contract files
-   (`connection-requirement`, `connection-url`, `chat-intent`, `runtime-contract`,
-   `sidecar-contract`), which are today locked by in-package tests rather than published
-   JSON Schemas.
+1. **The strict pairs publish strict.** `net-*` and `open-url-*` schemas carry
+   `additionalProperties: false` — that IS their contract (§2, R2's stated exception).
+   Their superRefine rules (body-on-GET refusal, credential-header refusal, https-only +
+   userinfo-free URLs) are not expressible in JSON Schema; this prose is normative for
+   them, and the exported schema is deliberately the weaker envelope, never the full
+   contract. A validator passing the schema has not yet validated the frame.
+2. **The Part III–V contracts publish as prose, not as JSON Schemas.** The
+   connection-requirement, connection-url, chat-intent, runtime-contract and
+   sidecar-contract shapes carry refinements JSON Schema cannot express (the host XOR,
+   the per-kind coherence arms, canonicalization, derived route subsets). Exporting a
+   schema weaker than the real contract would invite implementations that validate
+   against the export and admit what the contract refuses — so none is offered. This
+   specification's prose is normative for those surfaces, the reference implementation's
+   contract files are the machine-readable authority, and in-package tests lock them.

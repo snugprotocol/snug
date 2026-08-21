@@ -230,7 +230,7 @@ function checkFrames(html, fx) {
   const specTypes = new Set();
   for (const s of Object.values(fx.schemas)) for (const t of collectTypeConsts(s)) specTypes.add(t);
 
-  check('AC4', 'published schemas expose the nine core frame types', specTypes.size === 9,
+  check('AC4', 'published schemas expose all thirteen frame types', specTypes.size === 13,
     `found ${specTypes.size} snug:* type consts in schemas: ${[...specTypes].join(', ')}`);
 
   for (const t of [...specTypes].sort()) {

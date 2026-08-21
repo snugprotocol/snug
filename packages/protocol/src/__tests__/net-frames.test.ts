@@ -1,7 +1,7 @@
 // AL-03 (TASK-20260806-connected-fetch) — the envelope net capability's protocol surface.
-// INTERNAL draft frames (plan D1): `snug:net-request` / `snug:net-response` stay OUT of
-// the published json-schemas SOURCES (the publishes-to-spec line) and are locked here by
-// in-package tests instead. Key amendments under test: B1 (own frame size class — an
+// Published at spec v0.3 (owner ask 2026-08-20, TASK-20260820-spec-v03-whitepaper):
+// `snug:net-request` / `snug:net-response` are IN the json-schemas SOURCES; the pin below
+// locks the 14-file publication line. Key amendments under test: B1 (own frame size class — an
 // oversized net-response can never be silently dropped), R2 (GET/HEAD body strict-reject),
 // R5 (no appId field — the runner's net binding is host-assigned), C1 (the schema rejects
 // a headers object carrying credential headers), open-Q2 (`link` + `x-ratelimit-*` in the
@@ -209,10 +209,9 @@ describe('net error codes (D1)', () => {
   });
 });
 
-describe('publication line — net frames stay OUT of json-schemas SOURCES (D1, extends the AL-02 guard)', () => {
-  it('buildJsonSchemas() still exports exactly the pre-auth v1 wire set — no net-* entry', () => {
+describe('publication line — the v0.3 set (extends the AL-02 guard; superseded D1 on the 2026-08-20 owner ask)', () => {
+  it('buildJsonSchemas() exports exactly the 13 frames + envelope — nothing more, nothing less', () => {
     const names = Object.keys(buildJsonSchemas());
-    expect(names.some((n) => n.startsWith('net-'))).toBe(false);
     expect(names.sort()).toEqual(
       [
         'app-announce.json',
@@ -225,7 +224,19 @@ describe('publication line — net frames stay OUT of json-schemas SOURCES (D1, 
         'db-response.json',
         'host-event.json',
         'host-ready.json',
+        'net-request.json',
+        'net-response.json',
+        'open-url-request.json',
+        'open-url-result.json',
       ].sort(),
     );
+  });
+
+  it('the published net-request schema is the strict envelope, not the full contract (refinements live in prose)', () => {
+    // The superRefine rules (body-on-GET, credential-header refusal) cannot ride JSON
+    // Schema; SPEC-v0.3-draft.md §3 carries them. Pin that the export at least keeps the
+    // strict shape so an unknown key still rejects for v1.0 validators.
+    const exported = JSON.parse(buildJsonSchemas()['net-request.json']) as Record<string, unknown>;
+    expect(exported.additionalProperties).toBe(false);
   });
 });

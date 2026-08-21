@@ -121,8 +121,9 @@ export const dbResponseSchema = z.union([
 const NET_CREDENTIAL_HEADER_SET = new Set<string>(STRIP_HEADERS);
 
 /**
- * INTERNAL draft — AL-03's envelope net capability (plan D1; out of json-schemas
- * SOURCES until the Beta gate, locked by in-package tests instead).
+ * AL-03's envelope net capability — PUBLISHED at spec v0.3 (in json-schemas SOURCES
+ * since TASK-20260820-spec-v03-whitepaper; the superRefine rules below stay prose-only
+ * in the spec, since JSON Schema cannot express them).
  *
  * Strict by design (C1/R5): NO appId field exists — the runner's net binding is
  * HOST-assigned exactly like `dbNamespace`, so an app cannot name another app's auth
@@ -160,7 +161,7 @@ export const netRequestSchema = z
 const netResponseBase = { v: version, type: z.literal(FRAME_TYPES.netResponse), requestId: id } as const;
 
 /**
- * INTERNAL draft (see netRequestSchema). Success carries the HTTP status verbatim plus
+ * Published with netRequestSchema (spec v0.3). Success carries the HTTP status verbatim plus
  * WHITELIST-only headers (already value-scrubbed by the executor) and the scrubbed
  * body; `truncated` marks a response the executor had to cut at the size cap. Envelope
  * failures use the shared error shape (errors as data, R5).
@@ -178,7 +179,7 @@ export const netResponseSchema = z.union([
 ]);
 
 /**
- * INTERNAL draft (ADR-0038 D5, TASK-20260818): the open-url request. An app may ASK the
+ * The open-url request (ADR-0038 D5; published at spec v0.3): an app may ASK the
  * host to open an https URL in the user's real browser; the host renders the full URL
  * in a confirm dialog (provenance copy, punycode host) and only the user's gesture
  * opens anything — web via host-page window.open('noopener,noreferrer'), desktop via

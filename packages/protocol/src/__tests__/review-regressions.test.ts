@@ -20,10 +20,25 @@ import {
   type AppResponseFrame,
 } from '../index.js';
 
-describe('finding 1 — exported schemas must not forbid unknown fields (R2)', () => {
-  it('no schema contains additionalProperties: false', () => {
+describe('finding 1 — exported schemas must not forbid unknown fields (R2), except the stated strict set', () => {
+  // R2's v0.3 exception: the net and open-url frames are STRICT by design — their fields
+  // become real-world effects, so an unknown key is a rejection, and their published
+  // schemas MUST carry additionalProperties: false. The tolerant core must still not.
+  // (SPEC-v0.3-draft.md §2/§5 R2; publication flip: TASK-20260820-spec-v03-whitepaper.)
+  const STRICT_SCHEMAS = new Set([
+    'net-request.json',
+    'net-response.json',
+    'open-url-request.json',
+    'open-url-result.json',
+  ]);
+
+  it('tolerant schemas never contain additionalProperties: false; strict schemas always do', () => {
     for (const [name, text] of Object.entries(buildJsonSchemas())) {
-      expect(text.includes('"additionalProperties": false'), name).toBe(false);
+      if (STRICT_SCHEMAS.has(name)) {
+        expect(text.includes('"additionalProperties": false'), `${name} must stay strict`).toBe(true);
+      } else {
+        expect(text.includes('"additionalProperties": false'), name).toBe(false);
+      }
     }
   });
 });
