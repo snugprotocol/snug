@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "appHash": "4f1ab6206ec7d2289be35ed077ff1852087f571f569ecbda08222b91cdf34982",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Tap to keep the pig airborne — a pure offline arcade game.",
+            "High scores live in your own file."
+          ]
+        }
+      ]
+    }
+  ]
+}

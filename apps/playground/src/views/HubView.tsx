@@ -10,6 +10,8 @@ import { getPlatform } from '../platform/platform.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary, type LibraryEntry } from '../state/library.js';
 import { listStarterApps, starterInstallSource } from '../starter/starterApps.js';
+import { starterUpdateStatus } from '../starter/starterUpdate.js';
+import { getUserDb } from '../state/userdb.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { Chip } from '../ui/Chip.js';
@@ -131,6 +133,31 @@ function HubHome(): ReactElement {
     }
     return map;
   }, [load]);
+
+  /**
+   * install_source → the version an available starter update would bring (ADR-0045).
+   * REPORTING ONLY: the badge below says "update · vN", and the update act itself lives
+   * in the run header — the hub-never-writes doctrine (see `openStarter`) stands. The
+   * check is async (it reads the bundle lazily), so a tile renders "installed" until its
+   * status resolves — a beat of the old truth, never a wrong badge.
+   */
+  const [updatesBySource, setUpdatesBySource] = useState<ReadonlyMap<string, number>>(new Map());
+  useEffect(() => {
+    if (installedBySource.size === 0) return;
+    let cancelled = false;
+    void getUserDb().then(async (db) => {
+      const next = new Map<string, number>();
+      for (const [source, appId] of installedBySource) {
+        if (!source.startsWith('starter:')) continue;
+        const status = await starterUpdateStatus(db, appId).catch(() => undefined);
+        if (status?.updateAvailable === true) next.set(source, status.latestVersion);
+      }
+      if (!cancelled) setUpdatesBySource(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [installedBySource]);
 
   useEffect(() => {
     let cancelled = false;
@@ -316,6 +343,7 @@ function HubHome(): ReactElement {
             const style = { '--tile-color': look.color } as CSSProperties;
             const source = starterInstallSource(starter.id);
             const installed = installedBySource.has(source);
+            const updateTo = updatesBySource.get(source);
             // P3 item 5: a desktopOnly starter is LOCKED on web (its device lives on the
             // user's LAN, unreachable from a page) and simply enabled on the desktop
             // shell — where the badge would be a limitation that no longer exists.
@@ -333,7 +361,22 @@ function HubHome(): ReactElement {
                 data-testid="starter-tile"
                 data-starter-name={starter.name}
               >
-                {installed ? <span className="tile-installed-badge">installed</span> : null}
+                {/*
+                  "update · vN" REPLACES "installed" (ADR-0045) and gets its OWN class
+                  for the same strict-selector reason the desktop badge documents below:
+                  `dedup.spec.ts` uses `.tile-installed-badge` as a single-element proof.
+                  Clicking the card still only OPENS the copy; the update button is in
+                  the run header it opens.
+                */}
+                {installed ? (
+                  updateTo !== undefined ? (
+                    <span className="tile-update-badge" data-testid="starter-update-badge">
+                      update · v{updateTo}
+                    </span>
+                  ) : (
+                    <span className="tile-installed-badge">installed</span>
+                  )
+                ) : null}
                 {/*
                   HARVESTED from AL-09 with its bug fix intact. Its OWN class,
                   deliberately — not a reuse of `.tile-installed-badge`. These two badges
@@ -386,7 +429,9 @@ function HubHome(): ReactElement {
                   <span className="tile-name">{label}</span>
                   <span className="tile-sub">
                     {installed
-                      ? `${look.blurb} — already in your snug file, opens your copy`
+                      ? updateTo !== undefined
+                        ? `${look.blurb} — update available, open your copy to take it`
+                        : `${look.blurb} — already in your snug file, opens your copy`
                       : `${look.blurb} — try it first, install it if you like it`}
                   </span>
                 </button>

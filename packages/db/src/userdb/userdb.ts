@@ -61,7 +61,7 @@ import {
   type RuntimeContract,
 } from '@snugprotocol/protocol';
 import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
-import { appIdFromModelSettingKey, appModelSettingKey } from './app-settings-keys.js';
+import { appIdFromModelSettingKey, appModelSettingKey, starterVersionSettingKey } from './app-settings-keys.js';
 import { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './sidecar-identity-keys.js';
 import { base64ToBytes } from '../base64.js';
 import {
@@ -516,6 +516,14 @@ export interface InstallAppInput {
   installSource?: string;
 }
 
+/** Options for `saveAppVersion` — see the interface doc (ADR-0045). */
+export interface SaveAppVersionOptions {
+  /** Land the new version as a pinned factory snapshot (never pruned; `resetToFactory` target). */
+  pinned?: boolean;
+  /** Override the copy-forward: this version carries exactly this contract. */
+  contract?: RuntimeContract;
+}
+
 export interface UserDb {
   readonly persistence: DbPersistence;
   /** Runner-facing DbDriver over materialized per-app databases (inject into SnugAppFrame). */
@@ -526,8 +534,20 @@ export interface UserDb {
    * Append a new version. The runtime contract is COPIED FORWARD from
    * `contractSourceVersion` (default: the app's current version) so an ordinary edit never
    * strands it — ADR-0018 D2(i). Revert/reset pass the version they restore.
+   *
+   * `opts` exists for the starter-update act (ADR-0045): `pinned` lands the new version
+   * as a factory snapshot the retention prune never drops, and `contract` OVERRIDES the
+   * copy-forward with the starter's own contract for this version — validated at this
+   * boundary exactly like `putRuntimeContract`, and written in the same synchronous call
+   * so there is no durable state where updated HTML runs under the pre-update contract.
    */
-  saveAppVersion(appId: string, html: string, note?: string, contractSourceVersion?: number): AppVersionMeta;
+  saveAppVersion(
+    appId: string,
+    html: string,
+    note?: string,
+    contractSourceVersion?: number,
+    opts?: SaveAppVersionOptions,
+  ): AppVersionMeta;
   /** Patch display metadata (announce overlay, usesDb observation) — versions untouched. */
   updateAppMeta(
     appId: string,
@@ -2079,24 +2099,40 @@ function construct(
       return getApp(appId) as AppRecord;
     },
 
-    saveAppVersion(appId, html, note, contractSourceVersion) {
+    saveAppVersion(appId, html, note, contractSourceVersion, opts) {
       assertOpen();
       const app = getApp(appId);
       if (app === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
       guardAddedBytes(html.length, `new version of "${appId}"`);
+      // An explicit contract (the starter-update act, ADR-0045) validates BEFORE any row
+      // is written — same boundary rule as `putRuntimeContract`, and failing here leaves
+      // the app untouched rather than stranding a contract-less pinned version.
+      const explicitContractJson =
+        opts?.contract === undefined ? undefined : JSON.stringify(runtimeContractSchema.parse(opts.contract));
+      if (explicitContractJson !== undefined) {
+        guardAddedBytes(explicitContractJson.length, `runtime contract of "${appId}"`);
+      }
       const version = app.currentVersion + 1;
       // COPY-FORWARD (ADR-0018 D2(i)): an ordinary edit inherits the current version's
       // contract, so a cosmetic change never strands it and the P2 synthesis trigger stays
       // scoped to apps that genuinely have none (fold F-B1). Revert/reset override the
-      // source with the version they are restoring.
+      // source with the version they are restoring; a starter update overrides it with
+      // the starter's own contract (ADR-0045 — a factory update ships factory contract).
       const meta = insertVersion(
         appId,
         version,
         html,
         note,
-        false,
+        opts?.pinned === true,
         contractSourceVersion ?? app.currentVersion,
       );
+      if (explicitContractJson !== undefined) {
+        run(`UPDATE ${USERDB_TABLES.appVersions} SET runtime_contract_json = ? WHERE app_id = ? AND version = ?`, [
+          explicitContractJson,
+          appId,
+          version,
+        ]);
+      }
       run(`UPDATE ${USERDB_TABLES.apps} SET current_version = ?, updated_at = ? WHERE app_id = ?`, [
         version,
         now(),
@@ -2218,6 +2254,9 @@ function construct(
         //     one row per app, and equality needs no metacharacter escaping and cannot
         //     over-match a sibling id (the caveat noted for the secrets prefix above).
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [appModelSettingKey(appId)]);
+        //     … and the starter-version row (ADR-0045 §6), the second one-per-app key in
+        //     this namespace — same equality-delete rationale as above.
+        db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [starterVersionSettingKey(appId)]);
         // 3d. The sidecar identity directory, when this app held the LAST approved
         //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the
         //     transaction: the check reads the connection rows step 3 just deleted, so
@@ -2309,8 +2348,12 @@ function construct(
 
     resetToFactory(appId) {
       assertOpen();
+      // NEWEST pinned version, not oldest (ADR-0045): after a starter update lands a
+      // second factory pin, "reset to factory" means the starter you are on — restoring
+      // install-day bytes would re-strand the user on exactly the stale copy the update
+      // channel exists to retire (lessons.md 2026-08-19). Single-pin apps are unaffected.
       const factory = select(
-        `SELECT MIN(version) FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND pinned = 1`,
+        `SELECT MAX(version) FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND pinned = 1`,
         [appId],
       )[0]?.[0];
       if (typeof factory !== 'number') {

@@ -1764,6 +1764,100 @@ img.identity-avatar {
 .net-confirm-actions {
   justify-content: flex-end;
 }
+/* Starter versioning (ADR-0045): the tile update badge, the header version chip, and
+   the release-notes sheet. The badge mirrors `.tile-installed-badge`'s shape with its
+   OWN class (the dedup spec's strict selector) and the accent colour — an update is an
+   invitation, not a warning. */
+.tile-update-badge {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--ember-bright);
+  border: 1px solid var(--ember-deep);
+  background: transparent;
+}
+.run-version-chip {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--fg-muted);
+  border: 1px solid var(--hairline, #8884);
+  white-space: nowrap;
+}
+.release-notes-card {
+  max-width: 560px;
+  width: 100%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.release-notes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.release-notes-scroll {
+  overflow-y: auto;
+  min-height: 0;
+}
+.release-entry {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--hairline, #8884);
+}
+.release-entry:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.release-entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.release-entry-title {
+  margin: 0;
+  font-size: 0.98rem;
+}
+.release-entry-date {
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.release-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--ok);
+  border: 1px solid var(--ok);
+}
+.release-tag-new {
+  color: var(--ember-bright);
+  border-color: var(--ember-deep);
+}
+.release-section-title {
+  margin: var(--space-2) 0 4px;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.release-section-items {
+  margin: 0;
+  padding-left: 1.2em;
+  line-height: 1.5;
+}
+
 /* Connections panel status pills. */
 .connection-status {
   font-size: 0.78rem;

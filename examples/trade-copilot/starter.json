@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "appHash": "9d6b20ebb65740cc094eea7517798edcf304eef8414b1e326a1fb8220d571eab",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "A copilot grounded in your real Coinbase portfolio — it thinks, you decide.",
+            "Live balances and prices flow through a connection you approve field by field.",
+            "Desktop only: Coinbase’s API is reached with native fetch, not the browser."
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "appHash": "6ee7590ba73fd0d29cd0753521a3dd2040301c0ea9bd8c2a5ee0b24b2ec87fb2",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Forecasts turned into decisions — run, ride, water, or wait.",
+            "Live forecast data through your own API key, stored only in your file."
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -53,6 +53,7 @@ export {
   type AppPersistErrorEvent,
   type AppRecord,
   type AppVersionMeta,
+  type SaveAppVersionOptions,
   type ChatMessage,
   type ChatThread,
   type ConnectionRow,
@@ -88,8 +89,11 @@ export {
 
 export {
   APP_MODEL_SETTING_PREFIX,
+  STARTER_VERSION_SETTING_PREFIX,
   appIdFromModelSettingKey,
+  appIdFromStarterVersionSettingKey,
   appModelSettingKey,
+  starterVersionSettingKey,
 } from './userdb/app-settings-keys.js';
 
 export { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './userdb/sidecar-identity-keys.js';

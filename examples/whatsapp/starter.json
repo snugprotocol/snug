@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "appHash": "c6f392f22f3277452fc4c0a8c51329839df144feab804a985f68216c6c054d02",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Your WhatsApp, live in your file — with an analyst who knows the room.",
+            "Drafts replies in your voice; you approve every send.",
+            "Desktop only: the session lives in a local helper this app runs for you."
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -89,13 +89,15 @@ Exactly three proposers exist, and the review each one gets is fixed:
 
 The install-act rung (TASK-20260807-connection-reachability) exists because a chat-less
 app — a starter, anything installed rather than built — otherwise had no reachable path
-to a connection at all. Its declaration is **never persisted**: it is resolved on demand
-and only when TWO independent facts hold — `install_source` maps to a bundled manifest,
-AND the installed HTML matches the bundled starter's for **both** the pinned factory
-version and the version that actually runs. Requiring the running version is the security
-property: the iframe executes `current_version` and credential brokering keys on `appId`,
-so vouching for bytes that never run would let an imported DB pair pristine code with an
-attacker's. Any mismatch is reported in Settings, never silently withdrawn.
+to a connection at all. Its declaration resolves only when TWO independent facts hold —
+`install_source` maps to a bundled manifest, AND the installed HTML matches the bundled
+starter's for **both** the newest pinned factory version and the version that actually
+runs (ADR-0045: install pins v1 and each starter update pins the new release, so "the
+factory" is the newest pin). Requiring the running version is the security property: the
+iframe executes `current_version` and credential brokering keys on `appId`, so vouching
+for bytes that never run would let an imported DB pair pristine code with an attacker's.
+A mismatch withdraws the declaration with only a console warning today (the Settings
+surface for it is still queued in next-steps).
 
 The declaration rides in its own immutable wizard-session field, so it forces the strong
 review unconditionally — no mid-session action (notably "infer from docs") can downgrade
@@ -298,8 +300,9 @@ stages it to the reapproval diff — a ceiling move never promotes silently.
 deterministic household (planted subscription leaks) evicted wholesale by the first real
 sync; deterministic radar/time-machine/cash-flow analytics (extracted-core tested); five
 agent lanes over one discriminated schema; SimpleFIN addressed connection-relatively
-(`snug-connection://simplefin/...` — an installed starter never receives a rebuild, so an
-app must never name a host it didn't need to know).
+(`snug-connection://simplefin/...` — an installed starter receives a rebuild only when
+the user takes an offered update (ADR-0045), which can lag a registry move by any amount
+of time, so an app must never name a host it didn't need to know).
 
 **The open-url capability** (ADR-0038 D5): an app may REQUEST the host open an https URL
 — internal-draft `snug:open-url-request`/`-result` frames (strict, https-only,

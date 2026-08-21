@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "appHash": "7fc2e4fa00ac1717748bb816b2729bafa9c3edddc3033dd759ca3099bac60b03",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Light as mood — describe the evening and the agent becomes your lighting designer.",
+            "Talks to your Hue bridge over your own LAN; nothing leaves the house.",
+            "Desktop only: the bridge lives on your local network."
+          ]
+        }
+      ]
+    }
+  ]
+}
