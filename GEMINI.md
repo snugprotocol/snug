@@ -22,7 +22,7 @@ Optimize for clarity and maintainability over cleverness. **Update the wiki as p
 1. All work follows the six gates; **no work outside a task file** (`docs/tasks/active/`) — start with `/start-task`, resume with `/pickup`, **always** end the session with `/close-session`.
 2. Test-first for Medium/High risk tiers ([`docs/engineering/TDD.md`](docs/engineering/TDD.md)); never delete or weaken a failing test to get green.
 3. Never commit or push directly to `main` — branch `feat|fix/TASK-<id>`, PR, review (AI first, human second).
-4. **Never publish npm packages, deploy the Playground, push to `snugprotocol/spec`, or flip a repo public without an explicit human ask in that session.**
+4. **Never publish npm packages, deploy the Playground, push to `snugprotocol/spec`, create/edit a GitHub Release (desktop binaries — ADR-0047), or flip a repo public without an explicit human ask in that session.**
 5. **Memory is git — if state exists only in a chat, it doesn't exist.**
 
 Slash commands (Claude Code): `/start-task` · `/pickup` · `/handoff` · `/close-session` · `/adr` · `/learn`. Other tools follow the same gates manually via [`docs/engineering/PROMPT_TEMPLATES.md`](docs/engineering/PROMPT_TEMPLATES.md).

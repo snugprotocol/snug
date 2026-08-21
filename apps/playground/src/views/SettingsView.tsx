@@ -23,6 +23,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 
 import { popularModelsFor } from '@snugprotocol/adapters';
 
@@ -54,6 +55,7 @@ import { ProtectSetupFlow } from '../vault/ProtectSetupFlow.js';
 import { disableProtection } from '../vault/enableProtection.js';
 import { SETTING_PROTECTION_ENABLED, markProtectionDisabled } from '../vault/protectOffer.js';
 import { getPlatform } from '../platform/platform.js';
+import { autoCheckEnabled, checkForAppUpdate, setAutoCheckEnabled, useAppUpdate } from '../state/appUpdate.js';
 import { login, useAuth } from '../state/auth.js';
 import {
   applyRemote,
@@ -281,7 +283,91 @@ export function SettingsView(): ReactElement {
           </div>
         </Card>
       </Section>
+
+      <Section label="app">
+        <AppVersionCard />
+      </Section>
     </div>
+  );
+}
+
+/**
+ * The shell's own version + update controls (ADR-0047 §9, TASK-20260821 AC13/AC16).
+ * Desktop: version, a manual "check for updates" whose failure is NAMED (the launch
+ * check is quiet by design — pre-flip the endpoint 404s for everyone — but a click
+ * is a question that deserves an answer, lessons 2026-08-17), and the auto-check
+ * toggle (the launch check is a phone-home; the threat model names it, this is the
+ * off switch). Web: the pointer to the /download page.
+ */
+function AppVersionCard(): ReactElement {
+  const updates = getPlatform().appUpdates;
+  const update = useAppUpdate();
+  const [version, setVersion] = useState<string | undefined>(undefined);
+  const [autoCheck, setAutoCheck] = useState(() => autoCheckEnabled());
+  useEffect(() => {
+    let cancelled = false;
+    void updates?.currentVersion().then((v) => {
+      if (!cancelled) setVersion(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (updates === undefined) {
+    return (
+      <Card className="settings-group">
+        <div className="field settings-row">
+          <label>Snug desktop</label>
+          <span className="hint">
+            the free macOS app adds native networking for connected apps and keeps your file in <code>~/Snug</code>.
+          </span>
+          <Link to="/download" data-testid="settings-get-desktop">
+            get the desktop app
+          </Link>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="settings-group">
+      <div className="field settings-row">
+        <label>Snug desktop{version !== undefined ? ` v${version}` : ''}</label>
+        <div className="field-row">
+          <Button
+            variant="ghost"
+            data-testid="settings-check-updates"
+            disabled={update.phase === 'checking' || update.phase === 'downloading'}
+            onClick={() => void checkForAppUpdate({ quiet: false })}
+          >
+            {update.phase === 'checking' ? 'checking…' : 'check for updates'}
+          </Button>
+          {update.phase === 'current' ? <span className="hint">you&apos;re on the latest version.</span> : null}
+          {update.phase === 'available' || update.phase === 'downloading' || update.phase === 'ready-to-restart' ? (
+            <span className="hint">v{update.offer.version} is available — see the chip in the header.</span>
+          ) : null}
+        </div>
+        {update.phase === 'check-failed' ? (
+          <span className="hint" role="alert" data-testid="settings-check-failed">
+            couldn&apos;t check for updates: {update.message}
+          </span>
+        ) : null}
+        <label className="field-row" style={{ gap: 'var(--space-2)' }}>
+          <input
+            type="checkbox"
+            data-testid="settings-auto-update-check"
+            checked={autoCheck}
+            onChange={(event) => {
+              setAutoCheck(event.target.checked);
+              setAutoCheckEnabled(event.target.checked);
+            }}
+          />
+          <span className="hint">check for updates automatically at launch (asks github.com for the latest version)</span>
+        </label>
+      </div>
+    </Card>
   );
 }
 

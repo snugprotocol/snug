@@ -1560,6 +1560,25 @@
   line-height: 1;
 }
 
+/* ------------------------------------------------- desktop download (ADR-0047) */
+
+.download-page {
+  max-width: 640px;
+  margin: 0 auto;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.download-button {
+  display: inline-block;
+  text-decoration: none;
+}
+
+/* The header update chip shares .auth-repair-chip's quiet-ember family. */
+.app-update-chip {
+  white-space: nowrap;
+}
+
 /* ---------------------------------------------------------------- responsive */
 
 @media (max-width: 760px) {

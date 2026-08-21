@@ -67,6 +67,17 @@ export function parseDesktopReleases(raw: string): DesktopRelease[] | undefined 
   }
 }
 
+/** Numeric semver compare: positive when `a` is newer than `b`. Non-semver → 0. */
+export function compareSemver(a: string, b: string): number {
+  if (!isSemver(a) || !isSemver(b)) return 0;
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    if (pa[i]! !== pb[i]!) return pa[i]! - pb[i]!;
+  }
+  return 0;
+}
+
 /** The bundled history (newest first). Undefined only if the bundled file is malformed. */
 export function bundledDesktopReleases(): DesktopRelease[] | undefined {
   return parseDesktopReleases(rawBundledReleases);

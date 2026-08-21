@@ -471,9 +471,17 @@ function HubHome(): ReactElement {
                   Playwright run on the parked branch, 2026-08-08.
                 */}
                 {locked ? (
-                  <span className="tile-desktop-badge" data-testid="desktop-only-badge" title="this starter's device lives on your home network, which a web page cannot reach — the free Snug desktop app can">
+                  // ADR-0047 (TASK-20260821): the badge is now the LINK to the /download
+                  // page — it sits beside (not inside) the disabled tile button, so it
+                  // stays clickable while the tile itself refuses.
+                  <Link
+                    to="/download"
+                    className="tile-desktop-badge"
+                    data-testid="desktop-only-badge"
+                    title="this starter's device lives on your home network, which a web page cannot reach — the free Snug desktop app can"
+                  >
                     needs the desktop app — free download
-                  </span>
+                  </Link>
                 ) : null}
                 {/*
                   The CARD is the control (AC1), matching the installed-app tiles above —

@@ -11,6 +11,8 @@ import {
 } from './platform/openFile.js';
 import { initDesktopFirstRun } from './desktop/firstRun.js';
 import { ModeCoercionNote } from './desktop/ModeCoercionNote.js';
+import { AppUpdateSurface } from './desktop/AppUpdateControls.js';
+import { initAppUpdateLaunchCheck } from './state/appUpdate.js';
 import { refreshAppMeta } from './state/appMeta.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
@@ -31,6 +33,7 @@ import { UnlockScreen } from './vault/UnlockScreen.js';
 import { Logo } from './ui/Logo.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { BuilderView } from './views/BuilderView.js';
+import { DownloadView } from './views/DownloadView.js';
 import { HubView } from './views/HubView.js';
 import { SettingsView } from './views/SettingsView.js';
 import { WebllmBanner } from './views/WebllmBanner.js';
@@ -65,6 +68,10 @@ export function App(): ReactElement {
     void refreshAppMeta();
     void initSync();
     void refreshAuth();
+    // ADR-0047 §9: the shell update launch check — desktop-only, toggleable, quiet
+    // about failure (pre-flip the endpoint 404s by design). Its own exported act so
+    // the composition-root test can spy the seat (plan-review finding 14).
+    initAppUpdateLaunchCheck();
   }, []);
 
   if (dbStatus.state === 'locked') {
@@ -158,6 +165,10 @@ export function App(): ReactElement {
           <NavLink to="/settings" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
             settings
           </NavLink>
+          {/* ADR-0047 §9: a header WHISPER when a shell update is in play — desktop
+              only, renders nothing otherwise; the sheet it opens is the one place the
+              flow may occupy the screen, and only because the user clicked. */}
+          <AppUpdateSurface />
           <Button variant="ghost" onClick={toggleTheme} aria-label={`switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
             {theme === 'dark' ? '☀' : '☾'}
           </Button>
@@ -187,6 +198,7 @@ export function App(): ReactElement {
             }
           />
           <Route path="/settings" element={<SettingsView />} />
+          <Route path="/download" element={<DownloadView />} />
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
         </Routes>
       </main>
