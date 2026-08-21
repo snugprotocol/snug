@@ -75,21 +75,29 @@ describe('AC9 — the app header offers a way back to its connections', () => {
     expect(runView).toMatch(/isStarter=\{isStarterId\(id\)\}/);
   });
 
-  it('sits in the same action cluster as export and the theme toggle', () => {
+  it('sits in the app-level action cluster, ahead of the theme toggle', () => {
     // The owner asked for it "in a common place like the header where export and
     // light/dark are" — so assert the ORDERING, not merely that it exists somewhere.
     //
     // MIGRATED (2026-08-18): the per-app controls moved into `RunHeaderActions` and the
-    // model selector was swapped ahead of connections, so the source-index check that
-    // used to live here (manage < 'export .sqlite' < theme, all inside RunView.tsx) no
-    // longer describes the code. It is not DELETED: the same claim — connections sits
-    // with export, ahead of the workspace-level theme toggle — is asserted here across
-    // the two files, and the rendered document order (including the swap) is pinned by
-    // `runHeaderIcons.test.tsx`, which measures nodes rather than string positions.
+    // model selector was swapped ahead of connections; the rendered document order is
+    // pinned by `runHeaderIcons.test.tsx`, which measures nodes rather than strings.
+    //
+    // MIGRATED again (TASK-20260821-hardening-polish): the export button is now hidden
+    // behind SHOW_APP_EXPORT, so the visible header order is model select → connections
+    // and the manage-<-export index claim moved to the DORMANT path: the export control
+    // must survive in source, behind the one flag, after connections. Settings owns the
+    // visible export surface.
+    const select = headerActions.indexOf('<ModelSelect');
     const manage = headerActions.indexOf('data-testid="manage-connections"');
     const exportBtn = headerActions.indexOf('data-testid="export-sqlite"');
-    expect(manage).toBeGreaterThan(-1);
+    expect(select).toBeGreaterThan(-1);
+    expect(select).toBeLessThan(manage);
+    // Hidden, not removed: the dormant export path still follows connections…
     expect(manage).toBeLessThan(exportBtn);
+    // …and only ever renders behind the single flag.
+    expect(headerActions).toMatch(/showExport && canExport \?/);
+    expect(headerActions).toMatch(/showExport = SHOW_APP_EXPORT/);
     // The app-level cluster renders before the workspace-level theme toggle in RunView.
     expect(runView.indexOf('<RunHeaderActions')).toBeLessThan(runView.indexOf('switch to ${theme'));
   });

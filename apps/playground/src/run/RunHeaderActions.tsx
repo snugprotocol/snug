@@ -1,5 +1,5 @@
 // RunHeaderActions.tsx — the per-app controls in the run header: which model this app
-// uses, its connections, and the .snug export.
+// uses, its connections, and the (currently hidden) .snug export.
 //
 // Extracted from RunView so the cluster can be tested as a unit (RunView itself needs a
 // route, a user DB, a runner and an iframe to render at all). RunView keeps the
@@ -10,8 +10,10 @@
 //
 //   1. A glyph is not a name. `🔌` announces as "electric plug" or as nothing, so each
 //      button carries an explicit `aria-label` — which is also what test and e2e
-//      locators find (`e2e/starters.spec.ts` looks up the export control by the
-//      accessible name "export .snug", so that string is load-bearing, not cosmetic).
+//      locators find. (The header export control is HIDDEN behind `SHOW_APP_EXPORT`
+//      since TASK-20260821, so its "export .snug" name is no longer what e2e locates —
+//      the Settings 'export snug file' surface carries the load-bearing string now;
+//      docs/lessons.md 2026-08-18 rule.)
 //   2. `title` is the hover tooltip and NOTHING else. A title alone would leave the
 //      control unnamed to a screen reader — the same distinction the rail toggle in
 //      RunView already documents.
@@ -27,6 +29,15 @@ import type { ReactElement } from 'react';
 import { Button } from '../ui/Button.js';
 import { ModelSelect } from './ModelSelect.js';
 import { AuthRepairChip } from './AuthRepairChip.js';
+
+/**
+ * TASK-20260821-hardening-polish (owner ask): the per-app export control is
+ * deliberately HIDDEN, not removed. The export code path, props, and wiring stay
+ * intact behind this ONE flag so the owner may re-enable the surface later by
+ * flipping it; Settings keeps the whole-file export either way. Exported so tests
+ * can pin the shipped value and drive the gate both ways via `showExport`.
+ */
+export const SHOW_APP_EXPORT = false;
 
 export interface RunHeaderActionsProps {
   /** The library id of the app whose header this is. */
@@ -51,6 +62,11 @@ export interface RunHeaderActionsProps {
   };
   onManageConnections: () => void;
   onExport: () => void;
+  /**
+   * Test seam for the SHOW_APP_EXPORT gate (defaults to the shipped flag). Lets the
+   * suite prove BOTH states — hidden now, restorable later — without module mocking.
+   */
+  showExport?: boolean;
 }
 
 export function RunHeaderActions({
@@ -61,6 +77,7 @@ export function RunHeaderActions({
   syncState,
   onManageConnections,
   onExport,
+  showExport = SHOW_APP_EXPORT,
 }: RunHeaderActionsProps): ReactElement {
   return (
     <>
@@ -148,13 +165,14 @@ export function RunHeaderActions({
           ⚯
         </Button>
       ) : null}
-      {canExport ? (
+      {showExport && canExport ? (
         <Button
           variant="ghost"
           onClick={onExport}
           className="btn-icon"
           data-testid="export-sqlite"
-          // Kept verbatim: two e2e specs locate this button by this exact name.
+          // Kept verbatim while dormant, so flipping SHOW_APP_EXPORT restores the
+          // control under its established name rather than a drifted one.
           aria-label="export .snug"
           title="download this app’s database as a real .snug file"
         >

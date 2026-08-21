@@ -70,8 +70,11 @@ test.describe('pillar starters (AL-08) — open read-only, interact, stay clean'
     await expect(app.getByTestId('dm-note')).toBeVisible({ timeout: 20_000 });
     await expect(app.getByTestId('quest-choice').first()).toBeVisible();
 
-    // Inventory/journey live in real SQL — the host chrome offers the export moment.
-    await expect(page.getByRole('button', { name: 'export .snug' })).toBeVisible({ timeout: 20_000 });
+    // Inventory/journey live in real SQL — the whole-file export lives in Settings now
+    // (exercised by the zero-trace test below); the per-app header control is hidden.
+    // MIGRATED (TASK-20260821, lessons 2026-08-10): the old visibility claim becomes an
+    // absence claim — SHOW_APP_EXPORT ships false, so the hidden state IS the contract.
+    await expect(page.getByRole('button', { name: 'export .snug' })).toHaveCount(0);
 
     // AC4: browsing a starter never writes an app row.
     await page.getByRole('link', { name: 'your apps' }).click();
@@ -99,8 +102,11 @@ test.describe('pillar starters (AL-08) — open read-only, interact, stay clean'
     await app.getByRole('button', { name: /next/i }).click();
     await expect(app.getByText(/question 2 of 5/i)).toBeVisible();
 
-    // Scores persist to real SQL.
-    await expect(page.getByRole('button', { name: 'export .snug' })).toBeVisible({ timeout: 20_000 });
+    // Scores persist to real SQL — proven at the byte level by the zero-trace test
+    // below, which exports the WHOLE user file via Settings' 'export snug file'.
+    // MIGRATED (TASK-20260821, lessons 2026-08-10): the header export button is hidden
+    // behind SHOW_APP_EXPORT, so its absence is the new contract, asserted here.
+    await expect(page.getByRole('button', { name: 'export .snug' })).toHaveCount(0);
 
     expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
   });

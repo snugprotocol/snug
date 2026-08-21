@@ -41,7 +41,16 @@ describe('a per-app export is named .snug too (AC5)', () => {
     expect(read('run/RunView.tsx')).toContain(".snug`");
   });
 
-  it('the export control says .snug in its accessible name', () => {
+  it('the user-facing export surface says snug, never the legacy sqlite', () => {
+    // MIGRATED (TASK-20260821-hardening-polish): the per-app header control is hidden
+    // behind SHOW_APP_EXPORT, so the Settings whole-file export is the surface a user
+    // actually sees — its control copy and its download name carry this claim now.
+    const settings = read('views/SettingsView.tsx');
+    expect(settings).toContain('export snug file');
+    expect(settings).toContain("'snug-user.snug'");
+    expect(settings).not.toContain('export .sqlite');
+    // The dormant header path keeps its established name, so re-enabling the one flag
+    // cannot resurrect the old two-names bug.
     const header = read('run/RunHeaderActions.tsx');
     expect(header).toContain('export .snug');
     expect(header).not.toContain('export .sqlite');
