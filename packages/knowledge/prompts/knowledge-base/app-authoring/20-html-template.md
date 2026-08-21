@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool; the primary section the host LLM retrieves before writing any app; reachable only when the app-builder capability is enabled
 blast-radius: the literal skeleton and hook code copied into every generated app — any edit here changes every app built after it; hook code must stay byte-identical to the SDK reference (a sync test locks them together)
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05); hook code is the Snug SDK reference implementation
+source: rewritten for Snug v0.1 from ancestor KBs; hook code is the Snug SDK reference implementation
 -->
 
 # The Mandatory HTML Template

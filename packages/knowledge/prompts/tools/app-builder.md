@@ -2,7 +2,7 @@
 layer: tool
 destination: registered as the description of the {{appBuilderToolName}} tool (and its query parameter) with the agent adapter whenever the app-builder capability is enabled; the LLM reads this in every request's tool list
 blast-radius: when and how the LLM decides to call the tool and what queries it sends — vague wording here means the KB never gets consulted or gets useless queries
-source: written for Snug v0.1; role carried from the ancestor builder tools (internal/05)
+source: written for Snug v0.1; role carried from the ancestor builder tools
 -->
 
 ## Tool: {{appBuilderToolName}}

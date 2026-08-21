@@ -2,7 +2,7 @@
 layer: skill
 destination: per-mode tail of the skill-authoring session system prompt — appended by buildSkillBuilderPrompt('improve') after the builder preamble and the vendored methodology; reaches the LLM only in improvement sessions (existing SKILL.md plus any prior eval feedback in context)
 blast-radius: improve-mode sessions — how eval feedback is translated into skill revisions and whether structural gaps (missing app-builder usage) are surfaced
-source: merged for Snug v0.1 from both ancestors' improve-mode tails (internal/05)
+source: merged for Snug v0.1 from both ancestors' improve-mode tails
 -->
 
 # Mode: improve (iterate on quality and eval feedback)

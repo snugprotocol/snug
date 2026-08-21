@@ -2,7 +2,7 @@
 layer: tool
 destination: registered as the description of the host's artifact write tool (and its parameters) with the agent adapter whenever the artifacts capability is enabled; the LLM reads this in every request's tool list
 blast-radius: how the LLM delivers files — weak wording here causes file bodies dumped into chat or partial-content writes
-source: rewritten for Snug v0.1 from the ancestor fs.write tool description (internal/05)
+source: rewritten for Snug v0.1 from the ancestor fs.write tool description
 -->
 
 ## Tool: artifact write

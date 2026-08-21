@@ -2,7 +2,7 @@
 layer: system
 destination: host system prompt block, injection order 40; included only when the app-builder capability is enabled (app requests can only originate from running apps)
 blast-radius: whether app-originated turns get parseable JSON — weakening this rule breaks every running app's request loop with PARSE_FAILED errors
-source: rewritten for Snug v0.1 from the ancestor app-response-format system template (internal/05)
+source: rewritten for Snug v0.1 from the ancestor app-response-format system template
 -->
 
 ## App Request Response Format (CRITICAL)

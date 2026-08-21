@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM queries design, layout, theming, or polish topics; reachable only when the app-builder capability is enabled
 blast-radius: the visual bar of every generated app — weakening this produces ugly, cramped, or single-theme apps
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05); Tailwind-specific guidance replaced with CSS custom properties (play CDN is not on the Snug allowlist)
+source: rewritten for Snug v0.1 from ancestor KBs; Tailwind-specific guidance replaced with CSS custom properties (play CDN is not on the Snug allowlist)
 -->
 
 # Design Quality

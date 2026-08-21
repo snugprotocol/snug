@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM queries persistence, storage, or SQL topics; reachable only when the app-builder capability is enabled
 blast-radius: how generated apps store data — errors here produce apps that lose state, teach dead storage APIs, or design unusable schemas
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05); db-frame ops from packages/protocol SPEC v0.1
+source: rewritten for Snug v0.1 from ancestor KBs; db-frame ops from packages/protocol SPEC v0.1
 -->
 
 # Persistence and the App Database

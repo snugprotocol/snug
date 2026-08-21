@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM queries error handling, crashes, or prohibited patterns; reachable only when the app-builder capability is enabled
 blast-radius: the crash rate of generated apps — removing a guard rule here reintroduces the runtime failures the ancestors shipped
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05), "What NOT to Do" carried and re-targeted at the Snug bridge
+source: rewritten for Snug v0.1 from ancestor KBs, "What NOT to Do" carried and re-targeted at the Snug bridge
 -->
 
 # Defensive Coding

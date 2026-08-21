@@ -2,7 +2,7 @@
 layer: skill
 destination: per-mode tail of the skill-authoring session system prompt — appended by buildSkillBuilderPrompt('optimize-description') after the builder preamble and the vendored methodology; reaches the LLM only in description-optimization sessions
 blast-radius: optimize-description sessions — how triggering accuracy is measured and how the frontmatter description is revised
-source: merged for Snug v0.1 from both ancestors' optimize-description tails (internal/05)
+source: merged for Snug v0.1 from both ancestors' optimize-description tails
 -->
 
 # Mode: optimize-description (triggering accuracy only)

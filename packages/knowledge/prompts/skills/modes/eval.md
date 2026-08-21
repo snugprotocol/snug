@@ -2,7 +2,7 @@
 layer: skill
 destination: per-mode tail of the skill-authoring session system prompt — appended by buildSkillBuilderPrompt('eval') after the builder preamble and the vendored methodology; reaches the LLM only in eval sessions against an existing skill
 blast-radius: eval-mode sessions — how test cases are generated, where results are saved, and how results are reported to the user
-source: merged for Snug v0.1 from both ancestors' eval-mode tails (internal/05)
+source: merged for Snug v0.1 from both ancestors' eval-mode tails
 -->
 
 # Mode: eval (run and interpret evals)
