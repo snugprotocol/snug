@@ -524,6 +524,21 @@ test('AC9: the shelf glob can never bundle authoring/ content (derived from the 
   }
 });
 
+test('ADR-0045: the starter-metadata glob reaches starter.json and nothing else', () => {
+  // Sibling of the AC9 pin above, same rationale: the producer is parsed, never restated,
+  // so a widened pattern (or a second glob smuggled into the module) fails here.
+  const producer = readFileSync(
+    path.join(REPO_ROOT, 'apps', 'playground', 'src', 'starter', 'starterMeta.ts'),
+    'utf8',
+  );
+  const globs = [...producer.matchAll(/import\.meta\.glob\(\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(globs.length, 1, 'starterMeta.ts declares exactly one glob');
+  assert.ok(
+    globs[0].endsWith('/examples/*/starter.json'),
+    `starter-metadata glob must match exactly one starter.json per folder (got ${globs[0]})`,
+  );
+});
+
 test('ADR-0035: the doc-ingestion glob reaches authoring/{docs,prompts} and nothing else', () => {
   // The SIBLING of the pin above, and deliberately a separate assertion rather than a
   // loosening of it. ADR-0035 reverses "provenance never ships" — but only through ONE

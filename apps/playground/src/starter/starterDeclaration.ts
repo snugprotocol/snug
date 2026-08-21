@@ -14,8 +14,9 @@
 //
 // TWO INDEPENDENT FACTS, or nothing:
 //   1. the app's `install_source` resolves to a bundled `connection.json`, AND
-//   2. the app's PINNED FACTORY HTML (version 1) *and* the version that actually RUNS
-//      (`current_version`) both match the bundled starter HTML.
+//   2. the app's NEWEST PINNED factory HTML (v1 at install; each starter update adds a
+//      newer pin — ADR-0045) *and* the version that actually RUNS (`current_version`)
+//      both match the bundled starter HTML.
 //
 // The "and the version that runs" half was added by the Gate-4 implementation review:
 // validating v1 alone vouched for archival bytes while the iframe executed something
@@ -111,9 +112,10 @@ async function bundled(folder: string): Promise<{ manifest: string; html: string
  * the empty wizard on nothing more than a `.gitattributes` setting. A SEMANTIC edit
  * still fails, which is the property that matters.
  */
-function normalize(html: string): string {
+export function normalizeStarterHtml(html: string): string {
   return html.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').trim();
 }
+const normalize = normalizeStarterHtml;
 
 /**
  * Parse-and-drop. Invalid JSON, schema-invalid shapes, and admission refusals all yield
@@ -192,25 +194,33 @@ export async function resolveDeclaredIntent(db: UserDb, appId: string): Promise<
   const declaration = parseManifest(found.manifest, folder);
   if (declaration === null) return {};
 
-  // Fact 2. BOTH the pinned factory version AND the version that actually RUNS must match
-  // the bundle. Each half closes a different hole, and shipping either alone is unsafe:
+  // Fact 2. BOTH the newest PINNED factory version AND the version that actually RUNS
+  // must match the bundle. Each half closes a different hole, and shipping either alone
+  // is unsafe:
   //
-  //  - v1 alone (the original implementation) was defeated by the Gate-4 review: the
-  //    iframe executes `current_version` (`RunView` → `library.getHtml` →
-  //    `getAppHtml(id)` with no version), so a whole-DB import could supply v1 = the
-  //    repo's real bytes (public, free to copy) plus current_version = attacker code.
-  //    Both facts held while the running app had shipped nothing — and since credential
-  //    brokering is keyed on appId, the attacker's version was the beneficiary of any
-  //    approval. Fact 2's claim is "the bytes came from this repo", which is only an
-  //    inference about the RUNNING app when the compared bytes are the ones that run.
-  //  - current alone would be defeated the other way: an importer could leave a foreign
-  //    v1 and set the latest version to the bundle, minting a declaration for an app
-  //    whose install act never happened.
+  //  - the factory pin alone (the original implementation) was defeated by the Gate-4
+  //    review: the iframe executes `current_version` (`RunView` → `library.getHtml` →
+  //    `getAppHtml(id)` with no version), so a whole-DB import could supply a pinned
+  //    version = the repo's real bytes (public, free to copy) plus current_version =
+  //    attacker code. Both facts held while the running app had shipped nothing — and
+  //    since credential brokering is keyed on appId, the attacker's version was the
+  //    beneficiary of any approval. Fact 2's claim is "the bytes came from this repo",
+  //    which is only an inference about the RUNNING app when the compared bytes are the
+  //    ones that run.
+  //  - current alone would be defeated the other way: an importer could ship no pinned
+  //    row at all (or a foreign one) and set the latest version to the bundle, minting a
+  //    declaration for an app whose install act never happened. Hence `find(pinned)`
+  //    below: an EMPTY pinned set is a mismatch, never a pass.
   //
-  // Requiring both means a forgery must control every version row, and — more usefully —
-  // an app the user has genuinely edited stops declaring, which is correct: the guided
-  // setup vouches for shipped code, not for code the user has since changed.
-  const factory = db.getAppHtml(appId, 1);
+  // Fact 1's subject is the NEWEST pinned version, not literally v1 (ADR-0045): the
+  // starter-update act lands each release as a new factory pin, so after an update the
+  // newest pin is the bundle the user is on while v1 still holds install-day bytes.
+  // Forgery still requires controlling both the newest pinned row and `current_version`
+  // — the same strength as the original two facts — and, as before, an app the user has
+  // genuinely edited stops declaring, which is correct: the guided setup vouches for
+  // shipped code, not for code the user has since changed.
+  const newestPin = db.listAppVersions(appId).find((version) => version.pinned); // DESC ⇒ newest
+  const factory = newestPin === undefined ? undefined : db.getAppHtml(appId, newestPin.version);
   const running = db.getAppHtml(appId);
   const bundledHtml = normalize(found.html);
   if (
