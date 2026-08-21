@@ -9,8 +9,9 @@
 //   data-testid="artifact-card"               card rendered when the SSE artifact lands
 //   role=link "run it"                        primary CTA on the artifact card
 //   data-testid="frame-wrap"                  wrapper around the SnugAppFrame iframe
-//   role=button "open inspector"              mobile toggle for the rail-as-sheet
-//   aria-label "watch it think"               the rail (desktop) / sheet dialog (mobile)
+//   data-testid="mobile-view-toggle"          mobile app ⇄ think full-view toggle, named
+//                                             "show/hide watch it think" (TASK-20260821)
+//   aria-label "watch it think"               the rail (desktop) / full think view (mobile)
 //
 // If the app shell is absent (src/main.tsx not landed), those specs skip with an
 // explicit reason; the CSP / StrictMode / bridge round-trip specs run against the

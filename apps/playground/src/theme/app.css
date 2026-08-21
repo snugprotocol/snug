@@ -1641,6 +1641,24 @@
     min-height: 62dvh;
   }
 
+  /* Either/or full-view swap (TASK-20260821 item 5): in the 'think' state the app
+     stage's frame is hidden — display:none, but the iframe stays MOUNTED so the
+     running app keeps its state — and .mobile-think takes its place full-width under
+     the same header. In the 'app' state RunView renders no .mobile-think at all. */
+  .run-layout.is-mobile-think .frame-wrap {
+    display: none;
+  }
+
+  .mobile-think {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: var(--space-3);
+  }
+
   .msg {
     max-width: 100%;
   }

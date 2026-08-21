@@ -47,7 +47,6 @@ import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
 import { RailDivider } from '../ui/RailDivider.js';
-import { Sheet } from '../ui/Sheet.js';
 import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
 import { DocsPanel } from './DocsPanel.js';
@@ -175,7 +174,11 @@ export default function RunView(): ReactElement {
   // Belt and braces for AC18: even if some future path sets 'chat' for a starter (a
   // stale state across an id change, a restored tab), the starter renders the inspector.
   const railTab: RailTab = isStarterId(id) && railTabRaw === 'chat' ? 'inspector' : railTabRaw;
-  const [sheetOpen, setSheetOpen] = useState(false);
+  // Mobile (≤760px) is an EITHER/OR: the full app view or the full think view, never
+  // both (TASK-20260821 item 5, replacing the bottom-sheet modal). Deliberately local
+  // state, NEVER persisted — owner decision: "default should always be app view", so
+  // every mount lands on 'app'. The desktop rail keeps its own persisted `railShown`.
+  const [mobileView, setMobileView] = useState<'app' | 'think'>('app');
   const isMobile = useMediaQuery('(max-width: 760px)');
   const controlsRef = useRef<RunnerHost | null>(null);
   /** Bumped when a chat edit or revert lands a new version — reloads html + frame. */
@@ -655,7 +658,7 @@ export default function RunView(): ReactElement {
   );
 
   return (
-    <div className="run-layout" style={stageStyle}>
+    <div className={`run-layout${isMobile && mobileView === 'think' ? ' is-mobile-think' : ''}`} style={stageStyle}>
       {/* NetConfirmDialog moved to the App shell (TASK-20260815 AC12): the confirm gate's
           callers now include provider-lane chat turns on other routes. */}
       {/*
@@ -803,8 +806,19 @@ export default function RunView(): ReactElement {
               {theme === 'dark' ? '☀ light' : '☾ dark'}
             </Button>
             {isMobile ? (
-              <Button variant="ghost" onClick={() => setSheetOpen(true)} aria-label="open inspector">
-                inspect
+              // The mobile twin of the desktop toggle below: same accessible-name pair,
+              // same aria-pressed honesty — but it swaps the WHOLE view rather than a
+              // side rail (there is no room for both at 375px). ≥44px touch target via
+              // the shared .btn min-height.
+              <Button
+                variant="ghost"
+                onClick={() => setMobileView((view) => (view === 'think' ? 'app' : 'think'))}
+                aria-pressed={mobileView === 'think'}
+                data-testid="mobile-view-toggle"
+                aria-label={`${mobileView === 'think' ? 'hide' : 'show'} watch it think`}
+                title={`${mobileView === 'think' ? 'hide' : 'show'} the watch it think view`}
+              >
+                {mobileView === 'think' ? '◨ hide' : '◫ think'}
               </Button>
             ) : (
               /* AC6: hide/show "watch it think". On by default — the panel is the
@@ -923,13 +937,21 @@ export default function RunView(): ReactElement {
             </div>
           ) : null}
         </div>
+        {/*
+          The mobile FULL think view (TASK-20260821 item 5). It lives INSIDE the stage,
+          under the header, so the toggle stays reachable while the frame-wrap above is
+          hidden by `.is-mobile-think` CSS — hidden, never unmounted: unmounting the
+          iframe would destroy the running app's state. In the 'app' state nothing
+          renders here at all. A section, not a dialog — the modal Sheet is gone.
+        */}
+        {isMobile && mobileView === 'think' ? (
+          <section className="mobile-think" aria-label="watch it think" data-testid="mobile-think">
+            {railContent}
+          </section>
+        ) : null}
       </div>
 
-      {isMobile ? (
-        <Sheet title="watch it think" open={sheetOpen} onClose={() => setSheetOpen(false)}>
-          {railContent}
-        </Sheet>
-      ) : railShown ? (
+      {!isMobile && railShown ? (
         // The divider is a SIBLING of the rail, not a child: it has to sit between the
         // stage and the rail in the same flex row to be draggable at the seam (AC4).
         <>
