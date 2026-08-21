@@ -41,6 +41,14 @@ vi.mock('../state/appMeta.js', () => ({
   refreshAppMeta: () => Promise.resolve(),
 }));
 vi.mock('../starter/starters.js', () => ({ listStarterApps: () => [] }));
+// HubHome (the not-offering branch) boots a REAL sql.js database to list the library.
+// This spec is about which screen the router shows, so the db is stubbed out — without
+// it the wasm binary is fetched over a `/@fs/` URL that only resolves under a running
+// dev server, and the suite fails with an ENOENT that has nothing to do with the test.
+vi.mock('../state/userdb.js', () => ({
+  getUserDb: () => Promise.resolve({ listApps: () => [], getSetting: () => undefined }),
+  userDbStatusStore: { get: () => ({ state: 'ready' }), subscribe: () => () => undefined },
+}));
 
 const { HubView } = await import('../views/HubView.js');
 
