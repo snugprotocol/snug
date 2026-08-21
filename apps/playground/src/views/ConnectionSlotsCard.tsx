@@ -151,63 +151,84 @@ export function ConnectionSlotsCard(): ReactElement | null {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   };
 
+  // REDESIGNED LAYOUT (TASK-20260821 AC14) — same testids, same derived copy, same
+  // actions: identity on the left (glyph · provider · owning app · kind), state and
+  // actions on the right, stacking to a column on narrow screens (app.css). The glyph
+  // is the rail's existing ⚯ connections mark — a GEOMETRIC glyph that inherits
+  // currentColor, never an emoji (lessons.md 2026-08-18: emoji ignore theming and read
+  // as disabled beside real controls).
   return (
-    <Card>
-      <h3>connections</h3>
+    <Card className="settings-group connections-group">
       {error !== undefined ? (
         <div className="error-note" role="alert">
           {error}
         </div>
       ) : null}
       {rows.length === 0 ? (
-        <span className="hint">no app has asked to connect to anything yet.</span>
+        <div className="connections-empty">
+          <span className="connections-empty-glyph" aria-hidden="true">
+            ⚯
+          </span>
+          <span className="hint">no app has asked to connect to anything yet.</span>
+        </div>
       ) : (
-        <ul>
+        <ul className="connection-list">
           {rows.map((row) => (
             <li
               key={`${row.appId}:${row.slot}`}
+              className="connection-row"
               data-testid="connection-slot-row"
               data-app-id={row.appId}
               data-slot={row.slot}
               data-status={row.status}
               data-needs-reapproval={needsReapproval(row) ? 'true' : 'false'}
             >
-              <strong>{row.requirement.provider.name}</strong>
-              {/*
-                The owning app, in the user's own words for it. Falls back to the raw
-                `appId` rather than rendering nothing: a connection can outlive (or precede)
-                an installed app row, and a BLANK owner beside a destructive button is worse
-                than an ugly identifier — the whole point is that the user can tell which
-                grant they are about to cut off.
-              */}
-              <span className="hint" data-testid="slot-app">
-                in {appNames[row.appId] ?? row.appId}
+              <span className="connection-glyph" aria-hidden="true">
+                ⚯
               </span>
-              <span className="hint" data-testid="slot-kind">
-                {kindCopy(row)}
-              </span>
-              <span className="chip" data-testid="slot-status-pill">
+              <div className="connection-identity">
+                <strong>{row.requirement.provider.name}</strong>
+                {/*
+                  The owning app, in the user's own words for it. Falls back to the raw
+                  `appId` rather than rendering nothing: a connection can outlive (or precede)
+                  an installed app row, and a BLANK owner beside a destructive button is worse
+                  than an ugly identifier — the whole point is that the user can tell which
+                  grant they are about to cut off.
+                */}
+                <span className="hint" data-testid="slot-app">
+                  in {appNames[row.appId] ?? row.appId}
+                </span>
+                <span className="hint" data-testid="slot-kind">
+                  {kindCopy(row)}
+                </span>
+              </div>
+              <span
+                className={`chip connection-pill connection-pill-${needsReapproval(row) ? 'attention' : row.status}`}
+                data-testid="slot-status-pill"
+              >
                 {pillCopy(row)}
               </span>
-              <Button
-                /*
-                  NO `mode` IS PASSED, deliberately (fold). This call site used to hand the
-                  sheet `mode: 'reapprove'` so it would render the diff — which made the
-                  disclosure depend on every call site REMEMBERING to derive the same thing,
-                  and two shipped entry points did not. The sheet now derives the diff from
-                  `needsReapproval(row)` itself, the same definition `pillCopy` above reads,
-                  so passing a mode here would be a second copy of the derivation with
-                  nothing keeping it honest.
-                */
-                onClick={() => openConnectionWizard({ appId: row.appId, slot: row.slot, source: 'settings' })}
-              >
-                {actionCopy(row)}
-              </Button>
-              {row.status !== CONNECTION_STATUS.revoked ? (
-                <Button variant="danger" onClick={() => revoke(row)}>
-                  disconnect
+              <div className="connection-actions">
+                <Button
+                  /*
+                    NO `mode` IS PASSED, deliberately (fold). This call site used to hand the
+                    sheet `mode: 'reapprove'` so it would render the diff — which made the
+                    disclosure depend on every call site REMEMBERING to derive the same thing,
+                    and two shipped entry points did not. The sheet now derives the diff from
+                    `needsReapproval(row)` itself, the same definition `pillCopy` above reads,
+                    so passing a mode here would be a second copy of the derivation with
+                    nothing keeping it honest.
+                  */
+                  onClick={() => openConnectionWizard({ appId: row.appId, slot: row.slot, source: 'settings' })}
+                >
+                  {actionCopy(row)}
                 </Button>
-              ) : null}
+                {row.status !== CONNECTION_STATUS.revoked ? (
+                  <Button variant="danger" onClick={() => revoke(row)}>
+                    disconnect
+                  </Button>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>
