@@ -3,11 +3,12 @@
 // into the fresh DB. It NEVER pushes — after corruption the origin is the only good
 // copy, and nothing auto-pushes post-recovery without user confirmation, so the
 // provider's push is simply never invoked here (tests pin that).
+import type { Secrets as ContainerSecrets } from '../crypto/container.js';
 import type { SyncProvider, SyncPullResult } from './provider.js';
 
 /** The subset of UserDb recovery needs — matches what openFresh() hands back. */
 export interface RestorableUserDb {
-  importUserDb(bytes: Uint8Array, options?: { trustedOrigin?: boolean }): Promise<unknown>;
+  importUserDb(bytes: Uint8Array, options?: { trustedOrigin?: boolean; secrets?: ContainerSecrets }): Promise<unknown>;
   flush(): Promise<void>;
   close(): Promise<void>;
 }
@@ -28,6 +29,13 @@ export interface RestoreFromOriginOptions<T extends RestorableUserDb> {
   provider: SyncProvider;
   /** The corrupt open result's explicit-recovery constructor (OpenUserDbResult.openFresh). */
   openFresh(): Promise<T>;
+  /**
+   * Secrets for a PROTECTED origin image (ADR-0043, diff review D-4). A personal origin
+   * carries a container, so without these the corruption-recovery path fails at exactly
+   * the moment the user needs it most — their local file is already quarantined. The
+   * UI has the passphrase: it collected one to unlock, or is about to.
+   */
+  secrets?: ContainerSecrets;
 }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -51,7 +59,10 @@ export async function restoreFromOrigin<T extends RestorableUserDb>(
   }
   try {
     // The user's own origin image restored into a fresh hub — contracts survive (R-M2).
-    await fresh.importUserDb(remote.bytes, { trustedOrigin: true });
+    await fresh.importUserDb(remote.bytes, {
+      trustedOrigin: true,
+      ...(options.secrets !== undefined ? { secrets: options.secrets } : {}),
+    });
     await fresh.flush(); // make the restore durable immediately
     return { status: 'restored', userDb: fresh, revision: remote.revision };
   } catch (err) {

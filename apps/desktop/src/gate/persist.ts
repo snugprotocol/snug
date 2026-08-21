@@ -4,7 +4,7 @@
 // covers that. The claim is that a mutation made moments before the user quits
 // SURVIVES the window closing, which is only observable across a real process
 // boundary: write in one shell, close it, reopen a second shell over the same
-// `~/Snug/user.sqlite`, and look for the row.
+// `~/Snug/user.snug`, and look for the row.
 //
 // The driver runs the same binary twice with SNUG_SHELL_GATE_PHASE:
 //

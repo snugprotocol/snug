@@ -22,6 +22,14 @@ export interface SyncPullResult {
   bytes: Uint8Array;
   /** Opaque origin revision (etag, Dropbox rev, …) — echoed back as `baseRevision`. */
   revision: string;
+  /**
+   * Set when the bytes came from a provider's PRE-RENAME path (ADR-0042), so `revision`
+   * belongs to that older object rather than to the canonical one. The loop must then
+   * provision the canonical path (`baseRevision: undefined`) on the next push; echoing
+   * this revision back as a conditional update would target an object that does not
+   * exist yet and conflict permanently.
+   */
+  migratedFromLegacy?: boolean;
 }
 
 export type SyncPushResult =

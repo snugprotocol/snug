@@ -4,6 +4,47 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-20 — **PUSHED** — spec v0.2-draft §6 + §7 — TASK-20260820-snug-file-and-encryption (ADR-0042, ADR-0043) — spec commit `8ea69b8`
+
+**No JSON schema bytes changed; the wire protocol stays v1.** Both additions are to the
+*storage* surface (`spec-v0.2-userdb.md`), which ADR-0007 made normative because
+portability requires every hub to agree on it.
+
+**§5 — file naming.** The canonical user file is `user.snug` and the download artifact is
+`snug-user.snug`. The extension is explicitly a naming convention, **not** a format claim:
+implementations MUST decide format from leading bytes, MUST accept the historical
+`.sqlite` on input, and a hub finding a pre-existing `user.sqlite` MUST read it and adopt
+the canonical name on its next write **without renaming or deleting the original**.
+
+**§6 — the `SNUGENC1` container.** The optional protected form of a user file: AES-256-GCM
+over the whole database, file key wrapped independently per slot, PBKDF2-SHA256 (iteration
+count carried in the header so it can be raised without orphaning old files). Normative
+because misidentifying it destroys data — a hub that does not recognise the magic will
+quarantine or overwrite a perfectly healthy file. Rules that are requirements rather than
+guidance: at least two slots (never a single point of loss), ≥128-bit recovery key, header
+bound as GCM AAD, fresh CSPRNG nonces per operation (counters forbidden — one logical save
+can reach two physical slots), *locked* reported distinctly from *corrupt*, a locked file
+never quarantined or replaced, the container self-opening so any device with the file and
+the secret can read it, and size limits applied to the plaintext rather than the container.
+
+`packages/protocol` carries the constants (`USERDB_FILE`, `USERDB_LEGACY_FILE`,
+`USERDB_EXTENSION`, `CONTAINER`).
+
+**Pushed 2026-08-20 on the owner's explicit ask** as `snugprotocol/spec@8ea69b8`
+(single commit on `main`, +118/-3, one file). The sections land as **§6 and §7** of
+`SPEC-v0.2-draft.md` — the published document already used §1–§5, so the staged
+numbering (§5/§6) shifted on publication. Also amended in the same commit: §2's
+canonical filename, §2.2's per-app export, §3.2's hub export obligation, and a dated
+revision note. **No JSON Schema bytes changed**, and none were copied.
+
+**Known drift, deliberately NOT carried in this commit** (owner decision): the spec
+repo's `schemas/host-ready.json` still lacks the `net` and `openUrl` capability flags
+that `packages/protocol/schemas/` has. That drift originates in EARLIER tasks (AL-03
+net frames; TASK-20260818-ledger-starter, whose own entry records "no push … needs an
+explicit ask"), not this one. Publishing it inside this commit would have broken the
+one-commit-per-task traceability invariant and consumed another task's pending ask as
+a side effect. Tracked in `docs/next-steps.md`.
+
 ## 2026-08-18 — schemas: `host-ready.json` capability flag + INTERNAL-DRAFT open-url frames — TASK-20260818-ledger-starter (ADR-0038 D5)
 **One published schema changed, additively:** `hostReadySchema.capabilities` gains an
 optional `openUrl` boolean (the `net` flag's exact precedent — optional so pre-existing

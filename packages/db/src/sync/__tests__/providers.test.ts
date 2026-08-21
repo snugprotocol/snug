@@ -325,7 +325,10 @@ describe('dropbox provider specifics', () => {
     expect(uploads).toHaveLength(2);
     const firstArg = JSON.parse(headersOf(uploads[0]!.init)['dropbox-api-arg'] ?? '{}') as Record<string, unknown>;
     const secondArg = JSON.parse(headersOf(uploads[1]!.init)['dropbox-api-arg'] ?? '{}') as Record<string, unknown>;
-    expect(DROPBOX_DEFAULT_PATH).toBe('/snug/user.sqlite');
+    // ADR-0042: the remote copy is named `.snug` like the local one. The pre-rename
+    // path is NOT gone — it is read as a fallback (see dropbox-path-migration.test.ts)
+    // so an upgrading user's months of history are never orphaned.
+    expect(DROPBOX_DEFAULT_PATH).toBe('/snug/user.snug');
     expect(firstArg.path).toBe(DROPBOX_DEFAULT_PATH);
     expect(firstArg.mode).toBe('add');
     expect(secondArg.mode).toEqual({ '.tag': 'update', update: first.revision });

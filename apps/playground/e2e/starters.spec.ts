@@ -69,7 +69,7 @@ test.describe('pillar starters (AL-08) — open read-only, interact, stay clean'
     await expect(app.getByTestId('quest-choice').first()).toBeVisible();
 
     // Inventory/journey live in real SQL — the host chrome offers the export moment.
-    await expect(page.getByRole('button', { name: 'export .sqlite' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'export .snug' })).toBeVisible({ timeout: 20_000 });
 
     // AC4: browsing a starter never writes an app row.
     await page.getByRole('link', { name: 'your apps' }).click();
@@ -98,7 +98,7 @@ test.describe('pillar starters (AL-08) — open read-only, interact, stay clean'
     await expect(app.getByText(/question 2 of 5/i)).toBeVisible();
 
     // Scores persist to real SQL.
-    await expect(page.getByRole('button', { name: 'export .sqlite' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'export .snug' })).toBeVisible({ timeout: 20_000 });
 
     expect(errors, `unexpected console errors: ${errors.join(' | ')}`).toEqual([]);
   });

@@ -3,6 +3,7 @@ import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { parseBuildPrompt } from '../agent/chips.js';
+import { ProtectionOffer } from '../vault/ProtectionOffer.js';
 import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
 import { useDesktopFirstRun } from '../desktop/firstRun.js';
 import { getPlatform } from '../platform/platform.js';
@@ -63,14 +64,24 @@ const STARTER_LOOKS: Readonly<
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };
 
 /**
- * The hub route. On a desktop first run (TASK-20260812 P3 item 1) the welcome takes the
- * whole screen — one idea per screen — and the shelf waits until the person has chosen
- * (or skipped). A wrapper component rather than an early return so the two branches
- * keep their own hook lists.
+ * The hub route. ONE full-screen gate sits in front of the shelf: the desktop welcome
+ * (TASK-20260812 P3 item 1), which asks a question the hub cannot work without.
+ *
+ * The protection offer (TASK-20260820, D3) is deliberately NOT a second gate. It was
+ * one for about an hour, and the e2e suite caught what that costs: 24 specs timed out
+ * waiting for a starter tile, because a brand-new profile met a full-screen "protect
+ * this file?" and never reached the shelf. The product defect underneath the test
+ * failure is the real one — asking someone to protect a file before they have seen a
+ * single app is asking them to value something they have not been shown. So the offer
+ * renders as a dismissible banner INSIDE the hub (`ProtectionOffer`), where it is
+ * visible without being a wall.
+ *
+ * A wrapper component rather than early returns so each branch keeps its own hook list.
  */
 export function HubView(): ReactElement {
   const firstRun = useDesktopFirstRun();
-  return firstRun ? <DesktopWelcome /> : <HubHome />;
+  if (firstRun) return <DesktopWelcome />;
+  return <HubHome />;
 }
 
 function HubHome(): ReactElement {
@@ -195,6 +206,11 @@ function HubHome(): ReactElement {
           build
         </Button>
       </div>
+
+      {/* Below the create bar, above the shelf: seen on the way to the apps, never
+          instead of them. Renders nothing once protection is on or the offer is
+          declined. */}
+      <ProtectionOffer />
       <div className="chip-row" aria-label="suggestions">
         {prompt.chips.map((chip) => (
           <Chip key={chip} onClick={() => startBuild(chip)}>

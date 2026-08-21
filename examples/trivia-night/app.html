@@ -392,7 +392,7 @@ function useConnectedFetch() {
     // The roster is a real table, not key-value state: a kv write that races the
     // initial hydration gets overwritten when the stored value arrives, so a player
     // added in the first moments after load could silently vanish. SQL inserts have
-    // no such race — and the roster rides along in the exported .sqlite for free.
+    // no such race — and the roster rides along in the exported .snug for free.
     const DDL = [
       `CREATE TABLE IF NOT EXISTS tn_players (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

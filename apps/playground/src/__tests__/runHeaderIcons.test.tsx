@@ -1,14 +1,14 @@
 // runHeaderIcons.test.tsx — TASK-20260817 follow-on: the run header's action cluster
 // becomes ICON buttons, and the model selector swaps places with connections.
 //
-// Owner ask: "replace the Connections and export .sqlite buttons with appropriate icon
+// Owner ask: "replace the Connections and export buttons with appropriate icon
 // buttons with tooltip, and swap the position of the llm model selector with the new
 // connections icon button."
 //
 // The hazard this file exists to catch: an icon-only button that loses its ACCESSIBLE
 // NAME. The glyph is not a name — `🔌` announces as "electric plug" or as nothing at
 // all, and two existing e2e specs already locate the export control by the accessible
-// name 'export .sqlite' (`e2e/starters.spec.ts`). So each button keeps a real name via
+// name 'export .snug' (`e2e/starters.spec.ts`). So each button keeps a real name via
 // `aria-label`, and `title` carries the hover tooltip the owner asked for. Those are
 // DIFFERENT jobs: a `title` alone is not an accessible name (the same rule the rail
 // toggle already follows, and which RunView's own comment states).
@@ -126,18 +126,18 @@ describe('icon buttons keep an accessible name and gain a tooltip', () => {
     await renderActions();
     const el = exportBtn();
     expect(el).not.toBeNull();
-    expect(el!.getAttribute('aria-label')).toMatch(/\.sqlite/i);
+    expect(el!.getAttribute('aria-label')).toMatch(/\.snug/i);
     expect(el!.getAttribute('title')).toBeTruthy();
     expect(el!.textContent ?? '').not.toMatch(/export/i);
   });
 
-  it('keeps `export .sqlite` as the export button’s accessible name', async () => {
+  it('keeps `export .snug` as the export button’s accessible name', async () => {
     // Load-bearing: `e2e/starters.spec.ts` locates this control by
-    // getByRole('button', { name: 'export .sqlite' }) in two specs. Dropping the word
+    // getByRole('button', { name: 'export .snug' }) in two specs. Dropping the word
     // to a glyph without keeping the name would break those silently in a lane CI does
     // not yet run — exactly the kind of break that surfaces as a mystery later.
     await renderActions();
-    expect(exportBtn()!.getAttribute('aria-label')).toBe('export .sqlite');
+    expect(exportBtn()!.getAttribute('aria-label')).toBe('export .snug');
   });
 
   it('gives the two icons DIFFERENT glyphs, so they are not confusable', async () => {

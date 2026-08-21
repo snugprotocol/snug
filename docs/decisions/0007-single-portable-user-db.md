@@ -1,6 +1,6 @@
 # 0007 — Single portable per-user SQLite DB with per-app namespaces and app versioning
 
-- **Status:** accepted (amended by 0010 — blob-embedded app-data layout replaced by native app tables)
+- **Status:** accepted (amended by 0010 — blob-embedded app-data layout replaced by native app tables; by [0042](0042-snug-file-extension.md) — the canonical file is `.snug`; by [0043](0043-passphrase-encryption-at-rest.md) — a file the user opts to protect is an encrypted container and is NOT openable by standard sqlite tooling, a stated cost against the portability property below)
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-portable-hub
 

@@ -66,7 +66,7 @@ What an attacker would actually want, in rough order of severity:
 | **Credentials** — API keys, OAuth access/refresh tokens, client secrets, signing keys, minted helper tokens | `snug_secrets` in the user's own SQLite file, under the `auth:` namespace | Access to the user's connected accounts. The severity anchor for C1. |
 | **The user's app data** | Per-app SQLite namespaces in the same file | Personal records: finances, messages, journals. |
 | **Other people's messages** | The WhatsApp helper's own store, and thread content reaching an LLM | Third parties who never consented and cannot opt out. See §6 R-9. |
-| **The user file itself** (`~/Snug/user.sqlite`) | Plaintext on disk, OS user account is the perimeter | Everything above at once. |
+| **The user file itself** (`~/Snug/user.snug`) | On disk. Plaintext by default; **AES-256-GCM ciphertext when the user turns protection on** ([ADR-0043](decisions/0043-passphrase-encryption-at-rest.md)) | Everything above at once — unless protected, in which case an attacker holding the file holds ciphertext and must guess a passphrase offline. |
 | **The host page's execution context** | The browser tab / the shell's main window | Total compromise — it holds every credential and calls fetch. See §6 R-1. |
 | **The user's attention at a consent gate** | The wizard's review screen; the confirm dialog | The last wall behind several accepted residuals. If review copy degrades, those trades stop paying. |
 
@@ -81,7 +81,7 @@ What an attacker would actually want, in rough order of severity:
 | **A3** | **A prompt injector** — text arriving via provider bodies, app rows, or other people's WhatsApp messages | Writes text the model reads as though it were instruction | Fenced untrusted blocks; confirm gate on every mutating call; lane asymmetry (§6 R-7) |
 | **A4** | **A hostile connection requirement** — authored by an LLM steered by A3 | Proposes provider name, hosts, field labels, header templates | Admission's borrow ban; template lint; verbatim human review |
 | **A5** | **A hostile file** — an import, a `.snug` double-click, a sync image from an untrusted donor | Chooses every byte of a user database | Import demotes to `declared`; contract reconciliation; single-use open allowlist |
-| **A6** | **A local process** running as the same user | Reads any file the user can read | Explicitly *not* defended — see §6 R-3. The OS user account is the perimeter. |
+| **A6** | **A local process** running as the same user | Reads any file the user can read | **Unprotected file: not defended** — the OS user account is the perimeter. **Protected file: whole-file AES-256-GCM**, so the bytes are ciphertext at rest. Neither case defends a running host page that has already unlocked. See §6 R-3. |
 | **A7** | **A LAN-local attacker**, present at first device pairing | Answers at the typed address before the real bridge | TOFU pin; physical button press. Residual R-6. |
 
 **Deliberately not an adversary: the hub.** [ADR-0013](decisions/0013-hosted-hub-static-zero-backend.md)
@@ -240,11 +240,32 @@ endpoint that decodes and reflects the *underlying* secret reflects it in the cl
 *Bounded by:* the frozen host ceiling, which was always the primary wall. Inherited from the
 Dynamic Auth v2 delta.
 
-**R-3 — The OS user account is the perimeter.** `~/Snug/user.sqlite` is a plaintext file;
-any process running as the user can read it, and the WhatsApp helper's socket and key store
-with it. This is exactly the custody [ADR-0014](decisions/0014-credentials-local-first.md)
-promises — the user owns the file — not an oversight. Full-disk encryption and OS keychain
-wrapping are out of scope pre-1.0; the KeyProvider/KMS track is the roadmap answer.
+**R-3 — The OS user account is the perimeter, unless the user protects the file.**
+By default `~/Snug/user.snug` is a plaintext file and any process running as the user can
+read it, along with the WhatsApp helper's socket and key store. This is exactly the custody
+[ADR-0014](decisions/0014-credentials-local-first.md) promises — the user owns the file —
+not an oversight.
+
+Since 2026-08-20 the user may opt into **whole-file passphrase encryption**
+([ADR-0043](decisions/0043-passphrase-encryption-at-rest.md)): AES-256-GCM over the entire
+database, key wrapped by PBKDF2-SHA256 (600k) from a passphrase and, independently, from a
+mandatory Recovery Key. When it is on, A6 reads ciphertext and must guess offline; the
+protection travels with exports and personal-origin sync copies.
+
+*What it does NOT do,* stated plainly because the gap is the interesting part:
+- it does not defend a **running, already-unlocked host page** — R-1 is unchanged, and a
+  compromised host holds the plaintext database and every credential in it;
+- it does not defend a device **while the passphrase is being typed**, or one where the
+  attacker can observe the process;
+- it is **not** zero-knowledge and **not** end-to-end encrypted — it is at-rest encryption
+  with a key the user holds ([ADR-0014 §5](decisions/0014-credentials-local-first.md)
+  bounds what may be claimed);
+- hub-origin sync copies are still **plaintext** (secrets-stripped, per ADR-0014), by
+  decision — that copy carries no credentials, so encrypting it would change the `/userdb`
+  contract for no privacy gain.
+
+Full-disk encryption and OS keychain wrapping remain out of scope pre-1.0; the
+KeyProvider/KMS track is still the roadmap answer for hosted custody.
 
 **R-4 — An approved-but-hostile header template routes a secret to an odd header of an
 already-allowed host.** The lint bounds *what* a template references, never whether
@@ -319,6 +340,23 @@ where the docs put it" defect this section previously recorded is closed.
 terms and accounts have been banned for it. Pacing and rate caps are harm reduction, never
 detection evasion, and are not a guarantee. Disclosed in the wizard consent copy and the
 starter README before the user connects.
+
+**R-14 — A protected file whose secrets are both lost is unrecoverable.**
+[ADR-0043](decisions/0043-passphrase-encryption-at-rest.md) has no backdoor, no escrow and
+no reset: if the user loses BOTH the passphrase and the Recovery Key, the data is gone. That
+is the property the feature exists to provide, so it cannot be mitigated away — only
+disclosed and designed around. What bounds it:
+- protection is **opt-in**, and the cost is stated on the same screen as the offer, before
+  any commitment — never on a later screen;
+- a **Recovery Key is mandatory**, not optional: `encryptContainer` refuses to build a
+  single-slot container, so no user can end up with exactly one way in;
+- the key is shown once behind a **typed acknowledgement**, with copy/download/print — the
+  one deliberately inconvenient interaction in the product, because clicking through that
+  screen unread is the path that ends here;
+- the unlock screen offers **no destructive escape** (no "start fresh"), so a tired user
+  cannot trade their data for relief, and it names the Recovery Key as the way out;
+- turning protection **off** is always available from Settings while the file is open.
+*Accepted by the owner as the cost of the R-3 improvement, with the mitigations above.*
 
 ### Enforcement cadence — where "tested" is weaker than it sounds
 
@@ -426,6 +464,12 @@ reachable.
   host-blind. The honest term is **publisher-blind**, and it stays that way until a
   KeyProvider/KMS ships ([ADR-0003](decisions/0003-v1-scope-and-security-constraints.md),
   [ADR-0014](decisions/0014-credentials-local-first.md) §5).
+  **Optional at-rest encryption ([ADR-0043](decisions/0043-passphrase-encryption-at-rest.md))
+  does not change this.** It protects the file where it sits and where it travels; it says
+  nothing about custody, because the key was always the user's and still is. The claim it
+  supports is exactly *"your file can be encrypted with a passphrase only you hold"* — never
+  "zero-knowledge", never "end-to-end encrypted", and never a claim about a running host
+  page (R-1) or an unlocked session.
 - **No claim that prompt injection is solved.** It is contained, at named points, with the
   residual stated (R-8).
 - **No claim of formal verification, external audit, or a bug bounty.** This is a
@@ -455,7 +499,7 @@ treat it as a reading aid, and read the delta itself when the answer matters.
 |---|---|---|
 | `docs/security/threat-model-delta-connection-addressing.md` | `22f12227195b` | §5 ceiling · R-14 |
 | `docs/security/threat-model-delta-desktop-auth.md` | `f7e88cee2235` | §4 · R-1, R-2, R-5, R-6, R-15, R-20 |
-| `docs/security/threat-model-delta-desktop-shell.md` | `ebd06c7635f5` | §5 C2 · R-1, R-3, R-13 |
+| `docs/security/threat-model-delta-desktop-shell.md` | `edf449473757` | §5 C2 · R-1, R-3, R-13 |
 | `docs/security/threat-model-delta-dynamic-auth-v2.md` | `8bae299b6bb2` | §5 authoring · R-2, R-4, R-19 |
 | `docs/security/threat-model-delta-lean-runtime-data-chat.md` | `bec065ca9633` | §5 authoring · R-7, R-8, R-24, R-25 |
 | `docs/security/threat-model-delta-provider-chat-lane.md` | `6f92151dad7c` | §5 ceiling · R-8 |

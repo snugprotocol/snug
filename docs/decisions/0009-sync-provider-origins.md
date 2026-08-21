@@ -1,6 +1,6 @@
 # 0009 — User-DB sync: OPFS runtime copy, pluggable origin via SyncProvider, last-writer-wins v1
 
-- **Status:** accepted
+- **Status:** accepted — **amended 2026-08-20 by [ADR-0042](0042-snug-file-extension.md)** (the canonical export is `.snug`, with the legacy `.sqlite` still read on input) and **[ADR-0043](0043-passphrase-encryption-at-rest.md)** (a personal origin may carry a protected container; a hub origin keeps receiving secrets-stripped plaintext).
 - **Date:** 2026-08-03
 - **Task:** TASK-20260803-portable-hub
 
@@ -15,7 +15,7 @@ The single user DB (ADR-0007) runs in browser OPFS at runtime. Users need it dur
 - **Corruption fails closed at the user-DB level** (unlike the per-app driver's fail-open): corrupt local bytes are quarantined (`.bak`), restore is attempted from origin, and nothing auto-pushes after recovery without user confirmation.
 - **No pagehide network push** (keepalive caps ~64 KiB): pagehide flushes OPFS only; a local copy newer than origin pushes on next session start.
 - **Multi-tab**: single writer via Web Lock; reader tabs are read-only with BroadcastChannel invalidation.
-- **Export is mandatory hub behavior**: one-click download of the canonical `.sqlite`; import likewise — this is the portability escape hatch that keeps hub providers honest. Default export strips secrets (ADR-0008); imported or first-pulled DBs are treated as executable config — endpoint/provider settings require re-confirmation before use.
+- **Export is mandatory hub behavior**: one-click download of the canonical `.snug` (ADR-0042; `.sqlite` before that); import likewise — this is the portability escape hatch that keeps hub providers honest. Default export strips secrets (ADR-0008); imported or first-pulled DBs are treated as executable config — endpoint/provider settings require re-confirmation before use.
 - Multi-device concurrent-write merge (CRDT/changeset) is explicitly out of scope for v1 and a documented limitation.
 
 ## Alternatives considered

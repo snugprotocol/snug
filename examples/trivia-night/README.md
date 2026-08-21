@@ -14,7 +14,7 @@ zero networking, zero accounts, zero setup.
 - **Persistence picked per write-pattern**: the player roster is a real SQLite table
   (`tn_players` via `useAppDB`) because a key-value write racing the initial hydration
   can be silently overwritten when the stored value lands — SQL inserts have no such
-  race, and the roster rides along in the exported `.sqlite`. The hall-of-fame best
+  race, and the roster rides along in the exported `.snug`. The hall-of-fame best
   score stays in `usePersistedState`: it is only written at podium time, long after
   hydration settles.
 - **Kid-first**: auto-assigned animal emoji per player, big answer buttons, a podium with

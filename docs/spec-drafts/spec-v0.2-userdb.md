@@ -39,7 +39,8 @@
 
 ## 2. The user database
 
-One SQLite file per user (`user.sqlite`) is the canonical artifact. `PRAGMA
+One SQLite file per user (`user.snug`) is the canonical artifact — see §5 for the file
+name and §6 for the optional protected form. `PRAGMA
 user_version` carries the schema version (currently **2**); migrations are
 forward-only (v1→v2 is structural; v1 blob app data does not survive). Size cap:
 `MAX_USERDB_BYTES` (64 MiB v1).
@@ -80,7 +81,7 @@ Rules (all normative):
   triggers, views, in creation order) and replayed on materialization; DDL bodies are
   never rewritten. At-rest table names are produced by SQLite `ALTER TABLE … RENAME`
   (a pure name swap), not by editing statement text.
-- Per-app export = materialize + export: a standalone `.sqlite` with natural names.
+- Per-app export = materialize + export: a standalone `.snug` with natural names.
 - Hub-namespace tables are `snug_`-prefixed; apps can never reach them.
 - Push-state (last pushed revision/hash) lives OUTSIDE the image (sidecar) so the file
   never contains its own revision.
@@ -96,7 +97,7 @@ content and writes it into the user DB itself; hub stores are transient caches.
 A conforming hub:
 1. **Never requires its backend for app execution** — the hub client is static files;
    app reads/writes hit the browser copy (OPFS) of the user DB.
-2. **Offers Export/Import** — one-click download/upload of the canonical `.sqlite`
+2. **Offers Export/Import** — one-click download/upload of the canonical `.snug`
    (default export strips `snug_secrets` and VACUUMs; including secrets is explicit
    opt-in). Import treats the file's endpoint settings as executable config and
    requires user re-confirmation before agent turns run.
@@ -133,3 +134,82 @@ no KMS/host-blind claim is made until a KeyProvider ships.
 C1/C2 are unchanged in every mode: app iframes stay `sandbox="allow-scripts"` with
 `connect-src` blocked; LLM calls originate from the HOST page only; credentials never
 enter the iframe.
+
+---
+
+## 5. File naming (normative)
+
+The canonical user file is named **`user.snug`**, and the artifact a hub offers for
+download is **`snug-user.snug`**. `.snug` is the Snug Protocol's extension for the one
+portable file a user owns.
+
+The extension is a **naming convention, not a format claim**. Conforming implementations
+MUST determine a file's format from its leading bytes, never from its name:
+
+| Leading bytes | Format |
+|---|---|
+| `SQLite format 3\0` | a plain user database |
+| `SNUGENC1\n` | a protected user database (§6) |
+
+Implementations SHOULD accept the historical `.sqlite` extension on input (users hold
+pre-rename exports and backups), and MUST NOT reject a file for its extension alone.
+
+A hub that stores the user file under a name of its own choosing MUST still read a
+pre-existing `user.sqlite` when `user.snug` is absent, and adopt the canonical name on
+its next write, WITHOUT renaming or deleting the original.
+
+## 6. Protected user files — the `SNUGENC1` container (normative)
+
+A user MAY protect their file with a passphrase. A protected file is not a SQLite
+database; it is a container carrying one.
+
+**This section is normative because misidentifying it destroys data.** A hub that does
+not recognise `SNUGENC1` will conclude the bytes are corrupt and quarantine — or worse,
+overwrite — a perfectly healthy file. A conforming hub MUST detect the magic and prompt
+for a secret; it MUST NOT treat a protected file as corruption, and MUST NOT create a
+fresh empty database beside one.
+
+### 6.1 Layout
+
+```
+offset  size      field
+0       9         magic            "SNUGENC1\n"
+9       1         version          0x01
+10      2         kdf id           0x0001 = PBKDF2-HMAC-SHA256
+12      4         iterations       u32 big-endian
+16      16        salt
+32      2         slot count       u16 big-endian
+34      4         header checksum  FNV-1a/32 over the header with this field zeroed
+38      …         slot table       slot count × { kind:u8, iv:12 }
+…       …         wrapped keys     slot count × 48 (AES-256-GCM of the 32-byte file key)
+…       12        payload IV
+…       …         payload          AES-256-GCM of the SQLite bytes
+```
+
+Slot kinds: `0x01` passphrase, `0x02` recovery key.
+
+### 6.2 Rules
+
+1. **Key wrapping.** A random 32-byte *file key* encrypts the payload. Each slot
+   independently wraps that file key under a key derived from its own secret. Changing
+   one secret MUST NOT require re-encrypting the payload or invalidating other slots.
+2. **Two slots minimum.** A conforming implementation MUST NOT create a container with
+   only a passphrase slot. A single point of loss with no recovery path is not an
+   acceptable shape for a user's only copy of their data.
+3. **Recovery key entropy** MUST be at least 128 bits.
+4. **AAD.** The header (offset 0 through the end of the slot table) MUST be supplied as
+   GCM additional authenticated data for every slot unwrap and for the payload.
+5. **Nonces.** Every IV MUST be 12 fresh CSPRNG bytes per encryption operation. Counters
+   and derived nonces are forbidden: implementations may write one logical save into two
+   physical slots, so a repeat is reachable in ordinary operation, and a repeated GCM
+   nonce discloses plaintext and forges the authentication key.
+6. **Failure reporting.** Implementations MUST distinguish *locked* (a structurally valid
+   container that no supplied secret opened) from *corrupt* (malformed, truncated, or a
+   failed header checksum). Reporting damage as a wrong passphrase sends a user hunting
+   for a secret that was never the problem; reporting a wrong passphrase as damage
+   invites them to destroy a healthy file.
+7. **A locked file is never quarantined, rewritten, or replaced.** It is healthy.
+8. **Portability.** The container MUST be self-opening: everything required to unwrap it,
+   apart from the secret itself, travels inside it. No implementation may require state
+   held outside the file, so any device holding the file and the secret can open it.
+9. **Size limits** apply to the PLAINTEXT the container carries, not to the container.

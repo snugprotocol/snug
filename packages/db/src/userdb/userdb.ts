@@ -15,6 +15,14 @@
 // Unlike the per-app driver (errors-as-data at the frame boundary), the typed CRUD API
 // throws UserDbError — it is an in-process API, mirroring useAppDB's throwing contract.
 import initSqlJs from 'sql.js';
+import {
+  decryptContainer,
+  encryptContainer,
+  isEncryptedContainer,
+  openFileKey,
+  resealContainer,
+  type Secrets as ContainerSecrets,
+} from '../crypto/container.js';
 import type { BindParams, Database, SqlJsStatic } from 'sql.js';
 import {
   APP_KV_TABLE,
@@ -27,6 +35,7 @@ import {
   USERDB_CONNECTIONS_TABLE,
   USERDB_DDL,
   USERDB_FILE,
+  USERDB_LEGACY_FILE,
   USERDB_INDEX_DDL,
   USERDB_LIMITS,
   USERDB_OPFS_DIR,
@@ -73,6 +82,12 @@ export const USERDB_ERROR_CODES = {
   TOO_LARGE: 'USERDB_TOO_LARGE',
   /** Import payload is not an openable Snug user DB (magic/open-check/version failed). */
   BAD_IMPORT: 'USERDB_BAD_IMPORT',
+  /**
+   * The payload is a protected container and no supplied secret opened it. Distinct
+   * from BAD_IMPORT because the file is FINE — it needs a passphrase, and telling the
+   * user their backup is broken would be both false and frightening.
+   */
+  LOCKED_IMPORT: 'USERDB_LOCKED_IMPORT',
   /** The referenced app/version/thread does not exist. */
   NOT_FOUND: 'USERDB_NOT_FOUND',
   /** The UserDb was closed. */
@@ -423,6 +438,13 @@ export interface ConnectionRow {
  */
 export interface UserDbImportOptions {
   trustedOrigin?: boolean;
+  /**
+   * Secrets for a PROTECTED payload (ADR-0043). Every path that admits foreign bytes
+   * — sync pull-merge, applyRemote, recovery restore, and the UI's file import —
+   * arrives here, so this one seam is what makes a protected file portable between
+   * devices. Absent or non-matching secrets REJECT; they never clobber local state.
+   */
+  secrets?: ContainerSecrets;
 }
 
 /** What `importUserDb` surfaces about the auth reconciliation passes (plan D5/N1). */
@@ -679,6 +701,29 @@ export interface UserDb {
    */
   importUserDb(bytes: Uint8Array, options?: UserDbImportOptions): Promise<UserDbImportReport>;
 
+  /**
+   * Seals bytes into this file's container, or `undefined` when the file is not
+   * protected. Exposed so the sync loop can encrypt personal-origin payloads with the
+   * SAME session key the write-back uses (ADR-0043, D5) — the loop therefore never
+   * holds a passphrase, and pushes never re-key, so a second device that learned the
+   * secret once keeps opening every later copy (AC20).
+   */
+  readonly sealForOrigin?: (bytes: Uint8Array) => Promise<Uint8Array>;
+
+  /**
+   * Turn protection ON for this file, or change/remove it (ADR-0043, AC13/AC14).
+   *
+   * Owned by the UserDb rather than exposed as a generic "overwrite the stored bytes"
+   * seam, deliberately: a public whole-file write is a foot-gun that any future caller
+   * could point at the user's database. Here the conversion is the only thing it can
+   * do, and it reuses the SAME atomic write every ordinary save uses — desktop
+   * temp+fsync+rename, OPFS A/B slot commit — so a crash mid-conversion leaves the
+   * previous complete file in place. No bespoke second atomicity contract.
+   *
+   * Passing `undefined` removes protection and writes plaintext back.
+   */
+  protect(secrets: { passphrase: string; recoveryKey: string } | undefined): Promise<void>;
+
   flush(): Promise<void>;
   close(): Promise<void>;
 }
@@ -692,7 +737,15 @@ export type OpenUserDbResult =
       /** Explicit caller decision (F6): start over with an empty DB, quarantine retained. */
       openFresh(): Promise<UserDb>;
     }
-  | { status: 'unsupported'; foundVersion: number; message: string };
+  | { status: 'unsupported'; foundVersion: number; message: string }
+  /**
+   * The file is a `SNUGENC1` container and no supplied secret opened it (ADR-0043).
+   *
+   * Deliberately NOT 'corrupt': nothing is quarantined, nothing is rewritten, and the
+   * bytes on disk are untouched. A protected file is healthy — it is waiting for a
+   * secret. Quarantining it would look, to its owner, exactly like losing it.
+   */
+  | { status: 'locked'; message: string };
 
 export interface OpenUserDbOptions {
   backend?: PersistenceBackend;
@@ -712,6 +765,13 @@ export interface OpenUserDbOptions {
    * see the `ConnectionAdmissionGate` note for why that is the seam's whole point.
    */
   admissionGate?: ConnectionAdmissionGate;
+  /**
+   * Secrets for a protected file. Absent (or not matching) yields `status: 'locked'`;
+   * the caller collects a secret and opens again. Held only for the duration of the
+   * open and the session's write-backs — never persisted anywhere, least of all into
+   * `snug_secrets`, which lives inside the very file being decrypted (AC17).
+   */
+  secrets?: ContainerSecrets;
 }
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
@@ -1121,7 +1181,65 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
   const config = options.locateWasm !== undefined ? { locateFile: (f: string) => options.locateWasm!(f) } : undefined;
   const SQL = await initSqlJs(config);
 
-  const stored = await backend.load(file);
+  // ADOPT-FORWARD (ADR-0042, AC1/AC2/AC22). The canonical name moved from
+  // `user.sqlite` to `user.snug`; a user upgrading has bytes only under the old name.
+  // Reading the legacy file when the canonical one is absent is the ONLY thing
+  // standing between them and a pristine empty database opening over real data —
+  // which throws nothing, logs nothing, and shows them an empty hub.
+  //
+  // Both reads go through `backend.load`, deliberately. It is the only slot-aware
+  // reader: on OPFS the bytes never live under a bare filename but in `<file>.slot-a`
+  // / `.slot-b` behind a `.ptr`, so a "cheap existence probe" on the raw name is
+  // silently wrong on the web path, where every existing user is.
+  //
+  // Adoption is READ-ONLY: nothing renames, copies or deletes the legacy file here.
+  // The next ordinary persist writes the canonical name, and the old file stays put
+  // as the user's own backup. Once the canonical file exists it always wins, so a
+  // stale legacy copy can never roll a user back.
+  const loaded = (await backend.load(file)) ?? (file === USERDB_FILE ? await backend.load(USERDB_LEGACY_FILE) : undefined);
+
+  // A protected file (ADR-0043) is unwrapped HERE, before every existing guard, so
+  // everything downstream — the magic check, the open-check, the quarantine path, the
+  // version gate — sees ordinary SQLite bytes and behaves exactly as it always has.
+  // The alternative (teaching each guard about ciphertext) would have spread the
+  // format across five call sites and made 'locked' reachable from four of them.
+  let stored = loaded;
+  let sealer: ((bytes: Uint8Array) => Promise<Uint8Array>) | undefined;
+  /** Used only by the corrupt branch's `openFresh` — see its comment. */
+  let freshSealer: ((bytes: Uint8Array) => Promise<Uint8Array>) | undefined;
+  if (loaded !== undefined && isEncryptedContainer(loaded)) {
+    const opened = await decryptContainer(loaded, options.secrets ?? {});
+    if (opened.status === 'locked') {
+      // Healthy file, no key. Nothing is touched — see the `locked` doc comment.
+      return { status: 'locked', message: 'this Snug file is protected — enter your passphrase or Recovery Key' };
+    }
+    if (opened.status === 'corrupt') {
+      // Damage, and we can say so specifically instead of blaming the user's memory.
+      stored = loaded; // fall through to the existing quarantine path with the raw bytes
+      // The bytes WERE a container, so a "start fresh" here must not silently drop the
+      // user's protection (D-3). We cannot reuse the damaged file's key, so mint a new
+      // container from the secrets they just supplied — same passphrase, same recovery
+      // key, new salt and slots. Only possible when both were given.
+      const secrets = options.secrets;
+      if (secrets?.passphrase !== undefined && secrets.recoveryKey !== undefined) {
+        freshSealer = (next: Uint8Array) =>
+          encryptContainer(next, { passphrase: secrets.passphrase!, recoveryKey: secrets.recoveryKey! });
+      }
+    } else {
+      stored = opened.bytes;
+      // Unwrap the file key ONCE, here, and close over it. Every later write re-seals
+      // into this same container: same header, same slots (so the Recovery Key keeps
+      // working even in a passphrase-only session), fresh payload IV. Deriving the key
+      // again on each save would also cost 175 ms of PBKDF2 per keystroke-burst.
+      const keyed = await openFileKey(loaded, options.secrets ?? {});
+      if (keyed.status === 'ok') {
+        const original = loaded;
+        const fileKey = keyed.fileKey;
+        sealer = (next: Uint8Array) => resealContainer(original, fileKey, next);
+      }
+    }
+  }
+
   if (stored !== undefined) {
     let candidate: Database | undefined;
     try {
@@ -1142,7 +1260,19 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
         status: 'corrupt',
         quarantinedFile,
         message: `user DB bytes were unreadable and were quarantined to "${quarantinedFile}": ${errorMessage(err)}`,
-        openFresh: () => Promise.resolve(construct(SQL, new SQL.Database(), backend, file, options)),
+        /**
+         * A fresh database over a quarantined one — and it must be born PROTECTED when
+         * the file it replaces was (diff review D-3). Otherwise: a protected file's
+         * payload is damaged, the user picks "start fresh", and the empty database's
+         * first flush overwrites `user.snug` with an UNENCRYPTED file while they still
+         * believe they are protected. The `.bak` keeps the ciphertext, so it is
+         * recoverable — but they would be writing plaintext and never know.
+         *
+         * `freshSealer` is non-undefined only when the damaged bytes were a container
+         * AND a supplied secret opened its slots (see the open path above), so a
+         * genuinely corrupt non-container quarantine still starts plaintext.
+         */
+        openFresh: () => Promise.resolve(construct(SQL, new SQL.Database(), backend, file, options, freshSealer)),
       };
     }
     const foundVersion = readUserVersion(candidate);
@@ -1154,7 +1284,7 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
         message: `user DB is schema v${foundVersion}; this hub supports up to v${USERDB_SCHEMA_VERSION} — upgrade the hub, do not overwrite the file`,
       };
     }
-    return { status: 'ok', userDb: construct(SQL, candidate, backend, file, options) };
+    return { status: 'ok', userDb: construct(SQL, candidate, backend, file, options, sealer) };
   }
 
   return { status: 'ok', userDb: construct(SQL, new SQL.Database(), backend, file, options) };
@@ -1166,7 +1296,23 @@ function construct(
   backend: PersistenceBackend,
   file: string,
   options: OpenUserDbOptions,
+  /**
+   * Present when this file is protected: re-seals every write-back.
+   *
+   * It is a CLOSURE over the container that was opened, not a bag of secrets, and that
+   * distinction is load-bearing. A session that unlocked with the passphrase alone does
+   * not hold the Recovery Key and never can — so rebuilding the container from secrets
+   * on each save would silently drop the recovery slot and strand the user the first
+   * time they forgot their passphrase. Re-sealing instead REUSES the existing slots and
+   * their wrapped file key, replacing only the payload.
+   *
+   * If this were ever dropped, the next save would rewrite a protected file as
+   * plaintext while its owner believed it protected — so it is threaded explicitly.
+   */
+  initialSealer?: (bytes: Uint8Array) => Promise<Uint8Array>,
 ): UserDb {
+  // Mutable: `protect()` installs or removes it when the user turns protection on/off.
+  let sealer = initialSealer;
   let db = initial;
   const debounceMs = options.persistDebounceMs ?? DEFAULT_PERSIST_DEBOUNCE_MS;
   const maxBytes = options.maxBytes ?? USERDB_LIMITS.MAX_USERDB_BYTES;
@@ -1203,7 +1349,21 @@ function construct(
       dirty = false;
       const bytes = db.export();
       try {
-        await backend.save(file, bytes);
+        // Re-seal on the way out when this file is protected. A fresh IV per write
+        // (never a counter, never derived) — the A/B slot scheme can put one logical
+        // save into two slots, and a repeated GCM nonce leaks plaintext AND forges the
+        // auth key. Sealing here, at the single write-back, is what keeps every
+        // backend (OPFS, IndexedDB, desktop file) protected without any of them
+        // knowing the format exists.
+        //
+        // NOTE THE ORDER. `db.export()` happens BEFORE this await, so the bytes are a
+        // snapshot taken while `dirty` was cleared. Any mutation arriving during the
+        // seal re-marks the db dirty, and because that flag is checked again on the
+        // next turn of the `saving` chain, the newer state is written by the following
+        // persist rather than lost. Encryption is what made this window observable:
+        // it is the first thing to put real async work between snapshot and save.
+        const payload = sealer === undefined ? bytes : await sealer(bytes);
+        await backend.save(file, payload);
       } catch {
         dirty = true; // persistence failure must not take down the service; retried on next flush/mutation
       }
@@ -2896,8 +3056,29 @@ function construct(
       }
     },
 
-    async importUserDb(bytes, options) {
+    async importUserDb(incoming, options) {
       assertOpen();
+      // Unwrap a protected payload FIRST, so every guard below — the cap, the magic
+      // check, the open-check, the reconciliation passes — sees ordinary SQLite bytes.
+      // Doing it here rather than at each call site is what gives sync pull-merge,
+      // applyRemote, recovery restore and the UI import identical behavior for free.
+      let bytes = incoming;
+      if (isEncryptedContainer(incoming)) {
+        const opened = await decryptContainer(incoming, options?.secrets ?? {});
+        if (opened.status === 'locked') {
+          throw new UserDbError(
+            USERDB_ERROR_CODES.LOCKED_IMPORT,
+            'this Snug file is protected — enter its passphrase or Recovery Key to import it',
+          );
+        }
+        if (opened.status === 'corrupt') {
+          throw new UserDbError(USERDB_ERROR_CODES.BAD_IMPORT, `this Snug file is damaged: ${opened.reason}`);
+        }
+        bytes = opened.bytes;
+      }
+      // The cap applies to the PLAINTEXT: a container adds a header, wrapped keys, an
+      // IV and a tag, so charging the user for that overhead would make a database
+      // that fits become un-importable the moment they protected it (review B9).
       if (bytes.byteLength > maxBytes) {
         throw new UserDbError(USERDB_ERROR_CODES.TOO_LARGE, `import is ${bytes.byteLength} bytes — cap is ${maxBytes}`);
       }
@@ -3003,6 +3184,39 @@ function construct(
       }
       markDirty();
       return report;
+    },
+
+    // A GETTER, not a snapshot. `protect()` reassigns `sealer` mid-session, and a
+    // captured value would go stale in BOTH directions: enable protection and exports
+    // keep writing plaintext while the on-disk file is sealed; disable it and exports
+    // keep writing ciphertext keyed to a file that is now plaintext — an artifact its
+    // owner has no reason to think needs a passphrase.
+    get sealForOrigin() {
+      return sealer;
+    },
+
+    async protect(secrets) {
+      assertOpen();
+      await inner.flush();
+      await persistNow();
+      // Secrets INCLUDED: this is the user's own file being protected in place, not an
+      // export being handed to someone. Stripping credentials here would silently log
+      // them out of every connected account the moment they turned protection on.
+      const plain = db.export();
+      if (secrets === undefined) {
+        sealer = undefined;
+        await backend.save(file, plain);
+        return;
+      }
+      const sealed = await encryptContainer(plain, secrets);
+      await backend.save(file, sealed);
+      // Every LATER write re-seals into this container, so the recovery slot survives
+      // a session that only ever knew the passphrase (see resealContainer).
+      const keyed = await openFileKey(sealed, secrets);
+      if (keyed.status === 'ok') {
+        const fileKey = keyed.fileKey;
+        sealer = (next: Uint8Array) => resealContainer(sealed, fileKey, next);
+      }
     },
 
     async flush() {

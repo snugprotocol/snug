@@ -9,7 +9,7 @@
 // pagehide network push a lie for real images — pagehide flushes OPFS only (the UserDb
 // does that itself); a local copy newer than the origin pushes via reconcileOnStart()
 // on the next session.
-import { USERDB_FILE } from '@snugprotocol/protocol';
+import { USERDB_FILE, USERDB_LEGACY_FILE } from '@snugprotocol/protocol';
 import type { PersistenceBackend } from '../persistence.js';
 import {
   SYNC_ERROR_CODES,
@@ -17,7 +17,7 @@ import {
   type SyncProvider,
   type SyncPullResult,
 } from './provider.js';
-import { loadSidecar, saveSidecar, sha256Hex, type SyncSidecarState } from './sidecar.js';
+import { adoptLegacySidecar, loadSidecar, saveSidecar, sha256Hex, type SyncSidecarState } from './sidecar.js';
 
 /** The subset of UserDb the loop needs — structural, so tests can stub it. */
 export interface SyncableUserDb {
@@ -54,6 +54,18 @@ export interface CreateSyncLoopOptions {
    * provider's info() allows secrets — a hub origin strips secrets regardless.
    */
   includeSecrets?: boolean;
+  /**
+   * Seals the payload before it leaves the device (ADR-0043). Supplied only when the
+   * user's file is protected; applied only to PERSONAL origins (D5) — a hub origin
+   * keeps receiving the secrets-stripped plaintext it always did (D6), so the server
+   * and the `/userdb` contract are untouched.
+   *
+   * Injected rather than derived here so the loop never holds a passphrase: it is the
+   * same session sealer the write-back uses, closed over the already-unwrapped file
+   * key. That also means it does NOT re-key, so a second device that learned the
+   * secret once keeps opening every later copy (AC20).
+   */
+  sealForOrigin?: (bytes: Uint8Array) => Promise<Uint8Array>;
   onEvent?: (event: SyncEvent) => void;
 }
 
@@ -115,16 +127,49 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
 
   // Cached under the single-writer rule (F12): this loop is the only sidecar writer.
   let sidecar: SyncSidecarState | undefined;
-  const state = async (): Promise<SyncSidecarState> => (sidecar ??= await loadSidecar(backend, file));
+  const state = async (): Promise<SyncSidecarState> => {
+    if (sidecar !== undefined) return sidecar;
+    // Carry an anchor across the user.sqlite -> user.snug rename BEFORE the first
+    // read (AC21). Without it the loop sees "never pushed", concludes both sides
+    // moved, and shows every existing sync user a divergence that never happened.
+    if (file === USERDB_FILE) await adoptLegacySidecar(backend, file, USERDB_LEGACY_FILE);
+    return (sidecar = await loadSidecar(backend, file));
+  };
 
   const anchor = async (revision: string, hash: string): Promise<void> => {
     sidecar = { lastPushedRevision: revision, lastPushedHash: hash, lastSyncAt: new Date().toISOString() };
     await saveSidecar(backend, file, sidecar);
   };
 
-  /** The exact bytes a push would send; secrets only for explicitly-allowing origins. */
+  /** The plaintext image a push is built from; secrets only for explicitly-allowing origins. */
   const exportPayload = (): Promise<Uint8Array> =>
     userDb.exportUserDb({ includeSecrets: options.includeSecrets === true && provider.info().secretsAllowed });
+
+  /**
+   * The ONE place that decides what actually crosses the wire, and what the change
+   * gate is measured against. Four call sites used to build payloads independently;
+   * with encryption in the mix, any one of them left unwrapped would either leak
+   * plaintext to a personal origin or push ciphertext at a hub that rejects it. So
+   * they all come through here (plan review S3).
+   *
+   * ORDER IS LOAD-BEARING:
+   *   1. export  — strip + VACUUM happen on plaintext; they cannot run on ciphertext.
+   *   2. hash    — over the PLAINTEXT. Ciphertext carries a fresh random IV every
+   *                time, so hashing it would make every tick look changed and push
+   *                the whole database forever.
+   *   3. encrypt — personal origins only (D5). Hub origins keep receiving the
+   *                secrets-stripped plaintext they always did (D6), so `apps/server`
+   *                and the `/userdb` contract are untouched by this whole feature.
+   */
+  const payloadFor = async (): Promise<{ plaintextHash: string; wireBytes: Uint8Array }> => {
+    const plain = await exportPayload();
+    const plaintextHash = await sha256Hex(plain);
+    const seal = options.sealForOrigin;
+    if (seal === undefined || provider.info().kind === 'hub') {
+      return { plaintextHash, wireBytes: plain };
+    }
+    return { plaintextHash, wireBytes: await seal(plain) };
+  };
 
   // ----------------------------------------------------------------- primitives
 
@@ -153,7 +198,7 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
       if (value !== undefined) userDb.setSecret(key, value); // local wins over any pulled row
     }
     // Anchor on the merged image so the next tick sees "unchanged" and stays quiet.
-    await anchor(remote.revision, await sha256Hex(await exportPayload()));
+    await anchor(remote.revision, (await payloadFor()).plaintextHash);
     emit({ kind: 'pulled', revision: remote.revision });
   };
 
@@ -161,18 +206,16 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
 
   const syncNow = (): Promise<void> =>
     serialized(async () => {
-      const bytes = await exportPayload();
-      const hash = await sha256Hex(bytes);
+      const { plaintextHash, wireBytes } = await payloadFor();
       const known = await state();
-      if (hash === known.lastPushedHash) return; // content-hash gate: nothing changed
-      await push(bytes, hash, known.lastPushedRevision);
+      if (plaintextHash === known.lastPushedHash) return; // content-hash gate: nothing changed
+      await push(wireBytes, plaintextHash, known.lastPushedRevision);
     });
 
   const reconcileOnStart = (): Promise<void> =>
     serialized(async () => {
       const remote = await provider.pull();
-      const bytes = await exportPayload();
-      const hash = await sha256Hex(bytes);
+      const { plaintextHash: hash, wireBytes: bytes } = await payloadFor();
       const known = await state();
       if (remote === undefined) {
         // F1: a freshly provisioned empty origin never clobbers local — local goes up.
@@ -184,6 +227,15 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
       if (!remoteMoved) {
         // Origin still where we left it; catch up anything OPFS accumulated offline.
         if (localChanged) await push(bytes, hash, known.lastPushedRevision);
+        return;
+      }
+      if (remote.migratedFromLegacy === true) {
+        // The origin's bytes came from the PRE-RENAME path (ADR-0042). Its revision
+        // belongs to that older object, so it must never be echoed back as a
+        // conditional update — that targets an object the canonical path does not have
+        // yet and 409s forever, wedging sync with no user-visible way out. Provision
+        // the canonical path instead; the legacy copy stays where it is.
+        await push(bytes, hash, undefined);
         return;
       }
       if (!localChanged) {
@@ -210,8 +262,8 @@ export function createSyncLoop(options: CreateSyncLoopOptions): SyncLoop {
       // Explicit local-wins: rebase onto whatever revision the origin holds RIGHT NOW,
       // so the conditional write replaces it (or provisions an empty origin).
       const remote = await provider.pull();
-      const bytes = await exportPayload();
-      await push(bytes, await sha256Hex(bytes), remote?.revision);
+      const { plaintextHash, wireBytes } = await payloadFor();
+      await push(wireBytes, plaintextHash, remote?.revision);
     });
 
   return {

@@ -49,7 +49,7 @@ interface TauriConf {
     active: boolean;
     targets: string | string[];
     icon: string[];
-    fileAssociations?: Array<{ ext: string[] }>;
+    fileAssociations?: Array<{ ext: string[]; mimeType?: string }>;
   };
 }
 
@@ -163,5 +163,13 @@ describe('the rest of the bundle block is untouched by the target restriction', 
   it('still bundles at all, and still registers the .snug association', () => {
     expect(conf.bundle.active).toBe(true);
     expect(conf.bundle.fileAssociations?.[0]?.ext).toEqual(['snug']);
+  });
+
+  it('does not advertise .snug as a SQLite database (ADR-0043)', () => {
+    // A `.snug` used to be a plain SQLite file always, so `application/x-sqlite3` was
+    // honest. Since protection shipped it may be a SNUGENC1 container, and telling the
+    // desktop environment every `.snug` is an openable database invites other tools to
+    // try — then report the user's healthy protected file as corrupt.
+    expect(conf.bundle.fileAssociations?.[0]?.mimeType).toBe('application/octet-stream');
   });
 });

@@ -58,3 +58,34 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes.slice());
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+/**
+ * Carry a sync anchor across the `user.sqlite` → `user.snug` rename (AC21, ADR-0042).
+ *
+ * The sidecar name is derived from the db file name, so the rename orphans it — and
+ * `loadSidecar` is a TOTAL parser that returns `{}` for a missing file, which the loop
+ * cannot distinguish from "never pushed". The consequence is not cosmetic: with no
+ * anchor, `reconcileOnStart` sees both sides as moved and emits a DIVERGENCE for every
+ * existing sync user, on a file that never diverged. Resolving it the obvious way
+ * ("use the origin copy") imports the remote image over local and discards anything
+ * written since the last push.
+ *
+ * Deliberately best-effort and non-destructive:
+ *   - the canonical anchor always wins, so re-running this (every boot does) can never
+ *     replay a stale revision into a conditional write;
+ *   - the legacy sidecar is left on disk, like the legacy db file;
+ *   - a damaged legacy sidecar is skipped rather than propagated — an anchor is an
+ *     optimisation, and the honest fallback is "we have not pushed yet", which costs
+ *     one extra push and no correctness.
+ */
+export async function adoptLegacySidecar(
+  backend: PersistenceBackend,
+  canonicalFile: string,
+  legacyFile: string,
+): Promise<void> {
+  const existing = await loadSidecar(backend, canonicalFile);
+  if (existing.lastPushedRevision !== undefined || existing.lastPushedHash !== undefined) return;
+  const legacy = await loadSidecar(backend, legacyFile);
+  if (legacy.lastPushedRevision === undefined && legacy.lastPushedHash === undefined) return;
+  await saveSidecar(backend, canonicalFile, legacy);
+}

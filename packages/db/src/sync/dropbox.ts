@@ -17,7 +17,14 @@ import {
   type SyncPushResult,
 } from './provider.js';
 
-export const DROPBOX_DEFAULT_PATH = '/snug/user.sqlite';
+export const DROPBOX_DEFAULT_PATH = '/snug/user.snug';
+/**
+ * Where the remote copy lived before ADR-0042. Read ONLY when the canonical path is
+ * absent, and never written to: a user upgrading has months of history at this path,
+ * and pointing the provider straight at the new name would read it as "freshly
+ * provisioned origin" and push local up as a second, unrelated file.
+ */
+export const DROPBOX_LEGACY_PATH = '/snug/user.sqlite';
 
 const DOWNLOAD_URL = 'https://content.dropboxapi.com/2/files/download';
 const UPLOAD_URL = 'https://content.dropboxapi.com/2/files/upload';
@@ -61,6 +68,8 @@ function throwHttpError(response: Response, doing: string): never {
 export function createDropboxProvider(options: CreateDropboxProviderOptions): SyncProvider {
   const fetchImpl = options.fetch ?? defaultFetch;
   const path = options.path ?? DROPBOX_DEFAULT_PATH;
+  // Only the DEFAULT path has a legacy predecessor; a caller-chosen path has none.
+  const legacyPath = options.path === undefined ? DROPBOX_LEGACY_PATH : undefined;
 
   const authHeader = async (): Promise<string> => {
     const token = await options.getToken();
@@ -91,11 +100,27 @@ export function createDropboxProvider(options: CreateDropboxProviderOptions): Sy
 
     async pull() {
       const authorization = await authHeader();
-      const response = await fetchOrNetworkError(fetchImpl, DOWNLOAD_URL, {
-        method: 'POST',
-        headers: { authorization, 'dropbox-api-arg': JSON.stringify({ path }) },
-      });
-      if (response.status === 409) {
+      const download = async (at: string): Promise<Response> =>
+        fetchOrNetworkError(fetchImpl, DOWNLOAD_URL, {
+          method: 'POST',
+          headers: { authorization, 'dropbox-api-arg': JSON.stringify({ path: at }) },
+        });
+
+      // Canonical FIRST, always. Reading the legacy copy once the canonical one exists
+      // would silently roll the user back to an older image.
+      let response = await download(path);
+      let migratedFromLegacy = false;
+      if (response.status === 409 && legacyPath !== undefined && (await classify409(response)) === 'not-found') {
+        const legacy = await download(legacyPath);
+        if (legacy.status === 409) {
+          // Neither path exists: a genuinely empty origin. F1 keeps local safe.
+          return (await classify409(legacy)) === 'not-found'
+            ? undefined
+            : (throwHttpError(legacy, 'pull'), undefined);
+        }
+        response = legacy;
+        migratedFromLegacy = true;
+      } else if (response.status === 409) {
         if ((await classify409(response)) === 'not-found') return undefined;
         throw new SyncProviderError(SYNC_ERROR_CODES.HTTP, 'dropbox pull failed (409)', 409);
       }
@@ -110,7 +135,15 @@ export function createDropboxProvider(options: CreateDropboxProviderOptions): Sy
       if (typeof rev !== 'string') {
         throw new SyncProviderError(SYNC_ERROR_CODES.BAD_RESPONSE, 'dropbox download carried no rev metadata', 200);
       }
-      return { bytes: new Uint8Array(await response.arrayBuffer()), revision: rev };
+      // `migratedFromLegacy` tells the loop this revision belongs to the OLD path, so
+      // the first push must PROVISION the canonical one (`mode: 'add'`) instead of
+      // sending a conditional update against a revision the new path never had —
+      // which Dropbox rejects with a 409 forever, wedging sync with no way out.
+      return {
+        bytes: new Uint8Array(await response.arrayBuffer()),
+        revision: rev,
+        ...(migratedFromLegacy ? { migratedFromLegacy: true } : {}),
+      };
     },
 
     async push(bytes, baseRevision): Promise<SyncPushResult> {

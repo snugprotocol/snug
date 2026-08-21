@@ -50,5 +50,5 @@
   <path d="M466 258 C 360 284, 260 284, 178 258" fill="none" stroke="#a8712a" stroke-width="1.4" marker-end="url(#f6-a)"/>
   <text x="360" y="284" text-anchor="middle" class="f-edge-alt">← write-back: create under the natural name, then ALTER TABLE … RENAME (a pure name swap)</text>
 
-  <text x="16" y="308" class="f-note">A name-gate violation rolls the whole write-back back: prior state is retained and the error surfaces. Per-app export = materialise, then export a standalone .sqlite.</text>
+  <text x="16" y="308" class="f-note">A name-gate violation rolls the whole write-back back: prior state is retained and the error surfaces. Per-app export = materialise, then export a standalone .snug.</text>
 </svg>

@@ -93,6 +93,20 @@ export {
 } from './userdb/app-settings-keys.js';
 
 export { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './userdb/sidecar-identity-keys.js';
+export {
+  CONTAINER_MAGIC,
+  KDF_ITERATIONS,
+  decryptContainer,
+  encryptContainer,
+  generateRecoveryKey,
+  isEncryptedContainer,
+  openFileKey,
+  resealContainer,
+  rewrapPassphrase,
+  type DecryptResult,
+  type RewrapResult,
+  type Secrets as ContainerSecrets,
+} from './crypto/container.js';
 
 export {
   acquireUserDbWriterLock,
@@ -121,6 +135,7 @@ export {
   loadSidecar,
   saveSidecar,
   sha256Hex,
+  adoptLegacySidecar,
   sidecarFileFor,
   type SyncSidecarState,
 } from './sync/sidecar.js';

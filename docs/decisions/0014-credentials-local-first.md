@@ -1,6 +1,6 @@
 # 0014 — Credentials are local-first (custody doctrine)
 
-- **Status:** accepted (owner decision 2026-08-04/05, recorded 2026-08-05)
+- **Status:** accepted (owner decision 2026-08-04/05, recorded 2026-08-05) — **amended 2026-08-20 by [ADR-0043](0043-passphrase-encryption-at-rest.md)**: the deferred passphrase-encryption alternative below is now DECIDED and shipped (opt-in, with a mandatory Recovery Key paying down the forgotten-passphrase cost named there). Custody is unchanged — the keys are still in the user's own file.
 - **Date:** 2026-08-05
 - **Task:** TASK-20260805-doctrines-devex
 
@@ -31,7 +31,7 @@ ADR-0013 removes the hosted backend entirely; this ADR fixes where credentials l
 
 - **Server-side vault from day one** (the source systems' model). Rejected: operator-readable custody contradicts the ownership story, requires the backend ADR-0013 removes, and makes the strongest launch claim impossible.
 - **Browser keychain / extension storage** outside the user file. Rejected: breaks portability — the file is the product; a credential outside it dies with the browser profile and does not travel with export/import.
-- **Client-side encryption of `snug_secrets` with a user passphrase.** Deferred, not rejected: it hardens the file at rest but adds a forgotten-passphrase data-loss mode and does not change custody (the keys are still in the user's file). Revisit alongside the broker's KeyProvider work.
+- **Client-side encryption of `snug_secrets` with a user passphrase.** Deferred, not rejected: it hardens the file at rest but adds a forgotten-passphrase data-loss mode and does not change custody (the keys are still in the user's file). Revisit alongside the broker's KeyProvider work. — **SUPERSEDED 2026-08-20 ([ADR-0043](0043-passphrase-encryption-at-rest.md))**: shipped as WHOLE-FILE encryption rather than secrets-only (encrypting just `snug_secrets` would leave the app data that is most of the exposure readable), opt-in, with a mandatory Recovery Key as the second unlock path.
 - **Broker as the default with local as fallback.** Rejected: defaults are destiny — the audit's lesson is that the safe posture must be the default, and custody is the one decision users will not audit for themselves.
 
 ## Consequences

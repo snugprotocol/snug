@@ -95,7 +95,7 @@ const { rows, columns } = await db.exec(
 - Timestamps as ISO-8601 TEXT; ids as `INTEGER PRIMARY KEY`; booleans as 0/1.
 - Store raw facts, compute aggregates in queries — do not persist derived totals.
 - Your tables are private to this app and survive under the app's own namespace in the
-  user's single portable database; a per-app `.sqlite` export is always derivable.
+  user's single portable database; a per-app `.snug` export is always derivable.
 
 ## Pattern: Ask the Agent to Write SQL Against Your Schema
 
