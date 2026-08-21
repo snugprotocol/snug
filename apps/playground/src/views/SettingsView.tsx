@@ -382,7 +382,7 @@ function ProtectionCard(): ReactElement {
   };
 
   if (setupOpen) {
-    return <ProtectSetupFlow onDone={() => setSetupOpen(false)} />;
+    return <ProtectSetupFlow startAt={2} onDone={() => setSetupOpen(false)} />;
   }
 
   return (

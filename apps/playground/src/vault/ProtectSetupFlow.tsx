@@ -26,8 +26,20 @@ import { deferProtectOffer, declineProtectOfferPermanently, markProtectionEnable
 const MIN_PASSPHRASE = 12;
 const ACKNOWLEDGEMENT = 'i saved it';
 
-export function ProtectSetupFlow({ onDone }: { onDone: () => void }): ReactElement {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+export function ProtectSetupFlow({
+  onDone,
+  /**
+   * Where to start. The in-hub banner (`ProtectionOffer`) already states the trade and
+   * carries the three choices, so entering from there begins at the passphrase and does
+   * not repeat step 1 back at the user. Settings enters the same way. Step 1 remains for
+   * any caller that has not already made the offer.
+   */
+  startAt = 1,
+}: {
+  onDone: () => void;
+  startAt?: 1 | 2;
+}): ReactElement {
+  const [step, setStep] = useState<1 | 2 | 3>(startAt);
   const [passphrase, setPassphrase] = useState('');
   const [confirm, setConfirm] = useState('');
   const [reveal, setReveal] = useState(false);

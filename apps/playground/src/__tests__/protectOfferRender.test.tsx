@@ -78,7 +78,7 @@ afterEach(async () => {
 });
 
 describe('the protection offer reaches the screen', () => {
-  it('shows the setup flow when the offer is live', async () => {
+  it('is visible when the offer is live', async () => {
     protectOffer.value = true;
     await render();
     // The words a person would actually see on a brand-new file.
@@ -86,15 +86,31 @@ describe('the protection offer reaches the screen', () => {
     expect(container?.textContent ?? '').toMatch(/passphrase/i);
   });
 
+  it('does NOT BLOCK the hub — the shelf is still reachable (e2e-found regression)', async () => {
+    // THE BUG THIS PINS. The offer shipped as a full-screen gate for about an hour.
+    // 24 e2e specs timed out waiting for a starter tile, because a brand-new profile
+    // met "protect this file?" and never reached the shelf. The product defect under
+    // the test failure is the real one: asking someone to protect a file before they
+    // have seen a single app asks them to value something they have not been shown.
+    protectOffer.value = true;
+    await render();
+    const text = container?.textContent ?? '';
+    expect(text).toMatch(/protect this file/i);
+    // ...AND the hub itself is right there underneath it.
+    expect(text).toMatch(/talk\. build\. run\./i);
+    expect(container?.querySelector('.create-bar')).not.toBeNull();
+  });
+
   it('does NOT show it once the file is protected or the offer was declined', async () => {
     protectOffer.value = false;
     await render();
     expect(container?.textContent ?? '').not.toMatch(/protect this file/i);
+    // The hub is unaffected either way.
+    expect(container?.textContent ?? '').toMatch(/talk\. build\. run\./i);
   });
 
-  it('the desktop welcome still comes FIRST — one idea per screen', async () => {
-    // Stacking both gates would break the rule both were written to follow, and would
-    // ask about protecting a file before the user has any reason to care about it.
+  it('the desktop welcome still comes FIRST — it is the one real gate', async () => {
+    // The welcome asks something the hub cannot work without, so it earns the screen.
     desktopFirstRun.value = true;
     protectOffer.value = true;
     await render();
