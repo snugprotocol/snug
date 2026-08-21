@@ -62,6 +62,8 @@ export const IPC_CHECK_IDS = [
   'ipc-lan-fetch-refused',
   'ipc-sidecar-fetch-refused',
   'ipc-sidecar-fetch-dispatchable',
+  'ipc-sidecar-wizard-fetch-refused',
+  'ipc-sidecar-wizard-fetch-dispatchable',
   'ipc-updater-check-refused',
   'ipc-updater-install-refused',
   'ipc-process-relaunch-refused',
@@ -119,6 +121,30 @@ export const LAN_FETCH_COMMAND = 'lan_fetch';
  * instrument, exactly as the row above.
  */
 export const SIDECAR_FETCH_COMMAND = 'sidecar_fetch';
+
+/**
+ * `sidecar_wizard_fetch` closes threat-model R-12's standing exception, and the
+ * asymmetry it closes is the argument for the row: this command is registered in
+ * BOTH handler lists exactly as its sibling above is, and it is the MORE dangerous
+ * of the two — it fronts the wizard-only route table, which includes
+ * `GET /pair/status`, the route that RELEASES the helper's access token
+ * (`sidecar.rs`'s own tests call it "THE TOKEN-CAPTURE REFUSAL"). An app iframe
+ * that reached it could mint the credential that unlocks the linked-device
+ * session, rather than merely borrowing the session the sibling exposes.
+ *
+ * R-12 recorded the gap honestly instead of hiding it — "three carry per-command
+ * checks... `sidecar_wizard_fetch` has none, though it fronts GET /pair/status...
+ * while its lower-privilege sibling `sidecar_fetch` does" — and the mitigation it
+ * cited (the three key-absence checks are shared) is real but generic: it is
+ * exactly the family-level reasoning amendment 16 exists to reject, because
+ * registration is per-command and a command added to the wrong handler list is
+ * invisible to any check that does not name it.
+ *
+ * It shares the SENSOR PROBLEM of every row above and the same honest answer:
+ * reach is the observable, and the pass vouches for refusal only alongside the
+ * key-absence checks.
+ */
+export const SIDECAR_WIZARD_FETCH_COMMAND = 'sidecar_wizard_fetch';
 
 /**
  * The update-channel commands (ADR-0047 §3, TASK-20260821) get their own rows for
@@ -233,6 +259,14 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
   window['_' + SIDECAR_CB] = function () { sidecarCallbackFired = true; };
   window['_' + (SIDECAR_CB + 1)] = function () { sidecarCallbackFired = true; };
 
+  // Its own slot again (threat-model R-12): the WIZARD command is registered
+  // separately from the sibling above and fronts the token-releasing route, so a
+  // reach proven for the plain sidecar command must never be credited to it.
+  var sidecarWizardCallbackFired = false;
+  var SIDECAR_WIZ_CB = 987654381;
+  window['_' + SIDECAR_WIZ_CB] = function () { sidecarWizardCallbackFired = true; };
+  window['_' + (SIDECAR_WIZ_CB + 1)] = function () { sidecarWizardCallbackFired = true; };
+
   // Update-channel commands (ADR-0047 §3): one slot pair per command, never shared.
   var updaterCheckCallbackFired = false;
   var UPD_CB = 987654351;
@@ -291,6 +325,20 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     });
   }
 
+  function keylessSidecarWizardFetchBody() {
+    // A REAL, well-formed sidecar_wizard_fetch call, and deliberately the WORST
+    // one: GET /pair/status is the route that releases the helper's access token.
+    // Well-formed on purpose — a refusal must not be attributable to a bad
+    // payload. On a runner the socket is absent, so a DISPATCHED call resolves the
+    // error callback; reaching the dispatcher is the breakage either way.
+    return JSON.stringify({
+      cmd: '${SIDECAR_WIZARD_FETCH_COMMAND}',
+      callback: SIDECAR_WIZ_CB,
+      error: SIDECAR_WIZ_CB + 1,
+      payload: { method: 'GET', pathAndQuery: '/pair/status' }
+    });
+  }
+
   function keylessUpdaterCheckBody() {
     // A REAL, well-formed updater check — the exact shape the main frame's
     // @tauri-apps/plugin-updater check() posts. Well-formed on purpose: a refusal
@@ -331,6 +379,7 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     try { transports[k].handler.postMessage(keylessInvokeBody()); } catch (e3) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessLanFetchBody()); } catch (e4) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessSidecarFetchBody()); } catch (e5) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessSidecarWizardFetchBody()); } catch (e5b) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessUpdaterCheckBody()); } catch (e6) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessUpdaterInstallBody()); } catch (e7) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessRelaunchBody()); } catch (e8) { /* transport rejected the shape */ }
@@ -347,6 +396,7 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
         callbackFired: callbackFired,
         lanCallbackFired: lanCallbackFired,
         sidecarCallbackFired: sidecarCallbackFired,
+        sidecarWizardCallbackFired: sidecarWizardCallbackFired,
         updaterCheckCallbackFired: updaterCheckCallbackFired,
         updaterInstallCallbackFired: updaterInstallCallbackFired,
         relaunchCallbackFired: relaunchCallbackFired
@@ -365,6 +415,8 @@ interface ProbeReport {
   lanCallbackFired: boolean;
   /** Per-command: did a keyless `sidecar_fetch` resolve into the subframe? */
   sidecarCallbackFired: boolean;
+  /** Per-command (R-12): did a keyless `sidecar_wizard_fetch` resolve into the subframe? */
+  sidecarWizardCallbackFired: boolean;
   /** Per-command (ADR-0047): did a keyless `plugin:updater|check` resolve into the subframe? */
   updaterCheckCallbackFired: boolean;
   /** Per-command: did a keyless `plugin:updater|download_and_install` resolve into the subframe? */
@@ -506,6 +558,86 @@ export function decideSidecarFetchRefused(
 }
 
 /**
+ * THE PER-COMMAND VERDICT for `sidecar_wizard_fetch` — the row that closes
+ * threat-model R-12's named exception (TASK-20260821-launch-security-review).
+ *
+ * Kept as its OWN function rather than folded into the sibling above, because the
+ * whole point of the row is that the two commands are registered separately: a
+ * shared decision reading one slot would reproduce exactly the family-level
+ * blindness amendment 16 rejects. It reads `sidecarWizardCallbackFired` and
+ * nothing else.
+ *
+ * The stakes sentence is the sharpest of the sidecar pair: this command fronts the
+ * wizard route table, which includes `GET /pair/status` — the route that RELEASES
+ * the helper's access token. Reaching it from app code means MINTING the
+ * credential that unlocks the linked-device session, not merely borrowing the
+ * session. The command also auto-injects the spawn nonce host-side, so a reaching
+ * caller needs no secret of its own.
+ */
+export function decideSidecarWizardFetchRefused(
+  report: ProbeReport | undefined,
+  keyReachable: boolean,
+): CheckResult {
+  const id = 'ipc-sidecar-wizard-fetch-refused';
+  if (report === undefined) {
+    return {
+      id,
+      pass: false,
+      detail: `the sandboxed probe never reported — no ${SIDECAR_WIZARD_FETCH_COMMAND} invoke was attempted`,
+    };
+  }
+  const where = report.transports.length > 0 ? report.transports.join(', ') : 'no raw transport reachable';
+  if (report.sidecarWizardCallbackFired) {
+    return {
+      id,
+      pass: false,
+      detail: `${SIDECAR_WIZARD_FETCH_COMMAND} resolved a callback into a sandboxed subframe via ${where} — app code can reach the wizard-only route table, including GET /pair/status, which releases the helper's access token. STRUCTURAL BREAKAGE`,
+    };
+  }
+  if (keyReachable) {
+    return {
+      id,
+      pass: false,
+      detail: `the invoke key is reachable from the sandboxed subframe, so a silent ${SIDECAR_WIZARD_FETCH_COMMAND} cannot be ruled out — this check cannot vouch for refusal`,
+    };
+  }
+  return {
+    id,
+    pass: true,
+    detail: `keyless ${SIDECAR_WIZARD_FETCH_COMMAND} through ${where} resolved no callback, and the invoke key never reached the subframe (see ipc-tauri-internals-absent) — key-gated per command`,
+  };
+}
+
+/**
+ * THE POSITIVE TWIN for `sidecar_wizard_fetch`. Same rule as the sibling's twin: a
+ * refusal check over an unregistered command vouches for nothing, so the main
+ * window must be shown to dispatch this command at all. A body-level refusal (the
+ * helper is not running on a gate runner) is a PASS — the body ran, which is the
+ * question being asked. Only the unregistered/uncapable shapes fail.
+ */
+export function decideSidecarWizardFetchDispatchable(outcome: {
+  resolved: boolean;
+  detail: string;
+}): CheckResult {
+  const id = 'ipc-sidecar-wizard-fetch-dispatchable';
+  if (outcome.resolved) {
+    return { id, pass: true, detail: `${SIDECAR_WIZARD_FETCH_COMMAND} dispatched from the main window and resolved` };
+  }
+  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
+    return {
+      id,
+      pass: false,
+      detail: `${SIDECAR_WIZARD_FETCH_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the refusal row opposite is vouching for nothing`,
+    };
+  }
+  return {
+    id,
+    pass: true,
+    detail: `${SIDECAR_WIZARD_FETCH_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
+  };
+}
+
+/**
  * THE PER-COMMAND VERDICTS for the update channel (ADR-0047 §3, TASK-20260821) —
  * one shared decision because the sensor, its weakness, and the honest pairing
  * with `keyReachable` are identical to the two rows above; only the command and
@@ -635,6 +767,8 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
                 // rather than as truthy. Absence here is the safe direction only because
                 // the verdict also requires the key to be unreachable.
                 sidecarCallbackFired: (p as { sidecarCallbackFired?: unknown }).sidecarCallbackFired === true,
+                sidecarWizardCallbackFired:
+                  (p as { sidecarWizardCallbackFired?: unknown }).sidecarWizardCallbackFired === true,
                 updaterCheckCallbackFired:
                   (p as { updaterCheckCallbackFired?: unknown }).updaterCheckCallbackFired === true,
                 updaterInstallCallbackFired:
@@ -670,6 +804,7 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
   );
   byId.set('ipc-lan-fetch-refused', decideLanFetchRefused(report, keyReachable));
   byId.set('ipc-sidecar-fetch-refused', decideSidecarFetchRefused(report, keyReachable));
+  byId.set('ipc-sidecar-wizard-fetch-refused', decideSidecarWizardFetchRefused(report, keyReachable));
   byId.set(
     'ipc-updater-check-refused',
     decideUpdateChannelCommandRefused(
@@ -711,6 +846,20 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     dispatch = { resolved: false, detail: String(err) };
   }
   byId.set('ipc-sidecar-fetch-dispatchable', decideSidecarFetchDispatchable(dispatch));
+
+  // The wizard command's own positive twin. `/pair/status` is deliberately the
+  // route used: it is the one the refusal row opposite is ABOUT, so the twin
+  // proves reach on exactly the surface the negative check guards. On a gate
+  // runner the helper is absent, so this answers from the command body — which
+  // is a PASS, because the question is dispatch, not the helper's health.
+  let wizardDispatch: { resolved: boolean; detail: string };
+  try {
+    await invoke(SIDECAR_WIZARD_FETCH_COMMAND, { method: 'GET', pathAndQuery: '/pair/status' });
+    wizardDispatch = { resolved: true, detail: 'resolved' };
+  } catch (err) {
+    wizardDispatch = { resolved: false, detail: String(err) };
+  }
+  byId.set('ipc-sidecar-wizard-fetch-dispatchable', decideSidecarWizardFetchDispatchable(wizardDispatch));
 
   // The updater's own positive twin: the main window must reach plugin:updater|check.
   let updaterDispatch: { resolved: boolean; detail: string };
