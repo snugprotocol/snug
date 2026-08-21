@@ -714,6 +714,8 @@ export interface UserDb {
 
   getSetting(key: string): unknown;
   setSetting(key: string, value: unknown): void;
+  /** Remove one settings row entirely — `setSetting(key, undefined)` stores JSON null. */
+  deleteSetting(key: string): void;
   /**
    * Every app that has PINNED a model, as `{ [appId]: modelId }` (TASK-20260817).
    * Apps that inherit the global `model` setting are simply absent — inheritance is an
@@ -3083,6 +3085,10 @@ function construct(
 
     getSetting: (key) => kvGet(USERDB_TABLES.settings, key),
     setSetting: (key, value) => kvSet(USERDB_TABLES.settings, key, value),
+    deleteSetting(key) {
+      assertOpen();
+      run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]);
+    },
     listAppModels() {
       assertOpen();
       const out: Record<string, string> = {};

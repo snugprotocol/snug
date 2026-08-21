@@ -1,8 +1,10 @@
 // appModel.test.ts — TASK-20260817-per-app-model-selector, the resolution rule.
+// MIGRATED for TASK-20260821 multi-provider BYOK (every claim kept, none lost):
 //
 // `resolveModelForApp` is the ONE place the precedence rule lives:
 //
-//     per-app pick  →  the Settings default (`modelStore`)  →  undefined
+//     per-app pick  →  the per-PROVIDER default (byok) / `modelStore` (local, subscription)
+//                   →  undefined
 //
 // The tail matters: `undefined` is not a bug, it is the contract. The adapters apply
 // their own `*_DEFAULT_MODEL` when `options.model` is absent (anthropic.ts:101,
@@ -23,11 +25,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   appModelStore,
+  appProviderStore,
   hydrateAppModels,
   resolveModelForApp,
   setAppModel,
 } from '../state/appModel.js';
-import { modelStore } from '../state/mode.js';
+import { modeStore, modelStore, providerModelsStore, providerStore, providerChoiceStore, byokKeyPresenceStore } from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -37,6 +40,12 @@ const APP_B = 'app-b';
 
 beforeEach(() => {
   appModelStore.set({});
+  appProviderStore.set({});
+  modeStore.set('byok');
+  providerStore.set('anthropic');
+  providerChoiceStore.set(undefined);
+  byokKeyPresenceStore.set({ anthropic: true, openai: false });
+  providerModelsStore.set({});
   modelStore.set(undefined);
 });
 
@@ -46,36 +55,45 @@ describe('resolveModelForApp — precedence (AC3)', () => {
     expect(resolveModelForApp(APP_A)).toBeUndefined();
   });
 
-  it('inherits the Settings default when the app has no pick', () => {
-    modelStore.set('claude-sonnet-5');
+  it('inherits the default of the provider the app resolves to (byok)', () => {
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     expect(resolveModelForApp(APP_A)).toBe('claude-sonnet-5');
   });
 
-  it('keeps inheriting LIVE — a later change to the Settings default reaches an un-picked app', () => {
-    modelStore.set('claude-sonnet-5');
+  it('inherits the global `model` setting in LOCAL mode — an Ollama pick is not per-provider', () => {
+    modeStore.set('local');
+    modelStore.set('llama3.2');
+    expect(resolveModelForApp(APP_A)).toBe('llama3.2');
+  });
+
+  it('keeps inheriting LIVE — a later change to the default reaches an un-picked app', () => {
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5', openai: 'gpt-4o-mini' });
     expect(resolveModelForApp(APP_A)).toBe('claude-sonnet-5');
 
-    modelStore.set('gpt-4o');
-    // The owner's decision: an app that was never picked-for FOLLOWS the default. A
-    // copy-on-first-open design would answer 'claude-sonnet-5' here.
-    expect(resolveModelForApp(APP_A)).toBe('gpt-4o');
+    // The owner's decision: an app that was never picked-for FOLLOWS the default — the
+    // per-provider model change AND a default-provider change both reach it.
+    providerModelsStore.set({ anthropic: 'claude-opus-5', openai: 'gpt-4o-mini' });
+    expect(resolveModelForApp(APP_A)).toBe('claude-opus-5');
+    providerStore.set('openai');
+    expect(resolveModelForApp(APP_A)).toBe('gpt-4o-mini');
   });
 
   it('prefers the app’s own pick over the Settings default', async () => {
     const db = await installTestUserDb();
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     setAppModel(APP_A, 'claude-opus-5');
     await flush();
 
     expect(resolveModelForApp(APP_A)).toBe('claude-opus-5');
-    // The global default is untouched by a per-app pick.
-    expect(modelStore.get()).toBe('claude-sonnet-5');
+    // The defaults are untouched by a per-app pick.
+    expect(providerModelsStore.get().anthropic).toBe('claude-sonnet-5');
+    expect(db.getSetting('providerModel:anthropic')).toBeUndefined();
     expect(db.getSetting('model')).toBeUndefined();
   });
 
   it('returns to inheriting when a pick is cleared', async () => {
     await installTestUserDb();
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     setAppModel(APP_A, 'claude-opus-5');
     await flush();
     expect(resolveModelForApp(APP_A)).toBe('claude-opus-5');
@@ -88,7 +106,7 @@ describe('resolveModelForApp — precedence (AC3)', () => {
   it('resolves the Settings default when no app id is in scope', () => {
     // The inferrer lane and any non-app-scoped turn call this with no id; it must not
     // throw and must not invent a per-app value.
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     expect(resolveModelForApp(undefined)).toBe('claude-sonnet-5');
   });
 });
@@ -96,7 +114,7 @@ describe('resolveModelForApp — precedence (AC3)', () => {
 describe('resolveModelForApp — per-app isolation (AC5)', () => {
   it('picks for one app without touching another', async () => {
     await installTestUserDb();
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     setAppModel(APP_A, 'claude-opus-5');
     await flush();
 
@@ -182,7 +200,7 @@ describe('unknown or stale stored models (AC11)', () => {
 
   it('does not fall back to the Settings default for an unrecognized stored model', async () => {
     await installTestUserDb();
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     setAppModel(APP_A, 'some-retired-model-id');
     await flush();
     // Silently substituting the default here would send the app's turns to a model the

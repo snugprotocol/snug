@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ModelSelect } from '../run/ModelSelect.js';
 import { appModelStore, resolveModelForApp, setAppModel } from '../state/appModel.js';
-import { modeStore, modelStore, providerStore } from '../state/mode.js';
+import { modeStore, modelStore, providerModelsStore, providerStore } from '../state/mode.js';
 import { ollamaStore } from '../state/ollama.js';
 import { webgpuStore, webllmFlagStore } from '../state/webllm.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -124,7 +124,8 @@ describe('AC1 — picking writes the choice (state, not just render)', () => {
   });
 
   it('un-pins back to the inherited default', async () => {
-    modelStore.set('claude-sonnet-5');
+    // MIGRATED (TASK-20260821): the byok inherited default is per-provider now.
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     setAppModel(APP, 'claude-opus-5');
     await flush();
     await renderSelect();

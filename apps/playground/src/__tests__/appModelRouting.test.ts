@@ -28,8 +28,16 @@ import { createAppTransport, resolveAppTransport } from '../agent/transport.js';
 import { createDirectBuilder } from '../agent/builder.js';
 import type { ArtifactSink } from '../agent/artifactSink.js';
 import { liveInferenceAdapter } from '../agent/inferrerAdapter.js';
-import { appModelStore, setAppModel } from '../state/appModel.js';
-import { modelStore, providerStore, modeStore, endpointsNeedConfirmStore } from '../state/mode.js';
+import { appModelStore, appProviderStore, setAppModel, setAppPin } from '../state/appModel.js';
+import {
+  byokKeyPresenceStore,
+  endpointsNeedConfirmStore,
+  modeStore,
+  modelStore,
+  providerChoiceStore,
+  providerModelsStore,
+  providerStore,
+} from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -81,18 +89,23 @@ function testSink(): ArtifactSink {
 
 beforeEach(async () => {
   appModelStore.set({});
+  appProviderStore.set({});
   modelStore.set(undefined);
   modeStore.set('byok');
   providerStore.set('anthropic');
+  providerChoiceStore.set(undefined);
+  providerModelsStore.set({});
+  byokKeyPresenceStore.set({ anthropic: true, openai: true });
   endpointsNeedConfirmStore.set(false);
   vi.restoreAllMocks();
   const db = await installTestUserDb();
   db.setSecret('byok:anthropic', 'sk-test-key');
+  db.setSecret('byok:openai', 'sk-openai-key');
 });
 
 describe('AC6a — app-frame turns route to the app’s model', () => {
   it('sends the app’s pinned model on the wire', async () => {
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-opus-4-8' });
     setAppModel(APP_A, 'claude-opus-5');
     await flush();
 
@@ -105,15 +118,18 @@ describe('AC6a — app-frame turns route to the app’s model', () => {
     expect(calls).toEqual(['claude-opus-5']);
   });
 
-  it('sends the Settings default for an app with no pick', async () => {
-    modelStore.set('claude-sonnet-5');
+  it('sends the provider default for an app with no pick', async () => {
+    // MIGRATED (TASK-20260821): the byok default is per-provider now, and the fixture is
+    // deliberately NOT the adapter's own default — 'claude-sonnet-5' would pass vacuously
+    // because an absent model makes the adapter apply exactly that id.
+    providerModelsStore.set({ anthropic: 'claude-opus-4-8' });
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
     const transport = resolveAppTransport('byok', 'anthropic', undefined, APP_B);
     await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
 
-    expect(calls).toEqual(['claude-sonnet-5']);
+    expect(calls).toEqual(['claude-opus-4-8']);
   });
 
   it('reads the pick PER SEND, so a mid-session switch takes effect without remounting', async () => {
@@ -163,7 +179,7 @@ describe('AC6b/AC6c — the builder + app-attached chat lane routes to the app�
   // Both lanes resolve through ONE `useMemo` in useBuilderChat (the surprise recorded in
   // the task file), so they are driven here through the same seam the memo calls.
   it('sends the attached app’s pinned model on the wire', async () => {
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-opus-4-8' });
     setAppModel(APP_A, 'claude-opus-5');
     await flush();
 
@@ -181,8 +197,8 @@ describe('AC6b/AC6c — the builder + app-attached chat lane routes to the app�
     expect(calls[0]).toBe('claude-opus-5');
   });
 
-  it('falls back to the Settings default when no app is attached (a fresh build thread)', async () => {
-    modelStore.set('claude-sonnet-5');
+  it('falls back to the provider default when no app is attached (a fresh build thread)', async () => {
+    providerModelsStore.set({ anthropic: 'claude-opus-4-8' });
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
@@ -193,13 +209,13 @@ describe('AC6b/AC6c — the builder + app-attached chat lane routes to the app�
     });
     await builder.send('hello', {}, new AbortController().signal);
 
-    expect(calls[0]).toBe('claude-sonnet-5');
+    expect(calls[0]).toBe('claude-opus-4-8');
   });
 });
 
 describe('AC6d — connection inference routes to the app’s model', () => {
   it('uses the app’s pinned model when an app id is in scope', async () => {
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-opus-4-8' });
     setAppModel(APP_A, 'claude-opus-5');
     await flush();
 
@@ -218,8 +234,8 @@ describe('AC6d — connection inference routes to the app’s model', () => {
     expect(calls[0]).toBe('claude-opus-5');
   });
 
-  it('falls back to the Settings default when no app id is in scope', async () => {
-    modelStore.set('claude-sonnet-5');
+  it('falls back to the provider default when no app id is in scope', async () => {
+    providerModelsStore.set({ anthropic: 'claude-opus-4-8' });
     const { calls, fetchImpl } = recordingFetch();
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
 
@@ -232,7 +248,7 @@ describe('AC6d — connection inference routes to the app’s model', () => {
       signal: new AbortController().signal,
     });
 
-    expect(calls[0]).toBe('claude-sonnet-5');
+    expect(calls[0]).toBe('claude-opus-4-8');
   });
 });
 
@@ -270,5 +286,131 @@ describe('AC8 — subscription mode carries the resolved model to /invoke', () =
     // The server already accepts and swaps a per-request `model` (routes/invoke.ts:96-98),
     // so no server change is owed — only that the hub actually sends the resolved value.
     expect(calls[0]).toBe('claude-opus-5');
+  });
+});
+
+/**
+ * TASK-20260821 AC10 — a PROVIDER pin routes the wire: adapter family, endpoint, key
+ * and model all follow the app's pinned provider, per send.
+ *
+ * The double answers BOTH wire dialects, keyed on the URL, and records
+ * `host · model · key` so a lane that resolves the right provider but forwards the
+ * wrong key (or the other provider's model id) still reds.
+ */
+function dualRecordingFetch(): { calls: string[]; fetchImpl: typeof globalThis.fetch } {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: unknown, init?: { body?: unknown; headers?: unknown }) => {
+    const url = String(input);
+    const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as { model?: string }) : {};
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const key = headers['x-api-key'] ?? headers['Authorization'] ?? headers['authorization'] ?? '';
+    const host = new URL(url).host;
+    calls.push(`${host} · ${String(body.model)} · ${key.replace(/^Bearer /, '')}`);
+    if (host.includes('anthropic')) {
+      const sse = [
+        'event: message_start',
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}',
+        '',
+        'event: content_block_delta',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{\\"message\\":\\"ok\\"}"}}',
+        '',
+        'event: message_delta',
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}',
+        '',
+        'event: message_stop',
+        'data: {"type":"message_stop"}',
+        '',
+      ].join('\n');
+      return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }
+    const sse = [
+      'data: {"choices":[{"delta":{"content":"{\\"message\\":\\"ok\\"}"},"finish_reason":null}]}',
+      '',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":3}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n');
+    return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  }) as unknown as typeof globalThis.fetch;
+  return { calls, fetchImpl };
+}
+
+describe('AC10 — a provider pin routes adapter, key and model (per send, no remount)', () => {
+  it('an app pinned to the OTHER provider sends to that provider with ITS key and model', async () => {
+    providerModelsStore.set({ anthropic: 'claude-opus-4-8' });
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o-mini' });
+    await flush();
+    const { calls, fetchImpl } = dualRecordingFetch();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
+
+    // The captured `provider` argument is the RESOLVED DEFAULT (anthropic) — the pin
+    // must override it inside the per-send resolution, not rely on the caller.
+    const transport = createAppTransport('byok', 'anthropic', undefined, APP_A);
+    await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
+
+    expect(calls).toEqual(['api.openai.com · gpt-4o-mini · sk-openai-key']);
+  });
+
+  it('a pin made MID-SESSION reroutes the very next send of the memoized transport', async () => {
+    const { calls, fetchImpl } = dualRecordingFetch();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
+
+    const transport = createAppTransport('byok', 'anthropic', undefined, APP_A);
+    await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o-mini' });
+    await flush();
+    await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
+
+    expect(calls[0]).toContain('api.anthropic.com');
+    expect(calls[1]).toBe('api.openai.com · gpt-4o-mini · sk-openai-key');
+  });
+
+  it('the builder lane follows the attached app’s provider pin', async () => {
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o-mini' });
+    await flush();
+    const { calls, fetchImpl } = dualRecordingFetch();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
+
+    const builder = createDirectBuilder({
+      mode: 'byok',
+      provider: 'anthropic',
+      sink: testSink(),
+      appId: APP_A,
+    });
+    await builder.send('hello', {}, new AbortController().signal);
+
+    expect(calls[0]).toBe('api.openai.com · gpt-4o-mini · sk-openai-key');
+  });
+
+  it('the inference lane follows the app’s provider pin', async () => {
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o-mini' });
+    await flush();
+    const { calls, fetchImpl } = dualRecordingFetch();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
+
+    const result = await liveInferenceAdapter(APP_A);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    await result.adapter.complete({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+    });
+
+    expect(calls[0]).toBe('api.openai.com · gpt-4o-mini · sk-openai-key');
+  });
+
+  it('an app WITHOUT a pin keeps following the default provider — the pin is per-app', async () => {
+    setAppPin(APP_A, { provider: 'openai', model: 'gpt-4o-mini' });
+    await flush();
+    const { calls, fetchImpl } = dualRecordingFetch();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
+
+    const transport = createAppTransport('byok', 'anthropic', undefined, APP_B);
+    await transport.send('[SNUG_APP_REQUEST] {"snug":1}', { signal: new AbortController().signal });
+
+    expect(calls[0]).toContain('api.anthropic.com');
+    expect(calls[0]).toContain('sk-test-key');
   });
 });

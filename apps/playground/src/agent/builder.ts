@@ -9,7 +9,7 @@ import { buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
 import { getPlatform } from '../platform/platform.js';
-import { resolveModelForApp } from '../state/appModel.js';
+import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import { endpointsNeedConfirmStore, getByokKey, type ByokProvider } from '../state/mode.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
@@ -243,9 +243,18 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
           retryable: false,
         };
       }
+      // The attached app's PROVIDER pin resolves per send too (TASK-20260821, review
+      // finding 7 — same stale-capture class as the model): this memoized agent would
+      // otherwise keep routing a mid-thread cross-provider pin to the provider captured
+      // at construction. The demo arm's explicit `provider: 'mock'` and every test's
+      // explicit construction stay untouched — the pin only overrides byok with an app.
+      const provider =
+        options.mode === 'byok' && options.provider !== 'mock' && options.appId !== undefined
+          ? (appProviderPinFor(options.appId) ?? options.provider)
+          : options.provider;
       // local talks to an unauthenticated endpoint; webllm runs IN the page — neither
       // reads a provider key.
-      const key = options.mode === 'local' || isWebllm ? undefined : await readKey(options.provider);
+      const key = options.mode === 'local' || isWebllm ? undefined : await readKey(provider);
       // PER SEND, never at construction — useBuilderChat memoizes this agent, so a model
       // captured here at creation would freeze the thread on whatever was chosen when the
       // view mounted. An explicit `options.model` still wins (test pins, existing callers).
@@ -253,7 +262,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
       const adapter = createTurnAdapter(
         {
           mode: options.mode,
-          provider: options.provider,
+          provider,
           ...(key !== undefined ? { key } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),

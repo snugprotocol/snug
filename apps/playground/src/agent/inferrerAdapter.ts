@@ -20,7 +20,7 @@ import type { AgentAdapter } from '@snugprotocol/adapters';
 // rename to the surviving contract, not a change of shape.
 import { type RequirementInferrerComplete } from '@snugprotocol/auth';
 
-import { resolveModelForApp } from '../state/appModel.js';
+import { resolveModelForApp, resolveProviderForApp } from '../state/appModel.js';
 import { getByokKey, localUrlStore, modeStore, providerStore, type ByokProvider } from '../state/mode.js';
 import { currentBrain } from '../state/webllm.js';
 import { createTurnAdapter, type DirectMode } from './adapter.js';
@@ -49,12 +49,16 @@ type WireDecision =
   | { kind: 'byok'; provider: ByokProvider; viaSubscription: boolean }
   | { kind: 'unavailable' };
 
-async function decideWire(): Promise<WireDecision> {
+async function decideWire(appId?: string): Promise<WireDecision> {
   const brain = currentBrain();
   if (brain.kind === 'webllm') return { kind: 'webllm' };
   if (brain.kind === 'demo') return { kind: 'unavailable' }; // the demo brain cannot read docs
   const mode = modeStore.get();
-  const provider = providerStore.get();
+  // The app's provider pin routes THIS lane too (TASK-20260821, review finding 8):
+  // without it, an app pinned to the other provider would get that provider's model id
+  // sent to the GLOBAL provider's adapter with the global provider's key — a guaranteed
+  // provider-side error. No appId resolves the Settings default, as before.
+  const provider = resolveProviderForApp(appId);
   // Subscription has no browser-side adapter; the inference turn is a direct
   // browser call, so it runs on the byok/local DIRECT settings — never the mock.
   const direct: DirectMode = mode === 'subscription' ? 'byok' : mode;
@@ -103,7 +107,7 @@ export async function inferenceWireCopy(): Promise<string> {
  * inference resolves the Settings default, which is the pre-existing behavior exactly.
  */
 export async function liveInferenceAdapter(appId?: string): Promise<LiveAdapterResolution> {
-  const wire = await decideWire();
+  const wire = await decideWire(appId);
   if (wire.kind === 'unavailable') return { ok: false };
   if (wire.kind === 'webllm') {
     return { ok: true, adapter: createTurnAdapter({ mode: 'webllm', provider: providerStore.get() }, 'chat') };

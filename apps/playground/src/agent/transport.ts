@@ -12,7 +12,7 @@ import { ERROR_CODES, parseAppRequest, type RuntimeContract } from '@snugprotoco
 import type { AgentTransport } from '@snugprotocol/runner';
 
 import { getPlatform } from '../platform/platform.js';
-import { resolveModelForApp } from '../state/appModel.js';
+import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import {
   endpointsNeedConfirmStore,
   getByokKey,
@@ -265,11 +265,19 @@ export function resolveAppTransport(
   // than in createDirectAppTransport for the same reason the brain is: resolveAppTransport
   // runs per send, so a model chosen mid-session takes effect on the next turn without a
   // remount — RunView memoizes the transport it wraps.
+  //
+  // The PROVIDER pin resolves per send too (TASK-20260821, plan review finding 7): the
+  // `provider` parameter is CAPTURED by createAppTransport's closure at mount, so a pin
+  // to the other provider made mid-session would otherwise route on the old provider
+  // with the old key until a remount. The pin overrides only in byok mode and only when
+  // an app id exists — the demo/webllm arms above and every explicit test construction
+  // keep the provider they were handed.
   const model = resolveModelForApp(appId);
   if (mode === 'subscription') return createServerAppTransport(model, appId);
+  const pinnedProvider = mode === 'byok' && provider !== 'mock' && appId !== undefined ? appProviderPinFor(appId) : undefined;
   return createDirectAppTransport({
     mode,
-    provider,
+    provider: pinnedProvider ?? provider,
     ...(appId !== undefined ? { appId } : {}),
     ...(model !== undefined ? { model } : {}),
     localUrl: localUrlStore.get(),
