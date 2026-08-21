@@ -382,3 +382,20 @@ Settles two of the three open questions with numbers rather than guesses.
 - State: in review. 28 commits, 73 files, +4116/-101.
 - Next step: owner review of PR #89 → merge on local evidence (CI billing-blocked) → `/close-session` Gate 6 (done-index entry, retire this task file per ADR-0027).
 - Open questions: whether to run the `e2e` leg before merge — it is the lane that owns the export-button locator this task changed, and it does not run in CI. Offered and deselected for now.
+
+### 2026-08-20 — Jeetu — session (owner-found: the feature was unreachable)
+
+**The owner ran the desktop client, a new database was created, and nothing ever asked for a passphrase.** Correct report, and my error: `ProtectSetupFlow` was never rendered and `initProtectOffer` was never called. Both were built and unit-tested in isolation; nothing mounted either. **This is the same defect class as diff-review D-2** — I had just written the lesson for it and then shipped the identical mistake in the adjacent file.
+
+Then, after wiring it, **the same class bit again one layer down**: a wrong passphrase produced no message at all, because `unlockUserDb` published a transient `'opening'` status while `App.tsx` renders the unlock screen for `'locked'` only — so the screen UNMOUNTED mid-attempt and the `failed` state died with it. Neither existing test could see it (`vaultUnlock` mounts the component directly; `userdbLocked` mocks the store).
+
+**Fixed:**
+- `App.tsx` calls `initProtectOffer()` after settings hydrate (it reads its keys from the user file).
+- `HubView` gates on the offer AFTER the desktop welcome — one idea per screen, and the file exists by then.
+- `SettingsView` gains a `ProtectionCard`: turn on later, change passphrase, turn off behind a confirm that states the cost.
+- `unlockUserDb` no longer publishes an intermediate status.
+
+**Verified in a real browser, full round trip** (not just tests): plaintext → offer appears on first load → passphrase + confirm → Recovery Key `7KQYC-…-HA` (27 symbols) behind the typed acknowledgement → on-disk bytes are `SNUGENC1` → reload prompts → wrong passphrase shows the calm message *and keeps the typed text* → correct passphrase opens the hub → Settings turn-off → file is `SQLite` plaintext again.
+
+- State: playground **1348/1348**. Two new lessons recorded, the sharper one being: **run the product before claiming a UI feature works.**
+- Next step: re-run the full root suite, then the PR is current.
