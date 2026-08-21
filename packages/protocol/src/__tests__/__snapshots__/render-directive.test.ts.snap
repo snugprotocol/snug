@@ -1,5 +1,61 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`AC1 — render directive stays OUT of json-schemas SOURCES (extends the AL-02 guard; list updated to the v0.3 line) > locks the internal contract with an in-package snapshot instead 1`] = `
+{
+  "directiveKeys": [
+    "confidence",
+    "kind",
+    "proposal",
+    "provenance",
+    "v",
+  ],
+  "evidenceBounds": {
+    "chars": 300,
+    "items": 8,
+  },
+  "hintsKeys": [
+    "authMode",
+    "declaredApiHosts",
+    "docsUrl",
+    "endpoints",
+    "fields",
+    "headerTemplate",
+    "homepageUrl",
+    "kindHint",
+    "pkce",
+    "providerName",
+    "registrationConsoleUrl",
+    "registrationInstructions",
+    "scopes",
+    "userLayerEndpoints",
+    "userLayerFields",
+    "userLayerPkce",
+    "userLayerScopes",
+  ],
+  "inferrerKeys": [
+    "confidence",
+    "evidence",
+    "proposal",
+  ],
+  "provenances": [
+    "registry",
+    "inference",
+    "user_docs",
+  ],
+  "requirementDirectiveKeys": [
+    "confidence",
+    "kind",
+    "provenance",
+    "requirement",
+    "v",
+  ],
+  "samples": {
+    "directive": true,
+    "hints": true,
+  },
+}
+`;
+
 exports[`AC1 — render directive stays OUT of json-schemas SOURCES (extends the AL-02/AL-03 guard) > locks the internal contract with an in-package snapshot instead 1`] = `
 {
   "directiveKeys": [

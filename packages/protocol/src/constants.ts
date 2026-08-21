@@ -19,14 +19,14 @@ export const FRAME_TYPES = {
   dbResponse: 'snug:db-response',
   hostEvent: 'snug:host-event',
   appEvent: 'snug:app-event',
-  /** INTERNAL draft (AL-03, plan D1): the envelope net capability. Out of json-schemas SOURCES until Beta exit. */
+  /** The envelope net capability (AL-03; PUBLISHED at spec v0.3 — in json-schemas SOURCES since TASK-20260820-spec-v03-whitepaper). */
   netRequest: 'snug:net-request',
   netResponse: 'snug:net-response',
   /**
-   * INTERNAL draft (ADR-0038 D5, TASK-20260818): the open-url capability — an app may
-   * REQUEST the host open an https URL; a host confirm dialog and a user gesture sit
-   * between the request and any window. Out of json-schemas SOURCES like the net pair;
-   * the published half is host-ready's `openUrl` capability flag.
+   * The open-url capability (ADR-0038 D5, TASK-20260818; PUBLISHED at spec v0.3 in
+   * json-schemas SOURCES alongside the net pair) — an app may REQUEST the host open an
+   * https URL; a host confirm dialog and a user gesture sit between the request and any
+   * window. Host-ready's `openUrl` capability flag advertises it.
    */
   openUrlRequest: 'snug:open-url-request',
   openUrlResult: 'snug:open-url-result',

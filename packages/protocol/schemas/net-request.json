@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "maxLength": 262144,
+      "type": "string"
+    },
+    "headers": {
+      "additionalProperties": {
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "propertyNames": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "instanceId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "method": {
+      "enum": [
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ],
+      "type": "string"
+    },
+    "requestId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "type": {
+      "const": "snug:net-request",
+      "type": "string"
+    },
+    "url": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    },
+    "v": {
+      "const": 1,
+      "type": "number"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "requestId",
+    "instanceId",
+    "url",
+    "method"
+  ],
+  "type": "object"
+}

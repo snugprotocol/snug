@@ -227,8 +227,8 @@ describe('AC1 — derived host union (plan D2/N2)', () => {
   });
 });
 
-describe('AC1 — auth schemas stay OUT of the published export set (plan D1)', () => {
-  it('buildJsonSchemas() exports exactly the pre-auth v1 wire set — no auth-* entry', () => {
+describe('AC1 — auth schemas stay OUT of the published export set (plan D1; list updated to the v0.3 line, TASK-20260820-spec-v03-whitepaper)', () => {
+  it('buildJsonSchemas() exports exactly the v0.3 wire set — no auth-* entry', () => {
     expect(Object.keys(buildJsonSchemas()).sort()).toEqual(
       [
         'app-announce.json',
@@ -241,6 +241,10 @@ describe('AC1 — auth schemas stay OUT of the published export set (plan D1)', 
         'db-response.json',
         'host-event.json',
         'host-ready.json',
+        'net-request.json',
+        'net-response.json',
+        'open-url-request.json',
+        'open-url-result.json',
       ].sort(),
     );
   });

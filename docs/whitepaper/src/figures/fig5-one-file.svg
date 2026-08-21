@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 424" role="img" aria-label="The user database layout: hub-namespace tables and native per-app tables inside one SQLite file">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 424" role="img" aria-label="The user database layout: hub-namespace tables including connections, and native per-app tables, inside one SQLite file that may be passphrase-protected">
   <!-- file outline -->
   <rect x="16" y="34" width="688" height="342" rx="10" fill="#fdf7ee" stroke="#a8712a" stroke-width="1.8"/>
   <text x="32" y="58" class="f-title">user.snug</text>
-  <text x="122" y="58" class="f-tiny">— one file per user · PRAGMA user_version = 2 · cap MAX_USERDB_BYTES (64 MiB)</text>
+  <text x="122" y="58" class="f-tiny">— one file per user · PRAGMA user_version = 6 · cap MAX_USERDB_BYTES (64 MiB) · optionally a SNUGENC1 passphrase container</text>
 
   <!-- hub namespace -->
   <rect x="32" y="72" width="330" height="286" rx="8" fill="#fff" stroke="#5b6472" stroke-width="1.3"/>
@@ -10,36 +10,40 @@
   <text x="48" y="110" class="f-tiny">apps can never reach these tables</text>
 
   <g class="f-row">
-    <rect x="48" y="120" width="298" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
-    <text x="58" y="137" class="f-mono-sm">snug_apps</text>
-    <text x="336" y="137" text-anchor="end" class="f-tiny">one row per app · install_source unique</text>
+    <rect x="48" y="118" width="298" height="24" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+    <text x="58" y="134" class="f-mono-sm">snug_apps</text>
+    <text x="336" y="134" text-anchor="end" class="f-tiny">one row per app · install_source unique</text>
 
-    <rect x="48" y="150" width="298" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
-    <text x="58" y="167" class="f-mono-sm">snug_app_versions</text>
-    <text x="336" y="167" text-anchor="end" class="f-tiny">≥5 retained · factory version pinned</text>
+    <rect x="48" y="146" width="298" height="24" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+    <text x="58" y="162" class="f-mono-sm">snug_app_versions</text>
+    <text x="336" y="162" text-anchor="end" class="f-tiny">≥5 kept · factory pinned · runtime contract</text>
 
-    <rect x="48" y="180" width="298" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
-    <text x="58" y="197" class="f-mono-sm">snug_app_schemas</text>
-    <text x="336" y="197" text-anchor="end" class="f-tiny">verbatim DDL + namespace token</text>
+    <rect x="48" y="174" width="298" height="24" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+    <text x="58" y="190" class="f-mono-sm">snug_app_schemas</text>
+    <text x="336" y="190" text-anchor="end" class="f-tiny">verbatim DDL + namespace token</text>
 
-    <rect x="48" y="210" width="298" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
-    <text x="58" y="227" class="f-mono-sm">snug_app_migrations</text>
-    <text x="336" y="227" text-anchor="end" class="f-tiny">append-only DDL audit</text>
+    <rect x="48" y="202" width="298" height="24" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+    <text x="58" y="218" class="f-mono-sm">snug_app_migrations</text>
+    <text x="336" y="218" text-anchor="end" class="f-tiny">append-only DDL audit</text>
 
-    <rect x="48" y="240" width="298" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
-    <text x="58" y="257" class="f-mono-sm">snug_app_docs</text>
-    <text x="336" y="257" text-anchor="end" class="f-tiny">per-app wiki the agent maintains</text>
+    <rect x="48" y="230" width="298" height="24" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+    <text x="58" y="246" class="f-mono-sm">snug_app_docs</text>
+    <text x="336" y="246" text-anchor="end" class="f-tiny">per-app wiki the agent maintains</text>
 
-    <rect x="48" y="270" width="298" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
-    <text x="58" y="287" class="f-mono-sm">snug_chat_threads / _messages</text>
-    <text x="336" y="287" text-anchor="end" class="f-tiny">bootstrap turns pinned</text>
+    <rect x="48" y="258" width="298" height="24" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+    <text x="58" y="274" class="f-mono-sm">snug_chat_threads / _messages</text>
+    <text x="336" y="274" text-anchor="end" class="f-tiny">bootstrap turns pinned</text>
 
-    <rect x="48" y="300" width="298" height="26" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
-    <text x="58" y="317" class="f-mono-sm">snug_profile / _settings / _meta / _sync</text>
+    <rect x="48" y="286" width="298" height="24" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+    <text x="58" y="302" class="f-mono-sm">snug_connections</text>
+    <text x="336" y="302" text-anchor="end" class="f-tiny">requirements + grants · frozen ceilings</text>
 
-    <rect x="48" y="330" width="298" height="24" rx="4" fill="#fdf2f2" stroke="#b04a4a" stroke-dasharray="3 2"/>
-    <text x="58" y="346" class="f-mono-sm">snug_secrets</text>
-    <text x="336" y="346" text-anchor="end" class="f-tiny">stripped from hub pushes + default exports</text>
+    <rect x="48" y="314" width="298" height="24" rx="4" fill="#f5f7fa" stroke="#c9ced6"/>
+    <text x="58" y="330" class="f-mono-sm">snug_profile / _settings / _meta / _sync</text>
+
+    <rect x="48" y="342" width="298" height="24" rx="4" fill="#fdf2f2" stroke="#b04a4a" stroke-dasharray="3 2"/>
+    <text x="58" y="358" class="f-mono-sm">snug_secrets</text>
+    <text x="336" y="358" text-anchor="end" class="f-tiny">stripped from hub pushes + default exports</text>
   </g>
 
   <!-- app namespace -->
@@ -64,5 +68,5 @@
   <text x="533" y="345" text-anchor="middle" class="f-tiny">A violating name fails the write closed — never interpolated.</text>
 
   <text x="16" y="398" class="f-note">Real tables, not opaque blobs: open the file in any SQLite tool and the data is legible, queryable, and yours.</text>
-  <text x="16" y="414" class="f-note">Push-state lives outside the image, so the file never contains its own revision.</text>
+  <text x="16" y="414" class="f-note">Push-state lives outside the image, so the file never contains its own revision. Format is decided by leading bytes, never by the file's name.</text>
 </svg>

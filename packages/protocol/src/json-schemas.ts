@@ -10,6 +10,10 @@ import {
   dbResponseSchema,
   hostEventSchema,
   hostReadySchema,
+  netRequestSchema,
+  netResponseSchema,
+  openUrlRequestSchema,
+  openUrlResultSchema,
 } from './frames.js';
 
 const SOURCES: Record<string, z.ZodType> = {
@@ -22,6 +26,16 @@ const SOURCES: Record<string, z.ZodType> = {
   'db-response.json': dbResponseSchema,
   'host-event.json': hostEventSchema,
   'app-event.json': appEventSchema,
+  // v0.3 publication (owner ask 2026-08-20, TASK-20260820-spec-v03-whitepaper): the net
+  // pair and the open-url pair join the published set. These four are STRICT wire frames
+  // (additionalProperties: false is their real contract, unlike the tolerant core), and
+  // their superRefine rules (body-on-GET refusal, credential-header refusal, https/
+  // userinfo checks) are NOT expressible in JSON Schema — the spec prose carries them,
+  // and the exported schema is deliberately the weaker envelope, never the full contract.
+  'net-request.json': netRequestSchema,
+  'net-response.json': netResponseSchema,
+  'open-url-request.json': openUrlRequestSchema,
+  'open-url-result.json': openUrlResultSchema,
   'app-request-envelope.json': appRequestEnvelopeSchema,
 };
 

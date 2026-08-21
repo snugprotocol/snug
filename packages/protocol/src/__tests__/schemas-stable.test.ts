@@ -18,7 +18,8 @@ describe('JSON Schema export (AC-7)', () => {
     for (const expected of [
       'app-announce.json', 'host-ready.json', 'app-message.json', 'app-cancel.json',
       'app-response.json', 'db-request.json', 'db-response.json', 'host-event.json',
-      'app-event.json', 'app-request-envelope.json',
+      'app-event.json', 'net-request.json', 'net-response.json',
+      'open-url-request.json', 'open-url-result.json', 'app-request-envelope.json',
     ]) {
       expect(names).toContain(expected);
     }

@@ -2,10 +2,10 @@
 //
 // THE CAPABILITY IN ONE SENTENCE: an app may REQUEST that the host open an https URL
 // in the user's real browser; the host shows the full URL in a confirm dialog and only
-// a user gesture opens anything. The frames are INTERNAL DRAFT (out of the json-schemas
-// SOURCES, the net-frames precedent); the published half is the `openUrl` capability
-// flag on host-ready, tested in frames.test.ts's neighbourhood and regenerated via
-// gen:schemas.
+// a user gesture opens anything. The frames are PUBLISHED since spec v0.3 (owner ask
+// 2026-08-20, TASK-20260820-spec-v03-whitepaper — in the json-schemas SOURCES alongside
+// the net pair); the `openUrl` capability flag on host-ready was published earlier and is
+// tested in frames.test.ts's neighbourhood. Regenerate via gen:schemas.
 //
 // C2 IS UNTOUCHED and these tests pin the frame-level half of why: the request carries
 // a URL and nothing else — no target window, no features string, no navigation

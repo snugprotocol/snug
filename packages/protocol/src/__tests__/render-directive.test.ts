@@ -365,8 +365,8 @@ describe('TASK-20260810 P0 — the connection_requirement directive lands ALONGS
 
 // ------------------------------------------------- publication line (M1)
 
-describe('AC1 — render directive stays OUT of json-schemas SOURCES (extends the AL-02/AL-03 guard)', () => {
-  it('buildJsonSchemas() still exports exactly the pre-auth v1 wire set', () => {
+describe('AC1 — render directive stays OUT of json-schemas SOURCES (extends the AL-02 guard; list updated to the v0.3 line)', () => {
+  it('buildJsonSchemas() still exports exactly the v0.3 wire set', () => {
     expect(Object.keys(buildJsonSchemas()).sort()).toEqual(
       [
         'app-announce.json',
@@ -379,6 +379,10 @@ describe('AC1 — render directive stays OUT of json-schemas SOURCES (extends th
         'db-response.json',
         'host-event.json',
         'host-ready.json',
+        'net-request.json',
+        'net-response.json',
+        'open-url-request.json',
+        'open-url-result.json',
       ].sort(),
     );
   });
