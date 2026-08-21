@@ -4,8 +4,8 @@
 - **Owner**: Jeetu
 - **Risk tier**: medium (docs + whitepaper build/check scripts; zero runtime code)
 - **Branch**: `docs/TASK-20260820-spec-v03-whitepaper`
-- **Packages touched**: `docs/spec-drafts`, `docs/whitepaper`, `scripts/check-whitepaper.mjs`, `docs/spec-changelog.md`
-- **Spec impact**: the whole point — but **staging only**. Nothing is pushed to `snugprotocol/spec` and nothing in `packages/protocol` changes. Publication (and the 1.0 promotion) is the owner's explicit act after review (C3, PROCESS release rules; AL-12 auth-surface publication was HELD until Beta exit — the owner's commission of a 1.0 release candidate is read as superseding that hold **for staging**, not for pushing).
+- **Packages touched**: `docs/spec-drafts`, `docs/whitepaper`, `scripts/check-whitepaper.mjs`, `docs/spec-changelog.md`; **scope extended on the owner's 2026-08-20 follow-up ask**: `packages/protocol` (json-schemas SOURCES + 4 test pins; risk re-read as High for that commit, evidence 4 suites local)
+- **Spec impact**: the whole point. Originally staging-only; the owner's follow-up ask ("go ahead with all those 3 steps and then push") authorized the `packages/protocol` publication-line change and the spec-repo push — executed as `spec@ea0109d`+`cd011cc` (ADR-0044; C3 satisfied by the explicit in-session ask). The 1.0 promotion remains a separate owner act.
 - **Related**: ADR-0016/0018/0019 (doctrine), ADR-0031–0043 (surfaces to consolidate), `docs/threat-model.md` v1, TASK-20260807-protocol-whitepaper (edition 1), `docs/engineering/SPEC_SYNC.md`
 
 ## Spec (what & why)
@@ -46,3 +46,40 @@ versions in the published repo; launch copy.
 3. Rewrite `paper.html` (+ new figures: connected-apps lifecycle, sidecar architecture),
    update `paper.css` running head, rebuild checker, build PDF, iterate on page renders.
 4. Changelog entry, close-out, PR.
+
+## Session journal
+
+### 2026-08-20 (session 1 — authoring, publication-line flip, spec push)
+
+**Done.**
+- Research: four parallel read-only audits (protocol census; sidecar ADR/code deep-dive;
+  auth-vs-draft diff; ADR 0031–0043 sweep) + direct reads of threat-model v1, whitepaper
+  infra, positioning docs. Key corrections they surfaced vs the old drafts: 7 kinds not 6;
+  5 template helpers not 4 (`cdp_jwt` is IN the enum, both args declared-fields);
+  storage v6 with `snug_auth_specs` dropped at v5; `SIDECAR_SYMBOLIC_HOST` as the ceiling
+  identity; three pairing families; nine-field `_connection` state.
+- `SPEC-v0.3-draft.md` written (Parts I–V + conformance + appendices); the three old
+  staged drafts deleted; architecture/code-map pointers updated (`c5a5b5e`).
+- Whitepaper edition 2: paper.html rewritten, 3 new figures + fig2/fig5 reworked, CSS
+  running head, TOC repaginated against the rendered PDF; checker rewritten (fixture =
+  staged draft + `packages/protocol/schemas`; AC5 inverted to coverage; negation-only
+  zero-knowledge/E2E; ADR-0040/0043 claim checks); 33/33 pages visually reviewed
+  (`a757394`). Owner mid-task instruction honored: no starter named anywhere (Trivia
+  Night verified absent).
+- Owner ask #2 executed: publication line flipped (SOURCES → 14 files; four test pins
+  rewritten; protocol 345 · auth 915 · db 391 · runner 119 local; `0bd164a`), checker
+  103/103, host-ready drift carried, publication-line decision recorded (ADR-0044).
+- Spec repo: pending `docs/whitepaper-v0.1` branch rebased+landed as `ea0109d`
+  (edition-1 whitepaper, keeps linear one-commit-per-task history), v0.3 publication as
+  `cd011cc` (spec + 14 byte-identical schemas + edition-2 PDF + README/pointer notes),
+  pushed to origin/main, branch deleted. Changelog PUSHED entry with SHAs (`63186fc`).
+
+**Exact state.** `snugprotocol/spec@cd011cc` published. Snug branch
+`docs/TASK-20260820-spec-v03-whitepaper` pushed; **PR #90 open** with all snug-side
+commits; CI billing-blocked so its checks are red-with-zero-steps — evidence is local.
+
+**Single next step.** Owner reviews the published draft + PR #90; on the owner's "merge", merge
+#90, move this task file to done/, and index it.
+
+**Open questions.** (1) 1.0 promotion timing — a spec-repo status flip, its own ask.
+(2) Trivia Night starter removal (owner-stated plan; queued in next-steps).
