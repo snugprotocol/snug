@@ -21,6 +21,10 @@ import {
   resolveDeclaredIntent,
 } from '../starter/starterDeclaration.js';
 import {
+  __resetStarterDocFixturesForTests,
+  __setStarterDocFixturesForTests,
+} from '../starter/starterDocs.js';
+import {
   __resetStarterMetaFixturesForTests,
   __setStarterMetaFixturesForTests,
 } from '../starter/starterMeta.js';
@@ -56,6 +60,17 @@ const MANIFEST = JSON.stringify({
 });
 
 const CONTRACT_V2 = JSON.stringify({ overview: 'v2 contract — shipped by the update.' });
+
+/** A docs bundle for the fixture starter — the whole payload of a docs-only release. */
+const DOCS = {
+  [FOLDER]: {
+    docs: {
+      'vision.md': '# Vision\n\nForecasts turned into decisions.',
+      'lessons.md': '# Lessons\n\nSeeded by the docs-only release.',
+    },
+    prompts: { '01-build.md': '# Build prompt\n\nBuild the weather decider.' },
+  },
+};
 
 const meta = (version: number): string =>
   JSON.stringify({
@@ -95,6 +110,7 @@ afterEach(() => {
   __resetStarterMetaFixturesForTests();
   __resetStarterUpdateFixturesForTests();
   __resetRuntimeContractFixturesForTests();
+  __resetStarterDocFixturesForTests();
 });
 
 describe('starterUpdateStatus — detection (AC2, AC3)', () => {
@@ -208,14 +224,27 @@ describe('applyStarterUpdate — the update act (AC5, AC7)', () => {
     expect(db.getConnection(appId, 'example-api')).toEqual(before);
   });
 
-  it('is idempotent: a second apply writes nothing (AC5)', async () => {
+  it('is idempotent: a second apply writes no VERSION, no HTML, and no docs (AC5)', async () => {
+    // "Writes nothing" reclassified, not deleted (lessons 2026-08-18: migrate the claim):
+    // the already-current branch now RUNS the absent-only docs seed for docs-only
+    // releases, so the honest claim enumerates what a second apply leaves untouched —
+    // including a doc the user rewrote after the first apply, which a re-seed must
+    // never clobber (the wiki is living memory, ADR-0010).
+    __setStarterDocFixturesForTests(DOCS);
     setBundle(HTML_V2, 2);
     const appId = installAtV1();
     await applyStarterUpdate(db, appId);
+    db.putAppDoc(appId, 'vision', { content: 'my rewrite — mine to keep' });
     const versionsAfterFirst = db.listAppVersions(appId).length;
+    const docsAfterFirst = db.listAppDocs(appId).length;
+
     const result = await applyStarterUpdate(db, appId);
     expect(result).toMatchObject({ status: 'already-current' });
     expect(db.listAppVersions(appId)).toHaveLength(versionsAfterFirst);
+    expect(db.getAppHtml(appId)).toBe(HTML_V2);
+    expect(db.getSetting(starterVersionSettingKey(appId))).toBe(2);
+    expect(db.listAppDocs(appId)).toHaveLength(docsAfterFirst);
+    expect(db.getAppDoc(appId, 'vision')?.content).toBe('my rewrite — mine to keep');
   });
 
   it('heals a missing key when the bytes already match (partial-failure retry)', async () => {
@@ -224,6 +253,48 @@ describe('applyStarterUpdate — the update act (AC5, AC7)', () => {
     const result = await applyStarterUpdate(db, app.appId);
     expect(result).toMatchObject({ status: 'already-current' });
     expect(db.getSetting(starterVersionSettingKey(app.appId))).toBe(2);
+  });
+});
+
+describe('docs-only releases — identical html, higher version (AC8; plan-review findings 6+12)', () => {
+  // A release whose whole payload is the wiki: the bundle's bytes never change, only
+  // `starter.json`'s version moves. Detection must OFFER it (byte-equality is not
+  // release-equality), and taking it must land the absent docs and record the version
+  // so the offer clears — without minting a pointless pinned version.
+  beforeEach(() => __setStarterDocFixturesForTests(DOCS));
+
+  it('is offered to a recorded copy; apply seeds the absent docs AND records the version', async () => {
+    setBundle(HTML_V1, 2); // v2 ships the SAME bytes — the release payload is the docs
+    const appId = installAtV1();
+
+    const status = await starterUpdateStatus(db, appId);
+    expect(status).toMatchObject({ installedVersion: 1, latestVersion: 2, updateAvailable: true, edited: false });
+
+    const result = await applyStarterUpdate(db, appId);
+    expect(result).toMatchObject({ status: 'already-current', version: 2 });
+    // The docs landed and the version row cleared the offer…
+    expect(db.getAppDoc(appId, 'vision')?.content).toContain('Forecasts turned into decisions');
+    expect(db.getSetting(starterVersionSettingKey(appId))).toBe(2);
+    expect((await starterUpdateStatus(db, appId))?.updateAvailable).toBe(false);
+    // …and nothing else was written: no new pinned version, bytes untouched.
+    expect(db.listAppVersions(appId)).toHaveLength(1);
+    expect(db.getAppHtml(appId)).toBe(HTML_V1);
+  });
+
+  it('legacy copy (no version row) at the bundle bytes: the offer STAYS — unknown means older', async () => {
+    // Pre-seeding installs have no `starterVersion:` row. Deriving "current" from
+    // byte-equality would hide exactly the release that exists to reach them.
+    setBundle(HTML_V1, 2);
+    const app = db.installApp({ displayName: 'Weather', html: HTML_V1, installSource: SOURCE });
+
+    const status = await starterUpdateStatus(db, app.appId);
+    expect(status).toMatchObject({ installedVersion: 1, latestVersion: 2, updateAvailable: true });
+
+    const result = await applyStarterUpdate(db, app.appId);
+    expect(result).toMatchObject({ status: 'already-current', version: 2 });
+    expect(db.getSetting(starterVersionSettingKey(app.appId))).toBe(2);
+    expect(db.getAppDoc(app.appId, 'lessons')?.content).toContain('docs-only release');
+    expect((await starterUpdateStatus(db, app.appId))?.updateAvailable).toBe(false);
   });
 });
 

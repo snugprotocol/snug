@@ -1,7 +1,20 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "9d6b20ebb65740cc094eea7517798edcf304eef8414b1e326a1fb8220d571eab",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "The wiki reaches installed copies",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "No changes to the copilot itself — this release delivers its authoring wiki (vision through next tasks, plus the assembly and TWAP-extension prompts) into copies installed before doc seeding existed."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

@@ -1,7 +1,20 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "f83e9a494903f9b23b5eaae55d0a95e400be97d968faa750aff0df5c23f87b9a",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "The inbox manager, documented",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "No app changes — taking this update seeds the app's wiki and build prompt into copies installed before doc seeding existed."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

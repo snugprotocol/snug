@@ -1,7 +1,21 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "4f1ab6206ec7d2289be35ed077ff1852087f571f569ecbda08222b91cdf34982",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "The pig gets a wiki",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "The game's vision, requirements, plan, lessons, and next tasks now live in your file with the app.",
+            "A build prompt shows how to recreate the pig — written after the fact, and labeled as such."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

@@ -117,7 +117,11 @@ describe('installStarterDocs', () => {
 
   it('seeds nothing for a starter with no authoring bundle, and never throws', async () => {
     const db = await installTestUserDb();
-    const appId = await installedStarterApp(db, 'chess'); // LLM-free starter, no bundle
+    // A folder absent from the bundle map. (This row once named `chess` as the real
+    // bundle-less exemplar; since TASK-20260821 every shipped starter carries an
+    // authoring bundle — the validator floor enforces it — so the state under test is
+    // now hypothetical-only and the fixture folder says so.)
+    const appId = await installedStarterApp(db, 'bundle-less-starter');
 
     await expect(installStarterDocs(db, appId)).resolves.toBeUndefined();
     expect(db.listAppDocs(appId)).toEqual([]);

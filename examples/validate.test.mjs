@@ -447,6 +447,52 @@ for (const app of CONNECTED_APPS) {
 }
 
 /**
+ * AC7 (TASK-20260821-hardening-polish): the authoring FLOOR, for every starter — not just
+ * the connected ones AC9 above governs. Owner decision (item 6): a starter's wiki is part
+ * of the product, so EVERY shipped app carries the full Ledger-style doc set plus at
+ * least one build prompt, and the absent-only docs seed (ADR-0035/ADR-0045) has something
+ * to deliver on every install and every update. AC9's rule stands unchanged; this floor
+ * is deliberately a separate, wider gate — vision/requirements/plan alone no longer
+ * clears a starter for the shelf.
+ */
+const REQUIRED_DOC_SLUGS = ['vision', 'requirements', 'plan', 'lessons', 'next-tasks'];
+
+for (const app of APPS) {
+  test(`AC7: ${app} ships the full authoring wiki floor (docs + a build prompt)`, () => {
+    for (const slug of REQUIRED_DOC_SLUGS) {
+      const docPath = path.join(HERE, app, 'authoring', 'docs', `${slug}.md`);
+      assert.ok(existsSync(docPath), `${app}: authoring/docs/${slug}.md is part of the floor — every starter ships it`);
+      assert.ok(
+        readFileSync(docPath, 'utf8').trim().length >= 40,
+        `${app}: authoring/docs/${slug}.md must hold real content, not a stub`,
+      );
+    }
+    const prompts = readdirSync(path.join(HERE, app, 'authoring', 'prompts')).filter((f) => f.endsWith('.md'));
+    assert.ok(prompts.length >= 1, `${app}: authoring/prompts must hold at least one prompt page`);
+  });
+}
+
+/**
+ * AC7's honesty twin, SCOPED to exactly the four keepers whose build prompts were written
+ * AFTER the apps (lessons 2026-08-20: scope a must-appear assertion to the construct it
+ * governs — asserting over every prompt would force the label onto the verbatim dev-time
+ * records, where it would be a lie). The retro label is load-bearing: a reader of the
+ * installed wiki must be able to tell a reconstructed prompt from the prompt that
+ * actually drove the build.
+ */
+const RETRO_PROMPT_APPS = ['chess', 'flying-pig', 'adventure-quest', 'quiz-me'];
+
+for (const app of RETRO_PROMPT_APPS) {
+  test(`AC7: ${app}'s build prompt carries the retrospective label`, () => {
+    const body = readFileSync(path.join(HERE, app, 'authoring', 'prompts', '01-build.md'), 'utf8');
+    assert.ok(
+      body.includes('Reconstructed retrospectively'),
+      `${app}: authoring/prompts/01-build.md must say 'Reconstructed retrospectively' — the label is load-bearing honesty`,
+    );
+  });
+}
+
+/**
  * Starter versioning metadata (TASK-20260820-starter-updates, ADR-0045). Every starter
  * declares `starter.json`: an integer `version`, a cumulative `changelog` (newest
  * first), and `appHash` — the sha-256 of the NORMALIZED `app.html`. The hash is what

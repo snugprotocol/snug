@@ -1,7 +1,21 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "6ee7590ba73fd0d29cd0753521a3dd2040301c0ea9bd8c2a5ee0b24b2ec87fb2",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "The wiki, completed and delivered",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "The forecast app is unchanged; its wiki gains new lessons and next-tasks pages.",
+            "Taking this update lands the full doc set in copies installed before doc seeding existed."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",
