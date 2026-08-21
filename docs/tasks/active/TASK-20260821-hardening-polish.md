@@ -167,7 +167,19 @@ Workflow: 4 lenses (security/feasibility/testplan/scope) + per-finding refuters 
   endpoint single-homing, the release-script platform keys, the launch-check composition
   wire, the duplicate-id detector, and its reference-vs-definition distinction. Every one
   died and was restored by inverse edit, never `git checkout` (lessons 2026-08-21).
-- State: branch `feat/TASK-20260821-hardening-polish`, 8 commits, clean tree, no PR yet.
+- **`gate:local` — ALL SIX legs green**, run in two invocations (2026-08-21):
+  `--legs=workspace,smoke,e2e,desktop` → PASS/PASS/PASS/PASS, then `--legs=rust,release`
+  → PASS/PASS. Neither single run printed full ci.yml equivalence (each was a PARTIAL by
+  the gate's own honest accounting), but between them every leg ran and passed on this
+  tree. Two verdicts worth naming: the **three new C2 rows passed in a real WKWebView** —
+  keyless `plugin:updater|check`, `download_and_install` and `plugin:process|restart` all
+  resolved no callback from a sandboxed srcdoc frame, beside the positive twin proving
+  the main window CAN dispatch (its body answered "Could not fetch a valid release JSON",
+  i.e. the pre-flip 404 — exactly the designed state); and the **release gate's new
+  MUST-APPEAR check passed against a real 20.5 MB release binary**, which is the proof
+  that a shipped build points at the production endpoint and was not built with the dev
+  overlay.
+- State: branch `feat/TASK-20260821-hardening-polish`, 9 commits, clean tree.
 - Next step: **owner** — review the diff, then merge; the walks in next-steps
   (2026-08-21 entry) are owed after. The first `gh release create` and the Apple
   Developer ID both remain explicit-ask owner acts.
