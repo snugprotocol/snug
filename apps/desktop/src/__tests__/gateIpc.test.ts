@@ -16,6 +16,8 @@ import {
   decideLanFetchRefused,
   decideSidecarFetchDispatchable,
   decideSidecarFetchRefused,
+  decideSidecarWizardFetchDispatchable,
+  decideSidecarWizardFetchRefused,
   decideUpdateChannelCommandRefused,
   decideUpdaterCheckDispatchable,
   IPC_CHECK_IDS,
@@ -23,6 +25,7 @@ import {
   PROCESS_RELAUNCH_COMMAND,
   SENTINEL_NAME,
   SIDECAR_FETCH_COMMAND,
+  SIDECAR_WIZARD_FETCH_COMMAND,
   UPDATER_CHECK_COMMAND,
   UPDATER_INSTALL_COMMAND,
 } from '../gate/ipc.js';
@@ -32,6 +35,7 @@ const reachable = {
   callbackFired: false,
   lanCallbackFired: false,
   sidecarCallbackFired: false,
+  sidecarWizardCallbackFired: false,
   updaterCheckCallbackFired: false,
   updaterInstallCallbackFired: false,
   relaunchCallbackFired: false,
@@ -237,6 +241,99 @@ describe('decideSidecarFetchDispatchable — the POSITIVE twin (next-steps 2026-
 
   it('is one of the REQUIRED check ids — the derive-based driver expects it', () => {
     expect(IPC_CHECK_IDS).toContain('ipc-sidecar-fetch-dispatchable');
+  });
+});
+
+describe('decideSidecarWizardFetchRefused — sidecar_wizard_fetch (threat-model R-12)', () => {
+  // WHY THIS ROW EXISTS: R-12 named this command as the standing exception — it
+  // ships in BOTH handler lists (`lib.rs` debug and release) and fronts
+  // `GET /pair/status`, the route that RELEASES the helper's access token, while
+  // its LOWER-privilege sibling `sidecar_fetch` carried a per-command row and this
+  // one did not. Reaching it from app code means minting the token that unlocks the
+  // user's linked-device session — strictly worse than the sibling that was gated.
+  // Amendment 16: registration is per-command, so only a per-command probe can see it.
+
+  it('FAILS when a keyless sidecar_wizard_fetch resolved a callback into the subframe', () => {
+    const result = decideSidecarWizardFetchRefused(
+      { ...reachable, sidecarWizardCallbackFired: true },
+      false,
+    );
+    expect(result.pass).toBe(false);
+    expect(result.detail).toMatch(/STRUCTURAL BREAKAGE/);
+  });
+
+  it('cannot vouch for refusal while the invoke key is reachable', () => {
+    expect(decideSidecarWizardFetchRefused(reachable, true).pass).toBe(false);
+  });
+
+  it('FAILS when the probe never reported — an unanswerable sensor is not a pass', () => {
+    expect(decideSidecarWizardFetchRefused(undefined, false).pass).toBe(false);
+  });
+
+  it('passes only with no callback AND an unreachable key', () => {
+    expect(decideSidecarWizardFetchRefused(reachable, false).pass).toBe(true);
+  });
+
+  it("a sidecar_fetch refusal can never grant the WIZARD command's verdict", () => {
+    // The whole point of the row: the sibling being refused says nothing about
+    // this command, which is registered separately and is the more dangerous one.
+    const siblingRefusedButWizardReached = {
+      ...reachable,
+      sidecarCallbackFired: false,
+      sidecarWizardCallbackFired: true,
+    };
+    expect(decideSidecarFetchRefused(siblingRefusedButWizardReached, false).pass).toBe(true);
+    expect(decideSidecarWizardFetchRefused(siblingRefusedButWizardReached, false).pass).toBe(false);
+  });
+
+  it("the wizard command's refusal can never grant sidecar_fetch's verdict", () => {
+    const wizardRefusedButSiblingReached = {
+      ...reachable,
+      sidecarCallbackFired: true,
+      sidecarWizardCallbackFired: false,
+    };
+    expect(decideSidecarWizardFetchRefused(wizardRefusedButSiblingReached, false).pass).toBe(true);
+    expect(decideSidecarFetchRefused(wizardRefusedButSiblingReached, false).pass).toBe(false);
+  });
+
+  it('the verdict is one of the REQUIRED check ids', () => {
+    expect(IPC_CHECK_IDS).toContain('ipc-sidecar-wizard-fetch-refused');
+  });
+
+  it('the command name matches the one lib.rs registers', () => {
+    expect(SIDECAR_WIZARD_FETCH_COMMAND).toBe('sidecar_wizard_fetch');
+  });
+});
+
+describe('decideSidecarWizardFetchDispatchable — the POSITIVE twin', () => {
+  // A refusal check over an unregistered command vouches for nothing (the
+  // eight-seam defect). This row earns its own twin for the same reason the
+  // sibling did.
+
+  it('passes when the invoke RESOLVES — the helper answered, so dispatch happened', () => {
+    expect(decideSidecarWizardFetchDispatchable({ resolved: true, detail: 'resolved' }).pass).toBe(true);
+  });
+
+  it('passes when the command BODY refuses (helper not running) — refusal proves dispatch', () => {
+    const result = decideSidecarWizardFetchDispatchable({
+      resolved: false,
+      detail: 'the WhatsApp helper is not running — open the connection settings to start it',
+    });
+    expect(result.pass).toBe(true);
+  });
+
+  it('FAILS on the unregistered-command shape — the exact defect this twin exists for', () => {
+    for (const detail of [
+      'Command sidecar_wizard_fetch not found',
+      'sidecar_wizard_fetch not allowed. Command not found',
+      'unknown command sidecar_wizard_fetch',
+    ]) {
+      expect(decideSidecarWizardFetchDispatchable({ resolved: false, detail }).pass, detail).toBe(false);
+    }
+  });
+
+  it('is one of the REQUIRED check ids — the derive-based driver expects it', () => {
+    expect(IPC_CHECK_IDS).toContain('ipc-sidecar-wizard-fetch-dispatchable');
   });
 });
 

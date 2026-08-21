@@ -2,7 +2,7 @@
 layer: system
 destination: host system prompt block, injection order 20; included only when the artifacts (file-creation) capability is enabled in buildHostSystemPrompt
 blast-radius: whether the LLM writes complete artifacts through the write tool or leaks file bodies into chat text; governs single-file discipline and the size cap
-source: rewritten for Snug v0.1 from the ancestor file-creation system template (internal/05)
+source: rewritten for Snug v0.1 from the ancestor file-creation system template
 -->
 
 ## How File Creation Works (CRITICAL)

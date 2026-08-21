@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM queries app-authoring topics; reachable only when the host enables the app-builder capability
 blast-radius: the mental model behind every generated app — errors here produce apps that violate the bridge contract or the SDK hook signatures
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05)
+source: rewritten for Snug v0.1 from ancestor KBs
 -->
 
 # Snug App Authoring — Overview and Contract

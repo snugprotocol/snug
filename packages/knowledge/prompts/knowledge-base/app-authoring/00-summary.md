@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: injected into the host system prompt (progressive disclosure) beneath system/30-app-builder-summary.md, only when the app-builder capability is enabled; the full KB stays behind the {{appBuilderToolName}} tool
 blast-radius: whether the host LLM recognizes app-building moments at all — this ~600-char blurb is its only always-on awareness of Snug apps
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05)
+source: rewritten for Snug v0.1 from ancestor KBs
 -->
 
 You can build interactive single-file HTML apps ("Snug apps") that run in a sandboxed

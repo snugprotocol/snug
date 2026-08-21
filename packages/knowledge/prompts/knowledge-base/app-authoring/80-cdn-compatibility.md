@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM picks libraries or debugs script loading; reachable only when the app-builder capability is enabled
 blast-radius: which CDN URLs generated apps embed — a wrong URL here ships as a broken script tag in every app that uses that library
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05); allowlist narrowed to the Snug CSP (no Tailwind play CDN, no Google Fonts)
+source: rewritten for Snug v0.1 from ancestor KBs; allowlist narrowed to the Snug CSP (no Tailwind play CDN, no Google Fonts)
 -->
 
 # CDN Compatibility

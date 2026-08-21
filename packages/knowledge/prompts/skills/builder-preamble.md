@@ -2,7 +2,7 @@
 layer: skill
 destination: first block of the skill-authoring session system prompt on the Snug reference host — assembled by buildSkillBuilderPrompt(mode) ahead of the vendored skill-creator methodology (skill-creator/SKILL.md) and the per-mode tail (modes/<mode>.md); reaches the LLM in every skill-authoring session regardless of mode
 blast-radius: every skill-authoring session — how authors stage and finalize skill files, whether app-shaped requests route to the micro-app pattern, and which protocol constraints generated SKILL.md bodies carry; does not affect ordinary chat or app-runtime prompts
-source: rewritten for Snug v0.1 from both ancestor skill-builder preambles — IProject's deduped four-block discipline plus OProject's app-authoring guidance (internal/05)
+source: rewritten for Snug v0.1 from both ancestor skill-builder preambles — one ancestor's deduped four-block discipline plus the other's app-authoring guidance
 -->
 
 # Snug skill-authoring session

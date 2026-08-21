@@ -4,6 +4,33 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-21 — INTERNAL DRAFT, correction pending the next push — TASK-20260821-launch-security-review
+
+**§11.1's `SNUGENC1` container layout did not describe the container the code writes**, and
+the divergence was disqualifying rather than cosmetic. The draft documented a slot-table
+entry as `{ kind:u8, iv:12 }` — 13 bytes — while `packages/db/src/crypto/container.ts`
+strides `SLOT_LEN = 61` (kind + IV + 48 bytes reserved where an interleaved wrapped key
+would sit; the reference stores the wrapped keys contiguously after the header instead).
+For two slots the header is 160 bytes, not 64.
+
+Because §11.2 rule 4 makes *the header through the end of the slot table* the GCM AAD, an
+independent implementation written from the published text computes a different AAD span
+and **cannot open a conforming file at all** — surfacing as a wrong-secret error on a
+perfectly healthy container, i.e. precisely the misreport rule 6 exists to forbid. That
+makes this a correction to the portability claim §11.2 is normative for, not an editorial
+tidy.
+
+Corrected in the draft: the 61-byte stride is stated, the 48 reserved bytes are specified
+as MUST-be-zero, the 160-byte example is given, and a note records that the region is not a
+version-negotiation seat (a revision that uses it takes a new magic string). **Verified
+empirically against the shipping encoder before the edit** — slot count 2, zero non-zero
+reserved bytes, header length 160.
+
+Found by the spec-vs-code conformance lane of the pre-launch review. No code change: the
+code is the source of truth here and was self-consistent throughout; only the description
+was wrong. **Not pushed** — the owner regenerates and publishes the spec in a fresh session
+(PROCESS release rules); this entry is the record that the next push carries it.
+
 ## 2026-08-21 — INTERNAL DRAFT, not staged for any push — TASK-20260821-ui-polish (ADR-0046 §7)
 
 **Excluded from every spec push** (the ADR-0032/0034 precedent: `sidecar-contract.ts`

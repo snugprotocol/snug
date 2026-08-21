@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM matches a user idea to an app type or builds a game; reachable only when the app-builder capability is enabled
 blast-radius: which app archetypes get built and how — the chess example is the canonical worked pattern many generations copy
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05); app-type catalog carried from the richer ancestor
+source: rewritten for Snug v0.1 from ancestor KBs; app-type catalog carried from the richer ancestor
 -->
 
 # App Catalog

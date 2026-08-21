@@ -1,7 +1,7 @@
 // NetConfirmDialog — the mutating-call confirm (AL-03 D5 / open Q1). Observes
 // netConfirmStore; when an app asks to POST/PUT/PATCH/DELETE through the bridge, this
-// shows the (app, host, method) and a "remember for this session" checkbox. Allow/Deny
-// resolve the parked confirm. Dev-grade visuals; functional and clean.
+// shows the (app, host, method, URL) and a "remember for this session" checkbox.
+// Allow/Deny resolve the parked confirm. Dev-grade visuals; functional and clean.
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
@@ -26,7 +26,7 @@ export function NetConfirmDialog(): ReactElement | null {
   // actually present; with none, it renders chat-origin confirms too — a parked
   // decision must always have exactly one live surface.
   if (pending === null || (pending.origin === 'chat' && chatSurfaces > 0)) return null;
-  const { appId, host, method } = pending.request;
+  const { appId, host, method, url } = pending.request;
 
   return (
     <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="confirm network request">
@@ -37,9 +37,24 @@ export function NetConfirmDialog(): ReactElement | null {
           <strong>{host}</strong>. Your saved credentials for this connection will be attached by the host — the app
           never sees them.
         </p>
+        {/*
+          The URL is the field that DISTINGUISHES one mutating call from another, so
+          it is shown verbatim. Threat-model R-8 rests this dialog on "naming host,
+          method and URL": host+method alone cannot tell `POST /notes` from
+          `POST /transfer?to=attacker`, which is exactly the difference a prompt
+          injection would exploit. The chat-lane card has always rendered it.
+        */}
+        <code className="net-confirm-url" style={{ wordBreak: 'break-all' }}>
+          {url}
+        </code>
         <label className="check-label net-confirm-remember">
           <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
-          remember for this session ({method} to {host})
+          {/*
+            The grant is keyed (appId, host, method) with NO path component
+            (`session-confirm.ts`), so this covers every path on the host. Saying so
+            is the difference between consent and the appearance of it.
+          */}
+          remember for this session — any path, {method} to {host}
         </label>
         <div className="field-row net-confirm-actions">
           <Button variant="ghost" onClick={() => resolveNetConfirm({ granted: false })}>

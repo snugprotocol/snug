@@ -88,7 +88,11 @@ function memoryQuartet(): {
 async function connectedWithFailingRefresh(
   status: number,
   body: string,
+  /** Override the stored secret values — used to drive the base64-shaped fixture. */
+  secrets: { refreshToken?: string; clientSecret?: string } = {},
 ): Promise<{ service: OAuthService; store: CredentialStore }> {
+  const refreshToken = secrets.refreshToken ?? REFRESH_TOKEN;
+  const clientSecret = secrets.clientSecret ?? CLIENT_SECRET;
   const store = new UserDbCredentialStore(memoryQuartet());
   const service = new OAuthService({
     store,
@@ -102,7 +106,7 @@ async function connectedWithFailingRefresh(
         new Response(
           JSON.stringify({
             access_token: 'ACCESS_1',
-            refresh_token: REFRESH_TOKEN,
+            refresh_token: refreshToken,
             expires_in: 3600,
             token_type: 'Bearer',
           }),
@@ -113,8 +117,8 @@ async function connectedWithFailingRefresh(
   } as never);
 
   await store.setCredential(APP, 'client_id', 'client-abc');
-  await store.setCredential(APP, 'client_secret', CLIENT_SECRET);
-  await store.setCredential(APP, 'refresh_token', REFRESH_TOKEN);
+  await store.setCredential(APP, 'client_secret', clientSecret);
+  await store.setCredential(APP, 'refresh_token', refreshToken);
   await store.setConnectionState(APP, {
     status: 'connected',
     obtainedAt: Date.now() - 3600_000,
@@ -152,6 +156,47 @@ describe('a provider error body never carries credential material out of the oau
     expect(message, 'the client secret never rides the error message').not.toContain(CLIENT_SECRET);
     // Not a vacuous pass: a fix that returned an empty message would satisfy the two
     // assertions above for the wrong reason.
+    expect(message.length).toBeGreaterThan(0);
+  });
+
+  it('leaks neither spelling when the token is base64-shaped and the provider echoes what it RECEIVED', async () => {
+    // WHY THIS FIXTURE EXISTS, and why the tests above could not see the gap: their
+    // tokens are pure [A-Za-z0-9-], for which encodeURIComponent is the identity — so
+    // the raw and encoded spellings are byte-identical and every assertion passes
+    // whether or not the encoded form is defended. A real OAuth refresh token carries
+    // `+`, `/` and `=` (Spotify's do), and `URLSearchParams.toString()` percent-encodes
+    // them on the wire. A provider echoing the bytes it literally received therefore
+    // returns a spelling the raw-only candidate set cannot match, and `scrubAuthValues`
+    // is exact-substring. Same lesson the sibling seat already learned at
+    // connected-fetch.ts's query-injection candidates (P6 finding F1).
+    const b64Token = 'AQD+xk9/vZ8ePlusSlashEquals==';
+    const b64Secret = 'cs+SECRET/with=padding==';
+    const wireToken = new URLSearchParams({ v: b64Token }).toString().slice(2);
+    const wireSecret = new URLSearchParams({ v: b64Secret }).toString().slice(2);
+    // Precondition: the encoding must actually change the bytes, or this test is the
+    // same vacuous shape it exists to replace.
+    expect(wireToken).not.toBe(b64Token);
+    expect(wireSecret).not.toBe(b64Secret);
+
+    const { service } = await connectedWithFailingRefresh(
+      400,
+      JSON.stringify({
+        error: 'invalid_grant',
+        error_description: `bad token ${wireToken} for secret ${wireSecret}`,
+      }),
+      { refreshToken: b64Token, clientSecret: b64Secret },
+    );
+    let message = '';
+    try {
+      await service.refresh({ appId: APP, spec, allowedHosts: ALLOWED });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message, 'the encoded refresh token must not ride the error message').not.toContain(wireToken);
+    expect(message, 'the encoded client secret must not ride the error message').not.toContain(wireSecret);
+    expect(message, 'nor may the decoded spelling').not.toContain(b64Token);
+    expect(message).not.toContain(b64Secret);
     expect(message.length).toBeGreaterThan(0);
   });
 

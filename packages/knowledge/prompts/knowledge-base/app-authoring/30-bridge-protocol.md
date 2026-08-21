@@ -2,7 +2,7 @@
 layer: knowledge-base
 destination: served (whole or as ##-sections via searchKnowledge) by the {{appBuilderToolName}} tool when the host LLM queries frames, envelope, streaming, or error handling; reachable only when the app-builder capability is enabled
 blast-radius: how generated apps understand the wire — errors here produce apps that mis-parse responses, resolve on streaming frames, or crash on ok:false
-source: rewritten for Snug v0.1 from ancestor KBs (internal/05); normative shapes from packages/protocol SPEC v0.1
+source: rewritten for Snug v0.1 from ancestor KBs; normative shapes from packages/protocol SPEC v0.1
 -->
 
 # Bridge Protocol

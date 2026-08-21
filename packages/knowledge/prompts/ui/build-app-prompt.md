@@ -2,7 +2,7 @@
 layer: ui
 destination: composed CLIENT-SIDE by the Playground into the user message sent when someone submits an app idea (typed or via a suggestion chip); runtime placeholder {{{appIdea}}} is filled by the Playground, not the renderer
 blast-radius: the very first instruction of every Playground build flow — changes here shift what kind of apps get built and whether the KB gets consulted
-source: written for Snug v0.1; suggestion chips informed by the ancestor app catalog (internal/05)
+source: written for Snug v0.1; suggestion chips informed by the ancestor app catalog
 -->
 
 ## User Message Template

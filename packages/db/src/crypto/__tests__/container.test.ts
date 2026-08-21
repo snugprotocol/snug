@@ -235,3 +235,66 @@ describe('SNUGENC1 container — passphrase change without re-encrypting (AC12)'
     expect(await rewrapPassphrase(container, { current: 'wrong', next: 'x' })).toMatchObject({ status: 'locked' });
   });
 });
+
+// --- The published wire layout ---------------------------------------------
+//
+// WHY (TASK-20260821-launch-security-review). Spec §11.1 documented a slot-table entry as
+// `{ kind:u8, iv:12 }` — 13 bytes — while this encoder strides 61. That is disqualifying
+// rather than cosmetic, because §11.2 rule 4 makes the header *through the end of the slot
+// table* the GCM AAD: an implementation written from the published text computes a
+// different AAD span and cannot open a conforming file at all, surfacing as a wrong-secret
+// error on a healthy container — exactly the misreport rule 6 forbids.
+//
+// The spec was corrected to match this encoder (the code was self-consistent throughout).
+// These assertions pin the bytes the spec now promises, so the two cannot drift apart
+// again silently: the next person to change the layout fails here and is sent to the spec.
+describe('the SNUGENC1 wire layout matches the published specification', () => {
+  const HEADER_FIXED_LEN = 38;
+  const SLOT_STRIDE = 61;
+  const WRITTEN_PER_SLOT = 13; // kind:u8 + iv:12
+
+  it('writes a 61-byte slot stride whose trailing 48 bytes are reserved and ZERO', async () => {
+    const bytes = await encryptContainer(new Uint8Array([1, 2, 3, 4]), {
+      passphrase: 'correct-horse-battery-staple',
+      recoveryKey: 'ABCD-EFGH-JKLM-NPQR-STUV-WXYZ',
+    });
+
+    // Slot count is a u16 big-endian at offset 32 — two slots, always (a one-slot
+    // container is refused by construction).
+    expect(bytes[32]).toBe(0);
+    expect(bytes[33]).toBe(2);
+
+    for (let slot = 0; slot < 2; slot++) {
+      const at = HEADER_FIXED_LEN + slot * SLOT_STRIDE;
+      for (let i = WRITTEN_PER_SLOT; i < SLOT_STRIDE; i++) {
+        expect(bytes[at + i], `slot ${slot} reserved byte ${i} must be zero`).toBe(0);
+      }
+    }
+  });
+
+  it('puts the header at 160 bytes for two slots — the AAD span an implementer must reproduce', async () => {
+    // MEASURED from the bytes, not computed from the same constants the encoder uses: a
+    // test that restates the implementation's arithmetic passes under any stride and
+    // proves nothing (checked — the first draft of this test survived a 61→13 mutation).
+    // The second slot's IV is the last thing written into the slot table, so the first
+    // wrapped-key byte begins immediately after it, and finding where the zero-padding
+    // ends locates the header's true end independently.
+    const payload = new Uint8Array([9, 9]);
+    const bytes = await encryptContainer(payload, {
+      passphrase: 'another-passphrase-entirely',
+      recoveryKey: 'ABCD-EFGH-JKLM-NPQR-STUV-WXYZ',
+    });
+
+    // Walk forward from the end of the second slot's WRITTEN region to the first
+    // non-zero byte: that is where the wrapped keys start, i.e. the end of the header.
+    const secondSlotWrittenEnd = HEADER_FIXED_LEN + SLOT_STRIDE + WRITTEN_PER_SLOT;
+    let cursor = secondSlotWrittenEnd;
+    while (cursor < bytes.length && bytes[cursor] === 0) cursor++;
+    // 48 zero bytes of reserved space separate them (a wrapped key beginning with a zero
+    // byte would shorten this by one; allow that single-byte slack rather than flaking).
+    expect(cursor - secondSlotWrittenEnd).toBeGreaterThanOrEqual(47);
+    expect(cursor - secondSlotWrittenEnd).toBeLessThanOrEqual(48);
+    expect(HEADER_FIXED_LEN + 2 * SLOT_STRIDE).toBe(160);
+    expect(bytes.length).toBeGreaterThan(160);
+  });
+});

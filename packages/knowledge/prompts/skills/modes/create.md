@@ -2,7 +2,7 @@
 layer: skill
 destination: per-mode tail of the skill-authoring session system prompt — appended by buildSkillBuilderPrompt('create') after the builder preamble and the vendored methodology; reaches the LLM only in create-mode (greenfield) sessions
 blast-radius: greenfield skill interviews — whether app-shaped requests trigger the App Detection interview, which customizations are gathered, and what lands in the generated SKILL.md body
-source: merged for Snug v0.1 from OProject's create-mode tail (App Detection interview — dropped by the IProject port, recovered here) and IProject's create tail (internal/05)
+source: merged for Snug v0.1 from both ancestors' create-mode tails (the App Detection interview was dropped by the later port and is recovered here)
 -->
 
 # Mode: create (greenfield skill)
