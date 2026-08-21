@@ -18,6 +18,7 @@ import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
+import { starterVersionSettingKey } from '@snugprotocol/db';
 
 import RunView from '../run/RunView.js';
 import { HubView } from '../views/HubView.js';
@@ -255,6 +256,11 @@ describe('an uninstalled starter OPENS read-only; Install lives in the run view 
     expect(copy.installSource).toBe(STARTER_SOURCE);
     expect(path()).toBe(`/run/${copy.appId}`);
     expect(path()).not.toContain(STARTER_PREFIX);
+    // ADR-0045 (AC5b): install RECORDS the starter version it copied, so a fresh install
+    // never relies on the legacy byte-derivation — the real chess starter.json is v1+.
+    const recorded = db.getSetting(starterVersionSettingKey(copy.appId));
+    expect(typeof recorded).toBe('number');
+    expect(recorded).toBeGreaterThanOrEqual(1);
   });
 
   it('a double-click installs exactly one copy (the run-view latch)', async () => {

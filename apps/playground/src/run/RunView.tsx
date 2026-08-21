@@ -10,7 +10,7 @@ import type { CSSProperties, KeyboardEvent, ReactElement } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import type { AgentTurnEvent } from '@snugprotocol/adapters';
-import { createDbDriver, createMemoryBackend, type SnugDbDriver } from '@snugprotocol/db';
+import { createDbDriver, createMemoryBackend, starterVersionSettingKey, type SnugDbDriver } from '@snugprotocol/db';
 import { FRAME_TYPES, type Frame } from '@snugprotocol/protocol';
 import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } from '@snugprotocol/runner';
 
@@ -37,10 +37,12 @@ import { useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { toggleRailShown, useRailShown } from '../state/railLayout.js';
-import { isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
+import { STARTER_PREFIX, isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { installStarterDocs } from '../starter/starterDocs.js';
+import { starterMetaFor } from '../starter/starterMeta.js';
+import { StarterUpdateControls } from './StarterUpdateControls.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { Rail } from '../ui/Rail.js';
@@ -438,6 +440,14 @@ export default function RunView(): ReactElement {
       // a re-install never clobbers a page the user's own sessions have written. Like the
       // contract copy, every failure path is a no-op: doc-less is a supported state.
       await installStarterDocs(installedDb, entry.id);
+      // Record which starter VERSION this copy is (ADR-0045 §6, AC5b) so the update
+      // channel never has to derive it. An unversioned starter records v1.
+      try {
+        const meta = await starterMetaFor(id.slice(STARTER_PREFIX.length));
+        installedDb.setSetting(starterVersionSettingKey(entry.id), meta?.version ?? 1);
+      } catch {
+        // Best-effort like the copies above — the byte-derivation fallback covers it.
+      }
       navigate(`/run/${entry.id}`, { replace: true });
     } catch (err) {
       setInstallError(err instanceof Error ? err.message : String(err));
@@ -756,6 +766,19 @@ export default function RunView(): ReactElement {
               >
                 {installing ? 'installing…' : 'install'}
               </Button>
+            ) : null}
+            {/*
+              The starter-version cluster (ADR-0045): version chip + release notes for
+              every installed starter, and the ONE update write act when the bundle is
+              ahead. Self-nulls for apps that are not installed starters; read-only
+              starter views (isStarterId) show the install button above instead.
+            */}
+            {!isStarterId(id) ? (
+              <StarterUpdateControls
+                appId={id}
+                refreshToken={contentEpoch}
+                onUpdated={() => setContentEpoch((epoch) => epoch + 1)}
+              />
             ) : null}
             {/*
               The per-APP controls — model, connections, export — live in one component

@@ -1,8 +1,10 @@
 // VersionsPanel — the app's history inside the run rail (living-apps child 3):
 // every chat edit is a version; revert copy-forwards the chosen HTML as a NEW version
-// (history is never rewritten), then the frame remounts on the reverted code. The
-// FACTORY version (v1 of the build or install) is pinned — never pruned — so "reset
-// to factory" is always available (umbrella AC6).
+// (history is never rewritten), then the frame remounts on the reverted code. FACTORY
+// versions are pinned — never pruned — so "reset to factory" is always available
+// (umbrella AC6). Since ADR-0045 "factory" is PLURAL: v1 of the build/install plus one
+// pin per starter update, every row tagged, and the reset banner names the NEWEST pin
+// (the `find` below walks the DESC list) — the same version `resetToFactory` restores.
 
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
@@ -70,6 +72,8 @@ export function VersionsPanel({ appId, refreshToken, onReverted }: VersionsPanel
     return <EmptyState glyph="⧉" title="no versions yet" lesson="chat edits create versions — ask for a change and it lands here." />;
   }
 
+  // The NEWEST pin, deliberately (`versions` is DESC): with plural factory pins this is
+  // the starter version the user is on, matching `resetToFactory`'s MAX (ADR-0045).
   const factory = versions.find((v) => v.pinned);
   const onFactory = factory !== undefined && factory.version === currentVersion;
 
