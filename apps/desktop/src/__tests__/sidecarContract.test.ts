@@ -73,6 +73,23 @@ describe('the Rust route table matches the protocol contract exactly', () => {
     expect(all).toContain('/pair/status');
     expect(all).toContain('/session/status');
   });
+
+  it('the Rust WIZARD table equals the FULL contract — its own doc comment already claims it', () => {
+    // TASK-20260821 AC6d (plan review finding 2): the app-table assertion above changes
+    // NOT AT ALL when a wizard-only route is added to the contract — the `/session/`
+    // prefix excludes it from the derived app subset — so nothing forced the hand-written
+    // `WIZARD_ROUTES` table in sidecar.rs to move with it. A forgotten entry means
+    // `admit_wizard_request` refuses the new route and the feature is dead at runtime
+    // with every suite green (the untested-wire class, lessons.md 2026-08-17).
+    const block = /const WIZARD_ROUTES:[^=]*=\s*\[([\s\S]*?)\];/.exec(RUST_SOURCE);
+    if (block?.[1] === undefined) throw new Error('could not find WIZARD_ROUTES in sidecar.rs');
+    const rust = [...block[1].matchAll(/\(\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*\)/g)]
+      .map((match) => `${match[1]} ${match[2]}`)
+      .sort();
+    const typescript = SIDECAR_ROUTES.map((route) => `${route.method} ${route.path}`).sort();
+    expect(rust).toEqual(typescript);
+    expect(rust.length).toBeGreaterThan(0); // a regex matching nothing must not pass vacuously
+  });
 });
 
 describe('the Rust module holds the guards the design depends on', () => {

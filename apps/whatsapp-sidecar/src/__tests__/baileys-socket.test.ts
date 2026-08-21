@@ -12,7 +12,7 @@
  * data they feed the store, not of WhatsApp's protocol.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,9 +26,13 @@ interface FakeBaileysSocket {
   profilePictureUrl: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   updateMediaMessage: ReturnType<typeof vi.fn>;
+  logout: ReturnType<typeof vi.fn>;
+  end: ReturnType<typeof vi.fn>;
 }
 
 const created = vi.hoisted(() => [] as FakeBaileysSocket[]);
+/** The mocked auth store's writer — the forget tombstone must silence it (AC5). */
+const saveCredsSpy = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock('baileys', () => {
   const makeFake = (): FakeBaileysSocket => {
@@ -46,6 +50,8 @@ vi.mock('baileys', () => {
       profilePictureUrl: vi.fn(async () => undefined),
       sendMessage: vi.fn(),
       updateMediaMessage: vi.fn(),
+      logout: vi.fn(async () => {}),
+      end: vi.fn(async () => {}),
     };
   };
   return {
@@ -56,7 +62,7 @@ vi.mock('baileys', () => {
     }),
     DisconnectReason: { loggedOut: 401 },
     downloadMediaMessage: vi.fn(),
-    useMultiFileAuthState: vi.fn(async () => ({ state: { creds: {}, keys: {} }, saveCreds: async () => {} })),
+    useMultiFileAuthState: vi.fn(async () => ({ state: { creds: {}, keys: {} }, saveCreds: saveCredsSpy })),
   };
 });
 
@@ -564,5 +570,82 @@ describe('roster sweep and sync detail', () => {
     expect(detail?.rostersLoaded).toBe(1);
     expect(detail?.names).toBeGreaterThanOrEqual(2); // Asha (contact) + Bo (roster push seat)
     expect(detail?.messages).toBe(1);
+  });
+});
+
+/**
+ * THE DEEP-DELETE UNLINK (TASK-20260821 AC5) and its persist tombstone.
+ *
+ * The dangerous half of `forget` is not the wipe — it is every write that can run AFTER
+ * the wipe. The shell's reap is TERM-first precisely so the process-exit flush runs, and
+ * that flush is the SAME `persistNow` the debounce path calls; a `creds.update` fired by
+ * logout teardown reaches `saveCreds` the same way. Proving both writers dead through
+ * their reachable paths is what proves the exit flush dead too (the 'exit' event itself
+ * cannot be driven safely in-process).
+ */
+describe('forget — the deep-delete unlink (TASK-20260821 AC5)', () => {
+  const historyRow = (id: string, ts: number): unknown => ({
+    chats: [],
+    contacts: [],
+    messages: [
+      {
+        key: { id, remoteJid: '555@s.whatsapp.net', fromMe: false },
+        message: { conversation: 'row' },
+        messageTimestamp: ts,
+        pushName: 'Pat',
+      },
+    ],
+    progress: 10,
+  });
+
+  it('logs out, erases the auth dir, and the tombstone stops every later write', async () => {
+    writeResumableCreds(authDir);
+    writeFileSync(join(authDir, 'thread-cache.json'), 'cached-bytes');
+    writeFileSync(join(authDir, 'session-123.json'), 'signal-session');
+    const cache = { load: vi.fn(() => undefined), save: vi.fn() };
+    // Capture the adapter's REAL process-exit flush: it registers `persistNow` on
+    // 'exit', and that handler — not the debounce — is what the shell's TERM-first reap
+    // exists to run. Simulating the exit means CALLING the registered listener; merely
+    // letting timers elapse never reaches it (a first cut of this test proved exactly
+    // that, by surviving a deleted tombstone guard).
+    const listenersBefore = process.listeners('exit');
+    const { adapter, fake } = await linkedAdapter({ threadCache: cache, cacheDebounceMs: 5 });
+    const exitFlush = process.listeners('exit').find((l) => !listenersBefore.includes(l));
+    if (exitFlush === undefined) throw new Error('the adapter registered no exit flush');
+    // A debounced save is PENDING when forget arrives — the exact race the plan review
+    // named: wipe, then the queued flush re-writes the cache into the wiped directory.
+    fake.emit('messaging-history.set', historyRow('H1', 9));
+
+    await adapter.forget();
+
+    expect(fake.logout).toHaveBeenCalledTimes(1);
+    expect(readdirSync(authDir)).toEqual([]);
+
+    const savesAtWipe = cache.save.mock.calls.length;
+    const credsSavesAtWipe = saveCredsSpy.mock.calls.length;
+    // The pending debounce window elapses…
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    // …new store mutations arrive (a late history chunk)…
+    fake.emit('messaging-history.set', historyRow('H2', 10));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    // …a logout-teardown credential update fires…
+    fake.emit('creds.update', {});
+    // …and the process exits through the TERM path, running the REAL exit flush.
+    (exitFlush as () => void)();
+
+    expect(cache.save.mock.calls.length).toBe(savesAtWipe);
+    expect(saveCredsSpy.mock.calls.length).toBe(credsSavesAtWipe);
+    expect(readdirSync(authDir)).toEqual([]);
+  });
+
+  it('still erases the store when logout throws — an offline phone must not keep the disk dirty', async () => {
+    writeResumableCreds(authDir);
+    const { adapter, fake } = await linkedAdapter();
+    fake.logout.mockRejectedValueOnce(new Error('offline'));
+
+    await adapter.forget();
+
+    expect(readdirSync(authDir)).toEqual([]);
+    expect(adapter.linkState()).toBe('idle');
   });
 });

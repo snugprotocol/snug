@@ -6,7 +6,9 @@
 
 import type { UserDb } from '@snugprotocol/db';
 
+import { forgetSidecarSession } from './sidecarForget.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
+import { appHoldsLastSidecarFact } from './sidecarLive.js';
 import { getUserDb } from './userdb.js';
 
 export interface LibraryEntry {
@@ -78,10 +80,17 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
     },
     async delete(id) {
       const db = await getDb();
+      // Read BEFORE the cascade — it is about to delete the very rows this predicate
+      // reads. Deleting the LAST sidecar app is the user forgetting their WhatsApp
+      // (TASK-20260821 AC5); a sidecar fact on any OTHER app vetoes the unlink (AC6).
+      const unlinkDevice = appHoldsLastSidecarFact(db, id);
       await db.deleteApp(id);
       // deleteApp's cascade may have wiped the persisted identity directory; drop the
       // session's in-memory harvest with it (TASK-20260820, Gate-5 review).
       resetSidecarIdentitySession();
+      // AFTER the committed cascade, so a dead helper can never fail the delete: logout
+      // the linked device and erase the helper's on-disk session store.
+      if (unlinkDevice) await forgetSidecarSession();
     },
     async findByInstallSource(source) {
       const db = await getDb();

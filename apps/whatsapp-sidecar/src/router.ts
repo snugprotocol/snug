@@ -161,6 +161,15 @@ export function createRouter(deps: RouterDeps): SidecarRouter {
 
       // ------------------------------------------------- verify seat (wizard only, ADR-0025)
       if (segments[0] === 'session') {
+        // THE FORGET ARM IS NONCE-ONLY, checked before the shared guard below on purpose:
+        // the branch guard also accepts the minted APP token (harmless for the status
+        // read), but forget ERASES the user's session — anything holding the token must
+        // not be able to invoke it (TASK-20260821 AC6, plan review finding 3).
+        if (segments[1] === 'forget' && method === 'POST') {
+          if (!wizardAuthorized(request)) return json(401, { error: 'unauthorized' });
+          await socket.forget();
+          return json(200, { ok: true });
+        }
         if (!wizardAuthorized(request) && !appAuthorized(request)) return json(401, { error: 'unauthorized' });
         if (segments[1] === 'status' && method === 'GET') {
           // Status ONLY — never the auth state it is derived from.
