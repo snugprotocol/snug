@@ -1,6 +1,6 @@
 # 0045 — Starter versioning and the in-place update channel
 
-- **Status:** draft (accepted on plan approval of TASK-20260820-starter-updates)
+- **Status:** accepted (owner plan approval, 2026-08-21)
 - **Date:** 2026-08-20
 - **Task:** TASK-20260820-starter-updates
 

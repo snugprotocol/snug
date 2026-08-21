@@ -59,3 +59,8 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0038 — SimpleFIN rides plain connected-fetch via a token-claim pairing; Ledger ships the open-url concierge capability](0038-simplefin-token-claim-and-ledger.md)
 - [0039 — Gmail starter: pinned modify/settings/send scopes and governed inbox cleanup](0039-gmail-starter-scopes-and-governed-cleanup.md)
 - [0040 — Host-enforced third-party pseudonymisation backstop (R-9)](0040-host-pseudonymisation-backstop.md)
+- [0041 — The merge gate moves from GitHub Actions to one local command](0041-local-merge-gate.md)
+- [0042 — `.snug` is the canonical user-file name](0042-snug-file-extension.md)
+- [0043 — Opt-in passphrase encryption at rest (the `SNUGENC1` container)](0043-passphrase-encryption-at-rest.md)
+- [0044 — The spec v0.3 publication line: strict schemas publish strict; host contracts publish as prose](0044-spec-v03-publication-line.md)
+- [0045 — Starter versioning and the in-place update channel](0045-starter-versioning-and-update-channel.md)
