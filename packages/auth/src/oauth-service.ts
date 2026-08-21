@@ -58,12 +58,30 @@ const REVOKE_TIMEOUT_MS = 5_000;
  */
 const SECRET_FORM_PARAMS = ['client_secret', 'refresh_token', 'code', 'code_verifier', 'token'] as const;
 
-/** The submitted secret values, shaped as the scrubber's candidate record. */
+/**
+ * The submitted secret values, shaped as the scrubber's candidate record.
+ *
+ * BOTH SPELLINGS, and the second one is the whole point. `body.get(name)` returns the
+ * DECODED value, but `URLSearchParams.toString()` percent-encodes it on the wire — so a
+ * provider echoing back the bytes it literally received returns a spelling the decoded
+ * candidate cannot match, and `scrubAuthValues` is exact-substring. Any base64-shaped
+ * credential (`+`, `/`, `=`) or one carrying a space differs between the two forms, which
+ * is the common case for OAuth refresh tokens rather than an exotic one.
+ *
+ * The encoded candidate is built with `URLSearchParams` itself rather than
+ * `encodeURIComponent`, because the two disagree on space (`+` vs `%20`) and the
+ * serializer that WRITES the request is the only honest source for what went out — the
+ * same reasoning, and the same fix, as the query-injection candidates in
+ * `connected-fetch.ts` (P6 whole-surface finding F1). This seat did not inherit it.
+ */
 function submittedSecrets(body: URLSearchParams): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of SECRET_FORM_PARAMS) {
     const value = body.get(name);
-    if (value !== null && value.length > 0) out[name] = value;
+    if (value === null || value.length === 0) continue;
+    out[name] = value;
+    const encoded = new URLSearchParams({ v: value }).toString().slice(2);
+    if (encoded !== value) out[`${name}:encoded`] = encoded;
   }
   return out;
 }
