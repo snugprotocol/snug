@@ -1,6 +1,6 @@
 # TASK-20260820-spec-v03-whitepaper: Consolidated spec v0.3 draft + whitepaper edition 2 (1.0 release candidate)
 
-- **Status**: in-review (all ACs met 2026-08-20: spec consolidated, whitepaper edition 2 built — 33 pp / 10 figures, checker rewritten, 99/99 green, per-page visual pass done; awaiting owner review. Owner mid-task instruction honored: no Trivia Night mention anywhere — verified by grep, no starter is named in either document)
+- **Status**: in-review + **PUBLISHED** (2026-08-20 late: on the owner's explicit ask, the three Appendix C steps executed — net/open-url pairs into json-schemas SOURCES (snug `0bd164a`), host-ready drift carried, publication-line decision recorded — and the spec repo pushed: edition-1 whitepaper branch rebased+landed as `ea0109d`, v0.3 publication as `cd011cc`, stale branch deleted. Checker 103/103. PR #90 remains open for the snug-side review/merge. Owner mid-task instruction honored: no Trivia Night mention anywhere — no starter is named in either document)
 - **Owner**: Jeetu
 - **Risk tier**: medium (docs + whitepaper build/check scripts; zero runtime code)
 - **Branch**: `docs/TASK-20260820-spec-v03-whitepaper`

@@ -4,11 +4,10 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
-## 2026-08-20 — INTERNAL DRAFT, staged for owner review — spec v0.3 consolidated + whitepaper edition 2 — TASK-20260820-spec-v03-whitepaper
+## 2026-08-20 — **PUSHED** — spec v0.3-draft consolidated + whitepaper edition 2 — TASK-20260820-spec-v03-whitepaper — spec commits `ea0109d` (whitepaper e1, rebased) + `cd011cc` (v0.3)
 
-**Nothing pushed; zero schema bytes changed; wire protocol untouched at v1.** Owner-
-commissioned ("regenerate the specs v0.3 including the whitepaper … final draft for my
-final review before I promote it to 1.0"). Two deliverables, both staged in this repo:
+Owner-commissioned ("regenerate the specs v0.3 including the whitepaper … final draft for
+my final review before I promote it to 1.0"). Two deliverables, authored in this repo:
 
 **(1) `docs/spec-drafts/SPEC-v0.3-draft.md`** — ONE consolidated specification replacing
 the three staged draft files (`spec-v0.2-userdb.md`, `spec-v0.3-auth.md`,
@@ -33,12 +32,26 @@ zero-knowledge/E2E now negation-only checks per ADR-0043's bounded claim).
 `scripts/check-whitepaper.mjs` rewritten: fixture = the staged v0.3 draft +
 `packages/protocol/schemas` until publication (`--spec` still points at a spec clone
 after); AC5 inverted from "auth surface absent" to "v0.3 surfaces covered, superseded
-facts absent". 99/99 checks green; per-page visual pass done.
+facts absent". 99/99 checks green at staging (103/103 after the schema publication below);
+per-page visual pass done.
 
-**A v0.3 push (owner ask required) additionally needs**: net + open-url pairs added to
-`json-schemas.ts` SOURCES and regenerated; the recorded `host-ready.json` drift
-(`capabilities.net`/`openUrl`, from AL-03 + TASK-20260818) carried; and a publication-line
-decision for the Part III/IV/V contract files — see the draft's Appendix C.
+**Pushed 2026-08-20 on the owner's explicit ask** ("go ahead with all those 3 steps and
+then push the changes to specs repo too"). The three Appendix C steps executed first, all
+in snug commit `0bd164a`: **(a)** net + open-url pairs added to `json-schemas.ts` SOURCES
+(14 files; four publication-line test pins updated deliberately — auth-schema,
+render-directive, net-frames, review-regressions, the last now asserting strictness both
+ways; evidence protocol 345 · auth 915 · db 391 · runner 119, all local, CI
+billing-blocked); **(b)** the recorded `host-ready.json` net/openUrl drift carried;
+**(c)** publication-line decision recorded in Appendix C — the strict pairs publish
+STRICT with refinements prose-normative, and Part III–V contract files publish as prose +
+reference contracts, never as weaker-than-contract JSON Schemas. Spec-repo sequencing per
+the owner's "merge appropriately": the never-pushed local branch `docs/whitepaper-v0.1`
+(edition-1 whitepaper, TASK-20260807) was rebased onto main and fast-forwarded as
+`ea0109d`, keeping history linear and the edition-1 record traceable; the v0.3 commit
+`cd011cc` landed on top (SPEC-v0.3-draft.md; 14 byte-identical schemas; edition-2 PDF;
+README/SPEC.md/SPEC-v0.2-draft.md pointer notes); branch deleted after merge. The snug
+master's SPEC-v0.3-draft.md header flipped from "staged" to "published for review" in the
+same task commit, so master and publication stay byte-identical.
 
 ## 2026-08-20 — **PUSHED** — spec v0.2-draft §6 + §7 — TASK-20260820-snug-file-and-encryption (ADR-0042, ADR-0043) — spec commit `8ea69b8`
 

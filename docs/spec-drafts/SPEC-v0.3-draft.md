@@ -1,14 +1,13 @@
 # Snug Protocol — Specification v0.3 (DRAFT — 1.0 release candidate)
 
 - **Version:** v0.3-draft · **Date:** 2026-08-20 · **Task:** TASK-20260820-spec-v03-whitepaper
-- **Status: DRAFT, staged for owner review.** This is the consolidated specification of the
-  whole protocol — wire, storage, connected apps, runtime contracts, and linked-device
-  connections — prepared as the release candidate for spec 1.0. Nothing here is pushed to
-  `snugprotocol/spec`; pushing requires an explicit owner ask (C3, PROCESS release rules).
-- **Supersedes as documents:** `SPEC.md` (v0.1) and `SPEC-v0.2-draft.md` as separate files,
-  and the internal staged drafts `spec-v0.2-userdb.md`, `spec-v0.3-auth.md`,
-  `spec-v0.4-runtime.md`, which this file replaces. Their published content carries forward;
-  where this draft and a published document differ, the difference is called out in place.
+- **Status: DRAFT — published for review; finalises as spec 1.0.** This is the consolidated
+  specification of the whole protocol — wire, storage, connected apps, runtime contracts,
+  and linked-device connections — and the working document for the 1.0 release. Details may
+  change before it becomes normative.
+- **Supersedes as documents:** `SPEC.md` (v0.1, which remains the published wire-protocol
+  core) and `SPEC-v0.2-draft.md` (whose content carries forward into Part II). Where this
+  draft and a published document differ, the difference is called out in place.
 - **Versioning:** spec versions (`v0.x`) are independent of implementation package versions.
   Breaking envelope changes bump the minor pre-1.0. Every published change is a single
   commit referencing its origin task.
