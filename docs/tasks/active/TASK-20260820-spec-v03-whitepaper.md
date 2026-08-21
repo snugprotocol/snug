@@ -1,6 +1,6 @@
 # TASK-20260820-spec-v03-whitepaper: Consolidated spec v0.3 draft + whitepaper edition 2 (1.0 release candidate)
 
-- **Status**: in-progress (owner-commissioned 2026-08-20: "regenerate the specs v0.3 including the whitepaper (pdf) based on the latest codebase … final draft for my final review before I promote it to 1.0")
+- **Status**: in-review (all ACs met 2026-08-20: spec consolidated, whitepaper edition 2 built — 33 pp / 10 figures, checker rewritten, 99/99 green, per-page visual pass done; awaiting owner review. Owner mid-task instruction honored: no Trivia Night mention anywhere — verified by grep, no starter is named in either document)
 - **Owner**: Jeetu
 - **Risk tier**: medium (docs + whitepaper build/check scripts; zero runtime code)
 - **Branch**: `docs/TASK-20260820-spec-v03-whitepaper`

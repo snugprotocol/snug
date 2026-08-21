@@ -1,20 +1,22 @@
 # The Snug Protocol whitepaper
 
 Source for **"The Snug Protocol: An Open Protocol for Agent-Backed Personal Software"**
-(Jeetu Maker) — the design rationale, threat model, and security argument behind spec v0.1
-and the v0.2 draft.
+(Jeetu Maker), **edition 2** — the design rationale, threat model, and security argument
+behind the consolidated **spec v0.3 draft** (wire protocol · portable user database ·
+connected applications · runtime contracts · linked-device connections).
 
 | | |
 |---|---|
 | **Source** | [`src/paper.html`](src/paper.html) · [`src/paper.css`](src/paper.css) · [`src/figures/`](src/figures/) |
-| **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 21 pages, 7 figures |
-| **Task** | `docs/tasks/*/TASK-20260807-protocol-whitepaper.md` |
+| **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 33 pages, 10 figures |
+| **Spec fixture** | [`../spec-drafts/SPEC-v0.3-draft.md`](../spec-drafts/SPEC-v0.3-draft.md) + `packages/protocol/schemas/` |
+| **Tasks** | edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
 
 ## Build
 
 ```bash
 node docs/whitepaper/build.mjs        # → dist/snug-protocol-whitepaper.pdf
-pnpm run check-whitepaper             # 69 conformance checks
+pnpm run check-whitepaper             # 99 conformance checks
 ```
 
 The build needs a Chrome/Chromium binary (auto-detected, or set `CHROME_PATH`) and nothing
@@ -35,21 +37,22 @@ dependencies. Keeping the source as HTML also keeps it greppable, which is what 
 
 ## The checker is the point
 
-The spec repo is normative; this paper only explains it. `scripts/check-whitepaper.mjs`
-treats the published spec as a **fixture** and fails when the two disagree — so a constant
-or frame name cannot silently drift here as the protocol moves.
+The spec is normative; this paper only explains it. `scripts/check-whitepaper.mjs`
+treats the spec as a **fixture** and fails when the two disagree — so a constant or frame
+name cannot silently drift here as the protocol moves. Pre-publication the fixture is the
+staged consolidated draft in `docs/spec-drafts/` plus the schemas in
+`packages/protocol/schemas/` (the monorepo is the master, per SPEC_SYNC); after the v0.3
+push, point it at a `snugprotocol/spec` clone with `--spec <path>`.
 
 | | Enforces |
 |---|---|
 | **AC1/AC2** | PDF builds; embedded `/Title` and `/Author` are correct (metadata, not just the cover) |
-| **AC3** | Every protocol constant matches `SPEC.md` / `SPEC-v0.2-draft.md` |
-| **AC4** | Frame table matches `schemas/*.json` (`type` const + required fields); all R5 error codes documented |
-| **AC5** | v0.2 marked DRAFT; schema v3 / Dynamic Auth absent |
-| **AC6** | No anti-positioning language; `host-blind` disclaimed, never claimed |
-| **AC7** | Figures are inline vector, numbered, and each cited in prose |
+| **AC3** | Every protocol constant matches the spec draft, including the seven-kind set |
+| **AC4** | Frame inventory matches `schemas/*.json` + the four v0.3 frames; all R5 codes documented |
+| **AC5** | v0.3 surfaces COVERED and marked DRAFT; superseded facts (dropped tables, old counts) absent |
+| **AC6** | No anti-positioning language; `host-blind`/`zero-knowledge`/`end-to-end` disclaimed, never claimed; ADR-0040's honest class statement and ADR-0043's bounded claim travel with their features |
+| **AC7** | Figures are inline vector, numbered, and each cited in prose (≥10) |
 | **AC8** | Structural completeness; section numbering cannot drift |
-
-Point it at a spec clone elsewhere with `--spec <path>`.
 
 ### Two things the checker cannot see
 
@@ -65,12 +68,14 @@ Point it at a spec clone elsewhere with `--spec <path>`.
 ## Editing
 
 - **Content changes** go in `src/paper.html`. Every normative claim must trace to the spec
-  repo; if a number here disagrees with the spec, the spec wins and the checker enforces it.
+  draft; if a number here disagrees with the spec, the spec wins and the checker enforces it.
 - **Figures** live in `src/figures/*.svg` and are inlined at build time via
   `<!--FIGURE:name|label|caption-->` markers. Author them as plain SVG using the shared
   `.f-*` label classes in `paper.css`; do not paste SVG bodies into the HTML.
 - **New figures** must be numbered in the caption text (not by CSS counter — the checker
   needs to read them) and cited at least once from the body.
+- **TOC page hints are hand-authored** (Chrome lacks `target-counter()`): after any change
+  that reflows pages, re-render and update the `<span class="pg">` values.
 - **Tables** break across pages by default; add `class="keep-together"` for short ones that
   read as a unit.
 

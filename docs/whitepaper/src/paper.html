@@ -1,10 +1,12 @@
 <!--
-  paper.html — The Snug Protocol whitepaper (TASK-20260807-protocol-whitepaper).
+  paper.html — The Snug Protocol whitepaper, edition 2
+  (TASK-20260820-spec-v03-whitepaper; edition 1 was TASK-20260807-protocol-whitepaper).
 
-  Source of truth for every normative claim below is the published spec repo:
-  SPEC.md (v0.1), SPEC-v0.2-draft.md, and schemas/*.json. scripts/check-whitepaper.mjs
-  verifies the frame table and every constant against those files — if you change a
-  number here, the checker fails until the spec says the same thing.
+  Source of truth for every normative claim below is the staged consolidated spec:
+  docs/spec-drafts/SPEC-v0.3-draft.md, plus the published schemas exported from
+  packages/protocol. scripts/check-whitepaper.mjs verifies the frame inventory and every
+  constant against those files — if you change a number here, the checker fails until the
+  spec says the same thing.
 
   Figures are injected by build.mjs at the FIGURE markers (see build.mjs inlineFigures for
   the exact marker syntax) so the PDF has no external asset dependency. Do not paste SVG
@@ -25,9 +27,10 @@
 
   <h1>The Snug Protocol: An Open Protocol for Agent-Backed Personal Software</h1>
 
-  <p class="subtitle">A specification of the wire protocol, security model, and portable
-  data format for sandboxed micro-applications that use a host's language model as a
-  runtime capability — and that their users own outright, as a single file.</p>
+  <p class="subtitle">A specification of the wire protocol, security model, portable data
+  format, and connected-application surface for sandboxed micro-applications that use a
+  host's language model as a runtime capability, reach the user's own services under
+  human-frozen ceilings — and that their users own outright, as a single file.</p>
 
   <div class="cover-meta">
     <div>
@@ -36,7 +39,7 @@
     </div>
     <div>
       <div class="k">Specification</div>
-      <div class="v">v0.1 &nbsp;·&nbsp; v0.2 (draft)</div>
+      <div class="v">v0.3 (draft)</div>
     </div>
     <div>
       <div class="k">Date</div>
@@ -49,20 +52,26 @@
     software to the point where an application built for a single person is economically
     trivial. What has not existed is the structure that makes such software safe to run,
     durable enough to keep, and portable enough to own: an isolation model, a data format,
-    and a wire contract that any vendor can implement. This paper specifies the Snug
-    Protocol, which supplies that structure in two coupled layers. The first is a versioned
-    postMessage frame protocol between a sandboxed application and its host, together with a
-    tagged chat envelope by which the host relays an application's request to its own agent
-    endpoint; this makes the host's model a runtime capability the application invokes rather
-    than a code generator that produced it. The second is a portable user database — one
-    SQLite file holding an individual's applications, their versions, their data as native
-    tables, their conversations, and their settings — which travels intact between hosts,
-    model providers, and devices. We present the protocol's normative rules, an explicit
-    threat model in which application code is treated as hostile at all times, and the two
-    hard constraints from which the security properties follow: credentials never cross into
-    the application sandbox, and the sandbox profile is never weakened. We situate the design
-    against the Model Context Protocol, vendor application platforms, and the local-first
-    literature, and state its present limitations candidly.
+    a credential doctrine, and a wire contract that any vendor can implement. This paper
+    specifies the Snug Protocol, which supplies that structure in three coupled layers. The
+    first is a versioned postMessage frame protocol between a sandboxed application and its
+    host, together with a tagged chat envelope by which the host relays an application's
+    request to its own agent endpoint; this makes the host's model a runtime capability the
+    application invokes rather than a code generator that produced it. The second is a
+    portable user database — one SQLite file holding an individual's applications, their
+    versions, their data as native tables, their conversations, their connections, and
+    their settings — which travels intact between hosts, model providers, and devices, and
+    which the user may seal under passphrase encryption they alone hold. The third is a
+    connected-application surface under a single doctrine — the model proposes, the human
+    approves, the host enforces — in which an application reaches the user's own services
+    only through a host-side executor whose host ceiling is frozen at the moment of human
+    approval, and in which even a device that has no API at all is reachable through a
+    local helper that is governed as a capability rather than trusted as a host. We present
+    the protocol's normative rules, an explicit threat model in which application code is
+    treated as hostile at all times, and the hard constraints from which the security
+    properties follow. We situate the design against the Model Context Protocol, vendor
+    application platforms, and the local-first literature, and state its present
+    limitations candidly.
   </div>
 </section>
 
@@ -73,15 +82,18 @@
     <li><span class="num">1</span><span class="ttl">Introduction<span class="sub">The market of one, and what it still lacks</span></span><span class="pg">3</span></li>
     <li><span class="num">2</span><span class="ttl">Design goals and non-goals<span class="sub">What the protocol commits to, and what it deliberately refuses</span></span><span class="pg">4</span></li>
     <li><span class="num">3</span><span class="ttl">Architecture: the three actors<span class="sub">Model provider, host provider, and the user who owns the file</span></span><span class="pg">5</span></li>
-    <li><span class="num">4</span><span class="ttl">The wire protocol<span class="sub">Frames, message types, normative rules, and the chat envelope</span></span><span class="pg">7</span></li>
-    <li><span class="num">5</span><span class="ttl">Security model<span class="sub">Threat model, the two hard constraints, and residual risk</span></span><span class="pg">12</span></li>
-    <li><span class="num">6</span><span class="ttl">The portable user database<span class="sub">One file: hub tables, native per-app data, sync origins</span></span><span class="pg">16</span></li>
-    <li><span class="num">7</span><span class="ttl">Conformance<span class="sub">What an implementation must do to claim the name</span></span><span class="pg">20</span></li>
-    <li><span class="num">8</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">21</span></li>
-    <li><span class="num">9</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">23</span></li>
-    <li><span class="num">10</span><span class="ttl">Conclusion</span><span class="pg">24</span></li>
-    <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">25</span></li>
-    <li><span class="num">A</span><span class="ttl">Appendix: message schema summary</span><span class="pg">26</span></li>
+    <li><span class="num">4</span><span class="ttl">The wire protocol<span class="sub">Thirteen frames, seven rules, and the chat envelope</span></span><span class="pg">7</span></li>
+    <li><span class="num">5</span><span class="ttl">Security model<span class="sub">Threat model, hard constraints, and residual risk</span></span><span class="pg">12</span></li>
+    <li><span class="num">6</span><span class="ttl">The portable user database<span class="sub">One file: hub tables, native per-app data, naming, encryption</span></span><span class="pg">15</span></li>
+    <li><span class="num">7</span><span class="ttl">Connected applications<span class="sub">Requirements, grants, frozen ceilings, and the executor</span></span><span class="pg">20</span></li>
+    <li><span class="num">8</span><span class="ttl">Linked-device connections<span class="sub">Governing a provider that has no API: the helper surface</span></span><span class="pg">24</span></li>
+    <li><span class="num">9</span><span class="ttl">Runtime contracts and the data surface<span class="sub">Turns cheap enough for any brain; data that answers to its owner</span></span><span class="pg">26</span></li>
+    <li><span class="num">10</span><span class="ttl">Conformance<span class="sub">What an implementation must do to claim the name</span></span><span class="pg">27</span></li>
+    <li><span class="num">11</span><span class="ttl">Related work<span class="sub">MCP, vendor application platforms, local-first software</span></span><span class="pg">29</span></li>
+    <li><span class="num">12</span><span class="ttl">Limitations and future work<span class="sub">What is unsolved, stated plainly</span></span><span class="pg">30</span></li>
+    <li><span class="num">13</span><span class="ttl">Conclusion</span><span class="pg">31</span></li>
+    <li><span class="num">—</span><span class="ttl">Normative references</span><span class="pg">31</span></li>
+    <li><span class="num">A</span><span class="ttl">Appendix: message schema summary</span><span class="pg">32</span></li>
   </ol>
 </section>
 
@@ -105,7 +117,7 @@ would ever have shipped.</p>
 applications land as artifacts inside a vendor's product: they run under that vendor's
 rules, their data lives in that vendor's storage, and they are portable only in the sense
 that text is portable. The moment such an application needs to persist state, hold a
-credential, or outlive the conversation that produced it, three questions become urgent, and
+credential, or outlive the conversation that produced it, four questions become urgent, and
 none of them is a modelling question:</p>
 
 <ul>
@@ -115,6 +127,9 @@ none of them is a modelling question:</p>
   to it when the user leaves?</li>
   <li><strong>Continuity.</strong> If the application is genuinely the user's, it must
   survive a change of host, a change of model provider, and the disappearance of either.</li>
+  <li><strong>Connection.</strong> The application is most useful when it can reach the
+  user's own services — their music, their lights, their finances, even their messages. On
+  whose authority, within what wall, and with credentials held by whom?</li>
 </ul>
 
 <p>These are protocol questions. They are answered once, in public, by a contract that
@@ -130,27 +145,35 @@ capability. We refer to this throughout as the body/mind split, and it is a rela
 runtime, not a fact about how the code was produced.</p>
 
 <p>That single decision reorganises everything else. If the model lives outside the
-application, the application needs no network access, and can therefore be sandboxed far more
-tightly than a conventional web page. If it needs no network access, it cannot exfiltrate a
-credential, so credentials can be kept strictly on the host side of the boundary. And if the
-application is a small self-contained program with its data held separately, then the
-application and its data can be written into a single portable file that the user carries
-between hosts.</p>
+application, the application needs no network access, and can therefore be sandboxed far
+more tightly than a conventional web page. If it needs no network access, it cannot
+exfiltrate a credential, so credentials can be kept strictly on the host side of the
+boundary — which is also what makes it safe to let the application <em>request</em> the
+network as a mediated capability, one whose every reachable host a human approved and the
+host froze. And if the application is a small self-contained program with its data held
+separately, then the application and its data can be written into a single portable file
+that the user carries between hosts.</p>
 
-<p>The protocol has two layers, specified in this paper. Section 4 covers the wire
-protocol: nine versioned postMessage frames and a tagged chat envelope, normative at
-v0.1. Section 6 covers the portable user database, a storage and host-behaviour layer that
-leaves the wire protocol untouched and is published as a v0.2 draft. Section 5, which sits
-between them, is in our view the load-bearing part: the threat model and the two hard
-constraints that the other two layers exist to preserve.</p>
+<p>The protocol has three layers, specified in this paper. Section 4 covers the wire
+protocol: thirteen versioned postMessage frames and a tagged chat envelope. Section 6
+covers the portable user database, a storage and host-behaviour layer that leaves the wire
+protocol untouched — including the file's naming rules and its optional passphrase
+protection. Sections 7 through 9 cover the connected-application surface: how an
+application declares what it needs, how a human grant freezes what it may reach, how the
+one host-side executor enforces that wall on every request, and how the same governance
+extends to a provider that has no API at all. Section 5, which sits before them, is in our
+view the load-bearing part: the threat model and the hard constraints that every other
+layer exists to preserve.</p>
 
 <div class="callout">
   <div class="callout-title">Conventions</div>
   <p>The key words <strong>MUST</strong>, <strong>MUST NOT</strong>, <strong>SHOULD</strong>,
-  and <strong>MAY</strong> are used in the sense of RFC 2119. Material drawn from spec v0.1
-  is normative. Material drawn from the v0.2 draft is marked
-  <span class="badge draft">Draft</span> and is published for review, not for
-  conformance. Where this paper and the specification differ, the specification governs.</p>
+  and <strong>MAY</strong> are used in the sense of RFC 2119. The wire protocol's core is
+  normative and published since spec v0.1. Material introduced by the v0.3 draft — the
+  storage layer's current revision and the whole connected-application surface — is marked
+  <span class="badge draft">Draft</span>: published for review, not yet normative, and
+  finalising as spec 1.0. Where this paper and the specification differ, the specification
+  governs.</p>
 </div>
 </section>
 
@@ -178,8 +201,9 @@ both here so that later sections can be read as consequences rather than choices
 
   <dt><span class="rid">G3</span> The user owns the artifact</dt>
   <dd>Everything an individual accumulates — applications, versions, data, conversations,
-  settings — is one file in a standard, inspectable format they can export at any time and
-  open with ordinary tools.</dd>
+  connections, settings — is one file in a standard, inspectable format they can export at
+  any time and open with ordinary tools, and may protect with a passphrase only they
+  hold.</dd>
 
   <dt><span class="rid">G4</span> No required backend</dt>
   <dd>A conforming host is deliverable as static files. A hosted service may add convenience —
@@ -188,11 +212,21 @@ both here so that later sections can be read as consequences rather than choices
 
   <dt><span class="rid">G5</span> Additive evolution</dt>
   <dd>Unknown message types and unknown fields are ignored rather than rejected, so that a
-  newer participant can talk to an older one without negotiation beyond a version check.</dd>
+  newer participant can talk to an older one without negotiation beyond a version check. The
+  protocol grew from nine frames to thirteen without breaking a single deployed
+  application, which is this rule doing its job.</dd>
 
   <dt><span class="rid">G6</span> Implementable by more than its author</dt>
-  <dd>Every message is published as JSON Schema, exported byte-identically from the reference
+  <dd>Every published message is JSON Schema, exported byte-identically from the reference
   implementation. The schemas, not the prose, are the contract.</dd>
+
+  <dt><span class="rid">G7</span> The model proposes; the human approves; the host enforces</dt>
+  <dd>Anything that widens what an application can reach — a provider, a host, a scope — is
+  proposed by a model or a manifest, reviewed verbatim by a human, and then <em>frozen</em>
+  by the host at the moment of approval. Enforcement is structural and unconditional: there
+  is no strictness flag anywhere in the protocol, because a security property that can be
+  disabled by configuration will be disabled in some deployment, and that deployment is the
+  one that gets attacked.</dd>
 </dl>
 
 <h3>Non-goals</h3>
@@ -204,14 +238,16 @@ both here so that later sections can be read as consequences rather than choices
   <li><strong>A general plugin system for agents.</strong> Extending what a model can
   <em>do</em> — tools, resources, external systems — is well served by the Model Context
   Protocol, and Snug does not duplicate it. Snug addresses the inverse direction: giving a
-  user-authored application access to the model. Section 8 develops the distinction.</li>
+  user-authored application access to the model, and governing what that application may
+  reach. Section 11 develops the distinction.</li>
   <li><strong>A rendering or component standard.</strong> An application is an ordinary
   self-contained HTML document. The protocol constrains what crosses the boundary, not what
   the application draws.</li>
   <li><strong>Cryptographic custody.</strong> The protocol does not claim that a host is
-  incapable of reading a user's secrets — only that a conforming host never receives them. The
-  distinction is drawn precisely in §5.4, and we regard overstating it as a security defect
-  in its own right.</li>
+  incapable of reading a user's secrets — only that a conforming host never receives them.
+  The optional at-rest encryption of §6.6 changes where the file is readable, not who holds
+  custody; the distinction is drawn precisely in §5.4, and we regard overstating it as a
+  security defect in its own right.</li>
 </ul>
 </section>
 
@@ -234,18 +270,21 @@ treats all three as a single settings choice rather than a migration.</p>
 run. It provisions applications per user and may offer synchronisation, caching, and a
 subscription path to a model. What it may not do is make itself necessary: a conforming host
 delivers application execution from static assets, and its server components, where they
-exist, are strictly optional.</p>
+exist, are strictly optional. A host may be a browser page, or a desktop shell wrapping
+one — the reference implementation ships both, and the desktop host is what makes
+devices on the user's own network, and local helper processes, reachable at all.</p>
 
 <p>The <strong>end user</strong> owns the artifact. Not an account, not rows in a vendor's
 database — one file, in a format with a thirty-year record of stability and universal tool
 support.</p>
 
-<p>Figure 2 shows how these actors are realised inside a running host. Two boundaries in
-that diagram carry the security properties, and both are examined in §5: the seam between the
-host page and the sandboxed frame, and the point at which an application-originated request
-is validated before it can have any effect.</p>
+<p>Figure 2 shows how these actors are realised inside a running host. Three boundaries in
+that diagram carry the security properties, and all three are examined in §5: the seam
+between the host page and the sandboxed frame; the point at which an application-originated
+request is validated before it can have any effect; and the one seat — the connected-fetch
+executor — through which every credentialed call to the outside world must pass.</p>
 
-<!--FIGURE:fig2-architecture|Figure 2|<span class="fignum">Figure 2.</span> System architecture. The application is confined to a sandboxed frame with no network egress; every capability it has — model access, storage, connectivity — is mediated by the host through versioned frames. Model calls originate from the host page only. The user database is authoritative in every mode; host-side stores are transient caches.-->
+<!--FIGURE:fig2-architecture|Figure 2|<span class="fignum">Figure 2.</span> System architecture. The application is confined to a sandboxed frame with no network egress; every capability it has — model access, storage, connectivity — is mediated by the host through versioned frames. Model calls and provider calls originate from the host page only. The user database is authoritative in every mode; host-side stores are transient caches.-->
 
 <h3>The runtime relationship</h3>
 
@@ -265,7 +304,7 @@ go unused.</p>
 
 <!-- ============================================================ 4 -->
 <section>
-<h2>The wire protocol <span class="badge normative">Normative · v0.1</span></h2>
+<h2>The wire protocol <span class="badge normative">Normative · core since v0.1</span></h2>
 
 <p>The wire protocol comprises two coupled contracts. <em>Frames</em> are postMessage
 messages exchanged between the application frame and the host runner. The <em>chat
@@ -274,12 +313,15 @@ application, together with the reply contract the agent must satisfy.</p>
 
 <h3>Frames</h3>
 
-<p>Nine frame types are defined. Each carries <code>v: 1</code>, and each is published as a
-JSON Schema exported byte-identically from the reference implementation.</p>
+<p>Thirteen frame types are defined. Each carries <code>v: 1</code>: the wire protocol has
+been additively extended, never broken, since v0.1. The nine core frames are published as
+JSON Schemas exported byte-identically from the reference implementation; the net pair and
+the open-url pair join the published set with the v0.3 push.</p>
 
 <table>
-  <caption>The nine frame types of spec v0.1. Schemas are input shapes: validators MUST accept
-  unknown fields (R2).</caption>
+  <caption>The thirteen frame types of spec v0.3. Published schemas are input shapes:
+  validators MUST accept unknown fields (R2). The net and open-url frames are the stated
+  exception — strict, because their fields become real-world effects.</caption>
   <thead>
     <tr><th>Type</th><th>Direction</th><th>Purpose</th></tr>
   </thead>
@@ -296,7 +338,9 @@ JSON Schema exported byte-identically from the reference implementation.</p>
       <td><span class="dir">host → app</span></td>
       <td>Sent on frame load and again as an announce acknowledgement (idempotent):
       <code>instanceId</code>, <code>protocolVersions</code>, <code>capabilities</code>
-      (streaming, db, auth), <code>theme</code>, optional <code>locale</code>.</td>
+      (<code>streaming</code>, <code>db</code>, <code>auth</code>; optional additive
+      <code>net</code> and <code>openUrl</code>), <code>theme</code>, optional
+      <code>locale</code>.</td>
     </tr>
     <tr>
       <td class="mono-cell">snug:app-message</td>
@@ -328,10 +372,39 @@ JSON Schema exported byte-identically from the reference implementation.</p>
       <td>Result rows and columns, an exported byte payload, or an error.</td>
     </tr>
     <tr>
+      <td class="mono-cell">snug:net-request</td>
+      <td><span class="dir">app → host</span></td>
+      <td>The governed network capability (§7): <code>url</code>, <code>method</code>,
+      optional <code>headers</code> and <code>body</code>. Strict: a body on GET/HEAD, or
+      any credential-shaped header, rejects the whole frame. Carries <strong>no</strong>
+      <code>appId</code> — the network binding is host-assigned.</td>
+    </tr>
+    <tr>
+      <td class="mono-cell">snug:net-response</td>
+      <td><span class="dir">host → app</span></td>
+      <td><code>status</code>, whitelist-filtered <code>headers</code>, scrubbed
+      <code>body</code>, optional <code>truncated</code> — or an envelope error.</td>
+    </tr>
+    <tr>
+      <td class="mono-cell">snug:open-url-request</td>
+      <td><span class="dir">app → host</span></td>
+      <td>A request that the <em>host</em> open an https URL in the user's real browser,
+      after its own confirm dialog showing the full URL, on a user gesture. No target, no
+      window features, no navigation primitive; userinfo-bearing URLs are refused at the
+      schema.</td>
+    </tr>
+    <tr>
+      <td class="mono-cell">snug:open-url-result</td>
+      <td><span class="dir">host → app</span></td>
+      <td><code>opened</code>, <code>declined</code>, or <code>refused</code> (with an
+      optional reason).</td>
+    </tr>
+    <tr>
       <td class="mono-cell">snug:host-event</td>
       <td><span class="dir">host → app</span></td>
-      <td>Open additive channel: <code>theme-change</code>, <code>visibility</code>, and
-      further namespaced events. Unknown events are ignored.</td>
+      <td>Open additive channel: <code>theme-change</code>, <code>visibility</code>,
+      <code>connection-event</code>, and further namespaced events. Unknown events are
+      ignored. Subject to R7: hints, never content.</td>
     </tr>
     <tr>
       <td class="mono-cell">snug:app-event</td>
@@ -346,7 +419,10 @@ application frame runs with a null origin (§5.3), and browser storage APIs are 
 it. One of the production systems that preceded this protocol taught applications to use
 <code>localStorage</code>, which worked only because its sandbox was weakened enough to
 permit it — precisely the weakening this specification forbids. Routing storage through
-frames preserves the sandbox and gives the host a mediation point.</p>
+frames preserves the sandbox and gives the host a mediation point. The network capability
+follows the identical logic one layer up: the frame's content security policy blocks every
+egress path, so the only network an application can have is one the host performs on its
+behalf — which is what makes §7's governance enforceable rather than advisory.</p>
 
 <h3>The application lifecycle</h3>
 
@@ -357,9 +433,9 @@ without a normal answer.</p>
 
 <h3>Normative rules</h3>
 
-<p>Six rules constitute the normative core of v0.1. We give each rule and, briefly, the
-failure it exists to prevent — since a rule whose motivation is undocumented tends to be
-implemented approximately.</p>
+<p>Seven rules constitute the normative core. We give each rule and, briefly, the failure it
+exists to prevent — since a rule whose motivation is undocumented tends to be implemented
+approximately.</p>
 
 <dl class="rules">
   <dt><span class="rid">R1</span> Versioning</dt>
@@ -376,7 +452,9 @@ implemented approximately.</p>
   <dd>A frame with a valid <code>v</code> but an unrecognised <code>snug:*</code> type MUST be
   silently ignored, and unknown fields on known frames MUST be ignored. The <code>snug:</code>
   type prefix and the event namespaces are reserved. This is what allows a host and an SDK to
-  be upgraded independently.</dd>
+  be upgraded independently. The strict net and open-url frames are the deliberate
+  exception: their fields become network requests and browser navigations, so an unknown
+  key there is a rejection rather than a passthrough.</dd>
 
   <dt><span class="rid">R3</span> Terminal frame</dt>
   <dd>Every accepted <code>requestId</code> receives exactly one terminal
@@ -402,19 +480,35 @@ implemented approximately.</p>
   <code>PARSE_FAILED</code>, <code>THREAD_CONFLICT</code>, <code>NETWORK_ERROR</code>,
   <code>RESET_FAILED</code>, <code>CANCELLED</code>, <code>SUPERSEDED</code>,
   <code>UNSUPPORTED_VERSION</code>, <code>CONSENT_REQUIRED</code>
-  (reserved), <code>AUTH_REQUIRED</code> (reserved for a future authenticated-connections
-  revision), and <code>HOST_ERROR</code>. <code>MALFORMED</code> is defined by R1 as a
-  wire answer to an unparseable frame and is not part of this list. Receivers treat unknown
+  (reserved), <code>AUTH_REQUIRED</code> (reserved), and <code>HOST_ERROR</code>.
+  <code>MALFORMED</code> is defined by R1 as a wire answer to an unparseable frame and is
+  not part of this list. The network capability carries its own registry of
+  <code>NET_</code>-prefixed codes — approval, ceiling, SSRF, confirmation, redirect, and
+  size refusals each have a distinct name, because an application that cannot tell "the
+  user said no" from "the host is broken" will retry the wrong one. Receivers treat unknown
   codes according to the <code>retryable</code> flag and render them as
   <code>HOST_ERROR</code>.</dd>
 
   <dt><span class="rid">R6</span> Limits</dt>
-  <dd>Frames are capped at 256 KiB, except <code>db-request</code> and
-  <code>db-response</code>, which occupy their own size class at 8 MiB so that a
-  base64-encoded 5 MiB artifact round-trips through the storage bridge; artifacts are capped
-  at 5 MiB, <code>rawExcerpt</code> at 200 chars, and announce strings at displayName 80 and
-  description 400. The parse-failure budget is 3 consecutive failures, after which the host
-  requires an explicit user reset. Thread-conflict backoff is 100 / 250 / 500 ms.</dd>
+  <dd>Frames are capped at 256 KiB, with two larger size classes: <code>db-request</code>
+  and <code>db-response</code> at 8 MiB, so that a base64-encoded 5 MiB artifact
+  round-trips through the storage bridge; and <code>net-request</code>/<code>net-response</code>
+  at 1 MiB + 64 KiB — a 1 MiB response body plus envelope margin, with the response read
+  capped <em>while reading</em> and an overflow becoming a terminal size error rather than
+  a silent drop. Artifacts are capped at 5 MiB, <code>rawExcerpt</code> at 200 chars, and
+  announce strings at displayName 80 and description 400. The parse-failure budget is 3
+  consecutive failures, after which the host requires an explicit user reset.
+  Thread-conflict backoff is 100 / 250 / 500 ms.</dd>
+
+  <dt><span class="rid">R7</span> Push hints <span class="badge draft">Draft · v0.3</span></dt>
+  <dd>A host-initiated push (<code>snug:host-event</code>) carries <strong>references,
+  never content</strong> — a doorbell, not a delivery. The application answers a hint with
+  its own governed reads, and the host rebuilds every field of a hint before forwarding it.
+  Two frame-layer facts force this shape: host-event frames ride the ordinary 256 KiB class
+  and an oversized frame is dropped <em>silently</em>, and host-event frames carry no
+  <code>instanceId</code>, so a stale sender is indistinguishable from a live one. With
+  hints, a stale or dropped event costs one redundant refetch and can never inject
+  state.</dd>
 </dl>
 
 <div class="callout">
@@ -472,19 +566,26 @@ them makes behaviour uniform across hosts.</p>
 
 <!-- ============================================================ 5 -->
 <section>
-<h2>Security model <span class="badge normative">Normative · v0.1</span></h2>
+<h2>Security model <span class="badge normative">Normative</span></h2>
 
-<p>This section states what the protocol defends against, the two constraints from which its
-guarantees derive, and — with equal prominence — what it does not defend against.</p>
+<p>This section states what the protocol defends against, the constraints from which its
+guarantees derive, and — with equal prominence — what it does not defend against. The
+reference implementation maintains a public threat model organised the same way, in which
+every enforced invariant names the file that enforces it and the test that fails if it
+regresses; a claim that cannot name both is listed as a residual instead.</p>
 
 <h3>Threat model</h3>
 
-<p>The adversary is <strong>the application itself</strong>, and Figure 4 shows exactly where
-that adversary is confined. This is not a hypothetical posture. Application code is authored by a language model from a prompt that may
-incorporate untrusted text: a web page the model consulted, a document the user pasted, a
-message from a third party. Prompt injection is a live technique with no complete defence at
-the model layer, so the protocol assumes injection sometimes succeeds and constrains what a
-successful injection can accomplish.</p>
+<p>The first adversary is <strong>the application itself</strong>, and Figure 4 shows exactly
+where that adversary is confined. This is not a hypothetical posture. Application code is
+authored by a language model from a prompt that may incorporate untrusted text: a web page
+the model consulted, a document the user pasted, a message from a third party. Prompt
+injection is a live technique with no complete defence at the model layer, so the protocol
+assumes injection sometimes succeeds and constrains what a successful injection can
+accomplish. The connected-application surface adds three more adversaries with real
+capabilities: a hostile or compromised <em>provider</em> on a host the user approved, a
+hostile <em>connection requirement</em> authored by a steered model, and a hostile
+<em>file</em> arriving through import or sync.</p>
 
 <table>
   <caption>Threats and the mechanism that answers each. Every mechanism is structural; none
@@ -496,7 +597,8 @@ successful injection can accomplish.</p>
     <tr>
       <td>Application exfiltrates a credential</td>
       <td>Credentials never enter the frame; <code>connect-src 'none'</code> removes every
-      egress path the application could use</td>
+      egress path the application could use; the governed network path strips
+      credential-shaped headers at the schema and injects host-side only</td>
       <td>None by construction, provided C1 and C2 hold</td>
     </tr>
     <tr>
@@ -518,10 +620,32 @@ successful injection can accomplish.</p>
       <td>None at the protocol layer</td>
     </tr>
     <tr>
+      <td>Application reaches a host nobody approved</td>
+      <td>The frozen ceiling (§7): exact-hostname membership computed at approval, checked
+      on every request; SSRF literals refused even inside a ceiling; redirects never
+      followed</td>
+      <td>Any path on an approved host is reachable (§5.4)</td>
+    </tr>
+    <tr>
       <td>Injected instructions cause a privileged call</td>
-      <td>The application has no privileged call available: capabilities are host-mediated and
-      credential injection is host-bound and always strict</td>
+      <td>The application has no privileged call available: capabilities are host-mediated,
+      credential injection is host-bound and always strict, and every mutating call stops at
+      a human confirmation naming host, method, and URL</td>
       <td>Model-layer manipulation of answer <em>content</em> (§5.4)</td>
+    </tr>
+    <tr>
+      <td>A hostile requirement impersonates a known provider</td>
+      <td>Registry-borrow ban on two triggers (name and host-intersection); provider names
+      confined to printable ASCII; walkthroughs rendered as plain text; verbatim human
+      review of every seat (§7.2)</td>
+      <td>Pure-ASCII lookalike names (§5.4)</td>
+    </tr>
+    <tr>
+      <td>A hostile imported file carries grants or contracts</td>
+      <td>Imported connection rows demote to declared and cannot serve traffic; imported
+      runtime contracts are dropped unless byte-identical to known ones; endpoint settings
+      require re-confirmation</td>
+      <td>Import can still carry data a user then trusts (§5.4)</td>
     </tr>
     <tr>
       <td>Application exhausts the user's model quota</td>
@@ -546,14 +670,10 @@ reach the model, and never reach a publisher.</strong></p>
 
 <p>Concretely, hosts MUST strip <code>authorization</code>, <code>cookie</code>,
 <code>set-cookie</code>, <code>x-api-key</code>, and <code>proxy-authorization</code> from any
-application-originated request at the envelope boundary. That header strip is the whole of
-C1's normative wire surface at v0.1.</p>
-
-<p>Beyond it, the reference implementation adopts a rule we recommend to any host and expect
-a later revision to make normative: where a host injects a credential on an application's
-behalf, injection is host-bound and <strong>always strict — never a configurable
-flag</strong>. It is stated here as implementation doctrine, not as a v0.1 requirement,
-because the authenticated-connections surface it governs is itself unpublished (§9).</p>
+application-originated request at the envelope boundary — and the net frame schema refuses
+those header names outright, so a credential-carrying request is malformed before any
+handler runs. Where the host injects a credential on an application's behalf (§7), injection
+is host-bound and <strong>always strict — never a configurable flag</strong>.</p>
 
 <p>The emphasis is earned. An audit of the two production systems this protocol generalises
 from found a strictness control that defaulted to off, which is to say a documented feature
@@ -568,7 +688,7 @@ protocol therefore does not offer the choice.</p>
 <code>sandbox="allow-scripts"</code> only, with <code>connect-src</code> blocked.</strong>
 These are never weakened, including for demonstrations. Hosts that permit any script source
 at all SHOULD confine it to a fixed allowlist, as the reference implementation does; the
-allowlist itself is a host policy rather than a v0.1 requirement.</p>
+allowlist itself is a host policy rather than a protocol requirement.</p>
 
 <p>Three properties follow. First, the frame is assigned a <strong>null origin</strong>:
 <code>allow-same-origin</code> is absent, so the application cannot reach host storage, host
@@ -582,9 +702,10 @@ isolation enforceable rather than advisory.</p>
 <div class="callout security">
   <div class="callout-title">A note on demonstration builds</div>
   <p>The most common way a sandbox weakens is a temporary exception that is never
-  removed. The reference implementation asserts the sandbox profile in its test suite:
-  a frame carrying <code>allow-same-origin</code> fails the build. We recommend the practice
-  to any implementer — a constraint that is only documented is a constraint that erodes.</p>
+  removed. The reference implementation asserts the sandbox profile in its test suite,
+  workspace-wide: a frame carrying <code>allow-same-origin</code> anywhere in the tree
+  fails the build. We recommend the practice to any implementer — a constraint that is only
+  documented is a constraint that erodes.</p>
 </div>
 
 <h3>Residual risks</h3>
@@ -592,33 +713,62 @@ isolation enforceable rather than advisory.</p>
 <p>We state these plainly, because a threat model that lists only solved problems is
 marketing.</p>
 
-<p><strong>Secrets are persistent at rest.</strong> <span class="badge draft">Draft</span>
-In the draft storage layer of §6, credentials
-live in the <code>snug_secrets</code> table inside the user's own file. They are stripped from
-host-bound synchronisation and from default exports, and the file is vacuumed so that freed
-pages retain nothing recoverable. They are nonetheless present in the local file. This is a
-deliberate <strong>trade-off</strong> in favour of portability: cross-device continuity means
-the credentials travel with the file to storage the user chooses. No key-management or
-host-blind claim is made, and none should be made until a key-provider layer ships.</p>
+<p><strong>Secrets are at rest in the user's file — by default in plaintext, optionally
+sealed.</strong> Credentials live in the <code>snug_secrets</code> table inside the user's
+own file. They are stripped from host-bound synchronisation and from default exports, and
+the file is vacuumed so that freed pages retain nothing recoverable. They are nonetheless
+present in the local file — a deliberate <strong>trade-off</strong> in favour of
+portability: cross-device continuity means the credentials travel with the file to storage
+the user chooses. Since v0.3 the user may additionally protect the whole file with a
+passphrase (§6.6), which changes what an attacker holding the <em>bytes</em> holds — but the
+claim that supports is exactly <em>"the file can be encrypted with a passphrase only the
+user holds"</em>, and no more. It is not zero-knowledge, it is not end-to-end encryption,
+and it defends neither a running host page that has already unlocked the file nor a machine
+on which the passphrase is typed under observation. No key-management or host-blind claim
+is made, and none should be made until a key-provider layer ships.</p>
 
 <p>The honest formulation, and the only one we endorse: <em>your keys never reach our
-servers; your file, including keys, goes only to storage you choose.</em> That is a
-statement about host custody. It is not the stronger claim that keys never leave the local
-file, which would be false the moment a user connects a personal synchronisation origin — a
-legitimate and intended use.</p>
+servers; your file, including keys, goes only to storage you choose — and you may seal it
+with a passphrase only you hold.</em> That is a statement about host custody plus at-rest
+encryption. It is not the stronger claim that keys never leave the local file, which would
+be false the moment a user connects a personal synchronisation origin — a legitimate and
+intended use.</p>
 
 <p><strong>The model can be manipulated in what it says.</strong> C1 and C2 bound what an
 injected instruction can <em>do</em>: it cannot reach a credential, open a socket, or touch
-another application's data. It can still influence the <em>content</em> of an answer the
-application then renders. Applications that act on model output — rather than display it —
-should treat that output as untrusted input, and hosts should prefer
-<code>responseSchema</code> so that replies are shape-constrained.</p>
+another application's data — and on the connected surface it cannot widen a ceiling or
+bypass a confirmation. It can still influence the <em>content</em> of an answer the
+application then renders, and it can propose actions in the hope a hurried user approves
+them. Applications that act on model output should treat that output as untrusted input;
+hosts should prefer <code>responseSchema</code> so that replies are shape-constrained; and
+the confirmation dialog naming host, method, and URL is, by design, the wall that holds
+when everything upstream of it has been steered.</p>
+
+<p><strong>The scrub is honest about its class.</strong> Response scrubbing matches the
+values the host injected, raw and percent-encoded. A provider that re-encodes a credential —
+base64, hex, split across fields — defeats it by design; the frozen ceiling, which bounds
+who can receive the secret at all, was always the primary wall. The same honesty applies to
+the pseudonymisation backstop of §8: it is anti-default and anti-naive, not
+anti-adversarial, and the specification requires that statement to travel with the
+feature.</p>
+
+<p><strong>Any path on an approved host is reachable.</strong> The ceiling is
+host-granular: it does not bound ports, paths, methods, or query strings. A debug or echo
+endpoint on an approved host is reachable, which is precisely the precondition the
+re-encoding residual above depends on. Approving a host is approving the host.</p>
+
+<p><strong>Pure-ASCII lookalike provider names are accepted.</strong> The confusable guard
+stops homoglyph and registry-evasion attacks; it cannot reject <code>5potify</code> without
+rejecting legitimate names. Lookalikes are carried by the borrow ban's host-intersection
+trigger and by provenance disclosure in review, and a conforming host must not present the
+charset guard as more than it is.</p>
 
 <p><strong>Host implementation defects remain possible.</strong> Several mechanisms above
 depend on the host implementing them correctly: name validation, materialisation, header
-stripping. The protocol can specify these and the schemas can constrain the wire, but neither
-can compel a host to be correct. This is the ordinary condition of protocols, and it is why
-§7 states conformance in terms that are testable.</p>
+stripping, gate ordering. The protocol can specify these and the schemas can constrain the
+wire, but neither can compel a host to be correct. This is the ordinary condition of
+protocols, and it is why §10 states conformance in terms that are testable — and why the
+reference implementation's threat model pins every claim to a named test.</p>
 
 <p><strong>Availability is not addressed.</strong> A misbehaving application can make many
 individually valid requests. Rate control is left to hosts, which are better placed to know
@@ -627,29 +777,31 @@ their own cost model.</p>
 
 <!-- ============================================================ 6 -->
 <section>
-<h2>The portable user database <span class="badge draft">Draft · v0.2</span></h2>
+<h2>The portable user database <span class="badge draft">Draft · v0.3</span></h2>
 
 <div class="callout draft">
   <div class="callout-title">Draft status</div>
-  <p>This section describes spec <strong>v0.2</strong>, published for review and <strong>not
-  yet normative</strong>. It adds a storage and host-behaviour layer; the wire protocol of §4
-  is unchanged by it. A later revision may alter details described here. Storage schema
-  version 2 is described; the source of truth for constants and DDL is the reference
+  <p>This section describes the storage layer of the <strong>v0.3</strong> draft — published
+  for review and <strong>not yet normative</strong>; it finalises as spec 1.0. It adds a
+  storage and host-behaviour layer; the wire protocol of §4 is unchanged by it. Storage
+  schema version 6 is described; the source of truth for constants and DDL is the reference
   implementation, locked by a snapshot test.</p>
 </div>
 
 <p>If applications are the user's, their data must be too — and in a form that outlives any
 particular host. Snug's answer is a single SQLite file per user, <code>user.snug</code>,
-which is the canonical artifact. <code>PRAGMA user_version</code> carries the schema version;
-migrations are forward-only; total size is bounded by <code>MAX_USERDB_BYTES</code>, 64 MiB in
-the current draft. Figure 5 shows what that file contains.</p>
+which is the canonical artifact. <code>PRAGMA user_version</code> carries the schema version —
+currently 6, migrated forward-only, with a file stamped newer than the implementation
+understands refused rather than overwritten; total size is bounded by
+<code>MAX_USERDB_BYTES</code>, 64 MiB in the current draft. Figure 5 shows what that file
+contains.</p>
 
 <p>SQLite is chosen for unglamorous reasons: it is a stable, universally supported,
 single-file format with three decades of tooling. A user who exports their file can open it
 in any SQLite browser and read their own data without our software. We consider that
 property, rather than any feature, the substance of ownership.</p>
 
-<!--FIGURE:fig5-one-file|Figure 5|<span class="fignum">Figure 5.</span> The user database. Host-namespace tables carry applications, their retained versions, their schemas and migration history, their documentation, and the user's conversations and settings. Application data sits alongside as real, legible tables under an injective namespace token.-->
+<!--FIGURE:fig5-one-file|Figure 5|<span class="fignum">Figure 5.</span> The user database. Host-namespace tables carry applications, their retained versions, their schemas and migration history, their documentation, their connections with frozen ceilings, and the user's conversations and settings. Application data sits alongside as real, legible tables under an injective namespace token.-->
 
 <h3>Host-namespace tables</h3>
 
@@ -657,12 +809,14 @@ property, rather than any feature, the substance of ownership.</p>
 applications. They hold the file's identity and creation metadata
 (<code>snug_meta</code>), the display profile (<code>snug_profile</code>), execution settings
 (<code>snug_settings</code>), credentials (<code>snug_secrets</code>, §5.4), one row per
-application (<code>snug_apps</code>), complete HTML per version
-(<code>snug_app_versions</code>), the schema registry (<code>snug_app_schemas</code>), an
-append-only DDL audit (<code>snug_app_migrations</code>), a per-application documentation wiki
-(<code>snug_app_docs</code>), conversation history (<code>snug_chat_threads</code> and
-<code>snug_chat_messages</code>), and synchronisation configuration
-(<code>snug_sync</code>).</p>
+application (<code>snug_apps</code>), complete HTML per version together with the version's
+runtime contract (<code>snug_app_versions</code>, §9), the schema registry
+(<code>snug_app_schemas</code>), an append-only DDL audit (<code>snug_app_migrations</code>),
+a per-application documentation wiki (<code>snug_app_docs</code>), conversation history
+(<code>snug_chat_threads</code> and <code>snug_chat_messages</code>), synchronisation
+configuration (<code>snug_sync</code>) — and, since storage v4, the connection requirements
+and grants of §7 (<code>snug_connections</code>), so that what an application may reach
+travels with the user in the same file as everything else the user owns.</p>
 
 <p>Two version-retention details are worth drawing out, because they encode a view of what an
 application is. Hosts retain at least <code>VERSIONS_RETAINED</code> — five — unpinned
@@ -675,9 +829,10 @@ back.</p>
 <p>The documentation wiki deserves a note. Each application may accumulate markdown documents
 — advisory slugs include <code>vision</code>, <code>requirements</code>, <code>plan</code>,
 <code>lessons</code>, <code>memory</code>, and <code>next-tasks</code> — maintained by the
-agent as the application evolves. An application is thus not a frozen artifact but a living
-one, carrying its own rationale forward so that a later modification is informed by earlier
-intent.</p>
+agent as the application evolves, and optionally seeded by the starter that installed it
+(seeding never overwrites an existing document). An application is thus not a frozen
+artifact but a living one, carrying its own rationale forward so that a later modification
+is informed by earlier intent.</p>
 
 <h3>Per-application data as native tables</h3>
 
@@ -702,7 +857,8 @@ state retained; an unvalidated name is never interpolated into SQL.</p>
 portfolio tracker receives tables for equities, trades, and dividends, because that is what a
 portfolio tracker is about. This is a departure from storing application data as an opaque
 blob: the shape is legible at rest, so both the host and the agent can reason about the
-application's data when modifying it later.</p>
+application's data when modifying it later — a property §9 turns into a user-facing
+capability.</p>
 
 <h3>Materialisation and isolation</h3>
 
@@ -742,7 +898,7 @@ portable in practice rather than in principle.</p>
   file. Default export strips secrets and vacuums; including them is an explicit opt-in. On
   import, the file's endpoint settings are treated as executable configuration and require
   user re-confirmation before any agent turn runs — an imported file is untrusted input like
-  any other.</li>
+  any other, a rule §7 and §9 extend to connections and contracts.</li>
   <li><strong>Optionally act as a synchronisation origin</strong>, using conditional requests
   for concurrency: retrieval returns bytes with a revision tag; a write carries the expected
   revision and is rejected on mismatch, with a missing precondition rejected outright. Cookie
@@ -772,28 +928,408 @@ cache artifacts and conversation history server-side, but the client fetches art
 and writes it into the user database itself; host-side stores are transient caches. This is
 what keeps mode-switching a settings change rather than a migration — and what ensures that a
 host's disappearance costs the user a service, not their software.</p>
+
+<h3>File naming: the extension is a convention, not a format claim</h3>
+
+<p>The canonical user file is <code>user.snug</code>, and the artifact a host offers for
+download is <code>snug-user.snug</code>. A conforming implementation determines a file's
+format from its <strong>leading bytes</strong>, never from its name: <code>SQLite format
+3</code> means a plain database; <code>SNUGENC1</code> means the protected container of
+§6.6. Implementations SHOULD accept the historical <code>.sqlite</code> extension on
+input — users hold exports and backups made before the rename — and MUST NOT reject a file
+on its extension alone. A host that finds a pre-existing <code>user.sqlite</code> and no
+<code>user.snug</code> reads it and adopts the canonical name on its next write,
+<em>without renaming, copying, or deleting the original</em>: renaming a file an
+implementation looks for is a data-loss operation unless every derived name — sync
+sidecars, quarantine copies, remote paths — moves with it.</p>
+
+<h3 id="encryption">Protected files: the SNUGENC1 container</h3>
+
+<p>A user MAY protect their file with a passphrase. A protected file is not a SQLite
+database; it is a container carrying one: the whole database encrypted under AES-256-GCM
+with a random 32-byte file key, and that file key independently wrapped by keys derived —
+PBKDF2-HMAC-SHA256, 600,000 iterations, with the count carried in the header so it can be
+raised without orphaning old files — from each of the container's secrets. Key wrapping
+rather than direct encryption is what makes a passphrase change cheap, and what lets a
+second slot exist at all.</p>
+
+<p>Five of the container's rules are worth restating here because each one encodes a way
+users actually lose data. A conforming implementation MUST create a <strong>recovery key
+slot</strong> alongside the passphrase — at least 128 bits of real entropy — because a
+single point of loss is not an acceptable shape for a user's only copy of their data. It
+MUST bind the header as authenticated data and use fresh random nonces for every
+encryption operation. It MUST distinguish <em>locked</em> — a healthy container that no
+supplied secret opened — from <em>corrupt</em>, because reporting damage as a wrong
+passphrase sends a user hunting for a secret that was never the problem, and reporting a
+wrong passphrase as damage invites them to destroy a healthy file. A locked file is never
+quarantined, rewritten, or replaced. And the container MUST be self-opening — everything
+except the secret travels inside it — so that any device holding the file and the secret
+can open it, which is what keeps the portability promise true for protected files.</p>
+
+<p>What protection does not change is custody (§5.4): the key was always the user's and
+still is. And one property is stated to the user before it is enabled, not after: a
+protected file whose passphrase and recovery key are both lost is unrecoverable. There is
+no escrow and no reset. That is the property, not a gap in it.</p>
 </section>
 
 <!-- ============================================================ 7 -->
 <section>
+<h2>Connected applications <span class="badge draft">Draft · v0.3</span></h2>
+
+<p>A personal application becomes most valuable at the moment it can reach the services its
+owner already uses — and that is also the moment it becomes dangerous, because reaching a
+service means holding a credential, and the application is hostile by assumption (G2). Most
+platforms resolve this tension with a connector catalogue: a fixed set of integrations,
+each hand-built, each reviewed, each maintained by the vendor. Snug takes the opposite
+position: <strong>the integration engineer is the model, the reviewer is the user, and the
+enforcement is the host's</strong> — so any provider is reachable, including ones no
+catalogue would ever list, without a single credential entering code that was written by a
+language model minutes ago.</p>
+
+<p>This section specifies that surface. It is the largest addition of v0.3, and every rule
+in it is a consequence of one doctrine: <em>the model proposes, the human approves, the
+host enforces</em> (G7).</p>
+
+<h3>Requirements and grants</h3>
+
+<p>The design splits "connection" into two halves with different writers, different
+lifetimes, and different trust, shown in Figure 8. A <strong>requirement</strong> describes
+what the application needs — the provider, the auth kind, the credential fields to collect,
+the registration walkthrough, endpoints and scopes, the header or query template that
+places the credential, and the hosts it declares it will call. It is credential-free, and
+it is written at <em>authoring</em> moments: an app build, an auth-touching edit, a starter
+install. A <strong>grant</strong> records what the user allowed: the approval, its
+timestamp, and — decisively — the <strong>frozen host ceiling</strong>, the exact set of
+hostnames the connection may ever reach, computed at the moment of approval from the
+requirement the human actually reviewed. Credential values live in neither; they are held
+in the user's file under a namespace nothing but the host-side executor reads.</p>
+
+<!--FIGURE:fig8-connection-lifecycle|Figure 8|<span class="fignum">Figure 8.</span> The connection lifecycle. Three proposers may write credential-free requirements; a running application is structurally not among them. Only the user's approval writes a grant and freezes the ceiling; edits stage a diff against the grant rather than touching it; revocation wipes the credential slice and leaves a visible tombstone. Imported rows demote to declared unless byte-identical to a grant the device already held.-->
+
+<p><strong>A running application may never propose a connection.</strong> There is no
+frame, no SDK call, and no announce field through which application code can ask for a
+credential grant — the capability is structurally absent from the wire, not policy-refused
+at review. Exactly three proposers exist: the user, by hand; the builder assistant, through
+a reviewed directive in the build conversation; and the install act, through a starter's
+manifest whose vouching requires the installed bytes to match the shipped starter. All
+three may write <em>declared</em> rows only. Approval is the only writer of grants, and an
+edit against an approved grant stages a pending diff — the old ceiling keeps serving until
+the user re-approves the change field by field. There is no path by which an edit widens a
+ceiling without a human seeing the diff.</p>
+
+<p>Requirements are strict at every level — an unknown key anywhere is a rejection, never a
+passthrough, so a seat added in a future revision cannot ride in unreviewed on a channel
+that predates it. Seven auth kinds are defined: <code>api_key</code>,
+<code>bearer_token</code>, <code>basic_auth</code>, <code>oauth2_client_creds</code>,
+<code>oauth2_auth_code</code>, <code>linked_device</code> (§8), and <code>none</code> — the
+keyless provider, a first-class kind rather than an absent row, because a public API still
+needs a host ceiling and a keyless connection with no grant still fails closed. Devices on
+the user's own network, whose address no registry can pin, are declared through a
+<code>lanHost</code> seat — a declaration that an address <em>will be collected</em>, never
+an address — and the collected address must be a private-range literal of the declared
+class, alone, or the requirement is refused: a public host wearing LAN clothes is exactly
+the shape the rule exists to stop.</p>
+
+<h3>Templates, and why the credential can be placed but never read</h3>
+
+<p>A requirement may carry a header template or a query template that describes where the
+credential goes — <code>Authorization: Bearer {{api_key}}</code>, a signed timestamp
+header, a <code>?appid=</code> query parameter. Template values may reference only declared
+field keys, five pinned request tokens, five pinned helpers (timestamp, base64, two HMAC
+forms, and one provider-scoped JWT signer whose arguments must both be declared fields), or
+quoted literals — and the grammar is flat: no nesting, no user-defined functions, and a
+quoted argument is a literal in the engine, not only in the linter, so a template that
+passed review because its quotes made it look inert can never resolve those quotes into a
+live credential. An unknown token is a review-time rejection, never a silent
+fallback-to-literal: one transposed character in a signing template would otherwise sign
+the literal string <code>"api_secrt"</code> and produce a plausible signature the provider
+rejects — at signing time, where nobody is looking.</p>
+
+<p>Helpers are a closed enumeration, and additions are reviewed spec-level changes rather
+than configuration, because an unused helper is reachable signing surface. Signing schemes
+that cannot be expressed by the enum are added as provider-scoped helpers, never as a
+general-purpose escape hatch.</p>
+
+<h3>The registry, and what a host may vouch for</h3>
+
+<p>A host may keep a registry of pinned providers — known names, known hosts, known
+endpoints, known scopes, and pairing ceremonies. The registry's load-bearing rule is the
+<strong>borrow ban</strong>: a requirement that names a registry provider, <em>or</em>
+whose declared hosts intersect a registry entry's, has the registry's pinned values
+substituted for its own — discarded, not merged. Both triggers are required, because
+name-matching alone is evaded by renaming and host-matching alone is evaded by trading on a
+brand while declaring no overlapping host; and the ban is kind-agnostic, so an API-key
+requirement naming a known OAuth provider cannot borrow its legitimacy while pointing the
+credential somewhere else. A borrow is disclosed to the user: "these values came from the
+host's registry, not from the app" is a materially different provenance claim.</p>
+
+<p>Registry pins encode a principle this paper wants on the record: <strong>prefer a scope
+the token cannot exceed over a rule the application promises to follow.</strong> The
+reference implementation's mail integration, for example, pins scopes that permit moving a
+message to trash and structurally exclude the scope that permits permanent deletion — so
+irreversible destruction is impossible <em>regardless of application code</em>, which is a
+stronger statement than any review of application behaviour could make. Pinned scopes are
+entry-level identity, never per-flow options; and a pin change against an approved grant
+always re-consents, never silently promotes.</p>
+
+<p>For providers whose credential is obtained by ceremony rather than typed — a button
+pressed on a bridge, a QR code scanned by a phone, a one-time setup token pasted from a
+portal — the ceremony lives in the <em>registry entry</em>, never on the persisted
+requirement: a requirement seat carrying claim mechanics would be a channel through which a
+prompt-injected declaration aims an uncredentialed request. Every pairing family carries a
+mandatory <em>verify</em> probe — prove the counterparty is live and speaking the expected
+protocol before any credential is written — and the resulting proof markers are recorded
+per transport family, so a stale proof from one family can never vouch for another.</p>
+
+<h3>The executor</h3>
+
+<p>Everything above describes what may be <em>declared</em> and <em>approved</em>. What may
+be <em>done</em> is decided in exactly one place: a host-side executor that is the only
+code in the system that both reads credential values and calls fetch. Every
+application-originated network request passes its ordered gates, shown in Figure 9 — shape
+validation, host-assigned identity binding, the grant check, the frozen ceiling, the SSRF
+guard that refuses private-address literals even when a ceiling contains them, the human
+confirmation for every mutating method, credential-header stripping, host-side injection,
+a fetch that never follows redirects, and a size-capped, scrubbed read.</p>
+
+<!--FIGURE:fig9-executor-gates|Figure 9|<span class="fignum">Figure 9.</span> The executor's gate sequence. The confirmation gate precedes any credential read — a denied request resolves no secret and performs no fetch. A send to a local helper transport (§8) departs at gate 6a, after the confirmation and carrying the strip, injection, and scrub obligations with it; transport shape never excuses consent.-->
+
+<p>Two orderings in that pipeline are load-bearing enough to state as rules. <strong>The
+confirmation precedes any credential read</strong>: a denied mutating request not only
+performs no fetch, it never resolves a secret at all. And <strong>local transports depart
+after the confirmation, never before</strong>: the reference implementation's audit found a
+helper send that had been placed above the confirm gate under a comment asserting the gate
+had answered — every send reached the helper with credentials injected and no confirmation,
+and the suite stayed green because every test hardcoded a granting gate. The general
+lesson, now a conformance item: speech and spending in the user's name are gated by the
+confirmation, and nothing about a request's transport ever excuses it.</p>
+
+<p>Applications address their connections by <em>slot</em>, not by host:
+<code>snug-connection://&lt;slot&gt;/path</code> resolves through the grant to the
+connection's single approved host, runs the full gate pipeline on the resolved URL, and
+never discloses the resolved address to the application — the user sees the real host in
+the confirmation dialog; the application sees only its own slot. Beyond keeping addresses
+out of hostile code, the indirection solves a lifecycle problem: installed applications
+never receive rebuilds, so a hostname baked into shipped HTML is a liability the slot
+removes.</p>
+
+<h3>The provider lane, and requests the model composes</h3>
+
+<p>Because every wall above is host-enforced, a host can safely let the <em>model</em>
+compose provider requests on the user's behalf — "what's on my calendar", asked in chat,
+becoming a governed GET. The lane that does this receives connection <em>facts</em> (slot,
+provider name, scope summary) and never credentials; its requests execute through the same
+executor, the same ceiling, the same confirmation gates as application code; and a
+confirmation card rendered inline in chat is presentation, not authority — its resolution
+becomes an ordinary user message, and the only approval seat remains the executor's gate.
+The model is a request author, never a grant author: zero ceiling matches means a refusal
+and a connect offer, exactly as it does for application code.</p>
+
+<p>One forward-looking surface is specified in provisional form: a <strong>standing
+approval</strong>, by which a user explicitly arms a narrow, frozen scope — one connection,
+one target thread, one trigger class, rate-capped, quiet-houred, kill-switched, journaled —
+so that a specific class of send may proceed unattended. The specification pins the shape
+(a separate gate consulted before the session gate, deriving its target from two
+independent request sources that must agree, falling through to the ordinary confirmation
+for anything outside its frozen scope) precisely so implementers do not invent looser
+versions; the arming channel itself is deliberately unspecified until it has been built
+and audited. Armed is a recorded answer, not a bypass.</p>
+</section>
+
+<!-- ============================================================ 8 -->
+<section>
+<h2>Linked-device connections <span class="badge draft">Draft · v0.3</span></h2>
+
+<p>Some of the services people most want their personal software to reach have no API to
+call: they authenticate a <em>device session</em>, not a request. There is no key to paste
+and no OAuth redirect to run — a long-lived stateful client holds session key material and
+speaks a proprietary transport. A personal-messaging account is the canonical case. Most
+platforms simply cannot express this; the ones that try tend to do it by trusting a local
+companion process and punching a hole in whatever governance they had. Snug's v0.3 draft
+specifies the surface — shown in Figure 10 — without weakening a single wall.</p>
+
+<!--FIGURE:fig10-linked-device|Figure 10|<span class="fignum">Figure 10.</span> Linked-device connections. The application reaches the helper only through the governed executor; the ceiling holds a symbolic host that is an identity, never an address; the helper holds the device session's keys and serialises them on no route; pushes are hints (R7); and identities are pseudonymised before any model-bound payload leaves the host.-->
+
+<h3>A helper is a capability, never a host</h3>
+
+<p>The device session lives in a <strong>helper</strong>: a local, user-installed companion
+process that owns the session keys, the transport, and the sync state — and nothing else.
+The helper is LLM-free by rule: transport and custody, never a second brain; every
+analysis or compose turn runs in the governed host, where the protocol's walls exist.</p>
+
+<p>The interesting question is how the application reaches it, and the answer is the
+protocol's most instructive negative result. The obvious design — run the helper on a
+loopback port and put <code>127.0.0.1</code> in the ceiling — is wrong twice over: the
+ceiling is host-granular with no port dimension, so admitting the loopback address would
+grant every loopback port on the machine to any approved connection; and a
+<code>host:port</code> pair is not even a legal ceiling entry. The specification therefore
+forbids loopback addresses in ceilings outright. Instead, the helper listens on a
+<strong>unix-domain socket with <code>0600</code> permissions</strong> — no TCP endpoint
+exists, so there is no port to squat and no network path to filter; the filesystem decides
+who may connect — and the connection declares a <strong>symbolic host</strong>: a name
+under the reserved <code>.localhost</code> top-level domain, which can never resolve
+publicly and is never dialled. The symbolic name exists because hosts are the ceiling's
+unit, and a capability needs a host-shaped identity to be containable: the executor
+recognises it and routes to the helper transport, standing down exactly one gate — the
+SSRF literal guard — while every other gate, including the mutating-send confirmation,
+applies in full.</p>
+
+<h3>The custody split</h3>
+
+<p>Two secrets exist in this design, and they have opposite exposure rules. The
+<strong>device session keys</strong> — the keys to the user's account — live only in the
+helper's own store and are serialised on <em>no</em> route: not scrubbed, not redacted,
+simply never present in a response in the first place. The <strong>helper access
+token</strong> — the key to this helper — is minted exactly once at pairing, crosses the
+wire exactly once on the pairing poll that releases it, and lands in the user's file as
+the connection's ordinary credential, injected thereafter by the executor like any other.
+The asymmetry is the point: compromising everything Snug stores yields a key to a helper
+on the user's own machine, not the keys to the user's account.</p>
+
+<p>The helper's reachable surface is a closed, method-pinned route table whose
+app-reachable subset is <em>derived</em> from the one table rather than maintained as a
+second list — two hand-written lists drift invisibly until an application reaches a route
+nobody intended. Pairing routes are wizard-only and guarded by a per-launch spawn nonce,
+because the pairing status route releases the access token and "local" is not "trusted".
+Every route requires a credential; none is open. Path admission decodes before it checks,
+refuses traversal segments, and caps request and response sizes by refusing — never
+truncating, because a truncated payload is a corrupt payload. Lifecycle rules keep exactly
+one helper writing a session at a time, reap gracefully first so the helper's final flush
+runs, and require a stale-process verdict to identify the process by its command line
+before killing anything — recorded process ids are recycled, and a bare number would kill
+a stranger.</p>
+
+<h3>Live updates are doorbells</h3>
+
+<p>A messaging surface needs push. Rule R7 was written for this moment: the host runs a
+pump that long-polls the helper's event route <em>through the governed executor</em> — the
+pump holds no privilege the application lacks — and forwards hint records whose every
+field the host rebuilds. No message bodies, no names, no media ride the push channel; the
+application answers a doorbell with its own governed reads, and media bytes stop at the
+application frame — rendered from memory, never written to the application's database,
+never placed in a model-bound payload.</p>
+
+<h3>Other people's names</h3>
+
+<p>A linked-device connection is the one place Snug routinely handles data about people who
+never consented and cannot opt out: the other participants in the user's conversations.
+Under a bring-your-own-key configuration their message content reaches the user's chosen
+model provider — that is the feature, and no honest design pretends otherwise — but their
+<em>identities</em> need not. The v0.3 draft therefore requires a host-enforced
+<strong>pseudonymisation backstop</strong>: the host harvests third-party identities at
+the one governed seat every helper read crosses (extraction is the scrub — only identity
+fields enter the directory, never message text), and redacts those identities, together
+with dialable number runs, from every model-bound surface of every application holding a
+linked-device connection in <em>any</em> status — including a connection that arrived
+declared-but-unapproved through an import, because the replayable conversation data rides
+the same file. The scrub fails closed: an unreadable directory refuses the send rather
+than sending unscrubbed.</p>
+
+<p>The specification also requires the claim to be stated at its true strength, and we
+repeat it here in the required form: the backstop is <strong>anti-default and anti-naive,
+not anti-adversarial</strong>. An application that obfuscates — homoglyphs, encodings,
+numbers smuggled as numerics — defeats substring redaction; a nickname that only ever
+appeared inside message text is invisible to the directory; and content itself reaches
+the provider by design. Third-party consent is a real residual, and the user is told so
+before linking, alongside the provider terms-of-service risk that unofficial automation
+carries. The harvested directory is itself third-party personal data, so it has lifecycle
+rules of its own: wiped, transactionally, when the last approved linked-device connection
+is revoked or its application deleted; deliberately surviving import, because the data it
+scrubs against travels in the same file; and reset per session, so one user file's
+contacts are never written into another's.</p>
+
+<p>None of the reference binding — which messaging provider, which routes, which process
+runtime — is normative. What is normative is the shape: capability-not-host, the custody
+split, the closed derived route table, doorbell pushes, the pseudonymisation obligation,
+and the disclosures. Any device-session provider can be bound the same way.</p>
+</section>
+
+<!-- ============================================================ 9 -->
+<section>
+<h2>Runtime contracts and the data surface <span class="badge draft">Draft · v0.3</span></h2>
+
+<p>Two smaller v0.3 surfaces complete the picture, and both exist to serve the same end:
+keeping the application's runtime relationship with the model cheap, portable, and owned
+by the user rather than the platform.</p>
+
+<h3>Runtime contracts: turns cheap enough for any brain</h3>
+
+<p>An installed application's model turn is one self-contained request (§4). What such a
+turn historically carried was the application <em>builder's</em> system assembly — several
+kilobytes of authoring instructions that a runtime move cannot act on, resent on every
+turn. A <strong>runtime contract</strong> replaces that with the handful of facts a turn
+genuinely needs: what the application is, which of its settings shape an answer, what
+state arrives each turn, and the minimal response shape expected back. The whole contract
+is bounded at 2560 bytes, and the effect is protocol-level rather than cosmetic: every
+conforming application becomes cheap enough to run on a small local model, which is what
+makes a browser-resident brain with a 4K context a viable host at all.</p>
+
+<p>Because a contract speaks with system authority at runtime, its custody rules are
+strict. It is host-assigned, never app-claimed — no frame carries one. It is
+version-linked, stored on the application's version row: an ordinary edit copies it
+forward, and a revert restores the contract that shipped with the restored code, so code
+never runs under instructions written for a different version of itself. An imported
+contract is dropped unless it is byte-identical, after canonical serialisation, to one the
+importing host already holds — an untrusted file must not dictate the model's
+instructions; the affected application simply runs contract-less, degraded but never
+compromised. And a malformed contract reads as no contract: a corrupt row is not a reason
+to fail a user's move.</p>
+
+<h3>The data surface: your data answers to you</h3>
+
+<p>Because per-application data is stored as legible native tables (§6.2), a host can offer
+something no menu-driven application platform offers: the user asks anything of an
+application's data — "what did I spend on food last month?" against a budget app that
+never shipped that screen — and the model writes the SQL. The v0.3 draft constrains how
+that surface may touch the data, with a lane model whose classification <em>fails
+closed</em>: a message is classified into one of eight intents, an exhaustive
+compile-checked map routes each intent to one of four lanes — data, feature, provider
+(§7), answer — and an unusable classification produces a clarifying reply, never a
+default lane, and in particular never the lane that writes code.</p>
+
+<p>Reads are isolated by construction: generated SQL executes against a throwaway copy of
+the application's own materialised database — never live storage, and never behind a
+"read-only" flag, because isolation is a property of what the copy <em>contains</em>:
+other applications' tables and every host table are physically absent. Results are bounded
+(200 rows / 32 KiB) before re-entering the model's context, and truncation says so
+in-band. Writes are proposed, previewed, approved, then re-validated: the user sees the
+verbatim statements and an affected-row preview; execution happens only on explicit
+approval; and at execution the dry run re-runs against live data and halts if the
+affected-row counts have drifted from what was approved. Declining executes nothing.</p>
+
+<p>One asymmetry is disclosed rather than papered over: the <em>feature</em> lane — the
+one that edits the application itself — writes new versions on model authority, with no
+pre-write confirmation. The wall there is versioning: a visible reload, a revertable
+version write, and the pinned factory version. A host must disclose that asymmetry rather
+than let the data lane's approval gate imply coverage it does not have. And in every lane,
+stored rows are untrusted input — data crafted to read as instructions is the oldest trick
+in this genre — so prompts carrying query results delimit them as untrusted, with
+delimiter spellings defanged in the data.</p>
+</section>
+
+<!-- ============================================================ 10 -->
+<section>
 <h2>Conformance</h2>
 
-<p>An implementation may claim conformance with Snug v0.1 if it satisfies the following. The
-list is deliberately testable; each item is asserted by the reference implementation's suite.</p>
+<p>An implementation may claim conformance with the parts it implements; the wire protocol
+of §4 is the minimum. The list is deliberately testable; each item is asserted by the
+reference implementation's suite.</p>
 
 <h3>Hosts</h3>
 <ul>
   <li>Validate every inbound frame against the published schemas, accepting unknown fields
-  (R2) and rejecting unsupported versions with <code>UNSUPPORTED_VERSION</code> (R1).</li>
+  (R2) and rejecting unsupported versions with <code>UNSUPPORTED_VERSION</code> (R1); the
+  strict net and open-url frames refuse unknown keys.</li>
   <li>Mint <code>instanceId</code>, deliver it in <code>snug:host-ready</code>, and route
   by message source, never by <code>appId</code> (R4).</li>
   <li>Emit exactly one terminal <code>snug:app-response</code> per accepted
   <code>requestId</code> (R3).</li>
-  <li>Enforce the size, string, budget, and backoff limits of R6.</li>
+  <li>Enforce the size classes, string caps, parse budget, and backoff of R6; push hints,
+  never content, on host-initiated events (R7).</li>
   <li>Strip the five credential headers from application-originated requests at the envelope
   boundary (C1).</li>
   <li>Run application frames with <code>sandbox="allow-scripts"</code> only and
-  <code>connect-src</code> blocked (C2).</li>
+  <code>connect-src</code> blocked (C2); advertise only capabilities actually mediated.</li>
   <li>Parse agent replies with the graduated tolerance of §4.5 and convert failure to
   <code>PARSE_FAILED</code> with <code>rawExcerpt</code> and
   <code>attemptsRemaining</code>.</li>
@@ -808,25 +1344,50 @@ list is deliberately testable; each item is asserted by the reference implementa
   per instance.</li>
   <li>Ignore unknown frame types and unknown fields (R2).</li>
   <li>Treat streaming frames as provisional and the terminal frame as authoritative (R3).</li>
-  <li>Never assume storage APIs are available; use the storage frames.</li>
+  <li>Never assume storage or network APIs are available; use the frames, feature-detect
+  from capabilities, and render honest fallbacks.</li>
 </ul>
 
-<h3>Hosts additionally implementing the v0.2 draft</h3>
+<h3>Hosts additionally implementing the storage draft (§6)</h3>
 <ul>
-  <li>Carry the schema version in <code>PRAGMA user_version</code> and migrate
-  forward-only.</li>
+  <li>Carry the schema version in <code>PRAGMA user_version</code>, migrate forward-only,
+  refuse newer-stamped files, verify the table set on open, and run the legacy credential
+  wipe once, scoped by key shape rather than prefix.</li>
   <li>Compute namespace tokens with the normative function, and refuse to persist any runtime
   whose object names violate the naming rules — failing closed.</li>
   <li>Materialise per-application runtimes so that isolation is physical, and store DDL
   verbatim.</li>
   <li>Offer export and import; strip secrets and vacuum by default; require re-confirmation of
-  imported endpoint settings.</li>
+  imported endpoint settings; demote imported connections and drop unrecognised imported
+  contracts.</li>
   <li>Retain at least five unpinned versions and never prune the pinned factory version.</li>
+  <li>Decide file format by leading bytes; read legacy names and adopt forward without
+  deleting; honour every rule of the protected container, including locked-versus-corrupt
+  reporting.</li>
   <li>Never require the backend for application execution.</li>
+</ul>
+
+<h3>Hosts additionally implementing the connected surface (§7–§8)</h3>
+<ul>
+  <li>Persist requirements and grants only through the five writers; enforce the slot cap;
+  freeze ceilings at approval with stable, normalized output; stage edits as diffs.</li>
+  <li>Apply the full validation stack — schema bounds, template lint, registry-borrow ban,
+  provider-name guard — before a requirement is shown, stored, or acted on, and render
+  every re-admitted seat verbatim in review: fields, walkthrough, templates uncollapsed,
+  the complete host list, the freeze disclosure.</li>
+  <li>Run the executor's gates in order: confirmation before any credential read on every
+  mutating call, local transports included; redirects never followed; credentialed URLs
+  never disclosed; responses size-capped and scrubbed.</li>
+  <li>Disclose provenance honestly; disclose prior revocations keyed by provider, not slot;
+  disclose armed standing approvals wherever the connection is shown.</li>
+  <li>For linked devices: never admit a loopback address to a ceiling; enforce the custody
+  split, the derived route table, decoded-form admission, refuse-don't-truncate caps,
+  single-writer lifecycle, doorbell pushes, and the pseudonymisation backstop with its
+  honest class statement and pre-link disclosures.</li>
 </ul>
 </section>
 
-<!-- ============================================================ 8 -->
+<!-- ============================================================ 11 -->
 <section>
 <h2>Related work</h2>
 
@@ -844,10 +1405,11 @@ landscape:</p>
   </thead>
   <tbody>
     <tr><td><strong>Direction</strong></td><td>Agent → capability</td><td>Application → agent</td></tr>
-    <tr><td><strong>Question</strong></td><td>What can the model reach?</td><td>What can a user's application ask of the model?</td></tr>
+    <tr><td><strong>Question</strong></td><td>What can the model reach?</td><td>What can a user's application ask of the model — and reach through the host?</td></tr>
     <tr><td><strong>Author</strong></td><td>A developer building a server</td><td>A model, on the user's instruction</td></tr>
     <tr><td><strong>Unit</strong></td><td>Tools and resources</td><td>Sandboxed applications and their data</td></tr>
     <tr><td><strong>Trust</strong></td><td>Server is a configured, trusted integration</td><td>Application is hostile by default</td></tr>
+    <tr><td><strong>Credentials</strong></td><td>Held and used by the server the user installed</td><td>Held by the user's file; attached only by the host, inside a human-frozen ceiling, behind a confirmation</td></tr>
     <tr><td><strong>Persistence</strong></td><td>Out of scope</td><td>Central: one portable file</td></tr>
   </tbody>
 </table>
@@ -857,7 +1419,9 @@ MCP for what the agent can do, Snug for what the user's applications can ask. Th
 trust posture is the reason they are separate protocols rather than one. An MCP server is
 something a user or administrator deliberately installed; a Snug application is something a
 model wrote minutes ago from a prompt of uncertain provenance. Those two things cannot safely
-share a permission model.</p>
+share a permission model — and the connected surface of §7 is what a permission model looks
+like when it is designed for the hostile case first: no configured trust anywhere, every
+reachable host frozen by a human, every mutation confirmed by one.</p>
 
 <h3>Vendor application platforms</h3>
 
@@ -871,7 +1435,10 @@ professionally published software with commercial support behind it.</p>
 <p>It is a poor fit for the case this protocol addresses: an application built by one person
 for themselves, which no directory would list and no reviewer should need to approve, and
 whose value to its owner is precisely that it is theirs. Snug is the open, user-owned
-counterpart — not a competing store, but the layer that lets such software exist without one.</p>
+counterpart — not a competing store, but the layer that lets such software exist without one.
+The sandbox, not a submission queue, is the reviewer: a Snug application cannot phone home,
+cannot read another application's tables, and cannot touch a credential, whether or not
+anyone ever looked at its code.</p>
 
 <h3>Local-first software</h3>
 
@@ -886,11 +1453,11 @@ developers, describe a world in which people make small software for themselves.
 capability. It argued for personal software when producing it still required programming
 skill. The models removed that barrier and, in doing so, created the problem this
 specification addresses: with authoring solved, the binding constraints became isolation,
-custody, and portability. Snug's contribution is to answer those three at the protocol layer,
-so that the answer is not one vendor's implementation detail.</p>
+custody, portability — and now connection. Snug's contribution is to answer those at the
+protocol layer, so that the answer is not one vendor's implementation detail.</p>
 </section>
 
-<!-- ============================================================ 9 -->
+<!-- ============================================================ 12 -->
 <section>
 <h2>Limitations and future work</h2>
 
@@ -903,15 +1470,21 @@ it.</p>
 
 <p><strong>Browser-bound.</strong> The isolation model is the browser's: frame sandboxing and
 content security policy. This is a well-understood boundary with wide deployment, but it does
-bind conforming hosts to browser-class environments. A native host would need an equivalent
-mechanism, and the protocol does not currently specify what would qualify.</p>
+bind conforming hosts to browser-class environments, and it makes the platform's own
+correctness part of the trust base — the reference implementation's desktop shell ships on
+exactly one platform today because a second platform's webview demonstrably breaks the
+sandbox contract, and shipping it anyway would have made C2 false rather than fragile.</p>
 
-<p><strong>Authenticated connections are reserved, not specified.</strong>
-<code>CONSENT_REQUIRED</code> and <code>AUTH_REQUIRED</code> are reserved error codes for a
-future revision in which applications reach the user's own services. The custody doctrine
-that revision must satisfy is already fixed by §5.4 — credentials in the user's file, host
-custody never — but the wire surface is deliberately unpublished until it has been built and
-audited. We would rather reserve the space than specify it speculatively.</p>
+<p><strong>The standing-approval surface is provisional.</strong> The gate shape is
+specified; the arming channel is not, and the reference implementation's grant store does
+not yet survive a reload. Until both are settled and audited, unattended action remains a
+narrow, disclosed exception rather than a finished capability — and the specification says
+so rather than implying otherwise.</p>
+
+<p><strong>The pseudonymisation backstop has a stated class.</strong> It is anti-default
+and anti-naive, not anti-adversarial (§8), and the write-approval drift check compares row
+counts, not row identities. Both are disclosed limits with named upgrade paths, kept in the
+specification's residuals rather than its promises.</p>
 
 <p><strong>Size bounds are conservative.</strong> A 64 MiB file suits many personal
 applications and constrains others; a media-heavy application will meet the ceiling. Raising
@@ -920,7 +1493,7 @@ it interacts with synchronisation cost, since the present model transfers whole 
 <p><strong>No formal verification.</strong> The security properties are argued from structure
 and tested by suite, not proved. The isolation claim in particular — that materialisation
 makes cross-application reads impossible rather than merely difficult — would benefit from
-formal treatment.</p>
+formal treatment, as would the executor's gate ordering.</p>
 
 <p><strong>The agent reply contract is prose-shaped.</strong> Tolerant parsing is a pragmatic
 response to how models behave today. As constrained decoding becomes universally available,
@@ -928,7 +1501,7 @@ the fallbacks in §4.5 should become dead code, and a later revision may make sc
 replies mandatory rather than optional.</p>
 </section>
 
-<!-- ============================================================ 10 -->
+<!-- ============================================================ 13 -->
 <section>
 <h2>Conclusion</h2>
 
@@ -940,20 +1513,25 @@ has fallen to one. A person can now have software that exists solely because the
 <p>Whether that category becomes durable depends on questions models do not answer. Software
 built for one person must still be safe to run, since nobody reviewed it. It must be able to
 hold data without that data becoming somebody else's asset. It must survive its author's
-choice of vendor. These are the ordinary concerns of infrastructure, and they are settled by
-protocols or not at all.</p>
+choice of vendor. And if it is to do real work in a person's life, it must be able to reach
+that person's services without anyone — vendor, publisher, or the application itself —
+acquiring custody of their credentials. These are the ordinary concerns of infrastructure,
+and they are settled by protocols or not at all.</p>
 
 <p>Snug proposes a specific settlement. Treat the application as hostile and confine it
-absolutely; give it the model as a capability it calls rather than an engine it contains; and
-put everything the user accumulates into one file they can carry away. The wire protocol of §4
-is normative today; the storage format of §6 is published as a draft for review. Both are MIT
-licensed, both are specified by schemas exported from a working implementation, and both are
-offered in the expectation that other implementations will find them wanting in specific,
-correctable ways.</p>
+absolutely; give it the model as a capability it calls rather than an engine it contains;
+let it reach the world only through a wall a human froze and a gate a human answers; and
+put everything the user accumulates into one file they can carry away — and seal, if they
+choose, with a passphrase only they hold. The wire protocol's core is normative today; the
+storage format and the connected surface are published as a draft for review, finalising as
+1.0. All of it is MIT licensed, all of it is specified by schemas and contracts exported
+from a working implementation, and all of it is offered in the expectation that other
+implementations will find it wanting in specific, correctable ways.</p>
 
 <p>The measure of this work is not whether the reference implementation succeeds. It is
-whether a person can build something small and strange and entirely their own — and still
-have it, on their own terms, years later, on a device and a provider nobody has chosen yet.</p>
+whether a person can build something small and strange and entirely their own — connected
+to their real life, answerable only to them — and still have it, on their own terms, years
+later, on a device and a provider nobody has chosen yet.</p>
 </section>
 
 <!-- ============================================================ REFS -->
@@ -961,21 +1539,29 @@ have it, on their own terms, years later, on a device and a provider nobody has 
 <h2 class="nonum">Normative references</h2>
 
 <ol>
-  <li><strong>Snug Protocol Specification, v0.1.</strong> Frames, chat envelope, and rules
-  R1–R6. <span class="src">snugprotocol/spec — <code>SPEC.md</code></span></li>
-  <li><strong>Snug Protocol JSON Schemas.</strong> Normative message shapes for all nine frame
-  types and the chat envelope, published byte-identically from the reference
-  implementation. <span class="src">snugprotocol/spec — <code>schemas/</code></span></li>
-  <li><strong>Snug Protocol Specification, v0.2 (draft).</strong> Portable User Database
-  Format: host-namespace tables, native per-application tables, synchronisation origins,
-  export and import. <span class="src">snugprotocol/spec —
-  <code>SPEC-v0.2-draft.md</code></span></li>
+  <li><strong>Snug Protocol Specification, v0.3 (draft).</strong> The consolidated
+  specification: wire protocol, portable user database, connected applications, runtime
+  contracts, linked-device connections. <span class="src">snugprotocol —
+  <code>SPEC-v0.3-draft.md</code></span></li>
+  <li><strong>Snug Protocol JSON Schemas.</strong> Normative message shapes, published
+  byte-identically from the reference implementation. <span class="src">snugprotocol/spec —
+  <code>schemas/</code></span></li>
+  <li><strong>Snug Threat Model, v1.</strong> Enforced invariants with named enforcement
+  points and tests; residuals with equal standing. <span class="src">snugprotocol/snug —
+  <code>docs/threat-model.md</code></span></li>
   <li><strong>RFC 2119.</strong> Key words for use in RFCs to indicate requirement
   levels. <span class="src">S. Bradner, IETF, 1997</span></li>
   <li><strong>HTML Standard</strong> — the <code>sandbox</code> attribute and its
   origin semantics. <span class="src">WHATWG</span></li>
   <li><strong>Content Security Policy Level 3</strong> — the <code>connect-src</code>
   directive. <span class="src">W3C</span></li>
+  <li><strong>RFC 6761.</strong> Special-use domain names — the reserved
+  <code>.localhost</code> top-level domain. <span class="src">S. Cheshire, M. Krochmal,
+  IETF, 2013</span></li>
+  <li><strong>RFC 8018.</strong> PKCS #5: password-based cryptography (PBKDF2).
+  <span class="src">K. Moriarty et al., IETF, 2017</span></li>
+  <li><strong>NIST SP 800-38D.</strong> Galois/Counter Mode (GCM) and GMAC.
+  <span class="src">M. Dworkin, NIST, 2007</span></li>
   <li><strong>SQLite File Format.</strong> <span class="src">SQLite Consortium</span></li>
 </ol>
 
@@ -990,8 +1576,10 @@ have it, on their own terms, years later, on a device and a provider nobody has 
     <div class="k">Security contact</div>
     <p>security@snugprotocol.org</p>
     <div class="k" style="margin-top:4mm">Status</div>
-    <p>Wire protocol v0.1 is normative and published. The portable user database format is a
-    v0.2 draft, published for review; details may change before it becomes normative.</p>
+    <p>The wire protocol's core has been normative since v0.1. The v0.3 draft — the storage
+    layer at schema 6, the connected-application surface, runtime contracts, and
+    linked-device connections — is published for review and finalises as spec 1.0; details
+    may change before it becomes normative.</p>
   </div>
 </div>
 </section>
@@ -1000,9 +1588,9 @@ have it, on their own terms, years later, on a device and a provider nobody has 
 <section>
 <h2 class="nonum">Appendix A · Message schema summary</h2>
 
-<p>Required fields for every published message, from the normative schemas. All frames
-additionally require <code>v: 1</code> and <code>type</code>; validators MUST accept unknown
-fields (R2).</p>
+<p>Required fields for every message, from the normative schemas. All frames additionally
+require <code>v: 1</code> and <code>type</code>; validators MUST accept unknown fields on
+the tolerant frames (R2); the net and open-url frames are strict.</p>
 
 <table>
   <caption>Required fields by message type. Optional fields are described in §4.</caption>
@@ -1019,6 +1607,10 @@ fields (R2).</p>
     <tr><td class="mono-cell">snug:app-response <span class="dir">error</span></td><td><code>requestId</code>, <code>ok: false</code>, <code>error</code></td></tr>
     <tr><td class="mono-cell">snug:db-request</td><td><code>requestId</code>, <code>instanceId</code>, <code>op</code>, and the operation's own fields (e.g. <code>sql</code> for <code>exec</code>)</td></tr>
     <tr><td class="mono-cell">snug:db-response</td><td><code>requestId</code>, <code>ok</code> — with <code>error</code> when <code>ok: false</code></td></tr>
+    <tr><td class="mono-cell">snug:net-request</td><td><code>requestId</code>, <code>instanceId</code>, <code>url</code>, <code>method</code> <span class="dir">strict; no appId seat</span></td></tr>
+    <tr><td class="mono-cell">snug:net-response</td><td><code>requestId</code>, <code>ok</code> — with <code>status</code>, <code>headers</code>, <code>body</code> when <code>ok: true</code>, <code>error</code> otherwise</td></tr>
+    <tr><td class="mono-cell">snug:open-url-request</td><td><code>requestId</code>, <code>instanceId</code>, <code>url</code> <span class="dir">strict; https-only, no userinfo</span></td></tr>
+    <tr><td class="mono-cell">snug:open-url-result</td><td><code>requestId</code>, <code>status</code></td></tr>
     <tr><td class="mono-cell">snug:host-event</td><td><code>event</code></td></tr>
     <tr><td class="mono-cell">snug:app-event</td><td><code>event</code></td></tr>
     <tr><td class="mono-cell">chat envelope</td><td><code>snug: 1</code>, <code>appId</code>, <code>instanceId</code>, <code>requestId</code>, <code>action</code></td></tr>

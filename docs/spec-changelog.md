@@ -4,6 +4,42 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-20 — INTERNAL DRAFT, staged for owner review — spec v0.3 consolidated + whitepaper edition 2 — TASK-20260820-spec-v03-whitepaper
+
+**Nothing pushed; zero schema bytes changed; wire protocol untouched at v1.** Owner-
+commissioned ("regenerate the specs v0.3 including the whitepaper … final draft for my
+final review before I promote it to 1.0"). Two deliverables, both staged in this repo:
+
+**(1) `docs/spec-drafts/SPEC-v0.3-draft.md`** — ONE consolidated specification replacing
+the three staged draft files (`spec-v0.2-userdb.md`, `spec-v0.3-auth.md`,
+`spec-v0.4-runtime.md`, all deleted; published spec content carries forward). Parts: wire
+protocol (13 frames — net + open-url pairs promoted into the draft with stability markers;
+rules R1–R6 plus NEW R7 push-hints), portable user database (storage v6, version ladder
+incl. the v5 `snug_auth_specs` drop, `.snug` naming + SNUGENC1 verbatim from the 8ea69b8
+push), connected apps (7 kinds incl. `linked_device` coherence; five writers; frozen
+ceilings; 5-helper template enum incl. `cdp_jwt` — fixing the old draft's "outside this
+surface" error; registry rules incl. pinned scopes, three pairing families, borrow ban;
+10-gate executor + gate 6a; `snug-connection://` addressing; provider chat lane; standing
+approvals marked PROVISIONAL), runtime contracts + app-chat lanes, and the linked-device
+(sidecar) surface as a generic normative section (capability-not-host, symbolic host,
+custody split, doorbell rule, pseudonymisation backstop with the ADR-0040 honest-class
+statement). Sources verified against `packages/{protocol,auth,db}` at head by four
+parallel read audits; every constant restated from the exporting file.
+
+**(2) Whitepaper edition 2** (`docs/whitepaper/`) — full rewrite covering the v0.3
+surface: 33 pages, 10 figures (3 new: connection lifecycle, executor gates, linked-device;
+2 reworked: architecture + one-file), claim discipline retained (AC6 unweakened;
+zero-knowledge/E2E now negation-only checks per ADR-0043's bounded claim).
+`scripts/check-whitepaper.mjs` rewritten: fixture = the staged v0.3 draft +
+`packages/protocol/schemas` until publication (`--spec` still points at a spec clone
+after); AC5 inverted from "auth surface absent" to "v0.3 surfaces covered, superseded
+facts absent". 99/99 checks green; per-page visual pass done.
+
+**A v0.3 push (owner ask required) additionally needs**: net + open-url pairs added to
+`json-schemas.ts` SOURCES and regenerated; the recorded `host-ready.json` drift
+(`capabilities.net`/`openUrl`, from AL-03 + TASK-20260818) carried; and a publication-line
+decision for the Part III/IV/V contract files — see the draft's Appendix C.
+
 ## 2026-08-20 — **PUSHED** — spec v0.2-draft §6 + §7 — TASK-20260820-snug-file-and-encryption (ADR-0042, ADR-0043) — spec commit `8ea69b8`
 
 **No JSON schema bytes changed; the wire protocol stays v1.** Both additions are to the
