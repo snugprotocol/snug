@@ -716,7 +716,11 @@ export default function RunView(): ReactElement {
                 {meta.iconEmoji ?? '⬡'}
               </span>
               <div style={{ minWidth: 0 }}>
-                <div className="run-name">{meta.displayName}</div>
+                {/* The DB-backed name outranks the announce frame's: for a USER-RENAMED
+                    app (TASK-20260821 AC1) the store keeps the user's name while the
+                    frame keeps announcing the app's own; for everything else the two are
+                    equal (the announce merge writes the store). */}
+                <div className="run-name">{getAppMeta(id)?.displayName ?? meta.displayName}</div>
                 {meta.description !== undefined ? <div className="run-desc">{meta.description}</div> : null}
               </div>
             </div>

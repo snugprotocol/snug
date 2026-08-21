@@ -23,8 +23,22 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ModelSelect } from '../run/ModelSelect.js';
-import { appModelStore, resolveModelForApp, setAppModel } from '../state/appModel.js';
-import { modeStore, modelStore, providerStore } from '../state/mode.js';
+import {
+  appModelStore,
+  appProviderStore,
+  resolveModelForApp,
+  resolveProviderForApp,
+  setAppModel,
+  setAppPin,
+} from '../state/appModel.js';
+import {
+  byokKeyPresenceStore,
+  modeStore,
+  modelStore,
+  providerChoiceStore,
+  providerModelsStore,
+  providerStore,
+} from '../state/mode.js';
 import { ollamaStore } from '../state/ollama.js';
 import { webgpuStore, webllmFlagStore } from '../state/webllm.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -43,9 +57,13 @@ let root: Root | undefined;
 
 beforeEach(async () => {
   appModelStore.set({});
+  appProviderStore.set({});
   modelStore.set(undefined);
   modeStore.set('byok');
   providerStore.set('anthropic');
+  providerChoiceStore.set(undefined);
+  byokKeyPresenceStore.set({ anthropic: true, openai: false });
+  providerModelsStore.set({});
   ollamaStore.set('unknown');
   webllmFlagStore.set(false);
   webgpuStore.set('unknown');
@@ -88,16 +106,18 @@ describe('AC1 — the control renders for an opened app', () => {
     expect(select()).not.toBeNull();
   });
 
-  it('offers the pinned popular models for the active byok provider', async () => {
+  it('offers the pinned popular models for each KEYED byok provider', async () => {
     await renderSelect();
-    // The frontier catalog, not the Ollama list: this is byok/anthropic.
-    expect(optionValues()).toContain('claude-sonnet-5');
-    // Bounded by the owner's "up to 5", plus the inherited-default entry.
+    // The frontier catalog under provider-prefixed values (TASK-20260821): only
+    // anthropic has a key here, so only its group renders.
+    expect(optionValues()).toContain('anthropic:claude-sonnet-5');
+    expect(optionValues().some((v) => v.startsWith('openai:'))).toBe(false);
+    // Bounded by the owner's "up to 5" per provider, plus the inherited-default entry.
     expect(optionValues().length).toBeLessThanOrEqual(6);
   });
 
   it('shows the inherited default as a distinct, labelled option (AC3 on screen)', async () => {
-    modelStore.set('claude-sonnet-5');
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     await renderSelect();
     // The user must be able to SEE that this app is following the Settings default
     // rather than pinned — and must be able to get back to that state after picking.
@@ -106,14 +126,14 @@ describe('AC1 — the control renders for an opened app', () => {
 });
 
 describe('AC1 — picking writes the choice (state, not just render)', () => {
-  it('stores the pick so it resolves for this app', async () => {
-    modelStore.set('claude-sonnet-5');
+  it('stores the pick — model AND provider — so it resolves for this app', async () => {
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     await renderSelect();
 
     const el = select();
     expect(el).not.toBeNull();
     await act(async () => {
-      el!.value = 'claude-opus-5';
+      el!.value = 'anthropic:claude-opus-5';
       el!.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await flush();
@@ -121,10 +141,13 @@ describe('AC1 — picking writes the choice (state, not just render)', () => {
     // Assert the RESOLUTION, not the element's own value: an onChange that updated local
     // component state and wrote nothing would pass a `el.value` assertion perfectly.
     expect(resolveModelForApp(APP)).toBe('claude-opus-5');
+    // A pin is a PIN (review finding 10): the provider row rides with the model row.
+    expect(resolveProviderForApp(APP)).toBe('anthropic');
   });
 
   it('un-pins back to the inherited default', async () => {
-    modelStore.set('claude-sonnet-5');
+    // MIGRATED (TASK-20260821): the byok inherited default is per-provider now.
+    providerModelsStore.set({ anthropic: 'claude-sonnet-5' });
     setAppModel(APP, 'claude-opus-5');
     await flush();
     await renderSelect();
@@ -138,13 +161,24 @@ describe('AC1 — picking writes the choice (state, not just render)', () => {
 
     expect(resolveModelForApp(APP)).toBe('claude-sonnet-5');
     expect(appModelStore.get()[APP]).toBeUndefined();
+    // The provider row clears with it — inheriting is an absence of BOTH.
+    expect(appProviderStore.get()[APP]).toBeUndefined();
   });
 
   it('shows the app’s current pick as the selected option on open', async () => {
+    setAppPin(APP, { provider: 'anthropic', model: 'claude-opus-5' });
+    await flush();
+    await renderSelect();
+    expect(select()?.value).toBe('anthropic:claude-opus-5');
+  });
+
+  it('a legacy model-only pin (no provider row) displays under the default provider', async () => {
+    // ADR-0036-era rows have no appProvider sibling; they route on the resolved default,
+    // and the selector must show them exactly there.
     setAppModel(APP, 'claude-opus-5');
     await flush();
     await renderSelect();
-    expect(select()?.value).toBe('claude-opus-5');
+    expect(select()?.value).toBe('anthropic:claude-opus-5');
   });
 });
 
@@ -217,7 +251,51 @@ describe('AC11 — an unknown stored model is shown, never silently dropped', ()
     // If the control only rendered catalog entries, the browser would coerce the select
     // to its first option — the app would appear to be on the default while its turns
     // still went to the stored model. Showing it is what keeps the screen honest.
-    expect(optionValues()).toContain('some-retired-model-id');
-    expect(select()?.value).toBe('some-retired-model-id');
+    expect(optionValues()).toContain('anthropic:some-retired-model-id');
+    expect(select()?.value).toBe('anthropic:some-retired-model-id');
+  });
+});
+
+describe('AC13 (TASK-20260821) — both keyed providers render as labelled groups', () => {
+  it('groups both catalogs and picking the OTHER provider’s model pins provider + model', async () => {
+    byokKeyPresenceStore.set({ anthropic: true, openai: true });
+    await renderSelect();
+
+    const groups = Array.from(container?.querySelectorAll('optgroup') ?? []).map((g) => g.label);
+    expect(groups).toEqual(['Anthropic', 'OpenAI']);
+    expect(optionValues()).toContain('anthropic:claude-opus-5');
+    expect(optionValues()).toContain('openai:gpt-4o-mini');
+
+    const el = select();
+    await act(async () => {
+      el!.value = 'openai:gpt-4o-mini';
+      el!.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flush();
+
+    expect(resolveProviderForApp(APP)).toBe('openai');
+    expect(resolveModelForApp(APP)).toBe('gpt-4o-mini');
+  });
+
+  it('names the resolved default — provider and model — on the inherit row', async () => {
+    byokKeyPresenceStore.set({ anthropic: true, openai: true });
+    providerStore.set('openai');
+    providerModelsStore.set({ openai: 'gpt-4o-mini' });
+    await renderSelect();
+
+    const inherit = Array.from(select()?.options ?? []).find((o) => o.value === '');
+    expect(inherit?.textContent).toContain('OpenAI');
+    expect(inherit?.textContent).toContain('GPT-4o mini');
+  });
+
+  it('a pin whose key is GONE stays visible, marked, and selected — never silently re-routed', async () => {
+    setAppPin(APP, { provider: 'openai', model: 'gpt-4o-mini' });
+    await flush();
+    byokKeyPresenceStore.set({ anthropic: true, openai: false });
+    await renderSelect();
+
+    expect(select()?.value).toBe('openai:gpt-4o-mini');
+    const groups = Array.from(container?.querySelectorAll('optgroup') ?? []).map((g) => g.label);
+    expect(groups).toContain('OpenAI (key missing)');
   });
 });

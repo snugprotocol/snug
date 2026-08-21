@@ -140,4 +140,15 @@ export interface WaSocket {
   mediaOf(jid: string, id: string): Promise<WaMediaResult | undefined>;
   /** Preview-size avatar, or undefined when the jid has none we can reach. */
   pictureOf(jid: string): Promise<{ mime: string; base64: string } | undefined>;
+
+  /**
+   * THE DEEP-DELETE UNLINK (TASK-20260821 AC5). Best-effort provider logout (the phone
+   * shows the companion device unlinked), then erase the auth store — session keys, the
+   * minted token, and the thread cache — and arm a PERSIST TOMBSTONE so no later write
+   * (the debounce flush, the process-exit flush, a `creds.update`) can re-materialize
+   * what was just erased. The shell's stop is TERM-first precisely so the exit flush
+   * RUNS; without the tombstone that flush would rewrite the cache into the wiped
+   * directory (plan review 2026-08-21, finding 1). Never throws.
+   */
+  forget(): Promise<void>;
 }

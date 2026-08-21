@@ -1,5 +1,30 @@
+// SettingsView — redesigned for TASK-20260821 (AC8/AC9/AC11/AC14).
+//
+// STRUCTURE: Apple-Settings idiom over the app's own tokens — a hero title, then five
+// labelled sections (brain · account · your file · connections · appearance), each an
+// inset grouped card of rows. No new palette, no new fonts: everything derives from
+// theme/tokens.css, so the page belongs to the product it configures.
+//
+// BEHAVIOR PINS CARRIED VERBATIM (a redesign is a re-layout, not a re-contract):
+//   - the mode segment keeps its accessible name 'where the agent runs' and its three
+//     labels — e2e/webllm.spec.ts locates it by role+name in a lane CI does not run;
+//   - the webllm experiment card keeps its testid and copy;
+//   - local mode keeps `#local-url`, `#model-select`/`#model-id`, the `other…` escape
+//     hatch and every Ollama hint (desktopSettingsView.test.tsx pins all five states);
+//   - the F15 imported-settings confirm, protection, data and connection cards keep
+//     their strings, testids and actions.
+//
+// WHAT CHANGED FUNCTIONALLY (TASK-20260821): the single-provider BYOK card became the
+// multi-provider section — a key row per provider with a per-provider default model,
+// plus a default-provider control (auto: Anthropic when both keys exist; the user's
+// explicit pick overrides) — and the standalone "model" card is GONE: its local-mode
+// half lives in the local section, its subscription half in the subscription section,
+// and byok defaults are per-provider now.
+
 import { useEffect, useState } from 'react';
-import type { ReactElement } from 'react';
+import type { ReactElement, ReactNode } from 'react';
+
+import { popularModelsFor } from '@snugprotocol/adapters';
 
 import {
   availableModes,
@@ -10,12 +35,18 @@ import {
   setMode,
   setModel,
   setProvider,
+  setProviderModel,
+  useByokKeyPresence,
   useEndpointsNeedConfirm,
   useLocalUrl,
   useMode,
   useModel,
   useProvider,
+  useProviderChoice,
+  useProviderModels,
+  KEYED_PROVIDERS,
   type ByokProvider,
+  type KeyedProvider,
   type PlaygroundMode,
 } from '../state/mode.js';
 import { useOllama } from '../state/ollama.js';
@@ -36,15 +67,12 @@ import {
 } from '../state/sync.js';
 import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
-import { UserDbCredentialStore } from '@snugprotocol/auth';
 import { getUserDb } from '../state/userdb.js';
-import { invalidateNetGrants } from '../state/net.js';
-import { useStore } from '../state/store.js';
 import { downloadBlob } from '../run/exportDb.js';
+import { ADAPTER_DEFAULTS, labelFor, PROVIDER_LABELS } from '../run/ModelSelect.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { ConnectionSlotsCard } from './ConnectionSlotsCard.js';
-
 
 const MODE_LABELS: Record<PlaygroundMode, string> = {
   byok: 'bring your own key',
@@ -55,15 +83,23 @@ const MODE_LABELS: Record<PlaygroundMode, string> = {
 /** The model select's escape hatch back to free text. */
 const OTHER_MODEL_CHOICE = '__other__';
 
+/** Section shell: an eyebrow label + one inset grouped card. */
+function Section({ label, children }: { label: string; children: ReactNode }): ReactElement {
+  return (
+    <section className="settings-section" data-testid={`settings-section-${label.replace(/\s+/g, '-')}`}>
+      <h2 className="settings-section-label">{label}</h2>
+      {children}
+    </section>
+  );
+}
+
 export function SettingsView(): ReactElement {
   const mode = useMode();
-  const provider = useProvider();
   const model = useModel();
   const localUrl = useLocalUrl();
   const needsConfirm = useEndpointsNeedConfirm();
   const theme = useTheme();
   const ollama = useOllama();
-  const [keyDraft, setKeyDraft] = useState('');
   const [modelOther, setModelOther] = useState(false);
 
   // AC3: detection results only ever exist where a platform probe ran (desktop) —
@@ -76,27 +112,15 @@ export function SettingsView(): ReactElement {
       : (model ?? '');
   const showModelInput = detectedModels === undefined || modelSelectValue === OTHER_MODEL_CHOICE;
 
-  // Keys live in the user DB (async) — load the draft when the provider changes.
-  useEffect(() => {
-    let cancelled = false;
-    if (mode === 'byok' && provider !== 'mock') {
-      void getByokKey(provider).then((key) => {
-        if (!cancelled) setKeyDraft(key ?? '');
-      });
-    } else {
-      setKeyDraft('');
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, provider]);
-
   return (
     <div className="settings">
-      <h1>settings</h1>
+      <header className="settings-hero">
+        <h1>settings</h1>
+        <p className="settings-hero-sub">your brain, your file, your connections — everything lives with you.</p>
+      </header>
 
       {needsConfirm ? (
-        <Card>
+        <Card className="settings-attention">
           <div className="field">
             <label>imported settings need a look</label>
             <span className="hint">
@@ -108,172 +132,261 @@ export function SettingsView(): ReactElement {
         </Card>
       ) : null}
 
-      <Card>
-        <div className="field">
-          <label id="mode-label">where the agent runs</label>
-          <div className="seg" role="group" aria-labelledby="mode-label">
-            {/* Decision 10: the platform decides which modes exist — the desktop shell
-                never offers subscription, and that is a capability, not a hidden flag. */}
-            {availableModes().map((option) => (
-              <button key={option} type="button" aria-pressed={mode === option} onClick={() => setMode(option)}>
-                {MODE_LABELS[option]}
-              </button>
-            ))}
-          </div>
-          <span className="hint">
-            {mode === 'byok'
-              ? 'everything runs in this browser — your key goes straight to the provider, never to the hub.'
-              : mode === 'local'
-                ? 'fully on-device: the agent talks to an OpenAI-compatible endpoint on your machine (e.g. Ollama).'
-                : 'requests go through the hub server (:8787) and its LLM subscription — run `pnpm dev` in apps/server.'}
-          </span>
-        </div>
-      </Card>
-
-      <WebllmExperimentCard />
-
-      {mode === 'byok' ? (
-        <Card>
-          <div className="field">
-            <label htmlFor="byok-provider">provider</label>
-            <select
-              id="byok-provider"
-              value={provider}
-              onChange={(event) => setProvider(event.target.value as ByokProvider)}
-            >
-              <option value="mock">demo brain (no key needed)</option>
-              <option value="anthropic">anthropic</option>
-              <option value="openai">openai</option>
-            </select>
-            {provider === 'mock' ? (
-              <span className="hint">no key? try the demo brain — it builds a tiny oracle, offline.</span>
-            ) : null}
-          </div>
-          {provider !== 'mock' ? (
-            <div className="field field-gap">
-              <label htmlFor="byok-key">api key</label>
-              <input
-                id="byok-key"
-                type="password"
-                autoComplete="off"
-                value={keyDraft}
-                placeholder={provider === 'anthropic' ? 'sk-ant-…' : 'sk-…'}
-                onChange={(event) => {
-                  setKeyDraft(event.target.value);
-                  void setByokKey(provider, event.target.value);
-                }}
-              />
-              <span className="hint">
-                stored in your snug file on this device, sent straight to {provider} from your browser — never to the
-                hub, and stripped from hub sync and default exports.
-              </span>
+      <Section label="brain">
+        <Card className="settings-group">
+          <div className="field settings-row">
+            <label id="mode-label">where the agent runs</label>
+            <div className="seg" role="group" aria-labelledby="mode-label">
+              {/* Decision 10: the platform decides which modes exist — the desktop shell
+                  never offers subscription, and that is a capability, not a hidden flag. */}
+              {availableModes().map((option) => (
+                <button key={option} type="button" aria-pressed={mode === option} onClick={() => setMode(option)}>
+                  {MODE_LABELS[option]}
+                </button>
+              ))}
             </div>
-          ) : null}
-        </Card>
-      ) : null}
-
-      {mode === 'local' ? (
-        <Card>
-          <div className="field">
-            <label htmlFor="local-url">endpoint</label>
-            <input
-              id="local-url"
-              type="text"
-              value={localUrl}
-              onChange={(event) => setLocalUrl(event.target.value)}
-              placeholder="http://localhost:11434/v1"
-            />
-            {ollama !== 'unknown' && !ollama.running ? (
-              <span className="hint">Ollama not found — install it from ollama.com or paste an endpoint.</span>
-            ) : ollama !== 'unknown' && ollama.running && ollama.models.length === 0 ? (
-              /* P3 item 3 (W2b): running-but-empty is its own state — the install
-                 succeeded, only a model is missing. Free text stays available. */
-              <span className="hint">
-                Ollama is installed but has no models yet — try: <code>ollama pull llama3.2</code>
-              </span>
-            ) : (
-              <span className="hint">
-                any OpenAI-compatible server. for Ollama, set OLLAMA_ORIGINS to allow this hub, and mind that an https
-                hub cannot reach http://localhost in Safari.
-              </span>
-            )}
+            <span className="hint">
+              {mode === 'byok'
+                ? 'everything runs in this browser — your key goes straight to the provider, never to the hub.'
+                : mode === 'local'
+                  ? 'fully on-device: the agent talks to an OpenAI-compatible endpoint on your machine (e.g. Ollama).'
+                  : 'requests go through the hub server (:8787) and its LLM subscription — run `pnpm dev` in apps/server.'}
+            </span>
           </div>
-        </Card>
-      ) : null}
 
-      {mode !== 'byok' || provider !== 'mock' ? (
-        <Card>
-          <div className="field">
-            <label htmlFor={detectedModels !== undefined ? 'model-select' : 'model-id'}>model</label>
-            {detectedModels !== undefined ? (
-              <select
-                id="model-select"
-                value={modelSelectValue}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (value === OTHER_MODEL_CHOICE) {
-                    setModelOther(true);
-                    return;
-                  }
-                  setModelOther(false);
-                  setModel(value);
-                }}
-              >
-                <option value="">let the endpoint choose</option>
-                {detectedModels.map((detected) => (
-                  <option key={detected} value={detected}>
-                    {detected}
-                  </option>
-                ))}
-                <option value={OTHER_MODEL_CHOICE}>other…</option>
-              </select>
-            ) : null}
-            {showModelInput ? (
+          <WebllmExperimentCard />
+
+          {mode === 'byok' ? <ByokProvidersRows /> : null}
+
+          {mode === 'local' ? (
+            <>
+              <div className="field settings-row">
+                <label htmlFor="local-url">endpoint</label>
+                <input
+                  id="local-url"
+                  type="text"
+                  value={localUrl}
+                  onChange={(event) => setLocalUrl(event.target.value)}
+                  placeholder="http://localhost:11434/v1"
+                />
+                {ollama !== 'unknown' && !ollama.running ? (
+                  <span className="hint">Ollama not found — install it from ollama.com or paste an endpoint.</span>
+                ) : ollama !== 'unknown' && ollama.running && ollama.models.length === 0 ? (
+                  /* P3 item 3 (W2b): running-but-empty is its own state — the install
+                     succeeded, only a model is missing. Free text stays available. */
+                  <span className="hint">
+                    Ollama is installed but has no models yet — try: <code>ollama pull llama3.2</code>
+                  </span>
+                ) : (
+                  <span className="hint">
+                    any OpenAI-compatible server. for Ollama, set OLLAMA_ORIGINS to allow this hub, and mind that an
+                    https hub cannot reach http://localhost in Safari.
+                  </span>
+                )}
+              </div>
+              {/* The old standalone model card's LOCAL half, moved in-section
+                  (TASK-20260821 AC11): same ids, same states, same hints. */}
+              <div className="field settings-row">
+                <label htmlFor={detectedModels !== undefined ? 'model-select' : 'model-id'}>model</label>
+                {detectedModels !== undefined ? (
+                  <select
+                    id="model-select"
+                    value={modelSelectValue}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === OTHER_MODEL_CHOICE) {
+                        setModelOther(true);
+                        return;
+                      }
+                      setModelOther(false);
+                      setModel(value);
+                    }}
+                  >
+                    <option value="">let the endpoint choose</option>
+                    {detectedModels.map((detected) => (
+                      <option key={detected} value={detected}>
+                        {detected}
+                      </option>
+                    ))}
+                    <option value={OTHER_MODEL_CHOICE}>other…</option>
+                  </select>
+                ) : null}
+                {showModelInput ? (
+                  <input
+                    id="model-id"
+                    type="text"
+                    value={model ?? ''}
+                    onChange={(event) => setModel(event.target.value)}
+                    placeholder="llama3.2"
+                  />
+                ) : null}
+                <span className="hint">
+                  {detectedModels !== undefined
+                    ? 'these models are installed in your Ollama — pick one, or choose other… to type a name.'
+                    : 'leave empty for the provider’s default.'}
+                </span>
+              </div>
+            </>
+          ) : null}
+
+          {mode === 'subscription' ? (
+            /* The old model card's SUBSCRIPTION half: a free-text default-model
+               override for the hub's adapters, still the global `model` setting. */
+            <div className="field settings-row">
+              <label htmlFor="model-id">default model</label>
               <input
                 id="model-id"
                 type="text"
                 value={model ?? ''}
                 onChange={(event) => setModel(event.target.value)}
-                placeholder={
-                  mode === 'local' ? 'llama3.2' : provider === 'openai' ? 'gpt-4o' : 'claude-sonnet-5'
-                }
+                placeholder="claude-sonnet-5"
               />
-            ) : null}
-            <span className="hint">
-              {detectedModels !== undefined
-                ? 'these models are installed in your Ollama — pick one, or choose other… to type a name.'
-                : 'leave empty for the provider’s default.'}
-            </span>
+              <span className="hint">leave empty for the provider’s default.</span>
+            </div>
+          ) : null}
+        </Card>
+      </Section>
+
+      <Section label="account">
+        <AccountCard />
+      </Section>
+
+      <Section label="your file">
+        <DataCard />
+        <ProtectionCard />
+      </Section>
+
+      <Section label="connections">
+        {/*
+          P3 (fold B1): the v4 slot-aware card replaces AL-03's app-keyed ConnectionsCard.
+          One row per (app, SLOT) rather than one per app — the same provider connected in
+          two apps is two independent grants, and the old card could not say so.
+        */}
+        <ConnectionSlotsCard />
+      </Section>
+
+      <Section label="appearance">
+        <Card className="settings-group">
+          <div className="field settings-row">
+            <label id="theme-label">theme</label>
+            <div className="seg" role="group" aria-labelledby="theme-label">
+              <button type="button" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}>
+                dark
+              </button>
+              <button type="button" aria-pressed={theme === 'light'} onClick={() => setTheme('light')}>
+                light
+              </button>
+            </div>
+            <span className="hint">running apps are told live — watch the host event in the inspector.</span>
           </div>
         </Card>
-      ) : null}
-
-      <AccountCard />
-      <DataCard />
-      <ProtectionCard />
-      {/*
-        P3 (fold B1): the v4 slot-aware card replaces AL-03's app-keyed ConnectionsCard.
-        One row per (app, SLOT) rather than one per app — the same provider connected in
-        two apps is two independent grants, and the old card could not say so.
-      */}
-      <ConnectionSlotsCard />
-
-      <Card>
-        <div className="field">
-          <label id="theme-label">theme</label>
-          <div className="seg" role="group" aria-labelledby="theme-label">
-            <button type="button" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}>
-              dark
-            </button>
-            <button type="button" aria-pressed={theme === 'light'} onClick={() => setTheme('light')}>
-              light
-            </button>
-          </div>
-          <span className="hint">running apps are told live — watch the host event in the inspector.</span>
-        </div>
-      </Card>
-
+      </Section>
     </div>
+  );
+}
+
+/**
+ * The multi-provider BYOK rows (TASK-20260821 AC8/AC9): one row per keyed provider —
+ * key field, saved-state chip, and (once keyed) that provider's default model — plus
+ * the default-provider control. The demo brain is a first-class default choice, so a
+ * keyless install still says what it is running on.
+ */
+function ByokProvidersRows(): ReactElement {
+  const provider = useProvider();
+  const choice = useProviderChoice();
+  const keys = useByokKeyPresence();
+  const providerModels = useProviderModels();
+  const [drafts, setDrafts] = useState<Record<KeyedProvider, string>>({ anthropic: '', openai: '' });
+
+  // Keys live in the user DB (async) — load both drafts once.
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(KEYED_PROVIDERS.map((p) => getByokKey(p))).then(([anthropic, openai]) => {
+      if (!cancelled) setDrafts({ anthropic: anthropic ?? '', openai: openai ?? '' });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const defaultChoices: Array<{ id: ByokProvider; label: string; disabled: boolean }> = [
+    { id: 'anthropic', label: 'Anthropic', disabled: !keys.anthropic },
+    { id: 'openai', label: 'OpenAI', disabled: !keys.openai },
+    { id: 'mock', label: 'demo brain', disabled: false },
+  ];
+
+  return (
+    <>
+      {KEYED_PROVIDERS.map((p) => (
+        <div className="field settings-row provider-row" key={p} data-testid={`provider-row-${p}`}>
+          <div className="provider-row-head">
+            <label htmlFor={`byok-key-${p}`}>{PROVIDER_LABELS[p]}</label>
+            <span className={`chip provider-key-chip${keys[p] ? ' is-set' : ''}`} data-testid={`provider-key-state-${p}`}>
+              {keys[p] ? 'key saved' : 'no key'}
+            </span>
+          </div>
+          <input
+            id={`byok-key-${p}`}
+            type="password"
+            autoComplete="off"
+            value={drafts[p]}
+            placeholder={p === 'anthropic' ? 'sk-ant-…' : 'sk-…'}
+            onChange={(event) => {
+              const value = event.target.value;
+              setDrafts((current) => ({ ...current, [p]: value }));
+              void setByokKey(p, value);
+            }}
+          />
+          {keys[p] ? (
+            <div className="provider-model-row">
+              <label htmlFor={`provider-model-${p}`} className="provider-model-label">
+                default model
+              </label>
+              <select
+                id={`provider-model-${p}`}
+                data-testid={`provider-model-${p}`}
+                value={providerModels[p] ?? ''}
+                onChange={(event) => setProviderModel(p, event.target.value === '' ? undefined : event.target.value)}
+              >
+                <option value="">provider default ({labelFor(p, ADAPTER_DEFAULTS[p])})</option>
+                {popularModelsFor(p).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          <span className="hint">
+            stored in your snug file on this device, sent straight to {PROVIDER_LABELS[p]} from your browser — never
+            to the hub, and stripped from hub sync and default exports.
+          </span>
+        </div>
+      ))}
+
+      <div className="field settings-row">
+        <label id="default-provider-label">default provider</label>
+        <div className="seg" role="group" aria-labelledby="default-provider-label" data-testid="default-provider-seg">
+          {defaultChoices.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              aria-pressed={provider === option.id}
+              disabled={option.disabled}
+              onClick={() => setProvider(option.id)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <span className="hint">
+          {choice === undefined
+            ? 'picked automatically — Anthropic wins whenever both keys are saved. every app follows this unless you pin a model on its own header.'
+            : 'your pick. every app follows this unless you pin a model on its own header.'}
+          {provider === 'mock' ? ' no key? the demo brain builds a tiny offline oracle so you can try the flow.' : ''}
+        </span>
+      </div>
+    </>
   );
 }
 
@@ -288,21 +401,19 @@ function WebllmExperimentCard(): ReactElement | null {
   const brain = useBrain();
   if (!flagOn) return null;
   return (
-    <Card>
-      <div className="field" data-testid="webllm-experimental-card">
-        <label>experimental — in-browser model</label>
-        <span className="hint">
-          {brain.kind === 'webllm'
-            ? `the ?webllm=1 flag is on: builds and app turns run through ${brain.model} on WebGPU, inside this tab, ` +
-              'overriding the choice above. the model downloads on first use (GBs, cached by the browser). ' +
-              'the experiment stays on for this session even as you navigate — to leave it, reload the page ' +
-              'without ?webllm=1 in the address bar.'
-            : brain.kind === 'demo' && brain.reason === 'no-webgpu'
-              ? `the ?webllm=1 flag is on, but ${WEBLLM_FALLBACK_BANNER}.`
-              : 'the ?webllm=1 flag is on — checking whether this browser can run WebGPU…'}
-        </span>
-      </div>
-    </Card>
+    <div className="field settings-row" data-testid="webllm-experimental-card">
+      <label>experimental — in-browser model</label>
+      <span className="hint">
+        {brain.kind === 'webllm'
+          ? `the ?webllm=1 flag is on: builds and app turns run through ${brain.model} on WebGPU, inside this tab, ` +
+            'overriding the choice above. the model downloads on first use (GBs, cached by the browser). ' +
+            'the experiment stays on for this session even as you navigate — to leave it, reload the page ' +
+            'without ?webllm=1 in the address bar.'
+          : brain.kind === 'demo' && brain.reason === 'no-webgpu'
+            ? `the ?webllm=1 flag is on, but ${WEBLLM_FALLBACK_BANNER}.`
+            : 'the ?webllm=1 flag is on — checking whether this browser can run WebGPU…'}
+      </span>
+    </div>
   );
 }
 
@@ -312,8 +423,8 @@ export function AccountCard(): ReactElement | null {
   const sync = useSyncStatus();
   if (auth.state === 'unknown') return null;
   return (
-    <Card>
-      <div className="field">
+    <Card className="settings-group">
+      <div className="field settings-row">
         <label>hub account</label>
         {auth.state === 'unavailable' ? (
           <span className="hint">
@@ -386,8 +497,8 @@ function ProtectionCard(): ReactElement {
   }
 
   return (
-    <Card>
-      <div className="field">
+    <Card className="settings-group">
+      <div className="field settings-row">
         <label>protection</label>
         {protectedNow === true ? (
           <>
@@ -469,8 +580,8 @@ function DataCard(): ReactElement {
   };
 
   return (
-    <Card>
-      <div className="field">
+    <Card className="settings-group">
+      <div className="field settings-row">
         <label id="origin-label">your snug file</label>
         <span className="hint">
           one SQLite file holds your apps, their data, chats, and settings. it runs from this browser and can sync to
@@ -532,7 +643,7 @@ function DataCard(): ReactElement {
           </div>
         ) : null}
       </div>
-      <div className="field field-gap">
+      <div className="field settings-row field-gap">
         <label>portability</label>
         {dataError !== undefined ? (
           <div className="error-note" role="alert">
@@ -567,4 +678,3 @@ function DataCard(): ReactElement {
     </Card>
   );
 }
-

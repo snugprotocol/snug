@@ -38,6 +38,48 @@ export function appIdFromModelSettingKey(key: string): string | undefined {
   return appId.length === 0 ? undefined : appId;
 }
 
+/** The `appProvider:` namespace prefix (TASK-20260821-ui-polish). */
+export const APP_PROVIDER_SETTING_PREFIX = 'appProvider:';
+
+/**
+ * `appProvider:<appId>` — the LLM provider this one app routes to, written TOGETHER with
+ * `appModel:<appId>` by the selector (a pin is a pin — a model row without its provider
+ * would strand a foreign model id on whatever the default provider later becomes).
+ * Absent means the app follows the resolved default provider, live.
+ */
+export function appProviderSettingKey(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${APP_PROVIDER_SETTING_PREFIX}${appId}`;
+}
+
+/** The appId a settings key names, or `undefined` if the key is not a per-app provider row. */
+export function appIdFromProviderSettingKey(key: string): string | undefined {
+  if (!key.startsWith(APP_PROVIDER_SETTING_PREFIX)) return undefined;
+  const appId = key.slice(APP_PROVIDER_SETTING_PREFIX.length);
+  return appId.length === 0 ? undefined : appId;
+}
+
+/** The `appRenamed:` namespace prefix (TASK-20260821-ui-polish). */
+export const APP_RENAMED_SETTING_PREFIX = 'appRenamed:';
+
+/**
+ * `appRenamed:<appId>` — the USER renamed this app, so the announce path must stop
+ * refreshing `display_name` from the app's self-description (`recordAppMeta` reads this
+ * through the playground's renamed-apps store). Absence means the app's own announced
+ * name flows into the row as it always has; clearing a rename deletes the marker.
+ */
+export function appRenamedSettingKey(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${APP_RENAMED_SETTING_PREFIX}${appId}`;
+}
+
+/** The appId a settings key names, or `undefined` if the key is not a rename marker. */
+export function appIdFromRenamedSettingKey(key: string): string | undefined {
+  if (!key.startsWith(APP_RENAMED_SETTING_PREFIX)) return undefined;
+  const appId = key.slice(APP_RENAMED_SETTING_PREFIX.length);
+  return appId.length === 0 ? undefined : appId;
+}
+
 /** The `starterVersion:` namespace prefix (TASK-20260820-starter-updates, ADR-0045 §6). */
 export const STARTER_VERSION_SETTING_PREFIX = 'starterVersion:';
 

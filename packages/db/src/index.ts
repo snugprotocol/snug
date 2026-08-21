@@ -89,10 +89,16 @@ export {
 
 export {
   APP_MODEL_SETTING_PREFIX,
+  APP_PROVIDER_SETTING_PREFIX,
+  APP_RENAMED_SETTING_PREFIX,
   STARTER_VERSION_SETTING_PREFIX,
   appIdFromModelSettingKey,
+  appIdFromProviderSettingKey,
+  appIdFromRenamedSettingKey,
   appIdFromStarterVersionSettingKey,
   appModelSettingKey,
+  appProviderSettingKey,
+  appRenamedSettingKey,
   starterVersionSettingKey,
 } from './userdb/app-settings-keys.js';
 

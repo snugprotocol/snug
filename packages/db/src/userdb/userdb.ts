@@ -61,7 +61,15 @@ import {
   type RuntimeContract,
 } from '@snugprotocol/protocol';
 import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
-import { appIdFromModelSettingKey, appModelSettingKey, starterVersionSettingKey } from './app-settings-keys.js';
+import {
+  appIdFromModelSettingKey,
+  appIdFromProviderSettingKey,
+  appIdFromRenamedSettingKey,
+  appModelSettingKey,
+  appProviderSettingKey,
+  appRenamedSettingKey,
+  starterVersionSettingKey,
+} from './app-settings-keys.js';
 import { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './sidecar-identity-keys.js';
 import { base64ToBytes } from '../base64.js';
 import {
@@ -90,6 +98,14 @@ export const USERDB_ERROR_CODES = {
   LOCKED_IMPORT: 'USERDB_LOCKED_IMPORT',
   /** The referenced app/version/thread does not exist. */
   NOT_FOUND: 'USERDB_NOT_FOUND',
+  /**
+   * `deleteAppVersion` aimed at a pinned factory version. Pins are what `resetToFactory`
+   * restores and what the ADR-0045 starter-update vouch chain compares against — ALL of
+   * them are protected, not only the newest (owner decision 2026-08-21).
+   */
+  VERSION_PINNED: 'USERDB_VERSION_PINNED',
+  /** `deleteAppVersion` aimed at the version the app is currently running. */
+  VERSION_CURRENT: 'USERDB_VERSION_CURRENT',
   /** The UserDb was closed. */
   CLOSED: 'USERDB_CLOSED',
   /** An app runtime object name violates the normative naming rule (write-back refused). */
@@ -566,6 +582,15 @@ export interface UserDb {
   getAppByInstallSource(source: string): AppRecord | undefined;
   getAppHtml(appId: string, version?: number): string | undefined;
   listAppVersions(appId: string): AppVersionMeta[];
+  /**
+   * Delete ONE stored version row (TASK-20260821-ui-polish AC3/AC4).
+   *
+   * Refusals, in guard order: unknown app/version → NOT_FOUND (current is always
+   * MAX(version), so a too-high number reads as unknown, never as "current"); a pinned
+   * factory version → VERSION_PINNED (every pin — reset-to-factory and the starter-update
+   * vouch chain both address pins); the running version → VERSION_CURRENT.
+   */
+  deleteAppVersion(appId: string, version: number): void;
   revertApp(appId: string, toVersion: number): AppVersionMeta;
   /** Copy-forward to the pinned factory version (the never-pruned v1 of build/install). */
   resetToFactory(appId: string): AppVersionMeta;
@@ -689,6 +714,8 @@ export interface UserDb {
 
   getSetting(key: string): unknown;
   setSetting(key: string, value: unknown): void;
+  /** Remove one settings row entirely — `setSetting(key, undefined)` stores JSON null. */
+  deleteSetting(key: string): void;
   /**
    * Every app that has PINNED a model, as `{ [appId]: modelId }` (TASK-20260817).
    * Apps that inherit the global `model` setting are simply absent — inheritance is an
@@ -701,6 +728,18 @@ export interface UserDb {
   listAppModels(): Record<string, string>;
   /** Pin one app to a model, or clear the pin (`undefined`) so the app inherits again. */
   setAppModel(appId: string, model: string | undefined): void;
+  /**
+   * Every app that has PINNED a provider, as `{ [appId]: provider }` — the sibling of
+   * `listAppModels` (TASK-20260821): written together with the model pin, absent when the
+   * app follows the resolved default provider.
+   */
+  listAppProviders(): Record<string, string>;
+  /** Pin one app to a provider, or clear (`undefined`) so it follows the default again. */
+  setAppProvider(appId: string, provider: string | undefined): void;
+  /** Apps whose display name the USER set — the announce path must not clobber these. */
+  listRenamedApps(): string[];
+  /** Mark (or clear) the user-renamed flag for one app. */
+  setAppRenamed(appId: string, renamed: boolean): void;
   getProfileField(key: string): unknown;
   setProfileField(key: string, value: unknown): void;
   getSecret(key: string): string | undefined;
@@ -2257,6 +2296,11 @@ function construct(
         //     … and the starter-version row (ADR-0045 §6), the second one-per-app key in
         //     this namespace — same equality-delete rationale as above.
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [starterVersionSettingKey(appId)]);
+        //     … and the per-app provider pin + user-rename marker (TASK-20260821), the
+        //     third and fourth one-per-app keys — same rationale, mutation-checked by
+        //     app-provider-setting.test.ts.
+        db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [appProviderSettingKey(appId)]);
+        db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [appRenamedSettingKey(appId)]);
         // 3d. The sidecar identity directory, when this app held the LAST approved
         //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the
         //     transaction: the check reads the connection rows step 3 just deleted, so
@@ -2364,6 +2408,42 @@ function construct(
         throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `factory version ${factory} of "${appId}" is missing`);
       }
       return this.saveAppVersion(appId, html, `reset to factory (v${factory})`, factory);
+    },
+
+    deleteAppVersion(appId, version) {
+      assertOpen();
+      const app = getApp(appId);
+      if (app === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `unknown app "${appId}"`);
+      const row = select(
+        `SELECT pinned FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND version = ?`,
+        [appId, version],
+      )[0];
+      // Unknown FIRST: current is always MAX(version) (saveAppVersion lands current as the
+      // new maximum), so a too-high number must read as "no such version", never as a
+      // current-version refusal about a row that does not exist.
+      if (row === undefined) {
+        throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `app "${appId}" has no version ${version}`);
+      }
+      // Pinned BEFORE current: a pin is the permanent claim (reset-to-factory and the
+      // ADR-0045 vouch chain both address pins), so a pinned-and-current row names the
+      // reason that will still be true after the user reverts elsewhere.
+      if (row[0] === 1) {
+        throw new UserDbError(
+          USERDB_ERROR_CODES.VERSION_PINNED,
+          `v${version} of "${appId}" is a pinned factory version and cannot be deleted`,
+        );
+      }
+      if (version === app.currentVersion) {
+        throw new UserDbError(
+          USERDB_ERROR_CODES.VERSION_CURRENT,
+          `v${version} of "${appId}" is the running version — revert to another version first`,
+        );
+      }
+      run(`DELETE FROM ${USERDB_TABLES.appVersions} WHERE app_id = ? AND version = ?`, [appId, version]);
+      // No VACUUM here, deliberately: version HTML is not secret-bearing (unlike the
+      // credential bytes deleteApp reclaims), and the next deleteApp/export VACUUM frees
+      // the pages. Running a full-file VACUUM per row delete would be all cost.
+      markDirty();
     },
 
     // ---------------------------------------------------------- runtime contracts
@@ -3005,6 +3085,10 @@ function construct(
 
     getSetting: (key) => kvGet(USERDB_TABLES.settings, key),
     setSetting: (key, value) => kvSet(USERDB_TABLES.settings, key, value),
+    deleteSetting(key) {
+      assertOpen();
+      run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]);
+    },
     listAppModels() {
       assertOpen();
       const out: Record<string, string> = {};
@@ -3033,6 +3117,49 @@ function construct(
         return;
       }
       kvSet(USERDB_TABLES.settings, key, model.trim());
+    },
+    listAppProviders() {
+      assertOpen();
+      const out: Record<string, string> = {};
+      for (const row of select(`SELECT key, value FROM ${USERDB_TABLES.settings}`)) {
+        // Same parse-don't-prefix rule as listAppModels: a bare `appProvider:` row can
+        // never become an entry keyed by the empty string.
+        const appId = appIdFromProviderSettingKey(String(row[0]));
+        if (appId === undefined) continue;
+        const provider = JSON.parse(String(row[1])) as unknown;
+        // A corrupted value reads as "inherits the default" — the safe direction.
+        if (typeof provider === 'string' && provider !== '') out[appId] = provider;
+      }
+      return out;
+    },
+    setAppProvider(appId, provider) {
+      assertOpen();
+      const key = appProviderSettingKey(appId);
+      // Clearing DELETES — absence is what "follows the default provider" means.
+      if (provider === undefined || provider.trim() === '') {
+        run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]);
+        return;
+      }
+      kvSet(USERDB_TABLES.settings, key, provider.trim());
+    },
+    listRenamedApps() {
+      assertOpen();
+      const out: string[] = [];
+      for (const row of select(`SELECT key, value FROM ${USERDB_TABLES.settings}`)) {
+        const appId = appIdFromRenamedSettingKey(String(row[0]));
+        if (appId === undefined) continue;
+        if ((JSON.parse(String(row[1])) as unknown) === true) out.push(appId);
+      }
+      return out;
+    },
+    setAppRenamed(appId, renamed) {
+      assertOpen();
+      const key = appRenamedSettingKey(appId);
+      if (!renamed) {
+        run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]);
+        return;
+      }
+      kvSet(USERDB_TABLES.settings, key, true);
     },
     getProfileField: (key) => kvGet(USERDB_TABLES.profile, key),
     setProfileField: (key, value) => kvSet(USERDB_TABLES.profile, key, value),

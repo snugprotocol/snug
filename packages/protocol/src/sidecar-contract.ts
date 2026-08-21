@@ -56,6 +56,10 @@ export const SIDECAR_ROUTES: readonly SidecarRoute[] = [
   { method: 'GET', path: '/pair/status' },
   // --- the ADR-0025 verify-before-claim read (WIZARD ONLY) ---
   { method: 'GET', path: '/session/status' },
+  // --- the deep-delete unlink (TASK-20260821 AC5; WIZARD ONLY) — best-effort provider
+  //     logout, then the auth store (session keys, minted token, thread cache) is erased.
+  //     Destructive by design, which is exactly why it rides the nonce-guarded prefix. ---
+  { method: 'POST', path: '/session/forget' },
   // --- the thread surface (app-reachable) ---
   { method: 'GET', path: '/chats' },
   { method: 'GET', path: '/chats/:jid/history' },

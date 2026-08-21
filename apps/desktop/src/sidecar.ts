@@ -23,8 +23,12 @@ export interface SidecarHttpResponse {
   body: string;
 }
 
-/** Start, stop, or report the WhatsApp helper. */
-export async function sidecarCtl(action: 'start' | 'stop' | 'status'): Promise<SidecarStatus> {
+/**
+ * Start, stop, report — or FORGET the WhatsApp helper (TASK-20260821 AC5).
+ * `forget` stops the helper and removes the on-disk session store; it is the deep
+ * delete's disk backstop for the case where the helper cannot run at all.
+ */
+export async function sidecarCtl(action: 'start' | 'stop' | 'status' | 'forget'): Promise<SidecarStatus> {
   return invoke<SidecarStatus>('sidecar_ctl', { action });
 }
 

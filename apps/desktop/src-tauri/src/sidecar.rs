@@ -171,11 +171,13 @@ fn route_matches(pattern: &str, path: &str) -> bool {
 /// command inherits the C2 boundary instead — capabilities are scoped to the "main" window
 /// and app iframes cannot reach the IPC bridge at all, which the in-shell gate asserts
 /// per command. The wizard runs in the main window; an app never does.
-const WIZARD_ROUTES: [(&str, &str); 11] = [
+const WIZARD_ROUTES: [(&str, &str); 12] = [
     ("POST", "/pair/start"),
     ("GET", "/pair/qr"),
     ("GET", "/pair/status"),
     ("GET", "/session/status"),
+    // The deep-delete unlink (TASK-20260821 AC5) — nonce-guarded in the helper too.
+    ("POST", "/session/forget"),
     // The app routes too: the wizard reads a thread list to prove the token works, and a
     // door that admitted only pairing would force a second command for that one read.
     ("GET", "/chats"),
@@ -339,8 +341,45 @@ pub async fn sidecar_ctl(
                 nonce: None,
             })
         }
+        // The DISK BACKSTOP of the deep delete (TASK-20260821 AC5, plan review finding 4):
+        // the helper's own `/session/forget` performs the provider logout and the wipe —
+        // but it needs a LIVE helper, and "the helper cannot start" must not mean the
+        // user's WhatsApp session keys stay on disk after they deleted the app. Stop
+        // first (a running helper would re-create files), then remove the store.
+        "forget" => {
+            if let Some(running) = guard.take() {
+                reap_child(running);
+            }
+            let dir = crate::userfile::snug_dir()?;
+            forget_session_store(&dir)?;
+            Ok(SidecarStatus {
+                running: false,
+                nonce: None,
+            })
+        }
         other => Err(format!("'{other}' is not a sidecar action")),
     }
+}
+
+/// Where the helper keeps the WhatsApp session store. ONE owner of the name — `cli.ts`
+/// derives the same directory from the socket path (`dirname(socket)/whatsapp-session`),
+/// and `should_autostart` reads through this function rather than a second `join`.
+pub fn session_store_dir(snug_dir: &std::path::Path) -> PathBuf {
+    snug_dir.join("whatsapp-session")
+}
+
+/// Remove the WhatsApp session store — session keys, minted token, thread cache.
+///
+/// Idempotent: an absent store is success (the state the caller wants already holds).
+/// A store that EXISTS but cannot be removed is an error, never a silent pass — the whole
+/// point of this backstop is that "deleted" must not quietly mean "still on disk".
+pub fn forget_session_store(snug_dir: &std::path::Path) -> Result<(), String> {
+    let store = session_store_dir(snug_dir);
+    if !store.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&store)
+        .map_err(|e| format!("could not remove the WhatsApp session store: {e}"))
 }
 
 /// Stop one running helper: TERM first, KILL as the backstop, then remove the socket file.
@@ -598,7 +637,7 @@ fn start_helper(guard: &mut Option<RunningSidecar>) -> Result<SidecarStatus, Str
 /// own call (`isResumableStore`, the material predicate), made by the process that owns the
 /// store's format. Duplicating that judgement here would be a second spelling that drifts.
 pub fn should_autostart(snug_dir: &std::path::Path) -> bool {
-    snug_dir.join("whatsapp-session").join("creds.json").exists()
+    session_store_dir(snug_dir).join("creds.json").exists()
 }
 
 /// Launch-time autostart: spawn the helper iff a session store exists, so history sync
@@ -1375,6 +1414,47 @@ mod wizard_admission_tests {
         // The wizard's probe reads a thread list to prove the token works. A wizard door that
         // admitted ONLY pairing would force a second command for that.
         assert!(admit_wizard_request("GET", "/chats").is_ok());
+    }
+
+    #[test]
+    fn the_wizard_reaches_session_forget_and_the_app_never_does() {
+        // TASK-20260821 AC6d: the POSITIVE half is the one the equivalence test cannot
+        // supply — a route present in both tables but absent from this admission would be
+        // dead at runtime with every suite green (the untested-wire class).
+        assert!(admit_wizard_request("POST", "/session/forget").is_ok());
+        assert!(admit_wizard_request("GET", "/session/forget").is_err(), "wrong verb must refuse");
+        assert!(admit_app_request("POST", "/session/forget").is_err(), "an app must never erase the session");
+    }
+
+    #[test]
+    fn forget_session_store_removes_the_store_and_is_idempotent() {
+        // The disk backstop (TASK-20260821 AC5): when the helper cannot run, this is the
+        // only thing standing between "the user deleted Telepath" and their WhatsApp
+        // session keys staying on disk.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = session_store_dir(dir.path());
+        std::fs::create_dir_all(&store).expect("mkdir");
+        std::fs::write(store.join("creds.json"), b"{}").expect("write creds");
+        std::fs::write(store.join("thread-cache.json"), b"cached").expect("write cache");
+
+        forget_session_store(dir.path()).expect("forget");
+        assert!(!store.exists(), "the session store must be gone");
+        // Nothing else in ~/Snug is touched.
+        assert!(dir.path().exists());
+
+        // A second call over the absent store is SUCCESS — the state the caller wants holds.
+        forget_session_store(dir.path()).expect("idempotent forget");
+    }
+
+    #[test]
+    fn session_store_dir_matches_the_cli_derivation() {
+        // cli.ts derives `dirname(socket)/whatsapp-session`; the socket lives directly in
+        // ~/Snug. Two spellings of one directory is the drift class the equivalence tests
+        // exist for, so the Rust spelling is pinned to the same name.
+        assert_eq!(
+            session_store_dir(std::path::Path::new("/home/someone/Snug")),
+            PathBuf::from("/home/someone/Snug/whatsapp-session")
+        );
     }
 }
 

@@ -48,6 +48,8 @@ describe('the route table is a closed, method-pinned set', () => {
         'POST /pair/start',
         'GET /pair/status',
         'GET /session/status',
+        // --- deep delete (TASK-20260821-ui-polish AC5): the full device unlink ---
+        'POST /session/forget',
       ].sort(),
     );
   });
@@ -104,6 +106,16 @@ describe('pairing routes are never app-reachable (the token-capture refusal)', (
     // just-minted token before claiming connected. An app has no business proving the
     // connection; it just uses it.
     expect(isAppReachableSidecarRoute('GET', '/session/status')).toBe(false);
+  });
+
+  it('refuses `/session/forget` to apps by both verbs — an app must never erase the user’s session', () => {
+    // TASK-20260821 AC6: the deep-delete route rides the `/session/` wizard-only prefix,
+    // so the derived app subset excludes it WITHOUT a second hand-written list. Pinned
+    // anyway, because this is the route where the refusal is destructive-act-shaped
+    // rather than credential-disclosure-shaped.
+    expect(isAppReachableSidecarRoute('POST', '/session/forget')).toBe(false);
+    expect(isAppReachableSidecarRoute('GET', '/session/forget')).toBe(false);
+    expect(APP_REACHABLE_SIDECAR_ROUTES.some((route) => route.path === '/session/forget')).toBe(false);
   });
 });
 

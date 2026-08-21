@@ -338,6 +338,24 @@ export function appHasSidecarFact(db: UserDb, appId: string): boolean {
   return db.listConnections(appId).some((row) => (row.allowedHosts ?? []).includes(SIDECAR_SYMBOLIC_HOST));
 }
 
+/**
+ * Does `appId` hold the LAST sidecar fact across ALL apps (TASK-20260821 AC5/AC6)?
+ *
+ * The deep-delete trigger: deleting this app is the user forgetting their WhatsApp, so
+ * the helper session may be unlinked and its disk store erased. Any status counts (the
+ * same width as `appHasSidecarFact` — an imported `declared` row's app still owns the
+ * session's data story), and a sidecar fact on ANY OTHER app vetoes the unlink: cutting
+ * the device link out from under a surviving app is the failure the orphanhood rule in
+ * `wipeSidecarIdentityDirectoryIfOrphaned` already refuses at the db altitude, and the
+ * two altitudes must not disagree.
+ */
+export function appHoldsLastSidecarFact(db: UserDb, appId: string): boolean {
+  const sidecarRows = db
+    .listConnections()
+    .filter((row) => (row.allowedHosts ?? []).includes(SIDECAR_SYMBOLIC_HOST));
+  return sidecarRows.length > 0 && sidecarRows.every((row) => row.appId === appId);
+}
+
 /** Same fact, scoped to ONE slot — the provider lane's per-call classification. */
 export function isSidecarSlotFact(db: UserDb, appId: string, slot: string): boolean {
   return db

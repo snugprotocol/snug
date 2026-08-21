@@ -614,3 +614,50 @@ describe('GET /chats carries the sync state', () => {
     expect((res.body as { sync: { needsRelink?: boolean } }).sync.needsRelink).toBe(true);
   });
 });
+
+describe('POST /session/forget — the deep-delete unlink (TASK-20260821 AC5/AC6)', () => {
+  it('runs the socket forget on a nonce-authorized call and answers ok', async () => {
+    const { router, deps: d } = await linked();
+    const res = await router.handle({
+      method: 'POST',
+      path: '/session/forget',
+      headers: { 'x-snug-spawn-nonce': NONCE },
+    });
+    expect(res.status).toBe(200);
+    expect((res.body as { ok?: boolean }).ok).toBe(true);
+    expect(d.socket.forgotten()).toBe(true);
+  });
+
+  it('401s a valid APP bearer token — a destructive act demands the spawn nonce', async () => {
+    // The /session/ branch historically accepted the app token too (the verify read is
+    // harmless). Forget is NOT harmless: anything holding the minted token could erase
+    // the user's session. This test fails against a naive same-branch implementation —
+    // that is the point (plan review 2026-08-21, finding 3).
+    const { router, deps: d, token } = await linked();
+    const res = await router.handle({
+      method: 'POST',
+      path: '/session/forget',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(401);
+    expect(d.socket.forgotten()).toBe(false);
+  });
+
+  it('401s with no credential at all', async () => {
+    const { router, deps: d } = await linked();
+    const res = await router.handle({ method: 'POST', path: '/session/forget', headers: {} });
+    expect(res.status).toBe(401);
+    expect(d.socket.forgotten()).toBe(false);
+  });
+
+  it('405s the wrong verb even with the nonce', async () => {
+    const { router, deps: d } = await linked();
+    const res = await router.handle({
+      method: 'GET',
+      path: '/session/forget',
+      headers: { 'x-snug-spawn-nonce': NONCE },
+    });
+    expect(res.status).toBe(405);
+    expect(d.socket.forgotten()).toBe(false);
+  });
+});

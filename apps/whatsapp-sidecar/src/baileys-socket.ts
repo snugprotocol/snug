@@ -390,7 +390,17 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
 
   const cacheDebounceMs = deps.cacheDebounceMs ?? 5_000;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  const persistNow = (): void =>
+  /**
+   * THE PERSIST TOMBSTONE (TASK-20260821 AC5). Once `forget()` has erased the auth store,
+   * NOTHING may write into that directory again from this process: not the debounce
+   * flush, not the process-exit flush (which the shell's TERM-first reap exists to run),
+   * not a late `creds.update`. Every writer below checks this flag — a wipe followed by
+   * any one of those writes would ship the user's WhatsApp content back onto the disk
+   * they just asked to be cleared (plan review 2026-08-21, finding 1).
+   */
+  let forgotten = false;
+  const persistNow = (): void => {
+    if (forgotten) return;
     deps.threadCache?.save({
       store: store.snapshot(),
       history,
@@ -402,13 +412,14 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
         errors: Object.fromEntries(rosterErrorCounts),
       },
     });
+  };
   /**
    * Throttle-style: the first change opens a window, everything else in it rides along in
    * one write. History sync mutates the store thousands of times a minute; the disk sees a
    * snapshot every few seconds, and the process-exit flush below catches the tail.
    */
   const scheduleSave = (): void => {
-    if (deps.threadCache === undefined || saveTimer !== undefined) return;
+    if (forgotten || deps.threadCache === undefined || saveTimer !== undefined) return;
     saveTimer = setTimeout(() => {
       saveTimer = undefined;
       persistNow();
@@ -585,7 +596,11 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
     const socket = makeWASocket({ auth: state, printQRInTerminal: false, syncFullHistory: true });
     sock = socket;
 
-    socket.ev.on('creds.update', () => void saveCreds());
+    // Tombstone-guarded: Baileys fires this during logout teardown too, and a post-forget
+    // credential write would re-materialize the store the wipe just erased.
+    socket.ev.on('creds.update', () => {
+      if (!forgotten) void saveCreds();
+    });
 
     socket.ev.on('connection.update', (update) => {
       if (typeof update.qr === 'string' && update.qr.length > 0) {
@@ -905,6 +920,39 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       const id = sent?.key?.id;
       if (typeof id !== 'string' || id.length === 0) throw new Error('the message was not accepted');
       return { id };
+    },
+
+    async forget() {
+      // Order matters, and each step is why the previous one is safe:
+      //  1. TOMBSTONE FIRST — from this line no debounce flush, exit flush, or
+      //     `creds.update` can write into the store again (see the `forgotten` doc).
+      //  2. Cancel the pending debounce, so the wipe below cannot race a queued save.
+      //  3. LOGOUT before the wipe — the unlink frame needs the very credentials the wipe
+      //     destroys. Best-effort: an offline phone or an already-dead socket must not
+      //     keep the disk dirty, so failures fall through to the erase.
+      //  4. Erase the auth store LAST: session keys, minted token, thread cache — all of
+      //     it lives in `authDir` (the thread cache is created beside the keys for
+      //     exactly this shared-lifetime sweep).
+      forgotten = true;
+      if (saveTimer !== undefined) {
+        clearTimeout(saveTimer);
+        saveTimer = undefined;
+      }
+      const active = sock;
+      sock = undefined;
+      link = 'idle';
+      qr = undefined;
+      try {
+        await active?.logout();
+      } catch {
+        /* offline, unpaired, or already unlinked — the erase below is the contract */
+      }
+      try {
+        void active?.end(undefined);
+      } catch {
+        /* already closed */
+      }
+      resetAuthStore(deps.authDir);
     },
   };
 }

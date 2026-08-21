@@ -95,6 +95,9 @@ function HubHome(): ReactElement {
   const [load, setLoad] = useState<LoadState>({ phase: 'loading' });
   /** Which tile is showing its inline confirm — no window.confirm (design contract, AC22). */
   const [confirmingDelete, setConfirmingDelete] = useState<string | undefined>(undefined);
+  /** Which tile is in rename-edit mode (TASK-20260821 AC1), and its refusal copy. */
+  const [renaming, setRenaming] = useState<string | undefined>(undefined);
+  const [renameError, setRenameError] = useState<string | undefined>(undefined);
   /** In-flight latch for delete: one confirm = one delete. */
   const [deleting, setDeleting] = useState<string | undefined>(undefined);
   const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
@@ -121,6 +124,25 @@ function HubHome(): ReactElement {
     } finally {
       deleteLatch.current = undefined;
       setDeleting(undefined);
+    }
+  }, []);
+
+  /** Commit a rename: unique-or-refuse at the library layer, entries updated in place. */
+  const commitRename = useCallback(async (appId: string, name: string): Promise<void> => {
+    setRenameError(undefined);
+    try {
+      await userLibrary().rename(appId, name);
+      setLoad((current) =>
+        current.phase === 'ready'
+          ? {
+              phase: 'ready',
+              entries: current.entries.map((e) => (e.id === appId ? { ...e, displayName: name.trim().slice(0, 80) } : e)),
+            }
+          : current,
+      );
+      setRenaming(undefined);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : 'rename failed');
     }
   }, []);
 
@@ -286,7 +308,53 @@ function HubHome(): ReactElement {
                   <span className="tile-name">{name}</span>
                   <span className="tile-sub">{meta?.description ?? new Date(entry.createdAt).toLocaleDateString()}</span>
                 </Link>
-                {armed ? (
+                {renaming === entry.id ? (
+                  <div className="tile-confirm tile-rename-editor" role="group" aria-label={`rename ${name}`}>
+                    <input
+                      data-testid="app-rename-input"
+                      defaultValue={name}
+                      autoFocus
+                      aria-label={`new name for ${name}`}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          void commitRename(entry.id, (event.target as HTMLInputElement).value);
+                        }
+                        if (event.key === 'Escape') {
+                          setRenameError(undefined);
+                          setRenaming(undefined);
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="primary"
+                      data-testid="app-rename-save"
+                      onClick={(event) => {
+                        const input = (event.currentTarget.parentElement?.querySelector('input') ?? null) as
+                          | HTMLInputElement
+                          | null;
+                        if (input !== null) void commitRename(entry.id, input.value);
+                      }}
+                    >
+                      save
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      data-testid="app-rename-cancel"
+                      onClick={() => {
+                        setRenameError(undefined);
+                        setRenaming(undefined);
+                      }}
+                    >
+                      cancel
+                    </Button>
+                    {renameError !== undefined ? (
+                      <span className="error-note" role="alert">
+                        {renameError}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : armed ? (
                   <div className="tile-confirm" role="group" aria-label={`delete ${name}?`}>
                     <span className="tile-confirm-copy">delete for good?</span>
                     <Button
@@ -307,19 +375,35 @@ function HubHome(): ReactElement {
                     </Button>
                   </div>
                 ) : (
-                  <Button
-                    variant="ghost"
-                    className="tile-delete"
-                    data-testid="app-delete"
-                    onClick={() => {
-                      setDeleteError(undefined);
-                      setConfirmingDelete(entry.id);
-                    }}
-                    title={`delete ${name}`}
-                    aria-label={`delete ${name}`}
-                  >
-                    delete
-                  </Button>
+                  <div className="tile-actions">
+                    <Button
+                      variant="ghost"
+                      className="tile-rename"
+                      data-testid="app-rename"
+                      onClick={() => {
+                        setRenameError(undefined);
+                        setRenaming(entry.id);
+                        setConfirmingDelete(undefined);
+                      }}
+                      title={`rename ${name}`}
+                      aria-label={`rename ${name}`}
+                    >
+                      rename
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="tile-delete"
+                      data-testid="app-delete"
+                      onClick={() => {
+                        setDeleteError(undefined);
+                        setConfirmingDelete(entry.id);
+                      }}
+                      title={`delete ${name}`}
+                      aria-label={`delete ${name}`}
+                    >
+                      delete
+                    </Button>
+                  </div>
                 )}
               </Card>
             );

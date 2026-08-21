@@ -88,7 +88,10 @@ export interface SnugPlatform {
    * which refused them, so linking could never start. The claim was about a surface nobody
    * had run.)
    */
-  sidecarCtl?: (action: 'start' | 'stop' | 'status') => Promise<{ running: boolean; nonce?: string }>;
+  sidecarCtl?: (
+    /** `forget` (TASK-20260821 AC5) stops the helper AND removes its on-disk session store. */
+    action: 'start' | 'stop' | 'status' | 'forget',
+  ) => Promise<{ running: boolean; nonce?: string }>;
   sidecarFetch?: (
     method: string,
     pathAndQuery: string,
