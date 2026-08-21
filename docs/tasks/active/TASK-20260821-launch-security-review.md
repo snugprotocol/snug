@@ -146,20 +146,42 @@ write attempts.
 Four defects were found and **fixed** rather than described, one of them a real credential
 leak (§Findings). Two of the eight findings were defects in *checks* rather than code.
 
+### Verification actually performed
+
+**`pnpm run gate:local --all` → FULL PASS, 6/6 legs** (workspace · smoke · e2e · rust ·
+desktop · release), the gate's own verdict reading "equivalent to ci.yml on macOS". Its one
+named gap is the ci.yml Windows leg, which has no local counterpart.
+
+**`pnpm --filter desktop gate` → GATE GREEN in a real WKWebView**, run separately and after
+every commit in this branch. Both new rows executed and passed there:
+
+```
+PASS  ipc-sidecar-wizard-fetch-refused        keyless sidecar_wizard_fetch … resolved no
+                                              callback, and the invoke key never reached
+                                              the subframe — key-gated per command
+PASS  ipc-sidecar-wizard-fetch-dispatchable   sidecar_wizard_fetch dispatched and the
+                                              command body answered
+```
+
+The positive twin answering "the WhatsApp helper is not running" is the correct pass: it
+proves the main window *can* dispatch the command, which is what stops the refusal check
+opposite from vouching for nothing. So R-12's closure is proven behaviourally, not merely
+unit-pinned — the strongest form available on this surface.
+
 ### The conditions, in the order they bind
 
-1. **The in-shell gate has not been run.** The two new IPC rows are unit-pinned only; no
-   real WKWebView has executed them. `pnpm --filter desktop gate` on macOS hardware is the
-   only thing that proves the refusal, and it is owed before the flip.
-2. **CI is billing-blocked** and has been since ~2026-08-18, so nothing here was verified by
-   an independent runner. This is already recorded as a hard flip-public blocker: an outside
-   contributor's PR cannot be gated by a command that only runs on the owner's Mac.
-3. **No Windows verification of any kind**, so R-5's only regression detector is dark. The
+1. **CI is billing-blocked** and has been since ~2026-08-18, so nothing here was verified by
+   an independent runner — every green above is the owner's machine. This is already
+   recorded as a hard flip-public blocker: an outside contributor's PR cannot be gated by a
+   command that only runs on one Mac.
+2. **No Windows verification of any kind**, so R-5's only regression detector is dark. The
    decision to ship macOS-only stands and is now stated in the build, the README, SECURITY.md
    and the threat model — the condition is that this stays true, not that it be changed.
-4. **The reference server's missing authorization** (filed, item 1) needs at minimum the
+3. **The reference server's missing authorization** (filed, item 1) needs at minimum the
    runbook caveat before anyone self-hosts with SSO on. The shipped hub is unaffected.
-5. **Owner hardware walks remain owed** and no suite substitutes for them.
+4. **Owner hardware walks remain owed** and no suite substitutes for them.
+5. **Runbook stage 0 and the `internal/` reference scrub** are unexecuted flip prerequisites
+   — see "What was NOT checked".
 
 ### What was NOT checked — stated because a pass that hides its gaps is the failure mode
 

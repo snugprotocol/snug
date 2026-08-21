@@ -696,12 +696,14 @@ this section exists to prevent:**
 
 - **No lane reviewed `packages/adapters` or `packages/sdk`.** A deliberate scoping call, not
   an oversight; both are named here so the gap is visible.
-- **The in-shell gate was not run.** The new IPC rows are unit-pinned and have *not* been
-  executed in a real WKWebView — the gate is a separate script requiring a macOS shell run.
-  This is R-11's cadence gap, unchanged and now applying to the newest rows too.
 - **CI has been billing-blocked since ~2026-08-18**, so nothing here was verified by an
-  independent runner. The evidence is a local `gate:local` run whose own verdict names the
-  legs it did not execute.
+  independent runner — every green below is one machine. The evidence is `pnpm run
+  gate:local --all` at **FULL PASS, 6/6 legs** (its own verdict: "equivalent to ci.yml on
+  macOS", with the Windows leg named as having no local counterpart), plus a separate
+  `pnpm --filter desktop gate` run at **GATE GREEN in a real WKWebView** — where both new
+  R-12 rows executed and passed, so that closure is proven behaviourally and not merely
+  unit-pinned. R-11's cadence gap is therefore narrower than at v2 for these rows, and
+  unchanged for everything that still depends on CI.
 - **No Windows verification of any kind.** R-5's only regression detector remains a CI leg
   that does not run.
 - **The findings triaged as accepted rather than fixed** are in `docs/next-steps.md` with
