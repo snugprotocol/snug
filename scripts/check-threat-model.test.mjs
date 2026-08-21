@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import {
   backtickedPaths,
   checkDeltaLedger,
+  checkProseDeltaCount,
   checkResidualIdsUnique,
   hashPrefix,
   LEDGER_BEGIN,
@@ -177,4 +178,55 @@ test('checkResidualIdsUnique: the REAL threat model has unique ids', () => {
   // this proves the artifact.
   const md = readFileSync(new URL('../docs/threat-model.md', import.meta.url), 'utf8');
   assert.deepEqual(checkResidualIdsUnique(md), []);
+});
+
+// --- TM8: the §1 prose delta count must agree with the ledger --------------
+//
+// WHY THIS EXISTS (TASK-20260821-launch-security-review). The shipped v2 document said
+// "This document consolidates eight per-change threat-model deltas" while its ledger
+// carried twelve rows and docs/security/ held twelve files — and the checker was fully
+// green throughout, because its only count assertion was `actual.size >= 8`: a FLOOR that
+// passes at twelve and never reads the prose at all. A mechanical check earns exactly the
+// claim its mechanism supports, and this one was being credited with a claim it could not
+// make. These tests pin the check that would have caught it.
+
+test('checkProseDeltaCount: prose agreeing with the ledger yields no failures', () => {
+  const md = [
+    'This document consolidates twelve per-change threat-model deltas (§8).',
+    LEDGER_BEGIN,
+    '| Delta | Pinned hash | Consolidated into |',
+    '|---|---|---|',
+    ...Array.from({ length: 12 }, (_, i) => `| \`docs/security/threat-model-delta-${i}.md\` | \`0123456789ab\` | §5 |`),
+    LEDGER_END,
+  ].join('\n');
+  assert.deepEqual(checkProseDeltaCount(md), []);
+});
+
+test('checkProseDeltaCount: the EXACT v2 defect fails and names both numbers', () => {
+  const md = [
+    'This document consolidates eight per-change threat-model deltas (§8).',
+    LEDGER_BEGIN,
+    '| Delta | Pinned hash | Consolidated into |',
+    '|---|---|---|',
+    ...Array.from({ length: 12 }, (_, i) => `| \`docs/security/threat-model-delta-${i}.md\` | \`0123456789ab\` | §5 |`),
+    LEDGER_END,
+  ].join('\n');
+  const failures = checkProseDeltaCount(md);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /eight/i);
+  assert.match(failures[0], /12/);
+});
+
+test('checkProseDeltaCount: a missing prose sentence is a failure, never a silent pass', () => {
+  // The failure mode a "find the number and compare it" check invites: no number found,
+  // nothing compared, green. An absent claim must fail loudly.
+  const md = [LEDGER_BEGIN, '| Delta |', LEDGER_END].join('\n');
+  const failures = checkProseDeltaCount(md);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /no delta-count sentence/i);
+});
+
+test('checkProseDeltaCount: the REAL threat model agrees with its own ledger', () => {
+  const md = readFileSync(new URL('../docs/threat-model.md', import.meta.url), 'utf8');
+  assert.deepEqual(checkProseDeltaCount(md), []);
 });

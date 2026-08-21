@@ -16,7 +16,7 @@ Security is architectural, not policy: apps run in a locked-down iframe sandbox 
 
 This is the **reference implementation monorepo**: protocol bindings, iframe runner, in-app SDK, per-app database, LLM knowledge base, agent adapters, the hosted Playground, and example apps. The protocol specification lives in [`snugprotocol/spec`](https://github.com/snugprotocol/spec).
 
-> 🚧 **Pre-1.0.** The protocol surface may change until spec v0.2 is final. Status: `docs/next-steps.md`.
+> 🚧 **Pre-1.0.** The protocol surface may change until spec v0.3 is final. Status: `docs/next-steps.md`.
 
 ## Repo layout
 
@@ -26,11 +26,13 @@ This is the **reference implementation monorepo**: protocol bindings, iframe run
 | `packages/runner` | `@snugprotocol/runner` — sandboxed iframe runner + bridge host |
 | `packages/sdk` | `@snugprotocol/sdk` — in-app hooks: `useSnugApp`, `usePersistedState`, `useAppDB` (embedded + module forms) |
 | `packages/db` | `@snugprotocol/db` — sql.js + OPFS per-app isolated database, `.snug` export/import, optional passphrase encryption at rest |
-| `packages/auth` | `@snugprotocol/auth` — Dynamic Auth core: local-first credential handling (in development) |
+| `packages/auth` | `@snugprotocol/auth` — Dynamic Auth core + the connected-fetch executor: local-first credential handling, the frozen per-connection host ceiling, injection and response scrubbing (this is the C1 enforcement seat) |
 | `packages/knowledge` | `@snugprotocol/knowledge` — the LLM app-authoring knowledge base |
 | `packages/adapters` | `@snugprotocol/adapters` — anthropic, openai, mock |
 | `apps/playground` | Snug Playground — hosted demo (chat → build → run) |
-| `apps/server` | Minimal reference backend (`/invoke` + artifact store) |
+| `apps/desktop` | The macOS desktop shell (Tauri 2) — native fetch, loopback OAuth, `~/Snug/user.snug` on disk |
+| `apps/server` | Minimal reference backend (`/invoke` + artifact store) — **optional**; the hub is static and needs no backend |
+| `apps/whatsapp-sidecar` | Local linked-device helper for the Telepath starter (desktop-only, LLM-free by construction) |
 | `examples/` | Curated starter apps — each doubles as docs example and test fixture |
 
 ## Quickstart (under 10 minutes, no API key needed)

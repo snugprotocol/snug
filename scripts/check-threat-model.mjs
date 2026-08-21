@@ -88,6 +88,39 @@ export function checkResidualIdsUnique(md) {
   return failures;
 }
 
+/** Number words the §1 prose may spell the delta count with, plus their values. */
+const NUMBER_WORDS = new Map([
+  ['four', 4], ['five', 5], ['six', 6], ['seven', 7], ['eight', 8], ['nine', 9],
+  ['ten', 10], ['eleven', 11], ['twelve', 12], ['thirteen', 13], ['fourteen', 14],
+  ['fifteen', 15], ['sixteen', 16], ['seventeen', 17], ['eighteen', 18],
+  ['nineteen', 19], ['twenty', 20],
+]);
+
+/**
+ * The §1 prose states how many deltas this document consolidates. That sentence is a
+ * CLAIM about the ledger below it, and it can drift — v2 shipped "eight" against a
+ * twelve-row ledger, green the whole time, because the only count assertion here was a
+ * `>= 8` floor that never read the prose. Compare the two directly.
+ *
+ * A MISSING sentence is a failure rather than a skip: a check that quietly passes when it
+ * finds nothing to check is the shape this whole file exists to avoid.
+ */
+export function checkProseDeltaCount(md) {
+  const m = md.match(/consolidates\s+([a-z]+|\d+)\s+per-change threat-model deltas/i);
+  if (m === null) {
+    return ['no delta-count sentence found in the prose — §1 must state how many deltas this document consolidates'];
+  }
+  const raw = m[1].toLowerCase();
+  const stated = /^\d+$/.test(raw) ? Number(raw) : NUMBER_WORDS.get(raw);
+  if (stated === undefined) return [`the delta-count sentence says "${m[1]}", which is not a number this check understands`];
+  const ledger = parseLedger(md);
+  const actual = ledger === null ? 0 : ledger.size;
+  if (stated !== actual) {
+    return [`§1 prose says the document consolidates "${m[1]}" deltas, but the ledger carries ${actual} rows — the prose is a claim about the table below it`];
+  }
+  return [];
+}
+
 /**
  * Compare the ledger against the actual delta files. Pure: takes Map<path, hash> for
  * both sides so the tests need no filesystem. Returns a list of failure strings.
@@ -209,11 +242,20 @@ function main() {
     const rel = `docs/security/${f}`;
     actual.set(rel, hashPrefix(readFileSync(join(DELTA_DIR, f))));
   }
-  check('TM3', 'at least the eight founding deltas exist', actual.size >= 8, `found ${actual.size}`);
+  // EXACT, not a floor. `>= 8` passed at twelve and would pass at fifty — it could never
+  // notice a delta going missing above the floor, and it was the assertion mistakenly
+  // credited with catching the prose/ledger drift below.
+  check('TM3', 'the ledger row count equals the delta files on disk', actual.size === (parseLedger(tm)?.size ?? -1),
+    `docs/security/ holds ${actual.size}, the ledger carries ${parseLedger(tm)?.size ?? 'no'} rows`);
   for (const f of checkDeltaLedger(parseLedger(tm), actual)) check('TM3', 'delta ledger agrees with docs/security/', false, f);
   if (parseLedger(tm) !== null && checkDeltaLedger(parseLedger(tm), actual).length === 0) {
     check('TM3', 'delta ledger agrees with docs/security/', true);
   }
+
+  // TM8 — the §1 prose count is a claim about the ledger; hold it to that.
+  const proseFailures = checkProseDeltaCount(tm);
+  for (const f of proseFailures) check('TM8', 'the §1 delta count agrees with the ledger', false, f);
+  if (proseFailures.length === 0) check('TM8', 'the §1 delta count agrees with the ledger', true);
 
   // TM4 — invariant rows name enforcement + test paths that exist.
   const rows = parseInvariantRows(tm);

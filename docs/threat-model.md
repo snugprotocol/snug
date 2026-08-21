@@ -1,17 +1,27 @@
 # Snug — Threat Model
 
-- **Version:** 2.0 · **Date:** 2026-08-21 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2)
+- **Version:** 3.0 · **Date:** 2026-08-21 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2) · TASK-20260821-launch-security-review (v3)
 - **Status:** current as of commit-time. This document is audited, not transcribed — every
   enforcement claim below was checked against the code by an adversarial pass that tried to
-  break it, and two defects that pass found were fixed before v1 was written.
-- **What v2 changed:** four surfaces that landed after v1 are folded in — the `.snug`
-  container (whose changes v1 carried in-place without a delta; the ledger is repaired),
-  the starter update channel, multi-provider BYOK + the deep delete, and **the desktop
-  shell's own update channel**, which is this product's first supply-chain surface. v2's
-  adversarial pass was **targeted at those four**, not a repeat of v1's five-surface audit;
-  the rest of this document is v1's, re-checked mechanically (every cited path still
-  exists) but not re-attacked. One numbering defect was also fixed: v1 shipped two R-14s,
-  and the encryption residual is now R-27.
+  break it, and defects those passes found were fixed before each version was written.
+- **What v3 changed — the pre-launch pass, and the reason it exists.** v2 stated its own
+  limit: its adversarial pass was targeted at four new surfaces, and "the rest of this
+  document is v1's, re-checked mechanically but not re-attacked." A launch review that
+  inherited that boundary would ship v1's audit as though it were current. v3 therefore
+  **re-attacked the whole surface** across seven parallel fresh-context lanes — C1, C2 and
+  the desktop IPC census, the net executor's ten gates, prompt injection and LLM egress,
+  spec-vs-code conformance, flip-public hygiene, and the reference server plus storage
+  custody (the last had **never been assigned a reviewer** in v1 or v2).
+
+  Three defects were **fixed rather than described**: a credential leak in the OAuth error
+  seat (the scrub covered only the decoded spelling of a submitted secret, while a provider
+  echoing the bytes it received returns the percent-encoded one — see §5's C1 row and the
+  §9 record), a false claim in R-8 (the confirm dialog did not render the URL it was
+  documented to name), and R-12's missing per-command IPC row. Two numbers that were simply
+  wrong were corrected: §1 said "eight deltas" against a twelve-row ledger, and R-12's
+  command census was stale in both its numerator and its denominator.
+
+  **What v3 did NOT do** is in §9, stated as plainly as what it did.
 - **Reporting:** [SECURITY.md](../SECURITY.md) · **security@snugprotocol.org**
 
 ---
@@ -57,7 +67,7 @@ personal sync origin the user connected — that is [ADR-0014](decisions/0014-cr
 custody working as designed; denial of service against the user's own browser tab or own
 self-hosted server; and third-party self-hosted infrastructure misconfiguration.
 
-**This document consolidates eight per-change threat-model deltas** (§8). A delta is written
+**This document consolidates twelve per-change threat-model deltas** (§8). A delta is written
 for someone who already knows the system and is reading one change; this is written for a
 stranger deciding whether to trust the whole thing. Where a delta's residual is restated
 here it is marked as inherited, because a model that re-sells an old residual as new is as
@@ -141,7 +151,7 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | An app cannot send a credential-shaped header across the bridge | `packages/protocol/src/frames.ts` — `netRequestSchema` refuses `STRIP_HEADERS` names; the whole frame is malformed | `packages/runner/src/__tests__/host-net.test.ts` — a credential-carrying request is answered MALFORMED, handler never called |
 | The runner is value-blind — it never imports the credential layer | `packages/runner/src/host.ts` relays; no `@snugprotocol/auth` dependency exists | `packages/runner/src/__tests__/net-value-blind.test.ts` — source-walking lint over shipped sources |
 | Injected credential values are scrubbed from response bodies, headers and error messages | `packages/auth/src/scrub.ts`, applied at the executor's delivery seat in `packages/auth/src/connected-fetch.ts` | `packages/auth/src/__tests__/scrub.test.ts` |
-| A provider's error body cannot carry credential material out of the OAuth seat | `packages/auth/src/oauth-service.ts` — **the value scrub is the control**: the submitted secret values are known exactly here (`postForm` holds the `URLSearchParams` it sent) and are scrubbed on both sides of the extraction. `packages/auth/src/provider-error-detail.ts` bounds *volume and shape* only, and re-scrubs its own output because `JSON.parse` decodes `\u` escapes | `packages/auth/src/__tests__/oauth-error-echo.test.ts`, `packages/auth/src/__tests__/provider-error-detail.test.ts` |
+| A provider's error body cannot carry credential material out of the OAuth seat — **in either spelling** | `packages/auth/src/oauth-service.ts` — **the value scrub is the control**: the submitted secret values are known exactly here (`postForm` holds the `URLSearchParams` it sent) and are scrubbed on both sides of the extraction, as **both the decoded and the percent-encoded form**. The encoded candidate is derived from `URLSearchParams` itself, because that is the serializer that actually wrote the request and it disagrees with `encodeURIComponent` on space. `packages/auth/src/provider-error-detail.ts` bounds *volume and shape* only, and re-scrubs its own output because `JSON.parse` decodes `\u` escapes | `packages/auth/src/__tests__/oauth-error-echo.test.ts` (incl. a base64-shaped token whose two spellings differ — see the v3 note below), `packages/auth/src/__tests__/provider-error-detail.test.ts` |
 | Host-bound injection is strict always — no bypass flag exists | `packages/auth/src/app-host-freeze.ts` (exact-hostname, punycode-normalized both sides) | `packages/auth/src/__tests__/browser-safe.test.ts` — source lint **plus a runtime signature walk** over real exports |
 | Hub-bound sync and default exports carry no secrets | `packages/db/src/userdb/userdb.ts` — strip then VACUUM | `packages/db/src/userdb/__tests__/auth-custody.test.ts` |
 | Credentials never reach the LLM's context | `apps/playground/src/agent/providerTools.ts` renders the already-scrubbed result | `apps/playground/src/__tests__/providerTools.test.ts` — asserts the credential reached the *wire* and is absent from the *model-bound string* |
@@ -155,6 +165,7 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | The CDN allowlist is fixed and the policy is not parameterizable | `packages/protocol/src/constants.ts` — module-level `as const`; `injectCsp` has arity 1 | `packages/runner/src/__tests__/source-guard.test.ts` |
 | A self-navigating app is permanently cut off | `packages/runner/src/host.ts` — navigation credits, consumed in full, fail closed | `packages/runner/src/__tests__/host-lifecycle.test.ts` |
 | Shell IPC is unreachable from a sandboxed subframe (macOS) | `apps/desktop/src-tauri/capabilities/main.json` + the invoke-key gate | `apps/desktop/src/gate/ipc.ts`, run by the in-shell gate — **see R-11 on cadence** |
+| The token-releasing sidecar command is unreachable from a sandboxed subframe — proven per command, not by family | `apps/desktop/src-tauri/src/lib.rs` registers `sidecar_wizard_fetch` separately from `sidecar_fetch`, and `apps/desktop/src-tauri/src/sidecar.rs` fronts the wizard route table with it (`GET /pair/status` releases the helper's access token); capabilities are per-window, so the invoke-key gate is the actual wall | `apps/desktop/src/gate/ipc.ts` — `ipc-sidecar-wizard-fetch-refused` (a keyless, well-formed invoke of `/pair/status` from a srcdoc frame, on its own callback slot) **plus** `ipc-sidecar-wizard-fetch-dispatchable`, the positive twin — **see R-11 on cadence** |
 | The shell's UPDATE commands are unreachable from a sandboxed subframe — per command, not per family | `apps/desktop/src-tauri/capabilities/main.json` grants `updater:default` + `process:allow-restart` to the main WINDOW only — but capabilities are per-window, never per-frame, so the invoke-key gate is the actual wall | `apps/desktop/src/gate/ipc.ts` — `ipc-updater-check-refused`, `ipc-updater-install-refused`, `ipc-process-relaunch-refused` (keyless well-formed invokes from a srcdoc frame) **plus** `ipc-updater-check-dispatchable`, the positive twin — **see R-11 on cadence** |
 
 ### The network ceiling
@@ -361,7 +372,19 @@ actually holds is the confirm dialog naming host, method and URL on every mutati
 *One sharpening this document adds:* replayed conversation history reaches the intent
 classifier as bare list items **outside** the fence the rest of the pipeline uses, and the
 defang covers one tag spelling. Same class as the above, weaker containment than the
-provider-chat-lane delta's wording implies.
+provider-chat-lane delta's wording implies. Bounding the replay narrows it further than
+this text once admitted: history is capped at two turns of 300 characters each.
+
+*v3 correction (2026-08-21).* Until this pass the sentence above was **false about the
+control it leans on**: the modal confirm rendered app, host and method only — the URL was
+supplied by the executor and never displayed, though the chat-lane card had always shown
+it. Host and method alone cannot distinguish `POST /notes` from
+`POST /transfer?to=attacker`, which is precisely the difference an injected instruction
+exploits. The dialog now renders the URL verbatim
+(`apps/playground/src/run/NetConfirmDialog.tsx`, pinned by test). A second honesty gap was
+closed with it: the session-remember grant is keyed `(appId, host, method)` with **no path
+component**, so approving one benign POST authorizes every POST path on that host for the
+session — the checkbox now says so ("any path").
 
 **R-9 — Third-party consent, now behind a host-enforced backstop that is honest about its
 class.** The other participants in an analysed WhatsApp thread never consented, are not
@@ -433,13 +456,33 @@ WebView2 but not Chromium, which is the engine the hosted Playground ships to; a
 unit-level pins (policy text, decision functions) do run everywhere; what is CI-bound is
 proof of *actual webview behaviour*.
 
-**R-12 — Per-command IPC proof is a rule with a current exception.** The gate identifies
-commands individually, precisely so a new command inherits nothing. Ten commands ship;
-three carry per-command checks. The gap worth naming: `sidecar_wizard_fetch` has none,
-though it fronts `GET /pair/status` — the token-releasing route the whatsapp delta says is
-closed "at its source" — while its lower-privilege sibling `sidecar_fetch` does. Mitigating:
-the three key-absence checks are shared, so if the invoke key is absent no command is
-reachable.
+**R-12 — Per-command IPC proof is a rule that does not cover every command.** The gate
+identifies commands individually, precisely so a new command inherits nothing.
+
+*v3 (2026-08-21) re-derived this from source, because v2's figures — "ten commands ship;
+three carry per-command checks" — were stale in both numbers and silently compared two
+different sets. The honest census:*
+
+| Set | Count | Per-command keyless probe |
+|---|---|---|
+| Registered in `generate_handler!`, **release** | 10 | 4 — `write_user_file` (via the sentinel, the strongest instrument here), `lan_fetch`, `sidecar_fetch`, `sidecar_wizard_fetch` |
+| Registered in `generate_handler!`, **debug** | 13 | the 3 extra are the `gate::*` trio, which exist only to run the gate |
+| Tauri **plugin** commands (never in `generate_handler!`) | 3 | 3 — `plugin:updater\|check`, `plugin:updater\|download_and_install`, `plugin:process\|restart` |
+
+**The named exception is now CLOSED.** `sidecar_wizard_fetch` — which fronts the wizard
+route table including `GET /pair/status`, the token-releasing route, and auto-injects the
+spawn nonce host-side — carried no per-command row through v2 while its *lower*-privilege
+sibling did. TASK-20260821-launch-security-review added `ipc-sidecar-wizard-fetch-refused`
+(a keyless well-formed invoke of that exact route from a sandboxed srcdoc frame, on its own
+callback slot) plus `ipc-sidecar-wizard-fetch-dispatchable`, the positive twin.
+
+*What remains, stated exactly:* six release commands still have no per-command row —
+`read_user_file`, `read_opened_file`, `export_user_bytes`, `sidecar_ctl`,
+`pending_opened_files`, `close_flush_done`. None releases a credential, and the three
+key-absence checks are shared, so if the invoke key is absent no command is reachable at
+all. That shared check is what actually bounds this residual; the per-command rows exist
+because registration is per-command and a family-level check cannot see a command added to
+the wrong handler list.
 
 ### Smaller, stated rather than discovered
 
@@ -610,6 +653,65 @@ Both were reachable, both are the shape a delta would not catch — one because 
 asserted the ordering the code did not have, the other because every relevant assertion
 read `code` and never `message`. That is the argument for auditing rather than transcribing,
 and it is why §6 above should be read as a genuine list rather than a formality.
+
+### The v3 pass (2026-08-21) — the pre-launch audit
+
+Seven fresh-context lanes ran in parallel against a single committed tree, each required to
+return claim → enforcement `file:line` → probe → verdict, and each briefed that a finding
+without a runnable probe is an argument rather than a finding. Lanes: C1 credentials · C2
+sandbox + the desktop IPC census + the sidecar's own HTTP surface · the net executor's ten
+gates and the ceiling · prompt injection and LLM egress · spec-vs-code conformance ·
+flip-public hygiene · the reference server and storage custody.
+
+**Three defects were fixed in this pass, each test-first with the red recorded:**
+
+1. **The OAuth error seat leaked the ENCODED spelling of submitted secrets.**
+   `body.get()` returns a decoded value while `URLSearchParams.toString()`
+   percent-encodes on the wire, so a provider echoing back what it literally received
+   returned a spelling the raw-only candidate set could not match — and `scrubAuthValues`
+   is exact-substring. Any base64-shaped credential (`+`, `/`, `=`) differs between the two
+   forms, which is the ordinary shape of an OAuth refresh token. The resulting message
+   reaches the app iframe, the LLM, and `snug_secrets` (as `lastError`, which rides a
+   personal-origin sync). The sibling seat in `connected-fetch.ts` had learned this exact
+   lesson at its query-injection candidates; this seat never inherited it. **The existing
+   tests could not see it**: their fixtures were pure `[A-Za-z0-9-]`, for which encoding is
+   the identity, so raw and encoded were byte-identical and every assertion passed whether
+   or not the defense existed.
+2. **R-8's load-bearing sentence was false.** The residual rests on the confirm dialog
+   "naming host, method and URL on every mutating call"; the modal never rendered the URL.
+   Fixed in the dialog rather than by amending the sentence, and the session-remember
+   checkbox now discloses that its grant is path-blind.
+3. **R-12's named exception was closed** — `sidecar_wizard_fetch` gained its own keyless
+   refusal row and positive twin.
+
+**A flip-public BLOCKER was also fixed, outside this document's usual scope but worth
+recording**: a guard test in `packages/knowledge` hardcoded the real ancestor-system
+codenames as a plaintext list annotated as such — a test written to prevent that exposure
+was itself the exposure, in the file a curious reader would find most rewarding. The tokens
+are hashed now, with substring semantics preserved and the planted-token sample recovered
+by brute force rather than written down.
+
+**What v3 did NOT do — stated because a pass that hides its own gaps is the failure mode
+this section exists to prevent:**
+
+- **No lane reviewed `packages/adapters` or `packages/sdk`.** A deliberate scoping call, not
+  an oversight; both are named here so the gap is visible.
+- **The in-shell gate was not run.** The new IPC rows are unit-pinned and have *not* been
+  executed in a real WKWebView — the gate is a separate script requiring a macOS shell run.
+  This is R-11's cadence gap, unchanged and now applying to the newest rows too.
+- **CI has been billing-blocked since ~2026-08-18**, so nothing here was verified by an
+  independent runner. The evidence is a local `gate:local` run whose own verdict names the
+  legs it did not execute.
+- **No Windows verification of any kind.** R-5's only regression detector remains a CI leg
+  that does not run.
+- **The findings triaged as accepted rather than fixed** are in `docs/next-steps.md` with
+  severity and evidence — notably the reference server's missing authorization on
+  `/invoke` and `/artifacts` (bounded by ADR-0013: the shipped hub has no backend), the
+  breadth of untrusted `.snug` import, three IPv6-embedding forms the SSRF literal guard
+  does not cover, and a stale LAN-transport timeout that silences the executor's
+  self-naming abort message.
+- **Owner hardware walks remain owed** and no suite substitutes for them; they are listed
+  in `docs/next-steps.md`.
 
 ---
 

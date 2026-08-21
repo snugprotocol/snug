@@ -30,7 +30,8 @@ Please include a reproduction — a Playground sequence, a single-file app HTML,
 - Envelope-boundary validation gaps in `packages/protocol` / `packages/runner` (frames that bypass zod validation, smuggle capabilities, or confuse the bridge).
 - The reference server (`apps/server`): `/invoke`, session/CSRF handling, `/userdb` compare-and-swap endpoints, artifact cache.
 - Prompt-injection **with a boundary consequence** — LLM output or app content that causes the host to violate C1/C2. (Prompt injection that merely makes the LLM say something silly inside its existing permissions is a quality issue, not a security one.)
-- The credential-handling layer (`packages/auth` and the `snug_connections` storage in `packages/db`): defeating the per-app host-allowlist freeze, the OAuth flow binding, or the credential store's custody rules is in scope **today**. The connected-fetch injection/scrubbing runtime is landing next and is in scope from its first shipped commit; design-level reports against the documented model are welcome before then.
+- The credential-handling layer (`packages/auth` and the `snug_connections` storage in `packages/db`): defeating the per-app host-allowlist freeze, the OAuth flow binding, or the credential store's custody rules. **The connected-fetch injection/scrubbing runtime has shipped and is fully in scope** — its ten gates, the frozen host ceiling, the mutating-call confirm, and the response/error scrubbing are the highest-value targets in the repo.
+- The desktop shell (`apps/desktop`): the Tauri IPC boundary, the per-command capability gates, and the local WhatsApp helper (`apps/whatsapp-sidecar`) it supervises. Note the platform caveat below — Windows is a known break and does not ship.
 - Design-level flaws in the protocol itself — report here or against [`snugprotocol/spec`](https://github.com/snugprotocol/spec); same address either way.
 
 **Out of scope**
