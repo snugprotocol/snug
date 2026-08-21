@@ -109,3 +109,10 @@ Order chosen so DB/helper layers land test-first before UI, and the redesign lan
 - State: all six owner asks implemented and verified; branch `feat/ui-polish` at Phase F + docs; NOT merged, NO PR (owner instruction: wait for `/close-session`).
 - Next step: owner `/close-session` — gate legs choice, review, PR, merge, done-move.
 - Open questions: none. Residuals recorded: helper-cannot-start skips phone-side unlink (disk still wiped); keyless pin routes keyless (visible failure, selector marked).
+
+### 2026-08-21 — Claude (autonomous) — Gate 6 close
+- Done: owner chose gate legs **workspace+smoke**. Gate verdict, verbatim: **"PARTIAL PASS — 2/6 legs green (workspace, smoke). NOT VERIFIED: e2e, rust, desktop, release. This run is NOT equivalent to ci.yml. Merging on it accepts the gap above."** Supplementary in-session evidence (not gate legs): cargo 100, desktop vitest 141, whatsapp-sidecar 158, forced root turbo 23/23 (0 cached, playground 1442/1442), threat-model 139/139, whitepaper checker 103/103 after the draft touch-up.
+- Docs at close: spec-changelog INTERNAL-DRAFT entry for the `/session/forget` route (ADR-0032/0034 precedent; no schema bytes, no spec-repo push) + the staged SPEC-v0.3 draft's §20.8 route count corrected 11→12 locally, carried to the next consolidated push. next-steps dated entry: Telepath deep-delete hardware walk, desktop-shell settings eyeball, keyless-pin residual, deselected-legs disclosure. Lessons already landed pre-close (write tombstone; subset-equivalence blindness) — no NEW lessons from the close itself.
+- State: retiring to done/INDEX in the next commit; PR + squash-merge to `main` follow per the close-session contract (leg selection was the human beat).
+- Next step: none — task complete on merge.
+- Open questions: none.

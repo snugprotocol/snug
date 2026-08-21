@@ -4,6 +4,20 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-21 — INTERNAL DRAFT, not staged for any push — TASK-20260821-ui-polish (ADR-0046 §7)
+
+**Excluded from every spec push** (the ADR-0032/0034 precedent: `sidecar-contract.ts`
+stays outside `json-schemas.ts` SOURCES). ONE route joins the sidecar HTTP contract:
+`POST /session/forget` — the deep-delete device unlink. Wizard-only by the existing
+`/session/` prefix rule (the derived app-reachable subset excludes it with no new list),
+nonce-guarded at the helper router (the branch's app-token acceptance is explicitly NOT
+inherited — forget is destructive), mirrored in the Rust `WIZARD_ROUTES` table, which is
+now pinned equal to the FULL contract by a second equivalence test. Behavior: best-effort
+provider logout, then the auth store (session keys, minted token, thread cache) is erased
+behind a persist tombstone. No schema bytes changed; no spec-repo impact until the
+linked-device surface's next consolidated push, where the v0.3 §sidecar route table gains
+the row.
+
 ## 2026-08-20 — **PUSHED** — spec v0.3-draft consolidated + whitepaper edition 2 — TASK-20260820-spec-v03-whitepaper — spec commits `ea0109d` (whitepaper e1, rebased) + `cd011cc` (v0.3)
 
 Owner-commissioned ("regenerate the specs v0.3 including the whitepaper … final draft for

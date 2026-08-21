@@ -1250,12 +1250,14 @@ residual of §20.6, and — wherever the connection is disclosed — any standin
 ### 20.8 Reference binding (non-normative)
 
 The reference implementation binds this surface to WhatsApp: a Node helper owning a
-linked-device session; symbolic host `whatsapp.sidecar.localhost`; an 11-route table
-(pair/start, pair/qr, pair/status, session/status wizard-only; chats, per-chat history/
-messages GET+POST, events, media, picture app-reachable); a `device-link` pairing family
-entry in the registry; and the macOS desktop shell mediating the socket with a
-Rust-side admission table held equivalent by a source-parsing test. None of those
-specifics are normative; §20.1–§20.7 are.
+linked-device session; symbolic host `whatsapp.sidecar.localhost`; a 12-route table
+(pair/start, pair/qr, pair/status, session/status, session/forget wizard-only; chats,
+per-chat history/messages GET+POST, events, media, picture app-reachable —
+`POST /session/forget` is the deep-delete unlink: nonce-guarded provider logout plus
+auth-store erasure behind a persist tombstone, added 2026-08-21 ahead of the next
+consolidated push); a `device-link` pairing family entry in the registry; and the macOS
+desktop shell mediating the socket with a Rust-side admission table held equivalent by a
+source-parsing test. None of those specifics are normative; §20.1–§20.7 are.
 
 ---
 
