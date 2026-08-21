@@ -138,15 +138,23 @@ export function retryUserDbBoot(): void {
  * only the honest owner who has no reset link and no support desk.
  */
 export async function unlockUserDb(secrets: ContainerSecrets): Promise<boolean> {
-  if (userDbStatusStore.get().state !== 'locked') return userDbStatusStore.get().state === 'ready';
+  const before = userDbStatusStore.get();
+  if (before.state !== 'locked') return before.state === 'ready';
   ensureReadyPromise();
-  userDbStatusStore.set({ state: 'opening' });
+
+  // DELIBERATELY NOT via `{ state: 'opening' }`. App.tsx renders the unlock screen for
+  // exactly one status, so dipping through another one UNMOUNTS it mid-attempt and
+  // destroys the local state the screen is about to set — a wrong passphrase cleared
+  // the box and said nothing at all (found by the owner running the real app; the
+  // component test could not see it, because it mounts the screen directly).
+  //
+  // The screen owns its own busy state, so a transient global status buys nothing here.
+  // The status changes only when the ATTEMPT changes it: to 'ready' on success, or
+  // right back to 'locked' on a wrong secret.
   return new Promise<boolean>((resolve) => {
     const stop = userDbStatusStore.subscribe(() => {
-      const status = userDbStatusStore.get();
-      if (status.state === 'opening') return;
       stop();
-      resolve(status.state === 'ready');
+      resolve(userDbStatusStore.get().state === 'ready');
     });
     attemptOpen(secrets);
   });

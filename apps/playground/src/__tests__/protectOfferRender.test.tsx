@@ -8,10 +8,15 @@
 //
 // So this mounts the REAL route component and asserts a person sees the screen. Grepping
 // the source proves the wiring exists; only rendering proves it fires.
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import { MemoryRouter } from 'react-router-dom';
+
+const SRC = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const desktopFirstRun = { value: false };
 const protectOffer = { value: false };
@@ -86,5 +91,21 @@ describe('the protection offer reaches the screen', () => {
     protectOffer.value = true;
     await render();
     expect(container?.textContent ?? '').not.toMatch(/protect this file/i);
+  });
+});
+
+describe('the unlock screen survives a failed attempt (owner-found, second pass)', () => {
+  it('stays mounted while the status dips to opening', async () => {
+    // THE BUG: `unlockUserDb` sets status 'opening' mid-attempt, and App.tsx rendered
+    // UnlockScreen only while status === 'locked'. So a wrong passphrase UNMOUNTED the
+    // screen, destroying the `failed` state that was about to be set — the user got a
+    // cleared box and complete silence. The unit test missed it by mounting the
+    // component directly with the store mocked; only the composed app can show it.
+    // The fix: unlockUserDb never publishes an intermediate status, so the screen is
+    // never unmounted between submit and result.
+    const source = readFileSync(join(SRC, 'state/userdb.ts'), 'utf8');
+    const fn = /export async function unlockUserDb[\s\S]*?\n}/.exec(source)?.[0] ?? '';
+    expect(fn).not.toBe('');
+    expect(fn).not.toContain("userDbStatusStore.set({ state: 'opening' })");
   });
 });
