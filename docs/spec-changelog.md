@@ -4,7 +4,7 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
-## 2026-08-20 — STAGED, not pushed — spec v0.2-userdb §5 + §6 — TASK-20260820-snug-file-and-encryption (ADR-0042, ADR-0043)
+## 2026-08-20 — **PUSHED** — spec v0.2-draft §6 + §7 — TASK-20260820-snug-file-and-encryption (ADR-0042, ADR-0043) — spec commit `8ea69b8`
 
 **No JSON schema bytes changed; the wire protocol stays v1.** Both additions are to the
 *storage* surface (`spec-v0.2-userdb.md`), which ADR-0007 made normative because
@@ -28,7 +28,22 @@ never quarantined or replaced, the container self-opening so any device with the
 the secret can read it, and size limits applied to the plaintext rather than the container.
 
 `packages/protocol` carries the constants (`USERDB_FILE`, `USERDB_LEGACY_FILE`,
-`USERDB_EXTENSION`, `CONTAINER`). No push to `snugprotocol/spec` (needs an explicit ask).
+`USERDB_EXTENSION`, `CONTAINER`).
+
+**Pushed 2026-08-20 on the owner's explicit ask** as `snugprotocol/spec@8ea69b8`
+(single commit on `main`, +118/-3, one file). The sections land as **§6 and §7** of
+`SPEC-v0.2-draft.md` — the published document already used §1–§5, so the staged
+numbering (§5/§6) shifted on publication. Also amended in the same commit: §2's
+canonical filename, §2.2's per-app export, §3.2's hub export obligation, and a dated
+revision note. **No JSON Schema bytes changed**, and none were copied.
+
+**Known drift, deliberately NOT carried in this commit** (owner decision): the spec
+repo's `schemas/host-ready.json` still lacks the `net` and `openUrl` capability flags
+that `packages/protocol/schemas/` has. That drift originates in EARLIER tasks (AL-03
+net frames; TASK-20260818-ledger-starter, whose own entry records "no push … needs an
+explicit ask"), not this one. Publishing it inside this commit would have broken the
+one-commit-per-task traceability invariant and consumed another task's pending ask as
+a side effect. Tracked in `docs/next-steps.md`.
 
 ## 2026-08-18 — schemas: `host-ready.json` capability flag + INTERNAL-DRAFT open-url frames — TASK-20260818-ledger-starter (ADR-0038 D5)
 **One published schema changed, additively:** `hostReadySchema.capabilities` gains an
