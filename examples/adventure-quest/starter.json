@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "appHash": "4d6bdd3b60bd2f2c8344a3232cf09687948c431f40de726b6c8b620ef2b47f7f",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "The agent tells a tale that adapts to your choices.",
+            "Your pack and progress persist in a real database inside your file."
+          ]
+        }
+      ]
+    }
+  ]
+}

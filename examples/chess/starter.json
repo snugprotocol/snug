@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "appHash": "9931148a675f6157ec5b042ae9814f84e063325c5747e05ac44ca0643ebc5301",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Play a full chess game against an opponent with opinions — commentary included.",
+            "Runs entirely offline in your file: no server, no account."
+          ]
+        }
+      ]
+    }
+  ]
+}

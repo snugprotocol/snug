@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "appHash": "9768accfa2af746dd14da2715404dab12f0aed78771074ee17938a6fd8435ea3",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Pick any topic and take a five-question quiz generated on the spot.",
+            "Score history is saved, so you can watch yourself climb."
+          ]
+        }
+      ]
+    }
+  ]
+}

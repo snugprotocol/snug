@@ -14,6 +14,7 @@
 //   5. parses as HTML (jsdom when available at the repo root; structural checks otherwise)
 //   6. under the 5 MB artifact limit
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -441,6 +442,67 @@ for (const app of CONNECTED_APPS) {
       );
       const body = readFileSync(path.join(HERE, app, 'authoring', 'docs', `${slug}.md`), 'utf8');
       assert.ok(body.trim().length >= 40, `${app}: authoring/docs/${slug}.md must hold real content, not a stub`);
+    }
+  });
+}
+
+/**
+ * Starter versioning metadata (TASK-20260820-starter-updates, ADR-0045). Every starter
+ * declares `starter.json`: an integer `version`, a cumulative `changelog` (newest
+ * first), and `appHash` — the sha-256 of the NORMALIZED `app.html`. The hash is what
+ * makes the authoring rule enforceable rather than requested: editing a starter's html
+ * without bumping the version and writing release notes fails HERE, instead of shipping
+ * a fix that no installed copy is ever offered (the exact silent gap this scheme
+ * closes — a stale version number means `updateAvailable` stays false for every user
+ * whose install recorded it).
+ *
+ * The normalization is byte-identical to `starterDeclaration.ts`'s `normalize` (the
+ * two-fact vouch semantics): CRLF → LF, trailing whitespace stripped, outer trim. One
+ * semantic on purpose — the hash must consider "changed" exactly what the vouch and the
+ * update detector consider "changed", or a formatting-only touch would demand a release.
+ */
+const normalizeAppHtml = (html) => html.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').trim();
+const appHtmlHash = (html) => createHash('sha256').update(normalizeAppHtml(html), 'utf8').digest('hex');
+
+for (const app of APPS) {
+  test(`ADR-0045: ${app} declares versioned starter metadata bound to its bytes`, () => {
+    const raw = readFileSync(path.join(HERE, app, 'starter.json'), 'utf8');
+    const meta = JSON.parse(raw);
+
+    assert.ok(Number.isInteger(meta.version) && meta.version >= 1, `${app}: version must be an integer ≥ 1`);
+
+    const expected = appHtmlHash(readFileSync(path.join(HERE, app, 'app.html'), 'utf8'));
+    assert.equal(
+      meta.appHash,
+      expected,
+      `${app}: app.html changed but starter.json was not released — bump "version", add a changelog entry, and set "appHash": "${expected}"`,
+    );
+
+    assert.ok(Array.isArray(meta.changelog) && meta.changelog.length >= 1, `${app}: changelog must be a non-empty array`);
+    assert.equal(
+      meta.changelog[0].version,
+      meta.version,
+      `${app}: the newest changelog entry must document the current version`,
+    );
+    let previous = Infinity;
+    for (const entry of meta.changelog) {
+      assert.ok(Number.isInteger(entry.version) && entry.version >= 1, `${app}: changelog entry versions are integers ≥ 1`);
+      assert.ok(entry.version < previous, `${app}: changelog must be newest-first with strictly descending versions`);
+      previous = entry.version;
+      assert.match(String(entry.date), /^\d{4}-\d{2}-\d{2}$/, `${app}: changelog v${entry.version} needs a YYYY-MM-DD date`);
+      assert.ok(Array.isArray(entry.sections) && entry.sections.length >= 1, `${app}: changelog v${entry.version} needs at least one section`);
+      for (const section of entry.sections) {
+        assert.ok(
+          typeof section.title === 'string' && section.title.trim().length > 0,
+          `${app}: changelog v${entry.version} sections need titles`,
+        );
+        assert.ok(
+          Array.isArray(section.items) &&
+            section.items.length >= 1 &&
+            section.items.every((item) => typeof item === 'string' && item.trim().length > 0),
+          `${app}: changelog v${entry.version} "${section.title}" needs at least one non-empty item`,
+        );
+      }
     }
   });
 }

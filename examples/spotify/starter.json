@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "appHash": "9b5a6c891ed10ea60c025a52c2f5755c117956b18c6a9564117a634dcb249250",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Your listening, understood — portraits and trends Spotify forgets.",
+            "Connects to Spotify with an approval you walk through step by step; no password is ever shared."
+          ]
+        }
+      ]
+    }
+  ]
+}

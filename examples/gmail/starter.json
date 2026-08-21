@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "appHash": "f83e9a494903f9b23b5eaae55d0a95e400be97d968faa750aff0df5c23f87b9a",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "See who is really filling your inbox — and who you never answer.",
+            "Mass cleanup you preview and approve once; nothing is deleted without you.",
+            "Desktop only: Gmail is reached through Google’s desktop app sign-in."
+          ]
+        }
+      ]
+    }
+  ]
+}

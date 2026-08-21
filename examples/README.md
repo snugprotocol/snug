@@ -91,4 +91,26 @@ delimit the hook block), add a `README.md`, list the app in `APPS` in
 `validate.test.mjs` (and in `LLM_FREE_APPS` if it never calls the agent), update
 `MANIFEST_APPS` in `connection-manifests.test.mjs` if it declares a connection, and run
 the suite. The playground shelf picks the folder up automatically (vite glob) — give it
-a look in `HubView`'s `STARTER_LOOKS` so the tile isn't the generic fallback.
+a look in `HubView`'s `STARTER_LOOKS` so the tile isn't the generic fallback. Give it a
+`starter.json` (see below) at `"version": 1` with an "Initial release" changelog entry.
+
+## Changing an example (versioning — ADR-0045)
+
+**Every change to a starter's `app.html` is a release.** Installed copies are snapshots
+in users' own files; the version number in `starter.json` is what tells an installed
+copy that an update exists, and the changelog is the release notes the user reads before
+taking it. So, in the same change as the html edit:
+
+1. Bump `starter.json` → `version` (integers, no semver).
+2. Prepend a changelog entry — `{ version, date, title?, sections: [{ title, items }] }`,
+   newest first. Write for the USER, Tesla-release-notes style: what's new, what changed,
+   why they care. Never ship an empty or boilerplate entry.
+3. Recompute `appHash`. The validator enforces this — an `app.html` edit with a stale
+   hash is a red test whose message prints the expected value to paste in.
+
+The hash uses the same normalization as the playground's starter vouch (CRLF → LF,
+trailing whitespace stripped, trimmed), so formatting-only touches under that
+normalization do not demand a release, and anything the vouch would call a change does.
+There is no upstream history: the bundle's bytes simply replace the old bytes, and only
+the changelog accumulates. A user's installed copy keeps its own pre-update versions via
+the in-app versions panel.

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "appHash": "307978846dd796bd72bc9c54c9183692b3c7fe4d130981531a31eb848fcbbd26",
+  "changelog": [
+    {
+      "version": 1,
+      "date": "2026-08-21",
+      "title": "Initial release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "What needs you today, before you ask — your queue as a morning briefing.",
+            "Connects with a token you control and can revoke any time."
+          ]
+        }
+      ]
+    }
+  ]
+}
