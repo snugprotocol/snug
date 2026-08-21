@@ -1,32 +1,42 @@
-// ModelSelect.tsx — the per-app model picker in the run header (TASK-20260817).
+// ModelSelect.tsx — the per-app model picker in the run header (TASK-20260817), grown
+// multi-provider for TASK-20260821: with keys for both Anthropic and OpenAI saved, the
+// selector lists BOTH catalogs in provider-labelled groups, and picking a model
+// implicitly picks its provider for this app (owner decision 2026-08-21).
 //
-// Sits in the app's OWN header beside 🔌 connections and export .sqlite, which is where
-// the owner asked for it and where the connections door already lives: the controls that
-// act on THIS app belong on this app's chrome, while Settings keeps the cross-app view.
+// Three rules shape everything below (unchanged from the original):
 //
-// Three rules shape everything below.
-//
-// 1. INHERITING IS A VISIBLE STATE, not a blank. The first option is always the Settings
-//    default, labelled as inherited, and it is what an un-picked app shows. That is what
-//    makes the control honest about which apps follow the global default (and it is the
-//    only way back after pinning).
+// 1. INHERITING IS A VISIBLE STATE, not a blank. The first option is always the resolved
+//    default — provider AND model — labelled as inherited, and it is what an un-picked
+//    app shows. It is also the only way back after pinning.
 //
 // 2. IT RENDERS NOTHING WHERE A CHOICE WOULD BE A LIE. Under the webllm/demo brain the
-//    configured mode is overridden entirely and the engine loads its own pinned model
-//    (ADR-0015); `mock` is the demo brain and names no model at all. Offering a picker in
-//    those states would imply routing that cannot happen.
+//    configured mode is overridden entirely (ADR-0015); `mock` is the demo brain and
+//    names no model at all.
 //
 // 3. IT NEVER HIDES WHAT THE APP IS ACTUALLY RUNNING. A stored model absent from the
-//    current catalog is still listed and still selected — otherwise the browser would
-//    coerce the <select> to its first option and the screen would claim the app was on
-//    the default while its turns still went elsewhere.
+//    catalog is still listed and selected; a pinned provider whose KEY is gone renders
+//    with a "key missing" mark instead of being silently re-routed — the pin is honored
+//    by routing, so the screen must say so (appModel.ts states the honesty rationale).
+//
+// VALUE ENCODING: byok options carry `provider:model` (model ids contain no colon in
+// either catalog); local and subscription keep bare model ids — local has no provider
+// concept, and subscription's provider lives hub-side, so neither writes a provider row.
 
 import type { ReactElement } from 'react';
 
-import { popularModelsFor } from '@snugprotocol/adapters';
+import { ANTHROPIC_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, popularModelsFor } from '@snugprotocol/adapters';
 
-import { resolveModelForApp, setAppModel, useAppModel } from '../state/appModel.js';
-import { useMode, useModel, useProvider } from '../state/mode.js';
+import { setAppModel, setAppPin, useAppModel, useAppProvider } from '../state/appModel.js';
+import {
+  KEYED_PROVIDERS,
+  useByokKeyPresence,
+  useMode,
+  useModel,
+  useProvider,
+  useProviderModels,
+  type ByokProvider,
+  type KeyedProvider,
+} from '../state/mode.js';
 import { useOllama } from '../state/ollama.js';
 import { useBrain } from '../state/webllm.js';
 
@@ -35,8 +45,22 @@ export interface ModelSelectProps {
   appId: string;
 }
 
-/** Sentinel for "use my default" — empty string, so it can never collide with a model id. */
+/** Sentinel for "use my default" — empty string, so it can never collide with a value. */
 const INHERIT_CHOICE = '';
+
+export const PROVIDER_LABELS: Record<KeyedProvider, string> = { anthropic: 'Anthropic', openai: 'OpenAI' };
+export const ADAPTER_DEFAULTS: Record<KeyedProvider, string> = {
+  anthropic: ANTHROPIC_DEFAULT_MODEL,
+  openai: OPENAI_DEFAULT_MODEL,
+};
+
+const isKeyed = (value: string | undefined): value is KeyedProvider =>
+  value === 'anthropic' || value === 'openai';
+
+/** The catalog's human label for an id, or the id itself for anything unlisted. */
+export function labelFor(provider: KeyedProvider, id: string): string {
+  return popularModelsFor(provider).find((m) => m.id === id)?.label ?? id;
+}
 
 export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
   const brain = useBrain();
@@ -44,61 +68,138 @@ export function ModelSelect({ appId }: ModelSelectProps): ReactElement | null {
   const provider = useProvider();
   const globalModel = useModel();
   const ollama = useOllama();
-  const pinned = useAppModel(appId);
+  const pinnedModel = useAppModel(appId);
+  const pinnedProvider = useAppProvider(appId);
+  const keys = useByokKeyPresence();
+  const providerModels = useProviderModels();
 
   // Rule 2. `brain.kind === 'settings'` is the only state where the configured
   // mode/provider actually decide the model (webllm and demo both override it).
   if (brain.kind !== 'settings') return null;
   if (mode === 'byok' && provider === 'mock') return null;
 
-  // Local mode lists what the Ollama probe found — a local endpoint cannot serve a
-  // frontier model, so offering one would produce a provider-side failure with nothing
-  // on screen explaining it. Subscription and byok share the frontier catalog: the hub
-  // server runs the same anthropic/openai adapters and already accepts a per-request
-  // model override.
-  const isLocal = mode === 'local';
-  const detected = ollama !== 'unknown' && ollama.running ? ollama.models : [];
-  const options = isLocal
-    ? detected.map((id) => ({ id, label: id }))
-    : popularModelsFor(provider).map((m) => ({ id: m.id, label: m.label }));
-
-  // Rule 3: keep a stored id visible even when it is not in the list above.
-  const known = options.some((o) => o.id === pinned);
-  const shown = pinned !== undefined && !known ? [...options, { id: pinned, label: `${pinned} (not listed)` }] : options;
-
-  // What the app WOULD use if nothing were pinned — shown on the inherit option so the
-  // user can see what they are inheriting rather than just that they are inheriting.
-  const inherited = globalModel ?? resolveModelForApp(undefined);
-  const inheritLabel = inherited === undefined ? 'default (provider’s choice)' : `default (${inherited})`;
-
-  // Local-mode honesty (the Settings precedent): running-but-empty is its OWN state —
-  // the install succeeded, only a model is missing. An empty dropdown with no words is
-  // exactly the ambiguity that reads as a bug.
-  if (isLocal && shown.length === 0) {
+  // ---- LOCAL: the Ollama list, bare values, model row only (unchanged behavior). ----
+  if (mode === 'local') {
+    const detected = ollama !== 'unknown' && ollama.running ? ollama.models : [];
+    const known = detected.some((id) => id === pinnedModel);
+    const shown =
+      pinnedModel !== undefined && !known
+        ? [...detected.map((id) => ({ id, label: id })), { id: pinnedModel, label: `${pinnedModel} (not listed)` }]
+        : detected.map((id) => ({ id, label: id }));
+    if (shown.length === 0) {
+      return (
+        <span className="hint" data-testid="app-model-empty">
+          no local models — try <code>ollama pull llama3.2</code>
+        </span>
+      );
+    }
+    const inheritLabel = globalModel === undefined ? 'default (endpoint’s choice)' : `default (${globalModel})`;
     return (
-      <span className="hint" data-testid="app-model-empty">
-        no local models — try <code>ollama pull llama3.2</code>
-      </span>
+      <label className="app-model-select">
+        <span className="visually-hidden">model for this app</span>
+        <select
+          data-testid="app-model-select"
+          value={pinnedModel ?? INHERIT_CHOICE}
+          title="which model this app’s LLM calls use — remembered for this app"
+          onChange={(event) => {
+            const value = event.target.value;
+            setAppModel(appId, value === INHERIT_CHOICE ? undefined : value);
+          }}
+        >
+          <option value={INHERIT_CHOICE}>{inheritLabel}</option>
+          {shown.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
     );
   }
+
+  // ---- SUBSCRIPTION: single list for the active provider, bare values (unchanged) —
+  //      the hub owns the provider, so a per-app provider row would claim a routing the
+  //      /invoke body cannot express. ----
+  if (mode === 'subscription') {
+    const options = popularModelsFor(provider).map((m) => ({ id: m.id, label: m.label }));
+    const known = options.some((o) => o.id === pinnedModel);
+    const shown =
+      pinnedModel !== undefined && !known ? [...options, { id: pinnedModel, label: `${pinnedModel} (not listed)` }] : options;
+    const inherited = globalModel;
+    const inheritLabel = inherited === undefined ? 'default (provider’s choice)' : `default (${inherited})`;
+    return (
+      <label className="app-model-select">
+        <span className="visually-hidden">model for this app</span>
+        <select
+          data-testid="app-model-select"
+          value={pinnedModel ?? INHERIT_CHOICE}
+          title="which model this app’s LLM calls use — remembered for this app"
+          onChange={(event) => {
+            const value = event.target.value;
+            setAppModel(appId, value === INHERIT_CHOICE ? undefined : value);
+          }}
+        >
+          <option value={INHERIT_CHOICE}>{inheritLabel}</option>
+          {shown.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  // ---- BYOK: provider-labelled groups over every KEYED provider (AC13). ----
+  // `provider` is the resolved default and is anthropic|openai here (mock returned null).
+  const defaultProvider: KeyedProvider = isKeyed(provider) ? provider : 'anthropic';
+  // The provider a legacy model-only pin (ADR-0036 era, no provider row) displays under:
+  // the resolved default — which is exactly where its sends route.
+  const pinProvider: KeyedProvider | undefined =
+    pinnedModel === undefined ? undefined : isKeyed(pinnedProvider) ? pinnedProvider : defaultProvider;
+
+  const groups = KEYED_PROVIDERS.filter((p) => keys[p] || p === pinProvider).map((p) => {
+    const options = popularModelsFor(p).map((m) => ({ id: m.id, label: m.label }));
+    // Rule 3: a stored id outside the catalog still shows, inside its own provider group.
+    if (p === pinProvider && pinnedModel !== undefined && !options.some((o) => o.id === pinnedModel)) {
+      options.push({ id: pinnedModel, label: `${pinnedModel} (not listed)` });
+    }
+    return { provider: p, missingKey: !keys[p], options };
+  });
+
+  const inheritedModel = providerModels[defaultProvider] ?? ADAPTER_DEFAULTS[defaultProvider];
+  const inheritLabel = `default (${PROVIDER_LABELS[defaultProvider]} · ${labelFor(defaultProvider, inheritedModel)})`;
 
   return (
     <label className="app-model-select">
       <span className="visually-hidden">model for this app</span>
       <select
         data-testid="app-model-select"
-        value={pinned ?? INHERIT_CHOICE}
+        value={pinProvider === undefined || pinnedModel === undefined ? INHERIT_CHOICE : `${pinProvider}:${pinnedModel}`}
         title="which model this app’s LLM calls use — remembered for this app"
         onChange={(event) => {
           const value = event.target.value;
-          setAppModel(appId, value === INHERIT_CHOICE ? undefined : value);
+          if (value === INHERIT_CHOICE) {
+            setAppPin(appId, undefined);
+            return;
+          }
+          const split = value.indexOf(':');
+          const pickProvider = value.slice(0, split) as ByokProvider;
+          setAppPin(appId, { provider: pickProvider, model: value.slice(split + 1) });
         }}
       >
         <option value={INHERIT_CHOICE}>{inheritLabel}</option>
-        {shown.map((option) => (
-          <option key={option.id} value={option.id}>
-            {option.label}
-          </option>
+        {groups.map((group) => (
+          <optgroup
+            key={group.provider}
+            label={group.missingKey ? `${PROVIDER_LABELS[group.provider]} (key missing)` : PROVIDER_LABELS[group.provider]}
+          >
+            {group.options.map((option) => (
+              <option key={option.id} value={`${group.provider}:${option.id}`}>
+                {option.label}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
     </label>

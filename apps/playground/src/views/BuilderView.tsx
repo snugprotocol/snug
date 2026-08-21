@@ -6,6 +6,7 @@ import type { AgentTurnEvent } from '@snugprotocol/adapters';
 
 import { buildUserMessage, parseBuildPrompt } from '../agent/chips.js';
 import { useBuilderChat } from '../agent/useBuilderChat.js';
+import { BuilderModelSelect } from '../run/BuilderModelSelect.js';
 import { LlmInspectorPanel } from '../run/LlmInspectorPanel.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
 import { useMode } from '../state/mode.js';
@@ -161,6 +162,13 @@ export function BuilderView(): ReactElement {
           ))}
         </div>
       ) : null}
+
+      {/* The same selector every app header carries (TASK-20260821 AC12): bound to the
+          attached app when the thread has one, a session pick transferred on install
+          when it does not. Sits with the other build-scope controls, above the composer. */}
+      <div className="builder-toolbar">
+        <BuilderModelSelect attachedAppId={chat.attachedAppId} />
+      </div>
 
       <details className="builder-llm" data-testid="builder-llm" open={llmInspector.entries.length > 0}>
         <summary>

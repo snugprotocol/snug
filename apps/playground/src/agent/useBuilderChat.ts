@@ -20,6 +20,7 @@ import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirect
 import { directiveToMeta, metaToDirective, scanForRenderDirective } from './renderDirective.js';
 import { createServerArtifactFetch } from '../state/library.js';
 import { resolveModelForApp } from '../state/appModel.js';
+import { applyBuilderPickToApp, useBuilderPick } from '../state/builderModel.js';
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
 import { resolveTurnMode, useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
@@ -321,6 +322,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   const model = useModel();
   const localUrl = useLocalUrl();
   const brain = useBrain();
+  /** The build page's pending pick for a thread with no app yet (TASK-20260821 AC12). */
+  const builderPick = useBuilderPick();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState<string | undefined>(undefined);
@@ -345,6 +348,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     (appId: string): void => {
       setThreadAppId(appId);
       threadAppIdRef.current = appId;
+      // The build page's pending pick becomes the new app's pin (TASK-20260821 AC12):
+      // the thread routed on it, so the app it produced must keep routing there.
+      applyBuilderPickToApp(appId);
       void getUserDb().then((db) => {
         db.upsertThread(threadId, { appId });
       });
@@ -385,18 +391,24 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     // app model there would imply a routing that cannot happen.
     if (brain.kind === 'webllm') return createDirectBuilder({ mode: 'webllm', provider, sink, localUrl });
     if (brain.kind === 'demo') return createDirectBuilder({ mode: 'byok', provider: 'mock', sink, localUrl });
+    // A FRESH thread's pending pick (TASK-20260821 AC12) routes the build turns until an
+    // app exists to pin; once attached, the app's own rows own the routing and the pick
+    // is ignored here (onInstall transferred it). Keyed on `builderPick`, so a pick made
+    // mid-session rebuilds this memo.
+    const freshPick = attachedAppId === undefined ? builderPick : undefined;
     return mode === 'subscription'
       ? // Subscription mode resolves at CALL time (the value rides the /invoke body), so
         // it takes the resolved model rather than the id.
-        createServerBuilder(threadId, undefined, resolveModelForApp(attachedAppId))
+        createServerBuilder(threadId, undefined, freshPick?.model ?? resolveModelForApp(attachedAppId))
       : createDirectBuilder({
           mode,
-          provider,
+          provider: mode === 'byok' && provider !== 'mock' && freshPick !== undefined ? freshPick.provider : provider,
           sink,
           ...(attachedAppId !== undefined ? { appId: attachedAppId } : {}),
+          ...(mode === 'byok' && provider !== 'mock' && freshPick !== undefined ? { model: freshPick.model } : {}),
           localUrl,
         });
-  }, [brain, mode, provider, model, localUrl, threadId, sink, attachedAppId]);
+  }, [brain, mode, provider, model, localUrl, threadId, sink, attachedAppId, builderPick]);
 
   // AC4: a fresh session over the same user DB re-renders the persisted thread —
   // including artifact cards (from message meta) and the durable app pin.
