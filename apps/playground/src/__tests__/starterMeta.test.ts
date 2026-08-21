@@ -15,7 +15,8 @@ import { parseStarterMeta, starterMetaFor } from '../starter/starterMeta.js';
 describe('bundled starter metadata (real glob, no fixtures)', () => {
   it('every starter on the shelf has parseable release metadata', async () => {
     const starters = listStarterApps();
-    expect(starters.length).toBeGreaterThanOrEqual(13);
+    // 12 since trivia-night's permanent removal (TASK-20260821-hardening-polish).
+    expect(starters.length).toBeGreaterThanOrEqual(12);
     for (const starter of starters) {
       const folder = starter.id.slice(STARTER_PREFIX.length);
       const meta = await starterMetaFor(folder);

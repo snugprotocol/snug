@@ -1,7 +1,20 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "307978846dd796bd72bc9c54c9183692b3c7fe4d130981531a31eb848fcbbd26",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "The briefing catches up on paperwork",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "No app changes — the wiki gains its missing next-tasks page, and the whole set now reaches installed copies that predate doc seeding."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

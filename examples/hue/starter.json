@@ -1,7 +1,20 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "7fc2e4fa00ac1717748bb816b2729bafa9c3edddc3033dd759ca3099bac60b03",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "The lighting designer, documented in your file",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Nothing about the app changes — this release back-fills the designer's wiki and build prompt into installed copies from before docs were seeded at install."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

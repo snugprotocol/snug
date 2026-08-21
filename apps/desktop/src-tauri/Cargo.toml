@@ -48,6 +48,8 @@ futures-util = "0.3"
 # `cargo check --lib` — and every release build — unable to compile the crate
 # while `cargo test` was never run to notice.
 tokio = { version = "1", default-features = false, features = ["net", "io-util"] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # The sidecar reap sends SIGTERM before SIGKILL (ADR-0037 §1: the helper's TERM handler
 # runs the thread cache's final flush; `Child::kill` alone is SIGKILL, which runs no

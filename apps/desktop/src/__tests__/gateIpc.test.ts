@@ -16,10 +16,15 @@ import {
   decideLanFetchRefused,
   decideSidecarFetchDispatchable,
   decideSidecarFetchRefused,
+  decideUpdateChannelCommandRefused,
+  decideUpdaterCheckDispatchable,
   IPC_CHECK_IDS,
   LAN_FETCH_COMMAND,
+  PROCESS_RELAUNCH_COMMAND,
   SENTINEL_NAME,
   SIDECAR_FETCH_COMMAND,
+  UPDATER_CHECK_COMMAND,
+  UPDATER_INSTALL_COMMAND,
 } from '../gate/ipc.js';
 
 const reachable = {
@@ -27,6 +32,9 @@ const reachable = {
   callbackFired: false,
   lanCallbackFired: false,
   sidecarCallbackFired: false,
+  updaterCheckCallbackFired: false,
+  updaterInstallCallbackFired: false,
+  relaunchCallbackFired: false,
 };
 
 describe('decideInvokeRefused — the sentinel is the sensor', () => {
@@ -47,7 +55,7 @@ describe('decideInvokeRefused — the sentinel is the sensor', () => {
 
   it('PASSES when no raw transport was reachable at all', () => {
     const result = decideInvokeRefused(
-      { transports: [], callbackFired: false, lanCallbackFired: false, sidecarCallbackFired: false },
+      { ...reachable, transports: [] },
       { exists: false },
     );
     expect(result.pass).toBe(true);
@@ -229,5 +237,91 @@ describe('decideSidecarFetchDispatchable — the POSITIVE twin (next-steps 2026-
 
   it('is one of the REQUIRED check ids — the derive-based driver expects it', () => {
     expect(IPC_CHECK_IDS).toContain('ipc-sidecar-fetch-dispatchable');
+  });
+});
+
+describe('decideUpdateChannelCommandRefused — the updater/relaunch rows (ADR-0047 §3)', () => {
+  // The three rows share one decision; what these tests pin is that each row reads
+  // its OWN fired slot (amendment 16 — reach proven for one command must never be
+  // credited to another) and that every cannot-tell input FAILS.
+  const ROWS = [
+    { id: 'ipc-updater-check-refused', command: UPDATER_CHECK_COMMAND, flag: 'updaterCheckCallbackFired' },
+    { id: 'ipc-updater-install-refused', command: UPDATER_INSTALL_COMMAND, flag: 'updaterInstallCallbackFired' },
+    { id: 'ipc-process-relaunch-refused', command: PROCESS_RELAUNCH_COMMAND, flag: 'relaunchCallbackFired' },
+  ] as const;
+
+  it('FAILS its own row when its own callback fired — and names the command', () => {
+    for (const row of ROWS) {
+      const result = decideUpdateChannelCommandRefused(
+        row.id,
+        row.command,
+        'stakes sentence',
+        { ...reachable, [row.flag]: true, fired: true },
+        false,
+      );
+      expect(result.pass, row.id).toBe(false);
+      expect(result.detail).toContain(row.command);
+      expect(result.detail).toContain('STRUCTURAL BREAKAGE');
+    }
+  });
+
+  it('FAILS when the invoke key is reachable — a silent dispatch cannot be ruled out', () => {
+    for (const row of ROWS) {
+      const result = decideUpdateChannelCommandRefused(row.id, row.command, 's', { ...reachable, fired: false }, true);
+      expect(result.pass, row.id).toBe(false);
+      expect(result.detail).toContain('cannot vouch');
+    }
+  });
+
+  it('FAILS when the probe never reported — no invoke attempted is not a refusal', () => {
+    for (const row of ROWS) {
+      expect(decideUpdateChannelCommandRefused(row.id, row.command, 's', undefined, false).pass, row.id).toBe(false);
+    }
+  });
+
+  it('PASSES only on: probe reported, own slot silent, key unreachable', () => {
+    for (const row of ROWS) {
+      const result = decideUpdateChannelCommandRefused(row.id, row.command, 's', { ...reachable, fired: false }, false);
+      expect(result.pass, row.id).toBe(true);
+      expect(result.detail).toContain('key-gated per command');
+    }
+  });
+
+  it('the command names match the plugin registrations lib.rs makes', () => {
+    expect(UPDATER_CHECK_COMMAND).toBe('plugin:updater|check');
+    expect(UPDATER_INSTALL_COMMAND).toBe('plugin:updater|download_and_install');
+    expect(PROCESS_RELAUNCH_COMMAND).toBe('plugin:process|restart');
+  });
+
+  it('all four new ids are REQUIRED — the derive-based driver expects them', () => {
+    for (const id of [
+      'ipc-updater-check-refused',
+      'ipc-updater-install-refused',
+      'ipc-process-relaunch-refused',
+      'ipc-updater-check-dispatchable',
+    ]) {
+      expect(IPC_CHECK_IDS).toContain(id);
+    }
+  });
+});
+
+describe('decideUpdaterCheckDispatchable — the updater positive twin', () => {
+  it('passes when the invoke resolves, and when the BODY answers with a runtime failure', () => {
+    expect(decideUpdaterCheckDispatchable({ resolved: true, detail: 'resolved' }).pass).toBe(true);
+    // The pre-flip normal state: the private repo 404s / no network on a runner —
+    // the body ran, which is the whole question.
+    expect(
+      decideUpdaterCheckDispatchable({ resolved: false, detail: 'error sending request for url' }).pass,
+    ).toBe(true);
+  });
+
+  it('FAILS on the unregistered-command shapes', () => {
+    for (const detail of [
+      'Command plugin:updater|check not found',
+      'plugin:updater|check not allowed. Command not found',
+      'unknown command',
+    ]) {
+      expect(decideUpdaterCheckDispatchable({ resolved: false, detail }).pass, detail).toBe(false);
+    }
   });
 });

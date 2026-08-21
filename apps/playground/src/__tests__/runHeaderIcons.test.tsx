@@ -7,11 +7,17 @@
 //
 // The hazard this file exists to catch: an icon-only button that loses its ACCESSIBLE
 // NAME. The glyph is not a name — `🔌` announces as "electric plug" or as nothing at
-// all, and two existing e2e specs already locate the export control by the accessible
-// name 'export .snug' (`e2e/starters.spec.ts`). So each button keeps a real name via
-// `aria-label`, and `title` carries the hover tooltip the owner asked for. Those are
-// DIFFERENT jobs: a `title` alone is not an accessible name (the same rule the rail
-// toggle already follows, and which RunView's own comment states).
+// all. So each button keeps a real name via `aria-label`, and `title` carries the hover
+// tooltip the owner asked for. Those are DIFFERENT jobs: a `title` alone is not an
+// accessible name (the same rule the rail toggle already follows, and which RunView's
+// own comment states).
+//
+// TASK-20260821-hardening-polish (AC3): the export control is deliberately HIDDEN
+// behind the single `SHOW_APP_EXPORT` flag — not removed. The export claims below now
+// render with the flag forced ON (the dormant path must stay whole so flipping the one
+// flag restores it), and a new describe pins the shipped-hidden state both ways. The
+// e2e specs no longer locate 'export .snug' — the Settings 'export snug file' surface
+// carries the load-bearing string now (docs/lessons.md 2026-08-18 rule).
 //
 // Assertions here are made against the RENDERED DOM, not the source text, so a button
 // that exists in the file but never reaches the screen still reds.
@@ -20,7 +26,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { RunHeaderActions } from '../run/RunHeaderActions.js';
+import { RunHeaderActions, SHOW_APP_EXPORT } from '../run/RunHeaderActions.js';
 import { appModelStore } from '../state/appModel.js';
 import { modeStore, modelStore, providerStore } from '../state/mode.js';
 import { ollamaStore } from '../state/ollama.js';
@@ -72,6 +78,8 @@ interface RenderOptions {
   };
   onManageConnections?: () => void;
   onExport?: () => void;
+  /** Overrides the shipped SHOW_APP_EXPORT flag, so both states are testable. */
+  showExport?: boolean;
 }
 
 async function renderActions(options: RenderOptions = {}): Promise<void> {
@@ -88,6 +96,7 @@ async function renderActions(options: RenderOptions = {}): Promise<void> {
         syncState={options.syncState}
         onManageConnections={options.onManageConnections ?? ((): void => undefined)}
         onExport={options.onExport ?? ((): void => undefined)}
+        showExport={options.showExport}
       />,
     );
   });
@@ -108,6 +117,35 @@ function precedes(a: Node, b: Node): boolean {
   return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 }
 
+describe('the export control ships hidden behind ONE flag (TASK-20260821 AC3)', () => {
+  it('ships with the flag OFF', () => {
+    // The owner's ask is HIDDEN, not removed. Pinning the shipped value here means the
+    // mutation check for the absence test below is exactly one boolean flip away.
+    expect(SHOW_APP_EXPORT).toBe(false);
+  });
+
+  it('does NOT render the export control even when canExport is true', async () => {
+    // The absence claim, measured in the DOM: an earned export moment (sawDbOp → true)
+    // no longer surfaces a header button. Mutation-checked by flipping SHOW_APP_EXPORT
+    // to true (lessons 2026-08-04) — this test must go red.
+    await renderActions({ canExport: true });
+    expect(exportBtn()).toBeNull();
+    // …while the rest of the cluster is untouched by the hiding.
+    expect(connections()).not.toBeNull();
+    expect(modelSelect()).not.toBeNull();
+  });
+
+  it('flipping the flag restores the button — the path survives, both ways', async () => {
+    // The restore half of the contract: the code path, props, and wiring stay intact,
+    // so the owner can re-enable the surface by flipping the one flag.
+    await renderActions({ showExport: true });
+    expect(exportBtn()).not.toBeNull();
+    expect(exportBtn()!.getAttribute('aria-label')).toBe('export .snug');
+    await renderActions({ showExport: false });
+    expect(exportBtn()).toBeNull();
+  });
+});
+
 describe('icon buttons keep an accessible name and gain a tooltip', () => {
   it('renders connections as an icon button with a name and a tooltip', async () => {
     await renderActions();
@@ -123,7 +161,9 @@ describe('icon buttons keep an accessible name and gain a tooltip', () => {
   });
 
   it('renders export as an icon button with a name and a tooltip', async () => {
-    await renderActions();
+    // Flag forced ON (TASK-20260821): the dormant control must stay a correct control,
+    // or flipping the flag back would restore a broken one.
+    await renderActions({ showExport: true });
     const el = exportBtn();
     expect(el).not.toBeNull();
     expect(el!.getAttribute('aria-label')).toMatch(/\.snug/i);
@@ -132,16 +172,16 @@ describe('icon buttons keep an accessible name and gain a tooltip', () => {
   });
 
   it('keeps `export .snug` as the export button’s accessible name', async () => {
-    // Load-bearing: `e2e/starters.spec.ts` locates this control by
-    // getByRole('button', { name: 'export .snug' }) in two specs. Dropping the word
-    // to a glyph without keeping the name would break those silently in a lane CI does
-    // not yet run — exactly the kind of break that surfaces as a mystery later.
-    await renderActions();
+    // No longer load-bearing for e2e (TASK-20260821: the header control is hidden and
+    // `e2e/starters.spec.ts` now asserts its ABSENCE; Settings' 'export snug file'
+    // carries the load-bearing string). Still pinned so re-enabling the flag restores
+    // the control under its established name, not a drifted one.
+    await renderActions({ showExport: true });
     expect(exportBtn()!.getAttribute('aria-label')).toBe('export .snug');
   });
 
   it('gives the two icons DIFFERENT glyphs, so they are not confusable', async () => {
-    await renderActions();
+    await renderActions({ showExport: true });
     const a = (connections()!.textContent ?? '').trim();
     const b = (exportBtn()!.textContent ?? '').trim();
     expect(a).not.toBe('');
@@ -163,22 +203,24 @@ describe('the model selector and connections swap places', () => {
     expect(precedes(select!, conn!)).toBe(true);
   });
 
-  it('keeps connections before export', async () => {
-    await renderActions();
+  it('keeps connections before export (flag forced on)', async () => {
+    await renderActions({ showExport: true });
     expect(precedes(connections()!, exportBtn()!)).toBe(true);
   });
 });
 
 describe('the gates each control already had are unchanged', () => {
   it('hides connections when the app has no connection rows', async () => {
-    await renderActions({ connectionSlots: 0 });
+    await renderActions({ connectionSlots: 0, showExport: true });
     expect(connections()).toBeNull();
-    // …while the rest of the cluster still renders.
+    // …while the rest of the cluster still renders (flag forced on for the export leg).
     expect(exportBtn()).not.toBeNull();
   });
 
   it('hides export until the app has touched its database', async () => {
-    await renderActions({ canExport: false });
+    // The canExport gate must survive INSIDE the flag: re-enabling the surface must not
+    // resurrect it without an earned export moment.
+    await renderActions({ canExport: false, showExport: true });
     expect(exportBtn()).toBeNull();
     expect(connections()).not.toBeNull();
   });
@@ -186,7 +228,7 @@ describe('the gates each control already had are unchanged', () => {
   it('hides connections and the model selector for a read-only starter', async () => {
     // A starter has no persisted rows and no app row to key a pick to; the wizard would
     // open empty and the pick would be lost on install (which mints a new id).
-    await renderActions({ isStarter: true, connectionSlots: 3 });
+    await renderActions({ isStarter: true, connectionSlots: 3, showExport: true });
     expect(connections()).toBeNull();
     expect(modelSelect()).toBeNull();
     // Export still belongs to a starter being tried out — it writes real rows.
@@ -269,9 +311,9 @@ describe('the buttons still do their jobs', () => {
     expect(opened).toBe(1);
   });
 
-  it('exports on click', async () => {
+  it('exports on click (flag forced on)', async () => {
     let exported = 0;
-    await renderActions({ onExport: () => (exported += 1) });
+    await renderActions({ onExport: () => (exported += 1), showExport: true });
     await act(async () => {
       exportBtn()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });

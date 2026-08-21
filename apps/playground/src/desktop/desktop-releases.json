@@ -1,0 +1,28 @@
+{
+  "releases": [
+    {
+      "version": "0.1.0",
+      "date": "2026-08-21",
+      "title": "First release",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Snug for macOS — your apps, your data, one portable file, now in a native shell.",
+            "Native networking for connected apps: no browser CORS wall between you and your own providers.",
+            "Your .snug file lives in ~/Snug and opens with a double-click.",
+            "Optional passphrase protection for your file, with a Recovery Key that works when you forget.",
+            "Built-in update channel: the app tells you when a new version ships and shows you exactly what changed — installing is always your call."
+          ]
+        },
+        {
+          "title": "Good to know",
+          "items": [
+            "macOS only through 1.0 — the Windows WebView cannot yet hold our app-sandbox promise, so we don't ship there.",
+            "Telepath's WhatsApp helper is a separate developer install and is not delivered by this download."
+          ]
+        }
+      ]
+    }
+  ]
+}

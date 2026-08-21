@@ -62,6 +62,10 @@ export const IPC_CHECK_IDS = [
   'ipc-lan-fetch-refused',
   'ipc-sidecar-fetch-refused',
   'ipc-sidecar-fetch-dispatchable',
+  'ipc-updater-check-refused',
+  'ipc-updater-install-refused',
+  'ipc-process-relaunch-refused',
+  'ipc-updater-check-dispatchable',
 ] as const;
 
 /**
@@ -115,6 +119,32 @@ export const LAN_FETCH_COMMAND = 'lan_fetch';
  * instrument, exactly as the row above.
  */
 export const SIDECAR_FETCH_COMMAND = 'sidecar_fetch';
+
+/**
+ * The update-channel commands (ADR-0047 §3, TASK-20260821) get their own rows for
+ * the same amendment-16 reason as the two above, with the highest stakes yet: an
+ * app iframe that reached `plugin:updater|download_and_install` would get
+ * ARBITRARY BINARY INSTALLATION AS THE USER — it could hand the updater a
+ * malicious manifest's artifact and replace the shell itself. `plugin:process|restart`
+ * is its accomplice (install rides a relaunch). Capability placement cannot answer
+ * this — capabilities are per-WINDOW, and the main-window capability necessarily
+ * covers the webview holding the sandboxed iframes — so the refusal is proven the
+ * only way it can be: a real keyless invoke from inside a sandboxed srcdoc frame.
+ *
+ * They share the SENSOR PROBLEM of the rows above and the same honest answer:
+ * reach is the observable (a dispatched command resolves a callback, success or
+ * error alike), and the pass means something only alongside the key-absence checks.
+ *
+ * One deliberate hazard, stated: if `plugin:process|restart` were ever DISPATCHED
+ * from the probe frame, the shell would restart mid-gate and the harness would
+ * report "exited before writing results". That reading IS the correct verdict —
+ * a shell that lets a sandboxed iframe relaunch it has no business passing — and
+ * the lessons.md 2026-08-19 entry tells the reader how to distinguish it from a
+ * stale-lock environment failure.
+ */
+export const UPDATER_CHECK_COMMAND = 'plugin:updater|check';
+export const UPDATER_INSTALL_COMMAND = 'plugin:updater|download_and_install';
+export const PROCESS_RELAUNCH_COMMAND = 'plugin:process|restart';
 
 /**
  * The sentinel filename the subframe's keyless write targets. Must match
@@ -203,6 +233,20 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
   window['_' + SIDECAR_CB] = function () { sidecarCallbackFired = true; };
   window['_' + (SIDECAR_CB + 1)] = function () { sidecarCallbackFired = true; };
 
+  // Update-channel commands (ADR-0047 §3): one slot pair per command, never shared.
+  var updaterCheckCallbackFired = false;
+  var UPD_CB = 987654351;
+  window['_' + UPD_CB] = function () { updaterCheckCallbackFired = true; };
+  window['_' + (UPD_CB + 1)] = function () { updaterCheckCallbackFired = true; };
+  var updaterInstallCallbackFired = false;
+  var INS_CB = 987654361;
+  window['_' + INS_CB] = function () { updaterInstallCallbackFired = true; };
+  window['_' + (INS_CB + 1)] = function () { updaterInstallCallbackFired = true; };
+  var relaunchCallbackFired = false;
+  var REL_CB = 987654371;
+  window['_' + REL_CB] = function () { relaunchCallbackFired = true; };
+  window['_' + (REL_CB + 1)] = function () { relaunchCallbackFired = true; };
+
   function keylessInvokeBody() {
     // The main-frame invoke shape (scripts/core.js) MINUS a valid
     // Tauri-Invoke-Key. A WRITE command with a sentinel name, so that an invoke
@@ -247,10 +291,49 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     });
   }
 
+  function keylessUpdaterCheckBody() {
+    // A REAL, well-formed updater check — the exact shape the main frame's
+    // @tauri-apps/plugin-updater check() posts. Well-formed on purpose: a refusal
+    // must not be attributable to a bad payload. A dispatched check on a gate
+    // runner fails on network and resolves the ERROR callback — reach either way.
+    return JSON.stringify({
+      cmd: '${UPDATER_CHECK_COMMAND}',
+      callback: UPD_CB,
+      error: UPD_CB + 1,
+      payload: {}
+    });
+  }
+
+  function keylessUpdaterInstallBody() {
+    // rid 0 is a nonexistent resource: a DISPATCHED call answers "resource not
+    // found" through the error callback, which is reach; a healthy shell drops the
+    // keyless invoke before dispatch and neither slot ever fires.
+    return JSON.stringify({
+      cmd: '${UPDATER_INSTALL_COMMAND}',
+      callback: INS_CB,
+      error: INS_CB + 1,
+      payload: { rid: 0, onEvent: 0 }
+    });
+  }
+
+  function keylessRelaunchBody() {
+    // See PROCESS_RELAUNCH_COMMAND's header: if this ever DISPATCHES the shell
+    // restarts mid-gate — a self-announcing catastrophic failure, not a flake.
+    return JSON.stringify({
+      cmd: '${PROCESS_RELAUNCH_COMMAND}',
+      callback: REL_CB,
+      error: REL_CB + 1,
+      payload: {}
+    });
+  }
+
   for (var k = 0; k < transports.length; k++) {
     try { transports[k].handler.postMessage(keylessInvokeBody()); } catch (e3) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessLanFetchBody()); } catch (e4) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessSidecarFetchBody()); } catch (e5) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessUpdaterCheckBody()); } catch (e6) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessUpdaterInstallBody()); } catch (e7) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessRelaunchBody()); } catch (e8) { /* transport rejected the shape */ }
   }
 
   function finishInvoke() {
@@ -263,7 +346,10 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
         transports: reachableNames,
         callbackFired: callbackFired,
         lanCallbackFired: lanCallbackFired,
-        sidecarCallbackFired: sidecarCallbackFired
+        sidecarCallbackFired: sidecarCallbackFired,
+        updaterCheckCallbackFired: updaterCheckCallbackFired,
+        updaterInstallCallbackFired: updaterInstallCallbackFired,
+        relaunchCallbackFired: relaunchCallbackFired
       }
     }, '*');
   }
@@ -279,6 +365,12 @@ interface ProbeReport {
   lanCallbackFired: boolean;
   /** Per-command: did a keyless `sidecar_fetch` resolve into the subframe? */
   sidecarCallbackFired: boolean;
+  /** Per-command (ADR-0047): did a keyless `plugin:updater|check` resolve into the subframe? */
+  updaterCheckCallbackFired: boolean;
+  /** Per-command: did a keyless `plugin:updater|download_and_install` resolve into the subframe? */
+  updaterInstallCallbackFired: boolean;
+  /** Per-command: did a keyless `plugin:process|restart` resolve into the subframe? */
+  relaunchCallbackFired: boolean;
 }
 
 /**
@@ -414,6 +506,72 @@ export function decideSidecarFetchRefused(
 }
 
 /**
+ * THE PER-COMMAND VERDICTS for the update channel (ADR-0047 §3, TASK-20260821) —
+ * one shared decision because the sensor, its weakness, and the honest pairing
+ * with `keyReachable` are identical to the two rows above; only the command and
+ * the stakes sentence differ. `fired` is that command's OWN callback-slot pair,
+ * so reach proven for one command is never credited to another (amendment 16).
+ */
+export function decideUpdateChannelCommandRefused(
+  id: (typeof IPC_CHECK_IDS)[number],
+  command: string,
+  breakage: string,
+  report: (ProbeReport & { fired: boolean }) | undefined,
+  keyReachable: boolean,
+): CheckResult {
+  if (report === undefined) {
+    return { id, pass: false, detail: `the sandboxed probe never reported — no ${command} invoke was attempted` };
+  }
+  const where = report.transports.length > 0 ? report.transports.join(', ') : 'no raw transport reachable';
+  if (report.fired) {
+    return {
+      id,
+      pass: false,
+      detail: `${command} resolved a callback into a sandboxed subframe via ${where} — ${breakage}. STRUCTURAL BREAKAGE`,
+    };
+  }
+  if (keyReachable) {
+    return {
+      id,
+      pass: false,
+      detail: `the invoke key is reachable from the sandboxed subframe, so a silent ${command} cannot be ruled out — this check cannot vouch for refusal`,
+    };
+  }
+  return {
+    id,
+    pass: true,
+    detail: `keyless ${command} through ${where} resolved no callback, and the invoke key never reached the subframe (see ipc-tauri-internals-absent) — key-gated per command`,
+  };
+}
+
+/**
+ * THE POSITIVE TWIN for the updater (the `ipc-sidecar-fetch-dispatchable` rule
+ * applied to the new surface): a refusal check over an UNREGISTERED command
+ * vouches for nothing, so the main window must be able to dispatch
+ * `plugin:updater|check` at all. A body-level failure (no network on a runner, a
+ * 404 from the private repo) is a PASS — the body ran, which is the question.
+ * Only the unregistered/uncapable shapes fail.
+ */
+export function decideUpdaterCheckDispatchable(outcome: { resolved: boolean; detail: string }): CheckResult {
+  const id = 'ipc-updater-check-dispatchable';
+  if (outcome.resolved) {
+    return { id, pass: true, detail: `${UPDATER_CHECK_COMMAND} dispatched from the main window and resolved` };
+  }
+  if (/not found|not allowed|unknown command/i.test(outcome.detail)) {
+    return {
+      id,
+      pass: false,
+      detail: `${UPDATER_CHECK_COMMAND} is NOT DISPATCHABLE from the main window (${outcome.detail}) — unregistered or uncapable, so the three refusal rows opposite are vouching for nothing`,
+    };
+  }
+  return {
+    id,
+    pass: true,
+    detail: `${UPDATER_CHECK_COMMAND} dispatched and the command body answered: ${outcome.detail}`,
+  };
+}
+
+/**
  * THE POSITIVE TWIN (TASK-20260817-telepath, next-steps 2026-08-17 §1).
  *
  * `ipc-sidecar-fetch-refused` PASSED while the command was UNREGISTERED — eight-seam
@@ -477,6 +635,11 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
                 // rather than as truthy. Absence here is the safe direction only because
                 // the verdict also requires the key to be unreachable.
                 sidecarCallbackFired: (p as { sidecarCallbackFired?: unknown }).sidecarCallbackFired === true,
+                updaterCheckCallbackFired:
+                  (p as { updaterCheckCallbackFired?: unknown }).updaterCheckCallbackFired === true,
+                updaterInstallCallbackFired:
+                  (p as { updaterInstallCallbackFired?: unknown }).updaterInstallCallbackFired === true,
+                relaunchCallbackFired: (p as { relaunchCallbackFired?: unknown }).relaunchCallbackFired === true,
               },
             }
           : {}),
@@ -507,6 +670,36 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
   );
   byId.set('ipc-lan-fetch-refused', decideLanFetchRefused(report, keyReachable));
   byId.set('ipc-sidecar-fetch-refused', decideSidecarFetchRefused(report, keyReachable));
+  byId.set(
+    'ipc-updater-check-refused',
+    decideUpdateChannelCommandRefused(
+      'ipc-updater-check-refused',
+      UPDATER_CHECK_COMMAND,
+      'app code can probe and steer the shell update channel',
+      report === undefined ? undefined : { ...report, fired: report.updaterCheckCallbackFired },
+      keyReachable,
+    ),
+  );
+  byId.set(
+    'ipc-updater-install-refused',
+    decideUpdateChannelCommandRefused(
+      'ipc-updater-install-refused',
+      UPDATER_INSTALL_COMMAND,
+      'app code can drive binary installation as the user',
+      report === undefined ? undefined : { ...report, fired: report.updaterInstallCallbackFired },
+      keyReachable,
+    ),
+  );
+  byId.set(
+    'ipc-process-relaunch-refused',
+    decideUpdateChannelCommandRefused(
+      'ipc-process-relaunch-refused',
+      PROCESS_RELAUNCH_COMMAND,
+      'app code can relaunch the shell (the install flow\'s second half)',
+      report === undefined ? undefined : { ...report, fired: report.relaunchCallbackFired },
+      keyReachable,
+    ),
+  );
 
   // The POSITIVE twin, driven from the main frame — a real, well-formed app-route call.
   // Any answer from the command BODY passes; only the unregistered shapes fail.
@@ -518,6 +711,16 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     dispatch = { resolved: false, detail: String(err) };
   }
   byId.set('ipc-sidecar-fetch-dispatchable', decideSidecarFetchDispatchable(dispatch));
+
+  // The updater's own positive twin: the main window must reach plugin:updater|check.
+  let updaterDispatch: { resolved: boolean; detail: string };
+  try {
+    await invoke(UPDATER_CHECK_COMMAND, {});
+    updaterDispatch = { resolved: true, detail: 'resolved' };
+  } catch (err) {
+    updaterDispatch = { resolved: false, detail: String(err) };
+  }
+  byId.set('ipc-updater-check-dispatchable', decideUpdaterCheckDispatchable(updaterDispatch));
 
   // EVERY id must be present — a missing verdict is a FAIL (AC7).
   return IPC_CHECK_IDS.map((id) => byId.get(id) ?? { id, pass: false, detail: 'no-verdict' });

@@ -44,6 +44,7 @@ Auto-escalate: touching a High-tier area at all makes the task High.
 ## Release & publish rules
 
 - **Never** publish npm packages, deploy the Playground, push to `snugprotocol/spec`, or change repo visibility without an explicit human ask in that session.
+- **Never** create or edit a GitHub Release on a snugprotocol repo (desktop binaries, `latest.json` — every installed client trusts these) without an explicit human ask in that session; each one is journaled (ADR-0047).
 - Every publish/deploy/spec-push is recorded in the task journal (what, when UTC, verification performed).
 - Spec pushes additionally require a [spec-changelog](../spec-changelog.md) entry and follow [SPEC_SYNC.md](SPEC_SYNC.md).
 

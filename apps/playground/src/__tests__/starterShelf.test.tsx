@@ -35,7 +35,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
  * hue-lights-party → hue. The membership + count assertions below are EXTENDED to the
  * new curation, exactly as P4 extended them, never relaxed.
  */
-const KEEPER_FOLDERS = ['chess', 'flying-pig', 'adventure-quest', 'quiz-me', 'trivia-night'];
+const KEEPER_FOLDERS = ['chess', 'flying-pig', 'adventure-quest', 'quiz-me'];
 /**
  * The CONNECTED five (TASK-20260815-starter-apps-rebuild, ADR-0031): one per credential
  * shape — Coinbase (api_key + CDP signing, desktop-only), Spotify (oauth2_auth_code),

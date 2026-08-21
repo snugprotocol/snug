@@ -1,7 +1,20 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "49409ce980d85434e4208fefe823f56afed25fd94727ebe497cc839f16c9378b",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "The books about the books",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Nothing changes in the app — this release back-fills the ledger's wiki (vision through next tasks, plus both build prompts) into installed copies that predate doc seeding."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

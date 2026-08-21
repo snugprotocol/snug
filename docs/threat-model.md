@@ -1,9 +1,17 @@
 # Snug — Threat Model
 
-- **Version:** 1.0 · **Date:** 2026-08-20 · **Task:** TASK-20260820-threat-model-v1
+- **Version:** 2.0 · **Date:** 2026-08-21 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2)
 - **Status:** current as of commit-time. This document is audited, not transcribed — every
   enforcement claim below was checked against the code by an adversarial pass that tried to
-  break it, and two defects that pass found were fixed before this file was written.
+  break it, and two defects that pass found were fixed before v1 was written.
+- **What v2 changed:** four surfaces that landed after v1 are folded in — the `.snug`
+  container (whose changes v1 carried in-place without a delta; the ledger is repaired),
+  the starter update channel, multi-provider BYOK + the deep delete, and **the desktop
+  shell's own update channel**, which is this product's first supply-chain surface. v2's
+  adversarial pass was **targeted at those four**, not a repeat of v1's five-surface audit;
+  the rest of this document is v1's, re-checked mechanically (every cited path still
+  exists) but not re-attacked. One numbering defect was also fixed: v1 shipped two R-14s,
+  and the encryption residual is now R-27.
 - **Reporting:** [SECURITY.md](../SECURITY.md) · **security@snugprotocol.org**
 
 ---
@@ -147,6 +155,7 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | The CDN allowlist is fixed and the policy is not parameterizable | `packages/protocol/src/constants.ts` — module-level `as const`; `injectCsp` has arity 1 | `packages/runner/src/__tests__/source-guard.test.ts` |
 | A self-navigating app is permanently cut off | `packages/runner/src/host.ts` — navigation credits, consumed in full, fail closed | `packages/runner/src/__tests__/host-lifecycle.test.ts` |
 | Shell IPC is unreachable from a sandboxed subframe (macOS) | `apps/desktop/src-tauri/capabilities/main.json` + the invoke-key gate | `apps/desktop/src/gate/ipc.ts`, run by the in-shell gate — **see R-11 on cadence** |
+| The shell's UPDATE commands are unreachable from a sandboxed subframe — per command, not per family | `apps/desktop/src-tauri/capabilities/main.json` grants `updater:default` + `process:allow-restart` to the main WINDOW only — but capabilities are per-window, never per-frame, so the invoke-key gate is the actual wall | `apps/desktop/src/gate/ipc.ts` — `ipc-updater-check-refused`, `ipc-updater-install-refused`, `ipc-process-relaunch-refused` (keyless well-formed invokes from a srcdoc frame) **plus** `ipc-updater-check-dispatchable`, the positive twin — **see R-11 on cadence** |
 
 ### The network ceiling
 
@@ -173,6 +182,12 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | LLM-authored SQL cannot reach hub tables or other apps' data | `packages/db/src/driver.ts` — physical namespace separation; the bytes were never there | `packages/db/src/userdb/__tests__/scratch-run.test.ts` |
 | Sidecar routes are admitted by an enumerated table in Rust, traversal checked on the decoded form | `apps/desktop/src-tauri/src/sidecar.rs` | cargo tests in the same file + `apps/desktop/src/__tests__/sidecarContract.test.ts` (parses the Rust source for drift) |
 | The desktop shell has no generic path-read command | `apps/desktop/src-tauri/src/userfile.rs` (bare-name charset, `~/Snug` only); `apps/desktop/src-tauri/src/openfile.rs` (single-use, OS-delivered) | in-file cargo tests: `apps/desktop/src-tauri/src/userfile.rs`, `apps/desktop/src-tauri/src/openfile.rs` |
+| A starter's release notes cannot describe bytes other than the ones shipping — an `app.html` edit without a release is a failing test, not a convention | `examples/validate.test.mjs` — recomputes sha-256 over the normalized html and compares `starter.json`'s `appHash` | `examples/validate.test.mjs` (the ADR-0045 block) |
+| An installed starter's update lands as a NEW pinned version and never destroys the copy it replaces | `apps/playground/src/starter/starterUpdate.ts` — `saveAppVersion({pinned, contract})`, absent-only doc seed, declared-only connection refresh | `apps/playground/src/__tests__/starterUpdate.test.ts` |
+| A shell update installs only artifacts signed by the pinned minisign key | `apps/desktop/src-tauri/tauri.conf.json` — `plugins.updater.pubkey`; verification happens in the updater plugin's Rust before install | `apps/desktop/src/__tests__/updaterConfig.test.ts` (pubkey present and well-formed; endpoint byte-equals the single-homed constant) |
+| A shipped release points at the PRODUCTION update endpoint — a dev-overlay build cannot pass the release gate | `apps/desktop/gate/run-release-gate.mjs` — MUST-APPEAR byte-scan of the endpoint in the release binary | `apps/desktop/gate/run-release-gate.mjs` (run by `pnpm --filter desktop gate:release`) — **cadence caveat: this is a release-time gate, not a per-commit one** |
+| The shell's own version cannot drift between its three declarations | `apps/desktop/package.json` · `src-tauri/tauri.conf.json` · `src-tauri/Cargo.toml`, bumped together by `scripts/release-desktop.mjs` | `apps/desktop/src/__tests__/versionSync.test.ts` |
+| An update relaunch reaps the WhatsApp helper first — `AppHandle::restart()` skips `RunEvent::Exit` on the main thread | `apps/desktop/src/app-updates.ts` — explicit `sidecar_ctl('stop')` before `relaunch()` | `apps/desktop/src/__tests__/appUpdates.test.ts` — call-order spy |
 
 ---
 
@@ -230,6 +245,54 @@ window ships with `"csp": null`, so the layer a browser host page has is absent.
 the host page is immediate full IPC plus `snug_secrets`.
 *Bounded by:* the app-iframe boundary (C2) being the thing that keeps app code out of that
 context in the first place.
+
+**R-28 — The update manifest is TLS-trusted; only the ARTIFACT is signed.** The desktop
+update channel ([ADR-0047](decisions/0047-desktop-distribution-and-update-channel.md))
+verifies a minisign signature over the downloaded artifact, so an attacker who compromises
+the publishing GitHub account **cannot install a binary**. They CAN control every word of
+the prompt: version number, date, and notes prose come out of `latest.json`, which nothing
+signs. The realistic attack is therefore social — a fabricated "critical security update"
+whose notes steer the user somewhere the signature does not reach.
+*Bounded by:* the version string being syntax-validated, notes rendering as plain text with
+no linkification (pinned by test), the structured notes preferring the release's own asset
+under the same rules, and the update UX deliberately offering the attacker no button to aim
+— "later" and "update now" are the only actions, and neither leaves the app. Manifest
+signing would close it and is not implemented.
+*Full surface:* `docs/security/threat-model-delta-desktop-update-channel.md`.
+
+**R-29 — Distributed builds are unsigned and un-notarized until the Developer ID lands.**
+First run requires a right-click → Open — the exact habit that makes users vulnerable to
+other unsigned software — and a tampered DMG acquired anywhere but the linked release URL
+gets no OS-level warning distinguishing it from ours. Disclosed on the download page rather
+than smoothed over; the signing path is wired and env-gated so it activates the day
+credentials exist. First acquisition is TOFU either way: nothing published today lets a
+user verify a download out of band.
+
+**R-30 — The launch update check is a phone-home.** With auto-check on (the default), every
+desktop launch tells github.com the user's IP, the time, and the running version. Snug's
+posture is "we collect nothing as architecture", and this is the first automatic outbound
+request the desktop app makes that is not the user's own work. It goes to a third party we
+do not control rather than to us, it is disclosed in Settings copy and toggleable — but a
+user who wants zero background traffic has to discover the switch.
+
+**R-31 — An installed starter's update inherits the previous version's grants.** Data,
+`auth:<appId>:*` credentials, approved connections and chat are all keyed on `app_id`,
+never on version, so updated code inherits everything the prior code was trusted with
+([ADR-0045](decisions/0045-starter-versioning-and-update-channel.md)). That is the point —
+the alternative destroys the user's data — but it means the trust decision is "do I trust
+the next version of this app", answered by first-party in-repo provenance rather than by
+anything the user inspects. A changed requirement on an *approved* row still waits for the
+user's own re-review; only `declared` rows refresh.
+*Full surface:* `docs/security/threat-model-delta-starter-update-channel.md`.
+
+**R-32 — Deleting the last sidecar-fact app reaches OFF the machine.** The Telepath deep
+delete ends a WhatsApp linked-device session ([ADR-0046](decisions/0046-multi-provider-byok-and-app-lifecycle-controls.md)
+§7): re-linking needs a fresh QR scan on the phone. It is almost certainly what a user
+asking to remove Telepath wants, and it is the only act in the product whose blast radius
+extends to a third-party account's device list. Named in the delete confirmation copy.
+*Bounded by:* firing only after the cascade commits, only when no other app holds a sidecar
+fact, and behind a persist tombstone that silences every writer that could otherwise
+resurrect the wiped store.
 
 **R-2 — A scrubber that matches values cannot survive re-encoding.** `scrubAuthValues` is
 exact-substring over injected values, in raw and percent-encoded form. A provider that
@@ -341,7 +404,7 @@ terms and accounts have been banned for it. Pacing and rate caps are harm reduct
 detection evasion, and are not a guarantee. Disclosed in the wizard consent copy and the
 starter README before the user connects.
 
-**R-14 — A protected file whose secrets are both lost is unrecoverable.**
+**R-27 — A protected file whose secrets are both lost is unrecoverable.**
 [ADR-0043](decisions/0043-passphrase-encryption-at-rest.md) has no backdoor, no escrow and
 no reset: if the user loses BOTH the passphrase and the Recovery Key, the data is gone. That
 is the property the feature exists to provide, so it cannot be mitigated away — only
@@ -493,6 +556,12 @@ the checker was perfectly green while they were missing. They are now R-22 throu
 The "consolidated into" column below is human-maintained prose, not a verified mapping —
 treat it as a reading aid, and read the delta itself when the answer matters.
 
+**v2 note (2026-08-21).** Four rows were added. Three are new surfaces; the FIRST —
+`threat-model-delta-snug-file-encryption.md` — is a *retroactive* delta for a change that
+amended this model in place without leaving one, which is exactly the gap this ledger
+exists to make visible and which the ledger could not see (a delta that never existed
+cannot fail a hash check). Its content is not new; the record is.
+
 <!-- DELTA-LEDGER:BEGIN -->
 
 | Delta | Pinned hash | Consolidated into |
@@ -505,6 +574,10 @@ treat it as a reading aid, and read the delta itself when the answer matters.
 | `docs/security/threat-model-delta-provider-chat-lane.md` | `6f92151dad7c` | §5 ceiling · R-8 |
 | `docs/security/threat-model-delta-simplefin-token-claim.md` | `e8cb2f9a8acd` | §5 ceiling · R-1, R-22, R-23 |
 | `docs/security/threat-model-delta-whatsapp-sidecar.md` | `080e64034de0` | §5 ceiling · R-3, R-9, R-10, R-12 |
+| `docs/security/threat-model-delta-snug-file-encryption.md` | `77bfcb19bfa3` | §2 assets · §5 C1 · R-3, R-27 |
+| `docs/security/threat-model-delta-starter-update-channel.md` | `5a5625c1f999` | §5 authoring · R-31 |
+| `docs/security/threat-model-delta-multi-provider-byok.md` | `540490f88a1c` | §5 authoring · R-32 |
+| `docs/security/threat-model-delta-desktop-update-channel.md` | `39b94b2a4948` | §5 C2 + authoring · R-28, R-29, R-30 |
 
 <!-- DELTA-LEDGER:END -->
 

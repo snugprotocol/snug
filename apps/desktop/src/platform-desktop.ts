@@ -31,6 +31,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 import type { SnugPlatform } from '@playground/platform/platform';
 
+import { createAppUpdates } from './app-updates.js';
 import { createTauriFileFs } from './fs.js';
 import { lanFetch, lanPair } from './lan-fetch.js';
 import { sidecarCtl, sidecarFetch, sidecarWizardFetch } from './sidecar.js';
@@ -280,6 +281,10 @@ export function createDesktopPlatform(): SnugPlatform {
         for (const p of paths) void deliver(p);
       });
     },
+    // THE SHELL UPDATE CHANNEL (ADR-0047). check/downloadAndInstall ride the updater
+    // plugin (artifact-signature verified in Rust); relaunch reaps the sidecar first
+    // — the ordering is pinned by appUpdates.test.ts's call-order spy, never by prose.
+    appUpdates: createAppUpdates(),
     capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
   };
 }

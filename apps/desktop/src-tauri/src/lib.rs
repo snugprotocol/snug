@@ -103,6 +103,14 @@ pub fn run() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // ADR-0047: the shell update channel. The updater verifies the minisign
+        // signature over the downloaded ARTIFACT; latest.json's prose fields are
+        // TLS-trusted display data only (trust split stated in the ADR). The
+        // process plugin exists solely for post-install relaunch — and relaunch
+        // deliberately happens AFTER an explicit sidecar reap, because
+        // AppHandle::restart() skips RunEvent::Exit on the main thread.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(OpenedFiles::default())
         // WITHOUT THIS, both sidecar commands fail at the IPC boundary before their bodies
         // run: Tauri resolves `tauri::State<'_, SidecarState>` from managed state, and an

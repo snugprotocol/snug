@@ -1,7 +1,20 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "c6f392f22f3277452fc4c0a8c51329839df144feab804a985f68216c6c054d02",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "Telepath, self-documented in your copy",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "The app is untouched — this release carries Telepath's wiki and the verbatim build prompts into copies installed before docs were seeded."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

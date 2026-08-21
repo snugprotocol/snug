@@ -9,6 +9,7 @@
 // view + stores dynamically from that generation.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
@@ -66,7 +67,10 @@ async function render(node: React.ReactElement): Promise<void> {
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
-    root!.render(node);
+    // Router wrapper since TASK-20260821: the Settings "app" section may render a
+    // <Link> (a desktop platform without the appUpdates seat takes the web branch),
+    // and Link outside a router is a crash, not a warning.
+    root!.render(<MemoryRouter>{node}</MemoryRouter>);
   });
 }
 

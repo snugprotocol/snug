@@ -13,9 +13,14 @@
  * docs seed. An `approved` or `revoked` connection row is never touched — the AC4 lock.
  *
  * VERSION KNOWLEDGE. `starterVersion:<appId>` (settings row, ADR-0045 §6) is written by
- * the install and update acts. A copy that predates versioning has no row and derives:
- * newest-pinned bytes equal to the bundle ⇒ it IS the current release; anything else ⇒
- * treat as v1, which can only over-offer (a no-op update), never hide one.
+ * the install and update acts. A copy that predates versioning has no row and is treated
+ * as v1 outright — even when its bytes equal the bundle. Byte-equality used to derive
+ * "current release", but a DOCS-ONLY release (version bumped, html untouched) falsifies
+ * that: identical bytes can still be a release behind, and hiding the offer would deny
+ * exactly the pre-seeding copies the release exists to reach (TASK-20260821, plan-review
+ * findings 6+12). Treating unknown as older can only over-offer, and taking the offer is
+ * cheap and safe: bytes already at the bundle write no new version, the docs seed is
+ * absent-only, and recording the version clears the offer for good.
  */
 
 import type { UserDb } from '@snugprotocol/db';
@@ -97,8 +102,10 @@ export async function starterUpdateStatus(db: UserDb, appId: string): Promise<St
   const running = db.getAppHtml(appId);
   if (factory === undefined || running === undefined) return undefined;
 
-  const factoryIsCurrentRelease = normalizeStarterHtml(factory) === normalizeStarterHtml(bundle);
-  const installedVersion = recordedVersion(db, appId) ?? (factoryIsCurrentRelease ? meta.version : 1);
+  // No recorded row ⇒ v1, never "derive current from byte-equality" — a docs-only
+  // release ships identical html under a higher version, so equal bytes can still be a
+  // release behind (see VERSION KNOWLEDGE in the module doc).
+  const installedVersion = recordedVersion(db, appId) ?? 1;
 
   return {
     folder,
@@ -125,8 +132,9 @@ async function bundledContract(folder: string): Promise<RuntimeContract | undefi
 /**
  * THE UPDATE ACT — the second host write act of the install-act class (ADR-0045 §3; the
  * first is `installThisStarter` in RunView). Idempotent: bytes already at the bundle ⇒
- * nothing is written except healing a missing `starterVersion:` row, so a retry after a
- * partial failure converges instead of accumulating pinned versions.
+ * no version is written except healing a missing `starterVersion:` row — but the
+ * absent-only docs seed still runs, because for a docs-only release that branch IS the
+ * update. A retry after a partial failure converges instead of accumulating pins.
  *
  * Throws only from the version write itself (the caller renders the failure); the
  * connection/docs refreshes keep their own never-throw posture, exactly as at install.
@@ -140,8 +148,13 @@ export async function applyStarterUpdate(db: UserDb, appId: string): Promise<Sta
 
   const running = db.getAppHtml(appId);
   if (running !== undefined && normalizeStarterHtml(running) === normalizeStarterHtml(bundle)) {
-    // Already on this release's bytes — heal the version row if a prior attempt died
-    // before writing it, and change nothing else.
+    // Already on this release's BYTES — which is not the same as having taken this
+    // release: a docs-only release moves the version without touching the html, and its
+    // whole payload lands here. Seed the absent docs, then record the version (offer
+    // clears), and change nothing else. The declared-only connection refresh
+    // deliberately does NOT run in this branch — nothing in a docs-only release changes
+    // connections (decision recorded in the task file, plan-review findings 6+12).
+    await installStarterDocs(db, appId);
     if (recordedVersion(db, appId) !== meta.version) {
       db.setSetting(starterVersionSettingKey(appId), meta.version);
     }

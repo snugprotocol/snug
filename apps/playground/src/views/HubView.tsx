@@ -36,7 +36,6 @@ const STARTER_LOOKS: Readonly<
   'flying-pig': { emoji: '🐷', color: '#ec4899', blurb: 'tap to keep a pig airborne — pure offline arcade' },
   'adventure-quest': { emoji: '🐉', color: '#7c3aed', blurb: 'the agent tells the tale — your pack lives in a real file' },
   'quiz-me': { emoji: '🧠', color: '#0284c7', blurb: 'pick any topic, take a five-question quiz, watch scores climb' },
-  'trivia-night': { emoji: '🎉', color: '#d97706', blurb: 'pass one device around — game night with zero setup' },
   // The gold-standard connected five (TASK-20260815-starter-apps-rebuild, ADR-0031):
   // each complements its provider's own app rather than cloning it, and each teaches
   // the provider chat lane. Desktop-only where the transport demands it: Coinbase has
@@ -472,9 +471,17 @@ function HubHome(): ReactElement {
                   Playwright run on the parked branch, 2026-08-08.
                 */}
                 {locked ? (
-                  <span className="tile-desktop-badge" data-testid="desktop-only-badge" title="this starter's device lives on your home network, which a web page cannot reach — the free Snug desktop app can">
+                  // ADR-0047 (TASK-20260821): the badge is now the LINK to the /download
+                  // page — it sits beside (not inside) the disabled tile button, so it
+                  // stays clickable while the tile itself refuses.
+                  <Link
+                    to="/download"
+                    className="tile-desktop-badge"
+                    data-testid="desktop-only-badge"
+                    title="this starter's device lives on your home network, which a web page cannot reach — the free Snug desktop app can"
+                  >
                     needs the desktop app — free download
-                  </span>
+                  </Link>
                 ) : null}
                 {/*
                   The CARD is the control (AC1), matching the installed-app tiles above —

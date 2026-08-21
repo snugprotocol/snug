@@ -129,6 +129,32 @@ export interface SnugPlatform {
   probeOllama?(): Promise<{ running: boolean; models: string[] }>;
   /** Registers the .snug open handler. Desktop only. */
   onOpenUserFile?(cb: (bytes: Uint8Array, path: string) => void): void;
+  /**
+   * THE SHELL UPDATE CHANNEL (ADR-0047, TASK-20260821). Desktop only; absence means
+   * "this build cannot update itself" and every update surface renders nothing — the
+   * web hub instead offers the /download page.
+   *
+   * `check()` resolves `undefined` when up to date, and REJECTS on an unreachable or
+   * malformed manifest — the caller decides the temperature (launch check swallows
+   * quietly because the pre-flip private repo 404s by design; the Settings button
+   * names the failure). The `notes` field of the answer is UNTRUSTED display data:
+   * the minisign signature covers the downloaded ARTIFACT only, never the manifest
+   * (ADR-0047 §5), so renderers keep it plain text and never linkify.
+   *
+   * `downloadAndInstall` performs the signature-verified download + install and
+   * resolves with the app still running on the OLD bytes. `relaunch()` is the second
+   * half and REAPS THE SIDECAR FIRST: AppHandle::restart() skips RunEvent::Exit on
+   * the main thread (verdict recorded in ADR-0047 §10), so the exit-time reap cannot
+   * be assumed — a relaunch that skipped the reap would orphan the WhatsApp helper
+   * and wedge the linked-device session (lessons 2026-08-18/19).
+   */
+  appUpdates?: {
+    /** The running build's version — tauri.conf.json's, the one the updater compares. */
+    currentVersion(): Promise<string>;
+    check(): Promise<{ version: string; date?: string; notes?: string } | undefined>;
+    downloadAndInstall(onProgress?: (fraction: number | undefined) => void): Promise<void>;
+    relaunch(): Promise<void>;
+  };
   capabilities: { subscriptionMode: boolean; hubSyncOrigin: boolean; lanHttpPrivate: boolean };
 }
 

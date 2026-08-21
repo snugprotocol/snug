@@ -9,6 +9,7 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { UserDb } from '@snugprotocol/db';
@@ -66,7 +67,13 @@ async function render(): Promise<void> {
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
-    root!.render(<SettingsView />);
+    // Router wrapper since TASK-20260821: the "app" section's web branch renders a
+    // <Link to="/download">, and Link outside a router is a crash, not a warning.
+    root!.render(
+      <MemoryRouter>
+        <SettingsView />
+      </MemoryRouter>,
+    );
   });
   await act(async () => {
     await flush();
@@ -85,10 +92,12 @@ function typeInto(el: HTMLInputElement, value: string): void {
 }
 
 describe('structure (AC14)', () => {
-  it('renders the five labelled sections', async () => {
+  it('renders the six labelled sections', async () => {
+    // MIGRATED five → six (TASK-20260821, ADR-0047): the "app" section carries the
+    // shell version/update controls on desktop and the download pointer on web.
     await render();
     const labels = [...(container?.querySelectorAll('.settings-section-label') ?? [])].map((n) => n.textContent);
-    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'appearance']);
+    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'appearance', 'app']);
   });
 
   it('keeps the mode segment’s accessible name and three labels verbatim (the e2e pin)', async () => {

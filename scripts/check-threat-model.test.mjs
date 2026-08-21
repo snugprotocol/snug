@@ -5,11 +5,13 @@
 // drive the pure parsers directly rather than the filesystem: a ledger that agrees, one
 // that has drifted, one missing a delta entirely, and one pinning a file that is gone.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   backtickedPaths,
   checkDeltaLedger,
+  checkResidualIdsUnique,
   hashPrefix,
   LEDGER_BEGIN,
   LEDGER_END,
@@ -139,4 +141,40 @@ test('parseInvariantRows surfaces a row with NO enforcement path — the AC3 cas
   ].join('\n');
   const rows = parseInvariantRows(md);
   assert.deepEqual(rows[0].enforcement, []);
+});
+
+// ── TM7: residual ids are unique (TASK-20260821, plan-review finding 17) ──
+// v1 shipped two R-14s and downstream citations then disagreed about which was meant.
+// The hash-pin mechanism is structurally blind to this: a delta can be perfectly
+// unmoved while the document numbers two residuals the same.
+
+test('checkResidualIdsUnique: distinct ids yield no failures', () => {
+  const md = ['**R-1 — first.**', 'prose', '- **R-2 — second.**', '**R-30 — third.**'].join('\n');
+  assert.deepEqual(checkResidualIdsUnique(md), []);
+});
+
+test('checkResidualIdsUnique: a DUPLICATE definition fails and names the id', () => {
+  const md = ['**R-14 — the ceiling scope.**', 'prose', '- **R-14 — a protected file.**'].join('\n');
+  const failures = checkResidualIdsUnique(md);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /R-14 is DEFINED 2 times/);
+});
+
+test('checkResidualIdsUnique: a REFERENCE is not a definition', () => {
+  // The distinguishing property: without it, every cross-reference ("see R-8", the
+  // ledger's own "R-3, R-9" column) would read as a redefinition and the check would
+  // fail on a correct document — a false positive that gets the check deleted.
+  const md = [
+    '**R-8 — untrusted text.**',
+    'The precondition R-8 depends on, see R-8 above.',
+    '| `docs/security/delta-x.md` | `abc123def456` | §5 ceiling · R-8, R-9 |',
+  ].join('\n');
+  assert.deepEqual(checkResidualIdsUnique(md), []);
+});
+
+test('checkResidualIdsUnique: the REAL threat model has unique ids', () => {
+  // Against the shipped document, not a fixture — the fixture proves the mechanism,
+  // this proves the artifact.
+  const md = readFileSync(new URL('../docs/threat-model.md', import.meta.url), 'utf8');
+  assert.deepEqual(checkResidualIdsUnique(md), []);
 });

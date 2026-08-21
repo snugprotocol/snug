@@ -62,6 +62,33 @@ export function parseLedger(md) {
 }
 
 /**
+ * Every residual id (R-n) must be defined exactly ONCE (TASK-20260821, plan-review
+ * finding 17). v1 shipped two R-14s — the encryption residual and the ceiling-scope one
+ * — and downstream citations then disagreed about which was meant, silently, because
+ * nothing checked. The hash-pin mechanism cannot see this class: a delta can be
+ * perfectly unmoved while the document it feeds numbers two residuals the same.
+ *
+ * A DEFINITION is a bolded or list-item heading (`**R-n —` / `- **R-n —`); a mention in
+ * prose or in the ledger's "consolidated into" column is a REFERENCE and must not count,
+ * or every cross-reference would read as a redefinition.
+ *
+ * Pure: takes the markdown, returns failure strings.
+ */
+export function checkResidualIdsUnique(md) {
+  const seen = new Map();
+  for (const m of md.matchAll(/^(?:- )?\*\*(R-\d+)\s*—/gm)) {
+    seen.set(m[1], (seen.get(m[1]) ?? 0) + 1);
+  }
+  const failures = [];
+  for (const [id, count] of seen) {
+    if (count > 1) {
+      failures.push(`residual id ${id} is DEFINED ${count} times — ids must be unique; renumber the newer one`);
+    }
+  }
+  return failures;
+}
+
+/**
  * Compare the ledger against the actual delta files. Pure: takes Map<path, hash> for
  * both sides so the tests need no filesystem. Returns a list of failure strings.
  */
@@ -214,6 +241,10 @@ function main() {
   // TM6 — the shipped surface is honest about platform.
   check('TM6', 'macOS-only shipped surface stated', /macOS[- ]only/.test(tm),
     'ADR-0021 D8: the desktop shell ships macOS-only and the model must say so');
+
+  // TM7 — residual ids are unique (v1 shipped two R-14s; see the function's header).
+  const idFailures = checkResidualIdsUnique(tm);
+  check('TM7', 'every residual id is defined exactly once', idFailures.length === 0, idFailures.join('; '));
 
   const total = passes.length + failures.length;
   if (failures.length) {

@@ -24,6 +24,7 @@ import RunView from '../run/RunView.js';
 import { HubView } from '../views/HubView.js';
 import { modeStore } from '../state/mode.js';
 import { STARTER_PREFIX } from '../starter/starterApps.js';
+import { starterMetaFor } from '../starter/starterMeta.js';
 import { installTestUserDb } from './userdbTestHelper.js';
 
 declare global {
@@ -294,6 +295,12 @@ describe('an uninstalled starter OPENS read-only; Install lives in the run view 
 describe('an installed starter opens the user’s copy, never a second one (AC18)', () => {
   it('the tile switches to an Open control and keeps the installed badge', async () => {
     const copy = db.installApp({ displayName: 'chess', html: '<html>copy</html>', installSource: STARTER_SOURCE });
+    // MIGRATED (TASK-20260821): a bare installApp is a LEGACY no-row install, and since
+    // the docs-only-release fix those honestly show the "update" badge instead (the
+    // hubUpdateBadge suite owns that claim). This test's claim is about a copy at the
+    // CURRENT release, so record the bundle version the way every real install does.
+    const meta = await starterMetaFor('chess');
+    db.setSetting(starterVersionSettingKey(copy.appId), meta!.version);
     const { el, path } = await renderHub();
     const tile = starterTile(el, STARTER_NAME);
     // Both states are now a single card control (AC1); the badge and the testid are what

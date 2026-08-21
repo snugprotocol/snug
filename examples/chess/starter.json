@@ -1,7 +1,21 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "9931148a675f6157ec5b042ae9814f84e063325c5747e05ac44ca0643ebc5301",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "The app's own wiki",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Chess now carries its wiki in your copy: vision, requirements, plan, lessons, and next tasks — yours to read and rewrite.",
+            "The build prompt that recreates the app ships alongside, labeled as a retrospective reconstruction."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

@@ -75,6 +75,10 @@ describe('the Hue (desktopOnly) starter tile', () => {
     const badge = tile!.querySelector('[data-testid="desktop-only-badge"]');
     expect(badge, 'the limitation badge renders on web').not.toBeNull();
     expect(badge!.textContent?.toLowerCase()).toContain('needs the desktop app — free download');
+    // ADR-0047 (TASK-20260821 AC12): the badge is now the LINK to the download page —
+    // "free download" copy with nowhere to click was an unkept promise.
+    expect(badge!.tagName).toBe('A');
+    expect(badge!.getAttribute('href')).toBe('/download');
     const open = tile!.querySelector<HTMLButtonElement>('.tile-card-button');
     expect(open?.disabled, 'the web tile must not offer an open that cannot work').toBe(true);
   });

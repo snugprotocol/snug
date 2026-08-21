@@ -1,0 +1,9 @@
+{
+  "$comment": "ADR-0047 §11 — DEV-ONLY tauri --config overlay for pre-flip updater testing against a local static stub (serve latest.json + Snug.app.tar.gz + .sig on 127.0.0.1:43121, e.g. `npx serve`). Usage: `pnpm --filter desktop exec tauri dev --config updater-dev.json` (or a deliberate test bundle via `tauri build --config updater-dev.json`). NOTHING here ships by default: a normal build never reads this file, and the release gate's must-appear check FAILS any release binary whose baked endpoint is not the production one — so an overlay-built release cannot pass the gate. `dangerousInsecureTransportProtocol` is what lets the stub be plain http on loopback; that is exactly why this file must never merge into tauri.conf.json itself.",
+  "plugins": {
+    "updater": {
+      "endpoints": ["http://127.0.0.1:43121/latest.json"],
+      "dangerousInsecureTransportProtocol": true
+    }
+  }
+}

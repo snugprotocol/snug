@@ -1,7 +1,21 @@
 {
-  "version": 1,
+  "version": 2,
   "appHash": "9768accfa2af746dd14da2715404dab12f0aed78771074ee17938a6fd8435ea3",
   "changelog": [
+    {
+      "version": 2,
+      "date": "2026-08-21",
+      "title": "Quiz Me, documented",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Vision, requirements, plan, lessons, and next tasks now install with the app as its own wiki.",
+            "A reconstructed build prompt — labeled retrospective — records how the quiz came to be."
+          ]
+        }
+      ]
+    },
     {
       "version": 1,
       "date": "2026-08-21",

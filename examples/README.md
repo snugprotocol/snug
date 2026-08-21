@@ -19,7 +19,6 @@ hub keeps for user-built apps — vision, requirements, plan, lessons).
 | [`flying-pig/`](flying-pig/) | the origin-story arcade game — **LLM-free by design** (ADR-0011): pure local reflexes, high score via `usePersistedState` |
 | [`adventure-quest/`](adventure-quest/) | **both pillars at once** — the agent is the dungeon master, the pack + journal are SQLite tables, off-schema replies fall back to a local guide |
 | [`quiz-me/`](quiz-me/) | **education wow** — the agent writes a five-question quiz on any topic; hard shape validation; built-in bank when keyless; scores in SQL |
-| [`trivia-night/`](trivia-night/) | **multiplayer feeling, zero networking** — pass-and-play on one device, LLM-free, roster in SQL |
 | [`trade-copilot/`](trade-copilot/) | **the flagship connected app** — ported from the owner's own hub-built Coinbase copilot: live portfolio through Ed25519 per-request signing (ADR-0030), an agent grounded in real positions, desktop-only |
 | [`spotify/`](spotify/) | **your listening, understood** — portraits + trends the provider's app doesn't keep, journaled locally; playback control through governed writes |
 | [`hue/`](hue/) | **the LAN-class starter** — rooms and agent-composed moods over `snug-connection://hue/…` symbolic addressing (ADR-0026); the bridge address never enters the app |

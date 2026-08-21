@@ -24,8 +24,17 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5MDEwNUY1NDVCQTBBQzYKUldUR0NycEY5UVVCK2Z1cWRjY28vYVF4anRudmRpUGlNQ1liVTk5S3BGUUxrTGZjUktqOHpDdW0K",
+      "endpoints": [
+        "https://github.com/snugprotocol/snug/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app", "dmg"],
     "icon": [
       "icons/32x32.png",
