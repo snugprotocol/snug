@@ -189,3 +189,35 @@ Workflow: 4 lenses (security/feasibility/testplan/scope) + per-finding refuters 
   asset URLs don't header-auth, and a PAT in that transport has a redirect-forwarding
   failure class); (b) the six items rode ONE branch per the "under one task" instruction,
   with strictly per-item commits so any item can still be split out.
+
+### 2026-08-21 — claude — close-session (Gate 6)
+- Done: Gate 6 in full. **Journal** this entry. **Lessons** — four added to
+  `docs/lessons.md`, each in its matching section: (1) an invariant comment is a claim
+  about a *distribution*, and the first release of a new SHAPE (here: docs-only) turns
+  it into a bug — the blocker class this task's plan review caught; (2) a plan review's
+  value concentrates in "this cannot work" findings, which come from reading the CODE
+  the plan names, not the plan; (3) a permission scoped to a WINDOW says nothing about
+  the FRAMES in it, so each new IPC command earns its own keyless probe plus a positive
+  twin; (4) when a signature covers one artifact in a multi-artifact flow, name it — the
+  unsigned half is where the attack moves, and it is usually the half the user reads.
+  **Docs** — `architecture.md` gained a "Distribution and the shell update channel"
+  section (the drift: it described the shell but had no distribution story) and its
+  status line now reads 2026-08-21; `code-map.md`, `next-steps.md` and the threat model
+  were updated in the P5/P6 commits. **ADR-0047** was recorded with P5.
+  **Spec-sync: NOT triggered** — `git diff main...HEAD -- packages/` is EMPTY, so no
+  protocol bytes changed, no spec-changelog entry is owed, and the task file's stated
+  spec impact holds. Root-file sync rule honored: the PROCESS.md release-rule addition
+  was mirrored into CLAUDE.md/AGENTS.md/GEMINI.md in the P5b commit.
+- State: **PR [#94](https://github.com/snugprotocol/snug/pull/94) is OPEN, MERGEABLE,
+  mergeStateStatus CLEAN, zero reviews and zero comments.** Branch
+  `feat/TASK-20260821-hardening-polish` pushed, 11 commits, clean tree. No CI checks
+  attached — `ci.yml` is `workflow_dispatch`-only by ADR-0041, and `gate:local` is the
+  merge gate (all six legs green, evidence in the entry above). The task file stays in
+  `active/` precisely because the PR has not merged; it moves to `done/` with the merge.
+- Next step: **owner reviews and merges #94.** Then the four walks in the 2026-08-21
+  `next-steps.md` entry — the load-bearing one is the real update+restart on hardware,
+  because the reap ORDERING is spy-pinned while the actual restart (and the
+  single-instance lock race it runs into) is the one thing no suite can perform.
+- Open questions: none blocking. Two owner acts stay gated behind their own explicit
+  ask in the session they happen: the first `gh release create`, and the Apple
+  Developer ID that turns off the unsigned-build disclosure (threat-model R-29).

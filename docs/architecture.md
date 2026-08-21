@@ -1,6 +1,6 @@
 # Snug — Architecture
 
-> Status: **implemented (living-apps evolution + hub ops + hub polish + observability/caching + Dynamic Auth v2 + lean runtime turns & intent-routed data chat, pre-launch)** — 2026-08-15 (post-08-11 merges, each with its own section or ADR: registry-authoritative auth + multi-option auth kind ADR-0020 · desktop shell ADR-0021 · desktop-aware auth/LAN providers ADR-0022/0023 · think-rail ADR-0024 · LAN verify-before-claim ADR-0025 · connection-relative addressing ADR-0026 · registry-pinned scopes + provider-reason auth banner + pinned-URL console links ADR-0028/0029), TASK-20260804-observability-caching (on TASK-20260804-hub-polish (on TASK-20260803-hub-ops (on living-apps, TASK-20260803-living-apps, on portable-hub, TASK-20260803-portable-hub). Hub ops added: long-run builds (48-iteration ceiling — there was never a timeout), 30-minute server lifetimes, a build step timeline, an in-memory LLM round-trip inspector (a SIBLING of the structural frame inspector, never an extension), cascade app delete with a terminal-delete tombstone, and the LLM-optional app doctrine (ADR-0011)). Hub polish added: a header identity menu with the Google avatar, the ember-niche brand mark, one merged "think" rail surface, round-trip observability in the build view AND the app-frame transport, explicit starter install (a starter is read-only until owned), build-thread continuity, and CAS conflicts that reach the divergence resolver instead of throwing. Observability/caching added: LIVE round-trip observation (calls and tools appear as they start, each timed), the wire model name, prompt caching on the stable tools+system prefix of BUILDER turns only (a per-TURN request flag — the app-frame envelopes are below the cacheable minimum and deliberately excluded) (ADR-0012), cache-hit reporting as a cached %, and a rotating status line replacing the duplicate step timeline. The inspector's memory bound moved from a per-field ingest cap to a total-bytes budget so expanded payloads can be shown whole.) Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is internal-draft schema v6 (`docs/spec-drafts/SPEC-v0.3-draft.md` staged — the consolidated v0.3 release candidate, TASK-20260820-spec-v03-whitepaper; `userdb-schema.ts` is the truth). Auth broker (hosted credential custody) is deliberately unbuilt — RFC at 1.6, GA at 2.0 (roadmap v2, owner decision 2026-08-05); hub LOGIN shipped separately in `apps/server`. **SimpleFIN token-claim + the Ledger starter + the open-url capability (2026-08-18, ADR-0038)**: see the section below. **Per-app model selection (2026-08-18, ADR-0036)**: each app may pin its own LLM model and every app-scoped call for it routes there; storage is a namespaced `snug_settings` key, so the wire protocol and userdb schema are both unchanged (see the section below).
+> Status: **implemented (living-apps evolution + hub ops + hub polish + observability/caching + Dynamic Auth v2 + lean runtime turns & intent-routed data chat + desktop distribution/update channel, pre-launch)** — 2026-08-21 (TASK-20260821-hardening-polish added the shell update channel + `/download`, ADR-0047; threat model is at v2.0); prior baseline 2026-08-15 (post-08-11 merges, each with its own section or ADR: registry-authoritative auth + multi-option auth kind ADR-0020 · desktop shell ADR-0021 · desktop-aware auth/LAN providers ADR-0022/0023 · think-rail ADR-0024 · LAN verify-before-claim ADR-0025 · connection-relative addressing ADR-0026 · registry-pinned scopes + provider-reason auth banner + pinned-URL console links ADR-0028/0029), TASK-20260804-observability-caching (on TASK-20260804-hub-polish (on TASK-20260803-hub-ops (on living-apps, TASK-20260803-living-apps, on portable-hub, TASK-20260803-portable-hub). Hub ops added: long-run builds (48-iteration ceiling — there was never a timeout), 30-minute server lifetimes, a build step timeline, an in-memory LLM round-trip inspector (a SIBLING of the structural frame inspector, never an extension), cascade app delete with a terminal-delete tombstone, and the LLM-optional app doctrine (ADR-0011)). Hub polish added: a header identity menu with the Google avatar, the ember-niche brand mark, one merged "think" rail surface, round-trip observability in the build view AND the app-frame transport, explicit starter install (a starter is read-only until owned), build-thread continuity, and CAS conflicts that reach the divergence resolver instead of throwing. Observability/caching added: LIVE round-trip observation (calls and tools appear as they start, each timed), the wire model name, prompt caching on the stable tools+system prefix of BUILDER turns only (a per-TURN request flag — the app-frame envelopes are below the cacheable minimum and deliberately excluded) (ADR-0012), cache-hit reporting as a cached %, and a rotating status line replacing the duplicate step timeline. The inspector's memory bound moved from a per-field ingest cap to a total-bytes budget so expanded payloads can be shown whole.) Three-actor model: LLM providers · hub providers · the end user who owns ONE portable SQLite file. Apps are LIVING: LLM-designed native data schemas (ADR-0010), app-attached chat with compounding per-app wiki docs, factory-pinned versions. Wire protocol unchanged at v1; storage/hub behavior is internal-draft schema v6 (`docs/spec-drafts/SPEC-v0.3-draft.md` staged — the consolidated v0.3 release candidate, TASK-20260820-spec-v03-whitepaper; `userdb-schema.ts` is the truth). Auth broker (hosted credential custody) is deliberately unbuilt — RFC at 1.6, GA at 2.0 (roadmap v2, owner decision 2026-08-05); hub LOGIN shipped separately in `apps/server`. **SimpleFIN token-claim + the Ledger starter + the open-url capability (2026-08-18, ADR-0038)**: see the section below. **Per-app model selection (2026-08-18, ADR-0036)**: each app may pin its own LLM model and every app-scoped call for it routes there; storage is a namespaced `snug_settings` key, so the wire protocol and userdb schema are both unchanged (see the section below).
 >
 > **TASK-20260811 (ADR-0018/0019) added two protocol-level USPs.** (1) **Lean runtime
 > turns**: an installed app's own LLM turns are assembled from a compact, version-pinned
@@ -141,6 +141,37 @@ the exact strength — the shipped config *requests* macOS targets only; an expl
 `--bundles nsis` still overrides it, so this is not a build-level refusal (threat-model
 R-5b carries the wording).
 Threat surface: `docs/security/threat-model-delta-desktop-shell.md`.
+
+### Distribution and the shell update channel (TASK-20260821, ADR-0047)
+
+The shell is downloaded from the web hub (`/download`) and **updates itself in place,
+by offer** — the first supply-chain surface in the product, and the first time anything
+Snug ships can replace Snug. Hosting is GitHub Releases; the artifacts are a DMG for
+humans plus `.app.tar.gz`+`.sig` for the updater, all static (ADR-0013-compatible).
+
+**One endpoint, one home.** `apps/playground/src/desktop/releaseChannel.ts` owns the
+URLs and the desktop config is BYTE-COMPARED against it — `tauri.conf.json` cannot
+import TS, so the compare *is* the single-homing. The dependency direction stays
+desktop→playground (the `@playground` alias); the playground never imports from
+`apps/desktop`.
+
+**The trust split is the design constraint.** minisign covers the downloaded ARTIFACT;
+`latest.json`'s version, date, notes and URL are TLS-trusted only. A compromised
+publishing account therefore cannot install a binary but CAN author the update prompt —
+so fetched notes render as plain text with no linkification, the version is
+syntax-validated, and the UX offers no button pointing outside the flow (threat-model
+R-28).
+
+**Offered, never automatic** (ADR-0045's doctrine, inherited): a toggleable launch
+check that is quiet on failure (pre-flip the private repo 404s for everyone, so silence
+is the designed state, and the Settings button is where a failure gets NAMED), a
+non-blocking header chip, and a Tesla-style notes sheet. **`relaunch()` reaps the
+sidecar first** — `AppHandle::restart()` skips `RunEvent::Exit` on the main thread, so
+the shell's exit-time reap cannot be assumed and an orphaned helper would wedge the
+linked-device session. C2 gains three per-command keyless-refusal gate rows plus a
+positive twin: capabilities are per-WINDOW, so placement proves nothing about iframes.
+
+Threat surface: `docs/security/threat-model-delta-desktop-update-channel.md`.
 
 ### Desktop-aware dynamic auth (TASK-20260812-desktop-auth-awareness, ADR-0022 + ADR-0023)
 
