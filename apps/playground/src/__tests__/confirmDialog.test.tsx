@@ -54,6 +54,27 @@ describe('NetConfirmDialog', () => {
     expect(text).toContain('POST');
   });
 
+  it('shows the full URL — the path is the field that distinguishes the request', () => {
+    // WHY: threat-model R-8 rests on this dialog "naming host, method and URL on
+    // every mutating call" — it is the wall behind the prompt-injection residual.
+    // Host+method alone cannot distinguish `POST /notes` from `POST /transfer?to=…`,
+    // which is exactly the difference an injected instruction would exploit. The
+    // chat-lane card already renders the URL (ChatLog.tsx); the modal did not.
+    mount();
+    openConfirm(() => undefined);
+    expect(container.textContent ?? '').toContain('https://api.example.com/v1/items');
+  });
+
+  it('says the session grant covers ANY path on that host — it is keyed (app, host, method)', () => {
+    // The remember checkbox is honest about its own breadth or it manufactures
+    // consent: `session-confirm.ts` keys grants on (appId, host, method) with NO
+    // path component, so approving one benign POST authorizes every POST path on
+    // that host for the session.
+    mount();
+    openConfirm(() => undefined);
+    expect((container.textContent ?? '').toLowerCase()).toContain('any path');
+  });
+
   it('Allow resolves granted:false-remember by default (plain grant, not remembered)', () => {
     mount();
     const resolve = vi.fn();
