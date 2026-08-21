@@ -1,6 +1,6 @@
 # TASK-20260821-hardening-polish: Hardening and polishing (six-item umbrella)
 
-- **Status**: planned (awaiting owner plan approval)
+- **Status**: in-review (P1–P6 implemented, suites green; owner walks + merge outstanding)
 - **Owner**: jeetu
 - **Risk tier**: **high** — touches desktop release config (High-tier area), the threat model, C2-adjacent capability config, and e2e-load-bearing UI strings. High tier ⇒ fresh-context AI plan review BEFORE implementation + negative tests + journal self-sign-off.
 - **Branch**: `feat/TASK-20260821-hardening-polish`
@@ -134,3 +134,46 @@ Workflow: 4 lenses (security/feasibility/testplan/scope) + per-finding refuters 
   work begins at P1.
 - Open questions: none blocking; first real `gh release create` will need its own
   explicit ask in a future session.
+
+### 2026-08-21 — claude — session (implementation, P1–P6)
+- Done: **All six phases implemented and committed**, each its own commit.
+  - **Plan review (High-tier gate)** — 4-lens fresh-context workflow + per-finding
+    adversarial refuters (25 agents). 21 findings confirmed, **0 refuted**; all folded
+    into the plan as binding amendments before any code. Two were BLOCKERS that would
+    have shipped item 6 inert (the docs-only-release delivery path).
+  - **P1** trivia-night removed; three trivia-driven e2e specs classified rather than
+    deleted (journey → flying-pig, the two SQL-write guards → quiz-me).
+  - **P2** header export hidden behind `SHOW_APP_EXPORT`, both-ways tested,
+    mutation-checked; load-bearing locator claims migrated to the Settings surface.
+  - **P3** mobile either/or full-view toggle, app view on every mount, desktop path
+    byte-identical (railLayout suite green UNEDITED); CSS mutant killed in a real browser.
+  - **P4** full Ledger-style wiki bundles for the four keepers + github/weather gaps;
+    validator floor; all 12 starters bumped to v2. **The blocker fix**: the
+    already-current branch now seeds absent docs, and a legacy no-row copy stays
+    OFFERED — without it the whole item was undeliverable.
+  - **P5** ADR-0047 + the full channel: updater plugin, minisign signing, single-homed
+    endpoint byte-compared against the config, per-command C2 gate rows, release script,
+    `/download`, opt-in update UX with plain-text-only fetched notes.
+  - **P6** threat model v2.0: four deltas (one retroactive), R-28..R-32, duplicate R-14
+    → R-27, and TM7 (id uniqueness) with both mutants killed.
+- Verification: **root `turbo run test --force` 23/23 with `Cached: 0`** (the integrating
+  claim per lessons 2026-08-13). Playground 1463/1463, desktop 163/163, examples 362/362,
+  threat-model checker 169/169, checker tests 17/17. Real-browser: starters 5/5,
+  mobile 4/4, dedup green.
+- **Self-sign-off (High tier).** The plan review ran fresh-context before implementation
+  and every confirmed finding is either implemented or recorded as a conscious rejection
+  with rationale. Mutation checks performed on: the export flag (both ways), the mobile
+  hide rule (real browser), the docs seed in the already-current branch, version sync,
+  endpoint single-homing, the release-script platform keys, the launch-check composition
+  wire, the duplicate-id detector, and its reference-vs-definition distinction. Every one
+  died and was restored by inverse edit, never `git checkout` (lessons 2026-08-21).
+- State: branch `feat/TASK-20260821-hardening-polish`, 8 commits, clean tree, no PR yet.
+- Next step: **owner** — review the diff, then merge; the walks in next-steps
+  (2026-08-21 entry) are owed after. The first `gh release create` and the Apple
+  Developer ID both remain explicit-ask owner acts.
+- Open questions: none blocking. Conscious deviations from the plan worth the owner's
+  eye: (a) the dev-only updater override became a `--config` overlay with NO code path
+  rather than an env-gated header token — the token idea was rejected outright (github
+  asset URLs don't header-auth, and a PAT in that transport has a redirect-forwarding
+  failure class); (b) the six items rode ONE branch per the "under one task" instruction,
+  with strictly per-item commits so any item can still be split out.
