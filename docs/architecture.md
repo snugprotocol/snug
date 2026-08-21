@@ -279,6 +279,24 @@ The price of the shared namespace is that `deleteApp` must cascade to the key ex
 webllm/demo brain the pick is ignored and the control renders nothing — the brain
 overrides the configured mode entirely (ADR-0015).
 
+**Multi-provider BYOK (TASK-20260821, ADR-0046).** Keys for Anthropic AND OpenAI can be
+saved side by side; the DEFAULT provider RESOLVES — an explicit `providerChoice` row
+(absence = derived) → anthropic-if-keyed → openai-if-keyed → the demo brain — into the
+same `providerStore` every consumer always read. Default models are per provider
+(`providerModel:<provider>` rows; local/subscription keep the global `model`), and a
+per-app pick now stores provider AND model (`appProvider:<appId>` beside `appModel:`,
+both deleteApp-swept): a pin is a pin, inheriting stays an absence. Provider resolution
+happens PER SEND at every adapter-construction site (transport, builder, the inference
+ladder) — the memoized transports would otherwise freeze a mid-session pin. The build
+page carries the same selector; a fresh thread's pick is session-scoped and becomes the
+new app's pin on install. Legacy rows (`provider`, `model`) adopt forward once at
+hydrate and are never deleted. The run header name prefers the DB-backed app-meta store
+over the announce frame, which is what lets a USER RENAME (`appRenamed:<appId>` marker,
+unique display names, announce-clobber guard at both altitudes) survive every run.
+Deleting the LAST sidecar-fact app additionally performs the full device unlink
+(`POST /session/forget`, nonce-only + persist tombstone; `sidecar_ctl("forget")` as the
+Rust disk backstop) — ADR-0046 §7.
+
 ## Token-claim connections, Ledger, and the open-url capability (TASK-20260818, ADR-0038)
 
 **A third pairing family.** The registry's `WellKnownPairing` union gained `token-claim`

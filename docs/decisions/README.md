@@ -64,3 +64,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0043 — Opt-in passphrase encryption at rest (the `SNUGENC1` container)](0043-passphrase-encryption-at-rest.md)
 - [0044 — The spec v0.3 publication line: strict schemas publish strict; host contracts publish as prose](0044-spec-v03-publication-line.md)
 - [0045 — Starter versioning and the in-place update channel](0045-starter-versioning-and-update-channel.md)
+- [0046 — Multi-provider BYOK defaults, per-app provider pins, and the app-lifecycle controls](0046-multi-provider-byok-and-app-lifecycle-controls.md)
