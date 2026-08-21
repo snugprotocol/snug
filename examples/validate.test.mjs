@@ -49,11 +49,12 @@ const REPO_ROOT = path.resolve(HERE, '..');
 const EMBEDDED_HOOKS = path.join(REPO_ROOT, 'packages', 'sdk', 'embedded', 'snug-hooks.js');
 const APPS = [
   // The keepers (owner curation, TASK-20260815-starter-apps-rebuild).
+  // (trivia-night was removed permanently 2026-08-21, TASK-20260821-hardening-polish —
+  // owner decision on record in next-steps 2026-08-20.)
   'chess',
   'flying-pig',
   'adventure-quest',
   'quiz-me',
-  'trivia-night',
   // The gold-standard connected five (TASK-20260815-starter-apps-rebuild, ADR-0031):
   // each complements its provider's own app, exploits the provider chat lane, and
   // ships its authoring provenance in `authoring/` (prompts + wiki docs). One per
@@ -101,7 +102,6 @@ const LLM_FREE_APPS = new Set([
   // carry that posture, and the strict agent-driven branch of the lint below verifies
   // a real RESPONSE_SCHEMA plus a shipped runtime-contract.json for every one.
   'flying-pig',
-  'trivia-night',
 ]);
 /**
  * The no-network-APIs rule, as a PAIR of patterns with one home (so the per-app rule

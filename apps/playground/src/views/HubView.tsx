@@ -36,7 +36,6 @@ const STARTER_LOOKS: Readonly<
   'flying-pig': { emoji: '🐷', color: '#ec4899', blurb: 'tap to keep a pig airborne — pure offline arcade' },
   'adventure-quest': { emoji: '🐉', color: '#7c3aed', blurb: 'the agent tells the tale — your pack lives in a real file' },
   'quiz-me': { emoji: '🧠', color: '#0284c7', blurb: 'pick any topic, take a five-question quiz, watch scores climb' },
-  'trivia-night': { emoji: '🎉', color: '#d97706', blurb: 'pass one device around — game night with zero setup' },
   // The gold-standard connected five (TASK-20260815-starter-apps-rebuild, ADR-0031):
   // each complements its provider's own app rather than cloning it, and each teaches
   // the provider chat lane. Desktop-only where the transport demands it: Coinbase has
