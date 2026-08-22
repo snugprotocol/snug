@@ -1,6 +1,6 @@
 # TASK-20260822-spec-10-final: Spec 1.0 final + whitepaper (final edition) + website docs/spec pages
 
-- **Status**: draft
+- **Status**: in-review (implementation complete; awaiting Gate 5 review + owner review of the staged set)
 - **Owner**: Jeetu
 - **Risk tier**: high (spec publication surface — C3; the published spec IS the protocol; whitepaper claims discipline; website sync gate)
 - **Branch**: `feat/TASK-20260822-spec-10-final` (to be created at Gate 2 approval)
@@ -203,8 +203,36 @@ headings and are stable across the rename.
 
 ## Decisions & surprises
 
-- ADR-0050 to be drafted: spec 1.0 publication + document layout + §17 provisional
-  posture + whitepaper edition 3.
+- ADR-0050 written: spec 1.0 publication + document layout + §17 provisional posture +
+  whitepaper edition 3. (Also fixed: ADR-0049 was missing from the decisions README index.)
+- **Surprise 1 (audit lane 2, REAL code defect):** `healMissingTables` counted the
+  v5-dropped `snug_auth_specs` as a permanent "miss" — every open of a healthy post-v5
+  file replayed DDL, reported healed=true, and persisted spuriously. Fixed test-first
+  (red observed, then green): expected set now derived from `USERDB_DDL`. Fallout: the
+  legacy-adoption compose test had been passing FOR THE WRONG REASON (its adoption rode
+  the spurious dirty); given the §10 write it actually needs, claim preserved.
+- **Surprise 2 (plan review):** `/session/forget` was already in the local draft — the
+  changelog's "next consolidated push" wording made it look pending; fold was
+  publication-only.
+- Audit judgment calls taken INTO the spec (source-of-truth clause): 2560 measured as
+  serialized UTF-16 code units; wipe gate is version-advance (not "exactly once");
+  rewrap MAY reuse the slot IV under a new KEK; slot count valid range 2–8; factory
+  version = newest pinned (ADR-0045); CDN_ALLOWLIST + SNUG_APP_REQUEST_TAG published.
+- Website page walk found 3 pre-existing drifts (none introduced by the promotion), all
+  fixed: quickstart's "structurally cannot" over-covered passphrase encryption;
+  envelopes-and-frames over-generalized silent drops; connections defined the grant as
+  containing credential values.
+
+## Phase 7 — AC verification roll-up (2026-08-22)
+
+| AC | Evidence |
+|----|----------|
+| 1 | Five parallel audit lanes at head: Part III fully clean; Parts I/II/IV/V/VI findings all folded (see Decisions). Modality sweep ~25 load-bearing MUSTs verified; ADR-0045/0047 sweeps clean; 63 §-refs checked, 1 fixed |
+| 2 | Revision note in SPEC-1.0.md header names all folds; spec-changelog STAGED entry (headings grep: 25, none orphaned) |
+| 3 | `check-whitepaper` **104/104** in BOTH modes (in-repo fixture AND `--spec ../spec` against the staged clone); PDF rebuilt (33pp, 10 figures); all 15 TOC page hints verified programmatically; visual pass on cover/TOC/pp3,15,26,31 |
+| 4 | `sync-docs` regenerated 10 pages/assets; `check-website-sync` 24 pages/40 hashes OK; website vitest 33/33; root `pnpm test` exit 0 (first run), final-tree rerun recorded below |
+| 5 | Spec clone: exactly ONE unpushed commit `3ac7700` on `main`; `origin/main` untouched at `cd011cc`; pending-branch sweep clean; SPEC.md = 1.0 doc; stubs written; README + whitepaper/README rewritten |
+| 6 | `schemas/` byte-identical both sides (`diff -rq` clean); `packages/` diff = two test-file comments + the audited heal fix (userdb.ts + 2 tests + 1 doc comment) — the one code change, justified above |
 
 ## Session journal (append-only, newest last)
 
@@ -219,3 +247,25 @@ headings and are stable across the rename.
 - Next step: on approval → Phase 0 (checker pins first), then Phases 1–7 in order.
 - Open questions: none blocking; the ADR-0049 fold's exact prose lands at Phase 1/2 and
   rides Gate 5 review.
+
+### 2026-08-22 (later) — Claude (Fable 5) — session
+- Done: **Phases 0–7 complete on owner approval.** Checker pins flipped (Phase 0);
+  five-lane conformance audit at head, all findings folded (Phase 1); SPEC-1.0.md
+  promoted with ADR-0049 §12.12 fold + revision note (Phase 2); whitepaper edition 3 —
+  content pass, PDF rebuilt, 104/104 both fixture modes, TOC hints verified, visual pass
+  (Phase 3); website synced + rebuilt 24 pages, authored-page walk (agent) → 3
+  pre-existing drifts fixed, 33/33 + sync gate green (Phase 4); ADR-0050 + changelog
+  STAGED entry + code-map/next-steps/README rows (Phase 5); spec clone staged at
+  **`3ac7700`**, one unpushed commit, origin untouched (Phase 6); AC roll-up table above
+  (Phase 7). Final-tree root `pnpm test` **exit 0 under pipefail** (first attempt piped
+  to tail masked the code — re-run properly; the lesson held).
+- Code change beyond docs (audited, test-first): the `healMissingTables` spurious-persist
+  fix in packages/db (+ legacy-adoption test given its §10 write) and one comment in
+  userdb-schema.ts. db 419/419 · protocol 346/346.
+- State: implementation complete; branch `feat/TASK-20260822-spec-10-final` at Phases 0–6
+  done. **NOT done, by design:** push to `snugprotocol/spec` (explicit ask), website
+  deploy, GitHub Release, flip-public.
+- Next step: owner reviews the staged set (SPEC-1.0.md · whitepaper PDF · website local
+  preview · spec-clone `3ac7700`); then `/close-session` → gate-leg choice, Gate 5
+  review, PR, merge; the spec push is its own ask afterward.
+- Open questions: none.
