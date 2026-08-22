@@ -83,3 +83,32 @@ describe('single-homing — no second spelling of shared URLs in website source'
     expect(offenders).toEqual([]);
   });
 });
+
+describe('playground links open in a new tab (TASK-20260821-site-playground-polish AC1)', () => {
+  // The playground is a stateful workspace; the website is content. Every CTA already
+  // carries the ↗ glyph promising a new tab — the markup must deliver it. Any element
+  // whose href is the site.playground value needs target="_blank" + rel="noopener".
+  const files = walk(SRC_ROOT).filter((f) => !f.includes('__tests__'));
+
+  it('every site.playground href carries target="_blank" and rel="noopener"', () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      // Element-by-element: scan each opening tag that binds href to the playground link.
+      for (const tag of text.match(/<a\b[^>]*href=\{site\.playground\}[^>]*>/g) ?? []) {
+        if (!tag.includes('target="_blank"') || !/rel="[^"]*noopener[^"]*"/.test(tag)) {
+          offenders.push(`${file}: ${tag}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('the playground link sites all bind through site.playground (none hardcode)', () => {
+    const bindings = files.filter((f) =>
+      readFileSync(f, 'utf8').includes('href={site.playground}'),
+    );
+    // header + footer (MarketingLayout), hero (index), audience split, quickstart.
+    expect(bindings.length).toBeGreaterThanOrEqual(4);
+  });
+});
