@@ -277,6 +277,20 @@ evidence, journal the runs.
   register a web origin (google/googledrive) — pre-existing dead-ends, rides
   next-steps item (7); rationale in ADR-0049 consequences.
 - Task status → in-review; branch ready for PR.
+
+### 2026-08-22 (close) — Claude — session close (Gate 6)
+- Done: branch pushed; **PR #102 opened** (https://github.com/snugprotocol/snug/pull/102)
+  with full verification record. Three lessons distilled to `docs/lessons.md`. No
+  `packages/protocol` change → no spec-changelog entry (spec impact: none, verified —
+  the seats are registry-type-only). Root-file sync rule: no CLAUDE.md/AGENTS.md/
+  GEMINI.md edits were needed (docs/ only).
+- State: all gates 1–5 complete; root `pnpm test` 25/25 green at `c5b19df` + close
+  commit. Task file stays in `active/` until merge.
+- Next step (owner): review + merge PR #102; run the env-gated e2e when port 8787 is
+  free (`SNUG_E2E_HAS_APP=1 npx playwright test e2e/starters-connect.spec.ts` — your
+  dev server holds the port); then post-merge Gate 6 (done-index line, retire this
+  file per ADR-0027).
+- Open questions: none.
 - **High-tier self-sign-off (C1/C2 walk):** the web `client_secret` lives ONLY in the
   user's own credential store; it rides only the token-endpoint form body behind the
   frozen-ceiling gate (`postForm`), is scrubbed from thrown messages AND persisted
