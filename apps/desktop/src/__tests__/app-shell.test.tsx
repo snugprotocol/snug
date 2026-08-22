@@ -45,6 +45,14 @@ describe('first-run through the desktop entry composition', () => {
     vi.restoreAllMocks();
   });
 
+  // 20s, not vitest's default 5s. This one test resets the module graph, dynamic-imports the
+  // WHOLE playground App, boots a sql.js-backed user DB and renders React through it —
+  // ~1.1s alone, ~3.5s under partial load, and OVER 5s when `turbo run test` runs every
+  // package's suite at once, which is exactly how the merge gate runs it. That made the
+  // gate red on `main` for a test that had never regressed (reproduced on 2449990,
+  // TASK-20260822-wa-authstate-corruption). A budget must be set by what the work costs at
+  // its slowest, not by what it costs on an idle machine; the default was never chosen for
+  // this test, it was merely inherited.
   it('renders the welcome (platform first, HashRouter, playground App) on a fresh user file', async () => {
     vi.resetModules();
     const platform: SnugPlatform = {
@@ -79,5 +87,5 @@ describe('first-run through the desktop entry composition', () => {
     );
     // BYOK/local only: the desktop shell never shows a subscription surface.
     expect(container.textContent).not.toMatch(/subscription/i);
-  });
+  }, 20_000);
 });
