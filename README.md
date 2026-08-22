@@ -33,6 +33,7 @@ This is the **reference implementation monorepo**: protocol bindings, iframe run
 | `apps/desktop` | The macOS desktop shell (Tauri 2) — native fetch, loopback OAuth, `~/Snug/user.snug` on disk |
 | `apps/server` | Minimal reference backend (`/invoke` + artifact store) — **optional**; the hub is static and needs no backend |
 | `apps/whatsapp-sidecar` | Local linked-device helper for the Telepath starter (desktop-only, LLM-free by construction) |
+| `apps/website` | The public website — marketing landing, docs & spec hub, desktop download (static Astro + Starlight; docs derive from `docs/` + the schemas, gated by `check-website-sync`) |
 | `examples/` | Curated starter apps — each doubles as docs example and test fixture |
 
 ## Quickstart (under 10 minutes, no API key needed)

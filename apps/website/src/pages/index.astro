@@ -1,0 +1,149 @@
+---
+// index.astro — the landing page. Positioning and the three differentiators come from
+// docs/product-vision.md (tracked in docs-sync.json — when the vision moves, the gate
+// goes red and this page gets walked).
+import AudienceSplit from '../components/AudienceSplit.astro';
+import Differentiators from '../components/Differentiators.astro';
+import ImplementorPitch from '../components/ImplementorPitch.astro';
+import TeaserVideo from '../components/TeaserVideo.astro';
+import WireDemo from '../components/WireDemo.astro';
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import { site } from '../config/site';
+---
+
+<MarketingLayout
+  title="Snug — the protocol that connects agents to apps"
+  description="An open protocol for tiny, user-built apps that think through their host's AI agent at runtime — and live in one portable file you own."
+>
+  <section class="hero">
+    <div class="container hero-inner">
+      <p class="eyebrow rise">The Snug Protocol · open spec · MIT</p>
+      <h1 class="hero-title display rise rise-2">
+        <span class="hero-line-muted">MCP connects agents to tools.</span><br />
+        Snug connects agents to <em class="hero-em">apps</em>.
+      </h1>
+      <p class="hero-sub rise rise-3">
+        Describe a tiny app in chat and the agent writes it. It runs in a hard sandbox, thinks
+        through the host agent at runtime, and lives — code, data, versions, chats — in
+        <strong>one portable file you own</strong>.
+      </p>
+      <div class="hero-ctas rise rise-4">
+        <a class="btn btn-primary" href="/download/">Download for macOS</a>
+        <a class="btn btn-secondary" href={site.playground} rel="noopener">Try the Playground ↗</a>
+        <a class="btn btn-ghost" href="/docs/spec/">read the spec →</a>
+      </div>
+      <div class="hero-video rise rise-4">
+        <TeaserVideo />
+      </div>
+    </div>
+  </section>
+
+  <WireDemo />
+  <Differentiators />
+  <AudienceSplit />
+  <ImplementorPitch />
+
+  <section class="section closer" aria-labelledby="closer-title">
+    <div class="container closer-inner">
+      <h2 id="closer-title" class="display">talk. build. run.</h2>
+      <p class="muted">
+        Software that's yours in the oldest sense: it sits with you, works for you, and fits in
+        your pocket when you go.
+      </p>
+      <div class="closer-ctas">
+        <a class="btn btn-primary" href="/download/">Get the desktop app</a>
+        <a class="btn btn-secondary" href="/docs/">Read the docs</a>
+      </div>
+    </div>
+  </section>
+</MarketingLayout>
+
+<style>
+  .hero {
+    padding: clamp(4rem, 9vw, 6.5rem) 0 clamp(3rem, 7vw, 5rem);
+  }
+
+  .hero-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .hero-title {
+    font-size: clamp(2.1rem, 5.4vw, 3.9rem);
+    line-height: 1.12;
+    margin: var(--space-4) 0 0;
+    max-width: 18ch;
+  }
+
+  .hero-line-muted {
+    color: var(--fg-faint);
+  }
+
+  .hero-em {
+    font-style: italic;
+    color: var(--ember-bright);
+  }
+
+  .hero-sub {
+    max-width: 56ch;
+    font-size: var(--text-l);
+    line-height: 1.6;
+    color: var(--fg-muted);
+    margin: var(--space-5) 0 0;
+  }
+
+  .hero-sub strong {
+    color: var(--fg);
+  }
+
+  .hero-ctas {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-6) 0 0;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .hero-video {
+    width: min(100%, 880px);
+    margin-top: clamp(3rem, 6vw, 4.5rem);
+  }
+
+  .closer {
+    border-top: 1px solid var(--border);
+    background:
+      radial-gradient(700px 320px at 50% 120%, var(--ember-glow), transparent 70%),
+      var(--bg-deep);
+  }
+
+  .closer-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--space-4);
+  }
+
+  .closer h2 {
+    font-size: clamp(2rem, 5vw, 3rem);
+    margin: 0;
+  }
+
+  .closer p {
+    max-width: 46ch;
+    font-size: var(--text-l);
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  .closer-ctas {
+    display: flex;
+    gap: var(--space-3);
+    margin-top: var(--space-3);
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+</style>

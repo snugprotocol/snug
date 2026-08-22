@@ -1,0 +1,55 @@
+/* starlight-theme.css — maps the snug design system onto Starlight's theme variables
+   so the docs hub reads as the same product as the marketing pages and the playground.
+   Palette values mirror apps/playground/src/theme/tokens.css (warm charcoal + ember);
+   Starlight needs them restated as --sl-* scales, which have no 1:1 token source. */
+
+/* dark (default) */
+:root {
+  --sl-color-accent-low: #3a2312;
+  --sl-color-accent: #e8873a;
+  --sl-color-accent-high: #f4c49a;
+  --sl-color-white: #f3ece1;
+  --sl-color-gray-1: #e5dbcb;
+  --sl-color-gray-2: #b3a48f;
+  --sl-color-gray-3: #8a7c68;
+  --sl-color-gray-4: #574a3a;
+  --sl-color-gray-5: #3a2f24;
+  --sl-color-gray-6: #201a15;
+  --sl-color-black: #171310;
+  --sl-color-bg-nav: #14100d;
+  --sl-color-bg-sidebar: #14100d;
+  --sl-font: system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --sl-font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* light */
+:root[data-theme='light'] {
+  --sl-color-accent-low: #f6dfc8;
+  --sl-color-accent: #c96f1e;
+  --sl-color-accent-high: #7c3f0a;
+  --sl-color-white: #2b2015;
+  --sl-color-gray-1: #3f3222;
+  --sl-color-gray-2: #75664f;
+  --sl-color-gray-3: #a3937a;
+  --sl-color-gray-4: #cbbda4;
+  --sl-color-gray-5: #e3d8c5;
+  --sl-color-gray-6: #f6f0e5;
+  --sl-color-gray-7: #faf6ef;
+  --sl-color-black: #fffdf8;
+  --sl-color-bg-nav: #faf6ef;
+  --sl-color-bg-sidebar: #faf6ef;
+}
+
+/* brand moments: display serif for page + site titles */
+.site-title span,
+h1 {
+  font-family: 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  font-weight: 500;
+}
+
+/* the draft banner in ember, not alarm-red */
+.sl-banner {
+  background: linear-gradient(90deg, rgba(232, 135, 58, 0.16), rgba(232, 135, 58, 0.06));
+  color: var(--sl-color-white);
+  border-bottom: 1px solid rgba(232, 135, 58, 0.35);
+}

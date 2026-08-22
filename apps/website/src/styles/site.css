@@ -1,0 +1,158 @@
+/* site.css — marketing surfaces (landing, download).
+   The design system is the playground's tokens.css, imported via the @playground alias
+   (one home — ADR-0048 §5's direction applies to the brand too). The marketing pages
+   commit to the dark theme: the brand is dark-first and the teaser footage is dark. */
+@import '@playground/theme/tokens.css';
+
+html {
+  scroll-behavior: smooth;
+}
+
+.site {
+  background:
+    radial-gradient(1200px 600px at 70% -200px, rgba(232, 135, 58, 0.07), transparent 70%),
+    var(--bg-deep);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 var(--space-5);
+}
+
+/* ---------- type ---------- */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ember-bright);
+}
+
+.muted {
+  color: var(--fg-muted);
+}
+
+/* ---------- buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--tap);
+  padding: 0.65rem 1.4rem;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-m);
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition:
+    transform var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, var(--ember-bright), var(--ember));
+  color: var(--ember-ink);
+  box-shadow: 0 0 0 1px rgba(232, 135, 58, 0.35), 0 8px 24px var(--ember-glow-strong);
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px rgba(232, 135, 58, 0.55), 0 12px 32px var(--ember-glow-strong);
+}
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+
+.btn-secondary:hover {
+  border-color: var(--ember);
+  box-shadow: 0 6px 18px var(--ember-glow);
+  transform: translateY(-1px);
+}
+
+.btn-ghost {
+  color: var(--ember-bright);
+  padding: 0.65rem 0.5rem;
+}
+
+.btn-ghost:hover {
+  color: var(--ember);
+}
+
+/* ---------- section rhythm ---------- */
+
+.section {
+  padding: clamp(4rem, 10vw, 7rem) 0;
+}
+
+.section-head {
+  max-width: 640px;
+  margin-bottom: var(--space-7);
+}
+
+.section-head h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 3.6vw, 2.5rem);
+  font-weight: 500;
+  line-height: 1.15;
+  margin: var(--space-3) 0;
+}
+
+.section-head p {
+  color: var(--fg-muted);
+  font-size: var(--text-l);
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* ---------- entrance motion (hero) ---------- */
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise {
+  animation: rise-in 0.7s var(--ease-out) both;
+}
+
+.rise-2 {
+  animation-delay: 0.12s;
+}
+
+.rise-3 {
+  animation-delay: 0.24s;
+}
+
+.rise-4 {
+  animation-delay: 0.36s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["vitest/globals"],
+    "baseUrl": ".",
+    "paths": {
+      "@playground/*": ["../playground/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/content.config.ts"]
+}

@@ -1,0 +1,202 @@
+---
+// download.astro — the desktop download surface (ADR-0047: GitHub Releases hosting,
+// honest Gatekeeper disclosure, offered-not-automatic updates). URLs come from the
+// site config seam, which re-exports the playground's releaseChannel constants in
+// production and the locally staged DMG in local E2E mode (AC12).
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import { site, siteMode } from '../config/site';
+---
+
+<MarketingLayout
+  title="Download Snug for macOS"
+  description="The Snug desktop app: completely private, your file on your disk, your keys or a local model — plus LAN devices and linked-device connections a browser can't reach."
+>
+  <section class="dl-hero">
+    <div class="container dl-inner">
+      <p class="eyebrow">snug desktop</p>
+      <h1 class="display dl-title">Private by construction.</h1>
+      <p class="dl-sub">
+        The desktop app is Snug at full strength: your <code>.snug</code> file on your own disk,
+        your API keys or a local model via Ollama, no account, no telemetry — and connections a
+        browser tab structurally cannot make.
+      </p>
+      <div class="dl-ctas">
+        <a class="btn btn-primary dl-btn" href={site.download.dmg} download>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 19h16"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"></path>
+          </svg>
+          Download for macOS
+        </a>
+        <a class="btn btn-ghost" href={site.download.releasesPage} rel="noopener">
+          all releases & notes ↗
+        </a>
+      </div>
+      <p class="dl-fineprint muted">
+        Universal binary — Apple silicon and Intel. Requires macOS. Windows and Linux are
+        planned after 1.0.
+      </p>
+      {
+        siteMode === 'local' && (
+          <p class="dl-local">
+            Local E2E mode: this button serves the DMG staged by
+            <code> pnpm --filter website stage-local-desktop</code>.
+          </p>
+        )
+      }
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="dl-why">
+    <div class="container">
+      <div class="section-head">
+        <h2 id="dl-why">What the desktop unlocks</h2>
+      </div>
+      <div class="dl-grid">
+        <article>
+          <h3>Everything stays home</h3>
+          <p>
+            Your file lives at <code>~/Snug</code>, readable with any SQLite tool, optionally
+            sealed with a passphrase only you hold. Sync it to a provider you choose — or don't.
+          </p>
+        </article>
+        <article>
+          <h3>Apps that reach your devices</h3>
+          <p>
+            Philips Hue on your LAN. Your personal WhatsApp as a linked device. Ollama running
+            beside the app. All governed: every grant is one you approved, frozen by the host.
+          </p>
+        </article>
+        <article>
+          <h3>Any brain you like</h3>
+          <p>
+            Bring an Anthropic or OpenAI key, point at any local OpenAI-compatible endpoint, and
+            pin a model per app. Your credentials never leave your machine's own executor.
+          </p>
+        </article>
+        <article>
+          <h3>Updates are offered, never pushed</h3>
+          <p>
+            The app checks for releases and <em>asks</em>. Update artifacts are cryptographically
+            signed; nothing installs without your click, and "later" is always an answer.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section dl-gatekeeper" aria-labelledby="dl-gk">
+    <div class="container">
+      <div class="section-head">
+        <h2 id="dl-gk">First launch on macOS</h2>
+        <p>
+          Pre-1.0 builds may not yet carry Apple notarization. If macOS warns on first open:
+          right-click the app in Applications and choose <strong>Open</strong>, then confirm.
+          That's Gatekeeper doing its job on a new developer — the release page publishes
+          checksums if you want to verify the download.
+        </p>
+      </div>
+    </div>
+  </section>
+</MarketingLayout>
+
+<style>
+  .dl-hero {
+    padding: clamp(4rem, 9vw, 6.5rem) 0 clamp(2.5rem, 6vw, 4rem);
+  }
+
+  .dl-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .dl-title {
+    font-size: clamp(2.1rem, 5vw, 3.5rem);
+    margin: var(--space-4) 0 0;
+  }
+
+  .dl-sub {
+    max-width: 58ch;
+    font-size: var(--text-l);
+    line-height: 1.6;
+    color: var(--fg-muted);
+    margin: var(--space-5) 0 0;
+  }
+
+  .dl-sub code {
+    font-family: var(--font-mono);
+    color: var(--ember-bright);
+  }
+
+  .dl-ctas {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-6);
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .dl-btn {
+    font-size: var(--text-l);
+    padding: 0.85rem 1.8rem;
+  }
+
+  .dl-fineprint {
+    margin-top: var(--space-4);
+    font-size: var(--text-s);
+  }
+
+  .dl-local {
+    margin-top: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--warn);
+  }
+
+  .dl-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-6);
+  }
+
+  .dl-grid article {
+    border-top: 2px solid var(--border-strong);
+    padding-top: var(--space-4);
+  }
+
+  .dl-grid h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-l);
+    font-weight: 500;
+    margin: 0 0 var(--space-2);
+  }
+
+  .dl-grid p {
+    margin: 0;
+    color: var(--fg-muted);
+    line-height: 1.6;
+    font-size: var(--text-s);
+  }
+
+  .dl-grid code {
+    font-family: var(--font-mono);
+    color: var(--ember-bright);
+  }
+
+  .dl-gatekeeper {
+    border-top: 1px solid var(--border);
+  }
+
+  @media (max-width: 700px) {
+    .dl-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

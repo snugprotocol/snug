@@ -1,0 +1,53 @@
+---
+title: Try it in five minutes
+description: Run Snug from a browser tab, the desktop app, or your own clone of the reference repo.
+sidebar:
+  order: 2
+---
+
+import { site } from '../../../../config/site';
+
+Three ways in, fastest first.
+
+## 1. The hosted Playground (zero install)
+
+Open the <a href={site.playground} rel="noopener">Playground</a>, click a suggestion chip,
+and watch the agent build the app — then run it in the sandbox. Your user file lives in the
+browser (OPFS) and exports whole from settings whenever you want it.
+
+To make built apps *think*, open **settings** and either:
+
+- **Bring your own key** — paste an Anthropic or OpenAI key. It is stored in `snug_secrets`
+  inside your own local user file — stripped from hub sync and default exports, sent only to
+  the provider.
+- **Local model** — point at any OpenAI-compatible localhost endpoint (Ollama works out of
+  the box on desktop).
+
+## 2. The desktop app (recommended)
+
+[Download Snug for macOS](/download/). Everything the Playground does, plus what a browser
+structurally cannot: your file at `~/Snug` on your own disk, LAN devices like Philips Hue,
+personal WhatsApp as a linked device, Ollama autodetection, and optional passphrase
+encryption at rest. No account, no telemetry.
+
+## 3. From source (the reference implementation)
+
+Under ten minutes, no API key needed:
+
+```bash
+git clone https://github.com/snugprotocol/snug.git && cd snug
+pnpm install                       # ~2 min
+pnpm build && pnpm test            # everything green (~2 min)
+pnpm smoke                         # headless happy path via the mock adapter
+
+# run the Playground against the reference server (mock "demo brain" — no key):
+pnpm --filter server build && SNUG_ADAPTER=mock node apps/server/dist/server.js &
+pnpm --filter playground dev       # open the printed URL → click a chip → build → run
+```
+
+The starter apps in `examples/` run with zero setup and double as documentation.
+
+## Next
+
+- [Build your first app](/docs/get-started/first-app/) — what the agent actually produces.
+- [Implementor quickstart](/docs/get-started/implementors/) — host Snug in your own product.

@@ -1,0 +1,263 @@
+---
+// WireDemo.astro — the protocol, shown mechanically: a real snug:app-message crossing
+// the wire and a snug:app-response coming back. The JSON is spelled from the published
+// schemas (frame types, field names) — never invented (AC10).
+---
+
+<section class="section wire" aria-labelledby="wire-title">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">the runtime agent bridge</p>
+      <h2 id="wire-title">The app is a body.<br />The agent is its mind.</h2>
+      <p>
+        A Snug app doesn't bundle a model — it sends versioned JSON envelopes to whatever
+        agent its host runs, and animates the reply. Here is a chess app asking the host
+        agent for its move, verbatim.
+      </p>
+    </div>
+
+    <div class="wire-stage" aria-hidden="true">
+      <div class="wire-node">
+        <span class="wire-node-label">app iframe</span>
+        <span class="wire-node-sub">sandboxed · no network</span>
+      </div>
+
+      <div class="wire-lane">
+        <div class="wire-line"></div>
+        <pre class="wire-frame wire-frame-out"><code>{`{
+  "type": "snug:app-message",
+  "requestId": "mv-42",
+  "appId": "ember-chess",
+  "action": "opponent-move",
+  "payload": { "lastMove": "e7e5" }
+}`}</code></pre>
+        <pre class="wire-frame wire-frame-back"><code>{`{
+  "type": "snug:app-response",
+  "requestId": "mv-42",
+  "data": {
+    "move": "g1f3",
+    "note": "Developing the knight."
+  }
+}`}</code></pre>
+      </div>
+
+      <div class="wire-node">
+        <span class="wire-node-label">host agent</span>
+        <span class="wire-node-sub">any LLM · user's pick</span>
+      </div>
+    </div>
+
+    <p class="wire-footnote muted">
+      Thirteen frame types, all published as JSON Schemas.
+      <a href="/docs/spec/">Read the wire protocol →</a>
+    </p>
+  </div>
+</section>
+
+<style>
+  .wire {
+    border-top: 1px solid var(--border);
+  }
+
+  .wire-stage {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .wire-node {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-m);
+    background: var(--surface);
+    box-shadow: var(--inner-glow);
+  }
+
+  .wire-node-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-s);
+    color: var(--fg);
+  }
+
+  .wire-node-sub {
+    font-size: var(--text-xs);
+    color: var(--fg-faint);
+  }
+
+  .wire-lane {
+    position: relative;
+    min-height: 240px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wire-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--ember-deep) 15%, var(--ember-deep) 85%, transparent);
+  }
+
+  .wire-line::after {
+    content: '';
+    position: absolute;
+    top: -1.5px;
+    left: 0;
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--ember-bright));
+    animation: wire-pulse 6s linear infinite;
+  }
+
+  @keyframes wire-pulse {
+    0% {
+      left: 0;
+      opacity: 0;
+    }
+    10% {
+      opacity: 1;
+    }
+    45% {
+      left: calc(100% - 40px);
+      opacity: 1;
+      transform: scaleX(1);
+    }
+    50% {
+      opacity: 0;
+    }
+    55% {
+      left: calc(100% - 40px);
+      opacity: 0;
+      transform: scaleX(-1);
+    }
+    60% {
+      opacity: 1;
+      transform: scaleX(-1);
+    }
+    95% {
+      left: 0;
+      opacity: 1;
+      transform: scaleX(-1);
+    }
+    100% {
+      left: 0;
+      opacity: 0;
+    }
+  }
+
+  .wire-frame {
+    position: absolute;
+    margin: 0;
+    padding: var(--space-4);
+    border-radius: var(--radius-m);
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--fg-muted);
+    max-width: min(90%, 380px);
+    overflow-x: auto;
+  }
+
+  .wire-frame code {
+    color: inherit;
+  }
+
+  .wire-frame-out {
+    animation: frame-out 12s var(--ease-out) infinite;
+    border-color: rgba(232, 135, 58, 0.4);
+  }
+
+  .wire-frame-back {
+    animation: frame-back 12s var(--ease-out) infinite;
+  }
+
+  @keyframes frame-out {
+    0%,
+    2% {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    7%,
+    45% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    50%,
+    100% {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+  }
+
+  @keyframes frame-back {
+    0%,
+    52% {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    57%,
+    96% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+  }
+
+  .wire-footnote {
+    margin-top: var(--space-6);
+    font-size: var(--text-s);
+    text-align: center;
+  }
+
+  .wire-footnote a {
+    color: var(--ember-bright);
+  }
+
+  @media (max-width: 760px) {
+    .wire-stage {
+      grid-template-columns: 1fr;
+      justify-items: center;
+    }
+
+    .wire-lane {
+      width: 100%;
+      min-height: 260px;
+    }
+
+    .wire-line {
+      display: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wire-frame-out,
+    .wire-frame-back {
+      animation: none;
+      opacity: 1;
+      position: static;
+      transform: none;
+    }
+
+    .wire-lane {
+      flex-direction: column;
+      gap: var(--space-4);
+    }
+
+    .wire-line {
+      display: none;
+    }
+  }
+</style>
