@@ -6,7 +6,7 @@
 - **Branch**: `fix/TASK-20260822-wa-authstate-corruption`
 - **Packages touched**: `apps/whatsapp-sidecar`
 - **Spec impact**: none
-- **Related**: ADR-0032 (WhatsApp socket seam), ADR-0034 (surface v2)
+- **Related**: ADR-0032 (WhatsApp socket seam), ADR-0034 (surface v2), **ADR-0037 addendum 2026-08-22** (the decision record for this task), ADR-0041 (local merge gate), PR #114
 
 ## Spec (what & why)
 
@@ -74,3 +74,10 @@ Underlying weakness: the sidecar uses stock `useMultiFileAuthState`, whose `writ
 - State: implementation + review complete; only AC6 owner walk outstanding.
 - Next step: owner restarts the desktop app; verify the parking loop is gone; then PR.
 - Open questions: none.
+
+### 2026-08-22 (close) — Jeetu/Claude — session
+- Done: **PR #114 opened** (`fix/TASK-20260822-wa-authstate-corruption` → `main`, commits `697a9d4` + `35d2c9f`). Gate 6 docs: ADR-0037 **addendum 2026-08-22** written as this task's decision record (why the sidecar now owns auth storage, and what credentials need beyond the thread cache's rules — unique-tmp+fsync, salvage-before-quarantine, hash-named asides, ENOENT-only absence, creds-by-copy, log-and-continue persists; accepted logger residual stated); two `docs/lessons.md` entries (the oracle-suite blind spot that let the `lid-mapping` scalar bug through 11 green tests, and the ENOENT-only companion to the corruption-as-absence rule); `docs/code-map.md` row rewritten to the FIXED implementation (it had described the first cut); `docs/next-steps.md` dated entry carrying the owner walk + three deferred follow-ups + the accepted risk.
+- State: `gate:local --all` (ADR-0041, the merge gate) running at close; verdict recorded below and on the PR. Everything else is committed and pushed.
+- Next step: owner walk (AC6) — restart the desktop app, watch ≥2 resync cycles for `synced regular to vN` and no new parking lines; then delete `app-state-sync-key-AAAAAK7c.json.pre-heal-backup`.
+- Open questions: none.
+
