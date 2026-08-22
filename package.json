@@ -7,7 +7,9 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop && pnpm run check-website-sync",
+    "dev": "node scripts/dev.mjs",
+    "check-dev": "node --test scripts/dev.test.mjs",
+    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop && pnpm run check-website-sync && pnpm run check-dev",
     "lint": "turbo run lint",
     "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke",
     "update-code-map": "node --test scripts/update-code-map-counts.test.mjs && node scripts/update-code-map-counts.mjs",
