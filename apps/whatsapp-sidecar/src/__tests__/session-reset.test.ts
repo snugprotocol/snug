@@ -20,7 +20,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, existsSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { isHalfLinkedStore, resetAuthStore, shouldResetAuthStore } from '../baileys-socket.js';
+import { isHalfLinkedStore, isResumableStore, resetAuthStore, shouldResetAuthStore } from '../baileys-socket.js';
 
 let dir: string;
 
@@ -196,6 +196,24 @@ describe('isHalfLinkedStore — the wedge, named', () => {
     writeFileSync(path.join(dir, 'creds.json'), 'not json at all');
     expect(isHalfLinkedStore(dir)).toBe(false); // unreadable is not a claim
     expect(isHalfLinkedStore(path.join(dir, 'nope'))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('isResumableStore — reads through the salvager, like the store it must agree with', () => {
+  // TASK-20260822-wa-authstate-corruption review: the auth store salvages a torn tail; if
+  // this predicate still read strictly, a heal-write failure (disk full — the very condition
+  // that tears files) would leave the store answering "valid session" while the predicate
+  // answered "not resumable", and the next startLink would RESET a salvageable session.
+  it('is TRUE for a resumable creds.json carrying trailing garbage', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'snug-lenient-'));
+    const material = JSON.stringify({
+      me: { id: '1@s.whatsapp.net' },
+      account: { details: 'x' },
+      signalIdentities: [{ identifier: {} }],
+    });
+    writeFileSync(path.join(dir, 'creds.json'), `${material}"}`);
+    expect(isResumableStore(dir)).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 });

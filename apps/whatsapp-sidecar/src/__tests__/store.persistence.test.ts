@@ -7,7 +7,7 @@
  * helper is a spawn-supervised child that stops when the app closes and restarts on demand,
  * so "dies with the process" means "invalid the moment anything restarts it".
  *
- * The session keys already persist (Baileys' `useMultiFileAuthState`). The token is the same
+ * The session keys already persist (`auth-state.ts`'s `createFileAuthState`). The token is the same
  * class of fact — a credential the user's connection depends on — and belongs beside them.
  */
 

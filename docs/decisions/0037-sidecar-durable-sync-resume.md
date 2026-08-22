@@ -91,3 +91,47 @@ Two additions, deliberately overlapping, because each covers the other's blind s
 
 The pidfile is removed by every reap path, because a stale claim is exactly what makes a
 recycled pid dangerous on the next launch.
+
+## Addendum — 2026-08-22 (TASK-20260822-wa-authstate-corruption)
+
+The write rules above governed the thread cache — the sidecar's *own* disk state — while the
+session keys beside it stayed under Baileys' `useMultiFileAuthState`, which obeys none of
+them. That asymmetry surfaced as an owner-reported log loop: `failed to find key "AAAAAK7c"`
+every ~10 minutes for a key file that **existed**, torn by an interrupted in-place write
+(trailing `"}`). The library's reader catches `JSON.parse` failures and returns null, so the
+corruption reported as *absence*; app-state sync parked the `regular` collection permanently
+and the archive/pin/mute/read lane silently stopped applying.
+
+**Decision: the sidecar owns auth storage too** (`auth-state.ts`, `createFileAuthState`) —
+the ADR-0032 seam philosophy extended one layer down. The library's *socket* stays behind the
+seam; its *storage helper* was the moving part that had to move. Format fidelity is the whole
+constraint, so it is pinned both directions against the real `useMultiFileAuthState` as
+oracle rather than against a re-description of it: same folder, file names, `BufferJSON`
+serialization, `fixFileName` spelling, `AppStateSyncKeyData` revival.
+
+What credentials need beyond the cache's rules:
+
+- **Unique-tmp + fsync + rename**, not just temp+rename. A fixed tmp name is a cross-process
+  race in the rival-helper case the 2026-08-19 addendum documents; rename alone can commit
+  before the data blocks on power loss.
+- **Salvage before quarantine.** The cache quarantines anything unparseable because it can be
+  rebuilt from a re-sync; credentials cannot, so a torn tail is healed (the valid prefix
+  rewritten) and served. Values of any JSON type — `SignalDataTypeMap['lid-mapping']` is
+  `string`, and an object-only reader would have quarantined 1,600+ live files, destroying
+  the LID↔phone directory that ADR-0034 exists to keep honest.
+- **Quarantine names carry a content hash and nothing is ever deleted.** A fixed `.corrupt`
+  name lets repeat corruption clobber the only forensic copy.
+- **"Absent" means ENOENT alone.** Any other read error throws: a transient EACCES read as
+  "no creds" mints fresh ones that the next `creds.update` writes over a live session — the
+  same corruption-as-absence conflation the fix exists to remove.
+- **`creds.json` quarantines by COPY.** The desktop autostart predicate and the wedge
+  predicate both read that path by name; renaming it away would disable autostart forever
+  while signal material lingered aside with no UI path to forget it.
+- **Persist failures log and continue.** The cache's "never throws" contract applies with
+  more force here: an ENOSPC inside `void saveCreds()` would otherwise kill the helper
+  through an unhandled rejection and drop a live link.
+
+Accepted residual: the socket's new `warn`-floor logger forwards Baileys' fault payloads
+(which can carry contact jids and message keys) to local stderr. That is a strict reduction
+versus the default logger, which printed the same payloads at info level too, and local
+stderr is not an R-9 egress surface — revisit only if terminal logs ever leave the machine.

@@ -31,6 +31,8 @@ interface FakeBaileysSocket {
 }
 
 const created = vi.hoisted(() => [] as FakeBaileysSocket[]);
+/** Every config `makeWASocket` was handed — the logger seat is asserted from here. */
+const socketConfigs = vi.hoisted(() => [] as unknown[]);
 /** The mocked auth store's writer — the forget tombstone must silence it (AC5). */
 const saveCredsSpy = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -55,16 +57,31 @@ vi.mock('baileys', () => {
     };
   };
   return {
-    default: vi.fn(() => {
+    default: vi.fn((config: unknown) => {
+      socketConfigs.push(config);
       const sock = makeFake();
       created.push(sock);
       return sock;
     }),
     DisconnectReason: { loggedOut: 401 },
     downloadMediaMessage: vi.fn(),
-    useMultiFileAuthState: vi.fn(async () => ({ state: { creds: {}, keys: {} }, saveCreds: saveCredsSpy })),
   };
 });
+
+// The auth store is OUR module now (TASK-20260822-wa-authstate-corruption) — mocked at its
+// own seam, same shape the old `useMultiFileAuthState` mock supplied. salvageParse is a
+// plain parse here (these suites write clean files); the LENIENCY claim is pinned against
+// the real module in `session-reset.test.ts`.
+vi.mock('../auth-state.js', () => ({
+  createFileAuthState: vi.fn(async () => ({ state: { creds: {}, keys: {} }, saveCreds: saveCredsSpy })),
+  salvageParse: (raw: string) => {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return undefined;
+    }
+  },
+}));
 
 import { createBaileysWaSocket } from '../baileys-socket.js';
 import { createThreadStore } from '../thread-store.js';
@@ -73,6 +90,7 @@ let authDir: string;
 
 beforeEach(() => {
   created.length = 0;
+  socketConfigs.length = 0;
   authDir = mkdtempSync(join(tmpdir(), 'wa-sidecar-test-'));
 });
 
@@ -647,5 +665,61 @@ describe('forget — the deep-delete unlink (TASK-20260821 AC5)', () => {
 
     expect(readdirSync(authDir)).toEqual([]);
     expect(adapter.linkState()).toBe('idle');
+  });
+});
+
+describe('the terminal logger (TASK-20260822-wa-authstate-corruption AC5)', () => {
+  // Baileys' default pino logger prints info-level protocol housekeeping ("identity key
+  // changed…", "resyncing regular…") straight into the desktop terminal. The socket gets
+  // a warn-floor logger instead: faults still surface, chatter does not.
+  interface ConfigLogger {
+    level: string;
+    child(obj: Record<string, unknown>): ConfigLogger;
+    info(obj: unknown, msg?: string): void;
+    warn(obj: unknown, msg?: string): void;
+    error(obj: unknown, msg?: string): void;
+  }
+
+  it('hands makeWASocket a warn-level logger whose info is silent and whose warn/error reach the terminal', async () => {
+    await linkedAdapter();
+    const logger = (socketConfigs.at(-1) as { logger?: ConfigLogger }).logger;
+    expect(logger?.level).toBe('warn');
+
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      logger!.info({ noisy: true }, 'identity key changed or new contact');
+      expect(stderr).not.toHaveBeenCalled();
+      logger!.warn({ name: 'regular', attempt: 2 }, 'regular blocked on missing key');
+      logger!.error('plain string fault');
+      expect(stderr).toHaveBeenCalledTimes(2);
+      expect(stderr.mock.calls[0]!.join(' ')).toContain('regular blocked on missing key');
+      expect(stderr.mock.calls[1]!.join(' ')).toContain('plain string fault');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('child() keeps the floor AND its bindings — Baileys logs through children, not the root', async () => {
+    // Baileys immediately rebinds (`child({class:'baileys'})` in Defaults, `child({msgId})`
+    // before media uploads); a child that discards its bindings strips exactly the context
+    // that makes a surfaced fault attributable (review, 2026-08-22).
+    await linkedAdapter();
+    const logger = (socketConfigs.at(-1) as { logger: ConfigLogger }).logger;
+    const child = logger.child({ class: 'baileys' }).child({ msgId: 'M-77' });
+    expect(child.level).toBe('warn');
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      child.info({}, 'still chatter');
+      expect(stderr).not.toHaveBeenCalled();
+      child.warn({ attempt: 2 }, 'still a fault');
+      expect(stderr).toHaveBeenCalledTimes(1);
+      const line = stderr.mock.calls[0]!.map((arg) => JSON.stringify(arg)).join(' ');
+      expect(line).toContain('still a fault');
+      expect(line).toContain('baileys'); // the class binding survives
+      expect(line).toContain('M-77'); // nested bindings accumulate
+      expect(line).toContain('attempt'); // the call-site payload rides along
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
