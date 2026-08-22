@@ -1,9 +1,9 @@
 <!--
-  paper.html — The Snug Protocol whitepaper, edition 2
-  (TASK-20260820-spec-v03-whitepaper; edition 1 was TASK-20260807-protocol-whitepaper).
+  paper.html — The Snug Protocol whitepaper, edition 3 — the 1.0 edition
+  (TASK-20260822-spec-10-final; edition 2 was TASK-20260820, edition 1 TASK-20260807).
 
-  Source of truth for every normative claim below is the staged consolidated spec:
-  docs/spec-drafts/SPEC-v0.3-draft.md, plus the published schemas exported from
+  Source of truth for every normative claim below is the specification:
+  docs/spec-drafts/SPEC-1.0.md, plus the published schemas exported from
   packages/protocol. scripts/check-whitepaper.mjs verifies the frame inventory and every
   constant against those files — if you change a number here, the checker fails until the
   spec says the same thing.
@@ -39,7 +39,7 @@
     </div>
     <div>
       <div class="k">Specification</div>
-      <div class="v">v0.3 (draft)</div>
+      <div class="v">1.0</div>
     </div>
     <div>
       <div class="k">Date</div>
@@ -169,11 +169,11 @@ layer exists to preserve.</p>
   <div class="callout-title">Conventions</div>
   <p>The key words <strong>MUST</strong>, <strong>MUST NOT</strong>, <strong>SHOULD</strong>,
   and <strong>MAY</strong> are used in the sense of RFC 2119. The wire protocol's core is
-  normative and published since spec v0.1. Material introduced by the v0.3 draft — the
-  storage layer's current revision and the whole connected-application surface — is marked
-  <span class="badge draft">Draft</span>: published for review, not yet normative, and
-  finalising as spec 1.0. Where this paper and the specification differ, the specification
-  governs.</p>
+  normative and published since spec v0.1; the storage layer, the connected-application
+  surface, runtime contracts, and linked-device connections are normative as of
+  specification 1.0. One surface — standing approvals — is explicitly
+  <span class="badge draft">Provisional</span> and so marked where it appears. Where this
+  paper and the specification differ, the specification governs.</p>
 </div>
 </section>
 
@@ -316,10 +316,10 @@ application, together with the reply contract the agent must satisfy.</p>
 <p>Thirteen frame types are defined. Each carries <code>v: 1</code>: the wire protocol has
 been additively extended, never broken, since v0.1. All thirteen are published as JSON
 Schemas exported byte-identically from the reference implementation — the nine core frames
-since v0.1, the net and open-url pairs with v0.3.</p>
+since v0.1, the net and open-url pairs since spec 1.0's consolidation.</p>
 
 <table>
-  <caption>The thirteen frame types of spec v0.3. Published schemas are input shapes:
+  <caption>The thirteen frame types of specification 1.0. Published schemas are input shapes:
   validators MUST accept unknown fields (R2). The net and open-url frames are the stated
   exception — strict, because their fields become real-world effects.</caption>
   <thead>
@@ -500,7 +500,7 @@ approximately.</p>
   consecutive failures, after which the host requires an explicit user reset.
   Thread-conflict backoff is 100 / 250 / 500 ms.</dd>
 
-  <dt><span class="rid">R7</span> Push hints <span class="badge draft">Draft · v0.3</span></dt>
+  <dt><span class="rid">R7</span> Push hints</dt>
   <dd>A host-initiated push (<code>snug:host-event</code>) carries <strong>references,
   never content</strong> — a doorbell, not a delivery. The application answers a hint with
   its own governed reads, and the host rebuilds every field of a hint before forwarding it.
@@ -719,7 +719,7 @@ own file. They are stripped from host-bound synchronisation and from default exp
 the file is vacuumed so that freed pages retain nothing recoverable. They are nonetheless
 present in the local file — a deliberate <strong>trade-off</strong> in favour of
 portability: cross-device continuity means the credentials travel with the file to storage
-the user chooses. Since v0.3 the user may additionally protect the whole file with a
+the user chooses. The user may additionally protect the whole file with a
 passphrase (§6.6), which changes what an attacker holding the <em>bytes</em> holds — but the
 claim that supports is exactly <em>"the file can be encrypted with a passphrase only the
 user holds"</em>, and no more. It is not zero-knowledge, it is not end-to-end encryption,
@@ -777,15 +777,14 @@ their own cost model.</p>
 
 <!-- ============================================================ 6 -->
 <section>
-<h2>The portable user database <span class="badge draft">Draft · v0.3</span></h2>
+<h2>The portable user database</h2>
 
-<div class="callout draft">
-  <div class="callout-title">Draft status</div>
-  <p>This section describes the storage layer of the <strong>v0.3</strong> draft — published
-  for review and <strong>not yet normative</strong>; it finalises as spec 1.0. It adds a
-  storage and host-behaviour layer; the wire protocol of §4 is unchanged by it. Storage
-  schema version 6 is described; the source of truth for constants and DDL is the reference
-  implementation, locked by a snapshot test.</p>
+<div class="callout">
+  <div class="callout-title">Scope</div>
+  <p>This section describes the storage and host-behaviour layer of specification 1.0;
+  the wire protocol of §4 is unchanged by it. Storage schema version 6 is described; the
+  source of truth for constants and DDL is the reference implementation, locked by a
+  snapshot test.</p>
 </div>
 
 <p>If applications are the user's, their data must be too — and in a form that outlives any
@@ -793,7 +792,7 @@ particular host. Snug's answer is a single SQLite file per user, <code>user.snug
 which is the canonical artifact. <code>PRAGMA user_version</code> carries the schema version —
 currently 6, migrated forward-only, with a file stamped newer than the implementation
 understands refused rather than overwritten; total size is bounded by
-<code>MAX_USERDB_BYTES</code>, 64 MiB in the current draft. Figure 5 shows what that file
+<code>MAX_USERDB_BYTES</code>, 64 MiB. Figure 5 shows what that file
 contains.</p>
 
 <p>SQLite is chosen for unglamorous reasons: it is a stable, universally supported,
@@ -974,7 +973,7 @@ no escrow and no reset. That is the property, not a gap in it.</p>
 
 <!-- ============================================================ 7 -->
 <section>
-<h2>Connected applications <span class="badge draft">Draft · v0.3</span></h2>
+<h2>Connected applications</h2>
 
 <p>A personal application becomes most valuable at the moment it can reach the services its
 owner already uses — and that is also the moment it becomes dangerous, because reaching a
@@ -986,7 +985,7 @@ enforcement is the host's</strong> — so any provider is reachable, including o
 catalogue would ever list, without a single credential entering code that was written by a
 language model minutes ago.</p>
 
-<p>This section specifies that surface. It is the largest addition of v0.3, and every rule
+<p>This section specifies that surface. It is the largest part of the specification, and every rule
 in it is a consequence of one doctrine: <em>the model proposes, the human approves, the
 host enforces</em> (G7).</p>
 
@@ -1138,15 +1137,15 @@ and audited. Armed is a recorded answer, not a bypass.</p>
 
 <!-- ============================================================ 8 -->
 <section>
-<h2>Linked-device connections <span class="badge draft">Draft · v0.3</span></h2>
+<h2>Linked-device connections</h2>
 
 <p>Some of the services people most want their personal software to reach have no API to
 call: they authenticate a <em>device session</em>, not a request. There is no key to paste
 and no OAuth redirect to run — a long-lived stateful client holds session key material and
 speaks a proprietary transport. A personal-messaging account is the canonical case. Most
 platforms simply cannot express this; the ones that try tend to do it by trusting a local
-companion process and punching a hole in whatever governance they had. Snug's v0.3 draft
-specifies the surface — shown in Figure 10 — without weakening a single wall.</p>
+companion process and punching a hole in whatever governance they had. The specification
+defines the surface — shown in Figure 10 — without weakening a single wall.</p>
 
 <!--FIGURE:fig10-linked-device|Figure 10|<span class="fignum">Figure 10.</span> Linked-device connections. The application reaches the helper only through the governed executor; the ceiling holds a symbolic host that is an identity, never an address; the helper holds the device session's keys and serialises them on no route; pushes are hints (R7); and identities are pseudonymised before any model-bound payload leaves the host.-->
 
@@ -1215,7 +1214,7 @@ never placed in a model-bound payload.</p>
 never consented and cannot opt out: the other participants in the user's conversations.
 Under a bring-your-own-key configuration their message content reaches the user's chosen
 model provider — that is the feature, and no honest design pretends otherwise — but their
-<em>identities</em> need not. The v0.3 draft therefore requires a host-enforced
+<em>identities</em> need not. The specification therefore requires a host-enforced
 <strong>pseudonymisation backstop</strong>: the host harvests third-party identities at
 the one governed seat every helper read crosses (extraction is the scrub — only identity
 fields enter the directory, never message text), and redacts those identities, together
@@ -1246,9 +1245,9 @@ and the disclosures. Any device-session provider can be bound the same way.</p>
 
 <!-- ============================================================ 9 -->
 <section>
-<h2>Runtime contracts and the data surface <span class="badge draft">Draft · v0.3</span></h2>
+<h2>Runtime contracts and the data surface</h2>
 
-<p>Two smaller v0.3 surfaces complete the picture, and both exist to serve the same end:
+<p>Two smaller surfaces complete the picture, and both exist to serve the same end:
 keeping the application's runtime relationship with the model cheap, portable, and owned
 by the user rather than the platform.</p>
 
@@ -1260,7 +1259,8 @@ kilobytes of authoring instructions that a runtime move cannot act on, resent on
 turn. A <strong>runtime contract</strong> replaces that with the handful of facts a turn
 genuinely needs: what the application is, which of its settings shape an answer, what
 state arrives each turn, and the minimal response shape expected back. The whole contract
-is bounded at 2560 bytes, and the effect is protocol-level rather than cosmetic: every
+is bounded at 2560 (<code>RUNTIME_CONTRACT_MAX_BYTES</code> — serialized length; bytes
+for ASCII content), and the effect is protocol-level rather than cosmetic: every
 conforming application becomes cheap enough to run on a small local model, which is what
 makes a browser-resident brain with a 4K context a viable host at all.</p>
 
@@ -1280,7 +1280,7 @@ to fail a user's move.</p>
 <p>Because per-application data is stored as legible native tables (§6.2), a host can offer
 something no menu-driven application platform offers: the user asks anything of an
 application's data — "what did I spend on food last month?" against a budget app that
-never shipped that screen — and the model writes the SQL. The v0.3 draft constrains how
+never shipped that screen — and the model writes the SQL. The specification constrains how
 that surface may touch the data, with a lane model whose classification <em>fails
 closed</em>: a message is classified into one of eight intents, an exhaustive
 compile-checked map routes each intent to one of four lanes — data, feature, provider
@@ -1348,7 +1348,7 @@ reference implementation's suite.</p>
   from capabilities, and render honest fallbacks.</li>
 </ul>
 
-<h3>Hosts additionally implementing the storage draft (§6)</h3>
+<h3>Hosts additionally implementing the storage layer (§6)</h3>
 <ul>
   <li>Carry the schema version in <code>PRAGMA user_version</code>, migrate forward-only,
   refuse newer-stamped files, verify the table set on open, and run the legacy credential
@@ -1522,9 +1522,9 @@ and they are settled by protocols or not at all.</p>
 absolutely; give it the model as a capability it calls rather than an engine it contains;
 let it reach the world only through a wall a human froze and a gate a human answers; and
 put everything the user accumulates into one file they can carry away — and seal, if they
-choose, with a passphrase only they hold. The wire protocol's core is normative today; the
-storage format and the connected surface are published as a draft for review, finalising as
-1.0. All of it is MIT licensed, all of it is specified by schemas and contracts exported
+choose, with a passphrase only they hold. The whole surface — wire, storage, connected
+applications, runtime contracts, linked-device connections — is normative as of
+specification 1.0. All of it is MIT licensed, all of it is specified by schemas and contracts exported
 from a working implementation, and all of it is offered in the expectation that other
 implementations will find it wanting in specific, correctable ways.</p>
 
@@ -1539,16 +1539,16 @@ later, on a device and a provider nobody has chosen yet.</p>
 <h2 class="nonum">Normative references</h2>
 
 <ol>
-  <li><strong>Snug Protocol Specification, v0.3 (draft).</strong> The consolidated
-  specification: wire protocol, portable user database, connected applications, runtime
-  contracts, linked-device connections. <span class="src">snugprotocol —
-  <code>SPEC-v0.3-draft.md</code></span></li>
+  <li><strong>Snug Protocol Specification, 1.0.</strong> The complete specification:
+  wire protocol, portable user database, connected applications, runtime contracts,
+  linked-device connections. <span class="src">snugprotocol/spec —
+  <code>SPEC.md</code></span></li>
   <li><strong>Snug Protocol JSON Schemas.</strong> Normative message shapes, published
   byte-identically from the reference implementation. <span class="src">snugprotocol/spec —
   <code>schemas/</code></span></li>
-  <li><strong>Snug Threat Model, v1.</strong> Enforced invariants with named enforcement
-  points and tests; residuals with equal standing. <span class="src">snugprotocol/snug —
-  <code>docs/threat-model.md</code></span></li>
+  <li><strong>Snug Threat Model, v3.</strong> Enforced invariants with named enforcement
+  points and tests; residuals with equal standing; re-attacked whole-surface before
+  launch. <span class="src">snugprotocol/snug — <code>docs/threat-model.md</code></span></li>
   <li><strong>RFC 2119.</strong> Key words for use in RFCs to indicate requirement
   levels. <span class="src">S. Bradner, IETF, 1997</span></li>
   <li><strong>HTML Standard</strong> — the <code>sandbox</code> attribute and its
@@ -1576,10 +1576,10 @@ later, on a device and a provider nobody has chosen yet.</p>
     <div class="k">Security contact</div>
     <p>security@snugprotocol.org</p>
     <div class="k" style="margin-top:4mm">Status</div>
-    <p>The wire protocol's core has been normative since v0.1. The v0.3 draft — the storage
-    layer at schema 6, the connected-application surface, runtime contracts, and
-    linked-device connections — is published for review and finalises as spec 1.0; details
-    may change before it becomes normative.</p>
+    <p>Specification 1.0 is normative: the wire protocol (published since v0.1), the
+    storage layer at schema 6, the connected-application surface, runtime contracts, and
+    linked-device connections. One surface — standing approvals — is explicitly
+    provisional and so marked.</p>
   </div>
 </div>
 </section>

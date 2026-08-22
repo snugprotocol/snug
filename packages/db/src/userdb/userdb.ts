@@ -592,7 +592,7 @@ export interface UserDb {
    */
   deleteAppVersion(appId: string, version: number): void;
   revertApp(appId: string, toVersion: number): AppVersionMeta;
-  /** Copy-forward to the pinned factory version (the never-pruned v1 of build/install). */
+  /** Copy-forward to the NEWEST pinned factory version (ADR-0045: starter updates land as new pinned rows; no pinned row is ever pruned). */
   resetToFactory(appId: string): AppVersionMeta;
 
   /**
@@ -980,7 +980,21 @@ function healMissingTables(db: Database): boolean {
   const present = new Set(
     selectRows(db, `SELECT name FROM sqlite_master WHERE type = 'table'`).map((row) => String(row[0])),
   );
-  const missing = Object.values(USERDB_TABLES).filter((table) => !present.has(table));
+  // The expected set is "tables the DDL replay can actually recreate" — DERIVED from
+  // USERDB_DDL, never Object.values(USERDB_TABLES): that map still carries
+  // `snug_auth_specs` (dropped at v5, deliberately absent from the DDL), and counting it
+  // as a miss would make every open of a healthy post-v5 file report healed=true and
+  // persist spuriously. A "miss" the replay cannot fill is not a miss the guard can heal.
+  const creatable = USERDB_DDL.map((ddl) => ddl.match(/CREATE TABLE IF NOT EXISTS (\S+)/)?.[1]).filter(
+    (name): name is string => name !== undefined,
+  );
+  // One CREATE per DDL statement is the stated invariant; a statement written in any
+  // other shape would silently fall out of the derivation and disable the guard for its
+  // table — fail loudly instead (Gate-5 review hardening).
+  if (creatable.length !== USERDB_DDL.length) {
+    throw new Error(`healMissingTables: ${USERDB_DDL.length - creatable.length} USERDB_DDL statement(s) did not parse as CREATE TABLE IF NOT EXISTS`);
+  }
+  const missing = creatable.filter((table) => !present.has(table));
   if (missing.length === 0) return false;
   for (const ddl of USERDB_DDL) db.run(ddl);
   for (const ddl of USERDB_INDEX_DDL) db.run(ddl);

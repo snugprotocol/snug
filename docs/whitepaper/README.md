@@ -1,22 +1,22 @@
 # The Snug Protocol whitepaper
 
 Source for **"The Snug Protocol: An Open Protocol for Agent-Backed Personal Software"**
-(Jeetu Maker), **edition 2** — the design rationale, threat model, and security argument
-behind the consolidated **spec v0.3 draft** (wire protocol · portable user database ·
+(Jeetu Maker), **edition 3 — the 1.0 edition** — the design rationale, threat model, and
+security argument behind **Specification 1.0** (wire protocol · portable user database ·
 connected applications · runtime contracts · linked-device connections).
 
 | | |
 |---|---|
 | **Source** | [`src/paper.html`](src/paper.html) · [`src/paper.css`](src/paper.css) · [`src/figures/`](src/figures/) |
-| **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 33 pages, 10 figures |
-| **Spec fixture** | [`../spec-drafts/SPEC-v0.3-draft.md`](../spec-drafts/SPEC-v0.3-draft.md) + `packages/protocol/schemas/` |
-| **Tasks** | edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
+| **Output** | [`dist/snug-protocol-whitepaper.pdf`](dist/) — A4, 10 figures |
+| **Spec fixture** | [`../spec-drafts/SPEC-1.0.md`](../spec-drafts/SPEC-1.0.md) + `packages/protocol/schemas/` |
+| **Tasks** | edition 3: `TASK-20260822-spec-10-final` · edition 2: `TASK-20260820-spec-v03-whitepaper` · edition 1: `TASK-20260807-protocol-whitepaper` |
 
 ## Build
 
 ```bash
 node docs/whitepaper/build.mjs        # → dist/snug-protocol-whitepaper.pdf
-pnpm run check-whitepaper             # 99 conformance checks
+pnpm run check-whitepaper             # conformance checks (AC1–AC8)
 ```
 
 The build needs a Chrome/Chromium binary (auto-detected, or set `CHROME_PATH`) and nothing
@@ -39,17 +39,18 @@ dependencies. Keeping the source as HTML also keeps it greppable, which is what 
 
 The spec is normative; this paper only explains it. `scripts/check-whitepaper.mjs`
 treats the spec as a **fixture** and fails when the two disagree — so a constant or frame
-name cannot silently drift here as the protocol moves. Pre-publication the fixture is the
-staged consolidated draft in `docs/spec-drafts/` plus the schemas in
-`packages/protocol/schemas/` (the monorepo is the master, per SPEC_SYNC); after the v0.3
-push, point it at a `snugprotocol/spec` clone with `--spec <path>`.
+name cannot silently drift here as the protocol moves. Pre-publication the fixture is
+`docs/spec-drafts/SPEC-1.0.md` plus the schemas in `packages/protocol/schemas/` (the
+monorepo is the master, per SPEC_SYNC); after the 1.0 push, point it at a
+`snugprotocol/spec` clone with `--spec <path>` — there it reads `SPEC.md` (the 1.0
+document; the historical draft filenames are pointer stubs, never fixtures).
 
 | | Enforces |
 |---|---|
 | **AC1/AC2** | PDF builds; embedded `/Title` and `/Author` are correct (metadata, not just the cover) |
 | **AC3** | Every protocol constant matches the spec draft, including the seven-kind set |
-| **AC4** | Frame inventory matches `schemas/*.json` + the four v0.3 frames; all R5 codes documented |
-| **AC5** | v0.3 surfaces COVERED and marked DRAFT; superseded facts (dropped tables, old counts) absent |
+| **AC4** | Frame inventory matches `schemas/*.json` (thirteen frames); all R5 codes documented |
+| **AC5** | 1.0 surfaces COVERED; the paper claims 1.0 and carries no draft/RC self-description; superseded facts (dropped tables, old counts) absent |
 | **AC6** | No anti-positioning language; `host-blind`/`zero-knowledge`/`end-to-end` disclaimed, never claimed; ADR-0040's honest class statement and ADR-0043's bounded claim travel with their features |
 | **AC7** | Figures are inline vector, numbered, and each cited in prose (≥10) |
 | **AC8** | Structural completeness; section numbering cannot drift |

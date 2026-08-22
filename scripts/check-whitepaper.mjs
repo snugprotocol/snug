@@ -1,15 +1,16 @@
 #!/usr/bin/env node
-// check-whitepaper.mjs — conformance checks for the Snug Protocol whitepaper, edition 2
-// (TASK-20260820-spec-v03-whitepaper; edition 1 checker was TASK-20260807, AC1–AC8).
+// check-whitepaper.mjs — conformance checks for the Snug Protocol whitepaper, edition 3
+// (TASK-20260822-spec-10-final; edition 2 was TASK-20260820, edition 1 TASK-20260807).
 //
 // The whitepaper is a DERIVATIVE publication: the spec is normative, the paper only
 // explains it. So the paper must never be the place a constant, a frame name, or a rule
 // drifts. This checker treats the spec as a FIXTURE and fails when the two disagree.
 //
-// Edition-2 fixture: the STAGED consolidated draft (docs/spec-drafts/SPEC-v0.3-draft.md)
+// Edition-3 fixture: the promoted Specification 1.0 (docs/spec-drafts/SPEC-1.0.md)
 // plus the published schemas exported from packages/protocol — the monorepo is the master
 // (SPEC_SYNC), so pre-publication the paper is checked against the staged spec. After the
-// v0.3 push, point --spec at a spec-repo clone and the same checks run against it.
+// 1.0 push, point --spec at a spec-repo clone and the same checks run against its SPEC.md
+// (the 1.0 document; the old draft filenames there are pointer stubs, never fixtures).
 //
 // Dependency-free on purpose (node: builtins + regexes). Run via
 // `pnpm run check-whitepaper`, or directly:
@@ -20,7 +21,7 @@
 //   AC2  embedded PDF metadata carries the exact title and Author "Jeetu Maker"
 //   AC3  every protocol constant quoted in the paper matches the spec draft
 //   AC4  the frame inventory matches schemas + the draft (13 frames); R5/NET codes listed
-//   AC5  v0.3 surfaces are COVERED and marked DRAFT; superseded facts absent
+//   AC5  1.0 surfaces are COVERED; stale draft/RC self-description absent; superseded facts absent
 //   AC6  claim discipline: forbidden framings absent; bounded claims stay bounded
 //   AC7  figures are inline vector, numbered, and each cited in prose
 //   AC8  structural completeness; section numbering cannot drift
@@ -87,9 +88,11 @@ function assembleForCheck() {
 
 function loadSpecFixtures() {
   // Draft prose: the staged consolidated spec (or the same file in a --spec clone).
+  // In a --spec clone, SPEC.md IS the 1.0 document; the historical draft filenames
+  // there are pointer stubs and must never be picked up as fixtures.
   const draftCandidates = SPEC_OVERRIDE
-    ? [join(SPEC_OVERRIDE, 'SPEC-v0.3-draft.md'), join(SPEC_OVERRIDE, 'SPEC.md')]
-    : [join(REPO, 'docs', 'spec-drafts', 'SPEC-v0.3-draft.md')];
+    ? [join(SPEC_OVERRIDE, 'SPEC.md')]
+    : [join(REPO, 'docs', 'spec-drafts', 'SPEC-1.0.md')];
   const draftPath = draftCandidates.find(existsSync);
   // Schemas: byte-authoritative from packages/protocol unless a spec clone is given.
   const schemaDir = SPEC_OVERRIDE
@@ -189,7 +192,7 @@ const CONSTANTS = [
   { label: 'MAX_USERDB_BYTES 64 MiB', paper: /64\s*(?:&nbsp;|\s)?MiB/i, spec: /64\s*MiB/i },
   { label: 'VERSIONS_RETAINED 5', paper: /VERSIONS_RETAINED/, spec: /VERSIONS_RETAINED/ },
   { label: 'storage schema version 6', paper: /user_version|schema version\s*[—-]?\s*\n?\s*currently 6|currently 6/i, spec: /user_version.*currently\s*\*?\*?6|currently 6/i },
-  { label: 'runtime contract cap 2560 bytes', paper: /2560\s*bytes/i, spec: /2560\s*bytes/i },
+  { label: 'runtime contract cap 2560', paper: /2560/, spec: /2560/ },
   { label: 'PBKDF2 600,000 iterations', paper: /600,000\s*iterations/i, spec: /600,000/ },
   { label: 'data-lane bounds 200 rows / 32 KiB', paper: /200\s*rows\s*\/\s*32\s*KiB/i, spec: /200\s*rows\s*\/\s*32\s*KiB/i },
 ];
@@ -223,7 +226,7 @@ function checkConstants(html, fx) {
 
 // ---------------------------------------------------------------- AC4 — frame inventory
 
-const V03_FRAMES = ['snug:net-request', 'snug:net-response', 'snug:open-url-request', 'snug:open-url-result'];
+const POST_CORE_FRAMES = ['snug:net-request', 'snug:net-response', 'snug:open-url-request', 'snug:open-url-result'];
 
 function checkFrames(html, fx) {
   const text = stripTags(html);
@@ -237,10 +240,12 @@ function checkFrames(html, fx) {
     check('AC4', `frame documented: ${t}`, text.includes(t), `"${t}" appears in schemas but not in the paper`);
   }
 
-  // The four v0.3 frames must be documented in BOTH the paper and the spec draft.
-  for (const t of V03_FRAMES) {
-    check('AC4', `v0.3 frame documented: ${t}`, text.includes(t) && fx.spec.includes(t),
-      `"${t}" must appear in the paper and the spec draft`);
+  // The four frames added after the v0.1 core must be documented in BOTH the paper
+  // and the spec (they are ordinary published frames at 1.0; the pin guards regression
+  // to the nine-frame edition-1 inventory).
+  for (const t of POST_CORE_FRAMES) {
+    check('AC4', `frame documented (post-core): ${t}`, text.includes(t) && fx.spec.includes(t),
+      `"${t}" must appear in the paper and the spec`);
   }
 
   check('AC4', 'paper states the thirteen-frame inventory', /[Tt]hirteen frame types/.test(text),
@@ -282,7 +287,7 @@ function checkFrames(html, fx) {
 
 // ---------------------------------------------------------------- AC5 — coverage + drift
 
-/** v0.3 surfaces the paper MUST now cover (the inverse of edition 1's exclusions). */
+/** 1.0 surfaces the paper MUST cover (the inverse of edition 1's exclusions). */
 const REQUIRED_SURFACES = [
   { label: 'connected applications section', re: /Connected applications/i },
   { label: 'frozen host ceiling', re: /frozen (host )?ceiling/i },
@@ -310,13 +315,21 @@ const SUPERSEDED = [
 
 function checkCoverage(html) {
   const text = stripTags(html);
-  check('AC5', 'v0.3 material is marked DRAFT',
-    /\bdraft\b/i.test(text) && /v0\.3/i.test(text) && /not\s+yet\s+normative/i.test(text),
-    'v0.3 sections must carry an explicit DRAFT marking and say they are not yet normative');
+  // Edition 3 describes the NORMATIVE Specification 1.0 — the inverse of edition 2's
+  // draft-marking requirement. The paper must claim 1.0 and must NOT self-describe as a
+  // draft, a release candidate, or not-yet-normative. (§17 stays provisional and its own
+  // check below still requires that word FOR that feature — "provisional" is a per-surface
+  // maturity marker, not a document-level draft claim.)
+  check('AC5', 'edition 3 names specification 1.0',
+    /spec(?:ification)?\s*1\.0/i.test(text),
+    'the paper must state the spec version it documents');
+  check('AC5', 'no stale draft self-description',
+    !/v0\.3/i.test(text) && !/release\s+candidate/i.test(text) && !/not\s+yet\s+normative/i.test(text),
+    'a 1.0 paper must not carry v0.3 / release-candidate / not-yet-normative claims');
 
   for (const s of REQUIRED_SURFACES) {
-    check('AC5', `v0.3 surface covered: ${s.label}`, s.re.test(text),
-      'the v0.3 spec surface must be covered by this edition');
+    check('AC5', `1.0 surface covered: ${s.label}`, s.re.test(text),
+      'the 1.0 spec surface must be covered by this edition');
   }
   for (const s of SUPERSEDED) {
     check('AC5', `superseded fact absent: ${s.re.source}`, !s.re.test(text), s.why);
@@ -467,8 +480,9 @@ function checkStructure(html) {
       'margin boxes are what put running heads and folios on every page');
     check('AC8', 'section + figure counters declared',
       /counter-reset/.test(css) && /counter-increment/.test(css));
-    check('AC8', 'running head names the current spec version', /v0\.3/.test(css),
-      'the @top-right margin box must carry the v0.3 label');
+    check('AC8', 'running head names the current spec version',
+      /content:\s*"[^"]*\b1\.0\b[^"]*"/.test(css) && !/v0\.3/.test(css),
+      'a content: "…1.0…" margin-box string must carry the label (an incidental 1.0 elsewhere in the CSS must not satisfy this), and no stale v0.3');
   }
 }
 

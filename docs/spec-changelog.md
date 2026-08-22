@@ -4,6 +4,58 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-22 — **PUSHED** — spec 1.0 — TASK-20260822-spec-10-final (ADR-0050) — spec commit `3ac7700`
+
+**Pushed 2026-08-22 16:08 UTC on the owner's explicit ask** ("push 3ac7700 to
+snugprotocol/spec"), `cd011cc..3ac7700` on `main`. **Verified by fresh clone:** remote
+head is `3ac7700`; `schemas/` byte-identical to `packages/protocol/schemas/` (`diff -rq`
+clean); `SPEC.md` opens as "Specification 1.0"; the whitepaper PDF's SHA-1 matches the
+built artifact (`b6a9fc80…`). The entry below records what the commit carries.
+
+**Specification 1.0** — the v0.3 release candidate promoted to the final normative
+document for launch. Owner decisions (interview): §17 (standing approvals) stays in 1.0
+explicitly marked PROVISIONAL; the spec repo's `SPEC.md` becomes THE document (v0.2/v0.3
+draft filenames retired to pointer stubs, full text in git history); whitepaper becomes
+**edition 3 — the 1.0 edition**; everything staged, the owner pushes after review. The
+version stays 1.0 through pre-launch editorial corrections.
+
+**What the staged commit carries beyond the RC**, each verified by a five-lane
+spec-vs-code conformance audit at head (this repo `f36ba68`+):
+
+1. **§11.1 `SNUGENC1` layout correction** — first publication of the 2026-08-21 fix
+   recorded below (61-byte slot stride, 160-byte two-slot header, AAD span); verified
+   against `container.ts` again in this audit. Also new: the slot-count valid range
+   (structurally 1–8 — 0 or >8 read as corrupt, while rule 2 forbids CREATING a 1-slot container; the Gate-5 review corrected this entry's first spelling, which over-tightened the reader bound to 2–8) and rule 5's rewrap carve-out (a passphrase change MAY reuse
+   the slot's IV under the NEW KEK — fresh key keeps the pair unique and the AAD stable).
+2. **`POST /session/forget`** in §20.8's route table — first publication of the
+   ADR-0046 §7 route ("the next consolidated push" = this one); already in the local
+   draft, publication-only.
+3. **§12.12 web-surface capability seats** (ADR-0049): `webRedirectPosture` /
+   `webRegistration`, mutual-requirement structural rule, render-time-only/never
+   persisted, byte-match endpoint binding, absent-seat semantics (web absence does not
+   refuse — deliberately unlike the desktop posture).
+4. **Audit folds** (spec prose corrected to the code, per the source-of-truth clause):
+   header strict-pairs clause; `CDN_ALLOWLIST` + `SNUG_APP_REQUEST_TAG` added to §5 /
+   Appendix B; §20.3 wizard-prefix wording (status + forget); `RUNTIME_CONTRACT_MAX_BYTES`
+   measured as serialized UTF-16 code units; §22→§18.2 dangling ref; stability row R1–R7;
+   factory version = NEWEST pinned row (ADR-0045) in §8/§19/Part VI; v5 drop described
+   honestly (grants NOT migrated — re-approval is deliberate); legacy-slice wipe gate
+   described as version-advance, not "exactly once".
+
+**Zero schema bytes changed** — `schemas/` byte-compared identical between
+`packages/protocol/schemas/` and the staged clone. **One CODE fix fell out of the audit**
+(this repo, not the spec commit): `healMissingTables` derived its expected set from
+`USERDB_TABLES`, which still names the v5-dropped `snug_auth_specs`, so every open of a
+healthy post-v5 file reported healed=true and persisted spuriously; fixed test-first
+(red→green), expected set now derived from `USERDB_DDL`.
+
+**Verification at staging:** whitepaper checker 104/104 against BOTH fixture modes (the
+in-repo `SPEC-1.0.md` and the staged clone's `SPEC.md` via `--spec`); website
+`check-website-sync` 24 pages / 40 hashes green; root `pnpm test` run recorded in the
+task file. Staged clone state at the time: exactly ONE unpushed commit on `main`
+(`3ac7700`), no other branches (pending-branch sweep clean). Pushed the same day — see
+the header above.
+
 ## 2026-08-21 — INTERNAL DRAFT, correction pending the next push — TASK-20260821-launch-security-review
 
 **§11.1's `SNUGENC1` container layout did not describe the container the code writes**, and

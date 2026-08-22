@@ -951,6 +951,33 @@ describe('AC17 — DDL-replay self-healing guard (Q9: `migrate()` stamps user_ve
     expect(healed.getSetting('theme')).toBe('dark');
     await healed.close();
   });
+
+  it('a healthy current-version file opens CLEAN — the heal does not fire and nothing persists (spec 1.0 audit)', async () => {
+    // `snug_auth_specs` was dropped at v5 and is deliberately absent from USERDB_DDL —
+    // so the guard's expected set must be "tables the replay can recreate", not all of
+    // USERDB_TABLES. With the full set, EVERY open of a healthy post-v5 file counts the
+    // dropped table as a miss, reports healed=true, and marks the handle dirty: a
+    // spurious persist on every open, and a guard whose signal is permanently on.
+    // Counting SAVES, not trusting status (2026-08-20 lesson: count the writes).
+    const db = await open(backend);
+    db.setSetting('theme', 'dark');
+    await db.close();
+
+    let saves = 0;
+    const originalSave = backend.save.bind(backend);
+    backend.save = async (file, bytes) => {
+      saves += 1;
+      await originalSave(file, bytes);
+    };
+    const reopened = await open(backend);
+    // Let the (1 ms) persist debounce elapse before asserting: a scheduled spurious
+    // persist must have had every chance to fire, or this test passes vacuously.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(saves).toBe(0);
+    await reopened.close();
+    expect(saves).toBe(0); // a clean close of an untouched handle persists nothing
+    backend.save = originalSave;
+  });
 });
 
 // ------------------------------------------------ AC18: importUserDb reconciliation

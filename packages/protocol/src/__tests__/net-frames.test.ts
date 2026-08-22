@@ -234,7 +234,7 @@ describe('publication line — the v0.3 set (extends the AL-02 guard; superseded
 
   it('the published net-request schema is the strict envelope, not the full contract (refinements live in prose)', () => {
     // The superRefine rules (body-on-GET, credential-header refusal) cannot ride JSON
-    // Schema; SPEC-v0.3-draft.md §3 carries them. Pin that the export at least keeps the
+    // Schema; SPEC-1.0.md §3 carries them. Pin that the export at least keeps the
     // strict shape so an unknown key still rejects for v1.0 validators.
     const exported = JSON.parse(buildJsonSchemas()['net-request.json']) as Record<string, unknown>;
     expect(exported.additionalProperties).toBe(false);
