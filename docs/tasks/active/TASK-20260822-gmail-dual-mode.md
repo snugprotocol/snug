@@ -1,6 +1,6 @@
 # TASK-20260822-gmail-dual-mode: Gmail starter dual-mode — runtime-detected desktop/web connection wizard
 
-- **Status**: planned (awaiting plan approval)
+- **Status**: in-review (plan approved by owner 2026-08-22 — "plan approved, go thru all phases"; implementation complete; Gate 5 AI review in progress)
 - **Owner**: Jeetu
 - **Risk tier**: high (touches `packages/auth` registry — auto-escalate per PROCESS.md; High extras: negative tests + fresh-context AI plan review before implementation + journal self-sign-off)
 - **Branch**: `feat/TASK-20260822-gmail-dual-mode`
@@ -205,3 +205,84 @@ evidence, journal the runs.
 - State: Gates 1–2 complete; STOPPED for plan approval.
 - Next step: fresh-context AI plan review (High tier) + owner approval → Gate 3 tests-first.
 - Open questions: none blocking; seat name (`webRedirectPosture: 'origin-callback'`) open to review challenge.
+
+### 2026-08-22 (later) — Claude — session (plan approved; Gates 2–5)
+- Done: **Plan review** (fresh-context, High tier): v1 option-vehicle REJECTED on four
+  blockers → design v2 (entry-level render-time seats), ADR-0049 rewritten, findings in
+  Decisions above. **Gate 3**: auth `web-surface-seats.test.ts` (registry shape,
+  structural rules, emitter negative, dual-surface custody pin, web-exchange C1 scrub
+  with URLSearchParams-spelling fixture) + `BROWSER_CALLABLE` gmail row — 6 red on
+  `main`; playground `webSurfaceWizard.test.tsx` (helper table + register-screen
+  branching) + gmail dual-mode tile tests — 7 red on `main`, desktop pins green
+  pre-change (honest pins). Pin-green negatives (defense pre-existing, journaled):
+  exchange scrub, custody overwrite. **Gate 4**: gmail entry gains `browserCallable:
+  true` (probed host named), `webRedirectPosture: 'origin-callback'`,
+  `webRegistration` (8-step "Web application" walkthrough incl. both provider traps +
+  the §4 custody disclosure); `webSurfaceRegistrationFor` helper in
+  `connectionWizard.ts`; `RegisterScreen` override (consoleUrl clickable BY
+  CONSTRUCTION — registry-sourced, ADR-0029 rationale in-code); `STARTER_LOOKS` gmail
+  row unlocked; e2e gmail journey added to `starters-connect.spec.ts`. **Gate 5
+  verification:** root `pnpm test` **25/25 tasks green** (turbo graph — auth 939,
+  playground 1480/150 files, desktop 175, all dependents rebuilt). Two load-shaped
+  flakes observed on the way (desktop `app-shell` 5s timeout; playground `sidecarLive`
+  backoff timing) — both green in isolation AND in their full package suites; same
+  signature as the known file-parallelism flake (open-threads memory).
+- e2e leg: `SNUG_E2E_HAS_APP=1` run BLOCKED locally — port 8787 held by the owner's own
+  dev server (`node --env-file=.env.local dist/server.js`, left running; not killed).
+  The spec is committed and collects under `chromium`; owner to run
+  `SNUG_E2E_HAS_APP=1 npx playwright test e2e/starters-connect.spec.ts` when the port
+  is free. The same branch behavior is covered by the component suites
+  (`webSurfaceWizard`, `hubDesktopStarter`).
+- State: implementation complete; Gate 5 AI review running (/code-review high).
+- Next step: review findings → fixes if real → self-sign-off → push branch → PR →
+  owner closes/merges (explicit ask this session).
+
+### 2026-08-22 (Gate 5 review) — Claude — review + fixes
+- Seven review lanes ran (/code-review high). Every confirmed finding fixed in-branch;
+  root `pnpm test` 25/25 green after (auth 939, playground 1482 incl. tsc, examples,
+  website-sync gate).
+- **Security-grade (fixed):** the web walkthrough override originally keyed on
+  provider NAME alone — an imported R-4 row named "Gmail" with attacker endpoints
+  would have been dressed in Snug's pinned Google walkthrough around a flow sending
+  the pasted client_secret to the row's endpoints. Fix: the override now BINDS TO THE
+  ROW'S ENDPOINTS (byte-match against the entry's pinned authorize+token URLs);
+  mismatches keep the old copy-only honesty rules. Pinned by the attacker-endpoints
+  negative in `webSurfaceWizard.test.tsx`.
+- **Correctness (fixed):** (1) ReviewScreen's "how you get them" still rendered the
+  desktop walkthrough on web — adjacent screens instructed two client types; both
+  screens now take the override (guidance ≠ approved semantics; fields/scopes/hosts
+  stay the row's). (2) Exact-key `lookupWellKnownProvider` missed brand-adjacent rows
+  (the hue lesson) → `resolveRegistryEntryByName`, pinned by a "Gmail Premium" case.
+  (3) `hasRegistrationWalkthrough`/`nextStep` now consult the effective registration,
+  so a future web-only adopter cannot have the register screen skipped. (4) The e2e
+  journey clicked a `run-connect` testid nothing renders, on a route that persists no
+  row — rewritten as the REAL journey (tile → `starter-install` → installed copy →
+  `manage-connections` → review+register both asserting web copy). (5) Tile-unlock ↔
+  registry-seat tripwire test added (the two were keyed on different data).
+- **Mechanism discipline (fixed):** clickable verdict routed through the ONE ADR-0029
+  byte-match (`consoleUrlIsClickable` taught the displayed URL) instead of a
+  clickable-by-construction bypass; single [row]-keyed memo (no dead registry walk).
+- **Dedup/quality (fixed):** shared Google project/trap steps hoisted
+  (`GMAIL_PROJECT_STEPS`/`GMAIL_TRAP_STEPS` — walkthroughs compose, byte-identical);
+  shared wizard-sheet test harness extracted (`wizardSheetHarness.tsx`, tuned-settle
+  rationale carried; older copies migrate opportunistically); `starterTile(name)`
+  helper; test casts dropped (typed `ConnectionRequirement`, tsc-checked).
+- **Docs (fixed):** examples/gmail starter.json v3 changelog entry + v1 line
+  clarified, README connect section rewritten for dual-mode, authoring next-tasks
+  web item pruned; ADR-0049 context now carries the probe record itself (the
+  next-steps citation dangled once the entry was pruned); ADR-0049 consequences
+  corrected (review screen rides; endpoint binding; web-refusal semantics deferral
+  recorded, next-steps item (7) augmented).
+- Deferred deliberately: web refusal semantics for entries whose client type cannot
+  register a web origin (google/googledrive) — pre-existing dead-ends, rides
+  next-steps item (7); rationale in ADR-0049 consequences.
+- Task status → in-review; branch ready for PR.
+- **High-tier self-sign-off (C1/C2 walk):** the web `client_secret` lives ONLY in the
+  user's own credential store; it rides only the token-endpoint form body behind the
+  frozen-ceiling gate (`postForm`), is scrubbed from thrown messages AND persisted
+  `lastError` in both raw and wire spellings (pinned with a spelling-changing fixture),
+  never appears in the authorize URL (pinned), never enters a `ConnectionRequirement`,
+  the iframe, or the LLM. No sandbox/CSP surface touched; `packages/protocol` and
+  `packages/runner` untouched (spec impact: none). Negative tests: emitter non-emission
+  (non-vacuous), option-level web seats structurally banned, mail.google.com never
+  pinned (pre-existing suite, still green).

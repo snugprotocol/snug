@@ -1,124 +1,46 @@
 // webSurfaceWizard.test.tsx — TASK-20260822-gmail-dual-mode (ADR-0049 §1).
 //
-// The RUNTIME decides which registration walkthrough the register screen renders:
-// on web (`getPlatform().oauth === undefined` — the same predicate that already picks
-// the origin-literal redirect display, so walkthrough and displayed URI cannot
-// disagree) a provider that declares the web seats gets its `webRegistration` copy; on
-// desktop, and for every provider without the seats, the row's own persisted
-// registration renders exactly as today. Nothing is persisted: the override is
-// RENDER-TIME registry data in `desktopRedirectPosture`'s ADR-0021 §1 class, and the
-// anti-phishing property survives because the substituted copy is still sourced
-// exclusively from the human-reviewed registry (AL-04 D5).
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+// The RUNTIME decides which registration walkthrough the wizard renders: on web
+// (`getPlatform().oauth === undefined` — the same predicate that already picks the
+// origin-literal redirect display, so walkthrough and displayed URI cannot disagree) a
+// provider that declares the web seats gets its `webRegistration` copy on BOTH the
+// review screen's "how you get them" and the register screen; on desktop, and for
+// every provider without the seats, the row's own persisted registration renders
+// exactly as today. Nothing is persisted: the override is RENDER-TIME registry data in
+// `desktopRedirectPosture`'s ADR-0021 §1 class, and the anti-phishing property
+// survives because the substituted copy is still sourced exclusively from the
+// human-reviewed registry (AL-04 D5) — and because the override BINDS TO THE ROW'S
+// ENDPOINTS, not its name (the Gate-5 review's R-4 finding, pinned below).
+import { afterEach, describe, expect, it } from 'vitest';
+import type { ConnectionRequirement } from '@snugprotocol/protocol';
 
 import { lookupWellKnownProvider, requirementFromRegistryEntry } from '@snugprotocol/auth';
-import type { UserDb } from '@snugprotocol/db';
 
-import type { SnugPlatform } from '../platform/platform.js';
-
-declare global {
-  // eslint-disable-next-line no-var
-  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
-}
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+import {
+  cleanupSheet,
+  clickSheetButton,
+  declareSheetConnection,
+  fakeDesktopPlatform,
+  freshWizardSheet,
+  renderSheet,
+  settleSheet,
+  sheetContainer,
+} from './wizardSheetHarness.js';
 
 const APP = 'app-web-surface';
 
-function fakeDesktop(): SnugPlatform {
-  return {
-    kind: 'desktop',
-    oauth: {
-      redirectUriFor: vi.fn(async () => 'http://127.0.0.1:49152/callback'),
-      openExternal: async () => undefined,
-      channelFor: () => ({ onmessage: null, close: () => undefined }),
-      cancel: async () => undefined,
-    },
-    capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
-  };
-}
+afterEach(cleanupSheet);
 
-interface Harness {
-  db: UserDb;
-  wizard: typeof import('../state/connectionWizard.js');
-  Sheet: typeof import('../connections/ConnectionWizardSheet.js')['ConnectionWizardSheet'];
-}
-
-async function fresh(platform?: SnugPlatform): Promise<Harness> {
-  vi.resetModules();
-  const platformModule = await import('../platform/platform.js');
-  if (platform !== undefined) platformModule.setPlatform(platform);
-  const helper = await import('./userdbTestHelper.js');
-  const db = await helper.installTestUserDb();
-  const wizard = await import('../state/connectionWizard.js');
-  wizard.__resetConnectionWizardForTests();
-  const sheet = await import('../connections/ConnectionWizardSheet.js');
-  return { db, wizard, Sheet: sheet.ConnectionWizardSheet };
-}
-
-let container: HTMLDivElement | undefined;
-let root: Root | undefined;
-
-async function settle(): Promise<void> {
-  for (let i = 0; i < 25; i++) {
-    await act(async () => {
-      await Promise.resolve();
-    });
-  }
-}
-
-async function render(node: React.ReactElement): Promise<void> {
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  root = createRoot(container);
-  await act(async () => {
-    root!.render(node);
-  });
-  await settle();
-}
-
-async function click(name: RegExp): Promise<void> {
-  const target = [...(container?.querySelectorAll('button') ?? [])].find((b) => name.test(b.textContent ?? ''));
-  if (target === undefined) {
-    throw new Error(`no button matching ${String(name)} — rendered: ${container?.textContent?.slice(0, 400) ?? ''}`);
-  }
-  await act(async () => {
-    target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  });
-  await settle();
-}
-
-function declare(db: UserDb, requirement: Record<string, unknown>): void {
-  db.installApp({ appId: APP, displayName: 'Web Surface App', html: '<p>x</p>' });
-  db.putDeclaredConnection(APP, requirement['slot'] as string, requirement, 'registry' as never);
-  db.approveConnection(APP, requirement['slot'] as string);
-}
-
-afterEach(async () => {
-  if (root !== undefined) {
-    const current = root;
-    await act(async () => {
-      current.unmount();
-    });
-  }
-  container?.remove();
-  container = undefined;
-  root = undefined;
-  vi.restoreAllMocks();
-});
-
-function gmailRequirement(): Record<string, unknown> {
-  const gmail = lookupWellKnownProvider('Gmail')!;
-  return requirementFromRegistryEntry(gmail, 'Gmail', 'gmail') as unknown as Record<string, unknown>;
+function gmailRequirement(): ConnectionRequirement {
+  return requirementFromRegistryEntry(lookupWellKnownProvider('Gmail')!, 'Gmail', 'gmail');
 }
 
 // --------------------------------------------------- the resolver, as a table
 
 describe('webSurfaceRegistrationFor — the runtime picks the walkthrough, never the user', () => {
   it('web + gmail: the Web-application walkthrough, from the registry', async () => {
-    const { wizard } = await fresh();
-    const registration = wizard.webSurfaceRegistrationFor(gmailRequirement() as never);
+    const { wizard } = await freshWizardSheet();
+    const registration = wizard.webSurfaceRegistrationFor(gmailRequirement());
     expect(registration).toBeDefined();
     expect(registration?.instructions?.join('\n')).toContain('"Web application"');
     // And it is the REGISTRY's block, not the row's: the persisted row carries the
@@ -128,20 +50,48 @@ describe('webSurfaceRegistrationFor — the runtime picks the walkthrough, never
     expect(registration?.instructions?.join('\n')).not.toContain('type "Desktop app"');
   });
 
+  it('web + a BRAND-ADJACENT gmail row: still the web walkthrough — resolution follows admission, not exact keys', async () => {
+    // The hue lesson (display names are not registry keys): a borrow-admitted row named
+    // "Gmail Premium" carried the gmail entry's SUBSTITUTED desktop walkthrough and
+    // endpoints; an exact-key miss here would render those desktop steps on web beside
+    // a web redirect URI. `resolveRegistryEntryByName`'s brand-adjacent rung must
+    // resolve it exactly as `consoleUrlIsClickable` and admission substitution do.
+    const { wizard } = await freshWizardSheet();
+    const requirement = { ...gmailRequirement(), provider: { name: 'Gmail Premium' } };
+    expect(wizard.webSurfaceRegistrationFor(requirement)?.instructions?.join('\n')).toContain('"Web application"');
+  });
+
+  it('web + a row NAMED Gmail whose endpoints are NOT the pinned ones: undefined — the override binds to endpoints, not names', async () => {
+    // The R-4 channel (imported rows, where substitution never re-ran): a provider
+    // NAME is a claim any row can make. Dressing an attacker-endpointed row in Snug's
+    // pinned Google walkthrough would lend wizard-grade legitimacy to a flow that
+    // sends the pasted client_secret to the row's own endpoints. Endpoints are where
+    // the credential GOES, so they are the seat the override binds to; the mismatched
+    // row keeps its own registration under the existing copy-only honesty rules.
+    const { wizard } = await freshWizardSheet();
+    const requirement: ConnectionRequirement = {
+      ...gmailRequirement(),
+      endpoints: {
+        authorizeUrl: 'https://accounts.evil.example/authorize',
+        tokenUrl: 'https://accounts.evil.example/token',
+      },
+    };
+    expect(wizard.webSurfaceRegistrationFor(requirement)).toBeUndefined();
+  });
+
   it('desktop + gmail: undefined — the row renders its own (desktop) walkthrough', async () => {
-    const { wizard } = await fresh(fakeDesktop());
-    expect(wizard.webSurfaceRegistrationFor(gmailRequirement() as never)).toBeUndefined();
+    const { wizard } = await freshWizardSheet(fakeDesktopPlatform().platform);
+    expect(wizard.webSurfaceRegistrationFor(gmailRequirement())).toBeUndefined();
   });
 
   it('web + spotify (no web seats): undefined — providers without the seats are untouched', async () => {
-    const { wizard } = await fresh();
+    const { wizard } = await freshWizardSheet();
     const spotify = lookupWellKnownProvider('Spotify')!;
-    const requirement = requirementFromRegistryEntry(spotify, 'Spotify', 'spotify');
-    expect(wizard.webSurfaceRegistrationFor(requirement as never)).toBeUndefined();
+    expect(wizard.webSurfaceRegistrationFor(requirementFromRegistryEntry(spotify, 'Spotify', 'spotify'))).toBeUndefined();
   });
 
   it('web + unknown provider: undefined — no registry entry, no substitution source', async () => {
-    const { wizard } = await fresh();
+    const { wizard } = await freshWizardSheet();
     const requirement = {
       slot: 'idp',
       provider: { name: 'Some Private IdP' },
@@ -149,49 +99,58 @@ describe('webSurfaceRegistrationFor — the runtime picks the walkthrough, never
       endpoints: { authorizeUrl: 'https://idp.example/a', tokenUrl: 'https://idp.example/t' },
       pkce: true,
       declaredApiHosts: ['api.idp.example'],
-    };
-    expect(wizard.webSurfaceRegistrationFor(requirement as never)).toBeUndefined();
+    } as ConnectionRequirement;
+    expect(wizard.webSurfaceRegistrationFor(requirement)).toBeUndefined();
   });
 
-  it('web + a row that borrowed the gmail NAME with a different kind: undefined — the walkthrough describes an OAuth client, and only the default flow', async () => {
-    const { wizard } = await fresh();
-    const requirement = { ...gmailRequirement(), kind: 'api_key' };
-    expect(wizard.webSurfaceRegistrationFor(requirement as never)).toBeUndefined();
+  it('web + a row that borrowed the gmail NAME with a different kind: undefined — the walkthrough describes an OAuth client', async () => {
+    const { wizard } = await freshWizardSheet();
+    const requirement = { ...gmailRequirement(), kind: 'api_key' } as unknown as ConnectionRequirement;
+    expect(wizard.webSurfaceRegistrationFor(requirement)).toBeUndefined();
   });
 });
 
-// ------------------------------------------------- the register screen renders
+// ------------------------------------------------- the wizard screens render
 
-describe('the gmail register screen branches by runtime (AC1/AC2)', () => {
-  it('web: the "Web application" walkthrough renders, with the origin-literal redirect to paste', async () => {
-    const { db, wizard, Sheet } = await fresh();
-    declare(db, gmailRequirement());
+describe('the gmail wizard branches by runtime (AC1/AC2) — review AND register agree', () => {
+  it('web: BOTH screens carry the "Web application" walkthrough, with the origin-literal redirect to paste', async () => {
+    const { db, wizard, Sheet } = await freshWizardSheet();
+    declareSheetConnection(db, APP, gmailRequirement());
 
     wizard.openConnectionWizard({ appId: APP, slot: 'gmail', source: 'settings' });
-    await render(<Sheet />);
-    await click(/approve this connection/i);
-    await settle();
+    await renderSheet(<Sheet />);
 
-    const text = container!.textContent ?? '';
-    expect(text).toContain('"Web application"');
-    // The desktop walkthrough's step-5 phrasing must be gone; the bare name "Desktop
-    // app" is not a discriminator (the web copy names it as the type NOT to choose).
-    expect(text).not.toContain('type "Desktop app"');
-    const code = container!.querySelector('[data-testid="register-redirect-uri"]');
+    // The REVIEW screen's "how you get them" guidance is already the web copy — the
+    // adjacent-screens contradiction (review saying "Desktop app", register saying
+    // "Web application") is the exact defect the Gate-5 review caught.
+    const review = sheetContainer()!.textContent ?? '';
+    expect(review).toContain('"Web application"');
+    expect(review).not.toContain('type "Desktop app"');
+
+    await clickSheetButton(/approve this connection/i);
+    await settleSheet();
+
+    const register = sheetContainer()!.textContent ?? '';
+    expect(register).toContain('"Web application"');
+    expect(register).not.toContain('type "Desktop app"');
+    const code = sheetContainer()!.querySelector('[data-testid="register-redirect-uri"]');
     expect(code?.textContent).toBe(`${window.location.origin}/oauth/callback`);
+    // The console link keeps its one-tap affordance: the displayed URL is routed
+    // through the SAME ADR-0029 byte-match as every other render (one mechanism).
+    expect(sheetContainer()!.querySelector('[data-testid="register-console-link"] a')).not.toBeNull();
   });
 
   it('desktop: the "Desktop app" walkthrough renders unchanged (regression pin)', async () => {
-    const { db, wizard, Sheet } = await fresh(fakeDesktop());
-    declare(db, gmailRequirement());
+    const { db, wizard, Sheet } = await freshWizardSheet(fakeDesktopPlatform().platform);
+    declareSheetConnection(db, APP, gmailRequirement());
 
     wizard.openConnectionWizard({ appId: APP, slot: 'gmail', source: 'settings' });
-    await render(<Sheet />);
-    await click(/approve this connection/i);
-    await settle();
+    await renderSheet(<Sheet />);
+    await clickSheetButton(/approve this connection/i);
+    await settleSheet();
 
-    const text = container!.textContent ?? '';
-    expect(text).toContain('"Desktop app"');
+    const text = sheetContainer()!.textContent ?? '';
+    expect(text).toContain('type "Desktop app"');
     expect(text).not.toContain('"Web application"');
   });
 });

@@ -9,11 +9,15 @@
 
 The Gmail starter shipped desktop-only at v1 (ADR-0039 §5): a Google **Desktop app**
 OAuth client registers only loopback redirects, so the web playground origin was not
-registrable and the tile was honestly locked on web. Live probes (2026-08-21, recorded
-in next-steps) established the Gmail REST API itself is fully CORS-open from any web
-origin (`gmail.googleapis.com` reflects arbitrary `Origin`, preflight allows
-`authorization`); the only blocker is Google requiring `client_secret` at code exchange
-even with PKCE for **Web application** clients. Meanwhile the web OAuth lane already
+registrable and the tile was honestly locked on web. Live probes (2026-08-21, run for
+the next-steps queue entry this task shipped and pruned — git history holds the entry;
+this paragraph is now the durable record) established the Gmail REST API itself is
+fully CORS-open from any web origin — `gmail.googleapis.com`, the entry's pinned host,
+AND the legacy `www.googleapis.com` alias both reflect an arbitrary `Origin` with
+preflight allowing `authorization`; the only blocker is Google requiring
+`client_secret` at code exchange even with PKCE for **Web application** clients (PKCE
+is code-injection protection, not client auth; only native client types skip the
+secret, and those cannot register a web redirect). Meanwhile the web OAuth lane already
 exists generically in the codebase (origin `/oauth/callback` route + BroadcastChannel
 binding; `handleCallback` conditionally sends a stored `client_secret`). What was
 missing is registry vocabulary: no seat could say "this provider's registration can
@@ -27,15 +31,28 @@ serve a web origin, and here is the web walkthrough."
    web origin's `/oauth/callback` as an exact Authorized redirect URI;
    `webRegistration` carries the web-surface console walkthrough (structural rule:
    `webRegistration` requires `webRedirectPosture`; both require an OAuth kind). The
-   wizard's register screen consults them only when `getPlatform().oauth === undefined`
-   — the same predicate that already selects the origin-literal redirect display, so
-   the walkthrough and the displayed URI cannot disagree. Neither seat is emitted into
+   wizard consults them only when `getPlatform().oauth === undefined` — the same
+   predicate that already selects the origin-literal redirect display, so the
+   walkthrough and the displayed URI cannot disagree — on BOTH walkthrough-rendering
+   screens: the register screen and the review screen's "how you get them" block
+   (Gate-5 review: the guidance is registration instruction, not approved credential
+   semantics, and two adjacent screens must not instruct two client types; fields,
+   scopes, hosts and templates remain the row's, always). `nextStep`'s
+   review→register routing consults the same effective registration, so the step
+   machine and the screens cannot disagree either. Neither seat is emitted into
    `ConnectionRequirement` (pinned by a negative test on `requirementFromRegistryEntry`)
    — the same render-time registry-data class `desktopRedirectPosture` occupies under
    ADR-0021 §1. No protocol change; admission re-substitution stays byte-identical, so
    the drift migration answers 'none' for every approved row. The anti-phishing
-   property is preserved: the rendered walkthrough is still sourced exclusively from
-   the human-reviewed registry (AL-04 D5).
+   property is preserved twice over (Gate-5 review): the substituted copy is still
+   sourced exclusively from the human-reviewed registry (AL-04 D5), the console link's
+   one-tap verdict still flows through the single ADR-0029 byte-match mechanism
+   (`consoleUrlIsClickable`, taught the displayed URL rather than bypassed), and the
+   override BINDS TO THE ROW'S ENDPOINTS — a row that merely carries the provider's
+   NAME (the R-4 imported-file channel, where substitution never re-ran) with
+   non-pinned endpoints keeps its own registration under the copy-only honesty rules,
+   because a pinned walkthrough must never dress a flow whose token exchange goes
+   somewhere Snug never reviewed.
 2. **Credential fields are shared across surfaces, deliberately.** Gmail's desktop and
    web flows collect the identical `client_id` + `client_secret` pair, so the entry's
    pinned `fields` serve both and are left byte-untouched — an edit to entry field copy
@@ -92,10 +109,19 @@ serve a web origin, and here is the web walkthrough."
 - `STARTER_LOOKS.gmail.desktopOnly` is dropped; trade-copilot/hue/whatsapp locks remain
   (transport reasons unchanged).
 - The seat walk (lesson 2026-08-13): registry type + structural tests ride; the emitter
-  explicitly does NOT ride (negative test); the register screen rides; the review
-  screen does not (review renders the approved row — the walkthrough is registration
-  guidance, not approved credential semantics); drift/admission untouched by
-  construction; scrub gains no new secret params; the chat choice card is untouched (no
-  options added).
+  explicitly does NOT ride (negative test); the register screen, the review screen's
+  guidance block, `nextStep` routing, and `consoleUrlIsClickable` all ride (Gate-5
+  review corrected the first draft's review-screen non-ride — guidance is not approved
+  semantics); drift/admission untouched by construction; scrub gains no new secret
+  params; the chat choice card is untouched (no options added).
+- **Web refusal semantics are deliberately NOT built here.** An ABSENT web seat keeps
+  today's meaning — "the entry-level walkthrough serves the web too" (spotify) — so it
+  cannot also mean "refuse honestly" for entries whose documented client type cannot
+  register a web origin (google/googledrive, loopback-only walkthroughs). Those entries
+  are wizard-incomplete dead-ends today regardless (next-steps item 7), and their
+  web-refusal story rides that pickup: when they gain walkthroughs, either they gain
+  web seats too or the tri-state this seat would need (`works / refuse / entry serves
+  web`) gets designed then. The gmail tile-unlock ↔ registry-seat coupling is pinned by
+  a tripwire test so the unlock cannot outlive the seat.
 - High tier: negative tests (C1 secret custody, web seats never persisted) +
   fresh-context plan review (run 2026-08-22, findings adopted) + journal self-sign-off.

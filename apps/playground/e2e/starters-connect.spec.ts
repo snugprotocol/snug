@@ -308,17 +308,23 @@ test.describe('AC8/AC9 — Hue is honestly labelled on the web', () => {
 test.describe('TASK-20260822 — gmail is dual-mode: the web tile is live and its connect journey reaches the wizard', () => {
   test.skip(!hasApp, AWAITS);
 
-  test('the gmail tile is unlocked on the web, and the wizard renders the WEB walkthrough', async ({ page }) => {
+  test('the gmail tile is unlocked on the web, and the install → connections-door journey reaches the WEB walkthrough', async ({ page }) => {
     /**
      * The inverse of the Hue/trade-copilot assertions above, for the one lock whose
      * reason DISSOLVED (ADR-0049): gmail's v1 lock was a client-type fact (a Google
      * Desktop-app client cannot register a web origin), and the registry now vouches
      * for a "Web application" client path. So the web tile must be enabled with no
-     * badge, and the connect journey must reach the wizard — whose register screen
-     * shows the WEB walkthrough and the exact origin callback to paste, never the
-     * desktop one (the component suite pins the same branch; this asserts it at the
-     * surface a web user actually reaches). Nothing here CONNECTS — same project-home
-     * rule as the rest of this file (no credential exists, no request leaves).
+     * badge, and a real user journey must reach the wizard — whose review AND register
+     * screens both carry the WEB walkthrough (never the desktop one), with the exact
+     * origin callback to paste.
+     *
+     * THE JOURNEY IS THE INSTALLED COPY'S, deliberately: the tile's open button leads
+     * to the READ-ONLY starter route, which persists no declared row (this file's own
+     * AC8 comments pin that), so the wizard is reached the way a real user reaches it —
+     * `starter-install` writes the declared, UNAPPROVED row (the AC3/AC5 seam), and the
+     * header's connections door (`manage-connections`, AC9's one place) opens the
+     * review for it. Nothing here CONNECTS — same project-home rule as the rest of
+     * this file (no credential is pasted, no request leaves).
      */
     await page.goto('/');
     const tile = page.locator('[data-testid="starter-tile"][data-starter-name="gmail"]');
@@ -327,15 +333,20 @@ test.describe('TASK-20260822 — gmail is dual-mode: the web tile is live and it
     await expect(tile.locator('.tile-card-button')).toBeEnabled();
 
     await tile.locator('.tile-card-button').click();
-    const connect = page.getByTestId('run-connect').first();
-    await expect(connect).toBeVisible({ timeout: 20_000 });
-    await connect.click();
+    await expect(page).toHaveURL(/\/run\/starter--gmail/);
+    await page.getByTestId('starter-install').click();
+    // Install navigates to the user's own copy — a uuid route, never the starter id.
+    await expect(page).toHaveURL(/\/run\/(?!starter--)[0-9a-f-]{8,}/, { timeout: 20_000 });
 
-    // The wizard opens on review; walking one step forward lands on the register
-    // screen, which must carry the WEB client-type walkthrough and the origin literal.
-    await page.getByRole('button', { name: /approve this connection/i }).click();
-    await expect(page.getByTestId('register-steps')).toContainText('"Web application"');
-    await expect(page.getByTestId('register-steps')).not.toContainText('type "Desktop app"');
-    await expect(page.getByTestId('register-redirect-uri')).toHaveText(/\/oauth\/callback$/);
+    await page.getByTestId('manage-connections').click();
+    const wizard = page.locator('.sheet');
+    await expect(wizard).toBeVisible();
+    // The REVIEW screen's "how you get them" guidance must already be the web copy —
+    // the review/register contradiction is the exact defect the Gate-5 review caught.
+    await expect(wizard.getByTestId('review-registration-steps')).toContainText('"Web application"');
+    await wizard.getByRole('button', { name: /approve this connection/i }).click();
+    await expect(wizard.getByTestId('register-steps')).toContainText('"Web application"');
+    await expect(wizard.getByTestId('register-steps')).not.toContainText('type "Desktop app"');
+    await expect(wizard.getByTestId('register-redirect-uri')).toHaveText(/\/oauth\/callback$/);
   });
 });

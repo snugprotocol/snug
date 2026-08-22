@@ -525,6 +525,28 @@ const GOOGLE_ENDPOINTS = {
 /** Google needs these to return a refresh token; harmless nowhere else, so scoped here. */
 const GOOGLE_AUTHORIZE_PARAMS = { access_type: 'offline', prompt: 'consent' } as const;
 
+// The gmail walkthroughs' SHARED steps (ADR-0049 Gate-5 review): project creation, API
+// enable, consent screen, and both provider traps are facts about the Google PROJECT,
+// not the client type — so the desktop and web walkthroughs compose them from one
+// definition (the same shared-constant pattern as GOOGLE_ENDPOINTS above) and differ
+// only where the surfaces genuinely differ: the create-client step (application type +
+// redirect registration) and the web-only custody disclosure.
+const GMAIL_CONSOLE_URL = 'https://console.cloud.google.com/auth/clients';
+const GMAIL_PROJECT_STEPS = [
+  'Open the Google Cloud console (link above) and sign in with the SAME Google account whose mail you want to manage. If you have never used it before, accept the terms — it is free.',
+  'Create a project: click the project dropdown in the top bar, choose "New project", give it any name (e.g. "My Snug Inbox"), and create it. This is YOUR project; Snug never sees it.',
+  'Enable the Gmail API: search "Gmail API" in the console search bar, open it, and click "Enable". Without this step sign-in succeeds and every request is refused.',
+  'Set up the consent screen: choose "External" user type, fill in an app name and your own email where asked, and add YOUR OWN email address under "Test users". Skip every optional field.',
+] as const;
+const GMAIL_TRAP_STEPS = [
+  'When you first sign in, Google shows an "unverified app" warning — this is expected for a project only you use. Click "Advanced", then "Continue" to your app.',
+  // VERIFIED 2026-08-19 against Google's OAuth refresh-token expiration rules: a
+  // project left in "Testing" publishing status issues refresh tokens that expire
+  // after 7 days. This is the one trap that presents as "Snug broke for no reason" a
+  // week after a successful setup, so it is disclosed here with its fix.
+  'One thing to know: while your project stays in "Testing" status, Google expires the connection after 7 days and you will be asked to sign in again. To avoid that, open the consent screen page and click "Publish app" — for a project only you use, no Google review is required.',
+] as const;
+
 const REGISTRY: Record<string, WellKnownOauthProvider> = {
   spotify: {
     displayName: 'Spotify',
@@ -694,41 +716,27 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     registration: {
       // VERIFIED 2026-08-19: Google's consolidated Auth Platform clients page — the
       // Cloud Console redirects the older /apis/credentials path here.
-      consoleUrl: 'https://console.cloud.google.com/auth/clients',
+      consoleUrl: GMAIL_CONSOLE_URL,
       instructions: [
-        'Open the Google Cloud console (link above) and sign in with the SAME Google account whose mail you want to manage. If you have never used it before, accept the terms — it is free.',
-        'Create a project: click the project dropdown in the top bar, choose "New project", give it any name (e.g. "My Snug Inbox"), and create it. This is YOUR project; Snug never sees it.',
-        'Enable the Gmail API: search "Gmail API" in the console search bar, open it, and click "Enable". Without this step sign-in succeeds and every request is refused.',
-        'Set up the consent screen: choose "External" user type, fill in an app name and your own email where asked, and add YOUR OWN email address under "Test users". Skip every optional field.',
+        ...GMAIL_PROJECT_STEPS,
         'Create the credentials: on the Clients page, click "Create client", choose application type "Desktop app", name it anything, and create. Copy the Client ID and the Client secret into the fields below — Google shows both, and desktop sign-in needs both.',
-        'When you first sign in, Google shows an "unverified app" warning — this is expected for a project only you use. Click "Advanced", then "Continue" to your app.',
-        // VERIFIED 2026-08-19 against Google's OAuth refresh-token expiration rules: a
-        // project left in "Testing" publishing status issues refresh tokens that expire
-        // after 7 days. This is the one trap that presents as "Snug broke for no
-        // reason" a week after a successful setup, so it is disclosed here with its fix.
-        'One thing to know: while your project stays in "Testing" status, Google expires the connection after 7 days and you will be asked to sign in again. To avoid that, open the consent screen page and click "Publish app" — for a project only you use, no Google review is required.',
+        ...GMAIL_TRAP_STEPS,
       ],
     },
     // The WEB walkthrough (ADR-0049 §4) — rendered INSTEAD of the block above when the
-    // runtime has no desktop OAuth capability. Steps 1–4 are the same Google project
-    // dance (project, API, consent screen belong to the PROJECT, not the client type);
-    // step 5 is where the surfaces genuinely differ: client type "Web application" and
-    // the pasted redirect URI. The two provider traps (unverified warning, 7-day
-    // Testing expiry) are project facts too, so they are disclosed on both surfaces.
-    // The final step is the ADR-0049 §4 custody disclosure: one active client pair per
-    // app — a completed web sign-in replaces a desktop sign-in held in the same file.
+    // runtime has no desktop OAuth capability. Composed from the shared project/trap
+    // steps above; the create-client step is where the surfaces genuinely differ
+    // (application type "Web application" + the pasted redirect URI), and the final
+    // step is the ADR-0049 §4 custody disclosure: one active client pair per app — a
+    // completed web sign-in replaces a desktop sign-in held in the same file.
     webRegistration: {
       // Same consolidated Auth Platform clients page as the desktop walkthrough
       // (VERIFIED 2026-08-19; the client-type choice happens inside "Create client").
-      consoleUrl: 'https://console.cloud.google.com/auth/clients',
+      consoleUrl: GMAIL_CONSOLE_URL,
       instructions: [
-        'Open the Google Cloud console (link above) and sign in with the SAME Google account whose mail you want to manage. If you have never used it before, accept the terms — it is free.',
-        'Create a project: click the project dropdown in the top bar, choose "New project", give it any name (e.g. "My Snug Inbox"), and create it. This is YOUR project; Snug never sees it.',
-        'Enable the Gmail API: search "Gmail API" in the console search bar, open it, and click "Enable". Without this step sign-in succeeds and every request is refused.',
-        'Set up the consent screen: choose "External" user type, fill in an app name and your own email where asked, and add YOUR OWN email address under "Test users". Skip every optional field.',
+        ...GMAIL_PROJECT_STEPS,
         'Create the credentials: on the Clients page, click "Create client" and choose application type "Web application" — not "Desktop app"; only a web client can accept this page\'s address. Under "Authorized redirect URIs" click "Add URI" and paste the "redirect URI to register" shown below, exactly as displayed — Google matches it character for character. Then create, and copy the Client ID and the Client secret into the fields below; a web client refuses sign-in without its secret, even though this hub also uses PKCE.',
-        'When you first sign in, Google shows an "unverified app" warning — this is expected for a project only you use. Click "Advanced", then "Continue" to your app.',
-        'One thing to know: while your project stays in "Testing" status, Google expires the connection after 7 days and you will be asked to sign in again. To avoid that, open the consent screen page and click "Publish app" — for a project only you use, no Google review is required.',
+        ...GMAIL_TRAP_STEPS,
         'If you also connected Gmail from the Snug desktop app using this same Snug file: this hub keeps ONE Google sign-in per app, so completing this web sign-in replaces the desktop one (and vice versa) — you would simply reconnect when you switch surfaces.',
       ],
     },

@@ -1,8 +1,5 @@
 # Next tasks — Inbox Copilot
 
-- **Web-playground support.** v1 is desktop-only: a Google Desktop-app OAuth client
-  registers loopback redirects only. A Web-application client type plus a
-  posture-branched walkthrough would open the browser lane.
 - **Incremental sync.** Today's refresh re-reads the 90-day window. `historyId` would
   make refreshes cheap and allow a much longer window.
 - **Undo for a completed batch.** Trash is reversible in Gmail, but the app should be
