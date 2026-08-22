@@ -149,7 +149,7 @@
       "sources": [
         {
           "path": "docs/whitepaper/dist/snug-protocol-whitepaper.pdf",
-          "sha256": "f1a7c03dda6cc8c933349018e4f5a5c5657afa6c7361ad72a9f493c3f0b6578e"
+          "sha256": "68c0a957dc51fc29f9b655b2684b3f61ac62bbc1dde84be0a609f45a3d78095f"
         }
       ]
     },
@@ -301,7 +301,7 @@
       "sources": [
         {
           "path": "docs/whitepaper/dist/snug-protocol-whitepaper.pdf",
-          "sha256": "f1a7c03dda6cc8c933349018e4f5a5c5657afa6c7361ad72a9f493c3f0b6578e"
+          "sha256": "68c0a957dc51fc29f9b655b2684b3f61ac62bbc1dde84be0a609f45a3d78095f"
         }
       ]
     }

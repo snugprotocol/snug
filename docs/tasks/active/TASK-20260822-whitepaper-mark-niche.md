@@ -19,4 +19,11 @@ renders amber tile + black niche; checker green; PDF re-synced; page count uncha
 ## Session journal
 
 ### 2026-08-22 — Claude (Fable 5)
-- Implementing.
+- Done: paper-only fix — the single evenodd path split into ember tile (currentColor)
+  + explicit `.mark-niche` path filled `var(--ink)`; comment records why the paper
+  departs from the canonical knockout. Rebuilt: 33 pages (no shrink-to-fit), checker
+  104/104, cover crop reviewed (amber tile, black niche). Website re-synced (hash
+  parity dist↔public); spec-clone staged PDF commit AMENDED to `dcda2c6` (still ONE
+  unpushed commit covering both PDF refreshes — edition cover + niche; push on the
+  owner's word).
+- State: done pending merge.

@@ -108,6 +108,7 @@ body {
   margin-bottom: 30mm;
 }
 .cover-mark svg { width: 26px; height: 26px; color: var(--amber); }
+.cover-mark svg .mark-niche { fill: var(--ink); }
 .cover-mark span {
   font-family: var(--sans);
   font-size: 11pt;
