@@ -129,3 +129,15 @@ Fresh-context adversarial review (Medium tier) + the AC9 rendered pass. Reviewer
 - State: complete on branch, NOT merged. Deployment deliberately out of scope (next-steps item).
 - Next step: owner local E2E walk (instructions in the session summary), then Gate 5 review + PR.
 - Open questions: none.
+
+### 2026-08-21 (close) — claude — session close
+- Done: everything above committed as `60f84bf` (67 files); Gate 6 pass — two lessons appended
+  (stale content-layer cache × schema-default filter; newest-by-mtime picks build intermediates),
+  wiki drift was already fixed in the main commit (architecture, code-map, next-steps, README row,
+  ADR-0048 + index), no `packages/protocol` change so no spec-changelog entry.
+- State: branch `feat/TASK-20260821-website-launch` at the close commit; working tree clean;
+  local E2E ready (`dev:local` + staged DMG verified live this session).
+- Next step (single): owner walks the local E2E flow — `pnpm --filter playground dev` +
+  `pnpm --filter website dev:local`, click through landing → playground → /download → save the DMG.
+  Then Gate 5 (fresh-context review) + PR on an explicit ask.
+- Open questions: none.
