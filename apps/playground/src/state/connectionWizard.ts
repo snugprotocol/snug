@@ -377,9 +377,17 @@ export function forceCloseWizard(): void {
 // The derived machine
 // ---------------------------------------------------------------------------
 
-/** A `registration` seat with actual content is what earns the register screen. */
+/**
+ * A `registration` seat with actual content is what earns the register screen — the
+ * EFFECTIVE registration, i.e. the web-surface override when the runtime selects one
+ * (ADR-0049). Same source the register screen renders from, so the step machine and
+ * the screen cannot disagree: an entry that ships ONLY a web walkthrough (a future
+ * web-seat adopter with no desktop registration) still routes review → register on
+ * web, where the origin redirect-URI display lives.
+ */
 export function hasRegistrationWalkthrough(requirement: ConnectionRequirement | undefined): boolean {
-  const registration = requirement?.registration;
+  const registration =
+    (requirement !== undefined ? webSurfaceRegistrationFor(requirement) : undefined) ?? requirement?.registration;
   if (registration === undefined) return false;
   return registration.consoleUrl !== undefined || (registration.instructions ?? []).length > 0;
 }
@@ -2178,6 +2186,62 @@ export function desktopOAuthRefusalFor(requirement: ConnectionRequirement): Desk
     alternativeLabels: alternatives.map((alternative) => alternative.label),
     alternatives,
   };
+}
+
+/**
+ * The WEB-surface registration walkthrough for this requirement's provider, or
+ * `undefined` when the row's own persisted `registration` should render — which is
+ * every case except "web runtime + a registry entry that declares the web seats"
+ * (ADR-0049 §1, TASK-20260822-gmail-dual-mode).
+ *
+ * RENDER-TIME REGISTRY DATA in the posture block's exact class (comment at the top of
+ * this section): resolved here on every render, never persisted. The substituted copy
+ * still comes exclusively from the human-reviewed registry, so the AL-04 D5
+ * anti-phishing property (registry and explicit user entry are the ONLY walkthrough
+ * sources) survives the override.
+ *
+ * Three guards, each load-bearing:
+ *  - `getPlatform().oauth === undefined` — the wizard's ONE web discriminator, shared
+ *    with `redirectUriSourceFor` and the register screen's redirect display, so the
+ *    walkthrough and the displayed URI cannot describe different transports.
+ *  - `requirement.kind === 'oauth2_auth_code'` — the row is app-declarable data; a row
+ *    that borrowed the provider's NAME with another kind must keep its own walkthrough.
+ *  - THE ENDPOINT BYTE-MATCH — the row's authorize AND token URLs must equal the
+ *    entry's pinned endpoints. A provider NAME is a claim any imported row can make
+ *    (the R-4 channel, where substitution never re-ran): a row named "Gmail" whose
+ *    endpoints point somewhere else would otherwise be dressed in Snug's pinned Google
+ *    walkthrough — wizard-grade legitimacy around a flow that sends the pasted
+ *    client_secret to the row's own endpoints. Endpoints are where the credential
+ *    GOES, so they are the seat the override binds to; a mismatched row keeps its own
+ *    registration under the existing copy-only honesty rules, exactly as before this
+ *    seat existed.
+ * Deliberately NOT guarded here: entry-side coherence (web seats only on
+ * `oauth2_auth_code` entries, posture⇔walkthrough co-presence) is registry data pinned
+ * by web-surface-seats.test.ts's structural rules — re-checking it per render would be
+ * a second seat for a rule that already has one.
+ *
+ * Resolution is `resolveRegistryEntryByName` — the brand-adjacent rung admission
+ * itself uses — never the exact-key `lookupWellKnownProvider` (the hue lesson, same as
+ * the pairing/drift resolvers above): a borrow-admitted row named "Gmail Premium"
+ * carries the gmail entry's SUBSTITUTED desktop walkthrough (and its substituted
+ * endpoints, which is why the byte-match still holds for it), and an exact-key miss
+ * here would render those desktop steps on web beside a web redirect URI — pinned
+ * instructions walking the user into a redirect_uri_mismatch.
+ */
+export function webSurfaceRegistrationFor(
+  requirement: ConnectionRequirement,
+): { consoleUrl?: string; instructions?: string[] } | undefined {
+  if (getPlatform().oauth !== undefined) return undefined;
+  if (requirement.kind !== 'oauth2_auth_code') return undefined;
+  const entry = resolveRegistryEntryByName(requirement.provider.name)?.entry;
+  if (entry?.webRegistration === undefined || entry.endpoints === undefined) return undefined;
+  if (
+    requirement.endpoints?.authorizeUrl !== entry.endpoints.authorizeUrl ||
+    requirement.endpoints.tokenUrl !== entry.endpoints.tokenUrl
+  ) {
+    return undefined;
+  }
+  return entry.webRegistration;
 }
 
 /** The BroadcastChannel surface, injectable so tests drive delivery without a real bus. */

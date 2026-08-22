@@ -54,12 +54,13 @@ const STARTER_LOOKS: Readonly<
   // constraint applies — the sample dataset makes the tile compelling before any
   // connection exists.
   ledger: { name: 'Ledger', emoji: '📒', color: '#b95c22', blurb: 'your money, at home — every account in your file, an analyst on tap, a time machine for your net worth' },
-  // The AI inbox manager (TASK-20260819-gmail-starter, ADR-0039). Desktop-only for the
-  // transport reason, not a CORS one: Gmail is reached with a Google DESKTOP-app OAuth
-  // client, whose only registrable redirect is loopback — the web playground's origin
-  // cannot be registered on that client type at all, so the browser lane would offer a
-  // connect button that no user could complete.
-  gmail: { name: 'Inbox Copilot', emoji: '📬', color: '#c2410c', blurb: 'who is really filling your inbox, who you never answer, and a mass cleanup you approve once', desktopOnly: true },
+  // The AI inbox manager (TASK-20260819-gmail-starter, ADR-0039). Web AND desktop
+  // since ADR-0049 (TASK-20260822-gmail-dual-mode): the v1 lock was a client-type
+  // fact, not a CORS one — a Google DESKTOP-app client registers only loopback — and
+  // the registry now vouches for a "Web application" client path
+  // (webRedirectPosture: 'origin-callback' + its own walkthrough), with the Gmail API
+  // itself CORS-open (probed 2026-08-21). The wizard picks the walkthrough by runtime.
+  gmail: { name: 'Inbox Copilot', emoji: '📬', color: '#c2410c', blurb: 'who is really filling your inbox, who you never answer, and a mass cleanup you approve once' },
 };
 
 type LoadState = { phase: 'loading' } | { phase: 'ready'; entries: LibraryEntry[] } | { phase: 'error'; message: string };

@@ -59,12 +59,16 @@ async function renderHub(harness: Harness): Promise<void> {
 }
 
 // RE-POINTED (TASK-20260815-starter-apps-rebuild): `hue-lights-party` became `hue`, so
-// the tile's accessible name is now plain "hue". Same folder role, same desktopOnly row.
-function hueTile(): HTMLElement | undefined {
+// the tile's accessible name is now plain "hue". Keyed on `data-starter-name` — the
+// folder identity every suite in this file shares (Gate-5 review: three inline copies
+// of this query converged here).
+function starterTile(name: string): HTMLElement | undefined {
   return [...(container?.querySelectorAll<HTMLElement>('[data-testid="starter-tile"]') ?? [])].find(
-    (tile) => tile.getAttribute('data-starter-name') === 'hue',
+    (tile) => tile.getAttribute('data-starter-name') === name,
   );
 }
+
+const hueTile = (): HTMLElement | undefined => starterTile('hue');
 
 describe('the Hue (desktopOnly) starter tile', () => {
   it('web: greyed out, not clickable, with the plain download copy', async () => {
@@ -106,10 +110,55 @@ describe('the Hue (desktopOnly) starter tile', () => {
     const harness = await fresh();
     await renderHub(harness);
 
-    const chess = [...(container?.querySelectorAll<HTMLElement>('[data-testid="starter-tile"]') ?? [])].find(
-      (tile) => tile.getAttribute('data-starter-name') === 'chess',
-    );
+    const chess = starterTile('chess');
     expect(chess).toBeDefined();
     expect(chess!.querySelector<HTMLButtonElement>('.tile-card-button')?.disabled).toBe(false);
   });
+});
+
+// TASK-20260822-gmail-dual-mode (ADR-0049): gmail's lock reason DISSOLVED. The old row
+// comment was honest — a Desktop-app OAuth client cannot register the web origin — but
+// the registry now vouches for a web path (webRedirectPosture: 'origin-callback' + the
+// "Web application" walkthrough), so the tile unlocks. The OTHER desktopOnly rows keep
+// their locks: their reasons are transport facts (Coinbase no-CORS, Hue LAN, WhatsApp
+// unix socket) no client registration can dissolve.
+describe('the gmail starter tile is dual-mode (ADR-0049)', () => {
+  it('web: enabled, no desktop-only badge — AND the registry web seat that justifies the unlock exists', async () => {
+    const harness = await fresh();
+    await renderHub(harness);
+
+    const tile = starterTile('gmail');
+    expect(tile, 'the gmail tile must be on the shelf').toBeDefined();
+    expect(tile!.querySelector('[data-testid="desktop-only-badge"]')).toBeNull();
+    expect(tile!.querySelector<HTMLButtonElement>('.tile-card-button')?.disabled).toBe(false);
+
+    // THE TRIPWIRE (Gate-5 review): the tile's unlock (STARTER_LOOKS) and the wizard's
+    // web walkthrough (the registry's web seats) are keyed on DIFFERENT data with no
+    // shared invariant — desktopOnly was the only web-side gate, and the web wizard
+    // never refuses OAuth postures. Binding them here means a future registry edit
+    // that drops gmail's web seat cannot leave the tile silently unlocked in front of
+    // a wizard that would render desktop-client instructions no web user can complete.
+    const { lookupWellKnownProvider } = await import('@snugprotocol/auth');
+    expect(
+      lookupWellKnownProvider('gmail')?.webRedirectPosture,
+      'gmail tile unlocked on web ⇒ the registry must vouch for a web redirect path — re-lock the tile if this seat goes',
+    ).toBe('origin-callback');
+  });
+
+  it('desktop: still enabled (the unlock is additive, not a move)', async () => {
+    const harness = await fresh({
+      kind: 'desktop',
+      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
+    });
+    await renderHub(harness);
+
+    const tile = starterTile('gmail');
+    expect(tile).toBeDefined();
+    expect(tile!.querySelector('[data-testid="desktop-only-badge"]')).toBeNull();
+    expect(tile!.querySelector<HTMLButtonElement>('.tile-card-button')?.disabled).toBe(false);
+  });
+
+  // The lock-stays half (other desktopOnly rows keep their badge on web) is already
+  // pinned by the Hue suite above — trade-copilot is not on the vitest shelf, so a row
+  // of its own here could only assert against a tile that does not render.
 });

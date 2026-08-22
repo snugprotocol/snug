@@ -62,9 +62,14 @@ it is still showing the demo.
 The connection wizard drives it. Gmail is a well-known provider, so the walkthrough,
 the pinned scopes and the two credential fields all come from the registry — the
 manifest here is deliberately **bare** (slot, brand, kind, one host). You will create a
-free Google Cloud project and a Desktop-app OAuth client; the wizard walks each screen,
-including the two Google traps: the "unverified app" warning, and the 7-day connection
-expiry that applies until you publish the project.
+free Google Cloud project and an OAuth client, and the wizard picks the walkthrough for
+where you are running (ADR-0049): a **Desktop app** client in the desktop app, a
+**Web application** client in the web playground (only that type can register the
+page's callback address — and Google requires its client secret at the exchange even
+with PKCE). Don't pre-create the client from memory; let the wizard's steps name the
+type. Both walkthroughs disclose the two Google traps: the "unverified app" warning,
+and the 7-day connection expiry that applies until you publish the project. Using both
+surfaces means two client registrations, and one sign-in is active per copy of the app.
 
 ## Tests
 

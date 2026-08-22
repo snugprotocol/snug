@@ -29,9 +29,11 @@ token that reads nothing) and no credential fields (a wizard screen with zero in
 
 ## Slice C — the shelf
 
-9. `STARTER_LOOKS` row in `HubView.tsx`: display name "Inbox Copilot", unique emoji,
-   `desktopOnly` — a Desktop-app OAuth client registers loopback redirects only, so the
-   web playground origin cannot serve this flow.
+9. `STARTER_LOOKS` row in `HubView.tsx`: display name "Inbox Copilot", unique emoji.
+   Shipped `desktopOnly` at v1 (a Desktop-app OAuth client registers loopback redirects
+   only); the lock was dropped by TASK-20260822-gmail-dual-mode / ADR-0049, which added
+   a registry-vouched "Web application" client path (`webRedirectPosture` +
+   `webRegistration`) and a runtime-picked wizard walkthrough.
 
 ## Verification
 

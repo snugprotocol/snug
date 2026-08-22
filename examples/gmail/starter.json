@@ -1,7 +1,21 @@
 {
-  "version": 2,
+  "version": 3,
   "appHash": "f83e9a494903f9b23b5eaae55d0a95e400be97d968faa750aff0df5c23f87b9a",
   "changelog": [
+    {
+      "version": 3,
+      "date": "2026-08-22",
+      "title": "Now works in the browser too",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "No app changes — the web playground can now connect Gmail: the wizard walks you through a Google \"Web application\" client instead of the desktop one.",
+            "If you use Snug on both surfaces, each keeps its own Google client registration; one sign-in is active per copy of the app."
+          ]
+        }
+      ]
+    },
     {
       "version": 2,
       "date": "2026-08-21",
@@ -25,7 +39,7 @@
           "items": [
             "See who is really filling your inbox — and who you never answer.",
             "Mass cleanup you preview and approve once; nothing is deleted without you.",
-            "Desktop only: Gmail is reached through Google’s desktop app sign-in."
+            "Desktop only at this release: Gmail was reached through Google’s desktop app sign-in (the web lane arrived in v3)."
           ]
         }
       ]

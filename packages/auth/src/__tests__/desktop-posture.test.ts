@@ -233,6 +233,13 @@ describe('desktop postures — browserCallable is a documented fact or ABSENT, n
     // /simplefin/accounts. `true` is a documented fact with the probe dated beside the
     // registry seat, not an assumption.
     { key: 'simplefin', value: true },
+    // ADR-0049 (TASK-20260822): VERIFIED by live probe 2026-08-21 (recorded in
+    // next-steps at the time) — `gmail.googleapis.com` reflects an arbitrary Origin and
+    // preflight allows `authorization`, so a browser fetch with a Bearer token works
+    // from any web origin. The OAuth EXCHANGE is a separate question (Web-application
+    // client + client_secret, the webRegistration walkthrough) — this seat answers only
+    // "does the API answer a browser", which it does.
+    { key: 'gmail', value: true },
   ];
 
   for (const { key, value } of BROWSER_CALLABLE) {

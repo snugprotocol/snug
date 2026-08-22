@@ -89,6 +89,7 @@ import {
   startConnectionOAuthFlow,
   testConnection,
   unexpectedTestOutcome,
+  webSurfaceRegistrationFor,
   type ConnectionTestOutcome,
   type ConnectionWizardSession,
   type ConnectionWizardFailure,
@@ -183,8 +184,7 @@ function provenanceCopy(row: ConnectionRow): string {
  * migration documents: display names are not registry keys). Options' registrations are
  * checked too: an option's console URL is as pinned as the entry's.
  */
-function consoleUrlIsClickable(row: ConnectionRow): boolean {
-  const consoleUrl = row.requirement.registration?.consoleUrl;
+function consoleUrlIsClickable(row: ConnectionRow, consoleUrl = row.requirement.registration?.consoleUrl): boolean {
   if (consoleUrl === undefined) return false;
   const entry = resolveRegistryEntryByName(row.requirement.provider.name)?.entry;
   if (entry === undefined) return false;
@@ -194,6 +194,13 @@ function consoleUrlIsClickable(row: ConnectionRow): boolean {
   // pair one flow's registration STEPS with a one-tap link to a DIFFERENT flow's
   // console — still a pinned page, so not a phishing hand-off, but a walkthrough whose
   // link cannot be followed. Kind-mismatched pinned URLs fall to copy-only, fail-closed.
+  //
+  // The `consoleUrl` parameter is the DISPLAYED url — callers rendering the ADR-0049
+  // web-surface override pass its console url so this ONE mechanism keeps owning the
+  // anti-phishing verdict (the override's url is a direct registry read, so the
+  // byte-match holds today by construction; routing it through here means a future
+  // second source for the override cannot silently inherit the one-tap grant).
+  if (row.requirement.kind === entry.kind && entry.webRegistration?.consoleUrl === consoleUrl) return true;
   return [entry, ...(entry.authOptions ?? [])].some(
     (flow) => flow.kind === row.requirement.kind && flow.registration?.consoleUrl === consoleUrl,
   );
@@ -769,7 +776,13 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
   const requirement = row.requirement;
   const fields = requirement.fields ?? [];
   const scopes = requirement.scopes ?? [];
-  const registration = requirement.registration;
+  // "How you get them" is registration GUIDANCE, not approved credential semantics —
+  // so it takes the same ADR-0049 web-surface override as the register screen, or the
+  // two adjacent screens would instruct two different Google client types on web
+  // (review saying "Desktop app", register saying "Web application"). Everything else
+  // on this screen — fields, scopes, hosts, templates — stays the ROW, always: those
+  // ARE what is being approved.
+  const registration = webSurfaceRegistrationFor(requirement) ?? requirement.registration;
   // ONE resolution, both seats — the discipline P3 applied to the lint, applied here to
   // the disclosure, so the review can never fall behind what the executor will send.
   const headerTemplate = requirement.request?.headerTemplate;
@@ -944,12 +957,31 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
 // ---------------------------------------------------------------------------
 
 function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () => void }): ReactElement {
-  const registration = row.requirement.registration;
+  /**
+   * THE WEB-SURFACE WALKTHROUGH OVERRIDE (ADR-0049, TASK-20260822-gmail-dual-mode).
+   *
+   * Derived from the ROW and the PLATFORM — the same class as `desktopRefusal` and the
+   * redirect display below, and the same predicate as both (`getPlatform().oauth ===
+   * undefined` inside the helper), so the walkthrough, the refusal gate, and the
+   * displayed URI can never describe different transports. The row's persisted
+   * `registration` is the DESKTOP walkthrough (the registry emitter's default flow);
+   * on web, a provider whose entry declares the web seats — AND whose row's endpoints
+   * byte-match the pin (the helper's R-4 guard) — gets its `webRegistration` INSTEAD:
+   * copy for the client type the web sign-in actually uses. Nothing is persisted; an
+   * entry without the seats, a non-OAuth row, a mismatched import, or a desktop
+   * runtime all fall through to the row exactly as before.
+   *
+   * ONE memo, keyed on the row (this screen re-renders on every copy-button click and
+   * async redirect-URI arrival): the override resolution and the ADR-0029 clickable
+   * verdict — routed through `consoleUrlIsClickable` with the DISPLAYED url in both
+   * branches, so the anti-phishing byte-match has exactly one owner — are computed
+   * together, and the registry walk never runs for a verdict the render will not read.
+   */
+  const { registration, clickable } = useMemo(() => {
+    const effective = webSurfaceRegistrationFor(row.requirement) ?? row.requirement.registration;
+    return { registration: effective, clickable: consoleUrlIsClickable(row, effective?.consoleUrl) };
+  }, [row]);
   const consoleUrl = registration?.consoleUrl;
-  // Memoized: the resolution walks the registry (brand-adjacent scan on miss) and this
-  // screen re-renders on every copy-button click and async redirect-URI arrival, while
-  // the answer can only change with the row (Gate-5 review, efficiency).
-  const clickable = useMemo(() => consoleUrlIsClickable(row), [row]);
   const [copied, setCopied] = useState(false);
 
   /**
