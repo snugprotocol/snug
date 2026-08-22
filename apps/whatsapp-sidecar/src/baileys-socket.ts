@@ -34,7 +34,7 @@ import makeWASocket, {
   downloadMediaMessage,
   type WASocket as BaileysSocket,
 } from 'baileys';
-import { createFileAuthState } from './auth-state.js';
+import { createFileAuthState, salvageParse } from './auth-state.js';
 import { createEventBuffer } from './event-buffer.js';
 import type { ThreadCache } from './thread-cache.js';
 import { createThreadStore } from './thread-store.js';
@@ -114,7 +114,12 @@ function readCredsMaterial(
 ): { scanStarted: boolean; hasAccount: boolean; hasIdentities: boolean } | undefined {
   try {
     const raw = readFileSync(join(authDir, 'creds.json'), 'utf8');
-    const creds = JSON.parse(raw) as { me?: unknown; account?: unknown; signalIdentities?: unknown };
+    // Through the store's own salvager, not a strict parse: the auth store serves a
+    // torn-tail creds.json after salvaging it, and a strict read here would answer "not
+    // resumable" about the SAME file when the heal-write could not land (disk full) —
+    // sending startLink through resetAuthStore to destroy a salvageable session.
+    const creds = salvageParse(raw) as { me?: unknown; account?: unknown; signalIdentities?: unknown } | undefined;
+    if (creds === undefined) return undefined;
     return {
       scanStarted: creds.me !== undefined && creds.me !== null,
       hasAccount: creds.account !== undefined && creds.account !== null,
@@ -138,12 +143,12 @@ export function resetAuthStore(authDir: string): void {
     }
   } catch {
     // Missing directory (first run) or an unreadable one. Both are survivable: a fresh
-    // `useMultiFileAuthState` will create what it needs.
+    // `createFileAuthState` will create what it needs.
   }
 }
 
 export interface BaileysSocketDeps {
-  /** Folder for `useMultiFileAuthState` — THE store holding session keys, inside the helper. */
+  /** Folder for `createFileAuthState` — THE store holding session keys, inside the helper. */
   authDir: string;
   /** Injectable for tests; defaults to real time. */
   now?: () => number;
@@ -347,29 +352,35 @@ const silentLogger: MediaLogger = {
   error: () => {},
 };
 
-/** Pino calls both ways — `warn(obj, msg)` and `warn(msg)`; keep whichever seats exist. */
-function writeTerminalLine(level: 'warn' | 'error', obj: unknown, msg?: unknown): void {
-  const text = typeof obj === 'string' ? obj : typeof msg === 'string' ? msg : '';
-  const data = typeof obj === 'object' && obj !== null ? [obj] : [];
-  console.error(`[baileys ${level}] ${text}`, ...data);
-}
-
 /**
  * The socket's logger (TASK-20260822-wa-authstate-corruption AC5). Baileys' default pino
  * prints info-level protocol housekeeping — "identity key changed…", "resyncing regular…"
  * — straight into the desktop terminal. This is the warn floor: faults still surface with
  * their diagnostic payload, chatter does not. `level` is read by Baileys itself (its
- * trace-only decode paths check it), so 'warn' is a claim the library acts on.
+ * trace-only decode paths check it), so 'warn' is a claim the library acts on. `child`
+ * ACCUMULATES its bindings into every line — Baileys immediately rebinds
+ * (`child({class:'baileys'})` in its defaults, `child({msgId})` before media uploads), and
+ * a child that dropped them would strip exactly the context that makes a fault
+ * attributable. Pino calls both ways — `warn(obj, msg)` and `warn(msg)`; both seats kept.
  */
-const warnFloorLogger: MediaLogger = {
-  level: 'warn',
-  child: () => warnFloorLogger,
-  trace: () => {},
-  debug: () => {},
-  info: () => {},
-  warn: (obj, msg) => writeTerminalLine('warn', obj, msg),
-  error: (obj, msg) => writeTerminalLine('error', obj, msg),
-};
+function makeWarnFloorLogger(bindings: Record<string, unknown>): MediaLogger {
+  const write = (level: 'warn' | 'error', obj: unknown, msg?: unknown): void => {
+    const text = typeof obj === 'string' ? obj : typeof msg === 'string' ? msg : '';
+    const payload = { ...bindings, ...(typeof obj === 'object' && obj !== null ? obj : {}) };
+    console.error(`[baileys ${level}] ${text}`, ...(Object.keys(payload).length > 0 ? [payload] : []));
+  };
+  return {
+    level: 'warn',
+    child: (obj) => makeWarnFloorLogger({ ...bindings, ...obj }),
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: (obj, msg) => write('warn', obj, msg),
+    error: (obj, msg) => write('error', obj, msg),
+  };
+}
+
+const warnFloorLogger = makeWarnFloorLogger({});
 
 export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<WaSocket> {
   const now = deps.now ?? (() => Date.now());

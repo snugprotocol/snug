@@ -17,8 +17,8 @@ import { join } from 'node:path';
  *    a key to a helper, not the user's WhatsApp.
  *
  * The in-memory implementation below is what the suite runs against. The disk-backed one
- * (Baileys' `useMultiFileAuthState` over `~/Snug/whatsapp-sidecar/`) implements the same
- * interface; the router never learns which it has.
+ * (the sidecar's own `createFileAuthState` in `auth-state.ts` over `~/Snug/whatsapp-sidecar/`)
+ * implements the same interface; the router never learns which it has.
  */
 
 /** Opaque to this module — only the WhatsApp adapter interprets it. */
@@ -65,8 +65,9 @@ export function createMemoryStore(): SidecarStore {
  * ("the helper refused that key"). The session keys already persist beside this; the access
  * token is the same class of fact and belongs with them.
  *
- * The auth state stays in memory here: Baileys owns its own on-disk store through
- * `useMultiFileAuthState`, and a second copy would be a second source of truth.
+ * The auth state stays in memory here: the on-disk session keys are owned by
+ * `auth-state.ts` (`createFileAuthState`), and a second copy would be a second source of
+ * truth.
  */
 export function createFileStore(dir: string): SidecarStore {
   const tokenFile = join(dir, 'access-token.json');

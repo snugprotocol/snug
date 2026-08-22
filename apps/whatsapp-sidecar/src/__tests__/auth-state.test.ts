@@ -16,7 +16,7 @@
  * `useMultiFileAuthState` from the pinned tarball, not against a re-description of it.
  */
 
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { proto, useMultiFileAuthState } from 'baileys';
@@ -96,6 +96,32 @@ describe('createFileAuthState — format compatibility with useMultiFileAuthStat
     await ours.state.keys.set({ 'pre-key': { '1': null } } as never);
     expect(existsSync(join(dir, 'pre-key-1.json'))).toBe(false);
   });
+
+  it('a FALSY value in set() deletes too — the original tests truthiness, not null', async () => {
+    // Baileys can hand `''` for an empty lidUser (lid-mapping.js:112 warns but not always
+    // filters); the original removed the file. Writing it instead would leave scalar litter.
+    const ours = await createFileAuthState(dir);
+    await ours.state.keys.set({ 'lid-mapping': { x: 'kept@lid' } } as never);
+    expect(existsSync(join(dir, 'lid-mapping-x.json'))).toBe(true);
+    await ours.state.keys.set({ 'lid-mapping': { x: '' } } as never);
+    expect(existsSync(join(dir, 'lid-mapping-x.json'))).toBe(false);
+  });
+
+  it('round-trips SCALAR values — lid-mapping entries are bare JSON strings, not objects', async () => {
+    // THE REVIEW CATCH (2026-08-22): `SignalDataTypeMap['lid-mapping']: string` — the live
+    // session dir holds 1,644 of these. A reader that only accepts objects would have
+    // quarantined the entire LID↔phone directory on first read, with the suite green.
+    const theirs = await useMultiFileAuthState(dir);
+    await theirs.state.keys.set({ 'lid-mapping': { '100077100081166_reverse': '17148220178' } } as never);
+
+    const ours = await createFileAuthState(dir);
+    const read = await ours.state.keys.get('lid-mapping' as never, ['100077100081166_reverse']);
+    expect(read['100077100081166_reverse']).toBe('17148220178');
+
+    await ours.state.keys.set({ 'lid-mapping': { fresh: '236427898765432@lid' } } as never);
+    const reread = await (await useMultiFileAuthState(dir)).state.keys.get('lid-mapping' as never, ['fresh']);
+    expect(reread['fresh']).toBe('236427898765432@lid');
+  });
 });
 
 describe('createFileAuthState — atomic writes', () => {
@@ -153,6 +179,46 @@ describe('createFileAuthState — salvage and quarantine', () => {
     expect(readFileSync(join(dir, aside as string), 'utf8')).toBe('garbage{{{');
   });
 
+  it('a SECOND quarantine of the same file keeps the first — unique aside names, or rename clobbers', async () => {
+    // POSIX rename REPLACES an existing target: a fixed `.corrupt` name would destroy the
+    // first forensic copy the moment the same file corrupts twice (review, 2026-08-22).
+    const file = join(dir, 'app-state-sync-key-TWICE.json');
+    writeFileSync(file, 'first-garbage{{{');
+    await (await createFileAuthState(dir)).state.keys.get('app-state-sync-key', ['TWICE']);
+    writeFileSync(file, 'second-garbage{{{');
+    await (await createFileAuthState(dir)).state.keys.get('app-state-sync-key', ['TWICE']);
+
+    const asides = readdirSync(dir).filter((name) => name.startsWith('app-state-sync-key-TWICE.json.corrupt'));
+    expect(asides).toHaveLength(2);
+    const contents = asides.map((name) => readFileSync(join(dir, name), 'utf8')).sort();
+    expect(contents).toEqual(['first-garbage{{{', 'second-garbage{{{']);
+  });
+
+  it('salvages a scalar file with trailing garbage — the torn-tail class is not object-only', async () => {
+    const file = join(dir, 'lid-mapping-torn.json');
+    writeFileSync(file, '"17148220178"xtra');
+    const ours = await createFileAuthState(dir);
+    const read = await ours.state.keys.get('lid-mapping' as never, ['torn']);
+    expect(read['torn']).toBe('17148220178');
+    expect(readFileSync(file, 'utf8')).toBe('"17148220178"');
+  });
+
+  it('a read error that is NOT absence throws instead of impersonating a fresh start', async () => {
+    // THE REVIEW CATCH (2026-08-22): a transient EACCES at boot read as "no creds" would
+    // hand back fresh creds, and the next creds.update would atomically OVERWRITE the
+    // user's working session. Absence means ENOENT and nothing else.
+    const theirs = await useMultiFileAuthState(dir);
+    await theirs.saveCreds();
+    chmodSync(join(dir, 'creds.json'), 0o000);
+    try {
+      await expect(createFileAuthState(dir)).rejects.toThrow();
+      // And the unreadable file was not touched — no quarantine, no overwrite.
+      expect(existsSync(join(dir, 'creds.json'))).toBe(true);
+    } finally {
+      chmodSync(join(dir, 'creds.json'), 0o600);
+    }
+  });
+
   it('an empty file is corruption, not a fresh start: quarantined, read as absent', async () => {
     const file = join(dir, 'pre-key-9.json');
     writeFileSync(file, '');
@@ -173,14 +239,20 @@ describe('createFileAuthState — salvage and quarantine', () => {
     expect(ours.state.creds).toEqual(theirs.state.creds);
   });
 
-  it('quarantines unsalvageable creds.json before falling back to fresh creds (stock Baileys silently discards)', async () => {
+  it('copies unsalvageable creds.json aside but PRESERVES the original, then falls back to fresh creds', async () => {
+    // Keys quarantine by rename; creds.json quarantines by COPY. Two consumers read this
+    // exact path by name — the desktop autostart predicate (`creds.json` exists ⇒ spawn
+    // the helper) and the wedge predicate feeding `resetAuthStore` — and renaming it away
+    // would silently disable autostart forever while full signal material lingered in the
+    // `.corrupt` copy with no UI path to forget it (review, 2026-08-22). Leaving the
+    // corrupt original in place keeps the existing wedge-clear machinery in charge.
     const file = join(dir, 'creds.json');
     writeFileSync(file, 'not json at all');
 
     const ours = await createFileAuthState(dir);
     // Fresh creds are a working (unpaired) identity, not a crash.
     expect(ours.state.creds.registered).toBe(false);
-    expect(existsSync(file)).toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe('not json at all');
     const aside = readdirSync(dir).find((name) => name.startsWith('creds.json.corrupt'));
     expect(aside).toBeDefined();
     expect(readFileSync(join(dir, aside as string), 'utf8')).toBe('not json at all');

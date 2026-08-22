@@ -69,9 +69,18 @@ vi.mock('baileys', () => {
 });
 
 // The auth store is OUR module now (TASK-20260822-wa-authstate-corruption) — mocked at its
-// own seam, same shape the old `useMultiFileAuthState` mock supplied.
+// own seam, same shape the old `useMultiFileAuthState` mock supplied. salvageParse is a
+// plain parse here (these suites write clean files); the LENIENCY claim is pinned against
+// the real module in `session-reset.test.ts`.
 vi.mock('../auth-state.js', () => ({
   createFileAuthState: vi.fn(async () => ({ state: { creds: {}, keys: {} }, saveCreds: saveCredsSpy })),
+  salvageParse: (raw: string) => {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return undefined;
+    }
+  },
 }));
 
 import { createBaileysWaSocket } from '../baileys-socket.js';
@@ -690,17 +699,25 @@ describe('the terminal logger (TASK-20260822-wa-authstate-corruption AC5)', () =
     }
   });
 
-  it('child() keeps the same floor — Baileys logs through children, not the root', async () => {
+  it('child() keeps the floor AND its bindings — Baileys logs through children, not the root', async () => {
+    // Baileys immediately rebinds (`child({class:'baileys'})` in Defaults, `child({msgId})`
+    // before media uploads); a child that discards its bindings strips exactly the context
+    // that makes a surfaced fault attributable (review, 2026-08-22).
     await linkedAdapter();
     const logger = (socketConfigs.at(-1) as { logger: ConfigLogger }).logger;
-    const child = logger.child({ class: 'baileys' });
+    const child = logger.child({ class: 'baileys' }).child({ msgId: 'M-77' });
     expect(child.level).toBe('warn');
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       child.info({}, 'still chatter');
       expect(stderr).not.toHaveBeenCalled();
-      child.warn({}, 'still a fault');
+      child.warn({ attempt: 2 }, 'still a fault');
       expect(stderr).toHaveBeenCalledTimes(1);
+      const line = stderr.mock.calls[0]!.map((arg) => JSON.stringify(arg)).join(' ');
+      expect(line).toContain('still a fault');
+      expect(line).toContain('baileys'); // the class binding survives
+      expect(line).toContain('M-77'); // nested bindings accumulate
+      expect(line).toContain('attempt'); // the call-site payload rides along
     } finally {
       stderr.mockRestore();
     }
