@@ -436,9 +436,10 @@ disclosed and designed around. What bounds it:
   any commitment — never on a later screen;
 - a **Recovery Key is mandatory**, not optional: `encryptContainer` refuses to build a
   single-slot container, so no user can end up with exactly one way in;
-- the key is shown once behind a **typed acknowledgement**, with copy/download/print — the
-  one deliberately inconvenient interaction in the product, because clicking through that
-  screen unread is the path that ends here;
+- the key is shown once behind a **mandatory acknowledgement checkbox** (a typed phrase
+  until TASK-20260821-site-playground-polish), with copy/download/print — finishing the
+  screen without acknowledging stays impossible, because clicking through it unread is
+  the path that ends here;
 - the unlock screen offers **no destructive escape** (no "start fresh"), so a tired user
   cannot trade their data for relief, and it names the Recovery Key as the way out;
 - turning protection **off** is always available from Settings while the file is open.

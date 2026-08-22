@@ -49,7 +49,7 @@ const { title, description } = Astro.props;
         <div class="nav-links">
           <a href="/docs/">Docs</a>
           <a href="/docs/spec/">Spec</a>
-          <a href={site.playground} rel="noopener">Playground</a>
+          <a href={site.playground} target="_blank" rel="noopener">Playground</a>
           <a href={site.githubOrg} rel="noopener" aria-label="GitHub" class="nav-gh">
             <svg width="20" height="20" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
               <path
@@ -82,7 +82,7 @@ const { title, description } = Astro.props;
         </div>
         <nav aria-label="Product">
           <h3>Product</h3>
-          <a href={site.playground} rel="noopener">Playground</a>
+          <a href={site.playground} target="_blank" rel="noopener">Playground</a>
           <a href="/download/">Desktop app</a>
           <a href="/docs/">Documentation</a>
         </nav>

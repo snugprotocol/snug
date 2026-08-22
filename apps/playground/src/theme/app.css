@@ -1993,6 +1993,11 @@ img.identity-avatar {
   position: absolute;
   top: var(--space-2);
   right: var(--space-2);
+  /* Above the tile's flex-stretched card button: without an explicit level the
+     button's hit area covered the badge, so the /download link LOOKED clickable but
+     every real pointer click landed on the disabled button (found by the
+     TASK-20260821-site-playground-polish browser walk — jsdom cannot see this). */
+  z-index: 1;
   font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -2021,6 +2026,17 @@ img.identity-avatar {
   gap: var(--space-2);
   align-items: center;
   margin-top: var(--space-2);
+}
+/*
+  An input sharing a field-row with a button (the passphrase/unlock "show" rows —
+  TASK-20260821-site-playground-polish AC6) fills the remaining width. Those rows
+  used className="row", which NO stylesheet defines: the unstyled div left the input
+  at intrinsic width with the button colliding into it. min-width: 0 lets the input
+  actually shrink at narrow widths instead of forcing the row to overflow.
+*/
+.field-row > input {
+  flex: 1;
+  min-width: 0;
 }
 .field-row-wrap {
   flex-wrap: wrap;

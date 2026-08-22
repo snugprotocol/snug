@@ -474,13 +474,15 @@ function HubHome(): ReactElement {
                   // ADR-0047 (TASK-20260821): the badge is now the LINK to the /download
                   // page — it sits beside (not inside) the disabled tile button, so it
                   // stays clickable while the tile itself refuses.
+                  // TASK-20260821-site-playground-polish AC3 (owner call): a plain
+                  // "desktop" tag; the title keeps the full why + the free download.
                   <Link
                     to="/download"
                     className="tile-desktop-badge"
                     data-testid="desktop-only-badge"
-                    title="this starter's device lives on your home network, which a web page cannot reach — the free Snug desktop app can"
+                    title="needs the Snug desktop app (a free download) — this starter reaches things a web page cannot"
                   >
-                    needs the desktop app — free download
+                    desktop
                   </Link>
                 ) : null}
                 {/*

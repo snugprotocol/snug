@@ -57,6 +57,33 @@ describe('docs nav integrity', () => {
   it('the hub has pages at all (an empty content tree must not pass)', () => {
     expect(walk(CONTENT).length).toBeGreaterThanOrEqual(10);
   });
+
+  // TASK-20260821-site-playground-polish AC4 — the two checks above validate against
+  // DISK, which stayed green while the dev server threw `The slug "docs" ... does not
+  // exist`: a half-written .astro/ content store (interrupted sync) had dropped every
+  // .mdx entry, and a STALE dist/ from an older successful build masked it here. A
+  // corrupt store makes `astro build` itself fail, so the class only survives behind
+  // a stale dist — these close that mask.
+  it('every explicit sidebar slug was actually built into dist', () => {
+    const config = readFileSync(join(ROOT, 'astro.config.mjs'), 'utf8');
+    const slugs = [...config.matchAll(/slug:\s*'([^']+)'/g)].map((m) => m[1]);
+    const missing = slugs.filter((slug) => !existsSync(join(DIST, slug, 'index.html')));
+    expect(missing, 'sidebar slugs with no built page — rebuild apps/website').toEqual([]);
+  });
+
+  it('dist is not older than the content/config sources it was built from', () => {
+    const newestSource = [...walk(CONTENT), join(ROOT, 'astro.config.mjs')]
+      .map((file) => statSync(file).mtimeMs)
+      .reduce((a, b) => Math.max(a, b), 0);
+    const distIndex = join(DIST, 'index.html');
+    expect(existsSync(distIndex), 'dist/index.html missing — build apps/website first').toBe(true);
+    expect(
+      statSync(distIndex).mtimeMs >= newestSource,
+      'dist/ is older than src/content or astro.config.mjs — rebuild apps/website ' +
+        '(if the build errors on a slug whose file exists, delete apps/website/.astro ' +
+        'and rebuild: an interrupted content sync leaves a half-written store)',
+    ).toBe(true);
+  });
 });
 
 describe('C4 — nothing in the website references internal/', () => {

@@ -1,6 +1,7 @@
 // Desktop-only starter labeling (TASK-20260812 P3 item 5): the Hue starter reaches
 // a device on the user's LAN, which a web page cannot. On web its tile is greyed and
-// says so in plain words ("needs the desktop app — free download"); on the desktop
+// carries a quiet "desktop" tag linking to /download (the full why lives in the tag's
+// title — TASK-20260821-site-playground-polish AC3); on the desktop
 // platform the same tile is simply enabled, with no limitation badge at all.
 // Labeling only — no Hue connector is built here.
 import { act } from 'react';
@@ -74,7 +75,11 @@ describe('the Hue (desktopOnly) starter tile', () => {
     expect(tile, 'the hue tile must be on the shelf').toBeDefined();
     const badge = tile!.querySelector('[data-testid="desktop-only-badge"]');
     expect(badge, 'the limitation badge renders on web').not.toBeNull();
-    expect(badge!.textContent?.toLowerCase()).toContain('needs the desktop app — free download');
+    // TASK-20260821-site-playground-polish AC3 (owner call): a simple "desktop" tag —
+    // the long "needs the desktop app — free download" copy read as an ad; the title
+    // still carries the full explanation on hover.
+    expect(badge!.textContent?.trim().toLowerCase()).toBe('desktop');
+    expect(badge!.getAttribute('title') ?? '').not.toBe('');
     // ADR-0047 (TASK-20260821 AC12): the badge is now the LINK to the download page —
     // "free download" copy with nowhere to click was an unkept promise.
     expect(badge!.tagName).toBe('A');

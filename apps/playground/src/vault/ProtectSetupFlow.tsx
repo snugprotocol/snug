@@ -12,9 +12,9 @@
 //   2. the passphrase — length is the only rule. No "must contain a symbol" theatre:
 //      arbitrary composition rules are how people end up at Password1! on a sticky note.
 //   3. the Recovery Key — generated, shown ONCE, copyable and downloadable, and gated
-//      behind a typed acknowledgement. That last bit is the only interaction in this
-//      product deliberately designed to be slightly inconvenient, because clicking
-//      through this screen unread is precisely the path that ends in lost data.
+//      behind a mandatory acknowledgement (a checkbox since TASK-20260821 — owner
+//      call; originally a typed phrase), because clicking through this screen unread
+//      is precisely the path that ends in lost data.
 import { useState, type ReactElement } from 'react';
 
 import { Button } from '../ui/Button.js';
@@ -24,7 +24,6 @@ import { deferProtectOffer, declineProtectOfferPermanently, markProtectionEnable
 
 /** Long enough to matter; short enough that a memorable phrase qualifies. */
 const MIN_PASSPHRASE = 12;
-const ACKNOWLEDGEMENT = 'i saved it';
 
 export function ProtectSetupFlow({
   onDone,
@@ -45,7 +44,7 @@ export function ProtectSetupFlow({
   const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
-  const [ack, setAck] = useState('');
+  const [ack, setAck] = useState(false);
   const [error, setError] = useState('');
 
   const tooShort = passphrase.length > 0 && passphrase.length < MIN_PASSPHRASE;
@@ -106,7 +105,7 @@ export function ProtectSetupFlow({
           the trade: <strong>no one can reset a Snug passphrase</strong> — not us, not anyone. we will give you a
           Recovery Key as a second way in, and if you lose both, the data is gone for good.
         </p>
-        <div className="row" style={{ marginTop: 'var(--space-3)' }}>
+        <div className="field-row" style={{ marginTop: 'var(--space-3)' }}>
           <Button variant="primary" onClick={() => setStep(2)}>
             protect my file
           </Button>
@@ -126,7 +125,7 @@ export function ProtectSetupFlow({
         </div>
         <div className="field">
           <label htmlFor="vault-new">choose a passphrase</label>
-          <div className="row">
+          <div className="field-row">
             <input
               id="vault-new"
               type={reveal ? 'text' : 'password'}
@@ -161,7 +160,7 @@ export function ProtectSetupFlow({
             {error}
           </p>
         ) : null}
-        <div className="row" style={{ marginTop: 'var(--space-3)' }}>
+        <div className="field-row" style={{ marginTop: 'var(--space-3)' }}>
           <Button variant="primary" disabled={!canContinue || busy} onClick={() => void create()}>
             {busy ? 'protecting…' : 'continue'}
           </Button>
@@ -183,7 +182,7 @@ export function ProtectSetupFlow({
       <p className="recovery-key" data-testid="recovery-key" style={{ fontFamily: 'monospace', fontSize: '1.1rem' }}>
         {recoveryKey}
       </p>
-      <div className="row">
+      <div className="field-row">
         <Button onClick={copyKey}>copy</Button>
         <Button onClick={downloadKey}>download</Button>
         <Button onClick={() => window.print()}>print</Button>
@@ -193,18 +192,21 @@ export function ProtectSetupFlow({
         the file it unlocks protects nobody.
       </p>
       <div className="field" style={{ marginTop: 'var(--space-3)' }}>
-        <label htmlFor="vault-ack">type “{ACKNOWLEDGEMENT}” to confirm you have it</label>
-        <input
-          id="vault-ack"
-          type="text"
-          value={ack}
-          spellCheck={false}
-          autoComplete="off"
-          onChange={(event) => setAck(event.target.value)}
-        />
+        {/* Mandatory acknowledgement — a checkbox since TASK-20260821-site-playground-
+            polish AC5 (owner call; previously a typed phrase). The gate itself is
+            unchanged: no acknowledgement, no way forward. */}
+        <label className="check-label">
+          <input
+            type="checkbox"
+            data-testid="vault-ack"
+            checked={ack}
+            onChange={(event) => setAck(event.target.checked)}
+          />
+          I saved my Recovery Key somewhere safe — not on this computer
+        </label>
       </div>
-      <div className="row" style={{ marginTop: 'var(--space-3)' }}>
-        <Button variant="primary" disabled={ack.trim().toLowerCase() !== ACKNOWLEDGEMENT} onClick={finish}>
+      <div className="field-row" style={{ marginTop: 'var(--space-3)' }}>
+        <Button variant="primary" disabled={!ack} onClick={finish}>
           done
         </Button>
       </div>
