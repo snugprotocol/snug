@@ -269,3 +269,14 @@ headings and are stable across the rename.
   preview · spec-clone `3ac7700`); then `/close-session` → gate-leg choice, Gate 5
   review, PR, merge; the spec push is its own ask afterward.
 - Open questions: none.
+
+### 2026-08-22 16:08 UTC — Claude (Fable 5) — session (publish)
+- Done: **PUSHED `3ac7700` to `snugprotocol/spec`** on the owner's explicit in-session ask
+  ("push 3ac7700 to snugprotocol/spec"), `cd011cc..3ac7700` on `main`. Verification by
+  fresh shallow clone: remote head `3ac7700`; `schemas/` `diff -rq` clean against
+  `packages/protocol/schemas/`; SPEC.md header reads "Specification 1.0"; whitepaper PDF
+  SHA-1 `b6a9fc80…` matches the built artifact. Changelog entry flipped STAGED → PUSHED;
+  next-steps updated.
+- State: spec 1.0 is live in the (still-private) spec repo. Remaining: merge this branch
+  via `/close-session`; website deploy / GitHub Release / flip-public are separate asks.
+- Next step: owner runs `/close-session` (gate-leg choice → Gate 5 review → PR → merge).

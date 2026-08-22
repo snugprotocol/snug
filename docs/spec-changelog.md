@@ -4,7 +4,13 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
-## 2026-08-22 — **STAGED, push pending the owner's explicit ask** — spec 1.0 — TASK-20260822-spec-10-final (ADR-0050) — staged spec commit `3ac7700` (local clone only; `origin/main` untouched at `cd011cc`)
+## 2026-08-22 — **PUSHED** — spec 1.0 — TASK-20260822-spec-10-final (ADR-0050) — spec commit `3ac7700`
+
+**Pushed 2026-08-22 16:08 UTC on the owner's explicit ask** ("push 3ac7700 to
+snugprotocol/spec"), `cd011cc..3ac7700` on `main`. **Verified by fresh clone:** remote
+head is `3ac7700`; `schemas/` byte-identical to `packages/protocol/schemas/` (`diff -rq`
+clean); `SPEC.md` opens as "Specification 1.0"; the whitepaper PDF's SHA-1 matches the
+built artifact (`b6a9fc80…`). The entry below records what the commit carries.
 
 **Specification 1.0** — the v0.3 release candidate promoted to the final normative
 document for launch. Owner decisions (interview): §17 (standing approvals) stays in 1.0
@@ -46,9 +52,9 @@ healthy post-v5 file reported healed=true and persisted spuriously; fixed test-f
 **Verification at staging:** whitepaper checker 104/104 against BOTH fixture modes (the
 in-repo `SPEC-1.0.md` and the staged clone's `SPEC.md` via `--spec`); website
 `check-website-sync` 24 pages / 40 hashes green; root `pnpm test` run recorded in the
-task file. Staged clone state: exactly ONE unpushed commit on `main` (`3ac7700`), no
-other branches (pending-branch sweep clean). **To publish: push the staged commit on an
-explicit ask and update this entry with the pushed state.**
+task file. Staged clone state at the time: exactly ONE unpushed commit on `main`
+(`3ac7700`), no other branches (pending-branch sweep clean). Pushed the same day — see
+the header above.
 
 ## 2026-08-21 — INTERNAL DRAFT, correction pending the next push — TASK-20260821-launch-security-review
 
