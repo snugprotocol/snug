@@ -1,0 +1,309 @@
+{
+  "generatedAt": "sync-spec.mjs",
+  "entries": [
+    {
+      "page": "apps/website/src/content/docs/docs/spec/index.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/spec/part-1-the-wire-protocol.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/spec/part-2-the-portable-user-database.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/spec/part-3-connected-apps.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/spec/part-4-runtime-contracts-and-the-app-chat-surface.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/spec/part-5-linked-device-connections.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/spec/part-6-conformance.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/spec/appendices.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/spec/schemas.md",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "packages/protocol/schemas/app-announce.json",
+          "sha256": "5465c01b4bb2cb06c140f2662711be09d834525bcbdbf61518bab23971f2ba86"
+        },
+        {
+          "path": "packages/protocol/schemas/app-cancel.json",
+          "sha256": "d476dedfd0970e191e81e57764c4b382432258e4bc405ef3ad26356d03b91d1e"
+        },
+        {
+          "path": "packages/protocol/schemas/app-event.json",
+          "sha256": "a9f2830e553cd443739a7d21220f4fa62c04b92dcdb62b8cb97648301f44ec3e"
+        },
+        {
+          "path": "packages/protocol/schemas/app-message.json",
+          "sha256": "7e1bf9d610dae751783132f6c764f62bfecc01cd477f6657121181073aa8fd0f"
+        },
+        {
+          "path": "packages/protocol/schemas/app-request-envelope.json",
+          "sha256": "a629a096c3c560680ba1acc17a7931f2f1f7a8ee02bc6a0ac54ca972c97e01af"
+        },
+        {
+          "path": "packages/protocol/schemas/app-response.json",
+          "sha256": "80e18e8d332a2d53f4d1cf260bc103533ecf79a7f9806ab9c3ad50b614e691e8"
+        },
+        {
+          "path": "packages/protocol/schemas/db-request.json",
+          "sha256": "347f6f83e144a64a21a9d756e5adb8da3fef4e4fbe669f90b8b7b8dec386aad8"
+        },
+        {
+          "path": "packages/protocol/schemas/db-response.json",
+          "sha256": "330efb594c7a34d11c587130b34588091ab3d31b33d62e6ddcdc9026207b0396"
+        },
+        {
+          "path": "packages/protocol/schemas/host-event.json",
+          "sha256": "8aeafc3ce3a11100641a82330d2720f7a4feca1162a7a7e1bf266976a352785e"
+        },
+        {
+          "path": "packages/protocol/schemas/host-ready.json",
+          "sha256": "98c8e374b106500940f766fa33067089db3e6e6826dc9797d87c62884f3e8688"
+        },
+        {
+          "path": "packages/protocol/schemas/net-request.json",
+          "sha256": "424e5342ee7dda5609d83ec4eadec75fd8dd8dc97d993e5a0505c8269d834472"
+        },
+        {
+          "path": "packages/protocol/schemas/net-response.json",
+          "sha256": "1529ccc772eef5c26ca6be335f1f6c38ddf21e632959860b7da8d013d4a29de5"
+        },
+        {
+          "path": "packages/protocol/schemas/open-url-request.json",
+          "sha256": "e485ba743275f69a5fa9c755ecd8cfeba767eed9d0b9336071ce233c5164d60b"
+        },
+        {
+          "path": "packages/protocol/schemas/open-url-result.json",
+          "sha256": "866ff771cfcd5b205e9ca3947012993e31fba937739f1ec73d14ed9927170e19"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/public/whitepaper/snug-protocol-whitepaper.pdf",
+      "kind": "generated",
+      "sources": [
+        {
+          "path": "docs/whitepaper/dist/snug-protocol-whitepaper.pdf",
+          "sha256": "007156ad81f7dd47f3f17882f259ac9b6d9e94e81be510e4f30baa3c83b47067"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/pages/index.astro",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/product-vision.md",
+          "sha256": "7d07f8b9fe02cc5c314748bcecd23bb279d33a1db95ac0f2538b5f513408484e"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/pages/download.astro",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/product-vision.md",
+          "sha256": "7d07f8b9fe02cc5c314748bcecd23bb279d33a1db95ac0f2538b5f513408484e"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/index.mdx",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/product-vision.md",
+          "sha256": "7d07f8b9fe02cc5c314748bcecd23bb279d33a1db95ac0f2538b5f513408484e"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/get-started/what-is-snug.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/product-vision.md",
+          "sha256": "7d07f8b9fe02cc5c314748bcecd23bb279d33a1db95ac0f2538b5f513408484e"
+        },
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/get-started/quickstart.mdx",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "README.md",
+          "sha256": "e24b9c2082b681c4c62820b794f78b82fba32fc7b9fd016dfdc6495e830f6c70"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/get-started/first-app.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        },
+        {
+          "path": "packages/sdk/src/types.ts",
+          "sha256": "a29cf6272d1557736268762454b764dc0cb573705f5527c8f203cbbe798ce3c9"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/get-started/implementors.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "README.md",
+          "sha256": "e24b9c2082b681c4c62820b794f78b82fba32fc7b9fd016dfdc6495e830f6c70"
+        },
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/concepts/envelopes-and-frames.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/concepts/the-user-file.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/concepts/connections.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/concepts/runtime-contracts.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/build/hub-client.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/build/embed.md",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/spec-drafts/SPEC-v0.3-draft.md",
+          "sha256": "14057710cbb996173c88eac0e003def8c69bddde27744f28b28cf65c66fc1230"
+        }
+      ]
+    },
+    {
+      "page": "apps/website/src/content/docs/docs/whitepaper.mdx",
+      "kind": "authored",
+      "sources": [
+        {
+          "path": "docs/whitepaper/dist/snug-protocol-whitepaper.pdf",
+          "sha256": "007156ad81f7dd47f3f17882f259ac9b6d9e94e81be510e4f30baa3c83b47067"
+        }
+      ]
+    }
+  ]
+}

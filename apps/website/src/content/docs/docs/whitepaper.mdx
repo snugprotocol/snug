@@ -1,0 +1,34 @@
+---
+title: Whitepaper
+description: "The Snug Protocol: An Open Protocol for Agent-Backed Personal Software — design rationale, threat model, and the security argument."
+---
+
+import { LinkCard } from '@astrojs/starlight/components';
+
+**"The Snug Protocol: An Open Protocol for Agent-Backed Personal Software"** (Jeetu Maker,
+edition 2) is the *why* behind the spec: the design rationale, the threat model, and the
+security argument for the consolidated v0.3 draft — the wire protocol, the portable user
+database, connected applications, runtime contracts, and linked-device connections.
+
+Read it if you want to understand the shape of the protocol rather than its letter — why the
+agent bridge is a runtime relationship instead of codegen, why user data is one file, why
+credential custody is local-first, and which risks are **accepted and not mitigated**
+(the paper says so explicitly rather than leaving them implied).
+
+<LinkCard
+  title="Download the whitepaper (PDF)"
+  description="A4 · 33 pages · 10 figures · edition 2"
+  href="/whitepaper/snug-protocol-whitepaper.pdf"
+/>
+
+## How it relates to the spec
+
+The spec is normative; the paper only explains it. In the reference repo, a conformance
+checker verifies the paper's claims against the spec text on every build, so the two cannot
+silently drift. Cite the [specification](/docs/spec/) for requirements; cite the paper for
+rationale.
+
+## Citing
+
+> Maker, J. *The Snug Protocol: An Open Protocol for Agent-Backed Personal Software*,
+> edition 2, 2026. https://snugprotocol.org/whitepaper/snug-protocol-whitepaper.pdf

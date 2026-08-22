@@ -1,0 +1,135 @@
+---
+// ImplementorPitch.astro — the developer half of the audience: build a hub client,
+// or put Snug inside a product. The SDK snippet mirrors packages/sdk's real hooks.
+import { site } from '../config/site';
+---
+
+<section class="section impl" aria-labelledby="impl-title">
+  <div class="container impl-grid">
+    <div>
+      <p class="eyebrow">for implementors</p>
+      <h2 id="impl-title" class="impl-title">
+        Ship the app platform<br />your product was missing.
+      </h2>
+      <p class="impl-body">
+        Your product already has an AI assistant. Snug makes it an <em>app platform</em>: users
+        describe tiny apps in your chat, the assistant writes them, and they run in a hard sandbox
+        against your agent — with their own storage, versioning, and a security model that has
+        already been attacked in anger.
+      </p>
+      <ul class="impl-list">
+        <li><strong>An open spec</strong> — thirteen frames, published JSON Schemas, MIT.</li>
+        <li>
+          <strong>A production reference implementation</strong> — runner, SDK, portable user
+          database, credential broker, all extracted from a shipped system.
+        </li>
+        <li>
+          <strong>A whitepaper that argues the design</strong> — threat model and security
+          properties included, not implied.
+        </li>
+      </ul>
+      <div class="impl-ctas">
+        <a class="btn btn-primary" href="/docs/get-started/implementors/">Implementor quickstart</a>
+        <a class="btn btn-ghost" href={site.githubOrg} rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+
+    <pre class="impl-code" aria-label="SDK example"><code
+        ><span class="c">// a Snug app is one HTML file; the SDK is the bridge</span>
+<span class="k">const</span> {'{'} isReady, sendMessage {'}'} = <span class="f">useSnugApp</span>({'{'} appId: <span class="s">'ember-chess'</span>, displayName: <span class="s">'Ember Chess'</span> {'}'});
+<span class="k">const</span> db = <span class="f">useAppDB</span>();
+
+<span class="c">// the host agent is the app's brain — one call</span>
+<span class="k">const</span> reply = <span class="k">await</span> <span class="f">sendMessage</span>(<span class="s">'opponent-move'</span>, {'{'} lastMove: <span class="s">'e7e5'</span> {'}'});
+
+<span class="c">// per-app isolated storage in the user's own file</span>
+<span class="k">if</span> (reply.ok) <span class="k">await</span> db.<span class="f">exec</span>(<span class="s">'INSERT INTO moves (san) VALUES (?)'</span>, [reply.data.move]);</code></pre>
+  </div>
+</section>
+
+<style>
+  .impl {
+    border-top: 1px solid var(--border);
+  }
+
+  .impl-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: var(--space-7);
+    align-items: center;
+  }
+
+  .impl-title {
+    font-family: var(--font-display);
+    font-size: clamp(1.75rem, 3.6vw, 2.5rem);
+    font-weight: 500;
+    line-height: 1.15;
+    margin: var(--space-3) 0;
+  }
+
+  .impl-body {
+    color: var(--fg-muted);
+    line-height: 1.6;
+    margin: 0 0 var(--space-4);
+  }
+
+  .impl-list {
+    margin: 0 0 var(--space-5);
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+    line-height: 1.55;
+  }
+
+  .impl-list li::before {
+    content: '—';
+    color: var(--ember);
+    margin-right: 0.5rem;
+  }
+
+  .impl-ctas {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .impl-code {
+    margin: 0;
+    padding: var(--space-5);
+    border-radius: var(--radius-m);
+    border: 1px solid var(--border-strong);
+    background: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    box-shadow: var(--shadow-soft);
+  }
+
+  .impl-code .c {
+    color: var(--fg-faint);
+  }
+
+  .impl-code .k {
+    color: var(--ember-bright);
+  }
+
+  .impl-code .f {
+    color: var(--warn);
+  }
+
+  .impl-code .s {
+    color: var(--ok);
+  }
+
+  @media (max-width: 860px) {
+    .impl-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">
+  <desc>The snug mark, "The Ember Niche" (variant C, TASK-20260804-logo-variants.md) — same path as the playground's Logo.tsx; ember hex inlined because Starlight renders the logo as an img, outside any CSS currentColor context.</desc>
+  <path fill="#e8873a" fill-rule="evenodd" d="M10 2h12a8 8 0 0 1 8 8v12a8 8 0 0 1-8 8H10a8 8 0 0 1-8-8V10a8 8 0 0 1 8-8zm6 9a5 5 0 0 0-5 5v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-6a5 5 0 0 0-5-5z"/>
+</svg>

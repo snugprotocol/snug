@@ -1,0 +1,55 @@
+---
+title: Snug Protocol documentation
+description: Everything you need to use Snug, build Snug apps, or implement the protocol in your own product.
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+> **MCP connects agents to tools. Snug connects agents to apps.**
+
+Snug is an open protocol for **tiny, user-built apps that think through their host's AI agent
+at runtime**. A Snug app is a small sandboxed app — usually one HTML file — created through
+conversation. At runtime it exchanges versioned JSON **envelopes** with the host agent: the
+agent is the app's mind, the app is a body. Users own everything as one portable `.snug` file.
+
+<CardGrid stagger>
+  <Card title="Try it" icon="rocket">
+    Run the Playground in a browser tab, or [download the desktop app](/download/) for the
+    fully private experience. Start with [the five-minute quickstart](/docs/get-started/quickstart/).
+  </Card>
+  <Card title="Build an app" icon="pencil">
+    You mostly *talk* — the agent writes the app. Understand what it produces in
+    [Build your first app](/docs/get-started/first-app/).
+  </Card>
+  <Card title="Implement the protocol" icon="setting">
+    Host Snug apps in your own product or build a hub client from scratch:
+    [Implementor quickstart](/docs/get-started/implementors/).
+  </Card>
+  <Card title="Read the spec" icon="open-book">
+    The consolidated [v0.3 specification](/docs/spec/) — wire protocol, portable user
+    database, connected apps, runtime contracts — plus [JSON Schemas](/docs/spec/schemas/)
+    for every frame.
+  </Card>
+</CardGrid>
+
+## The shape of the system
+
+Three actors, deliberately separated:
+
+- **The user** owns ONE portable SQLite file (`.snug`) holding every app, its data, its chats,
+  and its settings. It runs from a browser (OPFS) or a desktop disk, syncs where the user
+  chooses, and exports whole.
+- **The hub client** (a web app, a desktop shell, *your* product) renders apps in a hard
+  sandbox and brokers every capability: agent turns, storage, network, navigation.
+- **The LLM provider** is whatever the user or host picks — the protocol is provider-neutral,
+  and a well-built app runs on a frontier model or a small local one.
+
+Security is architectural, not policy: app iframes get **no network of their own**, and
+credentials never enter the app, never reach the LLM, and never reach a publisher. The
+[whitepaper](/docs/whitepaper/) argues the design; the [spec](/docs/spec/) makes it normative.
+
+<LinkCard
+  title="What is Snug?"
+  description="The ten-minute mental model — bodies and minds, envelopes, the user file."
+  href="/docs/get-started/what-is-snug/"
+/>

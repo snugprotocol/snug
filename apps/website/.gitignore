@@ -1,0 +1,6 @@
+# build output
+dist/
+.astro/
+
+# AC12 — locally staged desktop bundles must never ride into the repo
+public/local-artifacts/

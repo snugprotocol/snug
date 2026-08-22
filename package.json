@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop",
+    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop && pnpm run check-website-sync",
     "lint": "turbo run lint",
     "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke",
     "update-code-map": "node --test scripts/update-code-map-counts.test.mjs && node scripts/update-code-map-counts.mjs",
@@ -16,7 +16,8 @@
     "check-sandbox-guard": "node --test scripts/check-sandbox-guard.test.mjs",
     "check-gate-local": "node --test scripts/gate-local.test.mjs",
     "gate:local": "node scripts/gate-local.mjs",
-    "check-release-desktop": "node --test scripts/release-desktop.test.mjs"
+    "check-release-desktop": "node --test scripts/release-desktop.test.mjs",
+    "check-website-sync": "node --test scripts/check-website-sync.test.mjs && node scripts/check-website-sync.mjs"
   },
   "devDependencies": {
     "jsdom": "^30.0.1",
