@@ -1259,7 +1259,8 @@ kilobytes of authoring instructions that a runtime move cannot act on, resent on
 turn. A <strong>runtime contract</strong> replaces that with the handful of facts a turn
 genuinely needs: what the application is, which of its settings shape an answer, what
 state arrives each turn, and the minimal response shape expected back. The whole contract
-is bounded at 2560 bytes, and the effect is protocol-level rather than cosmetic: every
+is bounded at 2560 (<code>RUNTIME_CONTRACT_MAX_BYTES</code> — serialized length; bytes
+for ASCII content), and the effect is protocol-level rather than cosmetic: every
 conforming application becomes cheap enough to run on a small local model, which is what
 makes a browser-resident brain with a 4K context a viable host at all.</p>
 

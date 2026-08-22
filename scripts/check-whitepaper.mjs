@@ -192,7 +192,7 @@ const CONSTANTS = [
   { label: 'MAX_USERDB_BYTES 64 MiB', paper: /64\s*(?:&nbsp;|\s)?MiB/i, spec: /64\s*MiB/i },
   { label: 'VERSIONS_RETAINED 5', paper: /VERSIONS_RETAINED/, spec: /VERSIONS_RETAINED/ },
   { label: 'storage schema version 6', paper: /user_version|schema version\s*[—-]?\s*\n?\s*currently 6|currently 6/i, spec: /user_version.*currently\s*\*?\*?6|currently 6/i },
-  { label: 'runtime contract cap 2560 bytes', paper: /2560\s*bytes/i, spec: /2560\s*bytes/i },
+  { label: 'runtime contract cap 2560', paper: /RUNTIME_CONTRACT_MAX_BYTES/, spec: /RUNTIME_CONTRACT_MAX_BYTES/ },
   { label: 'PBKDF2 600,000 iterations', paper: /600,000\s*iterations/i, spec: /600,000/ },
   { label: 'data-lane bounds 200 rows / 32 KiB', paper: /200\s*rows\s*\/\s*32\s*KiB/i, spec: /200\s*rows\s*\/\s*32\s*KiB/i },
 ];
