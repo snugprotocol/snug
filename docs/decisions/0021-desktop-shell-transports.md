@@ -1,6 +1,6 @@
 # 0021 — Desktop shell transports: loopback OAuth, registry redirect postures, native fetch, file-backed userdb
 
-- **Status:** accepted
+- **Status:** accepted (amended 2026-08-22 by ADR-0049: §1's registry-data class gains the web-surface seats `webRedirectPosture`/`webRegistration`; §7's "no client secrets held for the user" is re-scoped to *Snug-owned* secrets — user-registered BYOK secrets live in the user's own credential custody)
 - **Date:** 2026-08-12
 - **Task:** TASK-20260812-desktop-hub-scaffold
 

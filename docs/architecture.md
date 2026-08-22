@@ -123,9 +123,11 @@ sync sidecar share it); loopback OAuth (`RedirectUriProvider`/`CallbackSink` sea
 `tauri-plugin-oauth`, fixed port 41420 for exact-match providers, system browser only per
 RFC 8252); Ollama autodetect; `.snug` file association through a single-use Rust
 allowlist → confirm dialog → `importUserFile` (F15 arms). Registry entries carry
-human-authored `desktopRedirectPosture` + `browserCallable` seats (registry-level data,
-NOT requirement seats — no protocol change); unsupported postures refuse at wizard entry,
-and `pkce:false` + loopback is structurally refused (auth-code injection). The connected-
+human-authored `desktopRedirectPosture` + `browserCallable` seats, plus web-surface
+`webRedirectPosture: 'origin-callback'` + `webRegistration` (ADR-0049; gmail first) that
+the wizard's register screen resolves at render time on the web runtime (registry-level
+data, NOT requirement seats — no protocol change); unsupported postures refuse at wizard
+entry, and `pkce:false` + loopback is structurally refused (auth-code injection). The connected-
 fetch executor gained a desktop-only `transportPolicy` admitting `http` to user-approved
 RFC-1918 IPv4 literals (Hue-class LAN; browser profile unchanged). C2's in-shell proof =
 the 14 browser CSP checks + IPC-unreachability-from-iframe checks + one wizard e2e

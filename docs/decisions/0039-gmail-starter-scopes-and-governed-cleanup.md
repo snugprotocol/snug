@@ -1,6 +1,6 @@
 # 0039 — Gmail starter: pinned modify/settings/send scopes and governed inbox cleanup
 
-- **Status:** accepted (2026-08-19 — owner approved the plan; implemented in TASK-20260819-gmail-starter)
+- **Status:** accepted (2026-08-19 — owner approved the plan; implemented in TASK-20260819-gmail-starter. §5's "desktop-only at v1" superseded 2026-08-22 by ADR-0049: the deferred web-playground alternative shipped — web seats on the gmail entry, runtime-picked walkthrough, tile unlocked)
 - **Date:** 2026-08-19
 - **Task:** TASK-20260819-gmail-starter
 
