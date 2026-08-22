@@ -14,10 +14,14 @@
  *     router's security properties are proven against the seam either way.
  *
  * VERIFIED against the published `baileys@7.0.0-rc14` tarball (read, not remembered):
- * `makeWASocket` default export, `useMultiFileAuthState(folder) -> { state, saveCreds }`,
- * `ConnectionState.qr?: string`, `sendMessage(jid, content, options)`, and the events
- * `connection.update` / `creds.update` / `messages.upsert` / `messaging-history.set` /
- * `messaging-history.status`.
+ * `makeWASocket` default export, `ConnectionState.qr?: string`,
+ * `sendMessage(jid, content, options)`, the events `connection.update` / `creds.update` /
+ * `messages.upsert` / `messaging-history.set` / `messaging-history.status`, and the
+ * serialization primitives `BufferJSON` / `initAuthCreds` / `proto` that `auth-state.ts`
+ * builds on. Auth storage is OURS (TASK-20260822-wa-authstate-corruption): the library's
+ * `useMultiFileAuthState` tears files on crash and misreports corruption as absence, so
+ * `createFileAuthState` replaces it — same on-disk format, pinned both directions in
+ * `__tests__/auth-state.test.ts` with the library's own implementation as the oracle.
  */
 
 import type { WaEventsPage } from './event-buffer.js';

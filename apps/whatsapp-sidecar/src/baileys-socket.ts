@@ -32,9 +32,9 @@ import { join } from 'node:path';
 import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
-  useMultiFileAuthState,
   type WASocket as BaileysSocket,
 } from 'baileys';
+import { createFileAuthState } from './auth-state.js';
 import { createEventBuffer } from './event-buffer.js';
 import type { ThreadCache } from './thread-cache.js';
 import { createThreadStore } from './thread-store.js';
@@ -347,11 +347,35 @@ const silentLogger: MediaLogger = {
   error: () => {},
 };
 
+/** Pino calls both ways — `warn(obj, msg)` and `warn(msg)`; keep whichever seats exist. */
+function writeTerminalLine(level: 'warn' | 'error', obj: unknown, msg?: unknown): void {
+  const text = typeof obj === 'string' ? obj : typeof msg === 'string' ? msg : '';
+  const data = typeof obj === 'object' && obj !== null ? [obj] : [];
+  console.error(`[baileys ${level}] ${text}`, ...data);
+}
+
+/**
+ * The socket's logger (TASK-20260822-wa-authstate-corruption AC5). Baileys' default pino
+ * prints info-level protocol housekeeping — "identity key changed…", "resyncing regular…"
+ * — straight into the desktop terminal. This is the warn floor: faults still surface with
+ * their diagnostic payload, chatter does not. `level` is read by Baileys itself (its
+ * trace-only decode paths check it), so 'warn' is a claim the library acts on.
+ */
+const warnFloorLogger: MediaLogger = {
+  level: 'warn',
+  child: () => warnFloorLogger,
+  trace: () => {},
+  debug: () => {},
+  info: () => {},
+  warn: (obj, msg) => writeTerminalLine('warn', obj, msg),
+  error: (obj, msg) => writeTerminalLine('error', obj, msg),
+};
+
 export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<WaSocket> {
   const now = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  let { state, saveCreds } = await useMultiFileAuthState(deps.authDir);
+  let { state, saveCreds } = await createFileAuthState(deps.authDir);
 
   let link: WaLinkState = 'idle';
   let qr: string | undefined;
@@ -593,7 +617,12 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
   };
 
   const connect = (): void => {
-    const socket = makeWASocket({ auth: state, printQRInTerminal: false, syncFullHistory: true });
+    const socket = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+      syncFullHistory: true,
+      logger: warnFloorLogger,
+    });
     sock = socket;
 
     // Tombstone-guarded: Baileys fires this during logout teardown too, and a post-forget
@@ -757,7 +786,7 @@ export async function createBaileysWaSocket(deps: BaileysSocketDeps): Promise<Wa
       // reproduce the exact wedge this clears.
       if (shouldResetAuthStore(link)) {
         resetAuthStore(deps.authDir);
-        const reloaded = await useMultiFileAuthState(deps.authDir);
+        const reloaded = await createFileAuthState(deps.authDir);
         state = reloaded.state;
         saveCreds = reloaded.saveCreds;
       }
