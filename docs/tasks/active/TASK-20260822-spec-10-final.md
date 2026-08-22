@@ -280,3 +280,32 @@ headings and are stable across the rename.
 - State: spec 1.0 is live in the (still-private) spec repo. Remaining: merge this branch
   via `/close-session`; website deploy / GitHub Release / flip-public are separate asks.
 - Next step: owner runs `/close-session` (gate-leg choice → Gate 5 review → PR → merge).
+
+### 2026-08-22 (Gate 6 close) — Claude (Fable 5) — session
+- **Gate legs (owner choice: `--all`).** Verdict, stated exactly: **PASS 5/6 —
+  workspace · smoke · rust · desktop · release all GREEN; the e2e leg is RED with 6
+  failing specs that fail IDENTICALLY on `main` at `f36ba68`** (verified by running the
+  same spec files on a `main` checkout): 4 × mobile 375px horizontal-overflow (a REAL
+  regression from the #100 header nav) + 2 × starters-connect badge assertions gone
+  stale against #100's deliberate `desktop` short-text change. Charged to `main`, filed
+  as a dated next-steps item; this branch touches no playground surface and introduces
+  zero e2e deltas. First e2e attempt was an ENVIRONMENT verdict (stale `dist/server.js`
+  from 00:12 held port 8787 — zero specs ran; killed after command-line verification,
+  along with six orphaned CPU-hog loops from the 2026-08-20 contention experiment).
+- **Gate 5 fresh-context diff review**: 2 MUST-FIX + 4 NIT, zero blockers. Both
+  MUST-FIXes applied (slot-count reader bound corrected to structurally-1–8 — my audit
+  fold had over-tightened it, and the changelog claim of "verified" was wrong for the
+  lower bound; AC3's 2560 pin restored to value-bearing). NITs 1/3/4 applied
+  (heal-derivation count assert; rule-5 IV wording made exactly true; AC8 pin bound to
+  the content property). NIT 2 (index-only damage unhealed) accepted as restoration of
+  pre-bug intent, recorded here. Spec-clone editorial correction staged as `2132692`,
+  UNPUSHED — awaits the owner's explicit push word.
+- **Verification after fixes:** check-whitepaper 104/104 in both fixture modes; db
+  32 files / 419 green via the package's tsc-gated script; the pipefail lesson recurred
+  twice in this close (both background "exit 0" notifications were the pipe's) and is
+  now a lesson entry.
+- Lessons: 2 added (pipeline exit codes; permanently-firing repair guard + tests riding
+  its side effect). Docs: next-steps (e2e reds item + 1.0 published entry), changelog
+  correction, no other drift found (glossary/conventions clean).
+- State: ready to merge on the evidence above.
+- Next step: PR → merge → done-index → task file retired.
