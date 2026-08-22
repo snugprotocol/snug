@@ -67,3 +67,5 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0046 — Multi-provider BYOK defaults, per-app provider pins, and the app-lifecycle controls](0046-multi-provider-byok-and-app-lifecycle-controls.md)
 - [0047 — Desktop distribution and the shell update channel](0047-desktop-distribution-and-update-channel.md)
 - [0048 — Public website: one static site for marketing, docs, spec and download](0048-public-website-single-static-site.md)
+- [0049 — Web-surface registry seats and genuine web client secrets](0049-web-surface-auth-options.md)
+- [0050 — Specification 1.0: promotion, document layout, and the launch publication set](0050-spec-10-publication.md)
