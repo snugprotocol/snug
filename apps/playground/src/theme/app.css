@@ -1627,6 +1627,21 @@
     font-size: var(--text-brand-narrow);
   }
 
+  /* TASK-20260822-mobile-e2e-reds: the nav's five items (four text links + the theme
+     button) alone outgrow a 375px viewport — the brand's ellipsis cannot absorb that,
+     so the page body scrolled horizontally by ~29px (regression since the
+     snugprotocol.org link joined, #100; the header had no narrow compaction of its
+     own). Compact the LINKS, never wrap: `.run-layout` derives its height from the
+     single-row header's resolved 61px, so a wrapped header would break the run view.
+     min-height keeps the 44px tap target; only horizontal padding and type step down. */
+  .shell-nav {
+    gap: 0;
+  }
+  .nav-link {
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+  }
+
   .shell-main {
     padding: var(--space-4) var(--space-3);
   }
