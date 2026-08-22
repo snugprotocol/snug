@@ -58,13 +58,26 @@ pointer stubs).
 ### Phase 0 — Branch + tests first (Gate 3 for a docs task = the enforcing checkers)
 
 - Branch `feat/TASK-20260822-spec-10-final` off `main` (tree verified clean).
-- Flip the checker pins FIRST so they red until the content lands:
+- Flip the checker pins FIRST so they red until the content lands (list amended per the
+  fresh-context plan review, 2026-08-22):
   - `scripts/check-whitepaper.mjs` — fixture path → `docs/spec-drafts/SPEC-1.0.md`;
-    edition-3 metadata pins (title/author/edition); AC5 gains "no stale v0.3-draft /
-    release-candidate claims in the paper".
+    edition-3 metadata pins (title/author/edition); **AC5's existing positive
+    draft-marking requirement (`checkCoverage` :313–315 requires `\bdraft\b`, `v0.3`,
+    "not yet normative") is INVERTED** to "no stale v0.3-draft / release-candidate /
+    not-yet-normative claims" — the §17 `standing approval → provisional` check
+    (:327–330) STAYS, §17 remains provisional; **AC8's CSS running-head pin
+    (:470–471, `/v0\.3/` on paper.css) flips to `1.0`**; **the `--spec` override
+    candidate list (:91, `[SPEC-v0.3-draft.md, SPEC.md]`) becomes `[SPEC.md]`** —
+    Phase 6 turns the old name into a pointer stub in the clone, and `find(existsSync)`
+    would load the stub as the fixture.
   - `apps/website/scripts/sync-spec.mjs` — `SPEC_SOURCE` → the 1.0 file; DRAFT_BANNER
-    replaced by a 1.0 banner; AUTHORED_PAGES source paths follow. (`check-website-sync`
-    reds on the manifest until Phase 4 re-syncs — that red is the test.)
+    replaced by a 1.0 banner; AUTHORED_PAGES source paths follow; **plus the two
+    generated-body literals the review found: the spec-index blockquote hard-coding the
+    draft path (:181) and the index description "v0.3 draft — the 1.0 release
+    candidate" (:184), and the header comment (:5)**.
+  - Red timing, stated honestly: `check-whitepaper` reds immediately (missing fixture);
+    `check-website-sync` stays green until Phase 2's `git mv` breaks the manifest's
+    source path — its red arrives then.
 
 ### Phase 1 — Fresh spec-vs-code conformance audit (read-only, parallel subagents)
 
@@ -75,17 +88,27 @@ one lane per Part, restating every constant from the exporting file. Known delta
 confirm + fold; the audit may find more:
 
 1. **SNUGENC1 §11.1** — correction already in the local draft (61-byte stride, 160-byte
-   two-slot header); verify against `container.ts` and keep.
-2. **`POST /session/forget`** — joins the Part V sidecar route table (wizard-only,
-   nonce-guarded, destructive; ADR-0046 §7 named "the next consolidated push" — this is it).
+   two-slot header); verify against `container.ts` and keep. Publication-only fold.
+2. **`POST /session/forget`** — **already in the local draft** (§20.8, the 12-route
+   table, matching `sidecar-contract.ts` exactly — plan review verified the full sets;
+   only the pushed clone copy still says 11 routes). Publication-only fold, same as
+   delta 1; **no draft edit** — executing "add the row" literally would duplicate it.
 3. **ADR-0049 web-surface seats** (`webRedirectPosture`, `webRegistration`) — entry-level
-   registry vocabulary, resolved at wizard render, never persisted; assess Part III's
-   registry-rules section and add the seats + the byte-match binding rule (lesson
-   2026-08-22: the grant binds to the endpoints the secret rides, never the provider name).
+   registry vocabulary, resolved at wizard render, never persisted; land in **§12.12's
+   "capability facts" rule** (draft :834–841) + the byte-match binding rule (lesson
+   2026-08-22: the grant binds to the endpoints the secret rides, never the provider
+   name). **Asymmetry to respect (review finding 7):** desktop posture absent ⇒ wizard
+   refuses honestly; web seat absent ⇒ entry-level walkthrough serves the web too —
+   the web sentence must NOT mirror the desktop refusal semantics.
 4. Sweep ADR-0045/0047 for any protocol-surface claim the draft contradicts (expected:
    none — starter/desktop update channels are app/distribution level; verify, don't assume).
 5. Modality sweep (lesson 2026-08-07): grep the promoted document for each
    MUST/never/always against the source that backs it.
+6. **Residual-token sweep of the promoted document itself** (review finding 6): every
+   `v0.3` / `draft` / `release candidate` hit gets a per-hit keep-or-rewrite decision
+   (known hits: :60 net-pair intro, :154 "R7 new in v0.3", :1325 "the v0.3 contract
+   trades…", :1394 "decided at v0.3" — historical citations may stay, self-descriptions
+   must not).
 
 ### Phase 2 — Promote the spec to 1.0
 
@@ -116,9 +139,12 @@ confirm + fold; the audit may find more:
 
 - Run `pnpm --filter website sync-docs` → spec pages regenerate verbatim from SPEC-1.0.md,
   schemas page from `packages/protocol/schemas/`, new PDF copied, `docs-sync.json` rewritten.
-- Walk every AUTHORED page whose sources moved (manifest names them: index.mdx,
-  what-is-snug, first-app, whitepaper.mdx, …) plus a repo-wide grep for `v0.3`/`draft`/
-  `release candidate` in `apps/website/src` — update copy to 1.0.
+- Walk every AUTHORED page whose declared sources move (the ten, from the manifest —
+  review finding 8): what-is-snug, first-app, implementors, envelopes-and-frames,
+  the-user-file, connections, runtime-contracts, hub-client, embed, whitepaper.mdx
+  (`index.mdx` tracks product-vision only and does NOT move this task). Plus a
+  repo-wide grep for `v0.3`/`draft`/`release candidate` in `apps/website/src` —
+  update copy to 1.0.
 - Delete `apps/website/node_modules/.astro` before the build check (lesson 2026-08-21:
   stale content-layer cache after schema/content changes).
 - Green: website vitest (incl. dist-freshness tripwire), `check-website-sync`, root
@@ -165,10 +191,15 @@ dependents anyway.
 **Spec-sync impact:** the full SPEC_SYNC flow, steps 1–4 + 6; step 5 (push) deferred to
 the owner's explicit ask, per the interview decision.
 
-**High-tier requirement:** fresh-context AI plan review BEFORE implementation, briefed to
-verify this plan's mechanism claims against the named files (lesson 2026-08-21: the
-highest-yield question is "the plan says X will happen — does the code that must do X
-actually do it?").
+**High-tier requirement — DONE 2026-08-22:** fresh-context AI plan review ran before
+implementation, briefed to verify mechanism claims against the named files. Result:
+1 blocker + 4 must-fix + 3 improve, ALL folded into the phases above (AC5 inversion,
+AC8 CSS pin, `--spec` candidate list, delta-2 restated as publication-only, sync-spec
+generated-body literals, promoted-doc token sweep, ADR-0049 asymmetry, authored-page
+list). Confirmations worth keeping: `packages/protocol/schemas/` and the spec clone's
+`schemas/` are byte-identical TODAY (`diff -rq` clean); the clone is clean — `main` ==
+`origin/main` at `cd011cc`, no stray branches; generated page slugs derive from Part
+headings and are stable across the rename.
 
 ## Decisions & surprises
 
@@ -179,9 +210,12 @@ actually do it?").
 
 ### 2026-08-22 — Claude (Fable 5) — session
 - Done: repo survey (spec-changelog, v0.3 draft header, whitepaper README, website sync
-  manifest, protocol diff since RC); task file created.
-- State: Gate 1 — interviewing owner on version identity, §17 provisional handling,
-  publication scope, whitepaper edition naming.
-- Next step: write Gate 2 plan from interview answers; fresh-context AI plan review
-  (High tier) before any implementation.
-- Open questions: see interview.
+  manifest, protocol diff since RC); task file created; owner interview (4 decisions:
+  §17 provisional, stage-only, edition 3, SPEC.md-becomes-1.0); Gate 2 plan written;
+  branch cut; **fresh-context plan review ran and all 8 findings folded into the plan**
+  (blocker: AC5 self-contradiction; must-fix: AC8 CSS pin, --spec stub-loading,
+  delta-2 already-in-draft, sync-spec body literals).
+- State: Gate 2 complete — **stopped for owner plan approval before implementation**.
+- Next step: on approval → Phase 0 (checker pins first), then Phases 1–7 in order.
+- Open questions: none blocking; the ADR-0049 fold's exact prose lands at Phase 1/2 and
+  rides Gate 5 review.
