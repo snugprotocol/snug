@@ -66,5 +66,28 @@ finding was reported — that directive is the plan approval for this narrow sco
   `toHaveAttribute('title', /desktop app/i)` pin so the why-copy cannot silently vanish;
   both AC8/AC9 specs green. One more stale `dist/server.js` (09:53, from the morning's
   runs) held 8787 — verified by command line, killed; recurrence noted.
-- State: full e2e leg running; unit suite next.
-- Next step: full e2e + unit green → screenshots 375/1440 → Gate 6.
+- State: **full e2e leg GREEN — 75 passed / 1 skipped, exit 0 pipefail-verified** (was
+  69/6). Screenshots taken and reviewed: 375px one-row header, no overflow (the active
+  pill wraps its label internally — that's what buys the fit, within the 44px
+  min-height); 1440px byte-for-byte the pre-change layout (compaction scoped ≤760px).
+  Unit suite running.
+- Next step: unit green → Gate 6 (journal, next-steps prune, PR, merge, done-index).
+
+### 2026-08-22 — Claude (Fable 5) — close
+- Verification roll-up: **AC1** 4/4 mobile specs green (the specs measure scrollWidth vs
+  innerWidth — the honest signal) · **AC2** both AC8/AC9 specs green; `toHaveText('desktop')`
+  fails against the pre-#100 text so it pins the deliberate state, and the new `title`
+  pin keeps the why-copy load-bearing · **AC3** 1440px screenshot identical layout
+  (compaction scoped ≤760px); websiteLink/siteLinks unit pins green · **AC4** full e2e
+  leg **75 passed / 1 skipped, exit 0 pipefail-verified** (was 69/6); playground unit
+  first run 1481/1482 with the one failure NOT captured (my grep kept only totals —
+  same-day pipe lesson applies), full re-run **1482/1482** — matches the documented
+  contention-flake varying-set signature; recorded honestly rather than classified.
+- Environment note: ANOTHER stale `dist/server.js` (09:53) held 8787 before the first
+  run — third occurrence today; killed after command-line verification. If it recurs,
+  consider `reuseExistingServer` posture or a pre-run port check in the e2e leg (left
+  for a future task; config untouched here).
+- No lessons beyond today's already-recorded two (the pipe lesson fired again; no new
+  rule earned). No doc drift beyond next-steps (pruned).
+- State: done pending merge.
+- Next step: PR → merge → done-index → retire.
