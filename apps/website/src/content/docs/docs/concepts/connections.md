@@ -15,9 +15,10 @@ sandbox.
 - A **requirement** declares what a provider connection needs: which hosts, which fields
   (an API key, OAuth, basic auth…), which scopes. Requirements are reviewed and approved by
   the **user** in the host's wizard — never silently.
-- A **grant** is the approved result: credential values in `snug_secrets` (inside the user's
-  own file — custody is local-first, not a server vault), plus a **frozen ceiling** — the
-  exact set of hosts this connection may ever reach, fixed at approval.
+- A **grant** is the approved result: the user's approval plus a **frozen ceiling** — the
+  exact set of hosts this connection may ever reach, fixed at approval. Credential values
+  live in *neither* the requirement nor the grant: they go to `snug_secrets`, inside the
+  user's own file — custody is local-first, not a server vault.
 - The app then addresses the connection symbolically —
   `snug-connection://<slot>/<path>` — and never names a real host at all.
 

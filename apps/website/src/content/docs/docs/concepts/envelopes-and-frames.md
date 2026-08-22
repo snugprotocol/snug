@@ -43,7 +43,9 @@ Two details worth knowing early:
 
 - **Streaming is cumulative.** A streaming `snug:app-response` re-sends the full text so a
   dropped frame cannot corrupt the result.
-- **Frames have size classes.** Oversized frames are dropped by rule, which is why push-style
-  channels carry *invalidations* (a doorbell that triggers a governed refetch), never data.
+- **Frames have size classes.** An oversized *request* gets a terminal error naming the
+  bound (never a silent drop) — but an oversized host-initiated *event* is dropped
+  silently, which is exactly why push-style channels carry *invalidations* (a doorbell
+  that triggers a governed refetch), never data.
 
 > Normative source: [Part I — the wire protocol](/docs/spec/part-1-the-wire-protocol/).
