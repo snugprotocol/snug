@@ -473,7 +473,48 @@ export interface WellKnownOauthProvider {
     consoleUrl?: string;
     instructions?: string[];
   };
+  /**
+   * WEB-SURFACE redirect capability (ADR-0049 §1, TASK-20260822-gmail-dual-mode) — the
+   * provider's client registration can accept the connecting web origin's
+   * `/oauth/callback` as an exact Authorized redirect URI ('origin-callback', the sole
+   * member today; gmail's "Web application" client type is the first case).
+   *
+   * RENDER-TIME REGISTRY DATA in exactly `desktopRedirectPosture`'s class (ADR-0021
+   * §1): resolved at wizard render time when the runtime has no desktop OAuth
+   * capability, NEVER emitted into a `ConnectionRequirement`, never persisted — which
+   * is what keeps the seat protocol-free and drift-free. ENTRY-level only, and NOT an
+   * `authOptions` flow BY STRUCTURE (web-surface-seats.test.ts): options are
+   * discriminated by KIND, and a web flow shares `oauth2_auth_code` with the entry — a
+   * same-kind option is invisible to `matchedRegistryOption`, inherits the entry's
+   * loopback through `resolveDesktopPosture`'s fallback, and seeds the chat
+   * AuthChoiceCard on every surface (the four blockers in ADR-0049's alternatives).
+   * Requires `webRegistration` beside it, and vice versa — a posture without its
+   * walkthrough leaves the register screen describing the wrong client type.
+   */
+  webRedirectPosture?: WebRedirectPosture;
+  /**
+   * The WEB-surface "register your app" walkthrough — same trust rules as
+   * `registration` above (AL-04 D5: registry and explicit user entry are the ONLY
+   * sources), same shape, rendered by the wizard's register screen INSTEAD of the
+   * entry's (desktop) walkthrough when `webRedirectPosture` is declared and the
+   * runtime has no desktop OAuth capability. Field definitions are deliberately NOT
+   * duplicated here: the entry's `fields` serve both surfaces (gmail's
+   * client_id/client_secret pair is identical across client types), and an edit to
+   * pinned field copy stages a full re-credential drift walk for approved rows
+   * (`fieldsMatchPinnedList` compares every property) — ADR-0049 §2.
+   */
+  webRegistration?: {
+    consoleUrl?: string;
+    instructions?: string[];
+  };
 }
+
+/**
+ * How a WEB page hands the provider's redirect back (ADR-0049 §1). One member today:
+ * the playground origin's own `/oauth/callback` route, registered by the user as an
+ * exact Authorized redirect URI on a web-capable client type.
+ */
+export type WebRedirectPosture = 'origin-callback';
 
 const GOOGLE_ENDPOINTS = {
   authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
