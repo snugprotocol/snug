@@ -1,16 +1,20 @@
-# Snug Protocol — Specification v0.3 (DRAFT — 1.0 release candidate)
+# Snug Protocol — Specification 1.0
 
-- **Version:** v0.3-draft · **Date:** 2026-08-20 · **Task:** TASK-20260820-spec-v03-whitepaper
-- **Status: DRAFT — published for review; finalises as spec 1.0.** This is the consolidated
-  specification of the whole protocol — wire, storage, connected apps, runtime contracts,
-  and linked-device connections — and the working document for the 1.0 release. Details may
-  change before it becomes normative.
-- **Supersedes as documents:** `SPEC.md` (v0.1, which remains the published wire-protocol
-  core) and `SPEC-v0.2-draft.md` (whose content carries forward into Part II). Where this
-  draft and a published document differ, the difference is called out in place.
-- **Versioning:** spec versions (`v0.x`) are independent of implementation package versions.
-  Breaking envelope changes bump the minor pre-1.0. Every published change is a single
-  commit referencing its origin task.
+- **Version:** 1.0 · **Date:** 2026-08-22 · **Task:** TASK-20260822-spec-10-final
+  (consolidated at v0.3 by TASK-20260820-spec-v03-whitepaper)
+- **Status: NORMATIVE.** This is the complete specification of the protocol — wire,
+  storage, connected apps, runtime contracts, and linked-device connections. One section
+  is explicitly **provisional** and so marked: §17 (standing approvals); everything else
+  is stable at 1.0. The version stays 1.0 through pre-launch editorial corrections; every
+  published change is recorded in the spec changelog.
+- **Supersedes as documents:** the v0.1 `SPEC.md` wire-protocol core, `SPEC-v0.2-draft.md`
+  (content carried forward into Part II), and the v0.3 consolidated draft this document
+  finalises. In the published spec repository, this document IS `SPEC.md`; the historical
+  filenames remain as pointer stubs.
+- **Versioning:** spec versions are independent of implementation package versions.
+  Post-1.0, additive changes bump the minor (1.x); a change that breaks a conforming
+  implementation bumps the major. Every published change is a single commit referencing
+  its origin task.
 - **Normative schemas:** JSON Schema for every published message type, exported
   byte-identical from the reference implementation (`packages/protocol`). Schemas are
   `io: 'input'` shapes: validators MUST accept unknown fields (rule R2).
@@ -23,14 +27,25 @@
 
 | Part | Surface | Stability |
 |---|---|---|
-| I | Wire protocol — the nine core frames, chat envelope, rules R1–R6 | **Published, normative since v0.1** |
-| I | Net frames, open-url frames, `capabilities.net`/`openUrl`, rule R7 | **New in v0.3** |
-| II | Portable user database (storage schema v6), `.snug` naming, `SNUGENC1` | Published as the v0.2 draft (§10–§11 pushed 2026-08-20); **consolidated and updated to v6 here** |
-| III | Connected apps: requirements, grants, custody, the executor | **New in v0.3** |
-| IV | Runtime contracts and the app chat surface | **New in v0.3** |
-| V | Linked-device connections (the sidecar surface) | **New in v0.3** |
+| I | Wire protocol — the nine core frames, chat envelope, rules R1–R6 | **Normative** (published since v0.1) |
+| II | Portable user database (storage schema v6), `.snug` naming, `SNUGENC1` | **Normative** (first published as the v0.2 draft) |
+| III | Connected apps: requirements, grants, custody, the executor | **Normative at 1.0** |
+| IV | Runtime contracts and the app chat surface | **Normative at 1.0** |
+| V | Linked-device connections (the sidecar surface) | **Normative at 1.0** |
 
-One section is explicitly **provisional** and so marked: §17 (standing approvals).
+The net and open-url frame pairs, `capabilities.net`/`openUrl`, and rule R7 joined Part I
+with the v0.3 consolidation and are normative at 1.0 (Appendix C records the publication
+line). One section is explicitly **provisional** and so marked: §17 (standing approvals).
+
+**Revisions, v0.3-draft → 1.0** (2026-08-22): (1) §11.1's `SNUGENC1` slot-table layout
+corrected to the shipping container — 61-byte slot stride (kind + IV + 48 reserved
+MUST-be-zero bytes), 160-byte two-slot header (found by the pre-launch spec-vs-code
+conformance review; first publication of the correction). (2) §20.8's route table carries
+`POST /session/forget`, the wizard-only deep-delete unlink (first publication; the
+reference implementation shipped it 2026-08-21). (3) §12.12 gains the web-surface
+capability seats (`webRedirectPosture`, `webRegistration`). (4) Editorial promotion:
+normative status, post-1.0 versioning semantics, stability table. No JSON schema bytes
+changed from the v0.3 publication.
 
 ## Conventions
 
@@ -151,7 +166,7 @@ that advertises `capabilities.openUrl: true` is promising exactly this mediated 
   announce strings capped (displayName 80, description 400). Parse-failure budget: 3
   consecutive, then the host requires an explicit user reset. Thread-conflict backoff:
   100/250/500 ms.
-- **R7 Push hints (new in v0.3).** A host-initiated push (`snug:host-event`) carries
+- **R7 Push hints (since v0.3).** A host-initiated push (`snug:host-event`) carries
   **references, never content** — a doorbell, not a delivery. The app answers a hint with
   its own governed reads, and the host rebuilds every field of a hint before forwarding.
   Two frame-layer facts force this shape and make it normative rather than stylistic:
@@ -836,6 +851,22 @@ wizard **refuses honestly at entry**, never guesses. A loopback-class redirect p
 representable only beside PKCE — `pkce: false` plus a loopback redirect leaves auth-code
 injection undefendable, so the combination is refused.
 
+**Web-surface capability facts (since 1.0).** A registry entry MAY carry two further
+render-time seats: `webRedirectPosture` (sole member today: `'origin-callback'` — the
+provider's client registration can accept the connecting web origin's `/oauth/callback`
+as an exact authorized redirect URI) and `webRegistration` (the web-surface console
+walkthrough). Structural rule: `webRegistration` requires `webRedirectPosture`, and both
+require an OAuth kind. Like the desktop posture, these are registry data resolved at
+wizard render time — they are **never persisted** and are never part of a
+`ConnectionRequirement`; fields, scopes, hosts, and templates remain the row's, always.
+Absence semantics deliberately differ from the desktop posture: an absent web seat does
+NOT refuse — the entry-level walkthrough serves the web surface too. A pinned web
+walkthrough **binds to the row's endpoints**, not to the provider's name: the override
+applies only when the row's authorize and token URLs byte-match the registry pin, and a
+row that merely carries a pinned provider's name with endpoints of its own keeps its own
+registration under the copy-only honesty rules — a reviewed walkthrough must never dress
+a flow whose token exchange goes somewhere the registry never vouched for.
+
 ### 12.13 The `connection_requirement` directive
 
 Requirements reach the host from a build conversation as a `connection_requirement`
@@ -1322,7 +1353,7 @@ minimum. Each item below is asserted by the reference implementation's test suit
   schema bounds → template lint (one field-key resolution for both templates) →
   registry-borrow ban → provider-name guard.
 - Render every re-admitted seat verbatim in the approval review — fields, walkthrough,
-  templates uncollapsed, the complete host list, the freeze disclosure. The v0.3 contract
+  templates uncollapsed, the complete host list, the freeze disclosure. This contract
   trades "the channel cannot express it" for "the user sees exactly what it expresses";
   a review that truncates voids the trade.
 - Run the ten-gate executor in order; confirm before credential read on every mutating
