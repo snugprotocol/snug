@@ -4,6 +4,17 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-22 — **PUSHED** — whitepaper edition-3 PDF refresh — TASK-20260822-public-spec-presentation + TASK-20260822-whitepaper-mark-niche — spec commit `dcda2c6`
+
+PDF-only, no spec text or schema bytes changed: the cover self-identifies
+(`1.0 · edition 3`, folded into the Specification cell — a fourth cover-meta cell
+triggers Chrome print's whole-document shrink-to-fit, recorded in the whitepaper README
+and lessons) and the mark's niche renders ink on the white cover instead of the
+knockout's page-background white (paper-only departure from the canonical knockout,
+commented in `paper.html`). **Pushed 2026-08-22 18:29 UTC on the owner's explicit ask**
+("push"), `2132692..dcda2c6` on `main`; verified hash-identical to the built artifact
+(`68c09d18…`).
+
 ## 2026-08-22 — **PUSHED** — spec 1.0 editorial correction — TASK-20260822-spec-10-final (Gate-5 review) — spec commit `2132692`
 
 Two sentences in `SPEC.md` §11, version held at 1.0 (ADR-0050's editorial-correction
