@@ -83,3 +83,9 @@ Order chosen so the environment fix lands first (it unblocks verification of eve
 - State: all 8 items + 1 walk-found bug done on `fix/TASK-20260821-site-playground-polish` (5 commits); NOT merged — owner will run /close-session (Gate 6) per instruction.
 - Next step: owner /close-session — suggest legs: workspace+smoke minimum; e2e worth adding (new spec + touched run/hub surfaces).
 - Open questions: none.
+
+### 2026-08-22 — claude — close-session (Gate 6)
+- Done: 3 lessons (href≠hit-testable; undefined-className jank; interrupted `.vite` cache third-state + stale-dist mask), code-map drift (counts 1471/74/33, setup 11, new surfaces row), gmail follow-up already queued in next-steps. No ADR (owner UI calls, no architecture decision); no protocol change → no spec-changelog.
+- State: gate legs per owner pick: workspace + smoke → run below; PR → squash-merge → done-move on green.
+- Next step: (owner, queued in next-steps) gmail dual-mode pickup; owner eyeball of the new badge/tag + checkbox on the desktop shell rides the existing settings-walk item.
+- Open questions: none.
