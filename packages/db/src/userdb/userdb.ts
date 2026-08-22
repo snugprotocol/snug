@@ -988,6 +988,12 @@ function healMissingTables(db: Database): boolean {
   const creatable = USERDB_DDL.map((ddl) => ddl.match(/CREATE TABLE IF NOT EXISTS (\S+)/)?.[1]).filter(
     (name): name is string => name !== undefined,
   );
+  // One CREATE per DDL statement is the stated invariant; a statement written in any
+  // other shape would silently fall out of the derivation and disable the guard for its
+  // table — fail loudly instead (Gate-5 review hardening).
+  if (creatable.length !== USERDB_DDL.length) {
+    throw new Error(`healMissingTables: ${USERDB_DDL.length - creatable.length} USERDB_DDL statement(s) did not parse as CREATE TABLE IF NOT EXISTS`);
+  }
   const missing = creatable.filter((table) => !present.has(table));
   if (missing.length === 0) return false;
   for (const ddl of USERDB_DDL) db.run(ddl);

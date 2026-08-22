@@ -25,7 +25,7 @@ spec-vs-code conformance audit at head (this repo `f36ba68`+):
 1. **§11.1 `SNUGENC1` layout correction** — first publication of the 2026-08-21 fix
    recorded below (61-byte slot stride, 160-byte two-slot header, AAD span); verified
    against `container.ts` again in this audit. Also new: the slot-count valid range
-   (2–8, outside → corrupt) and rule 5's rewrap carve-out (a passphrase change MAY reuse
+   (structurally 1–8 — 0 or >8 read as corrupt, while rule 2 forbids CREATING a 1-slot container; the Gate-5 review corrected this entry's first spelling, which over-tightened the reader bound to 2–8) and rule 5's rewrap carve-out (a passphrase change MAY reuse
    the slot's IV under the NEW KEK — fresh key keeps the pair unique and the AAD stable).
 2. **`POST /session/forget`** in §20.8's route table — first publication of the
    ADR-0046 §7 route ("the next consolidated push" = this one); already in the local

@@ -192,7 +192,7 @@ const CONSTANTS = [
   { label: 'MAX_USERDB_BYTES 64 MiB', paper: /64\s*(?:&nbsp;|\s)?MiB/i, spec: /64\s*MiB/i },
   { label: 'VERSIONS_RETAINED 5', paper: /VERSIONS_RETAINED/, spec: /VERSIONS_RETAINED/ },
   { label: 'storage schema version 6', paper: /user_version|schema version\s*[—-]?\s*\n?\s*currently 6|currently 6/i, spec: /user_version.*currently\s*\*?\*?6|currently 6/i },
-  { label: 'runtime contract cap 2560', paper: /RUNTIME_CONTRACT_MAX_BYTES/, spec: /RUNTIME_CONTRACT_MAX_BYTES/ },
+  { label: 'runtime contract cap 2560', paper: /2560/, spec: /2560/ },
   { label: 'PBKDF2 600,000 iterations', paper: /600,000\s*iterations/i, spec: /600,000/ },
   { label: 'data-lane bounds 200 rows / 32 KiB', paper: /200\s*rows\s*\/\s*32\s*KiB/i, spec: /200\s*rows\s*\/\s*32\s*KiB/i },
 ];
@@ -480,8 +480,9 @@ function checkStructure(html) {
       'margin boxes are what put running heads and folios on every page');
     check('AC8', 'section + figure counters declared',
       /counter-reset/.test(css) && /counter-increment/.test(css));
-    check('AC8', 'running head names the current spec version', /\b1\.0\b/.test(css) && !/v0\.3/.test(css),
-      'the @top-right margin box must carry the 1.0 label (and no stale v0.3)');
+    check('AC8', 'running head names the current spec version',
+      /content:\s*"[^"]*\b1\.0\b[^"]*"/.test(css) && !/v0\.3/.test(css),
+      'a content: "…1.0…" margin-box string must carry the label (an incidental 1.0 elsewhere in the CSS must not satisfy this), and no stale v0.3');
   }
 }
 

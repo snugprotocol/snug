@@ -373,7 +373,7 @@ offset  size      field
 10      2         kdf id           0x0001 = PBKDF2-HMAC-SHA256
 12      4         iterations       u32 big-endian (reference: 600,000)
 16      16        salt
-32      2         slot count       u16 big-endian (valid range 2–8; outside it → corrupt)
+32      2         slot count       u16 big-endian (structural range 1–8; 0 or >8 → corrupt. Creating a 1-slot container is nonetheless forbidden — rule 2)
 34      4         header checksum  FNV-1a/32 over the header with this field zeroed
 38      …         slot table       slot count × 61 (see below)
 …       …         wrapped keys     slot count × 48 (AES-256-GCM of the 32-byte file key)
@@ -419,7 +419,7 @@ header so it can be raised later without orphaning old files.
    **re-wrapping a slot under a NEW KEK** (a passphrase change) MAY reuse that slot's
    existing IV — the key/IV pair is still unique because the key is fresh, and reuse is
    what keeps the header (and therefore the AAD every other slot was bound to) unchanged.
-   An IV MUST NOT be reused with the same key under any circumstance.
+   An IV MUST NOT be reused with the same key over differing plaintext or AAD.
 6. **Failure reporting.** Implementations MUST distinguish **locked** (a structurally
    valid container that no supplied secret opened) from **corrupt** (malformed, truncated,
    or a failed header checksum). Reporting damage as a wrong passphrase sends a user
