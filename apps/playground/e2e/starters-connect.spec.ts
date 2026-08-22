@@ -304,3 +304,38 @@ test.describe('AC8/AC9 — Hue is honestly labelled on the web', () => {
     await expect(tile.getByTestId('starter-install')).toHaveCount(0);
   });
 });
+
+test.describe('TASK-20260822 — gmail is dual-mode: the web tile is live and its connect journey reaches the wizard', () => {
+  test.skip(!hasApp, AWAITS);
+
+  test('the gmail tile is unlocked on the web, and the wizard renders the WEB walkthrough', async ({ page }) => {
+    /**
+     * The inverse of the Hue/trade-copilot assertions above, for the one lock whose
+     * reason DISSOLVED (ADR-0049): gmail's v1 lock was a client-type fact (a Google
+     * Desktop-app client cannot register a web origin), and the registry now vouches
+     * for a "Web application" client path. So the web tile must be enabled with no
+     * badge, and the connect journey must reach the wizard — whose register screen
+     * shows the WEB walkthrough and the exact origin callback to paste, never the
+     * desktop one (the component suite pins the same branch; this asserts it at the
+     * surface a web user actually reaches). Nothing here CONNECTS — same project-home
+     * rule as the rest of this file (no credential exists, no request leaves).
+     */
+    await page.goto('/');
+    const tile = page.locator('[data-testid="starter-tile"][data-starter-name="gmail"]');
+    await expect(tile).toBeVisible({ timeout: 20_000 });
+    await expect(tile.getByTestId('desktop-only-badge')).toHaveCount(0);
+    await expect(tile.locator('.tile-card-button')).toBeEnabled();
+
+    await tile.locator('.tile-card-button').click();
+    const connect = page.getByTestId('run-connect').first();
+    await expect(connect).toBeVisible({ timeout: 20_000 });
+    await connect.click();
+
+    // The wizard opens on review; walking one step forward lands on the register
+    // screen, which must carry the WEB client-type walkthrough and the origin literal.
+    await page.getByRole('button', { name: /approve this connection/i }).click();
+    await expect(page.getByTestId('register-steps')).toContainText('"Web application"');
+    await expect(page.getByTestId('register-steps')).not.toContainText('type "Desktop app"');
+    await expect(page.getByTestId('register-redirect-uri')).toHaveText(/\/oauth\/callback$/);
+  });
+});

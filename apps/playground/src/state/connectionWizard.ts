@@ -2180,6 +2180,39 @@ export function desktopOAuthRefusalFor(requirement: ConnectionRequirement): Desk
   };
 }
 
+/**
+ * The WEB-surface registration walkthrough for this requirement's provider, or
+ * `undefined` when the row's own persisted `registration` should render — which is
+ * every case except "web runtime + a registry entry that declares the web seats"
+ * (ADR-0049 §1, TASK-20260822-gmail-dual-mode).
+ *
+ * RENDER-TIME REGISTRY DATA in the posture block's exact class (comment at the top of
+ * this section): resolved here on every render, never persisted. The substituted copy
+ * still comes exclusively from the human-reviewed registry, so the AL-04 D5
+ * anti-phishing property (registry and explicit user entry are the ONLY walkthrough
+ * sources) survives the override.
+ *
+ * Guards, each load-bearing:
+ *  - `getPlatform().oauth === undefined` — the wizard's ONE web discriminator, shared
+ *    with `redirectUriSourceFor` and the register screen's redirect display, so the
+ *    walkthrough and the displayed URI cannot describe different transports.
+ *  - `requirement.kind === 'oauth2_auth_code'` AND `entry.kind === requirement.kind` —
+ *    the web seats describe the entry's DEFAULT OAuth flow. A row that merely borrowed
+ *    the provider's name with another kind (or rebound to a different-kind
+ *    `authOptions` flow) must keep its own walkthrough: handing it web-OAuth steps
+ *    would describe a client its flow never uses.
+ */
+export function webSurfaceRegistrationFor(
+  requirement: ConnectionRequirement,
+): { consoleUrl?: string; instructions?: string[] } | undefined {
+  if (getPlatform().oauth !== undefined) return undefined;
+  if (requirement.kind !== 'oauth2_auth_code') return undefined;
+  const entry = lookupWellKnownProvider(requirement.provider.name);
+  if (entry === undefined || entry.kind !== requirement.kind) return undefined;
+  if (entry.webRedirectPosture === undefined) return undefined;
+  return entry.webRegistration;
+}
+
 /** The BroadcastChannel surface, injectable so tests drive delivery without a real bus. */
 export interface ConnectionChannelLike {
   onmessage: ((event: { data: unknown }) => void) | null;

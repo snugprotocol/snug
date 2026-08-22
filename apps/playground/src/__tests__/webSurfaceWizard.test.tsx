@@ -122,8 +122,10 @@ describe('webSurfaceRegistrationFor — the runtime picks the walkthrough, never
     expect(registration).toBeDefined();
     expect(registration?.instructions?.join('\n')).toContain('"Web application"');
     // And it is the REGISTRY's block, not the row's: the persisted row carries the
-    // desktop walkthrough (emitter test in packages/auth pins that).
-    expect(registration?.instructions?.join('\n')).not.toContain('"Desktop app"');
+    // desktop walkthrough (emitter test in packages/auth pins that). The marker is the
+    // desktop walkthrough's own step-5 phrasing — the web copy also NAMES "Desktop
+    // app" (as the type NOT to choose), so the bare name is not a discriminator.
+    expect(registration?.instructions?.join('\n')).not.toContain('type "Desktop app"');
   });
 
   it('desktop + gmail: undefined — the row renders its own (desktop) walkthrough', async () => {
@@ -172,7 +174,9 @@ describe('the gmail register screen branches by runtime (AC1/AC2)', () => {
 
     const text = container!.textContent ?? '';
     expect(text).toContain('"Web application"');
-    expect(text).not.toContain('"Desktop app"');
+    // The desktop walkthrough's step-5 phrasing must be gone; the bare name "Desktop
+    // app" is not a discriminator (the web copy names it as the type NOT to choose).
+    expect(text).not.toContain('type "Desktop app"');
     const code = container!.querySelector('[data-testid="register-redirect-uri"]');
     expect(code?.textContent).toBe(`${window.location.origin}/oauth/callback`);
   });

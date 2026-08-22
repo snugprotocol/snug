@@ -89,6 +89,7 @@ import {
   startConnectionOAuthFlow,
   testConnection,
   unexpectedTestOutcome,
+  webSurfaceRegistrationFor,
   type ConnectionTestOutcome,
   type ConnectionWizardSession,
   type ConnectionWizardFailure,
@@ -944,12 +945,32 @@ function ReviewScreen({ row, onApprove }: { row: ConnectionRow; onApprove: () =>
 // ---------------------------------------------------------------------------
 
 function RegisterScreen({ row, onForward }: { row: ConnectionRow; onForward: () => void }): ReactElement {
-  const registration = row.requirement.registration;
+  /**
+   * THE WEB-SURFACE WALKTHROUGH OVERRIDE (ADR-0049, TASK-20260822-gmail-dual-mode).
+   *
+   * Derived from the ROW and the PLATFORM — the same class as `desktopRefusal` and the
+   * redirect display below, and the same predicate as both (`getPlatform().oauth ===
+   * undefined` inside the helper), so the walkthrough, the refusal gate, and the
+   * displayed URI can never describe different transports. The row's persisted
+   * `registration` is the DESKTOP walkthrough (the registry emitter's default flow);
+   * on web, a provider whose entry declares the web seats gets its `webRegistration`
+   * INSTEAD — copy for the client type the web sign-in actually uses. Nothing is
+   * persisted: an entry without the seats, a non-OAuth row, or a desktop runtime all
+   * fall through to the row exactly as before.
+   */
+  const webRegistration = webSurfaceRegistrationFor(row.requirement);
+  const registration = webRegistration ?? row.requirement.registration;
   const consoleUrl = registration?.consoleUrl;
   // Memoized: the resolution walks the registry (brand-adjacent scan on miss) and this
   // screen re-renders on every copy-button click and async redirect-URI arrival, while
   // the answer can only change with the row (Gate-5 review, efficiency).
-  const clickable = useMemo(() => consoleUrlIsClickable(row), [row]);
+  //
+  // The web override is clickable BY CONSTRUCTION: its consoleUrl is read directly
+  // from the registry entry, so the ADR-0029 byte-match ("clickable iff identical to
+  // the pinned value") would be comparing the pinned value to itself. The row-based
+  // check still governs every non-overridden render.
+  const rowConsoleClickable = useMemo(() => consoleUrlIsClickable(row), [row]);
+  const clickable = webRegistration !== undefined ? webRegistration.consoleUrl !== undefined : rowConsoleClickable;
   const [copied, setCopied] = useState(false);
 
   /**

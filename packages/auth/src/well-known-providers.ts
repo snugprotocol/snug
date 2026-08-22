@@ -622,6 +622,22 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
     pkce: true,
     // Same Google desktop-client loopback policy — citation at the `google` entry.
     desktopRedirectPosture: 'loopback',
+    // ADR-0049 (TASK-20260822-gmail-dual-mode): VERIFIED by live probe 2026-08-21
+    // (recorded in next-steps at the time) — `gmail.googleapis.com`, the exact host
+    // pinned below, reflects an arbitrary `Origin` and its preflight allows
+    // `authorization`, so a browser fetch with a Bearer token works from any web
+    // origin. (The legacy `www.googleapis.com` alias answered the same, but the pin
+    // names only the host this entry actually uses — lesson 2026-08-18: pin the host
+    // you probed, and probe the host you pin.)
+    browserCallable: true,
+    // The WEB path (ADR-0049 §1/§4): a Google "Web application" client CAN register an
+    // https web origin's callback — which is exactly what the Desktop-app client type
+    // cannot, the fact that made this tile desktop-only at v1 (ADR-0039 §5). The OAuth
+    // exchange still requires the client secret even with PKCE — probed 2026-08-21:
+    // PKCE is code-injection protection, not client auth, and only native client types
+    // skip the secret. Both seats are RENDER-TIME data for the wizard's register
+    // screen; they never enter a requirement (web-surface-seats.test.ts).
+    webRedirectPosture: 'origin-callback',
     apiHosts: ['gmail.googleapis.com'],
     authorizeParams: { ...GOOGLE_AUTHORIZE_PARAMS },
     // ADR-0039 (TASK-20260819-gmail-starter) — the SECOND ADR-0028 pin, and the entry
@@ -691,6 +707,29 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
         // after 7 days. This is the one trap that presents as "Snug broke for no
         // reason" a week after a successful setup, so it is disclosed here with its fix.
         'One thing to know: while your project stays in "Testing" status, Google expires the connection after 7 days and you will be asked to sign in again. To avoid that, open the consent screen page and click "Publish app" — for a project only you use, no Google review is required.',
+      ],
+    },
+    // The WEB walkthrough (ADR-0049 §4) — rendered INSTEAD of the block above when the
+    // runtime has no desktop OAuth capability. Steps 1–4 are the same Google project
+    // dance (project, API, consent screen belong to the PROJECT, not the client type);
+    // step 5 is where the surfaces genuinely differ: client type "Web application" and
+    // the pasted redirect URI. The two provider traps (unverified warning, 7-day
+    // Testing expiry) are project facts too, so they are disclosed on both surfaces.
+    // The final step is the ADR-0049 §4 custody disclosure: one active client pair per
+    // app — a completed web sign-in replaces a desktop sign-in held in the same file.
+    webRegistration: {
+      // Same consolidated Auth Platform clients page as the desktop walkthrough
+      // (VERIFIED 2026-08-19; the client-type choice happens inside "Create client").
+      consoleUrl: 'https://console.cloud.google.com/auth/clients',
+      instructions: [
+        'Open the Google Cloud console (link above) and sign in with the SAME Google account whose mail you want to manage. If you have never used it before, accept the terms — it is free.',
+        'Create a project: click the project dropdown in the top bar, choose "New project", give it any name (e.g. "My Snug Inbox"), and create it. This is YOUR project; Snug never sees it.',
+        'Enable the Gmail API: search "Gmail API" in the console search bar, open it, and click "Enable". Without this step sign-in succeeds and every request is refused.',
+        'Set up the consent screen: choose "External" user type, fill in an app name and your own email where asked, and add YOUR OWN email address under "Test users". Skip every optional field.',
+        'Create the credentials: on the Clients page, click "Create client" and choose application type "Web application" — not "Desktop app"; only a web client can accept this page\'s address. Under "Authorized redirect URIs" click "Add URI" and paste the "redirect URI to register" shown below, exactly as displayed — Google matches it character for character. Then create, and copy the Client ID and the Client secret into the fields below; a web client refuses sign-in without its secret, even though this hub also uses PKCE.',
+        'When you first sign in, Google shows an "unverified app" warning — this is expected for a project only you use. Click "Advanced", then "Continue" to your app.',
+        'One thing to know: while your project stays in "Testing" status, Google expires the connection after 7 days and you will be asked to sign in again. To avoid that, open the consent screen page and click "Publish app" — for a project only you use, no Google review is required.',
+        'If you also connected Gmail from the Snug desktop app using this same Snug file: this hub keeps ONE Google sign-in per app, so completing this web sign-in replaces the desktop one (and vice versa) — you would simply reconnect when you switch surfaces.',
       ],
     },
   },
