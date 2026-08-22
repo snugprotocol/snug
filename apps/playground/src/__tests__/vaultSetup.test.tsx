@@ -122,16 +122,28 @@ describe('step 3 — the Recovery Key (D2, AC31)', () => {
   it('shows the generated key and does not let the user leave by just clicking next', async () => {
     await toRecoveryStep();
     expect(text()).toContain('ABCDE-FGHJK');
-    // The typed acknowledgement: the one deliberately inconvenient interaction in
-    // Snug. Clicking through this screen unread is the failure mode that ends with
-    // someone losing everything, so it is made impossible rather than discouraged.
+    // The mandatory acknowledgement (a checkbox since TASK-20260821-site-playground-
+    // polish AC5 — owner call; previously a typed phrase). Clicking through this
+    // screen unread is the failure mode that ends with someone losing everything,
+    // so finishing without the acknowledgement stays impossible, not discouraged.
     expect(button(/done|finish/i).disabled).toBe(true);
   });
 
-  it('enables the finish only after the acknowledgement is typed exactly', async () => {
+  it('enables the finish only after the acknowledgement box is checked — and re-blocks on uncheck', async () => {
     await toRecoveryStep();
-    await type(field(/type/i), 'i saved it');
+    const box = container!.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(box, 'the acknowledgement checkbox must exist').not.toBeNull();
+    await click(box!);
     expect(button(/done|finish/i).disabled).toBe(false);
+    // The gate is LIVE, not a one-way latch a stray click set forever.
+    await click(box!);
+    expect(button(/done|finish/i).disabled).toBe(true);
+  });
+
+  it('the typed-phrase textbox is gone — one acknowledgement control, the checkbox', async () => {
+    await toRecoveryStep();
+    expect(container!.querySelector('input[type="text"]')).toBeNull();
+    expect(text()).not.toMatch(/type .i saved it./i);
   });
 
   it('offers copy AND download — a key you cannot get out of the screen is not saved', async () => {

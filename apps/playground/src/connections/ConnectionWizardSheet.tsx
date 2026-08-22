@@ -1547,7 +1547,7 @@ function DoneScreen({ row, onClose }: { row: ConnectionRow; onClose: () => void 
             )}
           </span>
           {refresh === 'idle' ? (
-            <div className="row">
+            <div className="field-row">
               <Button
                 variant="primary"
                 onClick={() => {

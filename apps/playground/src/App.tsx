@@ -31,6 +31,7 @@ import { Button } from './ui/Button.js';
 import { initProtectOffer } from './vault/protectOffer.js';
 import { UnlockScreen } from './vault/UnlockScreen.js';
 import { Logo } from './ui/Logo.js';
+import { WebsiteLink } from './ui/WebsiteLink.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
@@ -165,6 +166,7 @@ export function App(): ReactElement {
           <NavLink to="/settings" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
             settings
           </NavLink>
+          <WebsiteLink />
           {/* ADR-0047 §9: a header WHISPER when a shell update is in play — desktop
               only, renders nothing otherwise; the sheet it opens is the one place the
               flow may occupy the screen, and only because the user clicked. */}

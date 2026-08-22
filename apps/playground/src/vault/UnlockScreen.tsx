@@ -70,7 +70,7 @@ export function UnlockScreen(): ReactElement {
         <form onSubmit={(event) => void submit(event)}>
           <div className="field">
             <label htmlFor="vault-secret">{usingRecovery ? 'Recovery Key' : 'passphrase'}</label>
-            <div className="row">
+            <div className="field-row">
               <input
                 id="vault-secret"
                 type={reveal || usingRecovery ? 'text' : 'password'}
@@ -101,7 +101,7 @@ export function UnlockScreen(): ReactElement {
             </p>
           ) : null}
 
-          <div className="row" style={{ marginTop: 'var(--space-3)' }}>
+          <div className="field-row" style={{ marginTop: 'var(--space-3)' }}>
             <Button type="submit" variant="primary" disabled={busy || trimmed.length === 0}>
               {busy ? 'opening…' : 'unlock'}
             </Button>
