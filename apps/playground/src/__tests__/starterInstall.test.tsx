@@ -56,7 +56,14 @@ async function settle(): Promise<void> {
  * the install never happens, it just stops racing the module loader.
  */
 async function settleUntil(done: () => boolean, label: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt++) {
+  // Budget by WALL CLOCK, not by attempt count: 100 attempts × 5 ms only bounds the sleeping,
+  // and each `act()` in between can itself take tens of ms once the machine is busy — so the
+  // real budget silently shrank exactly when it needed to be largest, and this file went red
+  // intermittently in `turbo run test` (2026-08-22) while passing alone every time. Ten
+  // seconds is far past any healthy install and still fails a broken one, with the label
+  // naming what never happened.
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
     if (done()) return;
     await settle();
   }

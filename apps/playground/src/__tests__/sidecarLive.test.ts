@@ -261,7 +261,20 @@ describe('failure — backoff', () => {
         }),
     });
     pump.start();
-    await new Promise((r) => setTimeout(r, 20));
+    // Wait for the THREE failures this asserts on, not for a fixed 20ms. The pump is async,
+    // so a wall-clock sleep is a bet on the scheduler: under load the third iteration had
+    // not run yet and the assertion read [1000, 2000] — an intermittent red on clean `main`
+    // (2 of 6 runs, 2026-08-22) that says nothing about the backoff. Wait for the condition
+    // and the test measures the pump instead of the machine; the deadline still fails a
+    // genuinely stuck pump, just with an honest message.
+    // Wait for all FOUR failure sleeps this test asserts on — the three-step ladder AND the
+    // post-success reset below. (Waiting for three exits before the fourth is recorded, which
+    // fails `failureSleeps[3]` almost every time; the condition must cover every assertion,
+    // not just the first one.)
+    const deadline = Date.now() + 5_000;
+    while (sleeps.filter((ms) => ms >= 1_000).length < 4 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
     pump.stop();
 
     const failureSleeps = sleeps.filter((ms) => ms >= 1_000);
