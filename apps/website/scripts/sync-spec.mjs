@@ -160,28 +160,55 @@ function writeSpecPage(fileName, title, order, bodyMarkdown, description, sideba
   });
 }
 
-// index page: preamble + a part directory
+// index page: a PUBLIC header + a part directory (ADR-0051, amending ADR-0048 §3 for
+// the header only). The spec document's own preamble is the ENGINEERING header — task
+// ids, superseded filenames, the load-bearing source-file list, revision details — and
+// none of that belongs on the public site. The normative sections the public header
+// keeps (stability table, conventions) are still carried VERBATIM, extracted by heading;
+// only the process bullets and the revision note are dropped. The Part pages below
+// remain fully verbatim.
+const preambleText = preamble.body.join('\n');
+const versionMatch = preambleText.match(/\*\*Version:\*\* (\S+) · \*\*Date:\*\* (\S+)/);
+if (!versionMatch) throw new Error('sync-spec: could not extract version/date from the spec preamble');
+const [, specVersion, specDate] = versionMatch;
+const stabilityStart = preambleText.indexOf('## Stability at a glance');
+const revisionsStart = preambleText.indexOf('**Revisions,');
+const conventionsStart = preambleText.indexOf('## Conventions');
+if (stabilityStart === -1 || conventionsStart === -1 || revisionsStart === -1 || !(stabilityStart < revisionsStart && revisionsStart < conventionsStart)) {
+  throw new Error('sync-spec: spec preamble structure changed — re-derive the public header extraction');
+}
+const stabilitySection = preambleText.slice(stabilityStart, revisionsStart).trim();
+const conventionsSection = preambleText.slice(conventionsStart).trim();
 const partList = parts
   .map((p, i) => `- [${p.heading}](/docs/spec/${slugForSection(p.heading, i + 1)}/)`)
   .join('\n');
+const indexBody = [
+  `> **Version ${specVersion}** · ${specDate} · **Normative.** The complete specification of`,
+  '> the protocol — wire, storage, connected apps, runtime contracts, and linked-device',
+  '> connections. One section is explicitly **provisional** and so marked: §17 (standing',
+  '> approvals). Machine-readable JSON Schemas are published byte-identical from the',
+  '> reference implementation; the published record lives in',
+  '> [snugprotocol/spec](https://github.com/snugprotocol/spec).',
+  '',
+  '## The document',
+  '',
+  partList,
+  `- [Appendices — error codes, constants, published schemas](/docs/spec/appendices/)`,
+  `- [Schema reference](/docs/spec/schemas/)`,
+  '',
+  stabilitySection,
+  '',
+  conventionsSection,
+].join('\n');
+if (/TASK-\d{8}/.test(indexBody)) {
+  throw new Error('sync-spec: a task id leaked into the public spec index — the header extraction regressed');
+}
 writeSpecPage(
   'index.md',
   'Specification',
   0,
-  [
-    preamble.body.join('\n').trim(),
-    '',
-    '## The document',
-    '',
-    partList,
-    `- [Appendices — error codes, constants, published schemas](/docs/spec/appendices/)`,
-    `- [Schema reference](/docs/spec/schemas/)`,
-    '',
-    '> Rendered verbatim from the reference implementation\u2019s specification',
-    '> (`docs/spec-drafts/SPEC-1.0.md`). The published record lives in',
-    '> [snugprotocol/spec](https://github.com/snugprotocol/spec).',
-  ].join('\n'),
-  'The Snug Protocol specification, 1.0.',
+  indexBody,
+  `The Snug Protocol specification, ${specVersion}.`,
   'Spec overview',
 );
 
