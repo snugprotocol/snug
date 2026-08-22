@@ -54,6 +54,17 @@ finding was reported — that directive is the plan approval for this narrow sco
 ## Session journal (append-only, newest last)
 
 ### 2026-08-22 — Claude (Fable 5) — session
-- Done: task file; branch cut.
-- State: diagnosing the 375px overflow.
-- Next step: measure the header at 375px.
+- Done: task file; branch cut. Diagnosis: the nav's five items (four text links + theme
+  button) alone outgrow 375px (~450px at base sizes) — the brand's ellipsis cannot
+  absorb it; the header simply had no narrow compaction of its own before #100 added the
+  fifth item. Fix: inside the existing ≤760px block, compact `.nav-link` (padding
+  space-3→space-2, text-s→text-xs) and zero the nav gap — deliberately NO wrap, because
+  `.run-layout` hardcodes the single-row header's 61px resolved height. All 4 mobile
+  specs green (measured: body scrollWidth ≤ innerWidth, the spec's own signal). Badge
+  assertions MIGRATED per the claim rule: `toHaveText('desktop')` (fails on the
+  pre-#100 "desktop app" text, so it pins the deliberate state) + a NEW
+  `toHaveAttribute('title', /desktop app/i)` pin so the why-copy cannot silently vanish;
+  both AC8/AC9 specs green. One more stale `dist/server.js` (09:53, from the morning's
+  runs) held 8787 — verified by command line, killed; recurrence noted.
+- State: full e2e leg running; unit suite next.
+- Next step: full e2e + unit green → screenshots 375/1440 → Gate 6.

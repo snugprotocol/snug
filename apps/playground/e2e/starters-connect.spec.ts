@@ -243,8 +243,12 @@ test.describe('AC8/AC9 — Hue is honestly labelled on the web', () => {
     await expect(tile).toBeVisible({ timeout: 20_000 });
 
     // GREYED, NEVER HIDDEN — the AC9 claim, at the surface that renders it.
+    // #100 deliberately shortened the badge TEXT to the `desktop` tag and moved the
+    // why into `title` (claim MIGRATED, not weakened): pin both halves, so neither the
+    // visible tag nor the reason copy can silently vanish.
     await expect(tile.getByTestId('desktop-only-badge')).toBeVisible();
-    await expect(tile.getByTestId('desktop-only-badge')).toContainText(/desktop app/i);
+    await expect(tile.getByTestId('desktop-only-badge')).toHaveText('desktop');
+    await expect(tile.getByTestId('desktop-only-badge')).toHaveAttribute('title', /desktop app/i);
     await expect(tile.locator('.tile-card-button')).toBeDisabled();
 
     // …and NO connect affordance anywhere on the hub for it. This is the assertion
@@ -299,7 +303,9 @@ test.describe('AC8/AC9 — Hue is honestly labelled on the web', () => {
     const tile = page.locator('[data-testid="starter-tile"][data-starter-name="trade copilot"]');
     await expect(tile).toBeVisible({ timeout: 20_000 });
     await expect(tile.getByTestId('desktop-only-badge')).toBeVisible();
-    await expect(tile.getByTestId('desktop-only-badge')).toContainText(/desktop app/i);
+    // Same #100 text migration as the Hue spec above: short tag + title carries the why.
+    await expect(tile.getByTestId('desktop-only-badge')).toHaveText('desktop');
+    await expect(tile.getByTestId('desktop-only-badge')).toHaveAttribute('title', /desktop app/i);
     await expect(tile.locator('.tile-card-button')).toBeDisabled();
     await expect(tile.getByTestId('starter-install')).toHaveCount(0);
   });
