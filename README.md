@@ -16,7 +16,7 @@ Security is architectural, not policy: apps run in a locked-down iframe sandbox 
 
 This is the **reference implementation monorepo**: protocol bindings, iframe runner, in-app SDK, per-app database, LLM knowledge base, agent adapters, the hosted Playground, and example apps. The protocol specification lives in [`snugprotocol/spec`](https://github.com/snugprotocol/spec).
 
-> 🚧 **Pre-1.0.** The protocol surface may change until spec v0.3 is final. Status: `docs/next-steps.md`.
+> **Specification 1.0.** The protocol is normative at 1.0 (one section, standing approvals, is explicitly provisional). Implementation packages remain pre-1.0 and may still move. Status: `docs/next-steps.md`.
 
 ## Repo layout
 

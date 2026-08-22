@@ -117,8 +117,11 @@ export const USERDB_TABLES = {
   /**
    * DROPPED AT v5 (TASK-20260810-p3-wizard, fold B1's named exit). The NAME survives the
    * table because the v5 migration has to say what it is dropping, and because the
-   * self-heal guard must be able to assert the table's ABSENCE. Nothing creates it: it is
-   * gone from `USERDB_DDL`, and no accessor reads or writes it any more.
+   * DDL-absence test needs a subject. Nothing creates it: it is gone from `USERDB_DDL`,
+   * and no accessor reads or writes it any more. The self-heal guard's expected set is
+   * therefore DERIVED from the DDL, never from this map — counting this row as a "miss"
+   * would fire the heal (and a spurious persist) on every open of a healthy post-v5 file
+   * (fixed TASK-20260822-spec-10-final; found by the 1.0 conformance audit).
    */
   authSpecs: 'snug_auth_specs',
   connections: 'snug_connections',

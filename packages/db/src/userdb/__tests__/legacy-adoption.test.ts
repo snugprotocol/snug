@@ -141,6 +141,11 @@ describe('the two migrations compose (rename × protection)', () => {
     expect(opened.status).toBe('ok');
     if (opened.status !== 'ok') return;
     expect(opened.userDb.listApps().map((a) => a.displayName)).toEqual(['Protected']);
+    // Adoption happens on the next WRITE (§10) — a clean unlock alone persists nothing.
+    // This test previously flushed with no write and still adopted, because the self-heal
+    // guard spuriously dirtied every open (fixed in this task); the compose claim under
+    // test is "protection survives adoption", so give adoption its write.
+    opened.userDb.setSetting('theme', 'dark');
     await opened.userDb.flush();
     await opened.userDb.close();
 

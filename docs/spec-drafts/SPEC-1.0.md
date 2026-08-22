@@ -17,7 +17,8 @@
   its origin task.
 - **Normative schemas:** JSON Schema for every published message type, exported
   byte-identical from the reference implementation (`packages/protocol`). Schemas are
-  `io: 'input'` shapes: validators MUST accept unknown fields (rule R2).
+  `io: 'input'` shapes: validators MUST accept unknown fields (rule R2), with the four
+  strict net/open-url schemas as R2's stated exception (§2, Appendix C).
 - **Source of truth:** where this prose and the reference implementation disagree, the
   implementation's contract files win and this document is the bug. The load-bearing files:
   `packages/protocol/src/{constants,frames,envelope,reply,userdb-schema,auth-schema,connection-requirement,connection-url,render-directive,runtime-contract,chat-intent,sidecar-contract,security}.ts`
@@ -27,7 +28,7 @@
 
 | Part | Surface | Stability |
 |---|---|---|
-| I | Wire protocol — the nine core frames, chat envelope, rules R1–R6 | **Normative** (published since v0.1) |
+| I | Wire protocol — the nine core frames, chat envelope, rules R1–R7 | **Normative** (core published since v0.1; R7 since v0.3) |
 | II | Portable user database (storage schema v6), `.snug` naming, `SNUGENC1` | **Normative** (first published as the v0.2 draft) |
 | III | Connected apps: requirements, grants, custody, the executor | **Normative at 1.0** |
 | IV | Runtime contracts and the app chat surface | **Normative at 1.0** |
@@ -178,7 +179,10 @@ that advertises `capabilities.openUrl: true` is promising exactly this mediated 
   publisher. Hosts MUST strip `authorization`, `cookie`, `set-cookie`, `x-api-key`,
   `proxy-authorization` from any app-originated request at the envelope boundary. Iframes
   run `sandbox="allow-scripts"` only — storage is therefore **host-brokered** via db
-  frames, and the network is host-brokered via net frames.
+  frames, and the network is host-brokered via net frames. The runner's CSP permits
+  script/style loads from a **fixed CDN allowlist** (`CDN_ALLOWLIST`: `cdn.jsdelivr.net`,
+  `cdnjs.cloudflare.com`, `unpkg.com`) and connections from none; the list is never
+  widened at runtime.
 
 ## 6. Chat envelope
 
@@ -218,7 +222,7 @@ overwritten. Size cap: `MAX_USERDB_BYTES` (64 MiB).
 | v2 | native per-app tables (structural; v1 blob data does not survive) |
 | v3 | added `snug_auth_specs` (superseded) |
 | v4 | added `snug_connections` — the requirement/grant split of Part III |
-| v5 | **dropped** `snug_auth_specs` (the one destructive migration; its data migrated to v4's shape) |
+| v5 | **dropped** `snug_auth_specs` (the one destructive migration — grants are NOT migrated: credential *values* survive in `snug_secrets`, and a previously-connected app re-enters the wizard, because inheriting an approval across the shape change would honor consent for a shape the user never saw) |
 | v6 | added `snug_app_versions.runtime_contract_json` (Part IV) |
 
 Two self-healing obligations (normative, easy to omit, expensive to omit):
@@ -226,11 +230,16 @@ Two self-healing obligations (normative, easy to omit, expensive to omit):
 1. **Verify tables against `sqlite_master`; do not trust the version stamp.** A
    forward-only migrator stamps `user_version` on completion, so the stamp claims which
    migrations *ran* — never that the tables they create *exist*. A conforming hub verifies
-   the expected table set on open and replays the idempotent DDL on any miss.
-   `snug_auth_specs` is deliberately **absent from the replayed DDL**, so self-healing can
-   never resurrect the dropped table.
-2. **Wipe the legacy (pre-slot) credential slice exactly once**, on the open that advances
-   a file past the versions that wrote it. Legacy keys are `auth:<appId>:<field>` with no
+   the expected table set on open and replays the idempotent DDL on any miss. The
+   expected set is the set of tables **the replay can recreate**: `snug_auth_specs` is
+   deliberately absent from the replayed DDL, so self-healing can never resurrect the
+   dropped table — and counting its absence as a "miss" would fire the heal (and a
+   spurious persist) on every open of a healthy post-v5 file.
+2. **Wipe the legacy (pre-slot) credential slice on version advance, never on routine
+   opens.** The wipe runs when an open actually advances the file's schema version —
+   a migration step, not a recurring sweep, because the legacy writers were still live
+   through the cutover and a wipe on every open would delete credentials they had just
+   written. Legacy keys are `auth:<appId>:<field>` with no
    slot; the wipe MUST be scoped by **segment count**, never by prefix — both shapes begin
    `auth:<appId>:`, so a prefix delete would also take every live slot-keyed credential.
 
@@ -243,7 +252,7 @@ Two self-healing obligations (normative, easy to omit, expensive to omit):
 | `snug_settings` | mode, provider, model, endpoints (key/value, JSON values) — also the sanctioned home for host-internal namespaced keys (below) |
 | `snug_secrets` | BYOK keys, connection credentials, personal-origin tokens (opaque strings; §12 and §13) |
 | `snug_apps` | one row per app: display metadata, `uses_db`, `current_version`, `install_source` (unique when present — a starter identity installs at most once) |
-| `snug_app_versions` | complete HTML per version + `pinned` + **`runtime_contract_json`** (v6, Part IV); hubs retain ≥ `VERSIONS_RETAINED` (5) unpinned versions, pruning oldest; the factory version (v1 of a build or install) is `pinned` and NEVER pruned; revert/reset = copy-forward as a NEW version |
+| `snug_app_versions` | complete HTML per version + `pinned` + **`runtime_contract_json`** (v6, Part IV); hubs retain ≥ `VERSIONS_RETAINED` (5) unpinned versions, pruning oldest; `pinned` versions (v1 of a build or install, plus each installed starter update) are NEVER pruned — "the factory version" means the NEWEST pinned row; revert/reset = copy-forward as a NEW version |
 | `snug_app_schemas` | one row per app with data: the app's runtime `sqlite_master` DDL **verbatim** (objects in creation order + AUTOINCREMENT counters) and its namespace `token` |
 | `snug_app_migrations` | append-only DDL audit per app (`seq`, statement, applied-at) |
 | `snug_app_docs` | per-app knowledge wiki: `(app_id, slug)` → markdown. Advisory slugs: `vision`, `requirements`, `plan`, `lessons`, `memory`, `next-tasks`; the table shape is normative. A starter MAY seed rows at install; seeding MUST be absent-slugs-only — an existing row is never overwritten, because the wiki is the app's living memory |
@@ -300,7 +309,7 @@ A conforming hub:
    export strips `snug_secrets` and VACUUMs; including secrets is explicit opt-in). Import
    treats the file's endpoint settings as executable config and requires user
    re-confirmation before agent turns run. Import obligations specific to connections and
-   contracts are in §12.4 and §22.
+   contracts are in §12.4 and §18.2.
 3. **May host the user DB as the default sync origin** via:
    - `GET /userdb` → `200` bytes + `ETag` revision (`application/octet-stream`, `nosniff`,
      `no-store`) or `404` when none.
@@ -364,7 +373,7 @@ offset  size      field
 10      2         kdf id           0x0001 = PBKDF2-HMAC-SHA256
 12      4         iterations       u32 big-endian (reference: 600,000)
 16      16        salt
-32      2         slot count       u16 big-endian
+32      2         slot count       u16 big-endian (valid range 2–8; outside it → corrupt)
 34      4         header checksum  FNV-1a/32 over the header with this field zeroed
 38      …         slot table       slot count × 61 (see below)
 …       …         wrapped keys     slot count × 48 (AES-256-GCM of the 32-byte file key)
@@ -406,7 +415,11 @@ header so it can be raised later without orphaning old files.
 5. **Nonces.** Every IV MUST be 12 fresh CSPRNG bytes per encryption operation. Counters
    and derived nonces are forbidden: an implementation may write one logical save into two
    physical slots, so a repeat is reachable in ordinary operation, and a repeated GCM
-   nonce discloses plaintext and forges the authentication key.
+   nonce discloses plaintext and forges the authentication key. One stated exception:
+   **re-wrapping a slot under a NEW KEK** (a passphrase change) MAY reuse that slot's
+   existing IV — the key/IV pair is still unique because the key is fresh, and reuse is
+   what keeps the header (and therefore the AAD every other slot was bound to) unchanged.
+   An IV MUST NOT be reused with the same key under any circumstance.
 6. **Failure reporting.** Implementations MUST distinguish **locked** (a structurally
    valid container that no supplied secret opened) from **corrupt** (malformed, truncated,
    or a failed header checksum). Reporting damage as a wrong passphrase sends a user
@@ -855,8 +868,9 @@ injection undefendable, so the combination is refused.
 render-time seats: `webRedirectPosture` (sole member today: `'origin-callback'` — the
 provider's client registration can accept the connecting web origin's `/oauth/callback`
 as an exact authorized redirect URI) and `webRegistration` (the web-surface console
-walkthrough). Structural rule: `webRegistration` requires `webRedirectPosture`, and both
-require an OAuth kind. Like the desktop posture, these are registry data resolved at
+walkthrough). Structural rule: `webRegistration` and `webRedirectPosture` require each
+other — a posture without its walkthrough is refused, and vice versa — and both require
+an OAuth kind. Like the desktop posture, these are registry data resolved at
 wizard render time — they are **never persisted** and are never part of a
 `ConnectionRequirement`; fields, scopes, hosts, and templates remain the row's, always.
 Absence semantics deliberately differ from the desktop posture: an absent web seat does
@@ -1082,8 +1096,10 @@ field here would be unreviewed text reaching the model's system instructions:
 | `settings?` | ≤16 entries; keys `[a-z0-9_]{1,40}`; scalar values (strings ≤120) | the settings slice that shapes answers |
 | `maxOutputTokens?` | int 256–8192 | opt-in, narrowing-only output ceiling; absent means "behave exactly as a contract-less app" |
 
-The serialized contract MUST be ≤ **2560 bytes** as a whole; per-field bounds deliberately
-sum to more, so a contract may spend its budget on any field.
+The serialized contract MUST be ≤ **2560** as a whole (`RUNTIME_CONTRACT_MAX_BYTES`;
+the reference implementation measures the serialized JSON's UTF-16 code-unit length,
+which equals bytes for ASCII content); per-field bounds deliberately sum to more, so a
+contract may spend its budget on any field.
 
 ### 18.2 Custody (normative)
 
@@ -1134,7 +1150,7 @@ comparison, is a disclosed limit of this revision.)
 
 **The feature lane** writes app versions on model authority — there is deliberately no
 pre-write confirm. The wall is versioning: a visible in-place reload, a revertable version
-write, and the pinned factory version. Hosts MUST disclose this asymmetry rather than
+write, and the newest pinned factory version. Hosts MUST disclose this asymmetry rather than
 imply the data lane's gate covers it.
 
 **Stored data is untrusted input.** Rows may contain text crafted to read as instructions.
@@ -1202,8 +1218,9 @@ the helper at spawn, required on every pairing/verify route. The pairing status 
 
 - **A closed, enumerated route table**, method-pinned, is the entire reachable surface.
   The app-reachable subset is **derived by filter from the one table** (wizard-only
-  prefixes: pairing and session-status routes), never a second hand-written list — two
-  lists drift invisibly until an app reaches a route nobody intended.
+  prefixes: the pairing routes and the session routes — status and the destructive
+  forget/unlink), never a second hand-written list — two lists drift invisibly until an
+  app reaches a route nobody intended.
 - **Every route requires a credential** — the access token for app routes, the spawn
   nonce for wizard routes. No open route exists.
 - **Path admission checks the decoded form**: percent-decode first (malformed encoding
@@ -1341,7 +1358,7 @@ minimum. Each item below is asserted by the reference implementation's test suit
   verbatim.
 - Offer export/import per §9; strip secrets and VACUUM by default; re-confirm imported
   endpoint settings; reconcile imported connections per §12.4 and contracts per §18.2.
-- Retain ≥5 unpinned versions; never prune the pinned factory version.
+- Retain ≥5 unpinned versions; never prune a pinned version (reset targets the newest pinned row).
 - Decide file format by leading bytes; read-and-adopt legacy names (§10); honor every
   SNUGENC1 rule of §11, including locked-vs-corrupt reporting.
 - Never require the backend for app execution.
@@ -1389,6 +1406,8 @@ unparseable frame, not a member of this list.)
 | Constant | Value |
 |---|---|
 | `PROTOCOL_VERSION` | 1 |
+| `SNUG_APP_REQUEST_TAG` | `[SNUG_APP_REQUEST]` |
+| `CDN_ALLOWLIST` | cdn.jsdelivr.net · cdnjs.cloudflare.com · unpkg.com |
 | `MAX_FRAME_BYTES` | 256 KiB (262 144) |
 | `MAX_DB_FRAME_BYTES` | 8 MiB (8 388 608) |
 | `MAX_NET_FRAME_BYTES` | 1 MiB + 64 KiB (1 114 112) |
