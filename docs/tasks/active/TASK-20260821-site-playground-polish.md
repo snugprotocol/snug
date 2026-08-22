@@ -61,6 +61,10 @@ Order chosen so the environment fix lands first (it unblocks verification of eve
 
 ## Decisions & surprises
 
+- **Walk-found pre-existing bug (fixed in-task): the desktop-only badge was unclickable to real pointers.** Since ADR-0047 made it a `<Link to="/download">`, the tile's flex-stretched `.tile-card-button` won hit-testing over the absolutely-positioned badge (both z-auto), so every real click landed on the disabled button — jsdom's `hubDesktopStarter` test could not see it (no hit-testing), the browser walk did. Fix: `z-index: 1` on `.tile-desktop-badge`; guard: `e2e/desktop-badge.spec.ts` (Playwright clicks with hit-target checking; mutation-verified — removing the z-index reds the spec).
+- **Item 3/8 confirmed environmental, walk-verified fixed**: THREE stale vite instances (ports 5173/5174/5175) plus an old server build on 8787 were still running from before the Trivia-Night removal; the 5173 one served a pre-removal module graph over the half-written `.vite` cache. All four (verified repo-owned by command line) recycled; fresh shelf shows exactly 12 starters, no Trivia Night; chess starter opens end-to-end (RunView + iframe board).
+- `/auth/me` now answers 401 (auth configured in `.env.local`), handled as logged-out — even the 404 console-noise class is gone with the server actually running via `pnpm dev`.
+
 - 2026-08-21 owner interview: Gmail dual-mode SPLIT to follow-up (High tier when picked up); nav label `snugprotocol.org`; dev script approved; owner corrected that Trivia Night appears on the **shelf**, not installed — consistent with the stale-dev-server diagnosis (build-time glob + wedged HMR), folded into AC8.
 - Item 1 pushback resolved: agreed with owner — new tab is right (workspace vs content; `↗` glyph already promised it).
 - `/auth/me` 404 = by-design console noise without `SNUG_AUTH=google` (server registers auth routes conditionally; playground maps non-200/401 → `unavailable`). No change.
@@ -72,3 +76,10 @@ Order chosen so the environment fix lands first (it unblocks verification of eve
 - State: plan written, NOT yet approved; no implementation code.
 - Next step: owner plan approval → Gate 3 (tests first, Leg 0).
 - Open questions: none blocking; item-5 guard's final form depends on the step-4 repro.
+
+### 2026-08-21 — claude (owner-approved plan, "proceed thru all phases") — session (Gates 3–5)
+- Done: all legs, tests-first throughout. Leg 0: `.vite` cache deleted; `scripts/dev.mjs` + 5 node:tests, root `pnpm dev`/`check-dev` wired into `pnpm test`. Leg 1: docs-slug repro → clean `.astro` rebuild heals it (hypothesis (a): interrupted content sync); `target="_blank"` on all 5 playground link sites + siteLinks pins; navIntegrity gained slug-in-dist + dist-freshness tripwire (proven red-then-green). Leg 2: `WebsiteLink` (`config/site.ts` + `ui/WebsiteLink.tsx` + shell-nav mount, 4 tests incl. desktop openExternal); badge copy → `desktop` (title keeps the why); Recovery-Key checkbox (3 rewritten pins incl. uncheck-re-blocks); `.row`→`.field-row` sweep ×8 + `.field-row > input` flex rule + source-scan ban; walk-found badge dead-click fixed (`z-index: 1`) + `e2e/desktop-badge.spec.ts` (mutation-verified). Leg 3: gmail dual-mode queued in next-steps with the OAuth research verdict; code-map row 23 + threat-model §wording updated (checker 175/175).
+- Verification: website vitest 33/33 + fresh build + check-website-sync OK; playground tsc clean + vitest **1471/1471** (serial, per known flake) + new badge e2e 1/1; desktop (dependent) 175/175; scripts checks (dev, threat-model) green. Browser walk on the live pair (via `pnpm dev`): shelf = exactly 12 starters, NO Trivia Night; chess opens end-to-end; DESKTOP badge click reaches /download; vault step-2 layout clean at 1440px AND 390px (screenshots in session scratchpad, sent to owner).
+- State: all 8 items + 1 walk-found bug done on `fix/TASK-20260821-site-playground-polish` (5 commits); NOT merged — owner will run /close-session (Gate 6) per instruction.
+- Next step: owner /close-session — suggest legs: workspace+smoke minimum; e2e worth adding (new spec + touched run/hub surfaces).
+- Open questions: none.

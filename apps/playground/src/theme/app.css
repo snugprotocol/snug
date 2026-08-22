@@ -1993,6 +1993,11 @@ img.identity-avatar {
   position: absolute;
   top: var(--space-2);
   right: var(--space-2);
+  /* Above the tile's flex-stretched card button: without an explicit level the
+     button's hit area covered the badge, so the /download link LOOKED clickable but
+     every real pointer click landed on the disabled button (found by the
+     TASK-20260821-site-playground-polish browser walk — jsdom cannot see this). */
+  z-index: 1;
   font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.04em;
