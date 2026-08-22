@@ -4,6 +4,19 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-22 — **PUSHED** — spec 1.0 editorial correction — TASK-20260822-spec-10-final (Gate-5 review) — spec commit `2132692`
+
+Two sentences in `SPEC.md` §11, version held at 1.0 (ADR-0050's editorial-correction
+path): the SNUGENC1 slot-count READER bound corrected to **structurally 1–8** (0 or >8 →
+corrupt; `container.ts:279` accepts a 1-slot container as structurally valid while rule 2
+still forbids CREATING one — the 1.0 push's "2–8" over-tightened the reader rule), and
+rule 5's IV sentence made exactly true ("MUST NOT be reused with the same key **over
+differing plaintext or AAD**" — an A→B→A passphrase change legitimately reproduces an
+identical key/IV/plaintext/AAD encryption). Both found by the Gate-5 fresh-context diff
+review; the in-repo `SPEC-1.0.md` carried the same fix in PR #103. **Pushed 2026-08-22
+17:27 UTC on the owner's explicit ask** ("push 2132692"), `3ac7700..2132692` on `main`;
+zero schema bytes changed.
+
 ## 2026-08-22 — **PUSHED** — spec 1.0 — TASK-20260822-spec-10-final (ADR-0050) — spec commit `3ac7700`
 
 **Pushed 2026-08-22 16:08 UTC on the owner's explicit ask** ("push 3ac7700 to
