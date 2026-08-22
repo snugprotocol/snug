@@ -113,3 +113,44 @@ describe('the Hue (desktopOnly) starter tile', () => {
     expect(chess!.querySelector<HTMLButtonElement>('.tile-card-button')?.disabled).toBe(false);
   });
 });
+
+// TASK-20260822-gmail-dual-mode (ADR-0049): gmail's lock reason DISSOLVED. The old row
+// comment was honest — a Desktop-app OAuth client cannot register the web origin — but
+// the registry now vouches for a web path (webRedirectPosture: 'origin-callback' + the
+// "Web application" walkthrough), so the tile unlocks. The OTHER desktopOnly rows keep
+// their locks: their reasons are transport facts (Coinbase no-CORS, Hue LAN, WhatsApp
+// unix socket) no client registration can dissolve.
+describe('the gmail starter tile is dual-mode (ADR-0049)', () => {
+  function gmailTile(): HTMLElement | undefined {
+    return [...(container?.querySelectorAll<HTMLElement>('[data-testid="starter-tile"]') ?? [])].find(
+      (tile) => tile.getAttribute('data-starter-name') === 'gmail',
+    );
+  }
+
+  it('web: enabled, no desktop-only badge', async () => {
+    const harness = await fresh();
+    await renderHub(harness);
+
+    const tile = gmailTile();
+    expect(tile, 'the gmail tile must be on the shelf').toBeDefined();
+    expect(tile!.querySelector('[data-testid="desktop-only-badge"]')).toBeNull();
+    expect(tile!.querySelector<HTMLButtonElement>('.tile-card-button')?.disabled).toBe(false);
+  });
+
+  it('desktop: still enabled (the unlock is additive, not a move)', async () => {
+    const harness = await fresh({
+      kind: 'desktop',
+      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
+    });
+    await renderHub(harness);
+
+    const tile = gmailTile();
+    expect(tile).toBeDefined();
+    expect(tile!.querySelector('[data-testid="desktop-only-badge"]')).toBeNull();
+    expect(tile!.querySelector<HTMLButtonElement>('.tile-card-button')?.disabled).toBe(false);
+  });
+
+  // The lock-stays half (other desktopOnly rows keep their badge on web) is already
+  // pinned by the Hue suite above — trade-copilot is not on the vitest shelf, so a row
+  // of its own here could only assert against a tile that does not render.
+});
