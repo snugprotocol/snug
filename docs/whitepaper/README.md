@@ -23,6 +23,12 @@ The build needs a Chrome/Chromium binary (auto-detected, or set `CHROME_PATH`) a
 else — no npm dependency, no network fetch, system fonts only. `--keep-html` retains the
 assembled single-file HTML in `dist/` for debugging.
 
+**Keep the cover-meta grid at three cells.** Adding a fourth cell makes Chrome's print
+pipeline apply shrink-to-fit to the ENTIRE document (every font scales ×~0.91, the page
+count drops ~12%, and every hand-authored TOC hint goes stale) — found 2026-08-22 when an
+Edition cell briefly rode as a fourth item. Fold new facts into an existing cell
+(`1.0 · edition 3`); a page-count change on rebuild is the tell.
+
 **Let the build finish.** It renders through Chrome and then rewrites the PDF's `/Info`
 dictionary; killing it midway leaves a PDF with no author metadata. The checker catches
 exactly this (AC2), so run it after every build.

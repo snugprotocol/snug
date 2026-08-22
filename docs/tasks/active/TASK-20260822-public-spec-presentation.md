@@ -54,7 +54,21 @@ site. The owner wants the MCP-style presentation: the latest spec, version promi
 ## Session journal (append-only, newest last)
 
 ### 2026-08-22 — Claude (Fable 5) — session
-- Done: diagnosis (PDF byte-identical everywhere; three stacked servers; Task ids only
-  in the index header). Task file created.
-- State: implementing.
-- Next step: reap servers, cover edition, index header rewrite.
+- Done: diagnosis (PDF byte-identical everywhere; three stacked servers — an `astro
+  preview` serving an OLD dist plus two dev instances, the owner's :4323 tab was stale;
+  Task ids only in the index header). All three reaped (command-line verified); one
+  fresh dev server on :4321. `sync-spec.mjs` index generation rewritten to the PUBLIC
+  header (version/date extracted, stability+conventions verbatim, process bullets and
+  revision note dropped; structure-changed and TASK-id-leak guards throw at generation).
+  Whitepaper cover self-identifies: `1.0 · edition 3` — **folded into the Specification
+  cell after a 4th cover-meta cell turned out to trigger Chrome print's whole-document
+  shrink-to-fit** (33pp→29pp at ×0.91 on every font; isolated by A/B rebuilds from
+  `git show HEAD:`; lesson recorded; README trap note added). ADR-0051 written +
+  indexed (amends ADR-0048 §3, header scope only).
+- Verification: checker 104/104 BOTH fixture modes; TOC hints re-verified ALL OK at
+  33pp; cover render reviewed; website build 24 pages + 33/33 tests +
+  `check-website-sync` 24/40 green; PDF hash identical dist↔website-public. Spec clone:
+  PDF refresh staged as `adc6901`, UNPUSHED (cover-only change; push on the owner's
+  word).
+- State: done pending merge.
+- Next step: PR → merge → done-index → retire.

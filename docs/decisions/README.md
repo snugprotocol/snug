@@ -69,3 +69,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0048 — Public website: one static site for marketing, docs, spec and download](0048-public-website-single-static-site.md)
 - [0049 — Web-surface registry seats and genuine web client secrets](0049-web-surface-auth-options.md)
 - [0050 — Specification 1.0: promotion, document layout, and the launch publication set](0050-spec-10-publication.md)
+- [0051 — Public spec pages: engineering header stays home; the website renders a public header](0051-public-spec-presentation.md)
