@@ -268,3 +268,19 @@ None; AC7 is the negative proof.
   reports ZERO external anchors without target. NEW `externalLinkTargets.test.ts` pins the
   .astro-source rule AND the two Starlight-layer wirings (deleting either silently reverts
   ~40 built anchors). Website suite 35/35; docs header visually verified unchanged.
+
+### 2026-08-23 — claude — session close (Gate 6)
+- Done: everything above, plus this close — lessons (6 new rules: breakpoint bands,
+  cascade order, dist-sweeps vs source greps, purpose-named seams, redaction modes, argv
+  before config), code-map (website 35 counts + externalLinkTargets, platform seam's
+  hubAuth/openExternalUrl, WebsiteLink label, NEW either/or row), next-steps rider dated.
+- Exact state: branch `feat/TASK-20260822-feedback-loop`, ~19 commits, tree clean after
+  this commit. ALL suites green at close: playground 1535/1535 · desktop 175/175 ·
+  website 35/35 · mobile e2e 5/5 (375+820) · full e2e leg 76/1-skip · gate:local
+  workspace+smoke PASS. Both local dev servers left RUNNING for the owner (playground
+  :5173, website :4321). No packages/protocol change → no spec-changelog. ADR-0052
+  accepted, in-branch.
+- Single next step: owner reviews diff + this file → explicit ask to push + open the PR
+  (never pushed without it). After merge: /close via done-INDEX + task-file retirement.
+- Open questions: (1) owner's real-phone landscape feel-check of the either/or;
+  (2) flip-day: verify one GitHub prefill end-to-end when the repo goes public.
