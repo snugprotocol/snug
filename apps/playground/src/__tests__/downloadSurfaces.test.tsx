@@ -62,6 +62,16 @@ describe('the /download page (AC12)', () => {
     const button = el.querySelector<HTMLAnchorElement>('[data-testid="download-dmg"]');
     expect(button).not.toBeNull();
     expect(button!.getAttribute('href')).toBe(DESKTOP_DOWNLOAD_URL);
+    // Every github.com link opens in a new tab (owner call, 2026-08-23): pre-flip
+    // these 404 anonymously, and a same-tab 404 would navigate the playground away.
+    expect(button!.getAttribute('target')).toBe('_blank');
+    expect(button!.getAttribute('rel')).toContain('noreferrer');
+    const releasesLink = Array.from(el.querySelectorAll('a')).find((a) =>
+      (a.getAttribute('href') ?? '').includes('/releases'),
+    );
+    expect(releasesLink).toBeDefined();
+    expect(releasesLink!.getAttribute('target')).toBe('_blank');
+    expect(releasesLink!.getAttribute('rel')).toContain('noreferrer');
 
     // The version on the button is the BUNDLED newest release — this build's own
     // trusted copy, no fetch (ADR-0047 §5).

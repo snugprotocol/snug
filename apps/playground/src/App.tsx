@@ -165,18 +165,21 @@ export function App(): ReactElement {
           <NavLink to="/build" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
             build
           </NavLink>
-          {/* Icon nav item (owner call, TASK-20260822): the gear is decoration —
-              the accessible name stays "settings" via aria-label, which is what the
-              e2e specs (and screen readers) address it by. */}
+          <WebsiteLink />
+          {/* Icon nav item (owner calls, TASK-20260822/23): about ↗ sits with the
+              text links, the gear leads the icon cluster (⚙️ 💬 ☾). Emoji
+              presentation (U+2699 U+FE0F) on purpose — the text-presentation gear
+              read as one more thin glyph beside the theme toggle. The accessible
+              name stays "settings" via aria-label, which is what the e2e specs
+              (and screen readers) address it by. */}
           <NavLink
             to="/settings"
             aria-label="settings"
             title="settings"
             className={({ isActive }) => `nav-link nav-link-icon${isActive ? ' active' : ''}`}
           >
-            ⚙︎
+            ⚙️
           </NavLink>
-          <WebsiteLink />
           {/* ADR-0052: the ONE persistent feedback affordance — quiet, no badge. */}
           <FeedbackMenu />
           {/* ADR-0047 §9: a header WHISPER when a shell update is in play — desktop

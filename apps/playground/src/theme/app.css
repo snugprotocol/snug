@@ -2327,9 +2327,10 @@ img.identity-avatar {
    error-note, the menu is one quiet header item, and the preview panel is a
    small card — no floating bubble, no badge, nothing persistent beyond these. */
 
-/* Icon nav item (TASK-20260822 owner call): the gear rides the nav-link box so
+/* Icon nav item (TASK-20260822/23 owner calls): the gear rides the nav-link box so
    active/hover states match its text siblings; the glyph just needs a step up to
-   read at nav size. \FE0E in the markup keeps it text-presentation, not emoji. */
+   read at nav size. Emoji presentation (U+FE0F) on purpose — the thin text-form
+   gear was indistinguishable from the theme toggle's ☾ at a glance. */
 .nav-link-icon {
   font-size: 1.05rem;
   line-height: 1;

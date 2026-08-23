@@ -211,3 +211,16 @@ None; AC7 is the negative proof.
   the failure TEXT was not captured before re-running (the flake entry's own instruction)
   — if it reds again, capture first. That diagnose-the-flake item remains queued and is
   not absorbed into this task.
+
+### 2026-08-23 — claude — session (owner UX pass 2: nav order, gear presentation, new-tab audit)
+- Owner calls: (1) about ↗ moved BEFORE the settings gear — about sits with the text
+  links, the icon cluster (⚙️ 💬 ☾) stays together (order pinned in websiteLink's wiring
+  test); (2) gear switched to EMOJI presentation ⚙️ (U+2699+FE0F) — the thin text-form
+  gear was indistinguishable from the theme toggle's ☾ at a glance; (3) audited every
+  github.com anchor for new-tab behavior — the feedback paths already opened new tabs
+  (window.open '_blank' / fallback anchors), the ONE gap was DownloadView: the
+  "all releases" link and the DMG button navigated same-tab, which pre-flip means a
+  GitHub 404 replacing the playground. Both now `target="_blank" rel="noreferrer"`
+  (pinned in downloadSurfaces).
+- Verification: pins red→green · playground 1532/1532 · desktop 175/175 · mobile e2e 4/4 ·
+  desktop-badge e2e 1/1.

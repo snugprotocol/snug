@@ -105,9 +105,11 @@ describe('WebsiteLink', () => {
     expect(openExternal).toHaveBeenCalledWith('https://snugprotocol.org');
   });
 
-  it('the shell nav actually mounts it (wiring, not just the component)', () => {
+  it('the shell nav actually mounts it, BEFORE the settings gear (owner order, 2026-08-23)', () => {
     // vitest runs with cwd = apps/playground; import.meta.url is not file-scheme here.
     const appSource = readFileSync(join(process.cwd(), 'src', 'App.tsx'), 'utf8');
     expect(appSource).toContain('<WebsiteLink />');
+    // about ↗ sits with the text nav links; the icon cluster (⚙️ 💬 ☾) stays together.
+    expect(appSource.indexOf('<WebsiteLink />')).toBeLessThan(appSource.indexOf('aria-label="settings"'));
   });
 });

@@ -46,7 +46,16 @@ export function DownloadView(): ReactElement {
       </p>
 
       <p>
-        <a className="btn btn-primary download-button" href={DESKTOP_DOWNLOAD_URL} data-testid="download-dmg">
+        {/* target=_blank on a file URL still downloads; what it buys is the pre-flip
+            case — the URL 404s anonymously until the first release, and a same-tab
+            404 would navigate the playground away (owner call, 2026-08-23). */}
+        <a
+          className="btn btn-primary download-button"
+          href={DESKTOP_DOWNLOAD_URL}
+          target="_blank"
+          rel="noreferrer"
+          data-testid="download-dmg"
+        >
           download for macOS{release !== undefined ? ` — v${release.version}` : ''}
         </a>
       </p>
@@ -84,7 +93,11 @@ export function DownloadView(): ReactElement {
       ) : null}
 
       <p className="hint">
-        all releases: <a href={DESKTOP_RELEASES_PAGE_URL}>github.com/snugprotocol/snug/releases</a>. once installed,
+        all releases:{' '}
+        <a href={DESKTOP_RELEASES_PAGE_URL} target="_blank" rel="noreferrer">
+          github.com/snugprotocol/snug/releases
+        </a>
+        . once installed,
         the app offers its own updates — always your call, never automatic.
       </p>
     </div>
