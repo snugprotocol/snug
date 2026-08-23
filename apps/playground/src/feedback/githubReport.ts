@@ -154,6 +154,19 @@ export function buildBugReport(ctx: BugReportContext): PreparedReport {
   return report;
 }
 
+/** The general-entry bug route: no error context exists, so only the template and
+    the environment stamp are prefilled — the user's words fill the rest on GitHub. */
+export function buildBlankBugReport(environment: string): PreparedReport {
+  return prepared(
+    REPO_NEW_ISSUE_URL,
+    [{ label: 'environment', value: environment }],
+    [
+      ['template', 'bug_report.yml'],
+      ['environment', environment],
+    ],
+  );
+}
+
 export function buildFeatureRequest(): PreparedReport {
   // No prefill beyond the template: the form's own required fields (problem,
   // proposal) are the user's words, and prefilling them would put OUR words there.

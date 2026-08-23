@@ -10,6 +10,7 @@ import { useStore } from '../state/store.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { AuthChoiceCard } from './AuthChoiceCard.js';
+import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 import { StatusLine, type StatusPhase } from './StatusLine.js';
 
 export interface ChatLogProps {
@@ -91,7 +92,8 @@ export function ChatLog({
             {message.error !== undefined ? (
               <div className="error-note" role="alert">
                 {message.error.message}
-                {message.error.retryable ? ' — try again.' : ''}
+                {message.error.retryable ? ' — try again.' : ''}{' '}
+                <ReportErrorLink context={{ surface: 'build', errorText: message.error.message }} />
               </div>
             ) : null}
             {message.directiveNote !== undefined ? <div className="hint">{message.directiveNote}</div> : null}

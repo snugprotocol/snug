@@ -2316,3 +2316,113 @@ img.identity-avatar {
     transform: rotate(360deg);
   }
 }
+
+/* ── feedback deep links (TASK-20260822-feedback-loop, ADR-0052) ─────────────
+   Restraint is the design: the inline report link lives INSIDE an existing
+   error-note, the menu is one quiet header item, and the preview panel is a
+   small card — no floating bubble, no badge, nothing persistent beyond these. */
+
+.report-error-wrap,
+.feedback-menu-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.report-error-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  opacity: 0.75;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.report-error-link:hover,
+.report-error-link:focus-visible {
+  opacity: 1;
+}
+
+.report-preview {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  min-width: 280px;
+  max-width: min(420px, 86vw);
+  padding: var(--space-3);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-lift);
+  display: grid;
+  gap: var(--space-2);
+  text-align: left;
+}
+
+.report-field {
+  display: grid;
+  gap: 2px;
+}
+
+.report-field-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
+.report-field-value {
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.report-preview-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.feedback-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  min-width: 180px;
+  padding: var(--space-1);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-lift);
+  display: grid;
+}
+
+.feedback-menu button {
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.feedback-menu button:hover,
+.feedback-menu button:focus-visible {
+  background: var(--surface-3);
+}
+
+.feedback-menu-wrap .report-preview {
+  right: 0;
+  left: auto;
+}
