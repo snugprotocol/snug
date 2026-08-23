@@ -203,7 +203,7 @@
       "sources": [
         {
           "path": "README.md",
-          "sha256": "8007a7dccb04a9e8c72eace17214dc0ddf52fb13a977a1962d1ba39dde091a29"
+          "sha256": "544a210670a26ece17dabdae0d72f37c15f83c73bd859050bd2efb5d13d65202"
         }
       ]
     },
@@ -227,7 +227,7 @@
       "sources": [
         {
           "path": "README.md",
-          "sha256": "8007a7dccb04a9e8c72eace17214dc0ddf52fb13a977a1962d1ba39dde091a29"
+          "sha256": "544a210670a26ece17dabdae0d72f37c15f83c73bd859050bd2efb5d13d65202"
         },
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",

@@ -1,8 +1,9 @@
 // teaser.ts — which teaser rendition a viewport gets (AC2).
 //
-// Two cuts of the same 48-second teaser exist: a 1920×1080 landscape master and a
-// 1080×1920 portrait master. The page ships BOTH <source> candidates and this pure
-// function makes the pick, so the choice is unit-testable without a browser.
+// Two cuts of the same one-minute teaser exist: a 1920×1080 landscape master and a
+// 608×1080 portrait master (cropped from its pillarboxed delivery canvas). The page
+// ships BOTH <source> candidates and this pure function makes the pick, so the
+// choice is unit-testable without a browser.
 
 export type TeaserRendition = 'landscape' | 'portrait';
 
@@ -23,8 +24,8 @@ export const TEASER_RENDITIONS: Record<TeaserRendition, TeaserSource> = {
   portrait: {
     src: '/videos/teaser-portrait.mp4',
     poster: '/videos/poster-portrait.jpg',
-    width: 1080,
-    height: 1920,
+    width: 608,
+    height: 1080,
   },
 };
 

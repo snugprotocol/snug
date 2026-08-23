@@ -37,12 +37,15 @@ Under ten minutes, no API key needed:
 ```bash
 git clone https://github.com/snugprotocol/snug.git && cd snug
 pnpm install                       # ~2 min
+pnpm dev                           # server (mock "demo brain" — no key) + Playground, one command
+                                   # open the printed URL → click a chip → build → run
+```
+
+Verify the whole stack if you like:
+
+```bash
 pnpm build && pnpm test            # everything green (~2 min)
 pnpm smoke                         # headless happy path via the mock adapter
-
-# run the Playground against the reference server (mock "demo brain" — no key):
-pnpm --filter server build && SNUG_ADAPTER=mock node apps/server/dist/server.js &
-pnpm --filter playground dev       # open the printed URL → click a chip → build → run
 ```
 
 The starter apps in `examples/` run with zero setup and double as documentation.
