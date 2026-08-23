@@ -285,6 +285,8 @@ export function createDesktopPlatform(): SnugPlatform {
     // plugin (artifact-signature verified in Rust); relaunch reaps the sidecar first
     // — the ordering is pinned by appUpdates.test.ts's call-order spy, never by prose.
     appUpdates: createAppUpdates(),
+    // hubAuth stays absent-and-off by design (ADR-0052 §5): the shell has no hub
+    // login surface — BYOK/local only — and stating it here would imply a knob.
     capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
   };
 }

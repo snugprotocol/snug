@@ -155,12 +155,32 @@ export interface SnugPlatform {
     downloadAndInstall(onProgress?: (fraction: number | undefined) => void): Promise<void>;
     relaunch(): Promise<void>;
   };
-  capabilities: { subscriptionMode: boolean; hubSyncOrigin: boolean; lanHttpPrivate: boolean };
+  capabilities: {
+    subscriptionMode: boolean;
+    hubSyncOrigin: boolean;
+    lanHttpPrivate: boolean;
+    /**
+     * The hub LOGIN surface (Google OIDC — ADR-0052 §5). OPTIONAL and absence
+     * means OFF: the launch posture is no sign-in anywhere, made structural
+     * rather than probe-dependent (before this seat, sign-in's absence on the
+     * static deploy rested on /auth/me 404ing into 'unavailable'). Self-hosters
+     * who enable SNUG_AUTH=google on their server opt the UI in by building the
+     * playground with VITE_SNUG_HUB_AUTH=1 (docs/runbooks/enable-google-sso.md).
+     * Optional-with-false-default also keeps every test-constructed platform on
+     * the launch posture without a seat edit.
+     */
+    hubAuth?: boolean;
+  };
 }
 
 const WEB_DEFAULT: SnugPlatform = {
   kind: 'web',
-  capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false },
+  capabilities: {
+    subscriptionMode: true,
+    hubSyncOrigin: true,
+    lanHttpPrivate: false,
+    hubAuth: import.meta.env?.VITE_SNUG_HUB_AUTH === '1',
+  },
 };
 
 let current: SnugPlatform | null = null;

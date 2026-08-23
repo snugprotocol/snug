@@ -92,12 +92,14 @@ function typeInto(el: HTMLInputElement, value: string): void {
 }
 
 describe('structure (AC14)', () => {
-  it('renders the six labelled sections', async () => {
+  it('renders the seven labelled sections', async () => {
     // MIGRATED five → six (TASK-20260821, ADR-0047): the "app" section carries the
     // shell version/update controls on desktop and the download pointer on web.
+    // MIGRATED six → seven (TASK-20260822, ADR-0052): "feedback" carries the
+    // GitHub deep-link card — the settings surface of the one feedback channel.
     await render();
     const labels = [...(container?.querySelectorAll('.settings-section-label') ?? [])].map((n) => n.textContent);
-    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'appearance', 'app']);
+    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'feedback', 'appearance', 'app']);
   });
 
   it('keeps the mode segment’s accessible name and three labels verbatim (the e2e pin)', async () => {

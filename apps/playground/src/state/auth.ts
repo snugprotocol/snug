@@ -4,6 +4,7 @@
 // Logged-out is fully functional (local-only) — login adds the hub-hosted origin.
 
 import { createStore, useStore } from './store.js';
+import { getPlatform } from '../platform/platform.js';
 
 export interface HubUser {
   userId: string;
@@ -32,6 +33,14 @@ export function readCsrfToken(): string | undefined {
 }
 
 export async function refreshAuth(fetchImpl: FetchLike = doFetch): Promise<AuthState> {
+  // ADR-0052 §5: sign-in is flag-gated OFF by default — the probe itself does not
+  // fire, so a static host answering 401 can no longer conjure the button. The
+  // launch posture is structural, not an accident of what /auth/me returns.
+  if (getPlatform().capabilities.hubAuth !== true) {
+    const gated: AuthState = { state: 'unavailable' };
+    authStore.set(gated);
+    return gated;
+  }
   let next: AuthState;
   try {
     const response = await fetchImpl('/auth/me', { credentials: 'include' });
