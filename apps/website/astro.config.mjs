@@ -10,12 +10,20 @@
 // (ADR-0047 §2 dependency direction).
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import rehypeExternalLinks from 'rehype-external-links';
 import { fileURLToPath } from 'node:url';
 
 const playgroundSrc = fileURLToPath(new URL('../playground/src', import.meta.url));
 
 export default defineConfig({
   site: 'https://snugprotocol.org',
+  // Every absolute-URL link in rendered Markdown/MDX content opens in a new tab
+  // (owner call, 2026-08-23): docs prose links to GitHub/the playground, and a
+  // same-tab hop navigates the reader out of the docs. Root-relative internal
+  // links are untouched (the plugin only matches protocol-carrying hrefs).
+  markdown: {
+    rehypePlugins: [[rehypeExternalLinks, { target: '_blank', rel: ['noopener'] }]],
+  },
   vite: {
     resolve: {
       alias: { '@playground': playgroundSrc },
@@ -37,6 +45,10 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/snugprotocol' },
       ],
       customCss: ['./src/styles/starlight-theme.css'],
+      // The stock SocialIcons renders the header GitHub icon without target="_blank"
+      // (same owner call) — the override is the same icon with the one attribute,
+      // reading the single-homed site config.
+      components: { SocialIcons: './src/components/HeaderSocialIcons.astro' },
       sidebar: [
         { label: 'Overview', slug: 'docs' },
         {

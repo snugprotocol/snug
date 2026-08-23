@@ -21,7 +21,7 @@ import { site, siteMode } from '../config/site';
         browser tab structurally cannot make.
       </p>
       <div class="dl-ctas">
-        <a class="btn btn-primary dl-btn" href={site.download.dmg} download>
+        <a class="btn btn-primary dl-btn" href={site.download.dmg} target="_blank" rel="noopener" download>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
               d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 19h16"
@@ -32,7 +32,7 @@ import { site, siteMode } from '../config/site';
           </svg>
           Download for macOS
         </a>
-        <a class="btn btn-ghost" href={site.download.releasesPage} rel="noopener">
+        <a class="btn btn-ghost" href={site.download.releasesPage} target="_blank" rel="noopener">
           all releases & notes ↗
         </a>
       </div>

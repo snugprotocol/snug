@@ -247,3 +247,24 @@ None; AC7 is the negative proof.
   full e2e leg **76 passed / 1 skip-by-default, zero failures** (journey 4 first-attempt
   green this run). Branch at 16 commits; still owed: the owner's real-phone landscape
   re-check, then push + PR on the owner's go.
+
+### 2026-08-23 — claude — session (owner reports: dev server 404 + same-tab external links)
+- **"Playground starting but not loading" was NOT a code defect.** Diagnosed live: the
+  owner's vite was started with a trailing `# localhost:5173` — zsh does not treat mid-line
+  `#` as a comment in interactive shells by default, so vite received `#` as its ROOT
+  argument and served a nonexistent directory (404 on everything, including /index.html).
+  Killed the wedged process, restarted a clean `pnpm dev` (5173 answers 200; hub verified
+  rendering in a real browser). Remedy for the owner: no trailing `#` comments on commands,
+  or `setopt interactive_comments`.
+- **Same-tab external links on the WEBSITE (playground + GitHub).** Swept the BUILT site
+  (dist scan, all 24 pages): the playground links were already new-tab; the offenders were
+  the marketing header GitHub icon + footer repo/spec links, an ImplementorPitch button,
+  both /download buttons (`MarketingLayout`/`ImplementorPitch`/`download.astro` — 7 source
+  anchors), PLUS two Starlight-layer sources the source scan cannot reach: the docs-header
+  social icon (stock SocialIcons renders no target → overridden with
+  `HeaderSocialIcons.astro`, same icon + the attribute, URL from the single-homed site
+  config) and Markdown/MDX content autolinks (→ `rehype-external-links` with
+  target=_blank/noopener in astro.config; NEW dependency). Verified: rebuilt dist sweep
+  reports ZERO external anchors without target. NEW `externalLinkTargets.test.ts` pins the
+  .astro-source rule AND the two Starlight-layer wirings (deleting either silently reverts
+  ~40 built anchors). Website suite 35/35; docs header visually verified unchanged.

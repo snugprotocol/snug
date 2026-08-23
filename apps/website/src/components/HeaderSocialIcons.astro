@@ -1,0 +1,26 @@
+---
+// Starlight SocialIcons override (owner report, 2026-08-23): the stock component
+// renders the docs-header GitHub icon WITHOUT target="_blank", so it navigated
+// the visitor away from the docs same-tab. Same icon, same placement, one added
+// attribute — and the URL comes from the single-homed site config, not a second
+// spelling of the org URL (the astro.config `social` entry remains for anything
+// else Starlight derives from it).
+import { Icon } from '@astrojs/starlight/components';
+import { site } from '../config/site';
+---
+
+<a href={site.githubOrg} target="_blank" rel="me noopener" class="sl-flex" aria-label="GitHub">
+  <Icon name="github" size="1em" />
+</a>
+
+<style>
+  a {
+    color: var(--sl-color-text-accent);
+    padding: 0.5em;
+    margin: -0.5em;
+    align-items: center;
+  }
+  a:hover {
+    opacity: 0.66;
+  }
+</style>
