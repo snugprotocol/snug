@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme/snug-teaser.gif" alt="Snug in 48 seconds: describe an app in chat, the agent writes it, it runs sandboxed and thinks through the host agent — and everything lives in one file you own." width="720" />
+  <img src="docs/assets/readme/snug-teaser.gif" alt="Snug in one minute: describe an app in chat, the agent writes it, it runs sandboxed and thinks through the host agent — and everything lives in one file you own." width="720" />
 </p>
 
 <h1 align="center">Snug — the Snug Protocol</h1>

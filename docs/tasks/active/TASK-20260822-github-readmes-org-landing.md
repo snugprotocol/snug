@@ -139,3 +139,21 @@ mechanical coupling (README → two authored website pages).
 - State: snug changes committed on `feat/TASK-20260822-github-readmes-org-landing`; PR open.
 - Next step: AI review → human review → merge (gate:local evidence, CI billing-blocked).
 - Open questions: none.
+
+### 2026-08-22 (later still) — Claude (with Jeetu) — session
+- Done: owner delivered the final teaser cuts (~64 s, with music) — replaced everywhere.
+  - Website: `teaser-landscape.mp4` re-encoded from `SnugDesktopWithMusic.mov`
+    (crf 25, 8.0 MB — the buildOutput guard caps videos at 20 MB; a lossless remux
+    was 38 MB and correctly failed it). `teaser-portrait.mp4` from
+    `SnugMobileWithMusic.mov`: the delivery was portrait content pillarboxed in a
+    1920×1080 canvas — cropped to true 608×1080 (crop verified stable across the
+    video), crf 24, 5.0 MB. Both posters regenerated from the new cuts (t=2 s hub
+    scenes). `teaser.ts` portrait dims → 608×1080; aria-label "48-second" →
+    "one-minute".
+  - README: hero GIF regenerated from the desktop cut (600 px / 7 fps / 128 c,
+    6.8 MB; assets total 7.3 MB ≤ budget); alt text updated. Sync gate re-hashed.
+  - Checks: website 33/33 tests green (buildOutput video-size guard now passes),
+    `check-website-sync` green.
+- State: pushed to the open PR branch.
+- Next step: review + merge; the deployed site picks up the new videos on next deploy.
+- Open questions: none.
