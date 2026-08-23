@@ -157,3 +157,13 @@ mechanical coupling (README → two authored website pages).
 - State: pushed to the open PR branch.
 - Next step: review + merge; the deployed site picks up the new videos on next deploy.
 - Open questions: none.
+
+### 2026-08-22 (close) — Claude (with Jeetu) — session close (Gate 6)
+- Done: lessons entry (delivered-video canvas ≠ content: pillarbox crop, remux-vs-encode
+  guard, U+202F filenames); next-steps entry (shipped + the flip-day org-profile edit);
+  no ADR needed (presentation only; the public-`.github` owner call is recorded in the
+  task, next-steps, and LAUNCH_OPS). No protocol change → no spec-changelog.
+- State: merging PR #117 on owner's explicit ask this session; task file retires to
+  done/ in the standard post-merge bookkeeping PR.
+- Next step: none — task complete after merge + retirement.
+- Open questions: none.
