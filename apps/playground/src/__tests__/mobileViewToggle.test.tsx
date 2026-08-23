@@ -1,4 +1,5 @@
-// mobileViewToggle — TASK-20260821-hardening-polish item 5 (AC5): on mobile (≤760px)
+// mobileViewToggle — TASK-20260821-hardening-polish item 5 (AC5): on mobile (≤1000px
+// since TASK-20260823 — the either/or band covers phone landscape + tablet portrait)
 // the run view is an EITHER/OR full-view toggle — the app view or "watch it think",
 // never both, never a bottom-sheet modal. The choice is deliberately NOT persisted
 // (owner decision, plan: "default should always be app view"), so every mount lands
@@ -70,7 +71,10 @@ beforeEach(async () => {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: (query: string) => ({
-      matches: query === '(max-width: 760px)',
+      // The run view's either/or band widened to ≤1000px (TASK-20260823 — phone
+      // landscape / tablet portrait fell between 760 and the desktop split);
+      // mobileThinkBreakpoint.test.ts pins the JS↔CSS lockstep.
+      matches: query === '(max-width: 1000px)',
       media: query,
       addEventListener: () => {},
       removeEventListener: () => {},

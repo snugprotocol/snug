@@ -224,3 +224,24 @@ None; AC7 is the negative proof.
   (pinned in downloadSurfaces).
 - Verification: pins red→green · playground 1532/1532 · desktop 175/175 · mobile e2e 4/4 ·
   desktop-badge e2e 1/1.
+
+### 2026-08-23 — claude — session (owner report: split view on real mobile)
+- Diagnosis, verified before changing anything: the either/or swap already existed and
+  was correct AT ≤760px (the e2e-verified band) — but a phone in LANDSCAPE (~850px) and
+  an iPad in portrait (768–834px) sit ABOVE the shell's 760px breakpoint, so they got
+  the DESKTOP split (340px rail, default-shown) — the "split view on mobile" the owner
+  walked into. This was precisely the owed owner hardware walk (next-steps 2026-08-21
+  item 3: "Playwright measures geometry at 375px, which is not the same as a thumb on
+  glass").
+- Fix: the RUN VIEW's either/or band widened to ≤1000px — phone landscape + tablet
+  portrait get the full-view swap (think hidden by default, toggle in the header in
+  BOTH states); iPad landscape (1024+) and the desktop shell (opens at 1200px) keep the
+  genuine rail split. The swap's CSS moved out of the ≤760px shell block into its own
+  ≤1000px media block at the end of app.css; RunView's matchMedia query matches; the
+  two are byte-pinned lockstep by NEW `mobileThinkBreakpoint.test.ts` (CSS cannot
+  import TS — the byte-compare IS the single-homing, releaseChannel precedent).
+- Tests first: NEW 820px e2e describe (no rail, app default, toggle honest both ways,
+  think full-width) shown red then green; `mobileViewToggle.test.tsx`'s matchMedia stub
+  migrated to the new literal.
+- Verification: playground 1535/1535 · desktop 175/175 · mobile e2e 5/5 (375 + 820) ·
+  full e2e leg re-running at journal time.

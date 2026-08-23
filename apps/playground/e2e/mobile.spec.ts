@@ -131,3 +131,47 @@ test.describe('375px viewport', () => {
     await expectNoHorizontalScroll(page);
   });
 });
+
+// TASK-20260823 (owner report): a real phone in LANDSCAPE (~850px) and an iPad in
+// portrait (768–834px) fell OUTSIDE the 760px breakpoint and got the desktop split
+// view — a 340px rail beside a squeezed app, on glass. The either/or band for the
+// RUN view is now ≤1000px (lockstep with app.css, pinned by
+// mobileThinkBreakpoint.test.ts); iPad landscape (1024+) keeps the genuine split.
+test.describe('820px viewport (phone landscape / tablet portrait) — either/or, never split', () => {
+  test.skip(!hasApp, AWAITS_INTEGRATION);
+  test.use({ viewport: { width: 820, height: 500 } });
+
+  test('run view: no desktop rail, app view default, toggle present and honest', async ({ page }) => {
+    await page.goto('/run/starter--chess');
+
+    // Never a split at this width: the desktop side rail must not exist…
+    await expect(page.locator('aside.rail')).toHaveCount(0);
+    // …the app view is the default (think hidden until asked for)…
+    await expect(page.locator('[data-testid="frame-wrap"] iframe')).toBeVisible();
+    await expect(page.getByTestId('mobile-think')).toHaveCount(0);
+    // …and the either/or toggle is the control on offer.
+    const toggle = page.getByTestId('mobile-view-toggle');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+    // Toggling swaps the WHOLE view: think full-width, iframe genuinely hidden,
+    // toggle still visible in the think state (the way back).
+    await toggle.click();
+    await expect(page.locator('[data-testid="frame-wrap"] iframe')).toBeHidden();
+    const think = page.getByTestId('mobile-think');
+    await expect(think).toBeVisible();
+    const thinkBox = await think.boundingBox();
+    expect(thinkBox).not.toBeNull();
+    const viewport = page.viewportSize();
+    expect(thinkBox!.width, 'think view must be full-width — never a split').toBeGreaterThanOrEqual(
+      viewport!.width * 0.9,
+    );
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    // And back.
+    await toggle.click();
+    await expect(page.locator('[data-testid="frame-wrap"] iframe')).toBeVisible();
+    await expect(page.getByTestId('mobile-think')).toHaveCount(0);
+  });
+});

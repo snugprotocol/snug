@@ -1680,23 +1680,11 @@
     min-height: 62dvh;
   }
 
-  /* Either/or full-view swap (TASK-20260821 item 5): in the 'think' state the app
-     stage's frame is hidden — display:none, but the iframe stays MOUNTED so the
-     running app keeps its state — and .mobile-think takes its place full-width under
-     the same header. In the 'app' state RunView renders no .mobile-think at all. */
-  .run-layout.is-mobile-think .frame-wrap {
-    display: none;
-  }
-
-  .mobile-think {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-    padding: var(--space-3);
-  }
+  /* The either/or full-view swap rules (.is-mobile-think / .mobile-think) live in
+     their OWN ≤1000px media block at the end of this file — the swap covers phone
+     landscape and tablet portrait, not just this ≤760px shell breakpoint
+     (TASK-20260823 owner report; lockstep with RunView's media query, byte-pinned
+     by mobileThinkBreakpoint.test.ts). */
 
   .msg {
     max-width: 100%;
@@ -2455,4 +2443,28 @@ img.identity-avatar {
 .feedback-card-preview .report-preview {
   position: static;
   max-width: none;
+}
+
+/* ── run view either/or (TASK-20260821 item 5; band widened TASK-20260823) ──────
+   ≤1000px the run view is the full app OR the full think view, never a split: a
+   phone in landscape (~850px) and an iPad in portrait (768–834px) sit above the
+   760px shell breakpoint but cannot afford a 340px rail beside a usable app.
+   RunView renders no rail in this band (its isMobile query is the SAME 1000px —
+   byte-pinned lockstep); these rules do the swap. In the 'think' state the frame
+   is hidden — display:none, but the iframe stays MOUNTED so the running app keeps
+   its state — and .mobile-think takes its place under the same header. */
+@media (max-width: 1000px) {
+  .run-layout.is-mobile-think .frame-wrap {
+    display: none;
+  }
+
+  .mobile-think {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: var(--space-3);
+  }
 }
