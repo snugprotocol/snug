@@ -16,6 +16,7 @@ import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } f
 
 import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
+import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import type { ChatCardState } from '../agent/cards.js';
 import { createOpenUrlHandlerFor } from '../state/openUrl.js';
@@ -760,7 +761,8 @@ export default function RunView(): ReactElement {
             */}
             {isStarterId(id) && installError !== undefined ? (
               <span className="error-note" role="alert" style={{ padding: '2px 8px' }}>
-                install failed — {installError}
+                install failed — {installError}{' '}
+                <ReportErrorLink context={{ surface: 'run', errorText: `install failed — ${installError}`, starterId: id }} />
               </span>
             ) : null}
             {isStarterId(id) ? (
@@ -873,7 +875,8 @@ export default function RunView(): ReactElement {
         ) : null}
         {exportError !== undefined ? (
           <div className="error-note" style={{ margin: 'var(--space-3) var(--space-4) 0' }} role="alert">
-            export failed — {exportError}
+            export failed — {exportError}{' '}
+            <ReportErrorLink context={{ surface: 'run', errorText: `export failed — ${exportError}` }} />
           </div>
         ) : null}
 

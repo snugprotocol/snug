@@ -2426,3 +2426,19 @@ img.identity-avatar {
   right: 0;
   left: auto;
 }
+
+.feedback-card-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Inside the settings card the preview flows in place instead of floating. */
+.feedback-card-preview {
+  position: relative;
+}
+
+.feedback-card-preview .report-preview {
+  position: static;
+  max-width: none;
+}

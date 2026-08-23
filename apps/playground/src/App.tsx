@@ -32,6 +32,8 @@ import { initProtectOffer } from './vault/protectOffer.js';
 import { UnlockScreen } from './vault/UnlockScreen.js';
 import { Logo } from './ui/Logo.js';
 import { WebsiteLink } from './ui/WebsiteLink.js';
+import { FeedbackMenu } from './feedback/FeedbackMenu.js';
+import { ReportErrorLink } from './feedback/ReportErrorLink.js';
 import { Skeleton } from './ui/Skeleton.js';
 import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
@@ -102,7 +104,7 @@ export function App(): ReactElement {
             <p className="hint">{dbStatus.message}</p>
             <p className="hint">
               if you have a backup or a synced copy, put it back in place — then try again. Nothing happens until you
-              do.
+              do. <ReportErrorLink context={{ surface: 'boot', errorText: dbStatus.message }} />
             </p>
             <Button variant="primary" onClick={() => retryUserDbBoot()}>
               try again
@@ -167,6 +169,8 @@ export function App(): ReactElement {
             settings
           </NavLink>
           <WebsiteLink />
+          {/* ADR-0052: the ONE persistent feedback affordance — quiet, no badge. */}
+          <FeedbackMenu />
           {/* ADR-0047 §9: a header WHISPER when a shell update is in play — desktop
               only, renders nothing otherwise; the sheet it opens is the one place the
               flow may occupy the screen, and only because the user clicked. */}

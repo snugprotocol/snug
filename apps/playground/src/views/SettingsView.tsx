@@ -71,6 +71,7 @@ import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { downloadBlob } from '../run/exportDb.js';
+import { FeedbackCard } from '../feedback/FeedbackCard.js';
 import { ADAPTER_DEFAULTS, labelFor, PROVIDER_LABELS } from '../run/ModelSelect.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -265,6 +266,10 @@ export function SettingsView(): ReactElement {
           two apps is two independent grants, and the old card could not say so.
         */}
         <ConnectionSlotsCard />
+      </Section>
+
+      <Section label="feedback">
+        <FeedbackCard />
       </Section>
 
       <Section label="appearance">

@@ -8,7 +8,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const openExternal = vi.fn(() => Promise.resolve());
+const openExternal = vi.fn((_url: string) => Promise.resolve());
 
 vi.mock('../platform/platform.js', () => ({
   getPlatform: () => ({
