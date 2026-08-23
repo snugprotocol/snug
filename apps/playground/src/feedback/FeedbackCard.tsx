@@ -25,8 +25,8 @@ export function FeedbackCard(): ReactElement {
   return (
     <Card className="settings-group">
       <p>
-        found something broken, missing, or great? it all lands on our GitHub — anonymously if your browser is signed
-        out; nothing is sent until you submit there.
+        found something broken, missing, or great? it lands on our GitHub (a GitHub account is needed to post) —
+        you&apos;ll see exactly what gets prefilled first, and nothing is posted until you submit there.
       </p>
       <div className="feedback-card-actions">
         <Button
