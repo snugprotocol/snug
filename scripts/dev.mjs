@@ -20,7 +20,14 @@ export function devPlan({ envLocalExists, env }) {
   const port = env.SNUG_SERVER_PORT;
   const portEnv = port ? { SNUG_SERVER_PORT: port } : {};
   return {
-    build: { cmd: 'pnpm', args: ['--filter', 'server', 'build'] },
+    // server... = server + its deps; playground^... = playground's deps only.
+    // A fresh clone has no dist/ anywhere and every package's main points at
+    // dist/index.js — building the bare server was only ever green on trees
+    // that had built the workspace before (cold-clone AC3 caught it).
+    build: {
+      cmd: 'pnpm',
+      args: ['--filter', 'server...', '--filter', 'playground^...', 'build'],
+    },
     server: {
       cmd: 'pnpm',
       args: ['--filter', 'server', envLocalExists ? 'dev:local' : 'dev'],

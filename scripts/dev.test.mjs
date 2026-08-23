@@ -11,10 +11,21 @@ import { test } from 'node:test';
 
 import { devPlan } from './dev.mjs';
 
-test('build step precedes the server start and targets the server package', () => {
+test('build step covers BOTH dependency closures, not just the server package', () => {
+  // Cold-clone regression (TASK-20260823-launch-readiness): every workspace package
+  // resolves via dist/index.js, so a fresh clone has NOTHING built — the server tsc
+  // needs its deps' d.ts, and playground vite resolves deps' dist at request time.
+  // `server...` = server + its deps; `playground^...` = playground's deps WITHOUT
+  // building the playground app itself. pnpm runs the union in topological order.
   const plan = devPlan({ envLocalExists: false, env: {} });
   assert.equal(plan.build.cmd, 'pnpm');
-  assert.deepEqual(plan.build.args, ['--filter', 'server', 'build']);
+  assert.deepEqual(plan.build.args, [
+    '--filter',
+    'server...',
+    '--filter',
+    'playground^...',
+    'build',
+  ]);
 });
 
 test('server uses dev:local when apps/server/.env.local exists, dev otherwise', () => {
