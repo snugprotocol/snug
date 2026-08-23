@@ -62,6 +62,10 @@ describe('FeedbackMenu (AC4)', () => {
     const trigger = container!.querySelector('[data-testid="feedback-menu-trigger"]');
     expect(trigger).not.toBeNull();
     expect(trigger!.getAttribute('aria-haspopup')).toBe('menu');
+    // Icon button (owner call, TASK-20260822): the glyph is decoration — the
+    // accessible NAME is the aria-label (the runHeaderIcons doctrine).
+    expect(trigger!.getAttribute('aria-label')).toBe('feedback');
+    expect(trigger!.textContent).toBe('💬');
     expect(container!.querySelector('[data-testid="feedback-menu"]')).toBeNull();
   });
 

@@ -191,3 +191,15 @@ None; AC7 is the negative proof.
   full Playwright leg re-run on the post-fix tree: **75 passed / 1 skip-by-default**.
 - State: implementation + AI review complete, all suites green, 10 commits on the branch.
 - Next step: owner review of diff AND task file → push + PR on the owner's go.
+
+### 2026-08-22 — claude — session (owner UX pass: header icons)
+- Owner calls (interview): feedback trigger → 💬 icon button; settings nav → ⚙ gear icon;
+  "snugprotocol.org" label → "about ↗" (domain moves to tooltip + accessible name).
+- Done test-first: label pins updated (websiteLink, feedbackMenu — the glyph is decoration,
+  aria-label is the accessible NAME per the runHeaderIcons doctrine; e2e's
+  `getByRole('link', { name: 'settings' })` keeps working via aria-label). Gear ships as
+  text-presentation `⚙︎` (U+2699+FE0E) beside `.nav-link-icon` sizing. The icon pass bought
+  the 375px header its width back, so the ≤760px feedback-trigger hide is REMOVED — mobile
+  keeps all three feedback doors; the mobile e2e overflow assertion is the guard.
+- Verification: mobile e2e 4/4 · playground 1532/1532 · desktop 175/175 · full e2e leg
+  re-run queued (result in the next entry if it differs from green).

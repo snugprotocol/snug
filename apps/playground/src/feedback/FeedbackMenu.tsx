@@ -56,10 +56,11 @@ export function FeedbackMenu(): ReactElement {
         data-testid="feedback-menu-trigger"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-label="feedback"
         title="report a bug, request a feature, or share feedback — it lands on our GitHub"
         onClick={() => setOpen((v) => !v)}
       >
-        feedback
+        💬
       </button>
       {open ? (
         <div ref={menuRef} className="feedback-menu" data-testid="feedback-menu" role="menu">

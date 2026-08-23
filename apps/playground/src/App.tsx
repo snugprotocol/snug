@@ -165,8 +165,16 @@ export function App(): ReactElement {
           <NavLink to="/build" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
             build
           </NavLink>
-          <NavLink to="/settings" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
-            settings
+          {/* Icon nav item (owner call, TASK-20260822): the gear is decoration —
+              the accessible name stays "settings" via aria-label, which is what the
+              e2e specs (and screen readers) address it by. */}
+          <NavLink
+            to="/settings"
+            aria-label="settings"
+            title="settings"
+            className={({ isActive }) => `nav-link nav-link-icon${isActive ? ' active' : ''}`}
+          >
+            ⚙︎
           </NavLink>
           <WebsiteLink />
           {/* ADR-0052: the ONE persistent feedback affordance — quiet, no badge. */}

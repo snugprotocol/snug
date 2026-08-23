@@ -76,9 +76,12 @@ function click(link: HTMLAnchorElement): MouseEvent {
 }
 
 describe('WebsiteLink', () => {
-  it('renders the website URL as a new-tab link labelled by the domain', async () => {
+  it('renders a short "about ↗" label; the domain moves to the tooltip and accessible name (owner call, TASK-20260822)', async () => {
     const link = await renderLink();
-    expect(link.textContent).toBe('snugprotocol.org');
+    expect(link.textContent).toBe('about ↗');
+    // The domain stays discoverable without the 16-char label: hover and AT both get it.
+    expect(link.getAttribute('title')).toContain('snugprotocol.org');
+    expect(link.getAttribute('aria-label')).toContain('snugprotocol.org');
     expect(link.getAttribute('href')).toBe('https://snugprotocol.org');
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toContain('noreferrer');

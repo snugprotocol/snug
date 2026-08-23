@@ -1642,16 +1642,10 @@
     font-size: var(--text-xs);
   }
 
-  /* ADR-0052: the header feedback trigger is the SIXTH nav item and the compaction
-     above was measured with five — at 375px it would reopen the horizontal-scroll
-     regression. Narrow screens keep two feedback doors: the settings card and the
-     inline report-this links on every error surface. */
-  .shell-nav .feedback-menu-wrap {
-    /* scoped selector: the base .feedback-menu-wrap rule sits LATER in this file
-       (the appended feedback block), so an equal-specificity hide here would lose
-       the cascade — measured as a 50px overflow before this was scoped. */
-    display: none;
-  }
+  /* ADR-0052 note: the feedback trigger was hidden here while the nav was six TEXT
+     items; the icon pass (settings → ⚙, feedback → 💬, "snugprotocol.org" →
+     "about ↗") bought the width back, so 375px keeps all three feedback doors.
+     The mobile e2e overflow assertion is the regression guard. */
 
   .shell-main {
     padding: var(--space-4) var(--space-3);
@@ -2332,6 +2326,14 @@ img.identity-avatar {
    Restraint is the design: the inline report link lives INSIDE an existing
    error-note, the menu is one quiet header item, and the preview panel is a
    small card — no floating bubble, no badge, nothing persistent beyond these. */
+
+/* Icon nav item (TASK-20260822 owner call): the gear rides the nav-link box so
+   active/hover states match its text siblings; the glyph just needs a step up to
+   read at nav size. \FE0E in the markup keeps it text-presentation, not emoji. */
+.nav-link-icon {
+  font-size: 1.05rem;
+  line-height: 1;
+}
 
 .report-error-wrap,
 .feedback-menu-wrap {
