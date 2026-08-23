@@ -201,5 +201,13 @@ None; AC7 is the negative proof.
   text-presentation `⚙︎` (U+2699+FE0E) beside `.nav-link-icon` sizing. The icon pass bought
   the 375px header its width back, so the ≤760px feedback-trigger hide is REMOVED — mobile
   keeps all three feedback doors; the mobile e2e overflow assertion is the guard.
-- Verification: mobile e2e 4/4 · playground 1532/1532 · desktop 175/175 · full e2e leg
-  re-run queued (result in the next entry if it differs from green).
+- Verification: mobile e2e 4/4 · playground 1532/1532 · desktop 175/175 · full e2e leg:
+  73/74 first-attempt + the skip-by-default row, exit 0 — the one first-attempt red was
+  `connection-wizard` journey 4, which then failed once more in a file-only run and
+  **passed 5 consecutive file runs (6/6 each)** on the same tree. Classification: the
+  PRE-EXISTING documented flake (next-steps 2026-08-10, openWizardFromCard DOM-detach,
+  ~1-in-5) — it predates this task, the same full leg ran 75/75 green on this branch
+  earlier tonight, and no icon-pass change touches the wizard journeys. Caveat owned:
+  the failure TEXT was not captured before re-running (the flake entry's own instruction)
+  — if it reds again, capture first. That diagnose-the-flake item remains queued and is
+  not absorbed into this task.
