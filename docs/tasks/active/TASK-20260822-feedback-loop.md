@@ -1,6 +1,6 @@
 # TASK-20260822-feedback-loop: In-product GitHub-deep-link feedback + SSO hide
 
-- **Status**: in-review — implementation complete, suites green, full e2e leg running
+- **Status**: in-review — implementation + AI review complete, ALL suites green (incl. full e2e); awaiting owner review + push/PR ask
 - **Owner**: jeetu
 - **Risk tier**: **Medium** (playground logic; NO protocol/runner/auth changes, no C1/C2 weakening, no CI/release config)
 - **Branch**: `feat/TASK-20260822-feedback-loop`
@@ -187,4 +187,7 @@ None; AC7 is the negative proof.
   `useDismissableMenu` at the third popover, inferrerAdapter pattern-list migration,
   render-twin mount fixtures.
 - Verification after fixes: playground **1532/1532** (tsc-gated) · desktop **175/175** ·
-  no e2e spec pins "this hub" (checked) · gate workspace+smoke re-run below.
+  no e2e spec pins "this hub" (checked) · `gate:local` workspace+smoke **PASS** ·
+  full Playwright leg re-run on the post-fix tree: **75 passed / 1 skip-by-default**.
+- State: implementation + AI review complete, all suites green, 10 commits on the branch.
+- Next step: owner review of diff AND task file → push + PR on the owner's go.
