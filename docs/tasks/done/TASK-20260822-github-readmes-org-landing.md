@@ -1,6 +1,6 @@
 # TASK-20260822-github-readmes-org-landing: World-class READMEs for both repos + GitHub org landing page
 
-- **Status**: in-review
+- **Status**: done
 - **Owner**: Jeetu
 - **Risk tier**: **Low** (docs/presentation only — no package code, no protocol/runner/auth). Elevated care on two axes: the org `.github` repo goes **public pre-launch** (C4 discipline applies to its content) and the spec-repo push follows the explicit-ask release rule (granted this session, see journal).
 - **Branch**: `feat/TASK-20260822-github-readmes-org-landing`
