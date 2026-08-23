@@ -244,4 +244,6 @@ None; AC7 is the negative proof.
   think full-width) shown red then green; `mobileViewToggle.test.tsx`'s matchMedia stub
   migrated to the new literal.
 - Verification: playground 1535/1535 · desktop 175/175 · mobile e2e 5/5 (375 + 820) ·
-  full e2e leg re-running at journal time.
+  full e2e leg **76 passed / 1 skip-by-default, zero failures** (journey 4 first-attempt
+  green this run). Branch at 16 commits; still owed: the owner's real-phone landscape
+  re-check, then push + PR on the owner's go.
