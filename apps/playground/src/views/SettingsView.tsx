@@ -61,6 +61,7 @@ import {
   applyRemote,
   DROPBOX_TOKEN_SECRET,
   exportUserFile,
+  hubOriginAvailable,
   importUserFile,
   pushLocal,
   setSyncOrigin,
@@ -71,6 +72,7 @@ import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { downloadBlob } from '../run/exportDb.js';
+import { FeedbackCard } from '../feedback/FeedbackCard.js';
 import { ADAPTER_DEFAULTS, labelFor, PROVIDER_LABELS } from '../run/ModelSelect.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
@@ -265,6 +267,10 @@ export function SettingsView(): ReactElement {
           two apps is two independent grants, and the old card could not say so.
         */}
         <ConnectionSlotsCard />
+      </Section>
+
+      <Section label="feedback">
+        <FeedbackCard />
       </Section>
 
       <Section label="appearance">
@@ -675,8 +681,10 @@ function DataCard(): ReactElement {
         </span>
         <div className="seg" role="group" aria-labelledby="origin-label">
           {/* Amendment 13: the hub origin only exists where the platform can reach a
-              hub (relative /userdb URLs mean nothing against tauri://). */}
-          {(getPlatform().capabilities.hubSyncOrigin
+              hub (relative /userdb URLs mean nothing against tauri://) — and, since
+              ADR-0052 §5, where the sign-in surface exists at all (hub sync
+              authenticates by session; a flag-off build offering it is a dead 401). */}
+          {(hubOriginAvailable()
             ? (['none', 'hub', 'dropbox'] as SyncOriginKind[])
             : (['none', 'dropbox'] as SyncOriginKind[])
           ).map((kind) => (

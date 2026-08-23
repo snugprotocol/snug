@@ -364,6 +364,30 @@ system opener). The published half is host-ready's optional `openUrl` capability
 (gen:schemas + spec-changelog). C2 untouched; popup-blocker escape proven in a real
 browser on production runner bytes.
 
+## Feedback channel + the hubAuth gate (TASK-20260822, ADR-0052)
+
+**There is no hosted feedback receiver, and that is the decision, not a gap.** ADR-0013's
+zero-endpoint claim keeps its strongest form through launch: in-product feedback is
+**prefilled GitHub deep-links** — inline "report this" affordances inside the error
+surfaces that already render (build failure, wizard connect-error, run install/export
+failures, boot load-failure), one quiet header menu + a Settings card (bug / feature /
+open feedback), all assembling issue-form field-id prefills or a Discussions composer
+(`src/feedback/`, URLs single-homed in `config/site.ts`). Because a prefilled URL
+transmits its query string ON OPEN, every path shows an in-product preview of the exact
+fields first and navigates only on confirm (desktop rides the system opener); error text
+passes a pattern-based credential-shape scrub BEFORE assembly (patterns, deliberately not
+credential-store knowledge — a new reader of `snug_secrets` for a non-custody purpose was
+refused), and the required `repro` form field is left empty on purpose so GitHub's own
+validation asks the reporter for the reproduction. A hosted anonymous channel (Worker+D1
+design, first ADR-0052 draft in git history) is parked to 1.1, evidence-gated. Ratings
+(👍/👎) were cut with it.
+
+**Sign-in is hidden structurally.** `capabilities.hubAuth` (optional platform seat,
+absence = off) gates the `/auth/me` probe itself — the default build never fires it and
+pins `unavailable`, so a static host answering 401 can no longer conjure the sign-in
+button; web builds opt in with `VITE_SNUG_HUB_AUTH=1` (runbook updated, incl. the
+measured caveat that server login gates `/auth/*` + `/userdb` only, never `/invoke`).
+
 ## Dependency graph (who depends on whom → whose tests also run)
 
 - `protocol` ← `runner`, `sdk`, `server`, `adapters`, `db`, `knowledge`, `playground` (change protocol → run everything)

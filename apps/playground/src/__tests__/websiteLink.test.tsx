@@ -76,9 +76,12 @@ function click(link: HTMLAnchorElement): MouseEvent {
 }
 
 describe('WebsiteLink', () => {
-  it('renders the website URL as a new-tab link labelled by the domain', async () => {
+  it('renders a short "about ↗" label; the domain moves to the tooltip and accessible name (owner call, TASK-20260822)', async () => {
     const link = await renderLink();
-    expect(link.textContent).toBe('snugprotocol.org');
+    expect(link.textContent).toBe('about ↗');
+    // The domain stays discoverable without the 16-char label: hover and AT both get it.
+    expect(link.getAttribute('title')).toContain('snugprotocol.org');
+    expect(link.getAttribute('aria-label')).toContain('snugprotocol.org');
     expect(link.getAttribute('href')).toBe('https://snugprotocol.org');
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toContain('noreferrer');
@@ -102,9 +105,11 @@ describe('WebsiteLink', () => {
     expect(openExternal).toHaveBeenCalledWith('https://snugprotocol.org');
   });
 
-  it('the shell nav actually mounts it (wiring, not just the component)', () => {
+  it('the shell nav actually mounts it, BEFORE the settings gear (owner order, 2026-08-23)', () => {
     // vitest runs with cwd = apps/playground; import.meta.url is not file-scheme here.
     const appSource = readFileSync(join(process.cwd(), 'src', 'App.tsx'), 'utf8');
     expect(appSource).toContain('<WebsiteLink />');
+    // about ↗ sits with the text nav links; the icon cluster (⚙️ 💬 ☾) stays together.
+    expect(appSource.indexOf('<WebsiteLink />')).toBeLessThan(appSource.indexOf('aria-label="settings"'));
   });
 });

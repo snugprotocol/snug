@@ -16,6 +16,7 @@ import { SnugAppFrame, type FrameDirection, type NetHandler, type RunnerHost } f
 
 import { NET_ERROR_CODES, type ConnectionRequirement } from '@snugprotocol/protocol';
 import { createAppTransport } from '../agent/transport.js';
+import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 import { useBuilderChat, type DataWriteCardState } from '../agent/useBuilderChat.js';
 import type { ChatCardState } from '../agent/cards.js';
 import { createOpenUrlHandlerFor } from '../state/openUrl.js';
@@ -174,12 +175,17 @@ export default function RunView(): ReactElement {
   // Belt and braces for AC18: even if some future path sets 'chat' for a starter (a
   // stale state across an id change, a restored tab), the starter renders the inspector.
   const railTab: RailTab = isStarterId(id) && railTabRaw === 'chat' ? 'inspector' : railTabRaw;
-  // Mobile (≤760px) is an EITHER/OR: the full app view or the full think view, never
-  // both (TASK-20260821 item 5, replacing the bottom-sheet modal). Deliberately local
+  // Mobile is an EITHER/OR: the full app view or the full think view, never both
+  // (TASK-20260821 item 5, replacing the bottom-sheet modal). Deliberately local
   // state, NEVER persisted — owner decision: "default should always be app view", so
   // every mount lands on 'app'. The desktop rail keeps its own persisted `railShown`.
   const [mobileView, setMobileView] = useState<'app' | 'think'>('app');
-  const isMobile = useMediaQuery('(max-width: 760px)');
+  // ≤1000px, NOT the shell's 760px breakpoint (owner report, 2026-08-23): a phone in
+  // LANDSCAPE (~850px) and an iPad in portrait (768–834px) fell between the two and
+  // got the desktop split — a 340px rail beside a squeezed app, on glass. The rail's
+  // split earns its keep from ~1024px (iPad landscape) up. Lockstep with app.css's
+  // either/or media block — mobileThinkBreakpoint.test.ts byte-pins both.
+  const isMobile = useMediaQuery('(max-width: 1000px)');
   const controlsRef = useRef<RunnerHost | null>(null);
   /** Bumped when a chat edit or revert lands a new version — reloads html + frame. */
   const [contentEpoch, setContentEpoch] = useState(0);
@@ -760,7 +766,8 @@ export default function RunView(): ReactElement {
             */}
             {isStarterId(id) && installError !== undefined ? (
               <span className="error-note" role="alert" style={{ padding: '2px 8px' }}>
-                install failed — {installError}
+                install failed — {installError}{' '}
+                <ReportErrorLink context={{ surface: 'run', errorText: `install failed — ${installError}`, starterId: id }} />
               </span>
             ) : null}
             {isStarterId(id) ? (
@@ -873,7 +880,8 @@ export default function RunView(): ReactElement {
         ) : null}
         {exportError !== undefined ? (
           <div className="error-note" style={{ margin: 'var(--space-3) var(--space-4) 0' }} role="alert">
-            export failed — {exportError}
+            export failed — {exportError}{' '}
+            <ReportErrorLink context={{ surface: 'run', errorText: `export failed — ${exportError}` }} />
           </div>
         ) : null}
 

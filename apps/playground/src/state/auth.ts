@@ -4,6 +4,7 @@
 // Logged-out is fully functional (local-only) — login adds the hub-hosted origin.
 
 import { createStore, useStore } from './store.js';
+import { getPlatform } from '../platform/platform.js';
 
 export interface HubUser {
   userId: string;
@@ -32,6 +33,14 @@ export function readCsrfToken(): string | undefined {
 }
 
 export async function refreshAuth(fetchImpl: FetchLike = doFetch): Promise<AuthState> {
+  // ADR-0052 §5: sign-in is flag-gated OFF by default — the probe itself does not
+  // fire, so a static host answering 401 can no longer conjure the button. The
+  // launch posture is structural, not an accident of what /auth/me returns.
+  if (getPlatform().capabilities.hubAuth !== true) {
+    const gated: AuthState = { state: 'unavailable' };
+    authStore.set(gated);
+    return gated;
+  }
   let next: AuthState;
   try {
     const response = await fetchImpl('/auth/me', { credentials: 'include' });
@@ -52,6 +61,13 @@ export async function refreshAuth(fetchImpl: FetchLike = doFetch): Promise<AuthS
 
 /** Starts the hub login; `returnTo` (same-origin path) brings the user back where they were. */
 export function login(returnTo?: string): void {
+  // Gated like the probe (ADR-0052 §5): the UI only reaches login() from surfaces
+  // the 'unavailable' state already hides, but the invariant is "no /auth/*
+  // navigation when the flag is off", not "the buttons happen to be hidden" — a
+  // future deep link or nudge must not walk a flag-off build into a 404.
+  // logout() stays deliberately UNGATED: it is the cure for a stale session, not
+  // a way to mint one.
+  if (getPlatform().capabilities.hubAuth !== true) return;
   const target = returnTo ?? globalThis.location?.pathname ?? '/';
   globalThis.location.assign(`/auth/login?return=${encodeURIComponent(target)}`);
 }

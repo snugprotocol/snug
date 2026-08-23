@@ -1642,6 +1642,11 @@
     font-size: var(--text-xs);
   }
 
+  /* ADR-0052 note: the feedback trigger was hidden here while the nav was six TEXT
+     items; the icon pass (settings → ⚙, feedback → 💬, "snugprotocol.org" →
+     "about ↗") bought the width back, so 375px keeps all three feedback doors.
+     The mobile e2e overflow assertion is the regression guard. */
+
   .shell-main {
     padding: var(--space-4) var(--space-3);
   }
@@ -1675,23 +1680,11 @@
     min-height: 62dvh;
   }
 
-  /* Either/or full-view swap (TASK-20260821 item 5): in the 'think' state the app
-     stage's frame is hidden — display:none, but the iframe stays MOUNTED so the
-     running app keeps its state — and .mobile-think takes its place full-width under
-     the same header. In the 'app' state RunView renders no .mobile-think at all. */
-  .run-layout.is-mobile-think .frame-wrap {
-    display: none;
-  }
-
-  .mobile-think {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-    padding: var(--space-3);
-  }
+  /* The either/or full-view swap rules (.is-mobile-think / .mobile-think) live in
+     their OWN ≤1000px media block at the end of this file — the swap covers phone
+     landscape and tablet portrait, not just this ≤760px shell breakpoint
+     (TASK-20260823 owner report; lockstep with RunView's media query, byte-pinned
+     by mobileThinkBreakpoint.test.ts). */
 
   .msg {
     max-width: 100%;
@@ -2314,5 +2307,164 @@ img.identity-avatar {
 @keyframes run-sync-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* ── feedback deep links (TASK-20260822-feedback-loop, ADR-0052) ─────────────
+   Restraint is the design: the inline report link lives INSIDE an existing
+   error-note, the menu is one quiet header item, and the preview panel is a
+   small card — no floating bubble, no badge, nothing persistent beyond these. */
+
+/* Icon nav item (TASK-20260822/23 owner calls): the gear rides the nav-link box so
+   active/hover states match its text siblings; the glyph just needs a step up to
+   read at nav size. Emoji presentation (U+FE0F) on purpose — the thin text-form
+   gear was indistinguishable from the theme toggle's ☾ at a glance. */
+.nav-link-icon {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.report-error-wrap,
+.feedback-menu-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.report-error-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  opacity: 0.75;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.report-error-link:hover,
+.report-error-link:focus-visible {
+  opacity: 1;
+}
+
+.report-preview {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  min-width: 280px;
+  max-width: min(420px, 86vw);
+  padding: var(--space-3);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-lift);
+  display: grid;
+  gap: var(--space-2);
+  text-align: left;
+}
+
+.report-field {
+  display: grid;
+  gap: 2px;
+}
+
+.report-field-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
+.report-field-value {
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.report-preview-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.feedback-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  min-width: 180px;
+  padding: var(--space-1);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-lift);
+  display: grid;
+}
+
+.feedback-menu button {
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.feedback-menu button:hover,
+.feedback-menu button:focus-visible {
+  background: var(--surface-3);
+}
+
+.feedback-menu-wrap .report-preview {
+  right: 0;
+  left: auto;
+}
+
+.feedback-card-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Inside the settings card the preview flows in place instead of floating. */
+.feedback-card-preview {
+  position: relative;
+}
+
+.feedback-card-preview .report-preview {
+  position: static;
+  max-width: none;
+}
+
+/* ── run view either/or (TASK-20260821 item 5; band widened TASK-20260823) ──────
+   ≤1000px the run view is the full app OR the full think view, never a split: a
+   phone in landscape (~850px) and an iPad in portrait (768–834px) sit above the
+   760px shell breakpoint but cannot afford a 340px rail beside a usable app.
+   RunView renders no rail in this band (its isMobile query is the SAME 1000px —
+   byte-pinned lockstep); these rules do the swap. In the 'think' state the frame
+   is hidden — display:none, but the iframe stays MOUNTED so the running app keeps
+   its state — and .mobile-think takes its place under the same header. */
+@media (max-width: 1000px) {
+  .run-layout.is-mobile-think .frame-wrap {
+    display: none;
+  }
+
+  .mobile-think {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: var(--space-3);
   }
 }

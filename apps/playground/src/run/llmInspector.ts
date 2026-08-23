@@ -24,6 +24,8 @@ import type {
   ToolCall,
 } from '@snugprotocol/adapters';
 
+import { redactCredentialShapes } from '../security/credentialShapes.js';
+
 /** One tool the model requested, nested under the round trip that asked for it (AC5). */
 export interface LlmInspectorTool {
   id: string;
@@ -118,60 +120,11 @@ export const LLM_INSPECTOR_MAX_ENTRIES = 60;
  */
 export const LLM_INSPECTOR_MAX_BYTES = 8 * 1024 * 1024;
 
-/**
- * Credential shapes that must never render (C1, AC15). Bodies are shown verbatim
- * otherwise, so redaction happens on the way IN — an un-redacted value is never stored
- * in state, which is what the marker test asserts.
- *
- * Deliberately broad: matching too much costs a few masked characters, matching too
- * little leaks a key.
- */
-const KEY_PATTERNS: RegExp[] = [
-  // Anthropic / OpenAI style keys, including the sk-ant-/sk-proj- prefixed variants.
-  // These are the ONLY credentials the host itself handles (BYOK is anthropic|openai),
-  // and they never ride in a request BODY — the key travels in an HTTP header the
-  // inspector never sees. They are matched anyway: a user who pastes their own key into
-  // chat must not have it rendered back at them.
-  /\bsk-[A-Za-z0-9_-]{8,}/g,
-  // Bearer / Basic credentials echoed into a prompt.
-  /\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi,
-  /\bBasic\s+[A-Za-z0-9+/]{12,}=*/gi,
-  // Google/GCP.
-  /\bAIza[A-Za-z0-9_-]{10,}/g,
-  // The rest are defence-in-depth for secrets a USER pastes into a prompt. The host never
-  // holds these, but the inspector renders bodies verbatim, so anything key-shaped that
-  // shows up is masked rather than displayed.
-  /\bgh[pousr]_[A-Za-z0-9]{16,}/g, // GitHub PATs
-  /\b(?:AKIA|ASIA)[A-Z0-9]{12,}/g, // AWS access key ids
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, // Slack
-  // `api-key: <value>` / `x-api-key=<value>` / `"apiKey": "<value>"` style pairs — mask
-  // the VALUE, keep the key name so the shape of the request stays readable.
-  /((?:api[_-]?key|apikey|access[_-]?token|secret|password|authorization)["']?\s*[:=]\s*["']?)([A-Za-z0-9._~+/-]{8,}=*)/gi,
-];
-
-const REDACTED = '«redacted»';
-
-function redactText(value: string): string {
-  // Payloads are now kept whole (AC6), so redaction runs over the FULL body. Truncation
-  // used to bound this work and incidentally drop secrets buried past the cap; neither
-  // shortcut is available any more, so every byte is scrubbed.
-  let out = value;
-  for (const pattern of KEY_PATTERNS) {
-    // Keep a leading capture group when the pattern has one (the `key:` half of a
-    // name/value pair) so the request stays readable with only the VALUE masked;
-    // patterns without a group are replaced whole.
-    //
-    // The group must be detected by TYPE, not by `=== undefined`. String.replace calls a
-    // group-less pattern's callback as (match, offset, string), so a naive `prefix`
-    // parameter binds to the offset NUMBER and spliced it into the output —
-    // 'key sk-ant-…' rendered as 'key 4«redacted»' (Gate-5 review, 2026-08-05).
-    out = out.replace(pattern, (_match, ...args: unknown[]) => {
-      const first = args[0];
-      return typeof first === 'string' ? `${first}${REDACTED}` : REDACTED;
-    });
-  }
-  return out;
-}
+// Redaction is single-homed in security/credentialShapes.ts since
+// TASK-20260822-feedback-loop (the feedback deep links needed the same shapes and
+// two lists had already drifted — ASIA keys were in one, github_pat_ in the other).
+// The alias keeps this file's call sites reading as they always have.
+const redactText = redactCredentialShapes;
 
 /** Deep redaction over arbitrary tool input/output JSON — keys are preserved, values scrubbed. */
 function redactValue<T>(value: T): T {

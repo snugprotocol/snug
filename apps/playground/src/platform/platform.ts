@@ -123,6 +123,16 @@ export interface SnugPlatform {
      */
     cancel(flowId?: string): Promise<void>;
   };
+  /**
+   * Open an https URL in the system browser — the GENERIC link opener. A separate
+   * seat from `oauth.openExternal` ON PURPOSE (Gate-5 finding, TASK-20260822): the
+   * desktop OAuth opener carries flow side effects — it binds the pending flow's
+   * fixed-port loopback listener as its last pre-open step — so routing an
+   * ordinary link through it can bind an OAuth port, mutate a pending wizard
+   * flow, or reject on a port collision that has nothing to do with the link.
+   * Web: undefined → window.open(url, '_blank', 'noopener,noreferrer').
+   */
+  openExternalUrl?(url: string): Promise<void>;
   /** Save bytes with a native dialog. Web: undefined → downloadBlob anchor. */
   saveFile?(bytes: Uint8Array, suggestedName: string): Promise<void>;
   /** Probe local Ollama. Web: undefined → no probe. */
@@ -155,12 +165,32 @@ export interface SnugPlatform {
     downloadAndInstall(onProgress?: (fraction: number | undefined) => void): Promise<void>;
     relaunch(): Promise<void>;
   };
-  capabilities: { subscriptionMode: boolean; hubSyncOrigin: boolean; lanHttpPrivate: boolean };
+  capabilities: {
+    subscriptionMode: boolean;
+    hubSyncOrigin: boolean;
+    lanHttpPrivate: boolean;
+    /**
+     * The hub LOGIN surface (Google OIDC — ADR-0052 §5). OPTIONAL and absence
+     * means OFF: the launch posture is no sign-in anywhere, made structural
+     * rather than probe-dependent (before this seat, sign-in's absence on the
+     * static deploy rested on /auth/me 404ing into 'unavailable'). Self-hosters
+     * who enable SNUG_AUTH=google on their server opt the UI in by building the
+     * playground with VITE_SNUG_HUB_AUTH=1 (docs/runbooks/enable-google-sso.md).
+     * Optional-with-false-default also keeps every test-constructed platform on
+     * the launch posture without a seat edit.
+     */
+    hubAuth?: boolean;
+  };
 }
 
 const WEB_DEFAULT: SnugPlatform = {
   kind: 'web',
-  capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false },
+  capabilities: {
+    subscriptionMode: true,
+    hubSyncOrigin: true,
+    lanHttpPrivate: false,
+    hubAuth: import.meta.env?.VITE_SNUG_HUB_AUTH === '1',
+  },
 };
 
 let current: SnugPlatform | null = null;

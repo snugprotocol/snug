@@ -26,7 +26,9 @@ describe('getPlatform default', () => {
     const { getPlatform } = await freshModule();
     const p = getPlatform();
     expect(p.kind).toBe('web');
-    expect(p.capabilities).toEqual({ subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false });
+    // hubAuth is false unless the build sets VITE_SNUG_HUB_AUTH=1 (ADR-0052 §5) —
+    // vitest sets no such env, so the default is the launch posture.
+    expect(p.capabilities).toEqual({ subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false, hubAuth: false });
     // Absent seams are the web signal: consumers fall back to page fetch /
     // detectPersistenceBackend / popup+BroadcastChannel / downloadBlob / no probe.
     expect(p.fetchImpl).toBeUndefined();

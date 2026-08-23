@@ -102,6 +102,7 @@ import { hasLiveAppHost, notifyAppRefresh } from '../state/appHosts.js';
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
 import { Sheet } from '../ui/Sheet.js';
+import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 
 /**
  * ADR-0014 clause 5, VERBATIM (fold F-M1). The wording is load-bearing and this constant
@@ -1381,7 +1382,8 @@ function ConnectScreen({ row, onStart }: { row: ConnectionRow; onStart: () => Pr
         </span>
       ) : status.state === 'error' ? (
         <div className="error-note" role="alert" data-testid="connect-error">
-          {status.message}
+          {status.message}{' '}
+          <ReportErrorLink context={{ surface: 'connection-wizard', errorText: status.message }} />
           {status.authorizeUrl !== undefined ? (
             <>
               {/*

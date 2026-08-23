@@ -5,6 +5,21 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The F14 ordering assertion below (logout → fresh /auth/me probe → loop rebuild)
+// describes the FLAG-ON surface: since ADR-0052 §5 the auth probe is hubAuth-gated
+// and this suite opts in, preserving the semantics it has always pinned. Every
+// other platform seat passes through untouched.
+vi.mock('../platform/platform.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../platform/platform.js')>();
+  return {
+    ...actual,
+    getPlatform: () => {
+      const platform = actual.getPlatform();
+      return { ...platform, capabilities: { ...platform.capabilities, hubAuth: true } };
+    },
+  };
+});
+
 import { authStore } from '../state/auth.js';
 import { endpointsNeedConfirmStore } from '../state/mode.js';
 import { applyRemote, exportUserFile, importUserFile, setSyncOrigin, signOut, syncStatusStore } from '../state/sync.js';

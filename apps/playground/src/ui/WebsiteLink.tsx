@@ -26,9 +26,13 @@ export function WebsiteLink(): ReactElement {
       href={WEBSITE_URL}
       target="_blank"
       rel="noreferrer"
+      // Short label (owner call, TASK-20260822 — the 16-char domain crowded the
+      // header); the domain stays discoverable via tooltip + accessible name.
+      title="snugprotocol.org — about Snug"
+      aria-label="about — snugprotocol.org"
       onClick={openViaPlatform}
     >
-      snugprotocol.org
+      about ↗
     </a>
   );
 }
