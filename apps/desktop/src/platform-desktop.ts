@@ -244,6 +244,10 @@ export function createDesktopPlatform(): SnugPlatform {
         await transport.cancel();
       },
     },
+    // The GENERIC link opener (Gate-5, TASK-20260822): openInSystemBrowser is the
+    // side-effect-free primitive (https guard + plugin-opener) — deliberately NOT
+    // oauth.openExternal, whose pending-flow bind must stay OAuth-only.
+    openExternalUrl: (url: string) => openInSystemBrowser(url),
     async saveFile(bytes: Uint8Array, suggestedName: string) {
       // Dialog AND write both live in one Rust command: the webview never
       // names a filesystem path, so there is no consent-free write to forge.

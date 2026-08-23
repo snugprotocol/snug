@@ -23,6 +23,19 @@ import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
+
+/**
+ * The hub sync origin needs BOTH capability seats (Gate-5, TASK-20260822): a
+ * platform that can reach a hub (`hubSyncOrigin` — relative /userdb URLs mean
+ * nothing against tauri://) AND a build whose sign-in surface exists (`hubAuth`,
+ * ADR-0052 §5) — hub sync authenticates by session cookie, so offering the origin
+ * where sign-in is structurally hidden is either a dead 401 loop or, with a stale
+ * cookie, silent egress under an account the UI denies exists.
+ */
+export function hubOriginAvailable(): boolean {
+  const caps = getPlatform().capabilities;
+  return caps.hubSyncOrigin && caps.hubAuth === true;
+}
 import { logout, readCsrfToken } from './auth.js';
 
 export type SyncOriginKind = 'none' | 'hub' | 'dropbox';
@@ -106,14 +119,19 @@ async function startLoop(kind: SyncOriginKind): Promise<void> {
     syncStatusStore.set({ origin: 'none', state: 'off' });
     return;
   }
-  if (kind === 'hub' && !getPlatform().capabilities.hubSyncOrigin) {
+  if (kind === 'hub' && !hubOriginAvailable()) {
     // An imported config can name the hub origin on a platform that has none (relative
-    // /userdb URLs mean nothing against tauri:// — P0 amendment 13). Say so honestly
-    // instead of building a loop that would fail mid-sync.
+    // /userdb URLs mean nothing against tauri:// — P0 amendment 13), or on a build
+    // whose sign-in surface is flag-hidden (ADR-0052 §5) — where resuming the loop
+    // would silently keep pushing the file under a session the UI cannot even show,
+    // let alone sign out of (Gate-5 finding). Say so honestly instead of building a
+    // loop that would fail — or worse, succeed invisibly — mid-sync.
     syncStatusStore.set({
       origin: 'hub',
       state: 'error',
-      detail: 'hub sync is not available in the desktop app — choose this device only, or dropbox',
+      detail: getPlatform().capabilities.hubSyncOrigin
+        ? 'hub sync needs the sign-in surface, which this build hides — choose this device only, or dropbox (self-hosters: build with VITE_SNUG_HUB_AUTH=1)'
+        : 'hub sync is not available in the desktop app — choose this device only, or dropbox',
     });
     return;
   }

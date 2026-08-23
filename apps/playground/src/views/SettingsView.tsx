@@ -61,6 +61,7 @@ import {
   applyRemote,
   DROPBOX_TOKEN_SECRET,
   exportUserFile,
+  hubOriginAvailable,
   importUserFile,
   pushLocal,
   setSyncOrigin,
@@ -680,8 +681,10 @@ function DataCard(): ReactElement {
         </span>
         <div className="seg" role="group" aria-labelledby="origin-label">
           {/* Amendment 13: the hub origin only exists where the platform can reach a
-              hub (relative /userdb URLs mean nothing against tauri://). */}
-          {(getPlatform().capabilities.hubSyncOrigin
+              hub (relative /userdb URLs mean nothing against tauri://) — and, since
+              ADR-0052 §5, where the sign-in surface exists at all (hub sync
+              authenticates by session; a flag-off build offering it is a dead 401). */}
+          {(hubOriginAvailable()
             ? (['none', 'hub', 'dropbox'] as SyncOriginKind[])
             : (['none', 'dropbox'] as SyncOriginKind[])
           ).map((kind) => (

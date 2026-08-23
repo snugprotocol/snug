@@ -119,11 +119,21 @@ describe('sync origins — hub capability (W2b item 2, amendment 13)', () => {
     expect(container?.textContent).toContain('not available in the desktop app');
   });
 
-  it('web: the hub origin stays offered (AC10)', async () => {
-    const { SettingsView } = await fresh();
+  it('flag-on web: the hub origin stays offered (AC10, migrated — ADR-0052 §5 hides it by default)', async () => {
+    const { SettingsView } = await fresh({
+      kind: 'web',
+      capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false, hubAuth: true },
+    });
     await render(<SettingsView />);
 
     expect(buttonByText(/this hub/)).toBeDefined();
+  });
+
+  it('default web: the hub origin is NOT offered — sign-in is flag-hidden, so hub sync would be a dead 401', async () => {
+    const { SettingsView } = await fresh();
+    await render(<SettingsView />);
+
+    expect(buttonByText(/this hub/)).toBeUndefined();
   });
 });
 

@@ -1,24 +1,15 @@
 // The ONE persistent feedback affordance (ADR-0052 §2): a quiet header item — no
-// bubble, no badge, no nag — opening a three-route menu (bug / feature / open
-// feedback). Every route goes through the same preview-confirm the inline links
-// use: one honesty rule for every path out. Menu behavior (Escape + outside click
-// close, focus back to the trigger) copies the IdentityChip pattern.
+// bubble, no badge, no nag — opening the shared three-route menu (routes.ts, the
+// same list the Settings card renders). Every route goes through the same
+// preview-confirm the inline links use: one honesty rule for every path out.
+// Menu behavior (Escape + outside click close, focus back to the trigger) copies
+// the IdentityChip pattern — the second copy; a shared useDismissableMenu hook is
+// queued in next-steps for whichever popover arrives third.
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 
-import {
-  buildBlankBugReport,
-  buildFeatureRequest,
-  buildFeedbackDiscussion,
-  type PreparedReport,
-} from './githubReport.js';
-import { reportEnvironment } from './environment.js';
+import { FEEDBACK_ROUTES, type PendingReport } from './routes.js';
 import { ReportPreviewPopover } from './ReportPreviewPopover.js';
-
-interface PendingReport {
-  report: PreparedReport;
-  destination: string;
-}
 
 export function FeedbackMenu(): ReactElement {
   const [open, setOpen] = useState(false);
@@ -54,11 +45,6 @@ export function FeedbackMenu(): ReactElement {
     };
   }, [open, close]);
 
-  const route = (make: () => PendingReport): void => {
-    close(false);
-    setPending(make());
-  };
-
   return (
     <span className="feedback-menu-wrap">
       {/* Raw button, not <Button>: the trigger needs a ref for focus restore and
@@ -77,29 +63,19 @@ export function FeedbackMenu(): ReactElement {
       </button>
       {open ? (
         <div ref={menuRef} className="feedback-menu" data-testid="feedback-menu" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() =>
-              route(() => ({ report: buildBlankBugReport(reportEnvironment()), destination: 'a new GitHub issue' }))
-            }
-          >
-            report a bug
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => route(() => ({ report: buildFeatureRequest(), destination: 'a new GitHub issue' }))}
-          >
-            request a feature
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => route(() => ({ report: buildFeedbackDiscussion(), destination: 'GitHub Discussions' }))}
-          >
-            share feedback
-          </button>
+          {FEEDBACK_ROUTES.map((route) => (
+            <button
+              key={route.label}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                close(false);
+                setPending(route.make());
+              }}
+            >
+              {route.label}
+            </button>
+          ))}
         </div>
       ) : null}
       {pending !== null ? (

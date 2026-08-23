@@ -21,6 +21,12 @@ VITE_SNUG_HUB_AUTH=1 pnpm --filter playground build   # or dev
 
 (Behavior pinned by `apps/playground/src/__tests__/hubAuthGate.test.ts`.)
 
+> **Caveat — switching a live deployment back to a flag-off build:** existing session
+> cookies stay valid server-side, but the UI can no longer show them (no identity chip,
+> no sign-out) and refuses the hub sync origin rather than pushing under an invisible
+> session. Users who want the session gone clear the site's cookies, or the operator
+> rotates `SNUG_SESSION_SECRET` (logs everyone out).
+
 With the flag on, the client probes `GET /auth/me` once on mount
 (`apps/playground/src/state/auth.ts`, `refreshAuth`) and maps the answer to a
 four-state machine:

@@ -73,3 +73,33 @@ describe('hubAuth on (self-hosters, VITE_SNUG_HUB_AUTH=1 at build)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('login() gate + hub-origin conjunction (Gate-5 findings)', () => {
+  it('login() is a no-op when the flag is off — no /auth/login navigation from a hidden surface', async () => {
+    const auth = await freshAuth();
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, pathname: '/' });
+    auth.login();
+    expect(assign).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('the hub sync origin needs BOTH seats — hubSyncOrigin alone is not enough', async () => {
+    vi.resetModules();
+    const platformModule = await import('../platform/platform.js');
+    platformModule.setPlatform({
+      kind: 'web',
+      capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false },
+    });
+    const sync = await import('../state/sync.js');
+    expect(sync.hubOriginAvailable()).toBe(false);
+  });
+
+  it('…and is available when both are on', async () => {
+    vi.resetModules();
+    const platformModule = await import('../platform/platform.js');
+    platformModule.setPlatform(flagOn);
+    const sync = await import('../state/sync.js');
+    expect(sync.hubOriginAvailable()).toBe(true);
+  });
+});

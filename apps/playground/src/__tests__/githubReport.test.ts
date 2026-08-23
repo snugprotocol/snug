@@ -99,11 +99,25 @@ describe('buildFeatureRequest / buildFeedbackDiscussion (AC1)', () => {
   });
 });
 
-describe('scrubCredentialShaped (AC3)', () => {
+describe('scrubCredentialShaped (AC3) — the shared credentialShapes list', () => {
   it('redacts scheme-carrying header values', () => {
     const out = scrubCredentialShaped('got 401 with Authorization: Bearer abcDEF123456SECRET');
     expect(out).not.toContain('abcDEF123456SECRET');
-    expect(out).toContain('Bearer ***');
+    expect(out).toContain('Bearer «redacted»');
+  });
+
+  it('leaves scheme-adjacent PROSE alone — a digit-less word is not a token (Gate-5 finding)', () => {
+    expect(scrubCredentialShaped('Basic authentication failed for this provider')).toBe(
+      'Basic authentication failed for this provider',
+    );
+    expect(scrubCredentialShaped('token mismatch: session token expired')).toBe(
+      'token mismatch: session token expired',
+    );
+  });
+
+  it('redacts AWS temporary-session keys too (ASIA — the drift the shared list closes)', () => {
+    const out = scrubCredentialShaped('denied for ASIA1234567890AB');
+    expect(out).not.toContain('ASIA1234567890AB');
   });
 
   it('redacts well-known key shapes', () => {
@@ -125,6 +139,23 @@ describe('scrubCredentialShaped (AC3)', () => {
     const blob = 'A'.repeat(20) + 'b1'.repeat(15); // 50 chars, mixed
     const out = scrubCredentialShaped(`response echoed ${blob} back`);
     expect(out).not.toContain(blob);
+  });
+
+  it('caps the URL even when the OTHER context fields are hostile-length (Gate-5 finding)', () => {
+    const report = buildBugReport({
+      ...baseCtx,
+      surface: 'run',
+      appName: 'A'.repeat(50_000),
+      environment: 'E'.repeat(50_000),
+      errorText: 'x'.repeat(50_000),
+    });
+    expect(report.url.length).toBeLessThanOrEqual(MAX_REPORT_URL_CHARS);
+  });
+
+  it('never strands a lone surrogate at a truncation cut', () => {
+    const report = buildBugReport({ ...baseCtx, errorText: '💥'.repeat(30_000) });
+    expect(report.url.length).toBeLessThanOrEqual(MAX_REPORT_URL_CHARS);
+    expect(report.url).not.toContain('%EF%BF%BD'); // U+FFFD — a split pair re-encoded
   });
 
   it('leaves ordinary error prose and URLs alone', () => {

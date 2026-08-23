@@ -8,11 +8,11 @@
 // things that are each load-bearing:
 //
 //   1. scrub credential-shaped material BEFORE assembly (never merely at display),
-//   2. cap the URL so a giant error text cannot overflow GitHub's URL limit
-//      silently — truncation is MARKED in the text, and
-//   3. return the prefill as named fields beside the URL, so the preview renders
-//      exactly the params the URL carries (pinned by test: the preview IS the
-//      payload).
+//      via the single-homed shape list in security/credentialShapes.ts,
+//   2. cap the URL so a giant input cannot overflow GitHub's URL limit silently —
+//      every free-text input is bounded and error-text truncation is MARKED, and
+//   3. derive preview fields and URL params from ONE entry list per builder, so
+//      the preview equals the payload by construction, not by test vigilance.
 //
 // Prefill mechanics: the repo's issue templates are YAML issue FORMS, which accept
 // per-field query params keyed by the field `id` (`what-happened`, `environment`,
@@ -20,8 +20,17 @@
 // required-field gate turns every report into a reproduction request.
 
 import { REPO_DISCUSSIONS_URL, REPO_NEW_ISSUE_URL } from '../config/site.js';
+import { scrubCredentialProse } from '../security/credentialShapes.js';
 
 export const MAX_REPORT_URL_CHARS = 7000;
+
+// Bounds on the caller-supplied context (an app name is user-controlled data; the
+// cap invariant must not depend on callers being polite).
+const MAX_ERROR_TEXT_CHARS = 6000;
+const MAX_APP_NAME_CHARS = 120;
+const MAX_STARTER_ID_CHARS = 64;
+const MAX_STARTER_VERSION_CHARS = 32;
+const MAX_ENVIRONMENT_CHARS = 200;
 
 export type ReportSurface = 'build' | 'run' | 'connection-wizard' | 'boot';
 
@@ -43,7 +52,7 @@ export interface ReportField {
 
 export interface PreparedReport {
   url: string;
-  /** What the preview shows — byte-equal to the URL's prefill params. */
+  /** What the preview shows — derived from the same entries as the URL params. */
   fields: ReportField[];
 }
 
@@ -59,96 +68,85 @@ const SURFACE_LABEL: Record<ReportSurface, string> = {
 const AREA_PLAYGROUND = 'apps/playground (hub UI)';
 const AREA_EXAMPLES = 'examples (starter apps)';
 
-/**
- * Best-effort redaction of credential-shaped material from error prose.
- *
- * DOCUMENTED BOUNDARY (the scrub.ts A3 precedent): patterns, not knowledge — this
- * module deliberately does NOT read the credential store to learn real values
- * (that would be a new reader of `snug_secrets` for a non-custody purpose), so a
- * secret that matches no shape below survives. The preview-confirm step is the
- * honest mitigation: the user sees exactly what the URL carries before it opens.
- */
-export function scrubCredentialShaped(text: string): string {
-  let out = text;
-  // Scheme-carrying header values ("Authorization: Bearer <tok>", bare "Basic <tok>").
-  out = out.replace(/\b(Bearer|Basic|Token|Digest|Negotiate)\s+[A-Za-z0-9+/=_.~-]{8,}/gi, '$1 ***');
-  // Well-known key shapes: GitHub tokens, Anthropic/OpenAI keys, Slack, Google, AWS.
-  out = out.replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}/g, '***');
-  out = out.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}/g, '***');
-  out = out.replace(/\bsk-[A-Za-z0-9_-]{8,}(?:-[A-Za-z0-9_-]+)*/g, '***');
-  out = out.replace(/\bxox[abprs]-[A-Za-z0-9-]{8,}/g, '***');
-  out = out.replace(/\bAIza[A-Za-z0-9_-]{20,}/g, '***');
-  out = out.replace(/\bAKIA[0-9A-Z]{16}\b/g, '***');
-  // Credential-shaped query params — the value only, the rest of the URL survives.
-  out = out.replace(
-    /([?&](?:key|apikey|api_key|appid|token|access_token|refresh_token|client_secret|secret|sig|signature|x-amz-signature)=)[^&\s"']+/gi,
-    '$1***',
-  );
-  // Long unbroken token-like runs (raw echoed secrets): 40+ chars of base64-ish
-  // alphabet containing at least one digit. Plain words never reach this shape;
-  // redacting the occasional long hash is an accepted false positive — this is a
-  // feedback body, not data. The digit check lives in a callback (not a regex
-  // lookahead) so a pathological input stays linear-time.
-  out = out.replace(/[A-Za-z0-9+/=_-]{40,}/g, (run) => (/\d/.test(run) ? '***' : run));
-  return out;
+/** Feedback's scrub is the shared shape list in PROSE mode — one name kept for the call sites/tests. */
+export const scrubCredentialShaped = scrubCredentialProse;
+
+/** {label (preview), param (URL field id), value} — one row serves both renditions. */
+interface PrefillEntry {
+  label: string;
+  param: string;
+  value: string;
 }
 
-function prepared(base: string, fields: ReportField[], params: Array<[string, string]>): PreparedReport {
-  const search = new URLSearchParams(params);
-  const query = search.toString();
-  return { url: query === '' ? base : `${base}?${query}`, fields };
+function prepared(base: string, template: string | null, entries: PrefillEntry[]): PreparedReport {
+  const params = new URLSearchParams(
+    [...(template !== null ? [['template', template] as [string, string]] : [])].concat(
+      entries.map(({ param, value }) => [param, value] as [string, string]),
+    ),
+  );
+  return {
+    url: `${base}?${params.toString()}`,
+    fields: entries.map(({ label, value }) => ({ label, value })),
+  };
+}
+
+/** Slice that never strands a lone lead surrogate at the cut. */
+function sliceClean(text: string, length: number): string {
+  return text.slice(0, length).replace(/[\uD800-\uDBFF]$/, '');
 }
 
 export function buildBugReport(ctx: BugReportContext): PreparedReport {
   const surfaceLabel = SURFACE_LABEL[ctx.surface];
   const area = ctx.starterId !== undefined ? AREA_EXAMPLES : AREA_PLAYGROUND;
-  const scrubbed = scrubCredentialShaped(ctx.errorText);
+  const appName = ctx.appName !== undefined ? sliceClean(ctx.appName, MAX_APP_NAME_CHARS) : undefined;
+  const starterId = ctx.starterId !== undefined ? sliceClean(ctx.starterId, MAX_STARTER_ID_CHARS) : undefined;
+  const starterVersion =
+    ctx.starterVersion !== undefined ? sliceClean(ctx.starterVersion, MAX_STARTER_VERSION_CHARS) : undefined;
+  const environment = sliceClean(ctx.environment, MAX_ENVIRONMENT_CHARS);
+  const scrubbedFull = scrubCredentialShaped(ctx.errorText);
+  // ANY shortening carries the marker — a silently pre-capped error text would
+  // read as complete to the maintainer triaging it.
+  const textFor = (keep: number): string => {
+    const cut = sliceClean(scrubbedFull, keep);
+    return cut.length < scrubbedFull.length ? `${cut}\n…[truncated]` : cut;
+  };
+  const scrubbed = textFor(MAX_ERROR_TEXT_CHARS);
 
   const appLine =
-    ctx.appName !== undefined || ctx.starterId !== undefined
-      ? `\napp: ${ctx.appName ?? ctx.starterId ?? ''}${
-          ctx.starterId !== undefined
-            ? ` (starter \`${ctx.starterId}\`${ctx.starterVersion !== undefined ? ` v${ctx.starterVersion}` : ''})`
+    appName !== undefined || starterId !== undefined
+      ? `\napp: ${appName ?? starterId ?? ''}${
+          starterId !== undefined
+            ? ` (starter \`${starterId}\`${starterVersion !== undefined ? ` v${starterVersion}` : ''})`
             : ''
         }`
       : '';
 
-  const bodyFor = (errorText: string): string =>
-    `Reported from the playground's ${surfaceLabel} surface.${appLine}\n\nThe error shown:\n\n\`\`\`\n${errorText}\n\`\`\``;
-
   const firstLine = scrubbed.split('\n')[0] ?? '';
-  const title = `[${surfaceLabel}] ${firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine}`;
+  const title = `[${surfaceLabel}] ${firstLine.length > 80 ? `${sliceClean(firstLine, 79)}…` : firstLine}`;
 
-  const assemble = (errorText: string): PreparedReport => {
-    const body = bodyFor(errorText);
-    return prepared(
-      REPO_NEW_ISSUE_URL,
-      [
-        { label: 'title', value: title },
-        { label: 'what happened', value: body },
-        { label: 'environment', value: ctx.environment },
-        { label: 'area', value: area },
-      ],
-      [
-        ['template', 'bug_report.yml'],
-        ['title', title],
-        ['what-happened', body],
-        ['environment', ctx.environment],
-        ['area', area],
-      ],
-    );
-  };
+  const assemble = (errorText: string): PreparedReport =>
+    prepared(REPO_NEW_ISSUE_URL, 'bug_report.yml', [
+      { label: 'title', param: 'title', value: title },
+      {
+        label: 'what happened',
+        param: 'what-happened',
+        value: `Reported from the playground's ${surfaceLabel} surface.${appLine}\n\nThe error shown:\n\n\`\`\`\n${errorText}\n\`\`\``,
+      },
+      { label: 'environment', param: 'environment', value: environment },
+      { label: 'area', param: 'area', value: area },
+    ]);
 
   let report = assemble(scrubbed);
   if (report.url.length > MAX_REPORT_URL_CHARS) {
-    // Trim the ERROR TEXT only — environment and area always survive. Encoding
-    // expands unpredictably (worst case 3×), so shrink until it fits.
-    const overhead = assemble('').url.length;
-    let keep = Math.max(0, Math.floor((MAX_REPORT_URL_CHARS - overhead) / 3) - 24);
-    report = assemble(`${scrubbed.slice(0, keep)}\n…[truncated]`);
+    // Trim the ERROR TEXT only — the other entries are bounded above, so the
+    // keep=0 assembly always fits. Seed with the raw char budget (one char encodes
+    // to ≥1 char, so it is a valid upper bound) and let the halving loop absorb
+    // percent-encoding expansion (up to 9× for astral chars).
+    let keep = Math.max(0, MAX_REPORT_URL_CHARS - assemble(textFor(0)).url.length);
+    report = assemble(textFor(keep));
     while (report.url.length > MAX_REPORT_URL_CHARS && keep > 0) {
       keep = Math.floor(keep / 2);
-      report = assemble(`${scrubbed.slice(0, keep)}\n…[truncated]`);
+      report = assemble(textFor(keep));
     }
   }
   return report;
@@ -157,20 +155,15 @@ export function buildBugReport(ctx: BugReportContext): PreparedReport {
 /** The general-entry bug route: no error context exists, so only the template and
     the environment stamp are prefilled — the user's words fill the rest on GitHub. */
 export function buildBlankBugReport(environment: string): PreparedReport {
-  return prepared(
-    REPO_NEW_ISSUE_URL,
-    [{ label: 'environment', value: environment }],
-    [
-      ['template', 'bug_report.yml'],
-      ['environment', environment],
-    ],
-  );
+  return prepared(REPO_NEW_ISSUE_URL, 'bug_report.yml', [
+    { label: 'environment', param: 'environment', value: sliceClean(environment, MAX_ENVIRONMENT_CHARS) },
+  ]);
 }
 
 export function buildFeatureRequest(): PreparedReport {
   // No prefill beyond the template: the form's own required fields (problem,
   // proposal) are the user's words, and prefilling them would put OUR words there.
-  return prepared(REPO_NEW_ISSUE_URL, [], [['template', 'feature_request.yml']]);
+  return prepared(REPO_NEW_ISSUE_URL, 'feature_request.yml', []);
 }
 
 export function buildFeedbackDiscussion(): PreparedReport {

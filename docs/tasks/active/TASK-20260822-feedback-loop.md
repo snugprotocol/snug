@@ -156,3 +156,35 @@ None; AC7 is the negative proof.
   leg RUNNING at journal time (result recorded next entry).
 - Next step: e2e result → AI review (this diff) → owner review/merge.
 - Open questions: none blocking. Flip-day: verify one prefill end-to-end once the repo is public.
+
+### 2026-08-22 — claude — review (Gate 5, AI first)
+- Full e2e leg GREEN before review (75 passed / 1 skip-by-default). Then /code-review at
+  high effort — 8 finder lanes. **Applied findings (each with a test first or a migrated pin):**
+  (1) CORRECTNESS: the scheme scrub mangled prose — "Basic authentication failed" became
+  "Basic «redacted» failed"; fixed with a prose-mode digit guard. (2) The URL cap was not
+  guaranteed under hostile-length appName/environment and a truncation cut could strand a
+  lone surrogate; every input is now bounded, any shortening carries the visible marker, and
+  slices are surrogate-clean. (3) The desktop confirm rode `oauth.openExternal`, whose
+  pending-flow loopback BIND is an OAuth side effect a feedback click must never trigger —
+  new side-effect-free `platform.openExternalUrl` seat (`openInSystemBrowser`); rejections
+  no longer discarded: a failed/blocked open keeps the preview up with a plain-link fallback.
+  (4) Escape double-closed through the wizard Sheet (both listen globally) — the popover now
+  stops propagation; click-away added; listener registration de-churned via an onClose ref.
+  (5) The hubAuth gate left contradictions: hub sync origin offered/resumable while sign-in
+  is structurally hidden (silent egress under an invisible session) — `hubOriginAvailable()`
+  now requires BOTH seats; `login()` gated at the module boundary; `logout()` deliberately
+  ungated (the cure for a stale session); runbook gained the stale-session caveat.
+  (6) REUSE: the scrub was a THIRD divergent credential-pattern list (ASIA keys already
+  passed it) — single-homed into `security/credentialShapes.ts` with display/prose modes;
+  llmInspector migrated (its 8 MiB fixtures also caught a regex stack overflow in the
+  long-run shape → prose-only). (7) Simplifications: shared `routes.ts` (menu/card),
+  one entries list per builder (preview=payload by construction), dead branch and no-op
+  regex tail removed, honest FeedbackCard copy (GitHub account required — never "anonymous").
+- Deliberate test migrations, named: llmInspector keeps aggressive display semantics (its
+  digit-less-Bearer pin stands via display mode); desktopSettingsView + platformBackendWiring
+  hub-origin AC10 rows are now flag-on rows with a new default-off twin.
+- Deferred to next-steps (recorded there): legacy opener call-site migration ×3,
+  `useDismissableMenu` at the third popover, inferrerAdapter pattern-list migration,
+  render-twin mount fixtures.
+- Verification after fixes: playground **1532/1532** (tsc-gated) · desktop **175/175** ·
+  no e2e spec pins "this hub" (checked) · gate workspace+smoke re-run below.

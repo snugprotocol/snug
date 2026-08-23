@@ -76,10 +76,16 @@ describe('platform userdb backend — the sync sidecar (W2b item 1)', () => {
     vi.resetModules();
     const recording = recordingBackend();
     const platformModule = await import('../platform/platform.js');
-    // hubSyncOrigin stays true in this fake: the seam under test is the BACKEND
-    // threading, and the hub provider is the one with an easily-faked fetch surface.
+    // hubSyncOrigin + hubAuth stay true in this fake: the seam under test is the
+    // BACKEND threading, and the hub provider is the one with an easily-faked fetch
+    // surface (hub origins additionally require the auth surface since ADR-0052 §5).
     platformModule.setPlatform(
-      desktopPlatform(recording.backend, { subscriptionMode: false, hubSyncOrigin: true, lanHttpPrivate: true }),
+      desktopPlatform(recording.backend, {
+        subscriptionMode: false,
+        hubSyncOrigin: true,
+        lanHttpPrivate: true,
+        hubAuth: true,
+      }),
     );
     const helper = await import('./userdbTestHelper.js');
     await helper.installTestUserDb();
@@ -127,8 +133,17 @@ describe('hub sync origin refused on desktop (W2b item 2; P0 amendment 13)', () 
     pageFetch.mockRestore();
   });
 
-  it('web default: initSync with a hub config still starts the loop (AC10)', async () => {
+  it('flag-on web: initSync with a hub config still starts the loop (AC10, migrated)', async () => {
+    // MIGRATED (TASK-20260822, ADR-0052 §5): the web DEFAULT now refuses the hub
+    // origin because the sign-in surface is flag-hidden — resuming would push the
+    // file under a session the UI cannot show. The prior behavior is the FLAG-ON
+    // surface; hubAuthGate.test.ts pins the default-off refusal.
     vi.resetModules();
+    const platformModule = await import('../platform/platform.js');
+    platformModule.setPlatform({
+      kind: 'web',
+      capabilities: { subscriptionMode: true, hubSyncOrigin: true, lanHttpPrivate: false, hubAuth: true },
+    });
     const helper = await import('./userdbTestHelper.js');
     const db = await helper.installTestUserDb();
     const sync = await import('../state/sync.js');

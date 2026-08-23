@@ -97,6 +97,42 @@ describe('ReportErrorLink (AC2)', () => {
     expect(container!.querySelector('[data-testid="report-preview"]')).toBeNull();
     expect(openSpy).not.toHaveBeenCalled();
   });
+
+  it('Escape closes ONLY the preview — propagation stops before window (the wizard Sheet listens there)', () => {
+    render(<ReportErrorLink context={ctx} />);
+    click(container!.querySelector('[data-testid="report-error-link"]'));
+    const windowSpy = vi.fn();
+    window.addEventListener('keydown', windowSpy);
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    window.removeEventListener('keydown', windowSpy);
+    expect(container!.querySelector('[data-testid="report-preview"]')).toBeNull();
+    // ui/Sheet.tsx closes on a window keydown — if this spy fired, dismissing a
+    // preview inside the connection wizard would close the whole wizard too.
+    expect(windowSpy).not.toHaveBeenCalled();
+  });
+
+  it('click-away dismisses the preview without navigating', () => {
+    render(<ReportErrorLink context={ctx} />);
+    click(container!.querySelector('[data-testid="report-error-link"]'));
+    act(() => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    expect(container!.querySelector('[data-testid="report-preview"]')).toBeNull();
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it('a blocked popup keeps the preview open and offers the URL as a plain link', () => {
+    openSpy.mockReturnValue(null); // window.open returns null when the popup is refused
+    render(<ReportErrorLink context={ctx} />);
+    click(container!.querySelector('[data-testid="report-error-link"]'));
+    click(container!.querySelector('[data-testid="report-confirm"]'));
+    expect(container!.querySelector('[data-testid="report-preview"]')).not.toBeNull();
+    const fallback = container!.querySelector('[data-testid="report-fallback-link"]');
+    expect(fallback).not.toBeNull();
+    expect(fallback!.getAttribute('href')).toContain('/issues/new?');
+  });
 });
 
 describe('ChatLog build-failure mount (AC2)', () => {
