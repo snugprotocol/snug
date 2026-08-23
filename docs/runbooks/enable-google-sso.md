@@ -9,8 +9,21 @@ missing.
 
 ## Why it hides
 
-The client probes `GET /auth/me` once on mount (`apps/playground/src/state/auth.ts`,
-`refreshAuth`) and maps the answer to a four-state machine:
+**Gate 0 — the build flag (since TASK-20260822, ADR-0052 §5).** The probe below only
+fires when the playground was **built with `VITE_SNUG_HUB_AUTH=1`**. The default build
+never calls `/auth/me` and pins the auth state to `unavailable` — the launch posture is
+"no sign-in anywhere", structural rather than probe-dependent. Self-hosting with login
+therefore needs BOTH the server env in step 2 AND a flag-on playground build:
+
+```sh
+VITE_SNUG_HUB_AUTH=1 pnpm --filter playground build   # or dev
+```
+
+(Behavior pinned by `apps/playground/src/__tests__/hubAuthGate.test.ts`.)
+
+With the flag on, the client probes `GET /auth/me` once on mount
+(`apps/playground/src/state/auth.ts`, `refreshAuth`) and maps the answer to a
+four-state machine:
 
 | `/auth/me` answers | auth state | UI |
 |---|---|---|
@@ -89,6 +102,15 @@ curl -i http://127.0.0.1:8787/auth/me     # expect 401 (not 404)
 Only that the hub becomes available as a **sync origin** for your snug file (`/userdb` CAS
 endpoints, also gated behind `SNUG_AUTH`). App building, running, and all local data work
 identically signed out — do not sign in expecting new app capabilities.
+
+> **⚠️ What sign-in does NOT change (2026-08-21 security review, measured):** enabling
+> `SNUG_AUTH=google` authenticates **`/auth/*` and `/userdb` only**. **`/invoke` and
+> `/artifacts` have no authorization at all** — artifacts and threads are one global
+> namespace, so on an exposed server an anonymous caller can list and read every
+> artifact, read another user's thread history into their own turn, and spend the
+> operator's API key. Do not put an `apps/server` instance on the open internet
+> expecting login to gate it; keep it on localhost or behind your own network/proxy
+> auth until per-user scoping ships.
 
 ## Related
 

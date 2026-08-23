@@ -1,6 +1,6 @@
 # TASK-20260822-feedback-loop: In-product GitHub-deep-link feedback + SSO hide
 
-- **Status**: planned — awaiting owner plan approval (Gate 2 stop, revised after pivot)
+- **Status**: in-review — implementation complete, suites green, full e2e leg running
 - **Owner**: jeetu
 - **Risk tier**: **Medium** (playground logic; NO protocol/runner/auth changes, no C1/C2 weakening, no CI/release config)
 - **Branch**: `feat/TASK-20260822-feedback-loop`
@@ -128,7 +128,31 @@ None; AC7 is the negative proof.
   (Worker+D1, committed `d9240e0`); owner asked for a strategic re-evaluation → pivot to
   GitHub deep-links chosen; ADR-0052 rewritten to record the rejection + new shape; plan
   rewritten; branch exists.
-- State: **STOPPED at the Gate-2 approval gate (revised plan) — no implementation code.**
-- Next step: owner approves → Gate 3 (failing tests: URL builders first).
-- Open questions: (1) keep the SSO-runbook no-authz caveat rider, or split out?
-  (2) Discussions category slug to target (checked at implementation via `gh api`).
+- State: STOPPED at the Gate-2 approval gate (revised plan).
+- Next step: owner approves → Gate 3.
+
+### 2026-08-22 — claude — session (post-approval implementation)
+- Done: Gates 3–4 test-first throughout (red shown before each step). AC1/AC3: `feedback/githubReport.ts`
+  builders + pattern scrub (15 tests; a quadratic scrub regex caught by test runtime and rewritten linear).
+  AC2/AC4/AC6: preview popover / ReportErrorLink / FeedbackMenu / FeedbackCard + mounts (ChatLog build
+  failure, RunView install+export, wizard connect-error, App boot load-failed, header, Settings section) +
+  mount source-scan (19 tests). AC5: `capabilities.hubAuth` OPTIONAL seat (absence=off — keeps every
+  test-built platform on launch posture), `refreshAuth` probe short-circuit, web default from
+  `VITE_SNUG_HUB_AUTH`, desktop stays absent-by-design (5 tests). Runbook: Gate-0 build-flag section +
+  the owed /invoke no-authz caveat. Docs: ADR-0052 accepted, architecture section, code-map row,
+  roadmap B6 note, next-steps entry.
+- Deliberate test migrations (not weakenings, each named): `authState.test.ts` + `syncState.test.ts` now
+  install a hubAuth-enabled platform (they pin the FLAG-ON mappings; the default-off gate is pinned in
+  `hubAuthGate.test.ts`); `platform.test.ts` capability pin gains `hubAuth:false`;
+  `settingsRedesign.test.tsx` sections six → seven ("feedback").
+- Surprises: (1) GitHub YAML issue forms prefill by FIELD ID — `what-happened`/`environment`/`area`
+  pinned so a template field rename reds a test. (2) The 375px header had ZERO slack (TASK-20260822-mobile-
+  e2e-reds); the header trigger hides ≤760px (Settings card + inline links are the mobile doors), and the
+  first hide rule LOST THE CASCADE to the later-in-file base rule — caught by the mobile e2e (50px
+  overflow), fixed by scoping `.shell-nav .feedback-menu-wrap`. (3) `import.meta.url` in vitest resolves
+  to vite's serving path — source-scan reads use `process.cwd()` (hueStarterManifest precedent).
+- Verification: playground 1520/1520 (tsc-gated) · desktop 175/175 · mobile e2e 4/4 ·
+  `gate:local` workspace+smoke PASS (sandbox guards green = AC7's negative proof) · full Playwright
+  leg RUNNING at journal time (result recorded next entry).
+- Next step: e2e result → AI review (this diff) → owner review/merge.
+- Open questions: none blocking. Flip-day: verify one prefill end-to-end once the repo is public.

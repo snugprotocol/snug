@@ -1,6 +1,6 @@
 # 0052 — Launch feedback channel: GitHub deep-links, no hosted receiver
 
-- **Status:** DRAFT — pending owner plan approval
+- **Status:** accepted (owner plan approval, 2026-08-22; hosted-receiver rejection was the owner's own re-evaluation call the same day)
 - **Date:** 2026-08-22
 - **Task:** TASK-20260822-feedback-loop
 
