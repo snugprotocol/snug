@@ -1,4 +1,4 @@
-# 0052 — Explicit user-initiated feedback channel (amends ADR-0013)
+# 0052 — Launch feedback channel: GitHub deep-links, no hosted receiver
 
 - **Status:** DRAFT — pending owner plan approval
 - **Date:** 2026-08-22
@@ -6,77 +6,71 @@
 
 ## Context
 
-The playground (web + desktop) ships with no accounts, no Google SSO, and — per ADR-0013 —
-a hosted instance that is static files with zero backend, where "no telemetry endpoint" is a
-named consequence. That doctrine leaves end users with **no path to tell us anything**: when
-an app breaks, a build fails, or the connection wizard can't connect, the only channel is
-GitHub, which serves contributors, not non-technical users. The internal roadmap (B6)
-sketched "in-app report/suggest → GitHub Discussions (no telemetry)", which forces every
-reporter onto github.com and cannot carry structured diagnostics.
+The playground (web + desktop) ships with no accounts and — per ADR-0013 — a hosted
+instance that is static files with zero backend, where "no telemetry endpoint" is a named
+consequence and any backend growth "is automatically a 2.0-era question with its own ADR
+— the default answer is no." End users hitting an error today have no in-product path to
+report it; the internal roadmap (B6, Beta milestone) sketched "in-app report/suggest →
+GitHub Discussions (no telemetry)".
 
-ADR-0013 also says any growth of a backend is "a 2.0-era question with its own ADR — the
-default answer is no." This is that ADR, invoked deliberately by the owner (2026-08-22),
-with the narrowest amendment that preserves what ADR-0013 actually protects.
+The owner first commissioned a hosted anonymous receiver (Cloudflare Worker + D1,
+`feedback.snugprotocol.org`, review-before-send), then asked for a fresh evaluation
+against the project's goals. That evaluation reversed the call, and this ADR records both
+the decision and why the hosted option lost.
 
 ## Decision
 
-1. **The hosted playground stays static (ADR-0013 §1–§2 unamended).** No backend grows on
-   the playground origin. What is added is a **separate, Snug-operated receiver** — a
-   Cloudflare Worker + D1 at `feedback.snugprotocol.org` (source in `apps/feedback`,
-   deployed only on an explicit owner ask, like the website) — that accepts **explicitly
-   user-initiated** submissions.
-2. **Nothing is ever automatic.** No crash auto-reporting, no analytics, no background
-   pings, no fetch on load. The ONLY egress to the feedback origin is a user pressing Send
-   after a **review-before-send** screen showing the exact payload that will be
-   transmitted. The "we collect nothing" landing/README claims remain true as claims about
-   automatic collection; their wording is not weakened by this ADR.
-3. **Anonymous by default; email optional.** No account, no client identifier, no
-   fingerprinting. An optional "email me back" field exists on every form, default empty;
-   when empty, no email key appears on the wire.
-4. **Payloads are scrubbed and capped.** Diagnostics and comments pass a credential-shaped
-   scrub (the connected-fetch scrubber family) BEFORE both the preview and the wire — the
-   preview shows post-scrub bytes, so what the user reviews is what leaves. Hard size caps
-   apply worker-side and client-side. This is a new egress surface for credential-shaped
-   prose (threat-model R-24 territory) and the scrub is best-effort, not proof — the
-   review screen is the honest mitigation.
-5. **Three v1 surfaces, all host-page-only (C1/C2 untouched — app iframes gain nothing):**
-   inline "report this" affordances beside existing error surfaces (build failure, wizard
-   connect failure, app run errors, userdb load failure) pre-filled with what the surface
-   already displays; one unobtrusive general feedback / feature-request launcher; and a
-   per-app 👍/👎 on installed/starter apps carrying app name + starter version only.
-6. **Abuse posture v1:** worker-side per-IP rate limiting, strict schema validation, size
-   caps, honeypot field. Turnstile is deliberately deferred — it would load a third-party
-   script into a page that today loads nothing, for a threat (feedback spam) whose blast
-   radius is one D1 table.
-7. **Google SSO / hub login UI is flag-gated, default off.** A `hubAuth` platform
+1. **No hosted feedback receiver ships at launch. ADR-0013 stands unamended.** The
+   "we collect nothing" claim keeps its strongest form — verifiable by the absence of any
+   endpoint — through the launch window where it does the most work.
+2. **In-product feedback is GitHub deep-links** (roadmap B6's shape, promoted from Beta
+   to now because the UI is cheap once designed): inline "report this" affordances at
+   existing error surfaces and one quiet general feedback entry, each assembling a
+   **prefilled GitHub URL** — the issue forms' field-id query params
+   (`what-happened`, `environment`, `area`; `problem`) for bugs and feature requests,
+   Discussions for open-ended feedback. The user reviews on GitHub's own compose screen
+   and submits there; Snug operates nothing and receives nothing.
+3. **Preview before navigation.** Opening a prefilled URL transmits its query string to
+   GitHub, so the affordance first shows a small in-product preview of exactly what will
+   be prefilled; navigation happens only on the user's confirm (new tab on web,
+   system browser on desktop). Prefill content passes a credential-shaped scrub and a
+   hard size cap before assembly. Nothing is ever sent or opened automatically.
+4. **No ratings channel.** Per-app 👍/👎 was cut with the receiver — without a backend it
+   has no home, and at launch scale stars/issues/HN are the rating system.
+5. **Google SSO / hub login UI is flag-gated, default off.** A `hubAuth` platform
    capability (web default from a build-time env flag, desktop `false`) gates the auth
-   probe and both sign-in surfaces. The deployed playground shows no sign-in; self-hosters
-   who follow the SSO runbook enable the flag at build time. The server-side OIDC code is
-   unchanged — the SaaS/spec surface stays intact.
-8. **Supersedes roadmap item B6's shape** (GitHub-Discussions-only): the in-product channel
-   is this one; GitHub remains the contributor channel.
+   probe and both sign-in surfaces, making the already-true-by-construction absence on
+   static deploys structural. Server-side OIDC code is unchanged — the SaaS/spec surface
+   stays intact for implementors.
+6. **The hosted channel is parked, not killed.** Revisit at 1.1 ("Alive & listening")
+   only on evidence that non-GitHub reporters are actually being lost. Its full design
+   (Worker + D1, anonymity, optional email, review-before-send, Turnstile deferral) lives
+   in this ADR's git history (first committed draft) and the task file.
 
 ## Alternatives considered
 
+- **Hosted Cloudflare Worker + D1 receiver** (the first draft of this ADR) — rejected for
+  launch: dilutes the verifiable zero-endpoint claim precisely when it matters most;
+  serves a non-GitHub-user persona that barely exists for a pre-launch developer-audience
+  reference implementation; adds a deployable + spam surface to a solo-dev launch already
+  carrying conditions; inverts the roadmap's own sequencing (B6 at Beta, feedback response
+  at 1.1). Anonymous submissions are also low-quality: no repro, no follow-up path.
 - **Firebase Firestore (anonymous auth / open rules)** — works without user Google
-  sign-in, but ships a Google dependency in a product whose pitch is "private, no Google",
-  and the write path is public-config spam-able (App Check raises, doesn't close). Rejected.
-- **Extend `apps/server` with `/feedback`** — requires deploying and hardening a server
-  that currently has no authorization, precisely what ADR-0013 exists to avoid. Rejected.
-- **GitHub Discussions/Issues deep-link (roadmap B6)** — zero backend, but excludes
-  non-technical users (account wall), carries no structured diagnostics, and publishes
-  every report publicly. Kept as the contributor channel only.
-- **Auto crash reporting with opt-in setting** — rejected outright: a standing consent to
-  future unseen payloads is exactly what review-before-send exists to avoid.
+  sign-in, but a Google dependency in a "private, no Google" product plus a
+  public-config spam-able write path. Rejected.
+- **Extend `apps/server`** — requires deploying and hardening a server with no
+  authorization; precisely what ADR-0013 avoids. Rejected.
+- **`mailto:` fallback for account-less reporters** — rejected: leaks the reporter's
+  email by construction, clunky, and unmeasurable benefit.
 
 ## Consequences
 
-- The repo gains a fourth deployable (`apps/feedback`); turbo/`apps/*` pick it up. Deploy +
-  DNS are explicit owner asks recorded in the task journal (PROCESS.md release rules).
-- The privacy story gains a sentence, not an asterisk: "we collect nothing automatically;
-  feedback exists and sends only what you approve." A deploy-time content pass may add
-  that sentence beside the three "no telemetry" claim sites (README, quickstart, download).
-- A new outbound POST precedent exists for the host page. Any future automatic egress
-  cannot cite this ADR — clause 2 is the boundary.
-- The launch flip checklist gains: deploy worker, wire `feedback.snugprotocol.org`, verify
-  CORS against the playground origin.
+- Zero new infrastructure; the repo's public issue forms and Discussions become the one
+  feedback funnel, with the in-product affordances as the on-ramp.
+- Reporting requires a GitHub account — accepted for the launch audience; the 1.1
+  revisit owns the day this filters out real users.
+- While the repo is private, the deep links 404 for non-collaborators — the same
+  designed quiet state as `/download` (ADR-0047); they go live at flip-public with no
+  code change.
+- The prefill query string is a small egress-on-click to github.com; the preview-confirm
+  step (clause 3) is what keeps "nothing leaves without your say-so" true.
