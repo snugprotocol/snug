@@ -1,6 +1,6 @@
 # TASK-20260823-launch-readiness: Pre-launch hardening audit, repo cleanup, and flip-to-public checklist
 
-- **Status**: draft
+- **Status**: in-review
 - **Owner**: Jeetu
 - **Risk tier**: high (touches CI/release config surface, repo-visibility procedure, org-wide GitHub settings; visibility flip itself stays an explicit owner ask per PROCESS.md release rules)
 - **Branch**: `chore/TASK-20260823-launch-readiness`
@@ -23,6 +23,30 @@ The owner will flip `snugprotocol/snug` (and, on its own explicit ask, `snugprot
 
 **Out of scope**: the visibility flip itself; the HN post; npm publishes; deploying playground/website; merging the instagram branch; fixing CI billing (owner-side billing action — tracked as a checklist blocker, not performed here).
 
+## Launch-readiness checklist (AC1 — triaged 2026-08-23; detail lives in `internal/RUNBOOK-flip-public.md`, refreshed same day)
+
+### A. Hard blockers — flip cannot happen until these clear
+1. **Stage-0 remote purge** — pre-scrub commits still fetchable by SHA from GitHub (re-verified 2026-08-23). Owner files the GitHub Support GC ticket (days of turnaround — file FIRST); the 0.4 probe must FAIL. Repo re-creation is no longer an option (ADR-0053 keeps the 120-PR history).
+2. **`internal/` off-tree move + reference sweep** — runbook stage 1: move the folder (never tracked — disk move only), rewrite the three root AI files' *Source systems* paragraph, sweep the 22 tracked files referencing `internal/`, re-run the scrub-terms + breadcrumb greps.
+3. **Website + playground deployed** (T-3, own explicit ask) — Cloudflare Pages, apex + playground subdomain (ADR-0048). The HN post links die without it.
+4. **security@ / hello@ round-trip** — the Cloudflare destination-verification click is still pending; SECURITY.md's contact must work before strangers use it.
+
+### B. Before the HN announce (flip can precede these by hours, not days)
+5. **First GitHub Release** (own explicit ask) — `/download` 404s until it exists; unsigned-build wording already honest. The desktop-update owner walk rides on it (or the updater-dev stub before it).
+6. **Owner walk ladder** — the "prime time" verification no suite can give (procedures in next-steps): update walk · `.snug` desktop walk · four sample-mode starters · Coinbase Ed25519+TWAP · Hue · weather+github live · WhatsApp restart watch · Telepath deep-delete + 3 sync items · dock icon on real bundle · mobile either/or on real phone.
+7. ~~**Cold-clone AC3**~~ **EXECUTED 2026-08-23 in this task — found and fixed a real cold-clone breaker** (`pnpm dev` built no workspace deps; `scripts/dev.mjs` + test-pin fixed). Post-fix: clone 98 s + cold-store install 41.5 s + boot-to-200 17 s ≈ **2 m 37 s**. Flip-week re-run on a foreign machine still listed in the runbook README box.
+8. **Owner content pass** over landing copy + docs hub (queued from TASK-20260821-website-launch).
+
+### C. Flip-day sequence — runbook stages 7–8 (spec first, then snug; same-hour stage 8: secret scanning + push protection, private vulnerability reporting, branch-protection ruleset, `.github` landing pre-launch-note removal, ADR-0052 feedback prefill live test, anonymous verification sweep, HN post at Tue/Wed ~8am ET)
+
+### D. Explicitly NOT blockers (owner-decided or accepted)
+- **CI billing** (owner 2026-08-23): flip on local evidence; ci.yml is dispatch-only so no live red X's; restore billing + re-run workflows post-launch; outside-contributor PRs gated by maintainer-run `gate:local` until then.
+- **Windows**: macOS-only through 1.0 (ADR-0021 D8); stated in README/SECURITY/threat model.
+- **Apple Developer ID**: unsigned builds disclosed on `/download`; signing path wired, env-gated (R-29).
+- **Instagram starter**: parked local-only until post-1.0 (owner directive; withdrawn from origin 2026-08-23).
+- Reference-server `/invoke` authz gap: bounded by ADR-0013 (nothing deployed); SSO-runbook caveat shipped; real fix queued.
+- Trademark sanity check: LAUNCH_OPS lists it; owner's 30-min counsel call, schedule-when-possible.
+
 ## Decisions & surprises
 
 - 2026-08-23 — **Owner interview (Gate 1)**: (1) **Retain full git history** at flip, gated on clean full-history secret scan + PR-content scan (squash-fresh rejected; ADR-0027 archive + transparent build trail are assets). (2) **Delete squash-merged branches now**, SHAs ledgered below. (3) **Delete `origin/feat/TASK-20260810-dynamic-auth-rewrite`** (planning-only branch; shipped rewrite + ADRs are the record). (4) **CI billing is NOT a launch blocker** — owner will flip on local evidence (gate:local doctrine); public red X's on recent PRs accepted, workflows re-run post-launch when billing is fixed.
@@ -34,6 +58,8 @@ Deleted local: aa3a660 chore/TASK-20260817-telepath-done · 9edd78a chore/TASK-2
 Deleted origin: 15444e1 chore/TASK-20260814-hue-starter-done-move · aa3a660 chore/TASK-20260817-telepath-done · 9edd78a chore/TASK-20260818-registered-flag-close · 6e7acfb chore/TASK-20260818-shutdown-done · f28b109 docs/TASK-20260810-plan · b7cd8e2 feat/TASK-20260806-flip-prep · b03ffd1 feat/TASK-20260806-spec-push · 5a8819a feat/TASK-20260806-starters-auth-spectrum · 739e3b4 feat/TASK-20260806-starters-pillars · ac0ed6a feat/TASK-20260806-webllm-spike · 2195b66 feat/TASK-20260810-dynamic-auth-rewrite · f54dfcc feat/TASK-20260810-p5-security-close · 985c7a3 feat/TASK-20260814-hue-starter-real-connection · 5ea130d feat/TASK-20260815-inline-cards · 0393a1f feat/TASK-20260815-provider-chat-lane · 8793384 feat/TASK-20260815-starter-apps-rebuild · c67abf3 feat/TASK-20260817-telepath · 03db79d feat/TASK-20260818-ledger-starter · eaf5ad7 feat/TASK-20260820-desktop-bundle-targets-macos · dc15e1f feat/TASK-20260820-desktop-bundle-targets-macos-close · 189b2c3 feat/TASK-20260821-launch-security-review · d8379d0 feat/TASK-20260822-gmail-dual-mode · 404d54a fix/TASK-20260814-hue-pairing-e2e · 9e519ed fix/TASK-20260818-registered-flag · a3d5a4e fix/TASK-20260818-sidecar-shutdown
 
 Kept: 698028a backup-pre-scrub-20260731 (local-only, never push) · 1d255b4 feat/TASK-20260820-instagram-starter (local + origin, parked until post-1.0) · 86a564c origin/feat/TASK-20260807-starters-auth-spectrum (AL-09 harvest source)
+
+**2026-08-23 amendment (owner, plan approval)**: also deleted on origin — 86a564c feat/TASK-20260807-starters-auth-spectrum (AL-09 harvest source abandoned) and 1d255b4 feat/TASK-20260820-instagram-starter (owner: half-baked branch must not go public at flip; LOCAL branch retained as sole copy, will be re-pushed post-1.0 resume). Safety: local instagram branch snapshotted to `../instagram-starter-backup-20260823.bundle` (outside the repo). Origin now holds `main` only.
 
 - 2026-08-23 — Branch survey: all 120 PRs merged, 0 open. Local `git fetch --prune` already removed refs GitHub auto-deleted. Remaining branches cross-checked against merged-PR head names (`gh pr list --state merged`) — ancestry checks are useless here because merges are squash.
 - 2026-08-23 — `backup-pre-scrub-20260731` is DISJOINT from main (no merge-base): main was fresh-bootstrapped 2026-07-31; the backup holds the 2-commit pre-scrub original. It exists only locally — it is not exposed by a flip.
@@ -75,3 +101,16 @@ Ops/docs task — no product code; anything discovered that needs code becomes a
 - Done: branch survey (all refs vs merged-PR heads), repo-visibility check (snug PRIVATE, spec PRIVATE, .github PUBLIC), scrub-history archaeology (main disjoint-bootstrapped 2026-07-31), task file created.
 - State: awaiting owner interview answers (history retention, branch-cleanup timing, scope shape, CI-billing assumption).
 - Next step: fold answers, write plan, create branch, stop for plan approval.
+
+### 2026-08-23 — Claude (Gates 3–5, owner-approved plan + two amendments) — session
+- Done:
+  - **Branch cleanup (AC4)**: 14 local + 27 origin deletions (incl. owner-amended AL-09 harvest branch + instagram-starter origin withdrawal; instagram bundle backup at `../instagram-starter-backup-20260823.bundle`). Origin = `main` only. Verified `git branch -a`.
+  - **Secret scan (AC2)**: gitleaks 8.30.1 over `--log-opts=--all` (343 commits, every ref incl. local-only branches): 54 findings, ALL verified planted-fake/schema-name/docs-grammar; `.gitleaksignore` committed; rescan "no leaks found". Also: `apps/server/.env.local` (live `sk-ant` key) confirmed gitignored + zero history hits on any ref.
+  - **GitHub-corpus scan (AC3)**: 110 PR bodies + 7 issue comments + 0 review comments + 10 issues swept (token shapes, emails, `/Users/` paths, phones): zero real findings (PR #4's `sk-ant-…` is prose about a redaction bug).
+  - **Settings pass (AC6)**: snug+spec descriptions/homepages/topics set; org description/blog set; `has_projects=false`; `delete_branch_on_merge=true`; Dependabot alerts + automated fixes ON (both repos). Probed: branch protection 403 while private-free (→ flip-hour ruleset); private-vulnerability-reporting 404 while private (→ stage 8). `.github` landing flip-day edit = remove pre-launch-note paragraph (staged in runbook stage 8).
+  - **Checklist (AC1)** written above; **runbook (AC7)** = `internal/RUNBOOK-flip-public.md` REFRESHED in place (stage-0 probe evidence: pre-scrub SHAs STILL FETCHABLE 2026-08-23; 0.3b marked obsolete per ADR-0053; stage 4 rewritten for ADR-0041 — flip-hour ruleset with 0-approval require-PR, required check only after billing returns; stages 5/6/7/8 statuses updated). LAUNCH_OPS registration boxes corrected.
+  - **ADR-0053 (AC5)** authored: retain full history/PRs/issues at flip, scan-gated, purge-gated.
+  - **Cold-clone AC3 executed** — caught + fixed the dev-script cold-boot breaker (`scripts/dev.mjs` builds both dependency closures now, TDD'd via `dev.test.mjs`); 2 m 37 s end-to-end post-fix.
+  - **Verification**: root `pnpm test` green (exit 0) after all edits; dev.test.mjs 5/5.
+- State: all ACs done except owner-side checklist items (A1–A4, B5–B6, B8). CI billing reclassified per owner (D-bucket).
+- Next step: PR this branch; owner files the GitHub-Support purge ticket (days of turnaround — the critical path).
