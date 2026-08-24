@@ -114,3 +114,9 @@ Ops/docs task — no product code; anything discovered that needs code becomes a
   - **Verification**: root `pnpm test` green (exit 0) after all edits; dev.test.mjs 5/5.
 - State: all ACs done except owner-side checklist items (A1–A4, B5–B6, B8). CI billing reclassified per owner (D-bucket).
 - Next step: PR this branch; owner files the GitHub-Support purge ticket (days of turnaround — the critical path).
+
+### 2026-08-23 — Claude — close-session (Gate 6)
+- Done: PR #122 opened; Gate-6 sweep — two lessons to `docs/lessons.md` (cold-clone-proof entrypoints; squash-merge branch verdicts come from the PR ledger, not ancestry), code-map dev.mjs row updated to the dependency-closure spelling, next-steps distilled (new top entry + 3 supersession amendments), ADR-0053 in-branch. Memory (auto-memory files) updated same session. PR merged on the owner's close-session ask; task retired to done/INDEX in the standard postmerge move.
+- State: task COMPLETE. Repo hardened; origin = `main` only; all machine-executable flip prep done.
+- Next step (owner, critical path): file the GitHub-Support purge ticket (runbook stage 0.3a) — everything else in checklist buckets A/B can run in parallel with its turnaround.
+- Open questions: none for this task; open items live in the checklist (bucket A/B) and next-steps.
