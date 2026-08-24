@@ -19,6 +19,10 @@ import {
   bumpedJsonConfig,
   changelogEntryFor,
   ghReleaseCommand,
+  EULA_LINE_BUDGET,
+  EULA_MAX_COLUMNS,
+  checkEulaText,
+  verifyDmgCarriesEula,
 } from './release-desktop.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -101,4 +105,56 @@ test('ghReleaseCommand names every stable asset and never auto-runs', () => {
   const cmd = ghReleaseCommand('0.1.0');
   assert.match(cmd, /^gh release create v0\.1\.0 --repo snugprotocol\/snug /);
   for (const asset of STABLE_ASSETS) assert.ok(cmd.includes(`release-out/${asset}`), asset);
+});
+
+// ---------------------------------------------------------------- TASK-20260823-legal-terms-privacy-eula AC10/AC11
+
+test('checkEulaText: ASCII only, short lines, under budget — and it refuses each violation by name', () => {
+  const good = 'Snug for macOS - License Agreement\n\nLICENSE. Free software.\n';
+  assert.deepEqual(checkEulaText(good), { ok: true });
+  const curly = checkEulaText(good.replace('-', '—'));
+  assert.equal(curly.ok, false);
+  assert.match(curly.reason, /non-ASCII/);
+  const long = checkEulaText(`${good}${'x'.repeat(EULA_MAX_COLUMNS + 1)}\n`);
+  assert.equal(long.ok, false);
+  assert.match(long.reason, /columns/);
+  const tall = checkEulaText(`${good}${'a\n'.repeat(EULA_LINE_BUDGET)}`);
+  assert.equal(tall.ok, false);
+  assert.match(tall.reason, /lines/);
+  assert.equal(checkEulaText('').ok, false);
+  assert.equal(checkEulaText('   \n').ok, false);
+});
+
+test('the REAL src-tauri/EULA.txt passes checkEulaText (the release script runs this before it builds)', () => {
+  const eula = readFileSync(path.join(ROOT, 'apps', 'desktop', 'src-tauri', 'EULA.txt'), 'utf8');
+  assert.deepEqual(checkEulaText(eula), { ok: true });
+});
+
+test('verifyDmgCarriesEula: decodes the SLA resource out of a REAL udifderez dump and matches the FULL text', () => {
+  // Captured from `hdiutil udifderez -xml` over a DMG built WITH bundle.licenseFile
+  // (lesson 2026-08-24: pin the parser to the platform's real output, keep the sample).
+  const withSla = readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'udifderez-with-sla.xml'), 'utf8');
+  const eula = readFileSync(path.join(ROOT, 'apps', 'desktop', 'src-tauri', 'EULA.txt'), 'utf8');
+  assert.deepEqual(verifyDmgCarriesEula(withSla, eula), { ok: true });
+  // A DIFFERENT text is refused — full-text compare, so a stale EULA with the same
+  // title cannot ride (Gate-5 review F6); the reason still names the first lines.
+  const wrong = verifyDmgCarriesEula(withSla, 'Some Other Product - License Agreement');
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.reason, /first line/);
+  const stale = verifyDmgCarriesEula(withSla, `${eula}\nOne extra clause.\n`);
+  assert.equal(stale.ok, false);
+});
+
+test('verifyDmgCarriesEula: a REAL dump of a DMG built WITHOUT licenseFile is refused (no SLA at all)', () => {
+  const noSla = readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'udifderez-no-sla.xml'), 'utf8');
+  const verdict = verifyDmgCarriesEula(noSla, 'Snug for macOS - License Agreement');
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /no SLA|LPic/);
+  // …and names the deprecation, so the day udifrez/udifderez vanish the failure is diagnosable.
+  assert.match(verdict.reason, /udifderez/);
+});
+
+test('verifyDmgCarriesEula: garbage in → a named refusal, never a throw', () => {
+  assert.equal(verifyDmgCarriesEula('', 'x').ok, false);
+  assert.equal(verifyDmgCarriesEula('not xml at all', 'x').ok, false);
 });

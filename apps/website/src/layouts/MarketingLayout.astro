@@ -3,6 +3,7 @@
 // dark-committed brand surface, sticky nav, footer. The docs hub has its own shell
 // (Starlight); both draw from the same tokens.
 import { site, siteMode } from '../config/site';
+import { SECURITY_POLICY_URL, THREAT_MODEL_URL } from '@playground/legal/legalShared';
 import '../styles/site.css';
 
 interface Props {
@@ -98,6 +99,13 @@ const { title, description } = Astro.props;
           <a href={site.githubRepo} target="_blank" rel="noopener">Reference implementation</a>
           <a href={site.specRepo} target="_blank" rel="noopener">Spec repository</a>
           <a href={`mailto:${site.securityEmail}`}>{site.securityEmail}</a>
+        </nav>
+        <nav aria-label="Legal">
+          <h3>Legal</h3>
+          <a href="/terms/">Terms</a>
+          <a href="/privacy/">Privacy</a>
+          <a href={THREAT_MODEL_URL} target="_blank" rel="noopener">Threat model</a>
+          <a href={SECURITY_POLICY_URL} target="_blank" rel="noopener">Security policy</a>
         </nav>
       </div>
     </footer>
@@ -196,7 +204,7 @@ const { title, description } = Astro.props;
 
   .footer-grid {
     display: grid;
-    grid-template-columns: 2fr 1fr 1fr 1fr;
+    grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
     gap: var(--space-6);
   }
 
@@ -232,6 +240,17 @@ const { title, description } = Astro.props;
 
   .footer-grid nav a:hover {
     color: var(--ember-bright);
+  }
+
+  @media (max-width: 1000px) {
+    /* Five tracks squeeze below ~100px each here; three real columns with the brand
+       spanning reads better and nothing overflows (Gate-5 review F9). */
+    .footer-grid {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+    .footer-brand {
+      grid-column: 1 / -1;
+    }
   }
 
   @media (max-width: 760px) {

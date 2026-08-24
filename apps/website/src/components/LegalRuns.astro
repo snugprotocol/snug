@@ -1,0 +1,25 @@
+---
+// LegalRuns.astro — one run of legal prose: plain text, or a link. In-app paths
+// (/terms, /privacy) become site routes; everything else is external and opens in a
+// new tab (the site-wide rule externalLinkTargets.test.ts enforces for literal hrefs).
+import type { Run } from '@playground/legal/legalShared';
+
+interface Props {
+  runs: Run[];
+}
+const { runs } = Astro.props;
+---
+
+{
+  runs.map((run) =>
+    typeof run === 'string' ? (
+      run
+    ) : run.href.startsWith('/') ? (
+      <a href={`${run.href}/`}>{run.label}</a>
+    ) : (
+      <a href={run.href} target="_blank" rel="noopener">
+        {run.label}
+      </a>
+    ),
+  )
+}

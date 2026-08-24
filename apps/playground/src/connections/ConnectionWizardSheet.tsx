@@ -101,6 +101,7 @@ import { chooseAuthOption } from '../state/authKindChoice.js';
 import { hasLiveAppHost, notifyAppRefresh } from '../state/appHosts.js';
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
+import { isPrivateNetworkHost } from '../security/privateHost.js';
 import { Sheet } from '../ui/Sheet.js';
 import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
 
@@ -246,18 +247,10 @@ function HostList({ hosts, testId }: { hosts: readonly string[]; testId: string 
  * String-shaped on purpose: `192-168-1-1.attacker.example` is a PUBLIC name and
  * must not raise the band, or the band stops meaning anything.
  */
-function isPrivateNetworkHost(host: string): boolean {
-  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host.trim());
-  if (match === null) return false;
-  const octets = match.slice(1).map(Number);
-  if (octets.some((octet) => Number.isNaN(octet) || octet > 255)) return false;
-  const [a, b] = octets as [number, number, number, number];
-  if (a === 10 || a === 127) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254) return true;
-  return false;
-}
+// isPrivateNetworkHost now lives in security/privateHost.ts (TASK-20260823-legal-terms-
+// privacy-eula AC7): the local-model band needed a SECOND predicate over the same
+// parser, and two copies of one classifier drift. Bytes unchanged; this comment stays
+// so the doctrine above still reads next to its use at the review screen.
 
 // ---------------------------------------------------------------------------
 // LAN-class screens (ADR-0023 D1/D2/D4)
@@ -404,6 +397,21 @@ function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: (
         sign-in details are never given to Snug, and you can unlink it from your phone at any
         time.
       </span>
+      {/*
+        THE R-9 BAND (ADR-0055 §3; TASK-20260823-legal-terms-privacy-eula AC9). The
+        operational half above was always here; the other-people half was stated nowhere
+        in the UI. It goes on THIS screen, before the button, because the people it is
+        about cannot be asked: the user is the only one who can weigh it. A WARNING, not
+        a refusal — the button below stays enabled.
+      */}
+      <div className="hint" role="note" data-testid="linked-device-third-party-band">
+        The other people in your chats have never agreed to any of this. When an app analyses a
+        thread, the content of their messages goes to your model provider; Snug scrubs the names
+        and numbers it has seen first, but the words themselves go, and the scrub is anti-default,
+        not anti-adversarial — it stops the obvious, not the determined. Linking an automation
+        tool to a personal account is against {provider}&apos;s terms, and accounts have been
+        banned for it.
+      </div>
       {qr === undefined ? (
         <Button variant="primary" disabled={busy} onClick={() => void start()}>
           {busy ? 'starting the helper…' : 'start linking'}

@@ -285,6 +285,14 @@ posture is "we collect nothing as architecture", and this is the first automatic
 request the desktop app makes that is not the user's own work. It goes to a third party we
 do not control rather than to us, it is disclosed in Settings copy and toggleable — but a
 user who wants zero background traffic has to discover the switch.
+*Where the user is told (ADR-0055):* the DMG's license screen — the product's one clickwrap —
+carries the sentence verbatim with the off-switch, and `/privacy` embeds the same
+byte-pinned constant (`UPDATE_CHECK_DISCLOSURE`, `apps/playground/src/legal/legalShared.ts`;
+`dmgEula.test.ts` pins the copies). The assent screen is the DMG's only: the updater
+installs `Snug.app.tar.gz` in place with no screen, so a user who fetches that asset
+directly meets the terms via Settings → about. Once a messaging account is linked, the
+helper's launch-time reconnect (ADR-0037 §3) is a second automatic egress, named in the
+same places.
 
 **R-31 — An installed starter's update inherits the previous version's grants.** Data,
 `auth:<appId>:*` credentials, approved connections and chat are all keyed on `app_id`,
@@ -421,11 +429,16 @@ model through the data lane (`data_read` results and replayed chat turns), which
 app-shaped and not scrubbable at this seam; and message content itself reaches the provider
 by design. Third-party consent therefore remains a real residual — but the "guard not
 where the docs put it" defect this section previously recorded is closed.
+*Where the user is told (ADR-0055):* on the linking screen itself, before "start linking"
+(`linked-device-third-party-band`, TASK-20260823-legal-terms-privacy-eula), and in the
+published privacy statement's third-party table — disclosure sits beside the control, never
+in place of it.
 
 **R-10 — ToS and account-ban risk.** Unofficial WhatsApp automation violates WhatsApp's
 terms and accounts have been banned for it. Pacing and rate caps are harm reduction, never
 detection evasion, and are not a guarantee. Disclosed in the wizard consent copy and the
-starter README before the user connects.
+starter README before the user connects — and, since ADR-0055, on the linking screen's
+third-party band and in `/terms` + `/privacy`.
 
 **R-27 — A protected file whose secrets are both lost is unrecoverable.**
 [ADR-0043](decisions/0043-passphrase-encryption-at-rest.md) has no backdoor, no escrow and

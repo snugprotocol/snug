@@ -1,0 +1,16 @@
+---
+// terms.astro — the public copy of the terms of use (ADR-0055 §1/§4). Content lives in
+// the playground's legal/terms.ts; this page only frames it.
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import LegalDoc from '../components/LegalDoc.astro';
+import { TERMS } from '@playground/legal/terms';
+---
+
+<MarketingLayout
+  title="Terms of use — Snug"
+  description="The terms for the Snug website, hosted Playground and macOS app: MIT-licensed, as-is, pre-1.0, nothing held on our side."
+>
+  <div class="container">
+    <LegalDoc doc={TERMS} />
+  </div>
+</MarketingLayout>

@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
-import { Link, NavLink, Route, Routes } from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 
 import {
   clearOpenUserFileError,
@@ -31,6 +31,11 @@ import { Button } from './ui/Button.js';
 import { initProtectOffer } from './vault/protectOffer.js';
 import { UnlockScreen } from './vault/UnlockScreen.js';
 import { Logo } from './ui/Logo.js';
+import { ExternalLink } from './ui/ExternalLink.js';
+import { LICENSE_URL, PRIVACY_PATH, TERMS_PATH, THREAT_MODEL_URL } from './legal/legalShared.js';
+import { PRIVACY } from './legal/privacy.js';
+import { TERMS } from './legal/terms.js';
+import { LegalPage } from './views/LegalPage.js';
 import { WebsiteLink } from './ui/WebsiteLink.js';
 import { FeedbackMenu } from './feedback/FeedbackMenu.js';
 import { ReportErrorLink } from './feedback/ReportErrorLink.js';
@@ -217,8 +222,13 @@ export function App(): ReactElement {
           <Route path="/settings" element={<SettingsView />} />
           <Route path="/download" element={<DownloadView />} />
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+          {/* ADR-0055 §1: disclosure, never a gate — ordinary routes, footer-linked,
+              rendered offline on the desktop shell from bundled data. */}
+          <Route path={TERMS_PATH} element={<LegalPage doc={TERMS} />} />
+          <Route path={PRIVACY_PATH} element={<LegalPage doc={PRIVACY} />} />
         </Routes>
       </main>
+      <ShellFooter />
       {/* ONE app-level wizard mount (P3, inheriting AL-04's M9 reason): the three entry
           points — chat directive card, Settings slot row, run-header error CTA — live in
           different views, and a per-view mount would strand the minutes-lived singleton
@@ -439,5 +449,34 @@ function IdentityAvatar({ label, picture }: { label: string; picture?: string })
     <span className="identity-avatar" aria-hidden="true">
       {label.slice(0, 1).toUpperCase()}
     </span>
+  );
+}
+
+/**
+ * The shell footer (ADR-0055 §1; TASK-20260823-legal-terms-privacy-eula AC4): terms ·
+ * privacy · threat model · MIT, on every route EXCEPT inside a running app — the app
+ * view is the product surface and its either/or mobile band is pinned at ≤1000px by
+ * mobile.spec.ts — and the OAuth callback popup, where a footer is noise. Links, never a
+ * gate: under Berman v. Freedom Financial a footer binds nobody, and that is fine —
+ * these pages do disclosure work (the DMG's EULA is the product's one clickwrap).
+ */
+function ShellFooter(): ReactElement | null {
+  const { pathname } = useLocation();
+  if (pathname.startsWith('/run/') || pathname.startsWith('/oauth/')) return null;
+  return (
+    <footer className="shell-footer" aria-label="legal">
+      <Link to={TERMS_PATH} data-testid="footer-terms">
+        terms
+      </Link>
+      <Link to={PRIVACY_PATH} data-testid="footer-privacy">
+        privacy
+      </Link>
+      <ExternalLink href={THREAT_MODEL_URL} data-testid="footer-threat-model">
+        threat model
+      </ExternalLink>
+      <ExternalLink href={LICENSE_URL} data-testid="footer-license">
+        MIT license
+      </ExternalLink>
+    </footer>
   );
 }
