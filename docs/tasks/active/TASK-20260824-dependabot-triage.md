@@ -120,3 +120,10 @@ Lockfile + vitest touch EVERY package's test runner → the full root run is the
 - **State**: branch `fix/TASK-20260824-dependabot-triage`, 7 commits, ready for review/PR.
 - **Next step**: PR + merge; then re-read the Security tab for AC1 (the 32 fixed alerts close only once the lockfile is on `main`). AC4 closed 2026-08-24 (gate green, 35/35).
 - **Open questions**: whether to delete the stray `/Users/jeetu/node_modules/` (315 packages, outside any repo — owner call; it can shadow any workspace package).
+
+### 2026-08-24 — Jeetu/Claude — session (Gate 6 — close-session)
+- Done: Gate 6 audit. Journal (this file, three entries), lessons (4 rules in `docs/lessons.md`), docs drift (code-map row, next-steps pruned + 2 follow-ups, ADR-0056 accepted + Outcome, decisions README index) — all landed in-branch during Gates 3–5 and re-verified here. `docs/architecture.md` re-read and left unchanged: its website and external-dependency lines are unversioned ("a static Astro build"), so the 5→7 bump introduces no drift there. **`packages/protocol` untouched → no spec-changelog entry and no spec-sync step (C3 not engaged).** Root-file sync rule: CLAUDE.md/AGENTS.md/GEMINI.md unchanged — this task added no convention.
+- Verification at close: working tree clean, 8 commits, `pnpm audit:deps` reports no un-accepted high/critical (was 6), desktop `gate` GREEN 35/35, every package suite green under vite 6 / vitest 3 / astro 7.
+- State: branch `fix/TASK-20260824-dependabot-triage` ready to push, PR, merge.
+- Next step: push → PR → merge → re-read the Security tab (AC1's final confirmation is only readable once the lockfile is on `main`), then retire this file to `docs/tasks/done/INDEX.md` per ADR-0027.
+- Open questions: the stray `/Users/jeetu/node_modules/` (315 packages, outside any repo) — owner call whether to delete; it can shadow any workspace package the way it shadowed `cookie@2`.
