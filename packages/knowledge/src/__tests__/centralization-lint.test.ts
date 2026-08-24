@@ -11,21 +11,33 @@
 //     code literals, not data files or fs reads);
 //   - located OUTSIDE packages/*/src and apps/*/src (scripts/, tools/, root-level code,
 //     nested src dirs not directly under a workspace package);
-//   - phrased without any PROMPT_MARKER hit ("You are|MUST respond|CRITICAL|system
-//     prompt") — plenty of real prompts contain none of these;
+//   - phrased without any PROMPT_MARKER hit (an anchored "You are", or "MUST respond" /
+//     "CRITICAL" / "system prompt" anywhere) — plenty of real prompts contain none of
+//     these, and a prompt whose "You are" sits mid-line is now among them;
 //   - inside nested ${`...`} template interpolation, which the regex cannot pair.
 // Reviewers should still ask "is this string LLM-bound?" for any sizable text literal.
+//
+// KNOWN FALSE-POSITIVE SURFACE (TASK-20260824). The heuristic reads code, but `You are`
+// is ordinary English: `apps/playground/src/legal/eula.ts` carries "the version you are
+// running" in the DMG license text and tripped this lint for the whole of PR #125's life
+// -- a permanently-red tripwire, which trains its only reader to ignore it. Hence the
+// marker anchors `You are` (and ONLY that one) to the start of a line or of the literal;
+// see PROMPT_MARKER in helpers.ts for why the anchor class is [\n`] rather than \n, and
+// `centralization-lint-marker.test.ts` for the rows that pin it. Do NOT re-loosen it to
+// clear a miss without adding a fixture there: prose using the second person is expected
+// in legal, marketing and docs strings and is not a violation.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { repoRoot, walkFiles } from './helpers.js';
-
-const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
-const PROMPT_MARKER = /You are|MUST respond|CRITICAL|system prompt/i;
-const MAX_LITERAL_CHARS = 400;
-// Handles escaped backticks; nested ${`...`} interpolation is beyond the heuristic.
-const TEMPLATE_LITERAL = /`(?:[^`\\]|\\[\s\S])*`/g;
+import {
+  CODE_EXTENSIONS,
+  MAX_LITERAL_CHARS,
+  PROMPT_MARKER,
+  TEMPLATE_LITERAL,
+  repoRoot,
+  walkFiles,
+} from './helpers.js';
 
 function srcDirs(): string[] {
   const dirs: string[] = [];
