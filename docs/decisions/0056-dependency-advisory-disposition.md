@@ -1,6 +1,6 @@
 # 0056 — Dependency advisories: classify by reachability, fix or dismiss with a recorded reason, gate locally
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260824-dependabot-triage; → accepted on plan approval)
+- **Status:** accepted (owner plan approval 2026-08-24)
 - **Date:** 2026-08-24
 - **Task:** TASK-20260824-dependabot-triage
 
@@ -27,3 +27,11 @@ Enabling Dependabot for the flip (ADR-0053 hardening) surfaced 36 open alerts on
 - The Security tab at flip shows zero open alerts, every closed one with a disposition.
 - Four accepted risks carry a `reviewBy` of 2026-11-30 (react-router v7 migration window; Tauri gtk-0.20 re-check).
 - Future Dependabot alerts have a classification ladder and a one-command local check.
+
+## Outcome (2026-08-24)
+
+All 36 alerts dispositioned: **32 fixed** by upgrade (vite 5→6.4.3, vitest 2→3.2.7, nanoid ≥3.3.18 via overrides, astro 5.18→7.2.5 + Starlight 0.35→0.41.7, which also dropped sharp 0.34.5), **4 dismissed** with evidence (3× react-router `not_used`, glib `tolerable_risk`). PR #121 closed as superseded — it bumped `astro` alone, which could never merge against Starlight 0.35's `astro ^5.5` peer.
+
+Two decisions were corrected by contact with the tree, and both are recorded in [lessons.md](../lessons.md): nanoid comes from **postcss**, not vitest (so the "belt-and-braces" override was in fact required), and a `>=` override target resolves to the newest **major** — `">=3.3.18"` installed nanoid 6.0.1 before being pinned to `"^3.3.18"`.
+
+The upgrade's real verification was the rendered output, not the exit code: all 26 built pages were confirmed **byte-identical in prose** against the Astro 5 baseline, with the differences isolated to CSS ordering, scoped-style hashes, and `compressHTML: 'jsx'` whitespace between flex/grid children that space via `gap`.
