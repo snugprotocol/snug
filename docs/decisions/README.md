@@ -70,3 +70,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0049 — Web-surface registry seats and genuine web client secrets](0049-web-surface-auth-options.md)
 - [0050 — Specification 1.0: promotion, document layout, and the launch publication set](0050-spec-10-publication.md)
 - [0051 — Public spec pages: engineering header stays home; the website renders a public header](0051-public-spec-presentation.md)
+- [0054 — Website + playground deployment: in-repo direct-upload script, deploy from merged `main`](0054-web-deploy-tooling.md)

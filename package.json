@@ -9,7 +9,7 @@
     "build": "turbo run build",
     "dev": "node scripts/dev.mjs",
     "check-dev": "node --test scripts/dev.test.mjs",
-    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop && pnpm run check-website-sync && pnpm run check-dev",
+    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop && pnpm run check-website-sync && pnpm run check-dev && pnpm run check-deploy-web",
     "lint": "turbo run lint",
     "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke",
     "update-code-map": "node --test scripts/update-code-map-counts.test.mjs && node scripts/update-code-map-counts.mjs",
@@ -19,12 +19,14 @@
     "check-gate-local": "node --test scripts/gate-local.test.mjs",
     "gate:local": "node scripts/gate-local.mjs",
     "check-release-desktop": "node --test scripts/release-desktop.test.mjs",
-    "check-website-sync": "node --test scripts/check-website-sync.test.mjs && node scripts/check-website-sync.mjs"
+    "check-website-sync": "node --test scripts/check-website-sync.test.mjs && node scripts/check-website-sync.mjs",
+    "check-deploy-web": "node --test scripts/deploy-web.test.mjs"
   },
   "devDependencies": {
     "jsdom": "^30.0.1",
     "turbo": "^2.0.0",
     "typescript": "^5.5.0",
-    "vitest": "^2.0.0"
+    "vitest": "^2.0.0",
+    "wrangler": "^4"
   }
 }
