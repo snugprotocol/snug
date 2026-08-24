@@ -24,6 +24,37 @@ export const generatedDir = path.join(packageRoot, 'src', 'generated');
 
 export const SKILL_CREATOR_PREFIX = 'skills/skill-creator/';
 
+// --- centralization lint (ADR-0004) primitives -------------------------------
+// Shared so `centralization-lint-marker.test.ts` can pin PROMPT_MARKER's behaviour
+// against the REAL value rather than a retyped copy (a fence that restates its data
+// cannot test it -- lessons.md 2026-08-13).
+
+export const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+
+/**
+ * Markers that suggest a literal is LLM-bound.
+ *
+ * `You are` is ANCHORED; the other three are not. It is the only marker that occurs in
+ * ordinary second-person prose -- `apps/playground/src/legal/eula.ts` says "the version
+ * you are running" in the DMG license text, which is not a prompt and must not trip this
+ * lint (the string's only consumers are the Settings->about screen and the byte-pinned
+ * DMG SLA resource).
+ *
+ * The anchor class is [\n`] and NOT bare \n on purpose: `TEMPLATE_LITERAL` matches
+ * include the surrounding backticks, so a system prompt written the natural way --
+ * `You are Snug, ...` -- carries its marker at index 1, neither at ^ nor after a newline.
+ * A \n-only anchor would clear the EULA and silently stop catching real prompts.
+ *
+ * `\b` keeps "You aren't" from matching.
+ */
+export const PROMPT_MARKER = /(?:^|[\n`])\s*(?:You are\b)|MUST respond|CRITICAL|system prompt/i;
+
+export const MAX_LITERAL_CHARS = 400;
+
+// Handles escaped backticks; nested ${`...`} interpolation is beyond the heuristic.
+// Used only via String.prototype.match, which resets lastIndex despite the /g flag.
+export const TEMPLATE_LITERAL = /`(?:[^`\\]|\\[\s\S])*`/g;
+
 /** Recursively list absolute file paths under dir (sorted). */
 export function walkFiles(dir: string): string[] {
   const out: string[] = [];
