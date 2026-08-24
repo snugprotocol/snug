@@ -647,3 +647,6 @@ folding (dispositions below).
   `dmgEula.test.ts`, 5 new node tests over REAL fixtures, and a real build whose SLA was
   verified by the platform three ways (udifderez parse, full-text decode-compare,
   `hdiutil attach` presenting the agreement before mount). I sign off on this diff.
+
+### 2026-08-24 — Claude (for Jeetu) — session (push + PR)
+- Owner: "review done. push" — branch pushed to origin and the PR opened (merge stays the owner's act). Footer question answered separately (threat-model link kept as-is pending an owner call).
