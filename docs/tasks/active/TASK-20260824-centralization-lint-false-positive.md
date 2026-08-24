@@ -1,6 +1,6 @@
 # TASK-20260824-centralization-lint-false-positive: centralization lint reds on legal prose; retire the stray ~/node_modules
 
-- **Status**: in-review (Gates 3-5 complete; awaiting review + merge)
+- **Status**: in-review (Gates 3-6 complete; awaiting review + merge)
 - **Owner**: Jeetu
 - **Risk tier**: low — test-file change in `packages/knowledge` (the lint itself), no product code, no protocol/runner/auth, no publish/CI config. Owner-selected Low; recorded because `knowledge` is a widely-depended package (the change touches only its `__tests__/`, not `src/` or `prompts/`, so no dependent behaviour moves).
 - **Branch**: `fix/TASK-20260824-centralization-lint-false-positive`
@@ -153,3 +153,18 @@ Order:
   metro-symbolicate mime mkdirp nanoid node-gyp-build* pino print-chrome-path
   parser react-native rimraf semver terser tlds update-browserslist-db yaml
 ```
+
+### 2026-08-24 17:4X UTC — Jeetu (with Claude) — close-session (Gate 6)
+
+- **Done**:
+  - Reconciled AC9's fix against the existing 2026-08-06 lesson, which says an undeclared `zod` import is fixed "by removing the import, not adding the dep" — the opposite of what I did. **The rule does not conflict; its remedy was scoped to a PHANTOM import.** `cards.ts` uses zod at runtime and for a security-relevant purpose: `chatCardSchema` is the strict re-validation that makes a drifted or crafted card row render NO card rather than a lying one (ADR-0031 §3), so the import cannot be removed. The rule's other half — "every runtime import needs a dep in that package's own package.json" — is exactly the fix applied. Recorded in `lessons.md` as an amendment to that entry rather than a new competing rule, so the next reader meets one rule with two branches instead of two rules that appear to disagree.
+  - Verified the ambient→declared version move is safe rather than assuming it: the tree had been resolving zod **3.25.76** from the stray directory; the declaration pins **4.4.3** (matching `packages/protocol` and `apps/server`). Both APIs `cards.ts` uses (`z.strictObject`, `z.ZodIssueCode.custom`) exist in v4, and `cards.test.ts` + `chatCards.test.tsx` pass **21/21** against it — including the strict re-validation rows. A silent major-version change under a security boundary was the risk worth spending a command on.
+  - `lessons.md`: three rules added — two in "Trusting a green run" (the outside-the-repo cache invalidation, and the ambient-dependency rule) and one in "Tests that can fail" (the extractor-token/anchoring rule, carrying the fix-the-marker-not-the-prose half) — plus the amendment to the 2026-08-06 entry described above.
+  - Docs drift check — and I was wrong to expect none. `docs/architecture.md`'s dependency graph is indeed unmoved (knowledge's public surface is unchanged; a declaration for an already-imported package does not move the graph), but **`docs/code-map.md` had stale test counts on three rows**: `knowledge` 183 (actual 185 BEFORE this task, 195 after — so already stale by 2, not my doing), playground 1471→1639, and db 416→419 which I would not have found by hand. `pnpm run update-code-map` measures a real run and rewrites the rows; it corrected all three and now reports "already match the measured run". Its existence is the real finding: the script works, it just is not wired into any gate, so counts rot between sessions that remember it. Queued in next-steps as a candidate `--check` seat beside the other root `check-*` scripts. The knowledge row also gained a sentence naming the anchored marker and the helpers.ts/marker-spec split.
+  - `docs/next-steps.md`: the stray-`node_modules` item was pruned last session (ADR-0027) and carries the `cookie`-stays decision forward; this session added a dated entry for the zod declaration (with a note that other packages may carry the same class of undeclared import — found by accident here, worth a deliberate sweep) and the code-map/gate observation.
+  - No ADR: confirmed at Gate 2 and unchanged. ADR-0004's doctrine ("all LLM-bound prompt content lives in `packages/knowledge/prompts/`") is untouched; only the precision of its tripwire moved, and that rationale lives in the test header where the next reader will look. AC9 is a missing dependency declaration, not a decision.
+  - **No `packages/protocol` change → no spec-changelog entry, no spec-sync.** Verified against the diff, not assumed.
+  - Root-file sync rule (`CLAUDE.md` / `AGENTS.md` / `GEMINI.md`): nothing in this task changes their content — no new command, constraint, or convention.
+- **State**: Gates 1–6 complete on `fix/TASK-20260824-centralization-lint-false-positive`. All 9 ACs met, tree clean, root `pnpm test` exit 0.
+- **Next step**: open the PR, then move this file to `docs/tasks/done/` with a one-line `INDEX.md` entry once merged (ADR-0027 — the file is deleted, git history is the archive).
+- **Open questions**: none. Both Gate-2 questions were settled by the owner's approval; the mid-task zod scope change was explicitly approved.
