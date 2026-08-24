@@ -1,0 +1,14 @@
+{
+  "$comment": "Time-boxed acceptances for dependency advisories (ADR-0056). Every entry states its evidence (`reason`), names the task that decided it (`task`), and expires (`reviewBy`) so an accepted risk cannot silently become permanent — `pnpm audit:deps` reds the day after. `tool: \"cargo\"` entries document Rust-side dismissals; the npm gate ignores them. Prune an entry once the advisory stops being reported (the gate lists prunable entries).",
+  "entries": [
+    {
+      "ghsa": "GHSA-wrw7-89jp-8q8g",
+      "package": "glib",
+      "tool": "cargo",
+      "class": "not-a-shipped-target",
+      "reason": "Tauri 2's gtk-0.18 Linux stack pins glib 0.18.5 (via gdk 0.18.2); the fix needs glib 0.20, an upstream Tauri change. Snug ships a macOS DMG only — Linux is compiled in the CI workspace leg but never released. The finding is local Iterator unsoundness, not a remotely reachable path.",
+      "task": "TASK-20260824-dependabot-triage",
+      "reviewBy": "2026-11-30"
+    }
+  ]
+}
