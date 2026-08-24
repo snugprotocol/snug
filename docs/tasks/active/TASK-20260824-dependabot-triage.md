@@ -67,7 +67,7 @@ The 36 alerts are **11 unique advisories across 8 packages**, double/triple-coun
 
 **Step 3 — Dismissals (alerts 4, 33, 34, 35 — the remaining 4).**
 - `gh api -X PATCH repos/snugprotocol/snug/dependabot/alerts/{33,34,35} -f state=dismissed -f dismissed_reason=not_used -f dismissed_comment="TASK-20260824-dependabot-triage: declarative router only (BrowserRouter/HashRouter/Routes/Link); no data router → deserializeErrors unreachable; every Link/navigate target is an internal literal or /run/<store-id>; v7 migration queued post-launch"`.
-- Alert 4 (glib): `dismissed_reason=no_bandwidth`… no — use `tolerable_risk` with comment "Tauri 2 gtk-0.18 Linux stack pins glib 0.18; fix requires upstream; Linux is not a shipped target (macOS DMG only); local unsoundness, not remotely reachable; re-check on Tauri gtk-0.20".
+- Alert 4 (glib): `dismissed_reason=tolerable_risk` with comment "Tauri 2 gtk-0.18 Linux stack pins glib 0.18; fix requires upstream; Linux is not a shipped target (macOS DMG only); local unsoundness, not remotely reachable; re-check on Tauri gtk-0.20".
 - Allowlist file gains the same four entries (GHSA-337j, GHSA-jjmj, GHSA-wrjc, GHSA-wrw7) with `reviewBy` = 2026-11-30 (post-launch v7 migration window) so `pnpm audit:deps` stays green on `main` and REDS when the review date lapses.
 - Verify AC1: `gh api 'repos/snugprotocol/snug/dependabot/alerts?state=open'` returns `[]` (fixed alerts close automatically once the lockfile lands on `main` — so the final AC1 check is a post-merge step, journaled).
 
