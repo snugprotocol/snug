@@ -36,4 +36,4 @@ Three forces decide it:
 - Self-hosters are the only audience for server-side features; server work is prioritized as OSS completeness, not hosted-instance need.
 - The landing page may state "no accounts, no telemetry, nothing to breach on our side" as a claim of architecture.
 - Anything that would require the hosted instance to grow a backend (subscription custody, hosted background jobs) is automatically a 2.0-era question with its own ADR — the default answer is no.
-- Source doctrine: `internal/07-roadmap.md` §2 (pre-launch strategy file, C4 — this ADR is the public record of the decision).
+- Source doctrine: the private roadmap §2 (pre-launch strategy, C4 — this ADR is the public record of the decision).

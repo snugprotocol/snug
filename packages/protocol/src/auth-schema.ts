@@ -1,8 +1,8 @@
 /**
  * Dynamic Auth spec schema — INTERNAL protocol surface (AL-02, plan D1).
  *
- * Ported from the two source systems (codenames OProject/IProject — C4):
- * OProject's five-kind discriminated union + `userLayer` embedding, IProject's
+ * Ported from the two ancestor production systems:
+ * one's five-kind discriminated union + `userLayer` embedding, the other's
  * `.strict()` ingest posture. Persisted in the `snug_auth_specs` table
  * (userdb-schema.ts, schema v3) with credential VALUES under `snug_secrets`
  * `auth:` keys per ADR-0014 (local-first custody).

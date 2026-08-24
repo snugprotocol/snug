@@ -1,7 +1,7 @@
 /**
  * paramsToAuthSpec — the deterministic hints→spec transformer, REWRITTEN per plan D2
- * (AL-02): OProject's five-kind shapes + two-layer userLayer synthesis, reconciled
- * with IProject's fail-closed posture. No LLM call ever happens here; when inputs are
+ * (AL-02): one ancestor system's five-kind shapes + two-layer userLayer synthesis, reconciled
+ * with a second ancestor system's fail-closed posture. No LLM call ever happens here; when inputs are
  * insufficient it returns `{ spec: null, reason }` so the caller (AL-04's wizard tool)
  * can ask for more, never guess.
  *

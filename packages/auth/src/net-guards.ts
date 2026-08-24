@@ -1,5 +1,5 @@
 /**
- * SSRF guard, honest browser edition (AL-03 plan D3.5) — ported from OProject's SSRF
+ * SSRF guard, honest browser edition (AL-03 plan D3.5) — ported from an ancestor system's SSRF
  * module MINUS the DNS half: a browser cannot pre-resolve hostnames, so DNS-rebinding
  * to private IPs is NOT claimed defended here. What this guard does reject, fail
  * closed, is every LITERAL non-routable target: private/loopback/link-local/reserved
@@ -12,7 +12,7 @@
  * sees one canonical form. Browser-safe: no node imports (AC5 lint).
  */
 
-/** [baseInt, maskInt] pairs — the OProject IPv4 block table, verbatim. */
+/** [baseInt, maskInt] pairs — an ancestor system's IPv4 block table, verbatim. */
 const IPV4_BLOCKED: ReadonlyArray<readonly [number, number]> = [
   [0x7f000000, 0xff000000], // 127.0.0.0/8   — loopback
   [0x0a000000, 0xff000000], // 10.0.0.0/8    — RFC 1918

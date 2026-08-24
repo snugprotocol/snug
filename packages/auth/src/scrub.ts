@@ -1,5 +1,5 @@
 /**
- * Response scrubber — ported from OProject's auth-fetch (AL-03 plan D4).
+ * Response scrubber — ported from an ancestor system's auth-fetch (AL-03 plan D4).
  *
  * Threat model: the app (or a prompt-injected LLM driving it) controls the URL within
  * the frozen host ceiling. If it targets a debug/echo endpoint on an approved host,

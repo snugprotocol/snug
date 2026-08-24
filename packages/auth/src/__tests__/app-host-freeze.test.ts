@@ -1,4 +1,4 @@
-// AL-02 D5/D7: IProject's host-freeze predicate ported as pure functions — the
+// AL-02 D5/D7: an ancestor system's host-freeze predicate ported as pure functions — the
 // service-level outbound ceiling (N2b defense-in-depth) and the ⊆ check. Exact-host
 // matching ONLY: no suffix tricks, empty allowlists fail closed.
 import { describe, expect, it } from 'vitest';

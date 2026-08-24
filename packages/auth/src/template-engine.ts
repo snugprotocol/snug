@@ -1,5 +1,5 @@
 /**
- * Header-template engine for `request.headerTemplate` strings — ported from OProject
+ * Header-template engine for `request.headerTemplate` strings — ported from an ancestor system
  * (AL-02 plan D7) and rewritten ASYNC-FIRST on WebCrypto (plan D6): every helper and
  * both render functions return Promises, and the PUBLIC signature is async from day
  * one so AL-03 consumes it async with no sync→async break later. No node crypto or

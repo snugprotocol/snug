@@ -9,7 +9,7 @@ The working agreements every human and agent follows. Read this before writing o
 - **C1 — Token boundary.** Credentials/tokens never enter the app iframe, never reach the LLM, never appear in envelope payloads, logs, or error messages. Credential injection happens server-side in the broker (`packages/auth` + `apps/server`), is host-bound against the spec's declared hosts, **strict always** (no `STRICT_*` escape flags — an off-by-default flag of this kind is a known exfiltration path; we do not introduce one). Response bodies are scrubbed of injected header values before returning to the LLM.
 - **C2 — Sandbox integrity.** Runner iframes: `sandbox="allow-scripts"` only (never `allow-same-origin`), CSP with `connect-src 'none'` for app-originated traffic, fixed CDN allowlist (per packages/protocol CDN_ALLOWLIST (jsdelivr, cdnjs, unpkg) — changing it is a protocol change (C3)
 - **C3 — Protocol changes flow through spec-sync.** See [engineering/SPEC_SYNC.md](engineering/SPEC_SYNC.md). `snugprotocol/spec` is never edited directly.
-- **C4 — `internal/` never ships public.** Flip-public checklist: `internal/LAUNCH_OPS.md`.
+- **C4 — pre-launch strategy stays private.** It lived in a private folder, now maintained outside this repo; nothing from it may inform public content.
 - **C5 — Security is first-class.** Secrets via env vars in `apps/server` only (`.env` gitignored, `.env.example` documented); packages take secrets only via injected interfaces (`KeyProvider`, adapter config). Validate and schema-parse every envelope message at the boundary (zod). Never log tokens, keys, or full credential material.
 
 ---

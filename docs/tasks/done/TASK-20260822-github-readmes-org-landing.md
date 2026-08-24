@@ -6,7 +6,7 @@
 - **Branch**: `feat/TASK-20260822-github-readmes-org-landing`
 - **Packages touched**: root `README.md`, `docs/assets/readme/` (new), `apps/website/docs-sync.json` + two authored docs pages (sync walk), spec repo `README.md` (downstream, local clone), new `snugprotocol/.github` repo
 - **Spec impact**: none — no normative change; spec repo README is presentation only (SPEC.md untouched)
-- **Related**: ADR-0048 (public website), ADR-0051 (public spec presentation — engineering detail stays home), `docs/product-vision.md` (positioning + anti-positioning), `internal/LAUNCH_OPS.md` (org/registration state)
+- **Related**: ADR-0048 (public website), ADR-0051 (public spec presentation — engineering detail stays home), `docs/product-vision.md` (positioning + anti-positioning), the private launch-ops notes (org/registration state)
 
 ## Spec (what & why)
 
@@ -38,7 +38,7 @@ embedders, then contributors.
    ADR-0051 spirit — no task-id/process noise in the pitch), states what the protocol is
    in the website's language, and routes to SPEC.md / schemas / whitepaper /
    implementations and back to the reference repo + website. Prepared as a single local
-   commit in `/Users/jeetu/SnugProtocol/spec`.
+   commit in the sibling `spec` clone.
 3. **Org profile**: `snugprotocol/.github` exists, public, with `profile/README.md`; the
    org page renders it; it presents the one-liner + differentiators, links website /
    playground / docs / spec / both repos, and states security contact. Content is
@@ -48,7 +48,7 @@ embedders, then contributors.
    authored pages (`get-started/quickstart.mdx`, `get-started/implementors.md`) walked
    for spirit-staleness and the manifest re-hashed. `pnpm gate:local` green before PR.
 5. **Positioning discipline**: no comparison to Artifacts/Bolt/v0, no capability claimed
-   that isn't merged and demoed, no `internal/` content or codenames anywhere in the
+   that isn't merged and demoed, no the private strategy tree content or codenames anywhere in the
    three documents (grep check).
 
 **Out of scope**: website code changes (its GitHub link already targets the org page);
@@ -79,7 +79,7 @@ Order of work (docs-first "tests" = the checks in the ACs, defined above before 
    `profile/README.md` (+ a one-line repo README pointing at profile/); push (authorized
    this session). Verify https://github.com/snugprotocol renders it logged-out
    (incognito-equivalent check via unauthenticated fetch).
-7. **Record**: update `internal/LAUNCH_OPS.md` registration state (org `.github` repo
+7. **Record**: update the private launch-ops notes registration state (org `.github` repo
    exists, public); append spec-repo commit SHA to the task journal (no
    `docs/spec-changelog.md` entry — that log is for spec-version changes, and this is
    presentation-only with no version bump).

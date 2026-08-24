@@ -9,7 +9,7 @@
 - **C1 — Token boundary.** Credentials/tokens never enter the app iframe, never reach the LLM, never reach a publisher. Host-bound injection always strict.
 - **C2 — Sandbox integrity.** `allow-scripts` only, `connect-src` blocked, fixed CDN allowlist. Never weakened.
 - **C3 — Protocol changes flow through spec-sync.** `packages/protocol` schemas are source of truth; `snugprotocol/spec` is downstream. See [engineering/SPEC_SYNC.md](engineering/SPEC_SYNC.md).
-- **C4 — `internal/` never ships public.** Strip before flip-public (`internal/LAUNCH_OPS.md` checklist).
+- **C4 — pre-launch strategy stays private.** It lived in a private folder, now maintained outside this repo; nothing from it may inform public content.
 - **C5 — Security is first-class.** Secrets via env in `apps/server` only; validate all input at the envelope boundary.
 
 ## 🧠 Always read first — Code-generation personas
@@ -58,7 +58,7 @@ Optimize for **clarity and maintainability** over cleverness.
 
 ## Pre-launch strategy (private)
 
-`../internal/` — full strategy, market audits, launch operations. **Never ships public (C4).** Load when making launch/positioning/priority calls.
+Pre-launch strategy, market audits and launch operations are maintained **outside this repo** (C4) and are not part of a public clone. Launch/positioning/priority calls draw on the owner's private notes.
 
 ---
 

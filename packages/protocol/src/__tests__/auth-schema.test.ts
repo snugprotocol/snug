@@ -1,5 +1,5 @@
 // AL-02 (TASK-20260805-auth-core) AC1: the Dynamic Auth spec schema — INTERNAL protocol
-// surface (plan D1). Ported from the OProject 5-kind union with the IProject `.strict()`
+// surface (plan D1). Ported from one ancestor system's 5-kind union with the other's `.strict()`
 // ingest posture. These tests lock the kind literals (persisted discriminators shared
 // with AL-03/04), the per-kind `declaredApiHosts` rules (plan D2), the status enum
 // (N5), the derived-host union incl. refreshUrl (N2), and the fact that NONE of this
@@ -106,7 +106,7 @@ describe('AC1 — the five kind literals, pinned verbatim (plan D2)', () => {
   });
 });
 
-describe('AC1 — .strict() ingest posture (IProject posture, plan D1/D2)', () => {
+describe('AC1 — .strict() ingest posture (ancestor-system posture, plan D1/D2)', () => {
   it('rejects unknown keys at the top level', () => {
     expect(authSpecSchema.safeParse({ ...apiKeySpec, sneaky: true }).success).toBe(false);
   });

@@ -9,6 +9,8 @@
     "build": "turbo run build",
     "dev": "node scripts/dev.mjs",
     "check-dev": "node --test scripts/dev.test.mjs",
+    "check-public-scrub": "node --test scripts/check-public-scrub.test.mjs && node scripts/check-public-scrub.mjs",
+    "_comment-check-public-scrub": "LOCAL ONLY (gitignored, owner decision 2026-08-24) — deliberately NOT in `test`: the script is absent from a public clone, so wiring it into the root gate would fail every contributor. Run by hand before a flip or release.",
     "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop && pnpm run check-website-sync && pnpm run check-dev && pnpm run check-deploy-web",
     "lint": "turbo run lint",
     "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke",

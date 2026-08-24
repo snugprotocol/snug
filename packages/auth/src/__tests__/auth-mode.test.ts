@@ -1,4 +1,4 @@
-// AL-02 D7: IProject's pure auth-mode resolution helper, re-seated on opaque appId
+// AL-02 D7: an ancestor system's pure auth-mode resolution helper, re-seated on opaque appId
 // (branded tenant/user types dropped). two_layer runtime resolution stays DEFERRED —
 // the typed code is the contract AL-03 branches on.
 import { describe, expect, it } from 'vitest';

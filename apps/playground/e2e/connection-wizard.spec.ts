@@ -267,7 +267,7 @@ test('journey 4 — oauth2_auth_code: register (redirect uri) → connect popup 
   const popupPromise = page.context().waitForEvent('page');
   await wizard(page).getByRole('button', { name: /connect my .* account/i }).click();
 
-  // ---- CONNECT screen: the waiting state names the provider (OProject's grammar).
+  // ---- CONNECT screen: the waiting state names the provider (an ancestor system's grammar).
   await expect(wizard(page)).toContainText(/waiting for .* sign-in/i);
   const popup = await popupPromise;
   await popup.waitForURL(/\/oauth\/callback/, { timeout: 15_000 });

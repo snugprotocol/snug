@@ -1,6 +1,6 @@
 /**
  * Well-known OAuth providers — pinned endpoint defaults the deterministic transformer
- * (`paramsToAuthSpec`) consults. Ported near-verbatim from OProject (AL-02 plan D7)
+ * (`paramsToAuthSpec`) consults. Ported near-verbatim from an ancestor system (AL-02 plan D7)
  * and EXTENDED in this child (plan D2/D6):
  *
  *   - `apiHosts` — the human-reviewed API-host list per provider. The ported registry

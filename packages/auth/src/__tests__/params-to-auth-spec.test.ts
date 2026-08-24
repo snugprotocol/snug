@@ -1,5 +1,6 @@
 // AL-02 AC1/D2: the deterministic params→spec transformer, REWRITTEN (not lifted):
-// OProject's five-kind shapes + userLayer synthesis, IProject's fail-closed posture —
+// One ancestor system's five-kind shapes + userLayer synthesis, a second ancestor system's
+// fail-closed posture —
 // declaredApiHosts REQUIRED non-empty for the four static/CC kinds; for
 // oauth2_auth_code it may be omitted ONLY when the well-known registry supplies
 // apiHosts (the branch points at data that exists). Never calls an LLM.

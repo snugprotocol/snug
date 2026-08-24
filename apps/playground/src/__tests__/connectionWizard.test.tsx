@@ -938,7 +938,7 @@ describe('P3 fold — the connect screen offers a way forward and names the prov
     const status = container.querySelector('[data-testid="connect-status"]');
     expect(status, 'the connect screen must state what is happening').not.toBeNull();
     // "waiting for Spotify sign-in" tells a person which window to look for; "please wait"
-    // tells them nothing they can act on. The grammar is OProject's, ported with the flow.
+    // tells them nothing they can act on. The grammar is an ancestor system's, ported with the flow.
     expect(status!.textContent ?? '').toMatch(/waiting for Tunecast sign-in/i);
   });
 
