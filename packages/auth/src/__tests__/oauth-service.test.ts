@@ -1,4 +1,4 @@
-// AL-02 AC4: the DI-pure OAuth service (plan D6), ported from OProject with its source
+// AL-02 AC4: the DI-pure OAuth service (plan D6), ported from an ancestor system with its source
 // tests ADAPTED to the Snug seats: async WebCrypto state/PKCE, CredentialStore instead
 // of a vault/repo pair, per-flow `flowId` binding instead of the fake session (bug 2),
 // userLayer unwrap on start AND callback (bug 1), the RedirectUriProvider/CallbackSink

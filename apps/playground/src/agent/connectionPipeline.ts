@@ -33,7 +33,7 @@
  *      keys. Run AFTER admission so a substituted requirement is linted as it will be
  *      stored, and BEFORE any write so the engine's unknown-token→literal fallback is
  *      unreachable from a persisted template (fold S-M2).
- *   5. PROVENANCE — the `user_confirmed`-wins rule (R3, OProject verbatim).
+ *   5. PROVENANCE — the `user_confirmed`-wins rule (R3, ancestor-system verbatim).
  *   6. DELTA — `canonicalRequirementHash` decides "changed", and it is the SAME function
  *      `nextRequirementVersion` uses in the db. One definition of changed, so the two
  *      surfaces cannot drift.
@@ -195,7 +195,7 @@ export async function persistConnectionRequirement(
   const existing = db.getConnection(input.appId, slot);
 
   // ---- Gate 5: PROVENANCE. A requirement the USER hand-confirmed is never overwritten
-  // by inference (R3, OProject's `user_confirmed`-wins rule adopted verbatim).
+  // by inference (R3, an ancestor system's `user_confirmed`-wins rule adopted verbatim).
   //
   // Modelled as a SUCCESSFUL no-op rather than a refusal, because it is the rule working
   // as intended: the user's row already says what the app needs, and a build that

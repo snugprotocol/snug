@@ -83,7 +83,7 @@ export const LIMITS = {
   MAX_NET_FRAME_BYTES: 1024 * 1024 + 64 * 1024,
   /** Request body ceiling for `snug:net-request` (bytes, executor-enforced). */
   MAX_NET_REQUEST_BODY_BYTES: 256 * 1024,
-  /** Response body ceiling the connected-fetch executor enforces WHILE reading (OProject's cap). */
+  /** Response body ceiling the connected-fetch executor enforces WHILE reading (inherited from an ancestor system). */
   MAX_NET_RESPONSE_BODY_BYTES: 1024 * 1024,
   MAX_ARTIFACT_BYTES: 5 * 1024 * 1024,
   RAW_EXCERPT_CHARS: 200,

@@ -6,7 +6,7 @@
 
 ## Context
 
-The 2026-07-31 survey of both source systems (`internal/05-prompt-ui-survey.md`) found ~80 prompt artifacts spread across TS string constants, route-handler string appends, versioned `.md` asset folders, DB-seeded rows, S3-seeded templates, boot-time GitHub fetches, and client-side React components — with at least three near-duplicate assembly implementations and a 4-way duplicated envelope-tag literal. One source system later externalized its system prompt into a versioned template folder (validating the direction); the other recorded an explicit anti-generic-loader doctrine ("each template gets its OWN typed export, NOT a hashmap"). A prompt-eval harness is the next phase and needs prompts addressable by stable path.
+The 2026-07-31 survey of both ancestor systems (private prompt/UI survey, C4) found ~80 prompt artifacts spread across TS string constants, route-handler string appends, versioned `.md` asset folders, DB-seeded rows, S3-seeded templates, boot-time GitHub fetches, and client-side React components — with at least three near-duplicate assembly implementations and a 4-way duplicated envelope-tag literal. One of them later externalized its system prompt into a versioned template folder (validating the direction); the other recorded an explicit anti-generic-loader doctrine ("each template gets its OWN typed export, NOT a hashmap"). A prompt-eval harness is the next phase and needs prompts addressable by stable path.
 
 ## Decision
 

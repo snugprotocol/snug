@@ -1,6 +1,6 @@
 /**
  * The connected-fetch executor (AL-03 plan D2) — the ONLY seat that both reads
- * credential values and calls fetch. Ported from OProject's auth-fetch resolver seam +
+ * credential values and calls fetch. Ported from an ancestor system's auth-fetch resolver seam +
  * response scrubber, re-seated DI-pure on Snug's local-first custody: credentials come
  * from the CredentialStore per use (no cache — AL-02 D4), the approval/ceiling row from
  * the NetSpecReader (the `snug_auth_specs` accessor), and the network from an injected

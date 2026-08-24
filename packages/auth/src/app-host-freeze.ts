@@ -1,5 +1,5 @@
 /**
- * Host-freeze predicates — IProject's pure ⊆ check ported (AL-02 plan D7), plus the
+ * Host-freeze predicates — an ancestor system's pure ⊆ check ported (AL-02 plan D7), plus the
  * outbound-ceiling membership test the OAuth service runs before EVERY token/refresh/
  * revoke POST (plan D5/N2b: a spec whose refresh host escaped the frozen ceiling
  * cannot refresh). The freeze itself is enforced at the db write boundary

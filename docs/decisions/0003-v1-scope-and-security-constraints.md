@@ -14,4 +14,4 @@ v1 scope = protocol bindings + iframe runner + SDK + **new-build per-app DB** (s
 Porting the prior auth implementation as-is (rejected: known bugs + weak-by-default injection); shipping without the per-app DB (rejected: it is the only hard differentiator vs Artifacts-class products).
 
 ## Consequences
-~2 weeks of new DB work in v1; auth lands as a second launch moment. Honest claims constrain marketing copy — see `internal/`.
+~2 weeks of new DB work in v1; auth lands as a second launch moment. Honest claims constrain marketing copy (positioning notes are kept privately, C4).

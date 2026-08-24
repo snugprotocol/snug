@@ -65,9 +65,9 @@ Conventions: **Difficulty** easy / moderate / stretch · **Proves it** = the sui
 
 ## 9. Script: dead-link check for `docs/`
 
-**Context.** The wiki under `docs/` is the project's memory, held together by relative links — and nothing catches a broken link at review time. One legitimate wrinkle: links into `internal/` (pre-launch strategy, deliberately untracked — hard constraint C4) dangle in every public clone by design, so the checker needs an allowlist rather than a blind fail.
+**Context.** The wiki under `docs/` is the project's memory, held together by relative links — and nothing catches a broken link at review time. Note that a few links deliberately point outside the repo (pre-launch strategy is maintained privately — hard constraint C4), so the checker should report dead *relative* links rather than trying to resolve everything.
 **Files.** New `scripts/check-doc-links.mjs` (follow the `scripts/update-code-map-counts.mjs` pattern: plain node + node:test, no dependencies).
-**Acceptance.** Scans `*.md` under `docs/` plus the root markdown files, resolves relative file links (`#anchors` optional), exits non-zero listing dead ones; `internal/` targets are allowlisted with a dated comment; any other dead links found on the current tree get fixed in the same PR.
+**Acceptance.** Scans `*.md` under `docs/` plus the root markdown files, resolves relative file links (`#anchors` optional), exits non-zero listing dead ones; any dead links found on the current tree get fixed in the same PR.
 **Difficulty.** moderate · **Proves it.** its own node:test; a clean run on the current tree
 
 ## 10. Glossary entries for the observability era

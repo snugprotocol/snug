@@ -13,7 +13,7 @@
 The desktop app's terminal shows a repeating (~every 10 min) Baileys error loop:
 `failed to find key "AAAAAK7c" to decode mutation` → retry with snapshot → `regular blocked on missing key from v0, parking after 2 attempts`.
 
-**Diagnosed root cause (2026-08-22):** `/Users/jeetu/Snug/whatsapp-session/app-state-sync-key-AAAAAK7c.json` is corrupt on disk — trailing extra `"}` after valid JSON (mtime Aug 20 10:29). Baileys' `useMultiFileAuthState.readData` swallows the `JSON.parse` error and returns `null`, so the app-state sync treats the key as *missing*, parks the `regular` collection, and re-fails on every server-triggered resync. Consequence beyond log spam: chat-metadata app-state sync (archive/pin/mute/read) never applies.
+**Diagnosed root cause (2026-08-22):** `~/Snug/whatsapp-session/app-state-sync-key-AAAAAK7c.json` is corrupt on disk — trailing extra `"}` after valid JSON (mtime Aug 20 10:29). Baileys' `useMultiFileAuthState.readData` swallows the `JSON.parse` error and returns `null`, so the app-state sync treats the key as *missing*, parks the `regular` collection, and re-fails on every server-triggered resync. Consequence beyond log spam: chat-metadata app-state sync (archive/pin/mute/read) never applies.
 
 The second logged item — `identity key changed or new contact, session will be re-established` — is benign level-30 Signal housekeeping, not a fault.
 

@@ -73,3 +73,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0054 — Website + playground deployment: in-repo direct-upload script, deploy from merged `main`](0054-web-deploy-tooling.md)
 - [0055 — Legal disclosure posture: published terms + privacy as disclosure, one clickwrap at the installer, contextual consent as the primary instrument](0055-legal-disclosure-posture.md)
 - [0056 — Dependency advisories: classify by reachability, fix or dismiss with a recorded reason, gate locally](0056-dependency-advisory-disposition.md)
+- [0057 — The ancestor codenames stay in git history at flip-public; the scrub tooling does not ship](0057-codenames-in-history-accepted.md)

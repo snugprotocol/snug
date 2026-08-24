@@ -130,7 +130,7 @@ terms page. Two facts shape the answer:
    MIT wins over the terms on any conflict about rights in the code; security research
    is authorised by cross-link to `SECURITY.md`'s safe harbour.
 8. **No 18+ age gate.** The Beta exit criterion is that an 11-year-old succeeds unaided
-   (`internal/07-roadmap.md`); an 18+ clause would contradict a shipping goal. Instead the
+   (the private roadmap, C4); an 18+ clause would contradict a shipping goal. Instead the
    documents state that there are no accounts and nothing is collected — so there is no
    profile of a child to hold — and ask that a parent or guardian set it up and stay
    involved, because the software connects to real accounts and sends text to a model
@@ -181,7 +181,7 @@ terms page. Two facts shape the answer:
 - Apple signing/notarization is unaffected and still env-gated (ADR-0047 §7); with the
   Developer ID now in hand (owner, 2026-08-23) it activates at the next release, which is
   its own explicit ask. The Gatekeeper paragraphs and R-29 come out in that release.
-- `internal/ip/TRACKER.md` D-02 and `internal/cowork-project-setup.md` ("no entity")
+- The private IP tracker D-02 and the private entity notes ("no entity")
   were false as of 2026-08-23 and are corrected locally (gitignored, C4); the USPTO
   applicant *decision* is flagged for the owner's re-confirmation, not changed.
 - The documents are drafted by the agent from the codebase's disclosed facts and the

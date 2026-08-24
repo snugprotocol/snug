@@ -13,7 +13,7 @@ out to be needed — and what it costs.
 
 The trigger was not a security finding. It was the owner running the shipped product:
 a Coinbase app built in the Playground asks for **one API key**, when Coinbase needs
-**key + secret + passphrase**. The comparison to OProject was blunt — "even my grandma
+**key + secret + passphrase**. The comparison to an ancestor system was blunt — "even my grandma
 could walk through the dynamic auth flow" there, while Snug ships a connection that
 cannot work.
 
@@ -394,7 +394,7 @@ like every other template.
   security posture: no LLM-authored field labels, ever. Rejected because it fails the
   grandma bar the rewrite exists to meet — it moves the entire burden of knowing that
   Coinbase needs a passphrase, and what to call it, onto a non-technical user, which is
-  the exact work OProject does for them. It also does not fix the header template, so a
+  the exact work an ancestor system does for them. It also does not fix the header template, so a
   signed scheme stays unbuildable at any level of user effort.
 - **A connector catalog: ship pinned specs for the top N providers and support nothing
   else.** Rejected: it makes Snug's app surface a function of our integration backlog,

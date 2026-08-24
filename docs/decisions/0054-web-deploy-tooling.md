@@ -22,7 +22,7 @@ ADR-0048 chose Cloudflare Pages for `snugprotocol.org` (website) and `playground
 
 ## Alternatives considered
 
-- **Private repo / local-only script** — rejected: nothing in it is sensitive, and it would be a second thing to keep in sync with this repo's build layout while `internal/` is already moving off-tree.
+- **Private repo / local-only script** — rejected: nothing in it is sensitive, and it would be a second thing to keep in sync with this repo's build layout while the private strategy tree was already moving off-tree.
 - **Cloudflare Pages Git integration** — rejected (auto-deploys every merge; irreversible choice per project). Reconsider for the *website only* post-launch, as a new project.
 - **GitHub Actions deploy on push** — deferred until CI billing returns; fine in a public repo (secrets are not exposed to fork PRs).
 - **`--allow-dirty` production override** — rejected on review: it ships bytes that are not in git and the `--commit-hash` attached to the deployment would name a commit that did not produce them.

@@ -1,4 +1,4 @@
-// AL-03 plan D4 — the response scrubber, ported from OProject's auth-fetch with its
+// AL-03 plan D4 — the response scrubber, ported from an ancestor system's auth-fetch with its
 // source tests adapted, plus the amendment R1 property tests: injected values planted
 // in WHITELISTED response headers (etag, cache-control, x-ratelimit-*), not just bodies.
 // The base64-of-exact-value boundary is DOCUMENTED as not caught — the honest test
@@ -8,7 +8,7 @@ import { scrubAuthValues } from '../scrub.js';
 
 const HEADERS = { Authorization: 'Bearer secret-token-abc123', 'X-Api-Key': 'key-9876543210' };
 
-describe('scrubAuthValues (OProject port)', () => {
+describe('scrubAuthValues (ancestor-system port)', () => {
   it('redacts every occurrence of an injected header value from a body', () => {
     const body = 'first secret-token-abc123 then again secret-token-abc123 end';
     const out = scrubAuthValues(body, { Authorization: 'secret-token-abc123' });

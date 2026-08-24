@@ -486,7 +486,7 @@ describe('P2-AC5 — a changed requirement on an APPROVED row STAGES, never repl
 
 // ------------------------------------- AC6: user provenance is never overwritten by inference
 
-describe("P2-AC6 — a `user`-provenance requirement is NEVER overwritten by inference (OProject's user_confirmed-wins rule, verbatim)", () => {
+describe("P2-AC6 — a `user`-provenance requirement is NEVER overwritten by inference (an ancestor system's user_confirmed-wins rule, verbatim)", () => {
   it('inference against a hand-confirmed `declared` row is refused, and the row is unchanged', async () => {
     const db = await installTestUserDb();
     const APP = 'app-user-owned';

@@ -1,5 +1,5 @@
 /**
- * The DI-pure OAuth service (AL-02 plan D6) — ported from OProject and re-seated on
+ * The DI-pure OAuth service (AL-02 plan D6) — ported from an ancestor system and re-seated on
  * Snug's local-first custody (ADR-0014): tokens and client creds live behind the
  * CredentialStore seam (the user's own `snug_secrets` file), dynamic connection state
  * at `auth:<appId>:_connection`, pending flows in memory (or spilled to

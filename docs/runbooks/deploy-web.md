@@ -16,7 +16,7 @@ node scripts/deploy-web.mjs playground --preview --deploy   # 🔑 preview from 
 ## Prerequisites
 
 1. `pnpm install` (wrangler is a root devDependency — `pnpm exec wrangler --version` ≥ 4).
-2. `pnpm exec wrangler login` **on the Cloudflare account that holds the `snugprotocol.org` zone** (the account name is recorded in `internal/LAUNCH_OPS.md`, not here). If `wrangler whoami` lists more than one account or the wrong one: `pnpm exec wrangler logout` and log in again.
+2. `pnpm exec wrangler login` **on the Cloudflare account that holds the `snugprotocol.org` zone** (the account name is recorded in the owner's private launch notes, not here). If `wrangler whoami` lists more than one account or the wrong one: `pnpm exec wrangler logout` and log in again.
 3. Root `.env` with `CLOUDFLARE_ACCOUNT_ID=<id from wrangler whoami>` — copy `.env.example`. The script refuses without it and refuses if the wrangler session is on a different account.
 
 ## One-time setup (🔑 each, in this order)
@@ -33,7 +33,7 @@ node scripts/deploy-web.mjs playground --preview --deploy   # 🔑 preview from 
 4. **Zone features OFF** (each injects a `/cdn-cgi/` script or beacon into pages ADR-0013 promises are inert): *Scrape Shield → Email Address Obfuscation* off (it rewrites `security@snugprotocol.org` on the site and injects a script); *Speed → Optimization → Rocket Loader* off (rewrites module scripts — breaks the playground); *Speed → Cloudflare Fonts* off (rewrites font links to `/cdn-cgi/`); *Security → Bots → Bot Fight Mode* off (injects a challenge script into HTML); *Analytics → Web Analytics* — do not enable for either project. (*Auto Minify* — retired by Cloudflare in 2024; nothing to toggle.) Confirm with the `cdn-cgi` check in **Verify**.
 5. **Preview Access policy** (project → *Settings* → *Enable access policy* / Cloudflare Access for `*.<project>.pages.dev` previews; first use prompts to create a Zero Trust organization — pick a team name, free plan) — **before the first `--preview` deploy**. Pre-flip, an open preview URL would publish the launch site and playground to anyone who guesses the branch name.
 6. **`*.pages.dev` Bulk Redirect** (account → *Bulk Redirects* → list `snug-pages-dev`, two entries): source `snug-website.pages.dev` → target `https://snugprotocol.org`, and source `snug-playground.pages.dev` → target `https://playground.snugprotocol.org`; status 301; *Subpath matching* ON, *Preserve path suffix* ON, *Preserve query string* ON, **Include subdomains OFF** (on, it would 301 the `*.snug-website.pages.dev` previews to production and defeat step 5). The playground on a second origin would be a second per-origin `.snug` store — users must land on one host.
-7. Record all of the above in the task journal + `internal/LAUNCH_OPS.md`.
+7. Record all of the above in the task journal + the owner's private launch notes.
 
 ## Routine deploy
 
@@ -71,9 +71,9 @@ Then by hand: landing page teaser plays; `/download` links resolve (they 404 by 
 ## What is deliberately NOT here
 
 - A `_headers` file for the playground: a top-level CSP is inherited by the `srcdoc` app frames (`packages/runner/src/csp.ts`, child-6), so any header work is its own C2-tier task.
-- Email Routing / MX records for `hello@` and `security@` — `internal/LAUNCH_OPS.md`.
+- Email Routing / MX records for `hello@` and `security@` — the owner's private launch notes.
 - CI-driven deploys — CI is dormant (ADR-0041); the script is the source of truth for what a deploy checks.
 
 ## Secrets posture
 
-Nothing in this repo authenticates to Cloudflare. Auth is the wrangler OAuth session on the owner's machine, or a `CLOUDFLARE_API_TOKEN` (scope: *Cloudflare Pages: Edit* on this account only) exported in the shell for a headless run. The account id in `.env` is not a secret but stays out of the public tree; the account's email address is recorded only in `internal/`.
+Nothing in this repo authenticates to Cloudflare. Auth is the wrangler OAuth session on the owner's machine, or a `CLOUDFLARE_API_TOKEN` (scope: *Cloudflare Pages: Edit* on this account only) exported in the shell for a headless run. The account id in `.env` is not a secret but stays out of the public tree; the account's email address is recorded only in the owner's private notes.

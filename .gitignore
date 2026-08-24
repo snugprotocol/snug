@@ -16,6 +16,17 @@ coverage/
 # Pre-launch strategy — never ships public (hard constraint C4). Kept local only.
 internal/
 
+# Pre-flip scrub tooling — LOCAL ONLY (owner decision 2026-08-24). These files must name
+# the approved-indirection codenames in order to check for them, and the owner's call is
+# that a tool built to hide a thing should not itself publish that thing. Consequence,
+# recorded rather than hidden: the public repo has NO automated codename tripwire, so a
+# codename reintroduced after the flip will not be caught by `pnpm test`. Run it by hand
+# before any flip or release: `node scripts/check-public-scrub.mjs`. The hashed
+# ancestor-identifier guard in packages/knowledge is unaffected and still ships.
+scripts/check-public-scrub.mjs
+scripts/check-public-scrub.test.mjs
+scripts/scrub-tokens.json
+
 # Machine-local agent settings — holds absolute paths to the source systems. Never commit.
 .claude/settings.local.json
 *.sqlite

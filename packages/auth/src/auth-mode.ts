@@ -1,5 +1,5 @@
 /**
- * Pure auth-mode resolution helper — ported near-verbatim from IProject (AL-02 plan
+ * Pure auth-mode resolution helper — ported near-verbatim from an ancestor system (AL-02 plan
  * D7), re-seated on Snug's opaque `appId` (branded tenant/user types dropped: the
  * local-first hub is single-actor, so the caller identity IS the file's owner).
  *

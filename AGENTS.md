@@ -8,10 +8,8 @@ All durable knowledge lives in **`docs/`**. **Start at [`docs/INDEX.md`](docs/IN
 - **C1 — Token boundary.** Credentials/tokens never enter the app iframe, never reach the LLM, never reach a publisher. Host-bound credential injection is always strict — no bypass flags.
 - **C2 — Sandbox integrity.** App iframes run `sandbox="allow-scripts"` only, `connect-src` blocked, CDN allowlist fixed. Never weaken these, even for a demo.
 - **C3 — Protocol changes flow through spec-sync.** `packages/protocol` schemas are the source of truth; every change follows [`docs/engineering/SPEC_SYNC.md`](docs/engineering/SPEC_SYNC.md) and is recorded in [`docs/spec-changelog.md`](docs/spec-changelog.md). The `snugprotocol/spec` repo is downstream — never edited directly.
-- **C4 — `internal/` never ships public.** It holds pre-launch strategy and must be removed (or moved to a private repo) before this repo is flipped public. The flip-public checklist lives in `internal/LAUNCH_OPS.md`.
+- **C4 — pre-launch strategy stays private.** It lived in a private `internal/` folder, now maintained outside this repo; nothing from it may inform public content. The constraint outlives the folder: launch/positioning material is never committed here.
 - **C5 — Security is first-class.** Secrets via environment variables in `apps/server` only; no secrets in packages, logs, config, or source. Validate all input at the envelope boundary.
-
-**Source systems.** Extraction work draws on two prior production systems, referred to throughout by the codenames **OProject** and **IProject**. Their real names, local paths, and branches live in `internal/.env.local` (gitignored — never commit or quote them in tracked files). Read that file before any extraction, port, or audit task; the trees sit outside this repo, so reading them needs cross-directory access.
 
 **When generating code, adopt the language-expert persona and follow the matching standard:**
 - **TypeScript** → Anders Hejlsberg league; front-end → Evan You / Rich Harris league — [`docs/standards/typescript.md`](docs/standards/typescript.md)

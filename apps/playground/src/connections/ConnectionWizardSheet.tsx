@@ -1330,7 +1330,7 @@ function CredentialsScreen({
  * terminal dead end where every OAuth user's journey ended. Copy that describes behavior
  * the code does not perform is worse than no copy, because the user waits for it.
  *
- * THE STATUS GRAMMAR is OProject's, ported with it: every state a flow can be in gets a
+ * THE STATUS GRAMMAR is an ancestor system's, ported with it: every state a flow can be in gets a
  * sentence that NAMES THE PROVIDER and says what the user should do next. "waiting for
  * Spotify sign-in…" tells a person which window to look for; "something went wrong" tells
  * them nothing they can act on. The blocked-popup state is the one that matters most — it
