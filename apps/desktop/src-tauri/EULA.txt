@@ -33,9 +33,10 @@ not receive that request; it goes to GitHub.
 
 LOCAL HELPER AND YOUR NETWORK. If you link a messaging account, the app
 runs a small helper on this computer that starts with the app and
-reconnects to that service on every launch until you unlink. Apps can
-reach devices on your own network only through connections you approve
-in the app.
+reconnects to that service on every launch until you unlink. Its
+session and a cache of the chats it has synced live beside your file
+in ~/Snug and are deleted when you unlink. Apps can reach devices on
+your own network only through connections you approve in the app.
 
 YOUR DATA. Your apps, their data, your chats and your keys live in one
 file in ~/Snug on this computer. If you connect a personal sync origin

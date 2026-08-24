@@ -156,12 +156,15 @@ const UDIFDEREZ_NOTE =
 
 /**
  * Given `hdiutil udifderez -xml <dmg>` output, confirm the image carries an SLA whose
- * DECODED text starts with `firstLine`. The body is base64 inside <data> (the bundler's
+ * DECODED text is exactly `expectedText` (a full-text compare is free once the resource
+ * is decoded — first-line-only would wave through a stale EULA with the same title;
+ * Gate-5 review F6). The body is base64 inside <data> (the bundler's
  * eula-resources-template.xml), so a raw substring check on the dump either always fails
  * against a real fixture or always passes against a hand-typed one — decode first.
- * Never throws: garbage in → a named refusal.
+ * Line endings are normalised before comparing. Never throws: garbage in → a named
+ * refusal.
  */
-export function verifyDmgCarriesEula(xml, firstLine) {
+export function verifyDmgCarriesEula(xml, expectedText) {
   if (typeof xml !== 'string' || !xml.includes('<key>LPic</key>')) {
     return { ok: false, reason: `no SLA resource in the udifderez dump (no LPic key) — the DMG has no license screen. ${UDIFDEREZ_NOTE}` };
   }
@@ -175,9 +178,14 @@ export function verifyDmgCarriesEula(xml, firstLine) {
   } catch (err) {
     return { ok: false, reason: `could not base64-decode the SLA ${m[1].trim()} resource: ${err}` };
   }
-  const got = decoded.split(/\r?\n|\r/)[0] ?? '';
-  if (got !== firstLine) {
-    return { ok: false, reason: `SLA first line mismatch: expected ${JSON.stringify(firstLine)}, the DMG carries ${JSON.stringify(got)}` };
+  const normalise = (s) => s.replace(/\r\n?/g, '\n');
+  if (normalise(decoded) !== normalise(String(expectedText ?? ''))) {
+    const got = normalise(decoded).split('\n')[0] ?? '';
+    const exp = normalise(String(expectedText ?? '')).split('\n')[0] ?? '';
+    return {
+      ok: false,
+      reason: `SLA text mismatch — the DMG carries a different EULA (its first line: ${JSON.stringify(got)}; expected first line: ${JSON.stringify(exp)})`,
+    };
   }
   return { ok: true };
 }
@@ -256,8 +264,16 @@ async function main() {
 
   const dmg = findOne(path.join(UNIVERSAL_BUNDLE, 'dmg'), '.dmg');
   // 3b — the platform's own parser vouches for the clickwrap before anything is staged.
-  const dump = execSync(`hdiutil udifderez -xml "${dmg}"`, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-  const carries = verifyDmgCarriesEula(dump, eulaText.split('\n')[0]);
+  let dump;
+  try {
+    dump = execSync(`hdiutil udifderez -xml "${dmg}"`, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  } catch (err) {
+    // The verb itself failing is the deprecation's expected failure mode (review F5) —
+    // name it here, where the stack trace alone would say nothing useful.
+    console.error(`REFUSED: hdiutil udifderez failed on the built DMG: ${err}. ${UDIFDEREZ_NOTE}`);
+    process.exit(2);
+  }
+  const carries = verifyDmgCarriesEula(dump, eulaText);
   if (!carries.ok) {
     console.error(`REFUSED: the built DMG does not carry the EULA — ${carries.reason}`);
     process.exit(2);

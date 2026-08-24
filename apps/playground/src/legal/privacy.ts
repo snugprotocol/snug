@@ -58,7 +58,7 @@ export const THIRD_PARTIES: readonly ThirdParty[] = [
     id: 'model-provider',
     name: 'Your model provider (Anthropic, OpenAI, or the endpoint you configured)',
     sees: 'Your prompts, the app data an app puts in front of the model, and the results of any connected-service calls the model asked for.',
-    when: 'Whenever the agent runs in "bring your own key" mode. Requests go straight from your browser or the desktop app to the provider, under their own terms, on your own bill. Nothing routes through us. In "local model" mode with a genuinely local endpoint, nothing leaves your machine — if the endpoint you typed is not on this machine, Settings tells you so.',
+    when: 'Whenever the agent runs in "bring your own key" mode. Requests go straight from your browser or the desktop app to the provider, under their own terms, on your own bill. Nothing routes through us. In "local model" mode with an endpoint on this machine or your own network, no model traffic leaves it — if the endpoint you typed is elsewhere, Settings tells you so.',
   },
   {
     id: 'cdn',
@@ -70,13 +70,13 @@ export const THIRD_PARTIES: readonly ThirdParty[] = [
     id: 'huggingface',
     name: WEBLLM_WEIGHTS_HOST,
     sees: 'Your IP address and which model weights were downloaded.',
-    when: 'Only if you turn on the experimental in-browser model (the ?webllm=1 flag). The weights download from Hugging Face on first use and are cached by your browser.',
+    when: "Only if you turn on the experimental in-browser model (the ?webllm=1 flag). The weights download from Hugging Face on first use and are cached by your browser; the model's runtime library downloads from raw.githubusercontent.com (GitHub) the same way.",
   },
   {
     id: 'github',
     name: 'GitHub',
     sees: 'Your IP address, the time, and the desktop app version (the update check); the download itself; and, if you use it, the feedback you chose to send.',
-    when: `${UPDATE_CHECK_DISCLOSURE} ${UPDATE_CHECK_PAIRING} Downloading the app from GitHub Releases is a request to GitHub. The in-app feedback links open a prefilled GitHub issue that you review and submit yourself — nothing is sent until you do.`,
+    when: `${UPDATE_CHECK_DISCLOSURE} ${UPDATE_CHECK_PAIRING} Downloading the app from GitHub Releases is a request to GitHub. The in-app feedback links build a prefilled GitHub issue that you review in Snug and then confirm; nothing reaches GitHub until you confirm the jump, and nothing is filed until you submit it there.`,
   },
   {
     id: 'sync-origin',
@@ -117,7 +117,7 @@ export const PRIVACY: LegalDocument = {
           'We operate no server that holds your data, we hold no account for you, we run no analytics script, and we set no cookie. There is no sign-up, no profile, and no copy of your file anywhere we can reach. When you use Snug, nothing about you is collected by us — not because of a policy, but because there is nothing on our side to collect it into.',
         ),
         p(
-          'Two honest bounds on that sentence. Cloudflare, which hosts the website and the Playground as static files, shows us aggregate request counts for the domain, and GitHub shows download counts for the desktop app; neither identifies you to us. And your file, together with a few preferences (theme, layout, whether the desktop app checks for updates), lives in this browser\'s storage on this device, or in ~/Snug on a Mac — on a shared computer, that is where it is, readable by whoever else uses that account.',
+          'Two honest bounds on that sentence. Cloudflare, which hosts the website and the Playground as static files, shows us aggregate request counts for the domain, and GitHub shows download counts for the desktop app; neither identifies you to us. And your file, together with a few preferences (theme, layout, whether the desktop app checks for updates), lives in this app\'s browser storage on this device — on a Mac, the file itself lives in ~/Snug. On a shared computer, that is where they are, readable by whoever else uses that account.',
         ),
       ],
     },
@@ -127,6 +127,9 @@ export const PRIVACY: LegalDocument = {
       blocks: [
         p(
           'Everything Snug knows — your apps, their data, your chats, your settings, and every API key or token you save — lives in one file that is yours: in your browser\'s private storage on the web, or in ~/Snug in the desktop app. Export it and you have all of it; delete it and it is gone, because we never had a copy.',
+        ),
+        p(
+          'One thing lives beside that file rather than in it: if you link a messaging account, the helper\'s session — its keys, its access token, and a cache of the chats it has synced, which includes other people\'s messages — sits next to the file (in ~/Snug/whatsapp-session on a Mac). It does not ride exports or sync, and deleting the file does not delete it; unlinking the account, or removing the last linked app, does.',
         ),
         p(
           'By default that file is an ordinary database, readable by any program running under your user account on that computer. You can turn on protection in Settings: the whole file is then encrypted at rest with a passphrase only you hold, plus a Recovery Key shown to you once. If you lose both, the data is unrecoverable — there is no reset and no backdoor, which is the point of the feature and also its cost.',
@@ -152,7 +155,7 @@ export const PRIVACY: LegalDocument = {
       blocks: [
         p(UPDATE_CHECK_DISCLOSURE, ' ', UPDATE_CHECK_PAIRING),
         p(
-          'It is on by default because a desktop app that never learns about a security fix is worse for you than one request to GitHub per launch; the threat model records it as an accepted residual rather than pretending it is not there. The desktop app makes no other automatic outbound request of its own — except the messaging helper described above, which runs only if you linked an account.',
+          'It is on by default because a desktop app that never learns about a security fix is worse for you than one request to GitHub per launch; the threat model records it as an accepted residual rather than pretending it is not there. The desktop app makes no other automatic outbound request of its own — except the messaging helper described above and a sync origin you selected, each running only because you set it up.',
         ),
       ],
     },
@@ -197,7 +200,7 @@ export const PRIVACY: LegalDocument = {
         ),
         list(
           ['To see everything Snug knows about you: Settings → your file → export.'],
-          ['To erase it: delete the file (the desktop app keeps it in ~/Snug; the web Playground keeps it in this browser\'s site data).'],
+          ['To erase it: delete the file (the desktop app keeps it in ~/Snug; the web Playground keeps it in this browser\'s site data) — and if you linked a messaging account, unlink it too: its session store lives beside the file.'],
           ['To stop any third-party egress: revoke the connection, unlink the account, choose "this device only" as the sync origin, or turn off the update check — each in Settings.'],
         ),
       ],

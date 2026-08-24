@@ -10,7 +10,7 @@ export const EULA_LINE_BUDGET: number;
 export type Verdict = { ok: true } | { ok: false; reason: string };
 
 export function checkEulaText(text: string): Verdict;
-export function verifyDmgCarriesEula(xml: string, firstLine: string): Verdict;
+export function verifyDmgCarriesEula(xml: string, expectedText: string): Verdict;
 export function changelogEntryFor(releasesRaw: string, version: string): { version: string; title?: string; date: string };
 export function bumpedJsonConfig(raw: string, version: string): string;
 export function bumpedCargoToml(raw: string, version: string): string;

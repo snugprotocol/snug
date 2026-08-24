@@ -130,17 +130,19 @@ test('the REAL src-tauri/EULA.txt passes checkEulaText (the release script runs 
   assert.deepEqual(checkEulaText(eula), { ok: true });
 });
 
-test('verifyDmgCarriesEula: decodes the SLA resource out of a REAL udifderez dump and matches the first line', () => {
+test('verifyDmgCarriesEula: decodes the SLA resource out of a REAL udifderez dump and matches the FULL text', () => {
   // Captured from `hdiutil udifderez -xml` over a DMG built WITH bundle.licenseFile
   // (lesson 2026-08-24: pin the parser to the platform's real output, keep the sample).
   const withSla = readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'udifderez-with-sla.xml'), 'utf8');
   const eula = readFileSync(path.join(ROOT, 'apps', 'desktop', 'src-tauri', 'EULA.txt'), 'utf8');
-  const firstLine = eula.split('\n')[0];
-  assert.deepEqual(verifyDmgCarriesEula(withSla, firstLine), { ok: true });
-  // The wrong first line is refused — the check reads the DECODED text, not the plist.
+  assert.deepEqual(verifyDmgCarriesEula(withSla, eula), { ok: true });
+  // A DIFFERENT text is refused — full-text compare, so a stale EULA with the same
+  // title cannot ride (Gate-5 review F6); the reason still names the first lines.
   const wrong = verifyDmgCarriesEula(withSla, 'Some Other Product - License Agreement');
   assert.equal(wrong.ok, false);
   assert.match(wrong.reason, /first line/);
+  const stale = verifyDmgCarriesEula(withSla, `${eula}\nOne extra clause.\n`);
+  assert.equal(stale.ok, false);
 });
 
 test('verifyDmgCarriesEula: a REAL dump of a DMG built WITHOUT licenseFile is refused (no SLA at all)', () => {

@@ -88,7 +88,10 @@ describe('the text itself (checkEulaText — the release script\'s own rule)', (
     // about THIS text, not a hope about a future one.
     const lines = EULA_TEXT.split('\n').length;
     expect(lines).toBeLessThanOrEqual(EULA_LINE_BUDGET);
-    expect(EULA_LINE_BUDGET - lines).toBeGreaterThanOrEqual(3);
+    // Headroom shrank from 3 to 1 when the session-store disclosure landed (Gate-5
+    // review F1) — the owner's "under 60 lines" is the hard wall; the next addition
+    // means trimming, not growing.
+    expect(EULA_LINE_BUDGET - lines).toBeGreaterThanOrEqual(1);
     expect(EULA_LINE_BUDGET).toBeLessThanOrEqual(60);
   });
 
@@ -125,7 +128,9 @@ describe('the text itself (checkEulaText — the release script\'s own rule)', (
     expect(text).toMatch(/Clicking Agree means you accept these terms\./);
 
     // The section allowlist: a screen someone reads standing up grows only by decision.
-    const headings = [...EULA_TEXT.matchAll(/^([A-Z][A-Z0-9 .\-]+)\. /gm)].map((m) => m[1]);
+    // The lookahead requires sentence-case prose after the heading, so a re-wrapped
+    // all-caps MIT line containing ". IN NO EVENT" never counts as a section (review F11).
+    const headings = [...EULA_TEXT.matchAll(/^([A-Z][A-Z0-9 .\-]+)\. (?=[A-Z][a-z])/gm)].map((m) => m[1]);
     expect(headings).toEqual(['LICENSE', 'UPDATE CHECK', 'LOCAL HELPER AND YOUR NETWORK', 'YOUR DATA', 'PRE-1.0', 'LIABILITY']);
   });
 

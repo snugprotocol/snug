@@ -602,3 +602,48 @@ folding (dispositions below).
   agreement — line 1 `Snug for macOS - License Agreement` … line 57 `Clicking Agree means
   you accept these terms.` — BEFORE mounting `/Volumes/Snug`, then detached clean. The
   Finder rendering of the same screen stays on the owner walk (next-steps).
+
+### 2026-08-24 — Claude (for Jeetu) — review (Gate 5)
+- **Fresh-context diff review (High tier, second of two): 12 findings, verdict
+  merge-after-fixes — ALL twelve applied**, plus one residual noted. The three MAJORs
+  were truthfulness gaps in MY prose, exactly the class the plan review had already
+  taught once: **(1)** "delete the file and it is gone" was FALSE for a linked WhatsApp
+  account — the helper's session keys, minted token and thread cache (other people's
+  messages) live BESIDE the file in `~/Snug/whatsapp-session` (`sidecar.rs`
+  `session_store_dir`), don't ride exports, and survive file deletion → new paragraph in
+  "Where your data lives", the rights row, and two EULA lines (58/60 — headroom pin
+  relaxed 3→1 with the owner's "under 60" as the stated hard wall); **(2)** privacy
+  promised a Settings warning for any non-machine endpoint while the band deliberately
+  treats the user's own network as local (`192.168.1.20` pinned quiet) → "on this machine
+  or your own network"; **(3)** "no other automatic outbound except the helper" omitted
+  the Dropbox 30-second interval push — the exact egress my own new lesson names →
+  "and a sync origin you selected". Minors: webllm also pulls its runtime library from
+  `raw.githubusercontent.com` (named); the udifderez deprecation note now fires on the
+  verb FAILING (try/catch → named refusal), not only on a dump without `LPic`;
+  `verifyDmgCarriesEula` upgraded to FULL-TEXT compare (first-line-only waved through a
+  stale EULA with the same title; `.d.mts` + both tests updated; fixture recaptured from
+  a rebuilt DMG — 15.5 KB, session-store line visible on `hdiutil attach`); feedback
+  wording corrected (content reaches GitHub at the confirmed jump, not at submit);
+  ADR-0055 "three bands"→four + EULA contents list completed; code-map counts corrected
+  (legalPages 12, privateHost 38); lessons re-ordered newest-first; footer gains a
+  ≤1000px 3-column step (five tracks squeezed below ~100px); `isLocalEndpointHost`
+  accepts one trailing dot (v4-mapped hex stays a documented accepted-remote); EULA
+  heading regex hardened with a sentence-case lookahead; the website test pins the
+  indemnity section id instead of duplicating a prose pin. **Residual recorded in the
+  runbook**: if `VITE_SNUG_HUB_AUTH=1` ever ships, the privacy table needs a
+  hub-operator + Google-sign-in row first (the AC8 guard covers the Settings band only).
+- Review confirmations worth keeping: C1/C2/IPC untouched; no `dangerouslySetInnerHTML`;
+  `ExternalLink` rides the https-only `openInSystemBrowser`; `isPrivateNetworkHost`
+  lifted byte-identical; `licenseFile` touches ONLY the DMG (SLA added before codesign;
+  no effect on `Snug.app.tar.gz` / `latest.json` / minisign); `check-threat-model` TM3
+  hashes only the deltas — untouched.
+- Evidence after fixes: playground touched suites 107/107 + full 1637 earlier + tsc;
+  desktop `dmgEula` 11/11 + tsc; website rebuilt + 42/42; `release-desktop.test.mjs`
+  12/12 on the recaptured fixture; final root `pnpm test` running (first root run was
+  exit 0).
+- **Self-sign-off (High tier):** the two hard constraints are untouched by construction
+  and by review — no credential path, no sandbox/CSP/IPC change; the release-config
+  surface (tauri.conf.json `licenseFile`, release-desktop.mjs) is covered by
+  `dmgEula.test.ts`, 5 new node tests over REAL fixtures, and a real build whose SLA was
+  verified by the platform three ways (udifderez parse, full-text decode-compare,
+  `hdiutil attach` presenting the agreement before mount). I sign off on this diff.

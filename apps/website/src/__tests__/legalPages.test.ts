@@ -33,7 +33,8 @@ describe('legal pages (built output)', () => {
     expect(html).toContain('Terms of use');
     expect(html).toContain('mean Jeetu Maker and TechVoyage LLC together');
     expect(html).toContain('PROVIDED "AS IS"');
-    expect(html).toContain('That is the whole of it.');
+    // The indemnity SECTION, by id — its prose is legalContent.test.ts's to pin.
+    expect(html).toContain('id="indemnity"');
   });
 
   it('/privacy/ renders the shared statement with the third-party table, one row per party', () => {

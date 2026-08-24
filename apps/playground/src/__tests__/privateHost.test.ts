@@ -32,9 +32,11 @@ describe('isPrivateNetworkHost (the LAN band, unchanged)', () => {
 describe('isLocalEndpointHost (the local-model band)', () => {
   it.each([
     'localhost',
+    'localhost.', // one trailing dot: the DNS-root spelling of the same name
     'LOCALHOST',
     'ollama.localhost',
     '127.0.0.1',
+    '127.0.0.1.',
     '127.1.2.3',
     '0.0.0.0',
     '::1',

@@ -37,7 +37,10 @@ export function isPrivateNetworkHost(host: string): boolean {
 }
 
 export function isLocalEndpointHost(host: string): boolean {
-  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  // One trailing dot is the DNS root spelling of the same name ('localhost.').
+  // NOT handled, accepted: the v4-mapped hex form ('[::ffff:7f00:1]') classifies
+  // remote — warning-only, the band names the host, and nobody types it.
+  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (h === '') return false;
   if (h === 'localhost' || h.endsWith('.localhost')) return true;
   if (h === '0.0.0.0') return true;

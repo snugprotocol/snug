@@ -242,6 +242,17 @@ const { title, description } = Astro.props;
     color: var(--ember-bright);
   }
 
+  @media (max-width: 1000px) {
+    /* Five tracks squeeze below ~100px each here; three real columns with the brand
+       spanning reads better and nothing overflows (Gate-5 review F9). */
+    .footer-grid {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+    .footer-brand {
+      grid-column: 1 / -1;
+    }
+  }
+
   @media (max-width: 760px) {
     .footer-grid {
       grid-template-columns: 1fr 1fr;

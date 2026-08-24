@@ -58,9 +58,12 @@ terms page. Two facts shape the answer:
 2. **Exactly one clickwrap, at the desktop installer.** The DMG carries a plain-text EULA
    as a classic SLA resource via Tauri's `bundle.licenseFile` (→ `bundle_dmg.sh --eula`
    → `hdiutil udifrez`) — the macOS "Agree / Disagree" screen before the volume mounts.
-   One screen, ASCII-only, under sixty short lines: the MIT grant and its warranty
-   disclaimer verbatim, the update-check disclosure with its Settings off-switch, the
-   local-helper + LAN-reach disclosure, where the user's data lives, and the two URLs.
+   One screen, ASCII-only, under sixty short lines: the parties and their shared
+   definition, the MIT grant and its warranty disclaimer verbatim, the update-check
+   disclosure with its Settings off-switch, the local-helper + LAN-reach disclosure
+   (including the session store living beside the file), where the user's data lives,
+   the pre-1.0 warning, the liability cap with its section 1668 carve-out, and the two
+   URLs.
    This is the one place where the phone-home, the local sidecar and LAN reach all
    begin, the user is already in an "installing software" frame, and both *Berman* prongs
    (conspicuous notice, unambiguous assent) are met by the OS itself with no code in the
@@ -170,7 +173,7 @@ terms page. Two facts shape the answer:
 
 - The playground gains a footer, two routes and an "about" Settings section; the website
   gains two pages and a Legal footer column; the DMG gains an Agree screen; Settings and
-  the wizard gain three warning bands. No protocol, runner, auth or Rust change; no new
+  the wizard gain four warning bands (BYOK key, local endpoint, sync origin, messaging link). No protocol, runner, auth or Rust change; no new
   dependency.
 - The threat model's R-9, R-10 and R-30 each gain one sentence naming where the user is
   told (`/privacy`, the EULA, the band) — disclosure becomes part of the residual's
