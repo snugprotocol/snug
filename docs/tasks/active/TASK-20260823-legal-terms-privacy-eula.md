@@ -557,3 +557,48 @@ folding (dispositions below).
   documents committed; runbook stage 5/7 + memory updated.
 - State: **in-progress — Gate 3 (tests first) starting in the listed order.**
 - Next step: `legal/legalShared.ts` → `legalContent.test.ts` (red) → content modules.
+
+### 2026-08-23 — Claude (for Jeetu) — session (Gates 3–4, tests first)
+- Done, in the planned order, each suite red before its implementation: `legal/legalShared.ts`
+  (vocabulary + content model), `legal/claimDiscipline.ts` (all four whitepaper AC6 rules,
+  returns violations so the checker can be proven non-decorative), `legalContent.test.ts`
+  (29) → `privacy.ts` / `terms.ts` / `eula.ts`; `legalPages.test.tsx` (11) →
+  `views/LegalPage.tsx`, `ui/ExternalLink.tsx` (the side-effect-free `openExternalUrl`
+  seat), routes + `ShellFooter` in `App.tsx`, CSS; `settingsAbout.test.tsx` (3) → the
+  `about` section (EULA rendered offline from `EULA_TEXT`; `settingsRedesign.test.tsx`'s
+  label list is the one deliberate edit); `privateHost.test.ts` (30) →
+  `security/privateHost.ts` (LAN predicate lifted bytes-unchanged + `isLocalEndpointHost`);
+  `consentBands.test.tsx` (19) → BYOK / local-endpoint / dropbox / hub bands, the
+  include-secrets clause, the Hugging Face sentence; `linkedDeviceThirdPartyBand.test.tsx`
+  (3) → the R-9/R-10 band before "start linking"; `dmgEula.test.ts` (11) →
+  `src-tauri/EULA.txt` (byte-copy of `EULA_TEXT`, 57 lines, max 71 cols, ASCII) +
+  `bundle.licenseFile`; `release-desktop.test.mjs` (+5) → `checkEulaText` /
+  `verifyDmgCarriesEula` + main() wiring (pre-build shape refusal; post-build
+  `hdiutil udifderez -xml` proof), `scripts/release-desktop.d.mts` typed contract,
+  negative fixture captured from the pre-existing EULA-less DMG (`hdiutil` printed
+  `WARNING: udifderez is deprecated` — review F9 confirmed as fact); website
+  `legalPages.test.ts` (7) → `Legal{Doc,Runs}.astro`, `terms.astro`, `privacy.astro`,
+  the footer Legal column (5-col grid; 2-col at ≤760px unchanged). Docs: threat-model
+  R-9/R-10/R-30 cross-references, ADR-0055 accepted + index, code-map row, next-steps
+  entry (counsel review; signed release + staple check; udifrez deprecation; owner
+  Finder walk; TRACKER D-02 re-confirmation).
+- Evidence so far: playground `legalContent`/`legalPages`/`settingsAbout`/`consentBands`/
+  `privateHost`/`linkedDeviceThirdPartyBand` + neighbours green; desktop vitest 186/186 +
+  `tsc` clean after the `.d.mts`; website build green (both pages emitted) + 42/42;
+  `release-desktop.test.mjs` 11/12 pending the positive fixture (a real
+  `tauri build --bundles dmg` with `licenseFile` is running).
+- Two test defects of my own, fixed in the test not the code: an over-broad `.seg button`
+  selector (caught the default-provider seg, which legitimately disables unkeyed
+  providers) and a non-generic query helper the typecheck refused.
+- State: **in-progress — Gate 4 nearly complete; waiting on the DMG build for AC11's
+  positive fixture, then root `pnpm test`, the Gate-5 fresh-context diff review, journal
+  sign-off.**
+- **AC11 evidence (2026-08-23):** a real `tauri build --bundles dmg` with
+  `bundle.licenseFile` produced `Snug_0.1.0_aarch64.dmg` (9.1 MB vs 8.3 MB for the
+  EULA-less image); `hdiutil udifderez -xml` over it → `scripts/fixtures/udifderez-with-sla.xml`
+  (15.3 KB, `LPic` present; the no-SLA fixture is 9.1 KB with none) —
+  `release-desktop.test.mjs` 12/12. Then the platform's own behaviour, not just its
+  parser: `yes | hdiutil attach -nobrowse -noautoopen -readonly <dmg>` printed the
+  agreement — line 1 `Snug for macOS - License Agreement` … line 57 `Clicking Agree means
+  you accept these terms.` — BEFORE mounting `/Volumes/Snug`, then detached clean. The
+  Finder rendering of the same screen stays on the owner walk (next-steps).

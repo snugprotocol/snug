@@ -1,0 +1,127 @@
+---
+// LegalDoc.astro — renders a playground legal content module (terms / privacy) on the
+// website (ADR-0055 §4; TASK-20260823-legal-terms-privacy-eula AC12).
+//
+// ONE source, two renderers: the module is read through the `@playground` alias the
+// site already uses for releaseChannel.ts (ADR-0048 §5 — website → playground, never
+// the reverse), so the public copy at snugprotocol.org/terms/ and the in-app copy at
+// /terms can never say different things. The node kinds (text/link, list, table,
+// quote) are walked here exactly as views/LegalPage.tsx walks them.
+import type { LegalDocument } from '@playground/legal/legalShared';
+import LegalRuns from './LegalRuns.astro';
+
+interface Props {
+  doc: LegalDocument;
+}
+const { doc } = Astro.props;
+---
+
+<article class="legal">
+  <header class="legal-head">
+    <p class="eyebrow">{doc.slug}</p>
+    <h1 class="display">{doc.title}</h1>
+    <p class="muted">updated {doc.updated}</p>
+    <p class="legal-intro"><LegalRuns runs={doc.intro} /></p>
+  </header>
+
+  {
+    doc.sections.map((section) => (
+      <section class="legal-section" aria-labelledby={section.id}>
+        <h2 id={section.id}>{section.heading}</h2>
+        {section.blocks.map((block) =>
+          block.kind === 'quote' ? (
+            <blockquote class="legal-quote">{block.text}</blockquote>
+          ) : block.kind === 'p' ? (
+            <p>
+              <LegalRuns runs={block.runs} />
+            </p>
+          ) : block.kind === 'list' ? (
+            <ul>
+              {block.items.map((item) => (
+                <li>
+                  <LegalRuns runs={item} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div class="legal-table-wrap">
+              <table class="legal-table">
+                <thead>
+                  <tr>
+                    {block.head.map((h) => (
+                      <th scope="col">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row) => (
+                    <tr>
+                      {row.map((cell) => (
+                        <td>
+                          <LegalRuns runs={cell} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ),
+        )}
+      </section>
+    ))
+  }
+</article>
+
+<style>
+  .legal {
+    max-width: 72ch;
+    margin: 0 auto;
+    padding: clamp(3rem, 7vw, 5rem) 0;
+    display: grid;
+    gap: var(--space-5);
+    line-height: 1.6;
+  }
+  .legal-head {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .legal-intro {
+    font-size: var(--text-m);
+  }
+  .legal-section {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .legal-section h2 {
+    font-size: var(--text-l);
+    margin: var(--space-3) 0 0;
+  }
+  .legal-quote {
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--border);
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+  }
+  .legal-table-wrap {
+    overflow-x: auto;
+  }
+  .legal-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-s);
+  }
+  .legal-table th,
+  .legal-table td {
+    text-align: left;
+    vertical-align: top;
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--border);
+  }
+  .legal-table th {
+    color: var(--fg-faint);
+    font-weight: 600;
+    border-top: none;
+  }
+</style>

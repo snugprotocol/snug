@@ -1,0 +1,16 @@
+---
+// privacy.astro — the public copy of the privacy statement (ADR-0055 §1/§4), written
+// from the threat model. Content lives in the playground's legal/privacy.ts.
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import LegalDoc from '../components/LegalDoc.astro';
+import { PRIVACY } from '@playground/legal/privacy';
+---
+
+<MarketingLayout
+  title="Privacy — Snug"
+  description="What Snug does and does not do with your data: no server, no account, no analytics script — and the complete list of what your own choices can reach."
+>
+  <div class="container">
+    <LegalDoc doc={PRIVACY} />
+  </div>
+</MarketingLayout>

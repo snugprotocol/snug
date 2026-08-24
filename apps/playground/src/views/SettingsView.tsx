@@ -76,6 +76,10 @@ import { FeedbackCard } from '../feedback/FeedbackCard.js';
 import { ADAPTER_DEFAULTS, labelFor, PROVIDER_LABELS } from '../run/ModelSelect.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
+import { ExternalLink } from '../ui/ExternalLink.js';
+import { EULA_TEXT } from '../legal/eula.js';
+import { isLocalEndpointHost, localEndpointHostOf } from '../security/privateHost.js';
+import { LICENSE_URL, PRIVACY_PATH, TERMS_PATH, THREAT_MODEL_URL } from '../legal/legalShared.js';
 import { ConnectionSlotsCard } from './ConnectionSlotsCard.js';
 
 const MODE_LABELS: Record<PlaygroundMode, string> = {
@@ -187,6 +191,7 @@ export function SettingsView(): ReactElement {
                     https hub cannot reach http://localhost in Safari.
                   </span>
                 )}
+                <LocalEndpointBand url={localUrl} />
               </div>
               {/* The old standalone model card's LOCAL half, moved in-section
                   (TASK-20260821 AC11): same ids, same states, same hints. */}
@@ -290,7 +295,10 @@ export function SettingsView(): ReactElement {
         </Card>
       </Section>
 
-      <Section label="app">
+      {/* ADR-0055 §1: "about" — version + update controls (desktop) or the download
+          pointer (web), plus the legal links; the DMG's EULA text rendered offline on
+          desktop. Renamed from "app" (TASK-20260823-legal-terms-privacy-eula AC5). */}
+      <Section label="about">
         <AppVersionCard />
       </Section>
     </div>
@@ -333,6 +341,7 @@ function AppVersionCard(): ReactElement {
             get the desktop app
           </Link>
         </div>
+        <AboutLinks />
       </Card>
     );
   }
@@ -373,7 +382,44 @@ function AppVersionCard(): ReactElement {
           <span className="hint">check for updates automatically at launch (asks github.com for the latest version)</span>
         </label>
       </div>
+      <AboutLinks />
+      <div className="field settings-row">
+        {/* The installer's license screen, word for word, from the same constant the DMG
+            embeds (legal/eula.ts) — on the page, offline, because the playground never
+            imports from apps/desktop and a GitHub URL needs the network (review F2). */}
+        <details className="about-eula" data-testid="about-eula">
+          <summary>the license agreement you accepted at install</summary>
+          <pre>{EULA_TEXT}</pre>
+        </details>
+      </div>
     </Card>
+  );
+}
+
+/** Terms · privacy · threat model · license — the same four the footer carries. */
+function AboutLinks(): ReactElement {
+  return (
+    <div className="field settings-row">
+      <label>the fine print</label>
+      <div className="about-links">
+        <Link to={TERMS_PATH} data-testid="about-terms">
+          terms
+        </Link>
+        <Link to={PRIVACY_PATH} data-testid="about-privacy">
+          privacy
+        </Link>
+        <ExternalLink href={THREAT_MODEL_URL} data-testid="about-threat-model">
+          threat model
+        </ExternalLink>
+        <ExternalLink href={LICENSE_URL} data-testid="about-license">
+          MIT license
+        </ExternalLink>
+      </div>
+      <span className="hint">
+        disclosure, not a gate: nothing here asked you to agree to anything — the desktop installer is the one
+        place that did.
+      </span>
+    </div>
   );
 }
 
@@ -453,6 +499,17 @@ function ByokProvidersRows(): ReactElement {
             stored in your snug file on this device, sent straight to {PROVIDER_LABELS[p]} from your browser — never
             to the hub, and stripped from hub sync and default exports.
           </span>
+          {keys[p] ? (
+            /* THE BYOK BAND (ADR-0055 §3, AC6): the custody hint above says where the KEY
+               goes; this says what the PROVIDER receives, under whose terms, on whose bill.
+               Keys on the saved-key STATE — honest every time it renders, gone when the
+               key is cleared — never on a "first time" flag the store cannot keep. */
+            <div className="hint" role="note" data-testid="byok-consent-band">
+              with this key saved, your prompts, the app data an app shows the model, and the results of any
+              connected-service calls go straight to {PROVIDER_LABELS[p]} — under their own terms, on your own bill.
+              nothing routes through us.
+            </div>
+          ) : null}
         </div>
       ))}
 
@@ -483,6 +540,27 @@ function ByokProvidersRows(): ReactElement {
 }
 
 /**
+ * THE LOCAL-ENDPOINT BAND (ADR-0055 §3, AC7; review F7) — the private-address doctrine
+ * applied to the field where the misunderstanding costs most. "local model" promises
+ * nothing leaves the machine; if the URL's host is not on this machine, that promise is
+ * quietly false and the user is sending prompts, app data and connected-service results
+ * to a third party they did not knowingly choose. Keys on the HOST (a lookalike name
+ * raises, the default localhost stays quiet); NAMES the host so the user can judge;
+ * renders nothing for a half-typed URL; never disables the field — self-hosted remote
+ * endpoints are legitimate and growing.
+ */
+function LocalEndpointBand({ url }: { url: string }): ReactElement | null {
+  const host = localEndpointHostOf(url);
+  if (host === undefined || isLocalEndpointHost(host)) return null;
+  return (
+    <div className="hint" role="note" data-testid="local-endpoint-remote-band">
+      <code>{host}</code> is not on this machine — with this endpoint, your prompts, app data and connected-service
+      results leave this computer to it. fine if it&apos;s your own server; make sure you recognize the address.
+    </div>
+  );
+}
+
+/**
  * AL-07 experimental webllm surface — rendered ONLY while the `?webllm=1` flag is on
  * (AC1: flag-off has zero webllm footprint). Deliberately NOT a mode button: the
  * in-browser brain must not read as a first-class equal of byok/local/subscription
@@ -503,7 +581,8 @@ function WebllmExperimentCard(): ReactElement | null {
             'without ?webllm=1 in the address bar.'
           : brain.kind === 'demo' && brain.reason === 'no-webgpu'
             ? `the ?webllm=1 flag is on, but ${WEBLLM_FALLBACK_BANNER}.`
-            : 'the ?webllm=1 flag is on — checking whether this browser can run WebGPU…'}
+            : 'the ?webllm=1 flag is on — checking whether this browser can run WebGPU…'}{' '}
+        the weights download from huggingface.co, which sees your IP address and which model you fetched.
       </span>
     </div>
   );
@@ -714,6 +793,22 @@ function DataCard(): ReactElement {
           </div>
         ) : null}
         {sync.origin === 'dropbox' ? (
+          /* THE SYNC-ORIGIN BAND (ADR-0055 §3, AC8) — ADR-0014 §2's own words. Not
+             softened: this is the one place "your keys" leave the device, by design. */
+          <div className="hint" role="note" data-testid="sync-origin-secrets-band">
+            your whole file — including every saved key and token — is copied to that Dropbox, and re-copied for as
+            long as it stays selected. anyone with access to that Dropbox holds your keys; its security is yours.
+          </div>
+        ) : null}
+        {sync.origin === 'hub' && hubOriginAvailable() ? (
+          /* The hub twin (owner Q3 guard): only where the option exists at all — a
+             WARNING about app data reaching the operator, never a reassurance. */
+          <div className="hint" role="note" data-testid="sync-origin-hub-band">
+            your apps&apos; data — records, chats, messages — is copied to this hub&apos;s operator; your keys are
+            stripped first, and only the keys.
+          </div>
+        ) : null}
+        {sync.origin === 'dropbox' ? (
           <div className="field field-gap-s">
             <label htmlFor="dropbox-token">dropbox access token</label>
             <input
@@ -766,7 +861,8 @@ function DataCard(): ReactElement {
         </div>
         <span className="hint">
           the export is the whole file — take it to another hub, a personal origin, or a local runner. secrets stay
-          out unless you opt in. imported files ask you to re-confirm model endpoints before running.
+          out unless you opt in; with &quot;include secrets&quot; checked, the exported file then carries every saved
+          key and token. imported files ask you to re-confirm model endpoints before running.
         </span>
       </div>
     </Card>

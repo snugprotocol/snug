@@ -12,12 +12,22 @@
 //      release, not an afterthought — the ADR-0045 doctrine applied to the shell);
 //   2. bump the THREE version declarations together (package.json, tauri.conf.json,
 //      Cargo.toml — pinned in agreement by versionSync.test.ts);
+//   2b. refuse unless src-tauri/EULA.txt passes checkEulaText — the DMG's license
+//      screen (ADR-0055 §2, the product's ONE clickwrap) is classic TEXT: ASCII only,
+//      short lines, a hard line budget. The desktop suite runs the same function
+//      (dmgEula.test.ts imports it), so a wrong file fails twice, in two places;
 //   3. run the desktop release gate (gate:release: debug surfaces absent from the
 //      release binary) and then `tauri build --target universal-apple-darwin` with
 //      updater artifacts; minisign signing rides TAURI_SIGNING_PRIVATE_KEY[_PATH]
 //      (custody: ~/.tauri, ADR-0047 §4). Apple signing/notarization are ENV-GATED:
 //      with APPLE_SIGNING_IDENTITY absent the build is unsigned and this script says
 //      so loudly (the /download page carries the matching Gatekeeper disclosure);
+//   3b. prove the built DMG actually CARRIES the EULA: `hdiutil udifderez -xml` dumps
+//      the image's resources; verifyDmgCarriesEula decodes the SLA text resource and
+//      compares its first line (lessons 2026-08-24: a config is only a contract once
+//      the platform's parser accepted it). udifrez/udifderez are deprecated by Apple
+//      (still shipped on macOS 26, with a warning) — the refusal names that so the
+//      day they vanish the failure is diagnosable, not mysterious;
 //   4. stage release-out/ with the STABLE asset names the single-homed URLs expect
 //      (Snug.dmg, Snug.app.tar.gz(.sig), latest.json, desktop-releases.json) — both
 //      darwin platform keys point at the ONE universal artifact;
@@ -40,6 +50,7 @@ const DESKTOP = path.join(ROOT, 'apps', 'desktop');
 const RELEASES_JSON = path.join(ROOT, 'apps', 'playground', 'src', 'desktop', 'desktop-releases.json');
 const OUT_DIR = path.join(DESKTOP, 'release-out');
 const UNIVERSAL_BUNDLE = path.join(DESKTOP, 'src-tauri', 'target', 'universal-apple-darwin', 'release', 'bundle');
+const EULA_PATH = path.join(DESKTOP, 'src-tauri', 'EULA.txt');
 
 export const SEMVER = /^\d+\.\d+\.\d+$/;
 
@@ -105,6 +116,72 @@ export function buildLatestJson({ version, pubDate, signature }) {
   };
 }
 
+// ---------------------------------------------------------------- the DMG EULA (ADR-0055 §2)
+
+/**
+ * The SLA window is small and the resource is classic TEXT (Mac Roman): a curly quote
+ * or an em dash renders as garbage, a long line wraps badly, and a long text is a
+ * clickwrap nobody reads. The line budget is derived from the accepted draft plus
+ * headroom (plan-review finding 15), not a hope about a future one.
+ */
+export const EULA_MAX_COLUMNS = 74;
+export const EULA_LINE_BUDGET = 60;
+
+/** Shape check over the EULA text. `{ ok: true }` or `{ ok: false, reason }` — never throws. */
+export function checkEulaText(text) {
+  if (typeof text !== 'string' || text.trim() === '') return { ok: false, reason: 'EULA text is empty' };
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const bad = /[^\x09\x0a\x0d\x20-\x7e]/.exec(line);
+    if (bad !== null) {
+      return {
+        ok: false,
+        reason: `non-ASCII character ${JSON.stringify(bad[0])} at line ${i + 1} — the SLA resource is classic TEXT; use straight quotes and hyphens`,
+      };
+    }
+    if (line.length > EULA_MAX_COLUMNS) {
+      return { ok: false, reason: `line ${i + 1} is ${line.length} columns; the SLA window wraps past ${EULA_MAX_COLUMNS}` };
+    }
+  }
+  if (lines.length > EULA_LINE_BUDGET) {
+    return { ok: false, reason: `${lines.length} lines; the EULA budget is ${EULA_LINE_BUDGET} lines (a screen someone reads standing up)` };
+  }
+  return { ok: true };
+}
+
+const UDIFDEREZ_NOTE =
+  'Apple deprecated `hdiutil udifrez/udifderez` in macOS 12 (still shipped, with a warning); ' +
+  'if this check stops finding resources on a newer macOS, that deprecation is the first suspect.';
+
+/**
+ * Given `hdiutil udifderez -xml <dmg>` output, confirm the image carries an SLA whose
+ * DECODED text starts with `firstLine`. The body is base64 inside <data> (the bundler's
+ * eula-resources-template.xml), so a raw substring check on the dump either always fails
+ * against a real fixture or always passes against a hand-typed one — decode first.
+ * Never throws: garbage in → a named refusal.
+ */
+export function verifyDmgCarriesEula(xml, firstLine) {
+  if (typeof xml !== 'string' || !xml.includes('<key>LPic</key>')) {
+    return { ok: false, reason: `no SLA resource in the udifderez dump (no LPic key) — the DMG has no license screen. ${UDIFDEREZ_NOTE}` };
+  }
+  const m = /<key>(TEXT|RTF )<\/key>\s*<array>[\s\S]*?<data>([\s\S]*?)<\/data>/.exec(xml);
+  if (m === null) {
+    return { ok: false, reason: `LPic present but no TEXT/RTF resource with a <data> body in the udifderez dump. ${UDIFDEREZ_NOTE}` };
+  }
+  let decoded;
+  try {
+    decoded = Buffer.from(m[2].replace(/\s+/g, ''), 'base64').toString('latin1');
+  } catch (err) {
+    return { ok: false, reason: `could not base64-decode the SLA ${m[1].trim()} resource: ${err}` };
+  }
+  const got = decoded.split(/\r?\n|\r/)[0] ?? '';
+  if (got !== firstLine) {
+    return { ok: false, reason: `SLA first line mismatch: expected ${JSON.stringify(firstLine)}, the DMG carries ${JSON.stringify(got)}` };
+  }
+  return { ok: true };
+}
+
 /** The gh command PRINTED for the owner — never executed here (PROCESS.md release rules). */
 export function ghReleaseCommand(version) {
   const files = STABLE_ASSETS.map((name) => `release-out/${name}`).join(' ');
@@ -131,6 +208,14 @@ async function main() {
 
   const entry = changelogEntryFor(readFileSync(RELEASES_JSON, 'utf8'), version);
   console.log(`✔ release notes present: v${entry.version} — ${entry.title ?? '(untitled)'} (${entry.date})`);
+
+  const eulaText = existsSync(EULA_PATH) ? readFileSync(EULA_PATH, 'utf8') : '';
+  const eulaShape = checkEulaText(eulaText);
+  if (!eulaShape.ok) {
+    console.error(`REFUSED: src-tauri/EULA.txt — ${eulaShape.reason} (ADR-0055 §2; edit legal/eula.ts and copy it over).`);
+    process.exit(2);
+  }
+  console.log('✔ EULA.txt passes the SLA shape check');
 
   const pkgPath = path.join(DESKTOP, 'package.json');
   const confPath = path.join(DESKTOP, 'src-tauri', 'tauri.conf.json');
@@ -170,6 +255,14 @@ async function main() {
   });
 
   const dmg = findOne(path.join(UNIVERSAL_BUNDLE, 'dmg'), '.dmg');
+  // 3b — the platform's own parser vouches for the clickwrap before anything is staged.
+  const dump = execSync(`hdiutil udifderez -xml "${dmg}"`, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  const carries = verifyDmgCarriesEula(dump, eulaText.split('\n')[0]);
+  if (!carries.ok) {
+    console.error(`REFUSED: the built DMG does not carry the EULA — ${carries.reason}`);
+    process.exit(2);
+  }
+  console.log('✔ the DMG carries the EULA (SLA resource verified via hdiutil udifderez)');
   const tarGz = findOne(path.join(UNIVERSAL_BUNDLE, 'macos'), '.app.tar.gz');
   const sig = `${tarGz}.sig`;
   if (!existsSync(sig)) throw new Error(`missing updater signature beside the artifact: ${sig}`);

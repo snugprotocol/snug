@@ -97,9 +97,11 @@ describe('structure (AC14)', () => {
     // shell version/update controls on desktop and the download pointer on web.
     // MIGRATED six → seven (TASK-20260822, ADR-0052): "feedback" carries the
     // GitHub deep-link card — the settings surface of the one feedback channel.
+    // RENAMED "app" → "about" (TASK-20260823-legal-terms-privacy-eula, ADR-0055): the
+    // same card, now also carrying the legal links and (desktop) the EULA text.
     await render();
     const labels = [...(container?.querySelectorAll('.settings-section-label') ?? [])].map((n) => n.textContent);
-    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'feedback', 'appearance', 'app']);
+    expect(labels).toEqual(['brain', 'account', 'your file', 'connections', 'feedback', 'appearance', 'about']);
   });
 
   it('keeps the mode segment’s accessible name and three labels verbatim (the e2e pin)', async () => {

@@ -1,6 +1,6 @@
 # 0055 — Legal disclosure posture: published terms + privacy as disclosure, one clickwrap at the installer, contextual consent as the primary instrument
 
-- **Status:** **draft** — interview answered by owner 2026-08-23 (§6–§8 record the answers); becomes accepted with the owner's plan approval of TASK-20260823-legal-terms-privacy-eula
+- **Status:** accepted (owner plan approval 2026-08-23 — "TechVoyage LLC" confirmed as the registered spelling, hello@ verified, "go ahead"; §6–§9 record the interview answers)
 - **Date:** 2026-08-23
 - **Task:** TASK-20260823-legal-terms-privacy-eula
 
