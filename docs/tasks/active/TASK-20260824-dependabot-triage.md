@@ -1,6 +1,6 @@
 # TASK-20260824-dependabot-triage: Triage the 36 Dependabot alerts on `main` (real vs dev-only) before flip-public
 
-- **Status**: in-review (implementation complete; AC1 final read is post-merge)
+- **Status**: in-review (implementation complete + fully verified; AC1 final read is post-merge)
 - **Owner**: Jeetu
 - **Risk tier**: **medium** (confirmed: `apps/playground` runtime dep dispositions + desktop/website devDeps; no `packages/*` source, no CI/release config — any CI edit escalates to High)
 - **Branch**: `fix/TASK-20260824-dependabot-triage`
@@ -115,8 +115,8 @@ Lockfile + vitest touch EVERY package's test runner → the full root run is the
 - **Verification.** Every package green under the new toolchain: db 419 · auth 939 · playground 1639 (+ e2e 76 passed, 1 skipped) · desktop 186 · protocol 346 · runner 119 · adapters 130 · server 126 · sidecar 177 · sdk 41 · website 42 · examples 362 · audit-deps 17. Gates: `check-website-sync` OK (24 pages/40 hashes), `pnpm audit:deps` reports **no un-accepted high/critical** (was 6 at Step 0). Website build: 26 pages, and **all 26 verified byte-identical in prose** against the captured Astro 5 baseline (styles/scripts stripped, scoped-style hashes normalized) — the diffs are CSS ordering, style hashes, and `compressHTML: 'jsx'` whitespace, whose newly-adjacent inline elements were each confirmed to sit in flex/grid containers that space via `gap`.
 - **Two pre-existing failures, neither caused by this branch (both verified on clean `main`):**
   1. `packages/knowledge` `centralization-lint` reds on `apps/playground/src/legal/eula.ts` — a false positive from PR #125 (legal prose matching the prompt-marker heuristic). **Out of this task's scope; needs its own fix.**
-  2. `apps/desktop` `pnpm gate` cannot run: the installed **Snug.app is running and holds the single-instance lock** (the gate's own error text names this). Reproduced identically on clean `main` with vite 5, so it is environmental. The desktop vitest suite (186) and `cargo test` both pass. **AC4's `gate` leg is therefore NOT verified — it needs the app quit and a rerun (owner act).**
+  2. `apps/desktop` `pnpm gate` initially could not run: the installed **Snug.app was running and held the single-instance lock** (the gate's own error text names this). Reproduced identically on clean `main` with vite 5, confirming it was environmental. **RESOLVED — owner quit the app 2026-08-24 and the gate was re-run: `✓ GATE GREEN`, 35/35 verdicts, zero failures**, including every C1/C2 keyless-refusal row (`ipc-invoke`/`lan-fetch`/`sidecar-fetch`/`sidecar-wizard-fetch`/`updater-check`/`updater-install`/`process-relaunch`), the remap guards, and the api_key wizard journey's three secret canaries (absent from the serialized DOM after wizard AND after run; stub saw HMAC-signed headers with both seats exactly `***`). **AC4 is fully verified under vite 6.**
   - Also observed: `knowledge/no-ancestor-tokens` fails only under full-root concurrency (0/6 in isolation, passed 2 subsequent full runs) — the documented load-timeout flake class, not a regression.
 - **State**: branch `fix/TASK-20260824-dependabot-triage`, 7 commits, ready for review/PR.
-- **Next step**: owner — quit Snug.app and run `pnpm --filter desktop gate` to close AC4; then PR + merge; then re-read the Security tab for AC1 (fixed alerts close only once the lockfile is on `main`).
+- **Next step**: PR + merge; then re-read the Security tab for AC1 (the 32 fixed alerts close only once the lockfile is on `main`). AC4 closed 2026-08-24 (gate green, 35/35).
 - **Open questions**: whether to delete the stray `/Users/jeetu/node_modules/` (315 packages, outside any repo — owner call; it can shadow any workspace package).
