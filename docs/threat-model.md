@@ -271,13 +271,17 @@ under the same rules, and the update UX deliberately offering the attacker no bu
 signing would close it and is not implemented.
 *Full surface:* `docs/security/threat-model-delta-desktop-update-channel.md`.
 
-**R-29 — Distributed builds are unsigned and un-notarized until the Developer ID lands.**
-First run requires a right-click → Open — the exact habit that makes users vulnerable to
-other unsigned software — and a tampered DMG acquired anywhere but the linked release URL
-gets no OS-level warning distinguishing it from ours. Disclosed on the download page rather
-than smoothed over; the signing path is wired and env-gated so it activates the day
-credentials exist. First acquisition is TOFU either way: nothing published today lets a
-user verify a download out of band.
+**R-29 — First acquisition is trust-on-first-use.** *(Partially resolved 2026-08-24: builds
+are signed and notarized as of v0.1.0.)* Distributed builds now carry a Developer ID
+Application signature (Team 2KC5X47563), are notarized by Apple and have the ticket
+**stapled**, so first launch is an ordinary double-click and a tampered DMG gets an OS-level
+warning ours does not. The release pipeline refuses to stage an artifact that is not stapled
+or that Gatekeeper does not accept as `source=Notarized Developer ID`, so this cannot
+silently regress. What REMAINS: notarization proves the binary came from this Developer ID
+and carries no known malware — it does not tell a user that *this* Developer ID is Snug's.
+Nothing published today lets someone verify out of band that the identity signing the DMG is
+the project's own, so first acquisition is still TOFU on the download link. Closing that
+needs a published, independently-reachable fingerprint — filed, not done.
 
 **R-30 — The launch update check is a phone-home.** With auto-check on (the default), every
 desktop launch tells github.com the user's IP, the time, and the running version. Snug's

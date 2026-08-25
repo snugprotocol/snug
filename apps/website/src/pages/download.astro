@@ -89,19 +89,6 @@ import { site, siteMode } from '../config/site';
     </div>
   </section>
 
-  <section class="section dl-gatekeeper" aria-labelledby="dl-gk">
-    <div class="container">
-      <div class="section-head">
-        <h2 id="dl-gk">First launch on macOS</h2>
-        <p>
-          Pre-1.0 builds may not yet carry Apple notarization. If macOS warns on first open:
-          right-click the app in Applications and choose <strong>Open</strong>, then confirm.
-          That's Gatekeeper doing its job on a new developer — the release page publishes
-          checksums if you want to verify the download.
-        </p>
-      </div>
-    </div>
-  </section>
 </MarketingLayout>
 
 <style>
@@ -188,10 +175,6 @@ import { site, siteMode } from '../config/site';
   .dl-grid code {
     font-family: var(--font-mono);
     color: var(--ember-bright);
-  }
-
-  .dl-gatekeeper {
-    border-top: 1px solid var(--border);
   }
 
   @media (max-width: 700px) {

@@ -65,11 +65,6 @@ export function DownloadView(): ReactElement {
         on, so we don&apos;t ship a build we can&apos;t stand behind (it returns when that changes).
       </p>
 
-      <p className="hint" data-testid="gatekeeper-note">
-        current builds are not yet notarized with Apple: the first launch needs a right-click → <strong>Open</strong>{' '}
-        (once, then macOS remembers). signed builds are coming; nothing else changes.
-      </p>
-
       {release !== undefined ? (
         <section className="release-entry" data-testid="download-release-notes">
           <div className="release-entry-head">
