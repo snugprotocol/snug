@@ -407,6 +407,15 @@ async function main() {
     );
     process.exit(2);
   }
+  // An UNSET password is not an empty one: tauri prompts for it, and a build with no
+  // TTY dies with "incorrect updater private key password: Device not configured
+  // (os error 6)" — AFTER the notarization round-trip, which is the slowest and only
+  // irreversible-in-cost step. Twice on 2026-08-24/25. Default it explicitly so the
+  // key's actual state (no passphrase) is what the signer is told.
+  if (process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD === undefined) {
+    process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '';
+    console.log('· TAURI_SIGNING_PRIVATE_KEY_PASSWORD unset → defaulted to empty (the key has no passphrase)');
+  }
   const signing = appleSigningPlan(process.env);
   if (signing.mode === 'refused') {
     console.error(`REFUSED: ${signing.reason}`);
@@ -471,10 +480,19 @@ async function main() {
   // against the final bytes, not the pre-staple ones (review F9 named this interaction
   // as unverified; it is verified here).
   if (appleSigned) {
-    // Tauri's bundler already submitted the .app to Apple during `tauri build` (that
-    // is why the APPLE_ID/API-key trio is mandatory above). What it does NOT do is
-    // staple the DMG, so an offline first launch would still fail. Staple here, then
-    // make the platform itself vouch for the result.
+    // Tauri's bundler submitted the **.app** to Apple during `tauri build` (as
+    // Snug.zip — that is why the APPLE_ID/API-key trio is mandatory above). It does
+    // NOT submit the DMG, and a notarization ticket is keyed to the HASH OF ONE FILE:
+    // stapling the DMG against the app's ticket fails with "Record not found /
+    // CloudKit query ... failed" (observed 2026-08-25). The DMG is a separate
+    // artifact and needs its own submission. Both matter: the DMG is what a human
+    // downloads, the .app is what survives the drag to /Applications.
+    console.log('submitting the DMG to Apple for its own notarization (minutes, not seconds)…');
+    const notaryAuth =
+      signing.notarization === 'api-key'
+        ? `--key "${process.env.APPLE_API_KEY_PATH}" --key-id "${process.env.APPLE_API_KEY}" --issuer "${process.env.APPLE_API_ISSUER}"`
+        : `--apple-id "${process.env.APPLE_ID}" --password "${process.env.APPLE_PASSWORD}" --team-id "${process.env.APPLE_TEAM_ID}"`;
+    execSync(`xcrun notarytool submit "${dmg}" ${notaryAuth} --wait`, { stdio: 'inherit' });
     console.log('stapling the notarization ticket to the DMG…');
     execSync(`xcrun stapler staple "${dmg}"`, { stdio: 'inherit' });
 
