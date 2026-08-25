@@ -1,6 +1,6 @@
 # TASK-20260824-first-signed-release: First signed + notarized macOS Release (universal)
 
-- **Status**: in-review (released; PR open)
+- **Status**: done (merged `36fe45c`, PR #134; v0.1.0 released 2026-08-25)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated — release config + GitHub Release creation; ADR-0047 §13, PROCESS.md §Release & publish rules)
 - **Branch**: `feat/TASK-20260824-first-signed-release`
@@ -155,3 +155,11 @@ Pre-flip the repo is private, so anonymous fetches of these URLs 404 — designe
 - State: **released and verified.** Gatekeeper copy retired from both download surfaces, R-29 partially resolved (TOFU half retained), ADR-0047 §7 amended, two lessons recorded. PR open for review.
 - Next step: merge the PR; then `/close-session`. The v0.1.0→v0.1.1 update walk (check → chip → sheet → update now → restart, incl. the single-instance lock race and helper reap) stays open in next-steps and needs a SECOND release, i.e. its own explicit ask.
 - Open questions: owner still to move `~/Desktop/snug-updater-key-backup-20260824/` (the new key — no passphrase, so the file IS the secret) and `~/Desktop/snug-csr/` (`.p12` under a throwaway passphrase) into a password manager / encrypted volume, then delete both folders. **Now higher stakes than before: with v0.1.0 published, the updater key is load-bearing for every client that installs it.**
+
+### 2026-08-25 08:00 — Jeetu — session (Gate 6 close)
+- Done: merged PR #134 (squash `36fe45c`, branch deleted; the `v0.1.0` tag survives because a tag pins the commit object, verified — 5 assets still attached). Doc drift fixed in the close branch: **code-map** line 85 still said "Apple signing env-gated until the Developer ID lands" (false since today) and now records the real mechanism; **next-steps** items (2)+(4) of the 2026-08-24 block and (5) of the 2026-08-21 block marked DONE per ADR-0027, with a new dated 2026-08-25 entry carrying the five surviving follow-ups. No `packages/protocol` change → **no spec-changelog entry and no SPEC_SYNC step** (verified by diffing the merge range).
+- **Landmine found during close (now fixed forward, NOT retroactively):** `apps/desktop/release-out/` was never gitignored, so ~35 MB of release binaries (DMG + tarball) were swept into `git add -A` and are now **permanently in history at `36fe45c`** — removable only by rewriting it, which is not worth doing for a private pre-flip repo. Added to `.gitignore` and untracked going forward; recorded in `lessons.md` alongside the `trace.zip` precedent the .gitignore itself already documented from 2026-08-20. The bytes are also published as Release assets, which is their durable home.
+- Lessons written this session (3): notarization tickets are per-file (and the tarball/staple ordering trap); an unset passphrase env var means "prompt", failing after the slowest step; a new build step's output directory needs its .gitignore entry in the same change.
+- State: **released, merged, documented.** v0.1.0 is live at https://github.com/snugprotocol/snug/releases/tag/v0.1.0 and verified through the real distribution path (re-downloaded, byte-identical, still Gatekeeper-accepted).
+- Next step: **nothing on this task.** The next desktop work is the v0.1.0→v0.1.1 update walk, which needs a SECOND release and therefore its own explicit ask.
+- Open questions: **owner key custody** — `~/Desktop/snug-updater-key-backup-20260824/` (the new updater key, no passphrase, now trusted by every v0.1.0 install) and `~/Desktop/snug-csr/` (the `.p12` under a throwaway passphrase) still need moving into a password manager / encrypted volume and the Desktop folders deleting.
