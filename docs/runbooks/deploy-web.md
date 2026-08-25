@@ -19,6 +19,17 @@ node scripts/deploy-web.mjs playground --preview --deploy   # 🔑 preview from 
 2. `pnpm exec wrangler login` **on the Cloudflare account that holds the `snugprotocol.org` zone** (the account name is recorded in the owner's private launch notes, not here). If `wrangler whoami` lists more than one account or the wrong one: `pnpm exec wrangler logout` and log in again.
 3. Root `.env` with `CLOUDFLARE_ACCOUNT_ID=<id from wrangler whoami>` — copy `.env.example`. The script refuses without it and refuses if the wrangler session is on a different account.
 
+**The wrangler OAuth session cannot do the one-time zone setup, and that is deliberate.** It carries `pages (write)` + `zone (read)` — enough to create projects and deploy, not enough to touch DNS, rulesets, or zone settings. Keep it that way: the routine deploy path should stay unable to reconfigure the zone. Steps 2–6 below therefore need a **temporary, task-scoped API token**, and the permissions are not obvious:
+
+| Step | Needs |
+|---|---|
+| 2 — custom domains + their CNAMEs | Account → **Cloudflare Pages: Edit**, Zone → **DNS: Edit** |
+| 3 — `www` Redirect Rule | Zone → **Config Rules: Edit** (or *Transform Rules: Edit*) — **not** covered by DNS or Zone Settings |
+| 4 — zone features OFF | Zone → **Zone Settings: Edit**, plus Zone → **Bot Management: Read** for Bot Fight Mode |
+| 6 — Bulk Redirect | Account → **Account Rulesets: Edit** — **not** the same as any Zone permission |
+
+Verify the token before relying on it (`GET /user/tokens/verify`), and **probe each API you need rather than trusting the scope list** — a partial edit is silent, and a mid-sequence permission failure leaves the zone half-configured. **Revoke the token when this setup is done**; routine deploys need only the OAuth session. If it must live on disk while in use, root `.env` is gitignored (`git check-ignore -v .env`) — a documented, temporary exception to the secrets posture at the end of this file, not a new default.
+
 ## One-time setup (🔑 each, in this order)
 
 1. **Create the projects** — the script never does this:
@@ -26,13 +37,17 @@ node scripts/deploy-web.mjs playground --preview --deploy   # 🔑 preview from 
    pnpm exec wrangler pages project create snug-website --production-branch main
    pnpm exec wrangler pages project create snug-playground --production-branch main
    ```
-2. **Custom domains** (dashboard → Workers & Pages → project → *Custom domains* → *Set up a domain*): `snugprotocol.org` on `snug-website`; `playground.snugprotocol.org` on `snug-playground`. The zone is on the same account, so Cloudflare creates the CNAME records itself (the apex is CNAME-flattened).
+2. **Custom domains** (dashboard → Workers & Pages → project → *Custom domains* → *Set up a domain*): `snugprotocol.org` on `snug-website`; `playground.snugprotocol.org` on `snug-playground`.
+   - ⚠️ **Cloudflare did NOT create the CNAMEs itself** (observed 2026-08-24, zone on the same account — the earlier claim here was wrong). Both domains sat at `status: pending` with `verification_data: "CNAME record not set"` until the records were added **by hand**: `CNAME snugprotocol.org → <project>.pages.dev` and `CNAME playground → <project>.pages.dev`, both **proxied**. HTTP validation cannot complete without them. Add them, then wait.
+   - ⚠️ **Verify a domain by FETCHING it, not by reading its `status`.** The Pages domain status lags the edge by minutes: both hosts served 200 while the API still reported `pending` / `CNAME record not set`. A transient **522** on first request also cleared on its own. Poll `curl`, not the status field.
+   - The apex is CNAME-flattened, so the `CNAME` at the zone apex is fine — **and it does not disturb the `MX` record**. Confirm `dig MX snugprotocol.org` still answers after any apex change: this zone carries live email routing.
 3. **`www` → apex (301).** Pages `_redirects` cannot match a host (wrangler silently skips absolute-URL sources), so this lives in the zone, outside git:
    - DNS: add a **proxied** placeholder record for `www` (`AAAA www 100::`), so the rule has something to run on.
    - Rules → *Redirect Rules* → create: *when* hostname equals `www.snugprotocol.org` → *dynamic* redirect to `concat("https://snugprotocol.org", http.request.uri.path)`, status **301**, preserve query string.
 4. **Zone features OFF** (each injects a `/cdn-cgi/` script or beacon into pages ADR-0013 promises are inert): *Scrape Shield → Email Address Obfuscation* off (it rewrites `security@snugprotocol.org` on the site and injects a script); *Speed → Optimization → Rocket Loader* off (rewrites module scripts — breaks the playground); *Speed → Cloudflare Fonts* off (rewrites font links to `/cdn-cgi/`); *Security → Bots → Bot Fight Mode* off (injects a challenge script into HTML); *Analytics → Web Analytics* — do not enable for either project. (*Auto Minify* — retired by Cloudflare in 2024; nothing to toggle.) Confirm with the `cdn-cgi` check in **Verify**.
 5. **Preview Access policy** (project → *Settings* → *Enable access policy* / Cloudflare Access for `*.<project>.pages.dev` previews; first use prompts to create a Zero Trust organization — pick a team name, free plan) — **before the first `--preview` deploy**. Pre-flip, an open preview URL would publish the launch site and playground to anyone who guesses the branch name.
-6. **`*.pages.dev` Bulk Redirect** (account → *Bulk Redirects* → list `snug-pages-dev`, two entries): source `snug-website.pages.dev` → target `https://snugprotocol.org`, and source `snug-playground.pages.dev` → target `https://playground.snugprotocol.org`; status 301; *Subpath matching* ON, *Preserve path suffix* ON, *Preserve query string* ON, **Include subdomains OFF** (on, it would 301 the `*.snug-website.pages.dev` previews to production and defeat step 5). The playground on a second origin would be a second per-origin `.snug` store — users must land on one host.
+6. **`*.pages.dev` Bulk Redirect** (account → *Bulk Redirects* → list `snug-pages-dev`, two entries): source **`snug-website-c7z.pages.dev`** → target `https://snugprotocol.org`, and source `snug-playground.pages.dev` → target `https://playground.snugprotocol.org`;
+   - ⚠️ **Read the project's REAL subdomain before writing this entry — it is not always `<project>.pages.dev`.** Cloudflare assigned `snug-website-c7z.pages.dev` (the plain name was taken); `snug-playground` got its plain name. A redirect written against the assumed name silently protects nothing, and the Verify step below would be curling a host this account does not own. Get the truth from `wrangler pages project list` (Project Domains column) or `GET /accounts/{a}/pages/projects/{p}` → `.subdomain`. status 301; *Subpath matching* ON, *Preserve path suffix* ON, *Preserve query string* ON, **Include subdomains OFF** (on, it would 301 the `*.snug-website.pages.dev` previews to production and defeat step 5). The playground on a second origin would be a second per-origin `.snug` store — users must land on one host.
 7. Record all of the above in the task journal + the owner's private launch notes.
 
 ## Routine deploy
@@ -54,13 +69,42 @@ for h in snugprotocol.org playground.snugprotocol.org; do
   printf '  cdn-cgi injections: '; curl -s "https://$h/" | grep -c cdn-cgi      # must be 0
 done
 curl -sI https://www.snugprotocol.org/docs/ | grep -iE '^(HTTP|location)'       # 301 → https://snugprotocol.org/docs/
-curl -sI https://snug-website.pages.dev/ | grep -iE '^(HTTP|location)'         # 301 → snugprotocol.org (Bulk Redirect)
+curl -sI https://snug-website-c7z.pages.dev/ | grep -iE '^(HTTP|location)'     # 301 → snugprotocol.org (Bulk Redirect; NOTE the real subdomain, not snug-website.pages.dev)
 curl -s -o /dev/null -w '%{http_code}\n' https://playground.snugprotocol.org/settings   # 200 — SPA fallback serves index.html
 curl -s -o /dev/null -w '%{http_code}\n' https://snugprotocol.org/docs/spec/          # 200
 curl -s -o /dev/null -w '%{http_code}\n' https://snugprotocol.org/whitepaper/snug-protocol-whitepaper.pdf   # 200
 ```
 
+**Two traps, both met live on 2026-08-24 — read before trusting a green result:**
+
+1. **A `0` from `grep -c` is only evidence if the `curl` feeding it actually ran.** Putting `--resolve a --resolve b` in a plain shell variable makes curl reject the whole string as one unknown option; every check then printed a confident `0` that was curl failing, not a passing check (the decorative-test shape, lessons 2026-08-20/24). Use a bash **array** — `R=(--resolve "host:443:$IP")` … `curl "${R[@]}"` — and sanity-check one command's output before trusting the batch.
+2. **Right after a DNS cutover the local resolver has not caught up**, so these commands fail against a host that is already serving. Confirm the records at the authority first, then pin curl to the edge IP:
+   ```sh
+   dig @kipp.ns.cloudflare.com +short snugprotocol.org A        # authoritative truth
+   IP=$(dig @kipp.ns.cloudflare.com +short snugprotocol.org A | head -1)
+   R=(--resolve "snugprotocol.org:443:$IP" --resolve "playground.snugprotocol.org:443:$IP")
+   curl -s "${R[@]}" -o /dev/null -w '%{http_code}\n' https://snugprotocol.org/
+   ```
+
+Confirm the zone-level posture directly (ADR-0013 — the `cdn-cgi` grep alone does NOT prove these; it passed while Email Obfuscation was `on`, because the apex was not yet serving):
+
+```sh
+Z=<zone-id>   # api.cloudflare.com/client/v4/zones?name=snugprotocol.org
+for s in email_obfuscation rocket_loader fonts mirage polish; do
+  printf '%-20s ' "$s"
+  curl -s "https://api.cloudflare.com/client/v4/zones/$Z/settings/$s" \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | python3 -c 'import json,sys;print((json.load(sys.stdin).get("result") or {}).get("value"))'
+done   # every one must read: off
+curl -s "https://api.cloudflare.com/client/v4/zones/$Z/bot_management" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | python3 -c 'import json,sys;print("fight_mode:",(json.load(sys.stdin).get("result") or {}).get("fight_mode"))'   # must be False
+```
+
 Then by hand: landing page teaser plays; `/download` links resolve (they 404 by design until the first GitHub Release — ADR-0047); playground boots in demo mode with **no sign-in affordance anywhere** (ADR-0013); the `about ↗` link lands on the apex; one spec page renders.
+
+**On the sign-in check:** grepping the bundle for "sign in" is NOT the test — those strings ship. The affordance is gated at build time by `VITE_SNUG_HUB_AUTH` (`apps/playground/src/platform/platform.ts`), which the deploy script pins to `''`. Confirm the shipped bundle carries the constant-folded `hubAuth:!1`:
+```sh
+grep -roh 'hubAuth:!\?[01]' apps/playground/dist/assets/*.js | sort -u   # must be exactly: hubAuth:!1
+```
 
 ## Rollback (🔑, journaled)
 
