@@ -1,6 +1,6 @@
 # TASK-20260824-first-signed-release: First signed + notarized macOS Release (universal)
 
-- **Status**: in-progress (Gate 3 — tests first)
+- **Status**: in-review (released; PR open)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated — release config + GitHub Release creation; ADR-0047 §13, PROCESS.md §Release & publish rules)
 - **Branch**: `feat/TASK-20260824-first-signed-release`
@@ -136,3 +136,22 @@ Verified on `apps/desktop/release-out/`:
 - State: **`release-out/` staged and fully verified script-side. Nothing published.** Awaiting the owner's DMG walk (Agree screen legible on real glass + plain double-click opens the installed app, no right-click).
 - Next step: on a clean walk → apply the staged Gatekeeper-copy removal + R-29 rewrite, run root `pnpm test` + `check-public-scrub` by hand (ADR-0057), then `gh release create` on an explicit go-ahead.
 - Open questions: unchanged — the two Desktop folders (new updater key backup; the `.p12` under a throwaway passphrase) still need moving into a password manager, then deleting.
+
+### 2026-08-25 07:50 UTC — Jeetu — session (PUBLISHED — the first signed Release)
+
+**Owner walked the DMG on real hardware and confirmed all three steps**: the Agree screen renders and is legible, and the installed app **opens on a plain double-click — no right-click → Open**. That is the claim no suite can make, and every gated edit below waited on it.
+
+**PUBLISH RECORD (PROCESS.md §Release & publish rules; ADR-0047 §13):**
+- **What:** GitHub Release `v0.1.0` on `snugprotocol/snug` — "Snug desktop v0.1.0", not a draft, not a prerelease.
+- **When:** 2026-08-25T07:50:36Z.
+- **Target commit:** `98e154c6eae5763e50c218685816a7d52fd20c24` (branch `feat/TASK-20260824-first-signed-release`, pushed first so the tag resolves on the remote).
+- **Assets (5):** `Snug.dmg` (18,001,956), `Snug.app.tar.gz` (17,965,190), `Snug.app.tar.gz.sig` (400), `latest.json` (1,181), `desktop-releases.json` (1,112) — all `state: uploaded`.
+- **URL:** https://github.com/snugprotocol/snug/releases/tag/v0.1.0
+- **Verification performed BEFORE publish:** universal `x86_64 arm64`; both artifacts notarized (`b570af03…` app, `6a1ae884…` DMG) + stapled; `spctl` `accepted`/`source=Notarized Developer ID` on both; EULA intact in the POST-staple DMG; updater tarball's extracted app itself stapled + accepted; `.sig` key id == `tauri.conf.json` pubkey `F3922E7DDE0069B6`; `latest.json` both darwin keys byte-identical. Root `pnpm test` exit 0 (25/25), playground 1639/1639, desktop 186/186, `check-public-scrub` OK (by hand, ADR-0057).
+- **Verification performed AFTER publish:** re-downloaded `Snug.dmg` from the release — sha256 `da7819afe1404877e839ffcb5699f5962d51de7aeffb1d3e7a116b771c347aec`, **byte-identical** to the walked artifact — and the downloaded copy still validates its staple and is Gatekeeper-`accepted`. The distribution path itself is proven, not assumed.
+
+Pre-flip the repo is private, so anonymous fetches of these URLs 404 — designed-for state (ADR-0047 §1/§9); the launch check is quiet about it and the Settings check names it.
+
+- State: **released and verified.** Gatekeeper copy retired from both download surfaces, R-29 partially resolved (TOFU half retained), ADR-0047 §7 amended, two lessons recorded. PR open for review.
+- Next step: merge the PR; then `/close-session`. The v0.1.0→v0.1.1 update walk (check → chip → sheet → update now → restart, incl. the single-instance lock race and helper reap) stays open in next-steps and needs a SECOND release, i.e. its own explicit ask.
+- Open questions: owner still to move `~/Desktop/snug-updater-key-backup-20260824/` (the new key — no passphrase, so the file IS the secret) and `~/Desktop/snug-csr/` (`.p12` under a throwaway passphrase) into a password manager / encrypted volume, then delete both folders. **Now higher stakes than before: with v0.1.0 published, the updater key is load-bearing for every client that installs it.**
