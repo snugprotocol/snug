@@ -1,0 +1,47 @@
+---
+// SocialMeta.astro — the ONE home of the site's social-card tags, for both shells
+// (the Astro marketing pages and the Starlight docs hub). The same single-homing
+// doctrine site.ts applies to URLs (ADR-0048 §1): spelled once, imported twice.
+//
+// Why absolute URLs, emphatically: Open Graph requires them, and every real scraper
+// (X, Slack, LinkedIn, Facebook, iMessage, Discord) DROPS a root-relative og:image
+// rather than resolving it against the page URL. `/videos/poster-landscape.jpg`
+// shipped live on snugprotocol.org and previewed imageless everywhere until this
+// component replaced it — the card looked configured and was not.
+//
+// The base comes from `Astro.site` (astro.config.mjs `site:`), never a second spelling
+// of the domain. Astro.site is typed optional because a config may omit it; ours does
+// not, and the throw below is deliberate — a build that lost `site:` must fail loudly
+// rather than silently emit relative URLs again, which is the exact bug this fixes.
+import { OG_IMAGE } from '../config/socialImage';
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+
+if (!Astro.site) {
+  throw new Error(
+    'astro.config.mjs must set `site:` — social meta needs an absolute base (see SocialMeta.astro)',
+  );
+}
+
+const image = new URL(OG_IMAGE.path, Astro.site);
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+
+<meta property="og:title" content={title} />
+<meta property="og:description" content={description} />
+<meta property="og:type" content="website" />
+<meta property="og:url" content={canonical.href} />
+<meta property="og:site_name" content="Snug Protocol" />
+<meta property="og:image" content={image.href} />
+<meta property="og:image:width" content={String(OG_IMAGE.width)} />
+<meta property="og:image:height" content={String(OG_IMAGE.height)} />
+<meta property="og:image:alt" content={OG_IMAGE.alt} />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={image.href} />
