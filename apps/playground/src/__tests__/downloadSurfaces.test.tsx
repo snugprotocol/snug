@@ -79,9 +79,13 @@ describe('the /download page (AC12)', () => {
     expect(release).toBeDefined();
     expect(button!.textContent).toContain(`v${release!.version}`);
 
-    // Honest while unsigned (ADR-0047 §7): the right-click → Open paragraph. When
-    // Apple signing lands, remove the paragraph AND this assertion together.
-    expect(el.querySelector('[data-testid="gatekeeper-note"]')).not.toBeNull();
+    // Builds are signed + notarized since v0.1.0 (TASK-20260824, ADR-0047 §7
+    // amendment), so the right-click → Open disclosure is GONE — and its absence is
+    // now the contract. Asserting absence rather than deleting the assertion keeps
+    // the page honest in the other direction too: if anyone reinstates the paragraph
+    // while builds are notarized, the page would be telling users to practise the
+    // exact habit that makes them vulnerable to unsigned software.
+    expect(el.querySelector('[data-testid="gatekeeper-note"]')).toBeNull();
 
     // macOS-only is stated, not implied (ADR-0021 D8).
     expect(el.textContent!.toLowerCase()).toContain('macos only');

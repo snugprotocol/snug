@@ -1,6 +1,6 @@
 # 0047 — Desktop distribution and the shell update channel
 
-- **Status:** accepted (owner plan approval, 2026-08-21; every actual `gh release create` remains its own explicit per-session ask)
+- **Status:** accepted (owner plan approval, 2026-08-21; every actual `gh release create` remains its own explicit per-session ask); **§7 amended 2026-08-24 — signing/notarization implemented for real; see [Amendment](#amendment--2026-08-24-signing-and-notarization-implemented-task-20260824-first-signed-release)**
 - **Date:** 2026-08-21
 - **Task:** TASK-20260821-hardening-polish (P5)
 
@@ -39,3 +39,20 @@ The owner wants the ChatGPT/Claude-desktop shape: the web app offers the downloa
 - Threat model v2 gains the desktop-update-channel delta: key custody, artifact-vs-manifest trust split, the launch-check phone-home, the TOFU first download, the helper skew residual.
 - `bundleTargets.test.ts` keeps ADR-0021 D8 pinned (macOS targets only); updater config gets its own sibling test.
 - First actual release (v0.1.0) happens only on a fresh explicit ask, journaled per PROCESS.md.
+
+## Amendment — 2026-08-24: signing and notarization implemented (TASK-20260824-first-signed-release)
+
+**§7 described a mechanism that did not exist.** It said signing and notarization were "wired but env-gated: when `APPLE_SIGNING_IDENTITY`/notarization vars are present the release script signs and notarizes". In fact `release-desktop.mjs` read `APPLE_SIGNING_IDENTITY` exactly once, as a boolean, to decide whether to print a warning. There was no notarization call, no stapling, no hardened runtime, no entitlements file, and no `bundle.macOS` block. The env-gate was real; the thing it gated was not. Recorded plainly because the gap was invisible from the ADR alone — the prose read as shipped.
+
+What now exists, in the order the script runs it:
+
+1. **`appleSigningPlan(env)` replaces the boolean.** Three outcomes, not two: `signed` (identity + notary profile), `unsigned` (neither — a cert-less machine must still be able to build), and **`refused`** for the half-configured middle. Half-configured was the dangerous state: an identity without notary credentials produces a signed-but-un-notarized DMG that Gatekeeper still blocks, discovered only after the slowest step in the pipeline. An identity that is not a `Developer ID Application:` cert is also refused up front — `Apple Development` certs sign happily and fail notarization at the far end.
+2. **Notarize → staple → verify.** `notarytool submit --wait`, then `stapler staple`, then `checkStapleOutput` over `stapler validate` and `checkSpctlOutput` over `spctl -a -vvv -t install`. The Gatekeeper check demands **both** `accepted` and `source=Notarized Developer ID`: an artifact can be accepted for unrelated reasons, and matching "accepted" alone would vouch for a notarization that never happened. Stapling is checked separately because notarizing without stapling is the classic silent failure — it works on the build machine and fails for a user who is offline at first launch.
+3. **The EULA check moved AFTER stapling.** Stapling rewrites the DMG. Verifying the SLA resource before it proved a property of bytes that no longer ship. Review F9 flagged this interaction as unverified; it is now verified in the only order that means anything.
+4. **`checkUniversalArchs` gates §6's universal claim.** `lipo -archs` on the Mach-O inside the `.app` must report **both** `arm64` and `x86_64`, matched as exact tokens (`arm64e` is the pointer-authentication ABI, not a distribution architecture, and a substring test passes on it). §6 pointed both `latest.json` platform keys at one artifact without ever checking the artifact was fat — which made a thin build silently wrong rather than loudly broken.
+
+**Credential mechanism: notarytool keychain profile** (owner decision 2026-08-24). `xcrun notarytool store-credentials` stores the Apple ID + app-specific password in the keychain; the build refers to it only as `APPLE_KEYCHAIN_PROFILE=snug`. No app-specific password in the environment, in shell history, or in any file. Cost: the profile is machine-local, so a future CI signer needs a different mechanism (an App Store Connect API key) — acceptable, since §4 already forbids keys in CI.
+
+**Entitlements are minimal and deliberately so.** `apps/desktop/src-tauri/entitlements.plist` grants `allow-jit` and `allow-unsigned-executable-memory` — the documented WKWebView pair, required because notarization mandates the hardened runtime and the hardened runtime blocks JavaScriptCore's JIT. Nothing else. `disable-library-validation` is absent (the WhatsApp helper is a separate process, not a library, so it does not need it); `allow-dyld-environment-variables` is absent (an injection vector). **Entitlements govern the shell process, not the app iframe** — C1 and C2 are enforced by the CSP, the `sandbox="allow-scripts"` attribute and the capability allowlist, none of which this file can weaken.
+
+**Consequence for §7's last sentence:** it still holds — the minisign updater signature is independent of Apple signing and always applies.

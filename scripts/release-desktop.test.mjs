@@ -23,6 +23,10 @@ import {
   EULA_MAX_COLUMNS,
   checkEulaText,
   verifyDmgCarriesEula,
+  checkUniversalArchs,
+  appleSigningPlan,
+  checkStapleOutput,
+  checkSpctlOutput,
 } from './release-desktop.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -157,4 +161,135 @@ test('verifyDmgCarriesEula: a REAL dump of a DMG built WITHOUT licenseFile is re
 test('verifyDmgCarriesEula: garbage in → a named refusal, never a throw', () => {
   assert.equal(verifyDmgCarriesEula('', 'x').ok, false);
   assert.equal(verifyDmgCarriesEula('not xml at all', 'x').ok, false);
+});
+
+// ---------------------------------------------------------------- TASK-20260824-first-signed-release
+
+test('checkUniversalArchs: only a binary carrying BOTH arm64 and x86_64 passes', () => {
+  // Real `lipo -archs` output is a single space-separated line (captured on macOS 26).
+  assert.deepEqual(checkUniversalArchs('x86_64 arm64\n'), { ok: true });
+  assert.deepEqual(checkUniversalArchs('arm64 x86_64'), { ok: true });
+  // THE bug this whole check exists to catch: an Intel-only build shipped as
+  // "universal" (the owner's stated worry, 2026-08-24). Apple Silicon users get a
+  // Rosetta-or-nothing binary and nothing in the pipeline would have noticed.
+  const intelOnly = checkUniversalArchs('x86_64\n');
+  assert.equal(intelOnly.ok, false);
+  assert.match(intelOnly.reason, /arm64/);
+  const armOnly = checkUniversalArchs('arm64\n');
+  assert.equal(armOnly.ok, false);
+  assert.match(armOnly.reason, /x86_64/);
+  // arm64e is NOT arm64 — /bin/ls reports `x86_64 arm64e`, and a substring check
+  // would wave that through. Distribution binaries are arm64; arm64e is Apple's
+  // pointer-authentication ABI and is not what tauri emits.
+  const arm64e = checkUniversalArchs('x86_64 arm64e');
+  assert.equal(arm64e.ok, false);
+  assert.match(arm64e.reason, /arm64/);
+  // Broken tooling must FAIL, not silently pass (the release-gate's positive-control
+  // doctrine: a parser that can only succeed proves nothing).
+  assert.equal(checkUniversalArchs('').ok, false);
+  assert.equal(checkUniversalArchs('fatal error: can\'t figure out the architecture').ok, false);
+  assert.equal(checkUniversalArchs(undefined).ok, false);
+  assert.equal(checkUniversalArchs(null).ok, false);
+});
+
+test('appleSigningPlan: signed, unsigned, and the REFUSED half-configured states', () => {
+  // Fully configured → sign + notarize. Tauri's bundler reads the APPLE_ID trio (or
+  // the API-key trio); a notarytool KEYCHAIN PROFILE is not one of its inputs — the
+  // first real build (2026-08-24) proved that by warning "skipping app notarization"
+  // with a profile set. That miss is exactly what this test now pins.
+  const signed = appleSigningPlan({
+    APPLE_SIGNING_IDENTITY: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
+    APPLE_ID: 'jeetumaker@gmail.com',
+    APPLE_PASSWORD: 'abcd-efgh-ijkl-mnop',
+    APPLE_TEAM_ID: '2KC5X47563',
+  });
+  assert.equal(signed.mode, 'signed');
+  assert.equal(signed.notarization, 'apple-id');
+  // The App Store Connect API key trio is the other accepted shape.
+  const viaApi = appleSigningPlan({
+    APPLE_SIGNING_IDENTITY: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
+    APPLE_API_KEY: 'ABC123',
+    APPLE_API_ISSUER: 'issuer-uuid',
+    APPLE_API_KEY_PATH: '/keys/AuthKey_ABC123.p8',
+  });
+  assert.equal(viaApi.mode, 'signed');
+  assert.equal(viaApi.notarization, 'api-key');
+  // A KEYCHAIN PROFILE alone is NOT notarization credentials for the bundler — it
+  // must be refused, not accepted as configured. This is the regression that shipped
+  // a signed-but-un-notarized DMG on the first attempt.
+  const profileOnly = appleSigningPlan({
+    APPLE_SIGNING_IDENTITY: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
+    APPLE_KEYCHAIN_PROFILE: 'snug',
+  });
+  assert.equal(profileOnly.mode, 'refused');
+  assert.match(profileOnly.reason, /APPLE_ID|keychain profile does NOT work/i);
+  // A PARTIAL trio is not a trio — missing the team id must not read as configured.
+  const partial = appleSigningPlan({
+    APPLE_SIGNING_IDENTITY: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
+    APPLE_ID: 'jeetumaker@gmail.com',
+    APPLE_PASSWORD: 'abcd-efgh-ijkl-mnop',
+  });
+  assert.equal(partial.mode, 'refused');
+  // Nothing set → the honest unsigned path (a cert-less machine must still build).
+  const unsigned = appleSigningPlan({});
+  assert.equal(unsigned.mode, 'unsigned');
+  assert.match(unsigned.reason, /APPLE_SIGNING_IDENTITY/);
+  // HALF-configured is the dangerous middle: it looks configured to a human but
+  // produces a signed-yet-un-notarized DMG that Gatekeeper still blocks. Refuse it
+  // rather than silently downgrading to unsigned.
+  const noProfile = appleSigningPlan({ APPLE_SIGNING_IDENTITY: 'Developer ID Application: X (Y)' });
+  assert.equal(noProfile.mode, 'refused');
+  assert.match(noProfile.reason, /notarization credentials|APPLE_ID/);
+  const noIdentity = appleSigningPlan({
+    APPLE_ID: 'a@b.c',
+    APPLE_PASSWORD: 'p',
+    APPLE_TEAM_ID: 'T',
+  });
+  assert.equal(noIdentity.mode, 'refused');
+  assert.match(noIdentity.reason, /APPLE_SIGNING_IDENTITY/);
+  // An identity that is not a Developer ID Application cert cannot notarize —
+  // "Apple Development" signs locally and passes codesign, then fails notarization
+  // at the far end of a slow build.
+  const wrongKind = appleSigningPlan({
+    APPLE_SIGNING_IDENTITY: 'Apple Development: Jitendra Maker (2KC5X47563)',
+    APPLE_ID: 'a@b.c',
+    APPLE_PASSWORD: 'p',
+    APPLE_TEAM_ID: 'T',
+  });
+  assert.equal(wrongKind.mode, 'refused');
+  assert.match(wrongKind.reason, /Developer ID Application/);
+  // Whitespace-only is empty, not configured.
+  assert.equal(appleSigningPlan({ APPLE_SIGNING_IDENTITY: '   ' }).mode, 'unsigned');
+});
+
+test('checkStapleOutput: only a real staple acceptance passes', () => {
+  assert.deepEqual(checkStapleOutput('Processing: Snug.dmg\nThe staple and validate action worked!\n'), { ok: true });
+  // The exact refusal a never-notarized artifact produces (captured from a real run
+  // against an un-stapled app). This is the silent failure the check exists for: a
+  // notarization that succeeded but was never STAPLED still fails first launch on a
+  // machine that is offline or that Apple's CDN cannot answer for.
+  const noTicket = checkStapleOutput('Processing: Snug.dmg\nSnug.dmg does not have a ticket stapled to it.');
+  assert.equal(noTicket.ok, false);
+  assert.match(noTicket.reason, /ticket/i);
+  assert.equal(checkStapleOutput('Error 65').ok, false);
+  assert.equal(checkStapleOutput('').ok, false);
+  assert.equal(checkStapleOutput(undefined).ok, false);
+});
+
+test('checkSpctlOutput: Gatekeeper acceptance, and the notarization-specific rejection', () => {
+  // Real `spctl -a -vvv -t install` output for an accepted notarized artifact.
+  const ok = checkSpctlOutput('Snug.dmg: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Jitendra Maker (2KC5X47563)\n');
+  assert.deepEqual(ok, { ok: true });
+  // Signed but NOT notarized — the precise state this task exists to leave behind.
+  const unnotarized = checkSpctlOutput('Snug.dmg: rejected\nsource=Developer ID\norigin=Developer ID Application: Jitendra Maker (2KC5X47563)\n');
+  assert.equal(unnotarized.ok, false);
+  assert.match(unnotarized.reason, /rejected/i);
+  // "accepted" must come from NOTARIZATION, not from an ad-hoc/store source: a
+  // substring match on "accepted" alone would pass an artifact Gatekeeper only
+  // tolerates for another reason.
+  const wrongSource = checkSpctlOutput('Snug.dmg: accepted\nsource=Mac App Store\n');
+  assert.equal(wrongSource.ok, false);
+  assert.match(wrongSource.reason, /Notarized/i);
+  assert.equal(checkSpctlOutput('').ok, false);
+  assert.equal(checkSpctlOutput(undefined).ok, false);
 });

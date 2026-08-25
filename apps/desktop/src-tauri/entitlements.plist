@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the Snug desktop shell (TASK-20260824, ADR-0047 §7).
+
+  Notarization REQUIRES the hardened runtime, and the hardened runtime blocks the JIT
+  that WKWebView's JavaScript engine needs. These two entitlements buy back exactly
+  that, and nothing else.
+
+  WHAT THIS DOES NOT DO: entitlements govern the SHELL PROCESS, not the app iframe.
+  C1 (token boundary) and C2 (sandbox integrity) are enforced by the CSP, the
+  `sandbox="allow-scripts"` attribute and the capability allowlist — none of which
+  this file can weaken. Adding a broader entitlement here would not widen the app
+  sandbox, but it WOULD widen the shell's own attack surface, so the rule is: add
+  nothing that a failing launch has not actually demanded.
+
+  Deliberately ABSENT (and why):
+    - com.apple.security.cs.disable-library-validation — would let unsigned dylibs load
+      into the shell. The WhatsApp helper is a separate PROCESS, not a library, so it
+      does not need this.
+    - com.apple.security.cs.allow-dyld-environment-variables — an injection vector.
+    - com.apple.security.app-sandbox — the App Store sandbox, rejected for this
+      distribution channel by ADR-0047 (conflicts with the shell's file/socket surface).
+-->
+<plist version="1.0">
+<dict>
+	<!-- WKWebView's JavaScriptCore JIT. Without this the hub renders but every app is
+	     unusably slow, and some JS engines refuse to start at all. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<!-- JavaScriptCore also maps W^X pages outside the JIT entitlement's scope; the
+	     pair is the documented WKWebView combination. -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>
