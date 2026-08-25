@@ -254,7 +254,22 @@ export function checkUniversalArchs(lipoOutput) {
  */
 export function appleSigningPlan(env = {}) {
   const identity = String(env.APPLE_SIGNING_IDENTITY ?? '').trim();
-  const profile = String(env.APPLE_KEYCHAIN_PROFILE ?? '').trim();
+  // Tauri's OWN bundler performs notarization mid-build, and it reads only these
+  // trios — never a keychain profile (verified against tauri-cli 2.x, which warns
+  // "skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or
+  // APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH"). This MUST be the
+  // mechanism: the bundler notarizes the .app BEFORE wrapping it in the DMG, and
+  // notarizing only the DMG afterwards leaves the app the user actually runs
+  // un-notarized once it is copied to /Applications (TASK-20260824 build 1).
+  const appleId = String(env.APPLE_ID ?? '').trim();
+  const applePassword = String(env.APPLE_PASSWORD ?? '').trim();
+  const appleTeamId = String(env.APPLE_TEAM_ID ?? '').trim();
+  const apiKey = String(env.APPLE_API_KEY ?? '').trim();
+  const apiIssuer = String(env.APPLE_API_ISSUER ?? '').trim();
+  const apiKeyPath = String(env.APPLE_API_KEY_PATH ?? '').trim();
+  const hasAppleIdTrio = appleId !== '' && applePassword !== '' && appleTeamId !== '';
+  const hasApiTrio = apiKey !== '' && apiIssuer !== '' && apiKeyPath !== '';
+  const profile = hasAppleIdTrio || hasApiTrio ? 'tauri' : '';
   if (identity === '' && profile === '') {
     return {
       mode: 'unsigned',
@@ -266,7 +281,7 @@ export function appleSigningPlan(env = {}) {
   if (identity === '') {
     return {
       mode: 'refused',
-      reason: `APPLE_KEYCHAIN_PROFILE=${profile} is set but APPLE_SIGNING_IDENTITY is not — half-configured signing.`,
+      reason: 'notarization credentials are set but APPLE_SIGNING_IDENTITY is not — half-configured signing.',
     };
   }
   if (!identity.startsWith('Developer ID Application:')) {
@@ -282,12 +297,14 @@ export function appleSigningPlan(env = {}) {
     return {
       mode: 'refused',
       reason:
-        'APPLE_SIGNING_IDENTITY is set but APPLE_KEYCHAIN_PROFILE is not — the build would produce a ' +
-        'signed-but-UN-NOTARIZED artifact, which Gatekeeper still blocks. Create one with ' +
-        '`xcrun notarytool store-credentials` (ADR-0047 §7).',
+        'APPLE_SIGNING_IDENTITY is set but no notarization credentials are — the build would produce a ' +
+        'signed-but-UN-NOTARIZED artifact, which Gatekeeper still blocks. Tauri\'s bundler needs either ' +
+        'APPLE_ID + APPLE_PASSWORD (app-specific) + APPLE_TEAM_ID, or APPLE_API_KEY + APPLE_API_ISSUER + ' +
+        'APPLE_API_KEY_PATH. A notarytool keychain profile does NOT work here — the bundler never reads it ' +
+        '(ADR-0047 §7 amendment).',
     };
   }
-  return { mode: 'signed', identity, keychainProfile: profile };
+  return { mode: 'signed', identity, notarization: hasApiTrio ? 'api-key' : 'apple-id' };
 }
 
 /**
@@ -421,7 +438,20 @@ async function main() {
 
   // 3a — ADR-0047 §6: the ONE artifact both platform keys point at must actually be fat.
   // Checked on the Mach-O inside the .app, not the DMG (a disk image has no architecture).
-  const mainBinary = path.join(appBundle, 'Contents', 'MacOS', 'Snug');
+  //
+  // The executable name comes from Info.plist, NOT from the bundle name: the bundle is
+  // `Snug.app` but the binary inside is `snug-desktop` (Cargo's package name), and
+  // hardcoding either spelling breaks the moment productName and the crate name differ
+  // — as they already do here.
+  const execName = execSync(
+    `/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "${path.join(appBundle, 'Contents', 'Info.plist')}"`,
+    { encoding: 'utf8' },
+  ).trim();
+  const mainBinary = path.join(appBundle, 'Contents', 'MacOS', execName);
+  if (!existsSync(mainBinary)) {
+    console.error(`REFUSED: Info.plist names CFBundleExecutable=${execName}, but ${mainBinary} does not exist.`);
+    process.exit(2);
+  }
   let archOut;
   try {
     archOut = execSync(`lipo -archs "${mainBinary}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
@@ -441,12 +471,11 @@ async function main() {
   // against the final bytes, not the pre-staple ones (review F9 named this interaction
   // as unverified; it is verified here).
   if (appleSigned) {
-    console.log('submitting to Apple for notarization (this takes minutes, not seconds)…');
-    execSync(
-      `xcrun notarytool submit "${dmg}" --keychain-profile "${signing.keychainProfile}" --wait`,
-      { stdio: 'inherit' },
-    );
-    console.log('stapling the notarization ticket…');
+    // Tauri's bundler already submitted the .app to Apple during `tauri build` (that
+    // is why the APPLE_ID/API-key trio is mandatory above). What it does NOT do is
+    // staple the DMG, so an offline first launch would still fail. Staple here, then
+    // make the platform itself vouch for the result.
+    console.log('stapling the notarization ticket to the DMG…');
     execSync(`xcrun stapler staple "${dmg}"`, { stdio: 'inherit' });
 
     const stapleOut = execSync(`xcrun stapler validate "${dmg}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
@@ -456,6 +485,19 @@ async function main() {
       process.exit(2);
     }
     console.log('✔ notarization ticket stapled to the DMG');
+
+    // …and to the .app itself. The DMG is a delivery wrapper the user discards; the
+    // bundle they drag to /Applications is what Gatekeeper judges at every launch.
+    // Stapling one does not staple the other.
+    execSync(`xcrun stapler staple "${appBundle}"`, { stdio: 'inherit' });
+    const appStaple = checkStapleOutput(
+      execSync(`xcrun stapler validate "${appBundle}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }),
+    );
+    if (!appStaple.ok) {
+      console.error(`REFUSED: the .app bundle — ${appStaple.reason}`);
+      process.exit(2);
+    }
+    console.log('✔ notarization ticket stapled to Snug.app');
 
     // spctl EXITS NON-ZERO on rejection, so the throw is the rejection path — capture
     // stdout+stderr either way and let checkSpctlOutput name the verdict.
@@ -471,6 +513,24 @@ async function main() {
       process.exit(2);
     }
     console.log('✔ Gatekeeper accepts the stapled DMG (source=Notarized Developer ID)');
+
+    // REBUILD the updater tarball from the STAPLED app. `tauri build` created
+    // Snug.app.tar.gz from the .app as it stood BEFORE stapling, so shipping that
+    // file would hand every auto-updating client an un-stapled bundle — the exact
+    // offline-first-launch failure the staple exists to prevent, delivered by the
+    // update path instead of the download path.
+    const staleTar = path.join(UNIVERSAL_BUNDLE, 'macos', 'Snug.app.tar.gz');
+    console.log('rebuilding the updater tarball from the stapled .app…');
+    execSync(`rm -f "${staleTar}" "${staleTar}.sig"`, { stdio: 'inherit' });
+    execSync(`tar -czf "${staleTar}" -C "${path.dirname(appBundle)}" "${path.basename(appBundle)}"`, {
+      stdio: 'inherit',
+    });
+    // Re-sign it with the updater key: the .sig tauri produced belonged to the old bytes.
+    execSync(`pnpm --filter desktop exec tauri signer sign -f "${process.env.TAURI_SIGNING_PRIVATE_KEY_PATH}" -p "${process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? ''}" "${staleTar}"`, {
+      cwd: ROOT,
+      stdio: 'inherit',
+    });
+    console.log('✔ updater tarball rebuilt from the stapled app and re-signed');
   }
 
   // 3c — the platform's own parser vouches for the clickwrap. AFTER stapling (above).

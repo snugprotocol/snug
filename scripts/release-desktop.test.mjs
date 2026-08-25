@@ -193,13 +193,43 @@ test('checkUniversalArchs: only a binary carrying BOTH arm64 and x86_64 passes',
 });
 
 test('appleSigningPlan: signed, unsigned, and the REFUSED half-configured states', () => {
-  // Fully configured → sign + notarize.
+  // Fully configured → sign + notarize. Tauri's bundler reads the APPLE_ID trio (or
+  // the API-key trio); a notarytool KEYCHAIN PROFILE is not one of its inputs — the
+  // first real build (2026-08-24) proved that by warning "skipping app notarization"
+  // with a profile set. That miss is exactly what this test now pins.
   const signed = appleSigningPlan({
+    APPLE_SIGNING_IDENTITY: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
+    APPLE_ID: 'jeetumaker@gmail.com',
+    APPLE_PASSWORD: 'abcd-efgh-ijkl-mnop',
+    APPLE_TEAM_ID: '2KC5X47563',
+  });
+  assert.equal(signed.mode, 'signed');
+  assert.equal(signed.notarization, 'apple-id');
+  // The App Store Connect API key trio is the other accepted shape.
+  const viaApi = appleSigningPlan({
+    APPLE_SIGNING_IDENTITY: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
+    APPLE_API_KEY: 'ABC123',
+    APPLE_API_ISSUER: 'issuer-uuid',
+    APPLE_API_KEY_PATH: '/keys/AuthKey_ABC123.p8',
+  });
+  assert.equal(viaApi.mode, 'signed');
+  assert.equal(viaApi.notarization, 'api-key');
+  // A KEYCHAIN PROFILE alone is NOT notarization credentials for the bundler — it
+  // must be refused, not accepted as configured. This is the regression that shipped
+  // a signed-but-un-notarized DMG on the first attempt.
+  const profileOnly = appleSigningPlan({
     APPLE_SIGNING_IDENTITY: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
     APPLE_KEYCHAIN_PROFILE: 'snug',
   });
-  assert.equal(signed.mode, 'signed');
-  assert.equal(signed.keychainProfile, 'snug');
+  assert.equal(profileOnly.mode, 'refused');
+  assert.match(profileOnly.reason, /APPLE_ID|keychain profile does NOT work/i);
+  // A PARTIAL trio is not a trio — missing the team id must not read as configured.
+  const partial = appleSigningPlan({
+    APPLE_SIGNING_IDENTITY: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
+    APPLE_ID: 'jeetumaker@gmail.com',
+    APPLE_PASSWORD: 'abcd-efgh-ijkl-mnop',
+  });
+  assert.equal(partial.mode, 'refused');
   // Nothing set → the honest unsigned path (a cert-less machine must still build).
   const unsigned = appleSigningPlan({});
   assert.equal(unsigned.mode, 'unsigned');
@@ -209,8 +239,12 @@ test('appleSigningPlan: signed, unsigned, and the REFUSED half-configured states
   // rather than silently downgrading to unsigned.
   const noProfile = appleSigningPlan({ APPLE_SIGNING_IDENTITY: 'Developer ID Application: X (Y)' });
   assert.equal(noProfile.mode, 'refused');
-  assert.match(noProfile.reason, /APPLE_KEYCHAIN_PROFILE/);
-  const noIdentity = appleSigningPlan({ APPLE_KEYCHAIN_PROFILE: 'snug' });
+  assert.match(noProfile.reason, /notarization credentials|APPLE_ID/);
+  const noIdentity = appleSigningPlan({
+    APPLE_ID: 'a@b.c',
+    APPLE_PASSWORD: 'p',
+    APPLE_TEAM_ID: 'T',
+  });
   assert.equal(noIdentity.mode, 'refused');
   assert.match(noIdentity.reason, /APPLE_SIGNING_IDENTITY/);
   // An identity that is not a Developer ID Application cert cannot notarize —
@@ -218,7 +252,9 @@ test('appleSigningPlan: signed, unsigned, and the REFUSED half-configured states
   // at the far end of a slow build.
   const wrongKind = appleSigningPlan({
     APPLE_SIGNING_IDENTITY: 'Apple Development: Jitendra Maker (2KC5X47563)',
-    APPLE_KEYCHAIN_PROFILE: 'snug',
+    APPLE_ID: 'a@b.c',
+    APPLE_PASSWORD: 'p',
+    APPLE_TEAM_ID: 'T',
   });
   assert.equal(wrongKind.mode, 'refused');
   assert.match(wrongKind.reason, /Developer ID Application/);
