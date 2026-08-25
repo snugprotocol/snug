@@ -49,3 +49,11 @@ playwright-report/
 
 # wrangler writes per-cwd state here when run from the repo root (scripts/deploy-web.mjs).
 .wrangler/
+
+# Build output of `scripts/release-desktop.mjs` — the staged release assets (DMG,
+# .app.tar.gz, .sig, latest.json). ~35 MB per release, derived from the build and
+# already published as GitHub Release assets, which is the durable home for them.
+# NOT ignored during the first signed release (2026-08-25), so v0.1.0's artifacts
+# are in history at 36fe45c and cannot be removed without rewriting it. Ignored from
+# here on so a per-release 35 MB does not repeat.
+apps/desktop/release-out/
