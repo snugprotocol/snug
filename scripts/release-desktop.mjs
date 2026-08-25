@@ -19,12 +19,22 @@
 //   3. run the desktop release gate (gate:release: debug surfaces absent from the
 //      release binary) and then `tauri build --target universal-apple-darwin` with
 //      updater artifacts; minisign signing rides TAURI_SIGNING_PRIVATE_KEY[_PATH]
-//      (custody: ~/.tauri, ADR-0047 §4). Apple signing/notarization are ENV-GATED:
-//      with APPLE_SIGNING_IDENTITY absent the build is unsigned and this script says
-//      so loudly (the /download page carries the matching Gatekeeper disclosure);
-//   3b. prove the built DMG actually CARRIES the EULA: `hdiutil udifderez -xml` dumps
+//      (custody: ~/.tauri, ADR-0047 §4). Apple signing is ENV-GATED via
+//      appleSigningPlan: fully configured signs+notarizes, nothing configured builds
+//      unsigned and says so loudly, and HALF-configured is REFUSED (a signed but
+//      un-notarized DMG is still Gatekeeper-blocked — TASK-20260824, ADR-0047 §7
+//      amendment);
+//   3a. prove the artifact is genuinely UNIVERSAL: `lipo -archs` on the Mach-O inside
+//      the .app must report BOTH arm64 and x86_64. ADR-0047 §6 points both latest.json
+//      platform keys at ONE artifact, so a thin build is silently wrong rather than
+//      loudly broken (owner's stated worry, 2026-08-24);
+//   3b. NOTARIZE (`notarytool submit --wait`), STAPLE, then verify the staple and ask
+//      Gatekeeper itself (`spctl -a -t install`) whether it accepts the result, and
+//      accept only source=Notarized Developer ID. Stapling REWRITES the DMG, so this
+//      runs before — and the EULA check below runs after — the final bytes exist;
+//   3c. prove the built DMG actually CARRIES the EULA: `hdiutil udifderez -xml` dumps
 //      the image's resources; verifyDmgCarriesEula decodes the SLA text resource and
-//      compares its first line (lessons 2026-08-24: a config is only a contract once
+//      compares the full text (lessons 2026-08-24: a config is only a contract once
 //      the platform's parser accepted it). udifrez/udifderez are deprecated by Apple
 //      (still shipped on macOS 26, with a warning) — the refusal names that so the
 //      day they vanish the failure is diagnosable, not mysterious;
@@ -190,6 +200,146 @@ export function verifyDmgCarriesEula(xml, expectedText) {
   return { ok: true };
 }
 
+
+// ---------------------------------------------------------------- the universal binary (ADR-0047 §6)
+
+/** The two architectures a shipped Snug binary must contain. `arm64e` is NOT `arm64`. */
+export const REQUIRED_ARCHS = ['arm64', 'x86_64'];
+
+/**
+ * Parse `lipo -archs <binary>` and insist on a genuinely fat arm64+x86_64 image.
+ *
+ * ADR-0047 §6 chose one universal artifact served to BOTH `latest.json` platform keys.
+ * That makes a thin build silently wrong rather than loudly broken: `darwin-aarch64`
+ * would hand Apple Silicon users an Intel-only binary (Rosetta at best), and nothing
+ * downstream — not the gate, not the EULA check, not the updater — would notice.
+ *
+ * Exact-token matching matters. `/bin/ls` reports `x86_64 arm64e`; a substring test for
+ * 'arm64' passes on `arm64e`, which is the pointer-authentication ABI, not a
+ * distribution architecture. Never throws: unparseable output is a refusal, because a
+ * check that cannot fail proves nothing (run-release-gate.mjs's positive-control doctrine).
+ */
+export function checkUniversalArchs(lipoOutput) {
+  if (typeof lipoOutput !== 'string' || lipoOutput.trim() === '') {
+    return { ok: false, reason: 'no `lipo -archs` output to check — the architecture scan did not run' };
+  }
+  const archs = lipoOutput.trim().split(/\s+/);
+  const missing = REQUIRED_ARCHS.filter((a) => !archs.includes(a));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `the built binary is not universal: missing ${missing.join(' + ')} (lipo reports: ${archs.join(' ')}) — ` +
+        'ADR-0047 §6 ships ONE artifact for both darwin platform keys, so a thin build hands the ' +
+        'other architecture a binary it cannot run natively. Check `rustup target list --installed` ' +
+        'and that the build used --target universal-apple-darwin.',
+    };
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------- Apple signing + notarization (ADR-0047 §7)
+
+/**
+ * Decide the signing mode from the environment — `signed`, `unsigned`, or `refused`.
+ *
+ * The middle state is the point. Before this, `APPLE_SIGNING_IDENTITY` was read as a
+ * bare boolean, so an identity set WITHOUT notary credentials produced a signed but
+ * un-notarized DMG — which Gatekeeper still blocks, after a long build, in a way that
+ * looks like success in the logs. Half-configured is refused, never downgraded.
+ *
+ * The identity kind is checked too: `Apple Development` certs sign happily and then fail
+ * notarization at the far end of the slowest step in the pipeline. Only a
+ * `Developer ID Application` cert can notarize for outside-the-store distribution.
+ */
+export function appleSigningPlan(env = {}) {
+  const identity = String(env.APPLE_SIGNING_IDENTITY ?? '').trim();
+  const profile = String(env.APPLE_KEYCHAIN_PROFILE ?? '').trim();
+  if (identity === '' && profile === '') {
+    return {
+      mode: 'unsigned',
+      reason:
+        'APPLE_SIGNING_IDENTITY absent — building UNSIGNED (Gatekeeper right-click-open; the ' +
+        '/download page must keep its disclosure).',
+    };
+  }
+  if (identity === '') {
+    return {
+      mode: 'refused',
+      reason: `APPLE_KEYCHAIN_PROFILE=${profile} is set but APPLE_SIGNING_IDENTITY is not — half-configured signing.`,
+    };
+  }
+  if (!identity.startsWith('Developer ID Application:')) {
+    return {
+      mode: 'refused',
+      reason:
+        `APPLE_SIGNING_IDENTITY is ${JSON.stringify(identity)}, which is not a "Developer ID Application:" ` +
+        'certificate. Only that kind notarizes for distribution outside the Mac App Store; a Development ' +
+        'cert signs fine and then fails notarization at the end of the build.',
+    };
+  }
+  if (profile === '') {
+    return {
+      mode: 'refused',
+      reason:
+        'APPLE_SIGNING_IDENTITY is set but APPLE_KEYCHAIN_PROFILE is not — the build would produce a ' +
+        'signed-but-UN-NOTARIZED artifact, which Gatekeeper still blocks. Create one with ' +
+        '`xcrun notarytool store-credentials` (ADR-0047 §7).',
+    };
+  }
+  return { mode: 'signed', identity, keychainProfile: profile };
+}
+
+/**
+ * `xcrun stapler validate` — the ticket must be attached to the artifact itself.
+ *
+ * Notarizing without stapling is the classic silent failure: Gatekeeper falls back to
+ * an online check, so it works on the developer's machine and fails for a user who is
+ * offline or whom Apple's CDN cannot answer for at first launch.
+ */
+export function checkStapleOutput(output) {
+  if (typeof output !== 'string' || output.trim() === '') {
+    return { ok: false, reason: 'no `stapler validate` output — the staple check did not run' };
+  }
+  if (/The staple and validate action worked!/i.test(output)) return { ok: true };
+  if (/does not have a ticket stapled/i.test(output)) {
+    return { ok: false, reason: 'the artifact has NO notarization ticket stapled to it — first launch will fail offline' };
+  }
+  return { ok: false, reason: `stapler validate did not report success: ${output.trim().split('\n').slice(-1)[0]}` };
+}
+
+/**
+ * `spctl -a -vvv -t install` — Gatekeeper's own verdict, the closest thing to the user's
+ * first double-click that a script can obtain.
+ *
+ * Both halves are load-bearing: `accepted` AND a `source=` naming notarization. An
+ * artifact can be accepted for unrelated reasons (store signing, an ad-hoc exception),
+ * and matching on "accepted" alone would wave those through as if notarization worked.
+ */
+export function checkSpctlOutput(output) {
+  if (typeof output !== 'string' || output.trim() === '') {
+    return { ok: false, reason: 'no `spctl` output — the Gatekeeper check did not run' };
+  }
+  if (/:\s*rejected/i.test(output)) {
+    const source = /source=(.*)/i.exec(output)?.[1]?.trim() ?? 'unknown';
+    return {
+      ok: false,
+      reason: `Gatekeeper REJECTED the artifact (source=${source}) — signed but not notarized, or the notarization did not attach`,
+    };
+  }
+  if (!/:\s*accepted/i.test(output)) {
+    return { ok: false, reason: `spctl returned neither accepted nor rejected: ${output.trim().split('\n')[0]}` };
+  }
+  if (!/source=Notarized Developer ID/i.test(output)) {
+    const source = /source=(.*)/i.exec(output)?.[1]?.trim() ?? 'absent';
+    return {
+      ok: false,
+      reason: `Gatekeeper accepted the artifact but source=${source}, not "Notarized Developer ID" — accepted for some other reason`,
+    };
+  }
+  return { ok: true };
+}
+
 /** The gh command PRINTED for the owner — never executed here (PROCESS.md release rules). */
 export function ghReleaseCommand(version) {
   const files = STABLE_ASSETS.map((name) => `release-out/${name}`).join(' ');
@@ -240,12 +390,16 @@ async function main() {
     );
     process.exit(2);
   }
-  const appleSigned = Boolean(process.env.APPLE_SIGNING_IDENTITY);
-  if (!appleSigned) {
-    console.warn(
-      '⚠ APPLE_SIGNING_IDENTITY absent — building UNSIGNED (Gatekeeper right-click-open; ' +
-        'the /download page must keep saying so). Wire the Developer ID env vars when available.',
-    );
+  const signing = appleSigningPlan(process.env);
+  if (signing.mode === 'refused') {
+    console.error(`REFUSED: ${signing.reason}`);
+    process.exit(2);
+  }
+  const appleSigned = signing.mode === 'signed';
+  if (appleSigned) {
+    console.log(`✔ Apple signing: ${signing.identity} (notary profile "${signing.keychainProfile}")`);
+  } else {
+    console.warn(`⚠ ${signing.reason}`);
   }
 
   if (dry) {
@@ -263,7 +417,63 @@ async function main() {
   });
 
   const dmg = findOne(path.join(UNIVERSAL_BUNDLE, 'dmg'), '.dmg');
-  // 3b — the platform's own parser vouches for the clickwrap before anything is staged.
+  const appBundle = findOne(path.join(UNIVERSAL_BUNDLE, 'macos'), '.app');
+
+  // 3a — ADR-0047 §6: the ONE artifact both platform keys point at must actually be fat.
+  // Checked on the Mach-O inside the .app, not the DMG (a disk image has no architecture).
+  const mainBinary = path.join(appBundle, 'Contents', 'MacOS', 'Snug');
+  let archOut;
+  try {
+    archOut = execSync(`lipo -archs "${mainBinary}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  } catch (err) {
+    console.error(`REFUSED: could not read the built binary's architectures (lipo failed on ${mainBinary}): ${err}`);
+    process.exit(2);
+  }
+  const universal = checkUniversalArchs(archOut);
+  if (!universal.ok) {
+    console.error(`REFUSED: ${universal.reason}`);
+    process.exit(2);
+  }
+  console.log(`✔ universal binary: ${archOut.trim()}`);
+
+  // 3b — NOTARIZE, then STAPLE, then verify. Order matters twice over: stapling
+  // REWRITES the DMG, so both the Gatekeeper check and the EULA check below must run
+  // against the final bytes, not the pre-staple ones (review F9 named this interaction
+  // as unverified; it is verified here).
+  if (appleSigned) {
+    console.log('submitting to Apple for notarization (this takes minutes, not seconds)…');
+    execSync(
+      `xcrun notarytool submit "${dmg}" --keychain-profile "${signing.keychainProfile}" --wait`,
+      { stdio: 'inherit' },
+    );
+    console.log('stapling the notarization ticket…');
+    execSync(`xcrun stapler staple "${dmg}"`, { stdio: 'inherit' });
+
+    const stapleOut = execSync(`xcrun stapler validate "${dmg}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+    const stapled = checkStapleOutput(stapleOut);
+    if (!stapled.ok) {
+      console.error(`REFUSED: ${stapled.reason}`);
+      process.exit(2);
+    }
+    console.log('✔ notarization ticket stapled to the DMG');
+
+    // spctl EXITS NON-ZERO on rejection, so the throw is the rejection path — capture
+    // stdout+stderr either way and let checkSpctlOutput name the verdict.
+    let spctlOut;
+    try {
+      spctlOut = execSync(`spctl -a -vvv -t install "${dmg}" 2>&1`, { encoding: 'utf8', shell: '/bin/sh' });
+    } catch (err) {
+      spctlOut = String(err?.stdout ?? '') + String(err?.stderr ?? '');
+    }
+    const gate = checkSpctlOutput(spctlOut);
+    if (!gate.ok) {
+      console.error(`REFUSED: ${gate.reason}\n${spctlOut.trim()}`);
+      process.exit(2);
+    }
+    console.log('✔ Gatekeeper accepts the stapled DMG (source=Notarized Developer ID)');
+  }
+
+  // 3c — the platform's own parser vouches for the clickwrap. AFTER stapling (above).
   let dump;
   try {
     dump = execSync(`hdiutil udifderez -xml "${dmg}"`, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });

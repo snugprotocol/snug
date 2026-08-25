@@ -1,6 +1,6 @@
 # TASK-20260824-first-signed-release: First signed + notarized macOS Release (universal)
 
-- **Status**: planned — awaiting owner approval (Gate 2)
+- **Status**: in-progress (Gate 3 — tests first)
 - **Owner**: Jeetu
 - **Risk tier**: **high** (auto-escalated — release config + GitHub Release creation; ADR-0047 §13, PROCESS.md §Release & publish rules)
 - **Branch**: `feat/TASK-20260824-first-signed-release`
@@ -87,3 +87,11 @@ This task closes ADR-0047 §7 for real and ships **v0.1.0** as the first signed,
 - State: **Gate 2 — plan written, STOPPED for owner approval.** No implementation code written.
 - Next step: on approval → Gate 3, tests first in `scripts/release-desktop.test.mjs`. In parallel the owner does the 🔑 prerequisites (Developer ID Application cert into the login keychain + `xcrun notarytool store-credentials "snug"`), without which steps 4+ cannot run.
 - Open questions: (1) the Apple **Team ID** for the signing identity string; (2) is there a backup of `~/.tauri/snug-updater.key`? — single-custody, no escrow (ADR-0047 §4), and the first release makes losing it consequential.
+
+### 2026-08-24 23:25 — Jeetu — session (owner 🔑 prerequisites CLEARED)
+- Done: **the signing blocker is gone.** Developer ID Application cert created via the **web-portal CSR route** (Xcode's Manage Certificates path did not work for the owner): openssl-generated CSR → developer.apple.com → `developerID_application.cer`. Identity is `Developer ID Application: Jitendra Maker (2KC5X47563)` (Team **2KC5X47563**, G2 CA, valid to 2031-08-26). Notarytool keychain profile `snug` created by the owner and **verified live against Apple** (`notarytool history` → "No submission history", i.e. authenticated).
+- **Surprise worth keeping (→ lessons):** after `security import` the identity still listed as **0 valid identities**. Cause: the **Developer ID G2 intermediate CA was absent** from the login keychain, so the chain could not build. Xcode's flow installs intermediates implicitly; the web-portal route does NOT. Fix: import `DeveloperIDG2CA.cer` + `AppleRootCA-G2.cer` from apple.com/certificateauthority. Verified by an actual `codesign --options runtime --timestamp` smoke test — full chain to Apple Root CA, `flags=0x10000(runtime)`, trusted timestamp, and **no interactive keychain prompt** (so an unattended build will not hang).
+- **Security housekeeping:** `~/.tauri/` was `drwxr-xr-x` and the private updater key `-rw-r--r--` (world-readable) → tightened to `700`/`600`. Key backup staged at `~/Desktop/snug-updater-key-backup-20260824/` with a README stating the no-escrow stakes; **owner confirmed NO prior backup existed** — the first release would otherwise have shipped with a single unbacked-up custody point.
+- State: every prerequisite for a signed+notarized build is now satisfied on this machine. Gate 2 plan approved implicitly by the owner directing execution; Gate 3 begins.
+- Next step: tests first in `scripts/release-desktop.test.mjs` for `checkUniversalArchs`, `appleSigningPlan`, `checkStapleOutput`, `checkSpctlOutput`.
+- Open questions: **owner cleanup still owed** — move `~/Desktop/snug-updater-key-backup-20260824/` and the `.p12` in `~/Desktop/snug-csr/` into a password manager / encrypted volume, re-export the `.p12` with a real passphrase (it currently uses a throwaway one), then delete both Desktop folders.

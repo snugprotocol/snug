@@ -36,7 +36,10 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "licenseFile": "EULA.txt",
-    "targets": ["app", "dmg"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -45,13 +48,20 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["snug"],
+        "ext": [
+          "snug"
+        ],
         "name": "Snug data file",
         "description": "Snug portable data file",
         "mimeType": "application/octet-stream",
         "role": "Editor",
         "rank": "Owner"
       }
-    ]
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "10.15",
+      "hardenedRuntime": true
+    }
   }
 }
