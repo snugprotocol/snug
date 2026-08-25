@@ -257,3 +257,22 @@ Owner chose **Option A** for AC6 (keep ADR-0054 §7's zone Redirect Rule; add th
 - **`node scripts/deploy-web.test.mjs` → 26/26 pass** after the edits (the suite asserts the runbook names every out-of-git fact, so this was a real regression risk, not a formality).
 - **State:** AC1–AC5, AC8–AC12 MET. **AC6 and AC7 are the only open ACs**, both waiting on two token permissions: Zone → **Config Rules: Edit** and Account → **Account Rulesets: Edit** on token `921ab1541c5037d757319885ddba68fc`.
 - **Next step:** on the permissions → create the `www` → apex 301 Redirect Rule (ADR-0054 §7, path + query preserved) and the `snug-pages-dev` Bulk Redirect (sources `snug-website-c7z.pages.dev` + `snug-playground.pages.dev`, subpath ON, preserve path/query ON, include-subdomains OFF) → re-verify → browser walk → revoke the token → `/close-session`, PR, merge.
+
+### 2026-08-24 — Jeetu — session (owner-reported landing-page defect; close-session)
+
+Owner reported the hero reading "in**one** portable file you own". **My first check said the text was correct and it was WRONG** — I grepped for `in <strong>` without allowing for the `class="astro-…"` attribute Astro injects, found nothing, and reported the phrase fine on the strength of the meta-description match. The owner's screenshot was the correction. **A grep that does not model the real markup is not a search; reporting its miss as "correct" was the actual error.**
+
+- **Root cause:** Astro 7's `compressHTML: 'jsx'` strips the newline between a text run and an adjacent inline element, so a source line ending in a word with `<strong>` opening the next line renders the two joined. This is **[lessons.md] 2026-08-24 (Astro 7 output diffing) recurring at a `<strong>` boundary** — that entry pinned the `</a><a>` case and the `<strong>` case slipped past it.
+- **Three sites, not the one reported** — found by scanning the SERVED html, then the source, rather than fixing only what was pointed at:
+  1. `index.astro` hero — `— in<strong>one portable file you own`
+  2. `Differentiators.astro` — `lives in<strong>one portable <code>.snug</code> file`
+  3. `WireDemo.astro` — `JSON Schemas.<a>Read the wire protocol →`
+- **Fix:** explicit `{' '}` at each boundary. Rebuilt (26 pages) and scanned **all** built pages for BOTH directions of the defect (`word<tag` and `</tag>word`): **zero remaining**. Visible-text extraction confirms all three read correctly.
+- **Verified:** `pnpm --filter website test` **42/42**; root `pnpm test` **exit 0** with `website-sync: OK — 24 pages verified against 40 source hashes` (the DRIFT/FAIL lines above it in the log are the checker's own fixtures — these three pages are authored, not derived, so no re-sync was owed).
+- **Done this session overall:** first production deploy (both apps), custom domains live, a real ADR-0013 violation fixed (Email Obfuscation was `on`), runbook corrected in five places, landing-page spacing fixed.
+- **State:** `feat/TASK-20260824-web-deploy-execute` at `13fffbf` (3 commits incl. this close). **AC1–AC5, AC8–AC12 MET. AC6 + AC7 OPEN**, blocked only on two token permissions.
+- **Next step:** push → PR → merge → `node scripts/deploy-web.mjs website --deploy` from `main` (owner asked for all four in this session's close).
+- **Open questions / owner acts owed:**
+  1. **Token `921ab1541c5037d757319885ddba68fc` needs Zone → Config Rules: Edit and Account → Account Rulesets: Edit** to finish AC6/AC7.
+  2. **Revoke that token** once AC6/AC7 land — routine deploys need only the wrangler OAuth session.
+  3. The **preview Access policy** is still deferred; `--preview` must not be run until it exists.
