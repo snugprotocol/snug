@@ -111,3 +111,28 @@ This task closes ADR-0047 §7 for real and ships **v0.1.0** as the first signed,
 - State: fixes committed (`4783133`); 16/16 script tests and 186/186 desktop tests green; env verified (identity valid, pubkey matches, signer works). **Build 2 is being run by the owner** with the APPLE_ID trio exported.
 - Next step: on a green build — verify the staged `release-out/`, hand the DMG to the owner for the walk, then (and only then) `gh release create` on an explicit go-ahead.
 - Open questions: owner still to move `~/Desktop/snug-updater-key-backup-20260824/` (now the NEW key) and `~/Desktop/snug-csr/` (the .p12, currently a throwaway passphrase) into a password manager / encrypted volume, then delete both Desktop folders.
+
+### 2026-08-25 00:45 — Jeetu — session (build 2: signed + notarized + stapled; ALL script-side checks green)
+
+**The artifact exists and every automated check passes on the exact staged bytes.** Two Apple submissions, both `Accepted`: the .app as `Snug.zip` (`b570af03-d24b-4b80-9382-110743f503d6`, submitted by tauri's bundler) and the DMG (`6a1ae884-c4e2-40e1-8782-2cfe5c30b941`, submitted separately — see below).
+
+Verified on `apps/desktop/release-out/`:
+- **universal**: `lipo -archs` on `Contents/MacOS/snug-desktop` → `x86_64 arm64`
+- **DMG**: stapled (`validate worked`) + `spctl -a -t install` → `accepted`, `source=Notarized Developer ID`
+- **.app**: stapled + `spctl -a -t exec` → same
+- **EULA survives stapling** → `verifyDmgCarriesEula` on the POST-staple dump = `{ok:true}`. **This closes review F9's unverified interaction**: notarizing+stapling does NOT destroy the SLA resource.
+- **updater tarball**: extracted `Snug.app` from `Snug.app.tar.gz` is itself stapled + Gatekeeper-accepted (the build-1 defect proven fixed, not merely reasoned about)
+- **signature**: `.sig` key id `S2aQDefS6S` == the pubkey in `tauri.conf.json` (`F3922E7DDE0069B6`)
+- **latest.json**: both darwin keys byte-identical, one versioned URL
+- DMG sha256 `da7819afe1404877e839ffcb5699f5962d51de7aeffb1d3e7a116b771c347aec`
+
+**Two more design errors that only running the thing revealed** (both fixed in `b112915`):
+
+1. **A notarization ticket is keyed to the hash of ONE FILE.** Tauri submits the .app as `Snug.zip`; the **DMG is a separate artifact and was never submitted**, so `stapler staple` on it failed with `CloudKit query ... failed due to "Record not found"`. The plan's assumption — that notarizing the app covers the disk image — was simply wrong. The script now submits the DMG on its own before stapling it. Both artifacts need it for different reasons: the DMG is what a human downloads, the .app is what survives the drag to /Applications.
+2. **An UNSET `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is not an empty one.** Tauri prompts for it; with no TTY the build dies `incorrect updater private key password: Device not configured (os error 6)` — and it dies AFTER the notarization round-trip, the slowest step. Now defaulted to `''` explicitly inside the script, so the key's real state (no passphrase) is what the signer is told regardless of the caller's env.
+
+**Method note for the next release:** rather than re-run the whole pipeline after fix (2) — another ~15 min build plus a third Apple submission — the remaining steps were completed directly against the already-notarized artifacts, each verified individually. The script is now correct end-to-end for v0.1.1; that path has NOT itself been run start-to-finish, which is the honest state of `release-desktop.mjs` today.
+
+- State: **`release-out/` staged and fully verified script-side. Nothing published.** Awaiting the owner's DMG walk (Agree screen legible on real glass + plain double-click opens the installed app, no right-click).
+- Next step: on a clean walk → apply the staged Gatekeeper-copy removal + R-29 rewrite, run root `pnpm test` + `check-public-scrub` by hand (ADR-0057), then `gh release create` on an explicit go-ahead.
+- Open questions: unchanged — the two Desktop folders (new updater key backup; the `.p12` under a throwaway passphrase) still need moving into a password manager, then deleting.
