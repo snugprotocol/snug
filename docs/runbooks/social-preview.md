@@ -11,9 +11,13 @@
 
 ---
 
-## 1. 🔑 The two repo uploads
+## 1. 🔑 The two repo uploads — **only after the repo is public**
 
-GitHub exposes a repository's social preview **only through the dashboard** — no REST or GraphQL field writes it, and `gh` has no command for it. This is a hand act by design, not an automation gap.
+> **Precondition, learned the hard way (2026-08-25).** The **Social preview** section does not render at all on a private repository that has never had an image. GitHub's own doc carries the condition in a subordinate clause: *"You can upload an image to a public repository, **or to a private repository to which you have previously uploaded an image**."* Neither `snug` nor `spec` has ever had one, so there is nothing to scroll to — this is not a permissions problem (both were checked at `admin: true`) and not a UI relocation.
+>
+> **So these uploads belong immediately after stage 7 of the flip, and before any announcement.** In the window between going public and uploading, a shared repo link unfurls with GitHub's auto-generated fallback card (avatar + repo name, served from `opengraph.githubassets.com`). That degrades the card to generic branding rather than blanking it — but it is also cached per URL by every platform that sees it first.
+
+GitHub exposes a repository's social preview **only through the dashboard** — no REST or GraphQL field writes it, and `gh` has no command for it ([community #172072](https://github.com/orgs/community/discussions/172072) is an open request for exactly that endpoint). This is a hand act by design, not an automation gap.
 
 The images are already generated and committed:
 
@@ -31,21 +35,39 @@ For each repo:
 
 Both are 1280×640 — GitHub's documented size, pinned by `socialAssets.test.ts` so a re-render cannot silently drift.
 
-**Verify** (a private repo previews only for signed-in members — a full check needs the repo public):
+**Verify by LOOKING, not by reading the URL** (and only once the repo is public). GitHub proxies repo cards through `opengraph.githubassets.com`, and an uploaded image and a generated one can present the same way in the markup — so the tag's value is weak evidence that an upload landed. Fetch the image the tag points at and check it is the ember banner rather than the avatar-and-repo-name fallback, or paste the repo link into a private Slack channel and look at the unfurl.
 
 ```sh
 curl -s https://github.com/snugprotocol/snug | grep -o '<meta property="og:image"[^>]*>'
 ```
 
-The value should be an `opengraph.githubassets.com/…` URL, **not** the default avatar-derived card.
+Note `curl` may receive different markup than a browser does; treat a surprising result as a reason to check in a browser, not as a finding.
 
-### Regenerating them
+---
+
+## 1b. The org profile banner
+
+A third image, on a different surface and with a different mechanism: `snugprotocol/.github` → `profile/README.md` renders `profile/org-profile-banner.png` (1280×520) at the top of [github.com/snugprotocol](https://github.com/snugprotocol). It is a **committed file in a public repo**, not a dashboard upload — updating it is a normal commit, and it takes effect immediately.
+
+It carries the org's positioning line over both repo messages side by side, so the org front door says what each repo *is* before a visitor clicks into either. It replaced a hub screenshot (`hub-talk-build-run.png`, now unreferenced in that repo) — a screenshot shows the UI, and the org page is read by people who do not yet know what Snug is.
+
+```sh
+cp docs/assets/social/org-profile-banner.png <path-to>/.github/profile/
+# then commit + push in that repo; verify:
+curl -sI https://raw.githubusercontent.com/snugprotocol/.github/main/profile/org-profile-banner.png | head -1
+```
+
+### Regenerating all three
 
 ```sh
 node scripts/build-social-previews.mjs
 ```
 
-Reads the brand colours out of `apps/playground/src/theme/tokens.css` (so the cards cannot drift from the site's palette), writes the `.svg` sources beside the `.png` outputs, and re-reads each PNG's IHDR bytes to prove the geometry rather than trusting the converter. Needs `rsvg-convert`, `inkscape`, or `imagemagick`; it names the missing dependency and stops rather than writing a wrong-sized file. **Re-upload by hand afterwards — regenerating does not touch GitHub.**
+Writes both repo cards (1280×640) and the org banner (1280×520). Reads the brand colours out of `apps/playground/src/theme/tokens.css` (so nothing can drift from the site's palette), writes the `.svg` sources beside the `.png` outputs, and re-reads each PNG's IHDR bytes to prove the geometry rather than trusting the converter. Needs `rsvg-convert`, `inkscape`, or `imagemagick`; it names the missing dependency and stops rather than writing a wrong-sized file.
+
+**Then look at what it produced.** SVG text neither wraps nor shrinks to fit, so an edit that lengthens a line renders it straight off the canvas — the geometry check, the size check and every byte-level assertion still pass, because the canvas is the right size and the overflow is simply ink outside it. Open each PNG, and view the banner at the **800px** width the README actually displays it at.
+
+**Re-upload the two repo cards by hand afterwards** — regenerating does not touch GitHub. The org banner needs a commit to `snugprotocol/.github`.
 
 ---
 

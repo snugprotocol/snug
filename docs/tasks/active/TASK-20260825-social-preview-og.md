@@ -1,6 +1,6 @@
 # TASK-20260825-social-preview-og: Social preview — 2 repo uploads + the relative-`og:image` bug
 
-- **Status**: in-review (implementation complete, suites green; awaiting review + the 🔑 uploads)
+- **Status**: **done** — PR #136 squash-merged as `dc3802d`; org banner shipped separately as `snugprotocol/.github@0450950`. Two 🔑 owner items remain (uploads post-flip, deploy) — both tracked in `next-steps.md`, neither blocking this task.
 - **Owner**: Jeetu
 - **Risk tier**: **low** (see [engineering/PROCESS.md](../../engineering/PROCESS.md#risk-tiers)) — `apps/website` only: marketing/docs meta tags and committed image assets. No protocol/runner/auth/C1/C2/npm/CI surface is touched, so no auto-escalation applies. It ships to a **live public site**, which is a care-level, not a tier-level, concern.
 - **Branch**: `fix/TASK-20260825-social-preview-og`
@@ -116,3 +116,21 @@ Tests FIRST per [TDD.md](../../engineering/TDD.md) — one per acceptance criter
 - **State**: implementation complete on `fix/TASK-20260825-social-preview-og`, all suites green, nothing committed yet.
 - **Next step**: owner review of the diff + task file. Then the two 🔑 uploads (§1 of the runbook) and, separately, a 🔑 deploy — until the site is redeployed the card stays broken in production, since the fix ships as HTML.
 - **Open questions**: none blocking. The deferred card-art call from Gate 2 still stands (16:9 poster vs a purpose-made 1200×630); unchanged by this work.
+
+### 2026-08-25 — Jeetu + Claude — session (merge + org banner + Gate 6)
+
+- **Merged.** PR **#136** squash-merged as **`dc3802d`**; branch deleted; local `main` synced. Root `turbo run test --force` **25/25, 0 cached** and `check-public-scrub: OK` re-run immediately before the commit (the generator had been refactored after the previous full run).
+- **The GitHub Social-preview control is HIDDEN on private repos — the two uploads cannot happen before the flip.** The owner reported the section missing from repo Settings; permissions were ruled out first (`admin: true` on both repos via the API), then GitHub's own doc supplied the mechanism in a conditional clause: *"You can upload an image to a public repository, **or to a private repository to which you have previously uploaded an image**."* Both repos are private and have never had one, so the section is not rendered at all. There is no API path either — [community #172072](https://github.com/orgs/community/discussions/172072) is an open, unanswered request for exactly that endpoint. **This reorders the flip checklist:** item 6's uploads move to *immediately after* stage 7, before any announcement, because until then a shared link unfurls with GitHub's auto-generated fallback card (`opengraph.githubassets.com` — probed 200, so the failure mode is *generic*, not blank). My earlier answer that private repos have the setting was wrong and is corrected in the runbook.
+- **Org 2FA** (a sibling flip-checklist item, answered this session, not part of this task): `two_factor_requirement_enabled: false`, one member who is also the sole admin, zero outside collaborators, and the `2fa_disabled` member filter returns empty — so enabling it removes nobody. Owner reported it done. The **second-owner decision remains open**: with enforced 2FA and a sole owner, a lost device is an unrecoverable org.
+- **New deliverable, owner-asked mid-session: the org profile banner.** `snugprotocol/.github` → `profile/README.md` led with `hub-talk-build-run.png`, a hub screenshot — it shows the UI, not the proposition, on the surface read by people who do not yet know what Snug is *and* the one page pointing at both repos. Replaced with a generated banner carrying the org's positioning line over the two repo messages side by side. Committed and pushed to that repo's `main` as **`0450950`**; verified live (raw URL 200, all 476,353 bytes, published README references it). `hub-talk-build-run.png` left in place, now unreferenced — deleting it is an owner call.
+  - **No PR there, deliberately**: `snugprotocol/.github` has no branch protection, no task-file convention, and the change is a one-line image swap in a single-file profile repo. The branch-and-PR rule in `CLAUDE.md` is written for this repo and its gates. Flagged to the owner rather than assumed.
+  - `build-social-previews.mjs` was generalised to per-output dimensions (it had hardcoded one size); all three images regenerate from one command.
+  - **Two layout defects caught only by LOOKING at the render**: the first banner ran "apps." off the right edge (SVG text neither wraps nor shrinks — an overlong line just draws past the canvas, no warning, no error), and the second was left-weighted with a dead right half. Also checked at the real 800px README display width, not just at 1:1.
+- **State**: **task complete and merged.** Gate 6 in progress on `fix/TASK-20260825-social-preview-og-close`.
+- **Next step**: the two 🔑 items below — neither is code, both are owner acts.
+- **Open questions**: none. The Gate-2 card-art call (16:9 poster vs a purpose-made 1200×630) is still deferred and still not blocking.
+
+## Owed after this task (all 🔑 owner, none code)
+
+1. **The 2 repo uploads — AFTER the flip, before any announcement.** Files ready at `docs/assets/social/{snug,spec}-repo-preview.png`; steps in [`runbooks/social-preview.md`](../../runbooks/social-preview.md). Cannot be done while the repos are private.
+2. **A deploy of `snugprotocol.org`.** The fix is merged but reaches nobody until the site is redeployed (ADR-0054, its own ask). **The production card is still broken right now.** Pair it with the runbook's re-scrape step — platforms cache the blank card per URL.
