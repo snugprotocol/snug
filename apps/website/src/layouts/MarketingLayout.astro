@@ -4,6 +4,7 @@
 // (Starlight); both draw from the same tokens.
 import { site, siteMode } from '../config/site';
 import { SECURITY_POLICY_URL, THREAT_MODEL_URL } from '@playground/legal/legalShared';
+import SocialMeta from '../components/SocialMeta.astro';
 import '../styles/site.css';
 
 interface Props {
@@ -22,10 +23,7 @@ const { title, description } = Astro.props;
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta property="og:title" content={title} />
-    <meta property="og:description" content={description} />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content="/videos/poster-landscape.jpg" />
+    <SocialMeta title={title} description={description} />
   </head>
   <body class="site">
     {

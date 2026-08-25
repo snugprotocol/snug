@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f4a259" stop-opacity="0.20"/>
+      <stop offset="55%" stop-color="#e8873a" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#100d0b" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f4a259"/>
+      <stop offset="100%" stop-color="#e8873a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="#100d0b"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+  <rect x="0" y="634" width="1280" height="6" fill="url(#mark)"/>
+  <g transform="translate(96, 176) scale(2.6)">
+    <path fill="url(#mark)" fill-rule="evenodd" d="M10 2h12a8 8 0 0 1 8 8v12a8 8 0 0 1-8 8H10a8 8 0 0 1-8-8V10a8 8 0 0 1 8-8zm6 9a5 5 0 0 0-5 5v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-6a5 5 0 0 0-5-5z"/>
+  </g>
+  <text x="205.2" y="238.4" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="76" fill="#f3ece1">snug.</text>
+
+  <text x="96" y="352" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="54" fill="#f3ece1">The reference implementation</text>
+  <text x="96" y="416" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="27" fill="#b3a48f">Desktop app, runtime, SDK and starters — MIT licensed.</text>
+
+  <text x="96" y="536" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="23" fill="#e8873a" letter-spacing="2.5">SNUGPROTOCOL/SNUG</text>
+</svg>

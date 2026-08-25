@@ -46,10 +46,16 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/snugprotocol' },
       ],
       customCss: ['./src/styles/starlight-theme.css'],
-      // The stock SocialIcons renders the header GitHub icon without target="_blank"
-      // (same owner call) — the override is the same icon with the one attribute,
-      // reading the single-homed site config.
-      components: { SocialIcons: './src/components/HeaderSocialIcons.astro' },
+      components: {
+        // The stock SocialIcons renders the header GitHub icon without target="_blank"
+        // (same owner call) — the override is the same icon with the one attribute,
+        // reading the single-homed site config.
+        SocialIcons: './src/components/HeaderSocialIcons.astro',
+        // Starlight generates every OG tag EXCEPT og:image, so the docs hub and the whole
+        // rendered spec advertised a large-image card pointing at nothing. The override
+        // renders Starlight's stock head and appends the image tags only.
+        Head: './src/components/Head.astro',
+      },
       sidebar: [
         { label: 'Overview', slug: 'docs' },
         {

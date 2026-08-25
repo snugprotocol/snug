@@ -1,0 +1,40 @@
+---
+// Starlight Head override — adds the ONE social tag Starlight never emits.
+//
+// Starlight builds its head from a data array (utils/head.ts) and already generates
+// og:title, og:type, og:url, og:locale, og:description, og:site_name AND
+// twitter:card=summary_large_image. What it does NOT generate is og:image — so every
+// docs page and the entire rendered spec advertised a large-image card pointing at
+// nothing. That is why this override adds the image tags ONLY: re-emitting the rest
+// beside Starlight's would ship duplicate meta on 22 pages, and scrapers reading the
+// first-or-last occurrence of a duplicated property is exactly the ambiguity to avoid.
+//
+// The marketing shell has no such generator, so it uses SocialMeta.astro for the full
+// set. The two paths differ because the frameworks do — the image facts themselves stay
+// single-homed in config/socialImage.ts, which is what keeps them from drifting apart.
+//
+// Same component-override seam as HeaderSocialIcons.astro (owner call, 2026-08-23).
+import Default from '@astrojs/starlight/components/Head.astro';
+import { OG_IMAGE } from '../config/socialImage';
+
+if (!Astro.site) {
+  throw new Error(
+    'astro.config.mjs must set `site:` — social meta needs an absolute base (see Head.astro)',
+  );
+}
+
+// Absolute, per the Open Graph spec: a root-relative value is DROPPED by every real
+// scraper, not resolved against the page URL (the bug this task fixes site-wide).
+const image = new URL(OG_IMAGE.path, Astro.site);
+
+// Starlight's own tags carry the page's title/description; twitter:image is the only
+// Twitter-namespace tag added here, since twitter:title/description fall back to the
+// og: equivalents Starlight already emits.
+---
+
+<Default><slot /></Default>
+<meta property="og:image" content={image.href} />
+<meta property="og:image:width" content={String(OG_IMAGE.width)} />
+<meta property="og:image:height" content={String(OG_IMAGE.height)} />
+<meta property="og:image:alt" content={OG_IMAGE.alt} />
+<meta name="twitter:image" content={image.href} />
