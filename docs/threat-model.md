@@ -665,7 +665,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-snug-file-encryption.md` | `77bfcb19bfa3` | §2 assets · §5 C1 · R-3, R-27 |
 | `docs/security/threat-model-delta-starter-update-channel.md` | `5a5625c1f999` | §5 authoring · R-31 |
 | `docs/security/threat-model-delta-multi-provider-byok.md` | `540490f88a1c` | §5 authoring · R-32 |
-| `docs/security/threat-model-delta-desktop-update-channel.md` | `ba8b40813238` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
+| `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 
 <!-- DELTA-LEDGER:END -->
 
