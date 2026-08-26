@@ -2289,6 +2289,11 @@ img.identity-avatar {
   justify-content: center;
   background: rgba(0, 0, 0, 0.5);
   padding: var(--space-4);
+  /* A flex-centred child taller than the overlay is clipped at the TOP with no way to
+     scroll to it (TASK-20260826 AC1: the update sheet's head was cut off at the window's
+     minimum height). Let the overlay scroll; `margin: auto` on the card keeps it centred
+     while it fits and top-anchored once it does not. */
+  overflow-y: auto;
 }
 .net-confirm-card {
   background: var(--surface);
@@ -2315,6 +2320,8 @@ img.identity-avatar {
 }
 .net-confirm-actions {
   justify-content: flex-end;
+  /* never squeezed out by a tall notes list (TASK-20260826 AC1) */
+  flex-shrink: 0;
 }
 /* Starter versioning (ADR-0045): the tile update badge, the header version chip, and
    the release-notes sheet. The badge mirrors `.tile-installed-badge`'s shape with its
@@ -2346,7 +2353,12 @@ img.identity-avatar {
 .release-notes-card {
   max-width: 560px;
   width: 100%;
-  max-height: 80vh;
+  /* border-box so the cap INCLUDES the card's padding — as content-box, 80vh + padding +
+     head + action row overran short windows and the flex-centred overflow clipped the
+     title (TASK-20260826 AC1). */
+  box-sizing: border-box;
+  max-height: calc(100vh - 2 * var(--space-4));
+  margin: auto;
   display: flex;
   flex-direction: column;
 }

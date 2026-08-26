@@ -102,17 +102,18 @@ export function AppUpdateSheet({ onClose }: { onClose: () => void }): ReactEleme
       : undefined;
   if (offer === undefined) return null;
 
-  // The Tesla-style body: fetched entries when they parse, the bundled history as
-  // the anchor beneath (it is this build's own trusted copy), tagged against the
-  // running version.
-  const bundled = bundledDesktopReleases() ?? [];
-  const fetchedNewer = (fetched ?? []).filter(
-    (release) => current === undefined || compareSemver(release.version, current) > 0,
-  );
-  const entries: DesktopRelease[] = [
-    ...fetchedNewer,
-    ...bundled.filter((release) => !fetchedNewer.some((n) => n.version === release.version)),
-  ];
+  // ONLY what is newer than the running version (TASK-20260826, owner decision). Until
+  // 2026-08-26 the bundled history rode beneath the new entry "Tesla-style", which
+  // rendered the INSTALLED release's own "Good to know" as if it were news — on a v0.1.0
+  // install offered v0.1.1 the sheet said "macOS only through 1.0…", a line about the
+  // version already running. History lives on the web /download page, not here.
+  // Fetched entries win when they parse; the bundled file (this build's trusted copy)
+  // is the fallback, filtered the same way.
+  const newerThanCurrent = (release: DesktopRelease): boolean =>
+    current === undefined || compareSemver(release.version, current) > 0;
+  const fetchedNewer = (fetched ?? []).filter(newerThanCurrent);
+  const entries: DesktopRelease[] =
+    fetchedNewer.length > 0 ? fetchedNewer : (bundledDesktopReleases() ?? []).filter(newerThanCurrent);
 
   return (
     <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="desktop update">
