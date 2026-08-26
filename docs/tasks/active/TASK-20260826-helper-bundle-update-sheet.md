@@ -1,34 +1,92 @@
 # TASK-20260826-helper-bundle-update-sheet: bundle the WhatsApp helper (size-gated) + fix the update sheet (clipping, stale "good to know")
 
-- **Status**: draft
+- **Status**: planned (awaiting plan approval)
 - **Owner**: Jeetu
-- **Risk tier**: **High** (auto-escalated: touches the release/bundle config — `tauri.conf.json` bundle resources, `release-desktop.mjs`, release gate — and the desktop shell's helper spawn contract in `sidecar.rs`). The update-sheet half alone would be Low.
+- **Risk tier**: **High** (auto-escalated: release config/gate + a new download-verify-extract path in the shell + a `packages/auth` text touch). Per PROCESS.md the plan gets a fresh-context AI review before implementation. The update-sheet half alone would be Low.
 - **Branch**: `fix/TASK-20260826-helper-bundle-update-sheet`
-- **Packages touched**: `apps/desktop` (tauri bundle config, `src-tauri/src/sidecar.rs`, release gate), `apps/whatsapp-sidecar` (install/pack script), `apps/playground` (`desktop/AppUpdateControls.tsx`, `desktop/desktop-releases.json`, `theme/app.css`), `scripts/release-desktop.mjs`, docs (ADR-0047 §12 amendment, threat-model delta residual, next-steps)
+- **Packages touched**: `apps/desktop` (`src-tauri/src/sidecar.rs` + new `helper_install.rs`, `Cargo.toml`, `src/sidecar.ts`, `platform-desktop.ts`, release gate), `apps/whatsapp-sidecar` (new `pack-helper.mjs`), `apps/playground` (`desktop/AppUpdateControls.tsx`, `desktop/desktop-releases.json`, `theme/app.css`, `platform/platform.ts`, `state/connectionWizard.ts`, `state/net.ts`, `run/RunView.tsx`, `connections/ConnectionWizardSheet.tsx`, `views/DownloadView.tsx`), `packages/auth` (`well-known-providers.ts` instructions text only), new `scripts/release-helper.mjs`, docs (ADR-0060, ADR-0047 amendment, threat-model delta, architecture, code-map, next-steps)
 - **Spec impact**: none (protocol untouched)
-- **Related**: ADR-0047 §12 (helper NOT distributed by the update channel), ADR-0032 (sidecar contract), TASK-20260816-whatsapp-twin (packaging declared out of scope there), `docs/security/threat-model-delta-desktop-update-channel.md` (helper-skew residual), `docs/next-steps.md` (spawner version-stamp check)
+- **Related**: **ADR-0060 (draft, this task)**, ADR-0047 §12 (helper NOT distributed by the update channel), ADR-0032 (sidecar contract), TASK-20260816-whatsapp-twin (packaging declared out of scope there), `docs/security/threat-model-delta-desktop-update-channel.md` (helper-skew residual), `docs/next-steps.md` (spawner version-stamp check)
 
 ## Spec (what & why)
 
-Two owner-reported issues, one task.
+Two owner-reported issues, one task. Interview (2026-08-26) reset Part 1's direction.
 
-**Part 1 — helper bundling.** Today the Telepath WhatsApp helper is a dev-only install (`pnpm --filter whatsapp-sidecar install:helper` → `~/Snug/helpers/whatsapp-sidecar/`, spawned by `sidecar.rs` via the system `node`). A public DMG download has no helper. Measured cost of the installed tree: **62 MB on disk**, of which 26 MB is `@img/*` (sharp's libvips binary 17 MB + an 8.7 MB wasm build — an *optional* baileys dependency used only for media thumbnails), 9.2 MB baileys, 6.3 MB zod, 3.1 MB protobufjs; the helper's own `dist/` is 296 KB. Current DMG: 18 MB. **Caveat that decides the design:** bundling the JS does not remove the runtime dependency — the shell still spawns the *system* `node` and refuses below Node 20. Bundling the helper without a runtime therefore helps only users who already have Node ≥ 20; a full "works on any Mac" bundle means shipping a Node runtime (~40–50 MB uncompressed, ~20–25 MB compressed for a single arch; ×2 for universal) or a Node SEA.
+**Part 1 — on-demand helper distribution (ADR-0060 draft).** No bundling. Helpers become
+separately released, pre-release-tagged GitHub artifacts (`helper-whatsapp-sidecar-v0.1.0`),
+self-contained (own Node runtime, no sharp; ≈ 41 MB per arch), minisign-signed with the
+updater key, version-pinned by the shell. When an app needing a `linked_device` connection is
+installed (or pairing begins) and the helper is absent/outdated, the user is offered a
+one-click download into `~/Snug/helpers/<name>/`; on success the shell spawns it immediately.
+A developer install (`install:helper`, no `helper.json` stamp) always wins if present.
+Measured facts: current tree 62 MB (26 MB optional sharp); minus sharp 5.6 MB gz; Node 22
+arm64 35 MB gz; DMG 18 MB. `minisign-verify`, `tar`, `flate2` already in the Cargo tree.
 
-**Part 2 — update sheet.** (a) The sheet opened from the header "update to vX" chip is clipped at the top-centre and cannot be scrolled to. Diagnosis (to be confirmed by screenshot at implementation): `.net-confirm-overlay` is a flex-centred fixed layer; `.release-notes-card` caps at `max-height: 80vh` but that is `content-box` height, so `80vh + 2 × padding + head + action-row` can exceed the window (Tauri min height 560 px) and a flex-centred overflowing child is clipped at the top with no scroll. (b) The sheet shows *"macOS only through 1.0 — the Windows WebView cannot yet hold our app-sandbox promise…"* because the sheet deliberately renders the fetched newer entries **plus the bundled full history** (Tesla-style, `AppUpdateControls.tsx:107–116`), and that line lives in **v0.1.0's** "Good to know" section, not v0.1.1's. It is the installed release's note, tagged "installed", not a note about the update. Whether history belongs in the sheet at all, and whether that v0.1.0 line should stay, is an owner call (see interview).
+**Part 2 — update sheet.** (a) The sheet from the header chip is clipped at the top: the
+`.release-notes-card` `max-height: 80vh` is content-box, so padding + head + action row exceed
+the window at small heights, and a flex-centred overflowing child clips at the top with no
+scroll (to be confirmed by screenshot at the 800×560 minimum). (b) The "macOS only through
+1.0…" line is **v0.1.0's** "Good to know", rendered because the sheet shows the whole bundled
+history beneath the new entry (`AppUpdateControls.tsx:107-116`). Owner decisions: show only
+entries newer than the installed version; leave shipped notes untouched; write v0.1.2 notes.
 
-**Acceptance criteria** (each becomes at least one test) — to be finalised after the interview:
-1. (P1) A bundled helper resource exists in the built `.app` at a fixed path, and `sidecar.rs` resolves the helper from the bundle (falling back to / preferring `~/Snug/helpers/` per the interview answer). Rust unit test on the resolution order.
-2. (P1) The pack step produces a self-contained tree **without** `@img/*`/`sharp` (optional dep omitted) and the installed helper still starts and serves `/health` — script test in `apps/whatsapp-sidecar`.
-3. (P1) Release gate asserts the helper resource is present in the bundle (MUST-APPEAR, like the updater endpoint).
-4. (P1) `desktop-releases.json` v0.1.x "Good to know" line about the helper is corrected to the new truth; `check-website-sync`/DownloadView copy updated.
-5. (P2a) Sheet card uses `box-sizing: border-box`, `max-height: calc(100vh - 2·padding)` and the overlay scrolls if the card still overflows — a jsdom test can only pin the class/CSS contract; the real check is a screenshot at 800×560 (min window) recorded in the journal.
-6. (P2b) Sheet filtering per interview answer (e.g. only entries newer than the installed version, or history collapsed) — component test with `current = 0.1.0`, fetched `0.1.1`, asserting the v0.1.0 "Good to know" text is absent/collapsed.
+**Acceptance criteria** (each becomes at least one test):
+1. **AC1 sheet layout** — `.release-notes-card` is `border-box`, capped at `calc(100vh - 2×overlay padding)`, and the overlay scrolls if the card still overflows. jsdom pins the CSS contract (class present, stylesheet rule text); real proof = screenshot at 800×560 in the journal.
+2. **AC2 sheet filter** — with `current=0.1.0`, fetched `[0.1.1]`, bundled `[0.1.1, 0.1.0]`: the sheet renders v0.1.1 only; the v0.1.0 "Good to know" text is absent. With no fetched notes it falls back to bundled entries newer than current; with nothing newer it shows the manifest `notes`/"no release notes" hint.
+3. **AC3 pack script** — `apps/whatsapp-sidecar/pack-helper.mjs --arch aarch64|x86_64` produces `<name>-darwin-<arch>.tar.gz` whose tree contains `index.js`, `package.json`, `bin/node`, `node_modules/baileys`, `node_modules/@snugprotocol/protocol`, `node_modules/zod`, and **no** `node_modules/@img` / `sharp`; the Node tarball is verified against `SHASUMS256.txt` (test: tampered sum → refusal). Pure planning functions unit-tested like `release-desktop.test.mjs`.
+4. **AC4 release script** — `scripts/release-helper.mjs` signs both archives with minisign, writes `helper.json` (name, version, per-arch asset/sha256/size), refuses without a signing key, prints `gh release create --prerelease helper-<name>-v<ver>` and **stops** (test asserts the flag and the tag format).
+5. **AC5 pinned resolution** — Rust: `REQUIRED_HELPERS` names `whatsapp-sidecar` + version + tag URL base; `helper_status()` returns `{installed, kind: 'dev'|'downloaded'|'absent', installedVersion?, requiredVersion, downloadBytes}`; a stamp-less tree is `dev` and never flagged outdated; a stamped older tree is `outdated`.
+6. **AC6 verify-then-extract** — Rust `helper_install`: (a) bad/missing `.sig` → refused, nothing written under `~/Snug/helpers/`; (b) sha256 mismatch → refused; (c) archive entries with absolute paths, `..`, symlinks or hardlinks → refused, `.partial-*` removed; (d) byte cap exceeded → refused; (e) redirect to `http:` → refused; (f) happy path → previous tree replaced atomically, stamp written, helper started. Tests run against a local static server + a minisign key generated in the test.
+7. **AC7 spawn** — `start_helper` uses `<helper>/bin/node` when present (no system-node preflight); dev install (no `bin/node`) keeps the existing preflights. Test on the source-text pin at `sidecar.rs:~1825` updated accordingly.
+8. **AC8 playground seat** — `Platform` gains `helperStatus(name)` / `helperInstall(name, onProgress)` (desktop only). `beginDeviceLink` returns a typed `{ ok:false, reason:'helper-missing'|'helper-outdated', helper }` instead of the raw Rust string; the developer-facing "pnpm …" text never reaches the UI.
+9. **AC9 install moment** — installing Telepath on desktop (RunView install path, after `installStarterConnections`) shows an inline card: "Telepath needs the WhatsApp helper — a 41 MB download from GitHub" with [download & install] / [not now]; progress; then the helper is started and the card clears. On web the card does not render.
+10. **AC10 pairing moment** — LinkedDeviceScreen renders the same card (role `alert`, not a quiet hint) when `beginDeviceLink` reports helper-missing/outdated; after install it re-runs `beginDeviceLink` automatically.
+11. **AC11 runtime moment** — a `net.ts` start failure caused by helper-missing surfaces in RunView's net band with the install CTA (typed error code, not lost as a generic net error).
+12. **AC12 release gate** — `run-release-gate.mjs` MUST-APPEAR gains the helper download base URL; `bundleTargets`-style test pins that the pinned helper version in Rust matches `apps/whatsapp-sidecar/package.json` version.
+13. **AC13 docs/notes** — ADR-0060 accepted; ADR-0047 §12 amended; threat-model delta S9 added, R-e retired; architecture.md §Linked-device helpers + code-map rows; `desktop-releases.json` v0.1.2 entry ("the WhatsApp helper now downloads on demand…"); DownloadView copy; `well-known-providers.ts` instructions; `/sync-website` run; `docs/next-steps.md` spawner-stamp item closed.
+14. **AC14 hardware walk** (owner, journaled) — fresh `~/Snug/helpers/`, install Telepath from the public build, accept download, pair a device end-to-end; x86_64 archive's `bin/node` runs under Rosetta.
 
-**Out of scope**: shipping a Node runtime / SEA (unless the interview picks it — then it becomes its own follow-up task), updating the helper through the updater independently of the shell, Windows.
+**Out of scope**: auto-download without a click; updating helpers via the desktop updater; Windows; Node SEA; helpers other than `whatsapp-sidecar` (the mechanism is generic, only one entry ships); creating the actual GitHub helper release (explicit ask, own session).
 
 ## Plan
 
-_Pending interview answers — filled in before approval._
+Order is tests-first per TDD.md; each phase is a commit group. Phase A is independent and small — it lands first.
+
+**Phase A — update sheet (AC1–2)** · `apps/playground`
+1. Test `desktop/__tests__/appUpdateSheet.test.tsx`: filter cases (AC2) + CSS contract (AC1). Red.
+2. `AppUpdateControls.tsx`: `entries = fetchedNewer.length ? fetchedNewer : bundledNewer`; drop the history merge; keep tags.
+3. `theme/app.css`: `.net-confirm-overlay { overflow-y:auto }`, `.release-notes-card { box-sizing:border-box; max-height:calc(100vh - 2*var(--space-4)) }`, `.net-confirm-actions { flex-shrink:0 }`. Screenshot at 800×560 via `tauri dev` → journal.
+
+**Phase B — packaging + release scripts (AC3–4)** · `apps/whatsapp-sidecar`, `scripts/`
+4. Tests `apps/whatsapp-sidecar/pack-helper.test.mjs`, `scripts/release-helper.test.mjs` (pure planning fns: asset plan, sha verification, helper.json assembly, gh command string). Red.
+5. `pack-helper.mjs` (refactors the npm-install core out of `install-helper.mjs` so both share it; adds `--omit-optional`/explicit sharp exclusion, Node fetch+verify, `bin/node`, tar.gz). `install-helper.mjs` keeps its behaviour.
+6. `release-helper.mjs` mirrors `release-desktop.mjs` (minisign via the same `TAURI_SIGNING_PRIVATE_KEY[_PATH]` path, `helper.json`, print-and-stop).
+
+**Phase C — shell (AC5–7, AC12)** · `apps/desktop/src-tauri`
+7. Cargo: name `minisign-verify`, `tar`, `flate2`, `tempfile` as direct deps (rationale comment as for reqwest).
+8. Tests first in new `helper_install.rs`: stamp/pin logic, tar entry admission (traversal/symlink/hardlink), byte cap, redirect scheme, signature/sha refusal, happy path against a local HTTP stub (tokio + hand-rolled like the sidecar tests) with a test-generated minisign keypair.
+9. Implement `helper_install(name)` command + `helper-install-progress` events; `sidecar_ctl('status')` gains the AC5 fields; `start_helper` prefers `bin/node`. Register command; capabilities unchanged (custom commands ride `core:default`).
+10. Release gate MUST-APPEAR + pin-matches-package-version test.
+
+**Phase D — playground UX (AC8–11)** · `apps/desktop/src`, `apps/playground/src`
+11. Tests: `helperInstallCard.test.tsx`, `linkedDeviceHelperMissing.test.tsx`, `runViewHelperMissing.test.tsx`, `beginDeviceLink` typed-refusal test. Red.
+12. `apps/desktop/src/sidecar.ts` + `platform-desktop.ts`: new seats. `platform.ts` types + doc comment.
+13. `state/helperInstall.ts` (small store: idle/downloading(progress)/verifying/installing/done/error) + `connections/HelperInstallCard.tsx`; wire into RunView install path, LinkedDeviceScreen, RunView net band; `net.ts` throws a typed `HelperMissingError` code.
+
+**Phase E — docs + notes (AC13)**
+14. ADR-0060 → accepted; ADR-0047 amendment; threat-model delta S9/R-e; architecture.md; code-map.md; next-steps; `desktop-releases.json` v0.1.2 (bump stays for the release session); DownloadView; well-known-providers instructions; `/sync-website`; `check-website-sync`.
+
+**Phase F — verification**
+15. `pnpm test` root gate, `pnpm --filter desktop test:rust`, `gate:local`; owner hardware walk (AC14) journaled. Then `/code-review`.
+
+**Cross-package impact**: `packages/auth` text-only (no behaviour); `packages/protocol` untouched (spec impact none); `apps/playground` ↔ `apps/desktop` seam widens by two optional Platform fields (web stays `undefined`, same pattern as `sidecarCtl`).
+
+**Spec-sync**: none (no protocol change). Website: `/sync-website` after DownloadView/README wording.
+
+**Open questions for approval** (defaults stated; proceed on these unless overridden):
+- Q1 Node runtime in the archive (ADR-0060 §2) — default **yes** (≈ 41 MB per arch); the alternative keeps the system-Node dependency and is not "seamless".
+- Q2 Helper releases as **pre-releases** on `snugprotocol/snug` (keeps `releases/latest` for the desktop) vs a separate `snugprotocol/helpers` repo — default same repo, pre-release.
+- Q3 Same minisign key as the updater — default **yes**.
 
 ## Decisions & surprises
 
@@ -39,6 +97,7 @@ _Pending interview answers — filled in before approval._
 
 ### 2026-08-26 — Jeetu/Claude — session
 - Done: investigation (sizes, spawn contract, sheet rendering path, CSS), task file, branch.
-- State: awaiting interview answers, then plan → approval.
-- Next step: interview.
-- Open questions: see interview.
+- Interview: owner rejected bundling → on-demand, separately released helpers (ADR-0060 draft); sheet shows only newer entries; shipped notes untouched, v0.1.2 notes new.
+- State: plan written; **STOPPED for plan approval** (High tier: fresh-context AI plan review comes next, before code).
+- Next step: approval → fresh-context plan review → Phase A.
+- Open questions: Q1–Q3 in the plan.
