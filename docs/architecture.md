@@ -165,7 +165,7 @@ syntax-validated, and the UX offers no button pointing outside the flow (threat-
 R-28).
 
 **Offered, never automatic** (ADR-0045's doctrine, inherited): a toggleable launch
-check that is quiet on failure (pre-flip the private repo 404s for everyone, so silence
+check that is quiet on failure (this mattered pre-flip, when the private repo 404s for everyone; the repos went public 2026-08-26, so silence
 is the designed state, and the Settings button is where a failure gets NAMED), a
 non-blocking header chip, and a Tesla-style notes sheet. **`relaunch()` reaps the
 sidecar first** — `AppHandle::restart()` skips `RunEvent::Exit` on the main thread, so

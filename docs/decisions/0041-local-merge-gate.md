@@ -1,7 +1,16 @@
 # 0041 — The merge gate moves from GitHub Actions to one local command
 
-- **Status:** **accepted** (2026-08-20, owner decision at Gate 2; shipped with
-  TASK-20260820-local-ci-gate). Supersedes nothing; amends the operating assumption behind
+- **Status:** **accepted, operative half SUPERSEDED by [ADR-0058](0058-ci-restored-and-enforcing.md)
+  (2026-08-26)** — CI's triggers are restored and `workspace` + `desktop-shell (macos-latest)`
+  are now REQUIRED status checks that actually block a merge. Both premises below expired at
+  flip-public: billing dissolved (public repos get unlimited standard-runner minutes) and
+  required checks became available. **What survives unchanged:** `gate:local` remains the
+  pre-push gate and a deliberate SUPERSET of `ci.yml` (it runs Playwright and the server
+  smoke leg, which CI does not), and the AC3 contract still fails if a CI step loses its
+  local counterpart. The reasoning below — that a red X nobody can act on trains the reader
+  to merge past reds — is why ADR-0058 parked the Windows leg rather than leaving it red.
+  Originally accepted 2026-08-20 (owner decision at Gate 2; shipped with
+  TASK-20260820-local-ci-gate), amending the operating assumption behind
   `.github/workflows/ci.yml` (authored TASK-20260812-desktop-hub-scaffold P5).
 - **Date:** 2026-08-20
 - **Task:** TASK-20260820-local-ci-gate
