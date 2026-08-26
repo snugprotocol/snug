@@ -1,6 +1,6 @@
 [package]
 name = "snug-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Snug desktop hub — the playground in a native shell (TASK-20260812-desktop-hub-scaffold)"
 edition = "2021"
 rust-version = "1.77.2"
