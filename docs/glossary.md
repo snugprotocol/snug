@@ -32,3 +32,11 @@
 - **open-url capability** — the host-mediated way an app opens a website (ADR-0038 D5):
   an internal-draft frame the runner routes to a host confirm dialog; only a real user
   gesture opens the tab (`noopener,noreferrer`), and the sandbox gains nothing (C2).
+- **Demo brain** — the zero-key default "AI": the mock adapter's scripted turns
+  (`byok` mode + `mock` provider, and the keyless fall-through for a keyed provider).
+  Since ADR-0059 it is always ambiently disclosed — the header **brain chip** names
+  what's thinking on every route, each scripted assistant turn carries a persisted
+  `brainKind` provenance tag, and a first-contact callout introduces it once.
+- **Brain chip** — the header status surface (`BrainChip.tsx`) consuming
+  `resolveActiveBrain`, the live evaluation of `adapterKindFor` — the ONE adapter
+  routing derivation (ADR-0059 rule 2).

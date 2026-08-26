@@ -1,7 +1,7 @@
 # 0059 — The active brain is always disclosed, and scripted output carries its provenance
 
-- **Status:** proposed (drafted at Gate 2 of TASK-20260826-demo-brain-clarity; accepted
-  when the owner approves that task's plan)
+- **Status:** accepted (2026-08-26 — the owner approved TASK-20260826-demo-brain-clarity's
+  plan, which this ADR was drafted into)
 - **Date:** 2026-08-26
 - **Task:** TASK-20260826-demo-brain-clarity
 
@@ -12,7 +12,8 @@ brain", an offline script that fakes the build flow (ADR-0008's serverless-first
 posture). That default is deliberate and stays. But as of this writing, nothing ambient
 in the shell says the demo brain is what's thinking: the model selector hides itself
 under `mock`, and the only "demo brain" strings live in Settings and the webllm
-fallback banner. Two failure modes follow, both fatal for a launch audience:
+fallback banner. Two failure modes follow, both fatal for a first-time technical
+audience:
 
 1. A visitor assumes Snug is calling a hosted LLM on Snug's servers — the opposite of
    the product's own C1/serverless story.

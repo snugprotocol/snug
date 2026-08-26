@@ -6,7 +6,7 @@
 - **Branch**: `feat/TASK-20260826-demo-brain-clarity`
 - **Packages touched**: `apps/playground` only (web + desktop shell share this SPA)
 - **Spec impact**: none (PersistedMeta is playground-owned opaque JSON — no schema bump, no spec-sync)
-- **Related**: TASK-20260821 (provider resolution AC9), TASK-20260812 P3 (DesktopWelcome), ADR-0015 (webllm brain override), ADR-0027, draft ADR-0059 (this task), HN launch prep
+- **Related**: TASK-20260821 (provider resolution AC9), TASK-20260812 P3 (DesktopWelcome), ADR-0015 (webllm brain override), ADR-0027, ADR-0059 (this task)
 
 ## Spec (what & why)
 
@@ -16,9 +16,10 @@ paste an API key to try Snug — but today NOTHING ambient says the responses ar
 `BuilderModelSelect` hides itself when `provider === 'mock'`, and the only mentions of
 "demo brain" live in Settings and the webllm fallback banner. Worse, `createTurnAdapter`
 falls through to the mock adapter when a keyed provider has no key, so a user can
-believe they configured a real provider and still get scripted output. An HN audience
-will either assume Snug calls a hosted LLM (false — bad for trust) or judge the product
-on canned output without knowing it (bad for the demo). Both are launch-killers.
+believe they configured a real provider and still get scripted output. A skeptical
+technical first-time audience will either assume Snug calls a hosted LLM (false — bad
+for trust) or judge the product on canned output without knowing it (bad for the demo).
+Both are trust-killers.
 
 Goal: at every moment the demo brain (or any brain) is what's thinking, the UI says so —
 ambiently (a live status chip), per-output (a provenance tag on scripted turns), and
@@ -153,6 +154,76 @@ the AI provider you choose — never to Snug's servers."* Demo copy names the me
   2026-08-19 amendment not this task's fix either. Queued for next-steps.
 - The full-suite e2e ✘ rows in starters-connect are the KNOWN test.fail() quarantine
   (2026-08-20) — expected-fail, counted as passing; only journey 4 was a real red.
+- **C4 scrub (AI review, conventions angle):** earlier drafts of this file and
+  ADR-0059 named the launch venue and used launch-positioning phrasing in a public
+  repo. Reworded to audience-neutral language in the working tree; the branch's
+  earlier commits retain the old wording in history, accepted under the ADR-0057
+  doctrine (history is the archive; the working tree keeps what is currently true).
+- ADR-0059 flipped proposed → accepted (its stated condition — owner plan approval —
+  was met in-session) and indexed in decisions/README.md alongside the missing 0058
+  row (pre-existing index drift, fixed in the same touch per ADR-0027).
+
+### AI review (Gate 5) — 8/8 finder angles captured; consolidation never landed; triage below
+
+The `/code-review high` fork's 8 finder angles all reported (raw outputs were only in
+the session; the load-bearing content is HERE). The orchestrator's verify pass did not
+complete before session close, but the items below were **independently re-verified by
+the author against the code** — treat them as confirmed unless marked otherwise.
+
+**MUST FIX before PR (the fix pass — next session's first move):**
+1. **Fresh-thread pick divergence (worst finding, confirmed at `useBuilderChat.ts:427`):**
+   explicit provider choice (e.g. anthropic) with its key DELETED + a fresh-thread
+   builder pick for the OTHER keyed provider ⇒ `providerStore`='anthropic', presence
+   false ⇒ chip/callout say "demo brain — no AI service is called" while the send
+   routes `freshPick.provider`='openai' WITH a real key. Disclosure lies in the
+   dangerous direction. Fix: `resolveActiveBrain` layers `builderPickStore` with the
+   SAME guard the send path uses (`mode==='byok' && provider!=='mock' && pick`).
+2. **Ollama shortcut inert under `?webllm=1` (confirmed):** brain override active ⇒
+   menu's `setMode('local')` visibly does nothing yet persists a mode write. Fix:
+   offer the shortcut only when `currentBrain().kind === 'settings'`.
+3. **False comment in `activeBrain.ts` scope note** ("the global route is the only
+   route that can land on the demo brain…") — falsified by the per-app-pin case
+   (`builder.ts:262`: pinned provider + deleted key ⇒ demo turns under a chip naming
+   a real provider; 4 angles confirmed independently). Fix the comment now; the
+   full per-app chip context is QUEUED (below), the per-turn tag + ModelSelect's
+   "(key missing)" are the interim disclosure.
+
+**WORTH FIXING in the same pass (drift-proofing, all cheap, all verified):**
+4. `activeBrain.ts` re-inlines `currentBrain()`/`useBrain()` (webllm.ts:84/88) —
+   call them instead; also pass useStore values into the resolver (house pattern:
+   `useTurnMode`) or derive a single store, so the subscribe-list and read-list
+   cannot drift.
+5. `ADAPTER_KINDS` in useBuilderChat hand-duplicates the `AdapterKind` union —
+   single-home the list in adapter.ts (`const ADAPTER_KINDS = [...] as const;
+   type AdapterKind = typeof ADAPTER_KINDS[number]`).
+6. Sentinel `key: 'present'` → change `adapterKindFor` input to carry `hasKey`
+   (or `key?: string` stays for the constructor while the derivation takes a
+   discriminated input); deletes the sentinel and its guard test.
+7. **BrainChip is the THIRD copy of the popover-dismiss effect** — FeedbackMenu.tsx:5
+   explicitly queues `useDismissableMenu` "for whichever popover arrives third."
+   That's this one: extract the hook, consume from BrainChip + IdentityChip +
+   FeedbackMenu.
+8. Boot chain: `initDemoCallout` sits last in an uncaught `.then` chain (a throw in
+   `initProtectOffer` silently skips the latch) — at minimum `Promise.all` the two
+   independent latch inits.
+
+**QUEUED (recorded in next-steps, not this task):** per-app pin context for the chip
+(header needs route/thread awareness — design work); chip disclosure of the F15
+`needsEndpointConfirm` state (chip names a provider while every direct turn refuses
+CONSENT_REQUIRED); demo-callout latch re-init on file replacement (recoverFresh /
+import / sync pull — gap shared with the pre-existing `initProtectOffer` latch, fix
+both together); `brainKind` stamp for subscription turns (absence currently means
+pre-field OR hub row); test-harness consolidation (three new files copy the
+createRoot/act scaffolding `wizardSheetHarness.tsx` exists to end; `settleUntil`
+forked at 400×5ms); `.demo-brain-callout` as a `.connection-note` modifier; aria
+prefix composed once in BrainChip instead of six data rows; efficiency micro-items
+(menu-only ollama subscription, double `adapterKindFor` per send).
+
+**Checked-and-clean (finder consensus):** C1/C2 untouched (presence only, no
+credential values move); refactors behavior-identical for all `createTurnAdapter`
+callers; `resolveActiveBrain` webllm arm matches the send path's demo-fallback arm;
+`onBrain` ordering (after F15 refusal, before the wire) matches the tests' claims;
+meta plumbing, CSS tokens, e2e selector contract all verified.
 
 - Confirmed gap (2026-08-26 code read): `BuilderModelSelect` returns `null` when
   `provider === 'mock'`; only Settings + the webllm fallback banner ever say "demo
@@ -173,3 +244,41 @@ the AI provider you choose — never to Snug's servers."* Demo copy names the me
 - Next step: on approval — step 2 (AC1 failing test first).
 - Open questions: none blocking; chip placement compaction at ≤760px to be verified
   against the 375px tripwire during implementation.
+
+### 2026-08-26 (later) — Claude (Fable 5) — session (implementation, Gates 3–5)
+- Done: all ACs test-first and green. AC1 adapterKindFor (matrix, mutation-verified,
+  presence-only pin) · AC2 resolveActiveBrain/useActiveBrain · AC3/AC4 BrainChip +
+  popover in the shell header (pinned honest copy; ollama one-gesture switch) ·
+  AC5 onBrain stamp → PersistedMeta.brainKind → ChatLog demo tag (persist + rehydrate
+  proven) · AC6 demoCallout latch + DemoBrainCallout in BuilderView · AC7
+  demo-brain-clarity.spec.ts + mobile chip row + 375px compaction fix (short "demo"
+  span under 760px after the tripwire caught a 7px overflow).
+- Verification: playground gate (tsc + 1676/1676, exit 0, pipefail) ×2 · root
+  `pnpm test` 25/25 exit 0 · full e2e all projects: only red = connection-wizard
+  journey 4, measured 2-in-6 on branch AND main (pre-existing, journaled, queued) ·
+  real-browser walk with 5 screenshots (desktop first-visit, chip menu, demo build
+  with tag, settled tag, 375px) — all rendered as designed. Desktop shell shares this
+  SPA byte-for-byte for these surfaces; no tauri-specific seam touched.
+- State: AI review (code-review high) in flight; findings to be applied before PR.
+- Next step: apply review findings if any → /close-session (Gate 6) → PR.
+- Open questions: none.
+
+### 2026-08-26 (close) — Claude (Fable 5) — session close (Gate 6)
+- Done: doc-side review findings applied (ADR index rows 0058+0059; ADR-0059
+  proposed→accepted; C4 scrub of launch-venue phrasing — old wording remains in
+  branch history per the ADR-0057 doctrine, working tree is clean). All 8 review
+  finder angles captured and TRIAGED into this file (section above) — the fork's
+  consolidation pass did not land before close and dies with the session; the triage
+  section is the durable record. Lessons + code-map + next-steps updated in-branch.
+- State: implementation of AC1–AC7 complete and verified (playground gate 1676/1676
+  ×2 exit 0 · root 25/25 exit 0 · full e2e green except the pre-existing journey-4
+  flake, 2-in-6 on branch AND main · real-browser walk at 1280px + 375px). Branch
+  `feat/TASK-20260826-demo-brain-clarity`, NOT yet merged — the review fix pass is
+  owed first.
+- Next step: **execute the "MUST FIX before PR" list (items 1–3) + the cheap
+  drift-proofing (4–8) from the triage section, re-run the playground gate + the
+  three disclosure suites + mobile e2e, then PR.** Item 1 (fresh-pick divergence) is
+  the blocker — the chip can currently claim "demo brain" while a fresh-thread pick
+  sends to a keyed provider.
+- Open questions: none for the fix pass; the QUEUED block's design items (per-app
+  chip context, F15 disclosure) are next-steps entries, owner-prioritized.
