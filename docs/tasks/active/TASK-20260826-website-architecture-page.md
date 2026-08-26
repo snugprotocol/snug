@@ -1,6 +1,6 @@
 # TASK-20260826-website-architecture-page: public architecture page + mobile nav disclosure
 
-- **Status**: in-review (owner verified the rendered page 2026-08-26; Gate 6 done, PR next)
+- **Status**: **done** — PR #145 squash-merged `e8463be`; deployed to production 2026-08-26T07:06Z
 - **Owner**: Jeetu
 - **Risk tier**: **low** (marketing pages + website styling — PROCESS.md risk table row 1). No
   `packages/protocol`, `packages/runner`, `packages/auth`, C1/C2, npm-publish or CI/release surface
@@ -396,5 +396,39 @@ catches doc drift and the website-sync gate.
 - **State:** branch `feat/TASK-20260826-website-architecture-page`, all work committed. Website
   suite **520 green**; root `pnpm test` **exit 0**. Site builds 27 pages.
 - **Next step:** open PR → merge → deploy production (all three explicitly asked for this session).
+- **Open questions:** none.
+
+### 2026-08-26 07:06 UTC — Jeetu (with Claude) — merge + production deploy
+
+- **PR #145 opened, CI green, squash-merged to `main` as `e8463be`** (branch deleted). Both required
+  checks passed before merge — `workspace` and `desktop-shell (macos-latest)` — waited out rather
+  than merged past (state went `BLOCKED` → `CLEAN`; `BLOCKED` was checks-in-progress, not a policy
+  refusal: `main` carries no branch protection object, and the required contexts come from ADR-0058's
+  ruleset).
+- **DEPLOYED to production — website only.** Owner's explicit ask in this session (PROCESS.md
+  release rules).
+  - **What:** `node scripts/deploy-web.mjs website --deploy` from a clean tree on `main == origin/main`
+    @ `e8463be`. Dry pass run FIRST and read (pre-flight, hosted-posture, Pages limits) before adding
+    `--deploy`.
+  - **When:** 2026-08-26 **07:06 UTC**.
+  - **Result:** 15 files uploaded (70 already present, 85 total), 27 pages. Deployment
+    `c07910a2.snug-website-c7z.pages.dev`.
+  - **The playground was NOT deployed** — it needs no change here and a deploy is its own ask.
+- **Verified LIVE on the apex domain, not the pages.dev URL** (a pages.dev check would not prove the
+  custom domain serves it):
+  - `https://snugprotocol.org/architecture/` → **200**, 52,250 bytes.
+  - Nav link present on the landing page in BOTH the desktop row and the mobile disclosure, plus the
+    `Differentiators` onward link — found by SHAPE (`<a[^>]*href="/architecture/"[^>]*>`), because a
+    naive `href="/architecture/">` grep returns nothing against Astro's injected `class` attribute.
+    That false negative is `lessons.md`'s 2026-08-24 entry; it fired again here and the shape search
+    is what answered it.
+  - External hosts on the live page: **only** github.com, snugprotocol.org, playground.snugprotocol.org.
+  - **ADR-0013 posture re-confirmed post-deploy: 0 `cdn-cgi` hits.**
+  - "What this doesn't do" section present in the served html.
+  - **Real browser against production** at 375/768/850/**860**/1280px: exactly one nav at every width,
+    **zero horizontal scroll everywhere**, all 6 figures rendered.
+- **State:** shipped, merged, live, verified. Nothing outstanding for this task.
+- **Next step:** none — task complete; the follow-ups it leaves behind (OG card for this URL, optional
+  JS overlay menu) are recorded in `next-steps.md`, not here.
 - **Open questions:** none.
 
