@@ -407,6 +407,20 @@ async function main() {
     );
     process.exit(2);
   }
+  // `tauri build` reads the key CONTENTS from TAURI_SIGNING_PRIVATE_KEY and never the
+  // _PATH form — it fails with "A public key has been found, but no private key" deep
+  // in the bundler, long after this guard passed (2026-08-26). `tauri signer sign`
+  // below is the opposite: it takes a file via -f. Accept either input and satisfy
+  // both consumers by materialising the contents here.
+  if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
+    const keyPath = process.env.TAURI_SIGNING_PRIVATE_KEY_PATH.replace(/^~(?=\/|$)/, process.env.HOME ?? '~');
+    if (!existsSync(keyPath)) {
+      console.error(`REFUSED: TAURI_SIGNING_PRIVATE_KEY_PATH points at ${keyPath}, which does not exist.`);
+      process.exit(2);
+    }
+    process.env.TAURI_SIGNING_PRIVATE_KEY = readFileSync(keyPath, 'utf8').trim();
+    console.log('· TAURI_SIGNING_PRIVATE_KEY absent → read from TAURI_SIGNING_PRIVATE_KEY_PATH (tauri build needs the contents)');
+  }
   // An UNSET password is not an empty one: tauri prompts for it, and a build with no
   // TTY dies with "incorrect updater private key password: Device not configured
   // (os error 6)" — AFTER the notarization round-trip, which is the slowest and only

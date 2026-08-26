@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Snug desktop hub — Tauri 2 shell around the playground (BYOK/local only)",
   "license": "MIT",
