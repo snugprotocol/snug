@@ -10,7 +10,8 @@
 # High-tier surface (CI config): changes here need the full process gates.
 #
 # ────────────────────────────────────────────────────────────────────────────
-# DORMANT since 2026-08-20 (TASK-20260820-local-ci-gate, owner decision).
+# HISTORY — DORMANT 2026-08-20 → 2026-08-26. Kept because it explains why the local
+# gate exists and why it must stay a superset; see the `on:` block for today's state.
 #
 # GitHub Actions is billing-blocked: since ~2026-08-18 every run failed in ~2 s
 # with ZERO steps executed and the annotation "The job was not started because
@@ -31,21 +32,43 @@
 # (AC3) — so this stays the contract the local gate is graded against, not dead
 # weight. Keeping it also makes restoration a one-line revert.
 #
-# TO RESTORE (do this before flip-public — an outside contributor's PR cannot be
-# gated by a command that only runs on the owner's Mac):
-#   1. Fix billing in Settings → Billing & plans.
-#   2. Restore the `on:` block below.
-#   3. Re-run a few recent PRs' workflows to confirm the suites actually pass in
-#      CI — no post-2026-08-18 merge has been machine-verified on Windows at all,
-#      which is exactly the leg ADR-0021 D8 depends on staying red for the RIGHT
-#      reason.
+# TO RESTORE — DONE 2026-08-26, recorded because each step resolved differently
+# than this list predicted:
+#   1. ~~Fix billing~~ — never needed. Going public made Actions free, so the
+#      "restore billing first" premise dissolved rather than being satisfied.
+#   2. ~~Restore the `on:` block~~ — done, but NOT the one-line revert predicted
+#      above: it took fixing what the first live run exposed (PR #141) and putting
+#      the Windows leg on hold, because triggers over a red leg would have been
+#      worse than dormancy.
+#   3. ~~Re-run recent PRs' workflows~~ — superseded. A fresh run on `main` is
+#      better evidence than re-running stale ones, and Windows was never going to
+#      be machine-verified: it has been unbuildable since TASK-20260820.
 # ────────────────────────────────────────────────────────────────────────────
 
 name: ci
 
-# Manual-only. Push/PR triggers are deliberately absent — see the block above.
-# Restoring them is the whole of step 2 in TO RESTORE.
+# LIVE AGAIN 2026-08-26. The dormancy above is history; here is what actually holds now.
+#
+# Billing stopped being the constraint the moment the repos went public — public repos get
+# unlimited free Actions minutes on standard runners. Confirmed empirically, not assumed:
+# a dispatch run on `main` executed its steps instead of dying in ~2 s with zero steps
+# (run 32931999710), which is what the billing block looked like.
+#
+# That same run exposed two real failures the local gate had been absorbing, both now
+# fixed rather than waived:
+#   - workspace: two CPU-bound suites crossed vitest's 5000 ms default on 4-core shared
+#     runners (PR #141 sized them from measurement — they are 12-16x slower there).
+#   - windows:   dead since TASK-20260820 removed `icons/icon.ico`; the leg is on hold
+#     with Windows desktop itself (see the matrix comment in desktop-shell).
+#
+# `pull_request` covers outside contributors, which is the reason this matters now that
+# the repo is public: their PRs cannot be gated by `gate:local`, a command that only runs
+# on the maintainer's Mac. `gate:local` remains the pre-push gate and a proven SUPERSET of
+# these steps (AC3 in scripts/gate-local.test.mjs fails if a step here has no local twin).
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -83,7 +106,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        # macOS ONLY while Windows desktop is on hold (ADR-0021 D8: macOS-only
+        # through alpha, beta AND 1.0; Windows reconsidered post-1.0 as its own ADR).
+        #
+        # WHY THE LEG IS REMOVED RATHER THAN LEFT RED. It stopped being able to tell
+        # us anything. ADR-0021 D8 wanted this leg red as live evidence of R-5 — the
+        # WebView2 IPC-key leak — via a failing `keyReachable` assertion. But
+        # TASK-20260820 deleted `icons/icon.ico` for the macOS-only bundle, so since
+        # then the job dies at COMPILE: "`icons/icon.ico` not found; required for
+        # generating a Windows Resource file during tauri-build". It never reaches
+        # the assertion. A genuine R-5 regression and today's failure look identical,
+        # so the red proved nothing and cost a permanent X on every PR — which is
+        # precisely the "trains you to merge past reds" failure this file warns about
+        # in the block above. Verified on run 32931999710 (2026-08-26).
+        #
+        # WHAT MUST COME BACK WITH WINDOWS, post-1.0, as ADR-0021 D8's own preconditions
+        # already require: restore `windows-latest` here, restore `icon.ico` and the
+        # `bundle.targets` entry (pinned by bundleTargets.test.ts, which will fail until
+        # you do), then confirm the leg reaches `keyReachable` and reds THERE — plus the
+        # separately-unverified `cdp_jwt` native-ECDSA check. Do NOT soften `keyReachable`
+        # to make this green; a leg expected to stay red for a year is exactly the kind
+        # someone "fixes".
+        os: [macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
