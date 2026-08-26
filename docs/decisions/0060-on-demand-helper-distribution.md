@@ -35,42 +35,72 @@ on a system Node that most Macs lack. Helpers will multiply (Telepath is the fir
    download, paid only by users who install an app that needs the helper. The shell spawns
    `<helper>/bin/node` when present; the bare `node` preflight path survives **only** for a
    developer install (which has no `bin/node`).
-3. **The shell pins the helper version it requires.** `sidecar.rs` carries a `REQUIRED_HELPERS`
-   table (`name`, `version`, download base = the pinned tag URL). Downloading from the pinned
-   tag — never from "latest" — means an updated shell always names exactly the helper it was
-   tested with. This *closes* threat-model residual R-e (helper skew): a downloaded helper's
-   `helper.json` stamp is compared to the pin; mismatch surfaces as "update the helper", not
-   silent skew.
-4. **A developer install wins if present** (owner choice). A tree without a `helper.json`
-   stamp is a dev install: it is never overwritten by the downloader and never version-checked
-   (the dev knows what they installed). Only stamped, downloaded trees are upgraded.
-5. **One trust root.** Archives are minisign-signed with the **same** updater key
+3. **The shell pins the helper by CONTENT, not just by version.** `helper_install.rs` carries a
+   `REQUIRED_HELPERS` table: `name`, `version`, `tag`, and **per-arch sha256 + compressed +
+   unpacked sizes** (printed by `release-helper.mjs` for pasting; `check-helper-pin` fails if
+   it drifts from the published `helper.json`). Downloading from the pinned tag — never from
+   "latest" — means an updated shell always names exactly the helper it was tested with, and
+   the consent card can state the size **before** any network request. A downloaded tree's
+   `helper.json` stamp is compared to the pin by **exact equality** (not semver order — a
+   downgraded shell must not call a newer helper "outdated"); on mismatch the shell still
+   **spawns** the installed helper and offers the update (pin = wanted, never a refusal), so a
+   shell that ships before its helper release cannot brick existing users. Rollback/skew
+   residual R-e is thereby narrowed to developer installs (below), not retired.
+4. **A developer install wins if present** (owner choice). `install:helper` writes a stamp
+   `helper.json { kind: "dev", version }`; the downloader never overwrites a `dev` tree and
+   the shell only *warns* (status field) on a dev pin mismatch — never blocks. Downloaded
+   trees (`kind: "downloaded"`) are upgraded on mismatch after the user's click.
+5. **One trust root, content-bound.** Archives are minisign-signed with the **same** updater key
    (`F3922E7DDE0069B6`, ADR-0047 §4); the shell verifies with `minisign-verify` (already in
    the tree via the updater plugin, now a named direct dependency) against the pubkey in
-   `tauri.conf.json`. sha256 from `helper.json` is belt beneath the signature. An unsigned or
-   mis-signed archive is discarded before extraction; nothing under `~/Snug/helpers/` is
-   touched until the archive has verified.
+   `tauri.conf.json`. Because a minisign signature binds bytes, not identity, the signature
+   alone would let a compromised GitHub account substitute *any* artifact ever signed with the
+   key (an older helper, even `Snug.app.tar.gz`); the **pinned sha256 in the shell** is what
+   closes that — `helper.json`'s sums are display data. An unsigned, mis-signed or wrong-sha
+   archive is discarded before extraction; nothing under `~/Snug/helpers/` is touched until
+   both checks pass.
 6. **Install is explicit, never automatic.** Fetching from GitHub is a phone-home (same class
    as the launch update check, ADR-0047 §9). The shell downloads only on a user click on a
    surface that names the size and the source. Once installed, the helper starts without
    further prompts (the existing autostart rule is unchanged).
-7. **Extraction is defensive.** Stream to a temp file with a byte cap (2× the manifest size,
-   hard ceiling 300 MB); redirects must stay `https:`; extract into `~/Snug/helpers/<name>.partial-<nonce>`
-   refusing absolute paths, `..`, symlinks and hardlinks; then atomic rename over the previous
-   tree while the helper is stopped. A crash mid-install leaves a `.partial-*` directory that
-   the next attempt removes.
-8. **The `linked_device` requirement kind is the trigger.** No manifest schema change: an app
+7. **Extraction is defensive.** The downloader reuses the shell's rustls transport with
+   `Policy::none()` and follows redirects **manually**: at most 5 hops, `https:` only, hosts
+   limited to `github.com` and `objects.githubusercontent.com`. Streams to a temp file with a
+   compressed cap (2× pinned size); extraction caps **inflated** bytes (4× pinned unpacked size,
+   hard ceiling 1 GiB) and entry count, admits only regular files and directories (no symlinks,
+   hardlinks, devices, fifos), refuses absolute paths and `..`, preserves `0755` on `bin/node`,
+   and post-validates the shape (`index.js`, executable `bin/node`) before anything is swapped.
+   The swap is **two renames** (`rename(2)` cannot replace a non-empty directory): the old tree
+   moves to `<name>.old-<nonce>`, the `.partial-<nonce>` tree moves to `<name>`, then `.old-*` is
+   removed; on start, a missing `<name>` with an `.old-*` beside it is restored. One install per
+   helper is in flight at a time (Rust-side lock); a second trigger subscribes to the first.
+   The helper is stopped for the swap and restarted after it. `helper_install` is a
+   download-and-execute command reachable over IPC, so it gets its own C2 gate rows
+   (`ipc-helper-install-refused` + main-frame twin), like the updater commands.
+8. **Quarantine does not apply, and that is stated, not assumed.** Files written by the shell's
+   own `std::fs` carry no `com.apple.quarantine` (Tauri does not set `LSFileQuarantineEnabled`),
+   so Gatekeeper never assesses `bin/node`; the hardened runtime constrains the parent's dylib
+   loading, not its children. The Node binary is in any case Developer-ID signed by the Node.js
+   Foundation. If `LSFileQuarantineEnabled` is ever added to the shell, this breaks at launch.
+9. **The `linked_device` requirement kind is the trigger.** No manifest schema change: an app
    whose connection declares `kind: "linked_device"` needs the helper named by the well-known
    provider (`whatsapp` → `whatsapp-sidecar`). The hub's install step and the pairing wizard
    both check `sidecarCtl('status').installed` and offer the download in place.
-9. **Release rules apply unchanged.** `scripts/release-helper.mjs` packs, signs, writes
-   `helper.json`, prints the `gh release create --prerelease` line and **stops**; creating the
-   release is an explicit human ask (PROCESS.md release rules, ADR-0047 §13).
+10. **Release rules apply unchanged, plus two refusals.** `scripts/release-helper.mjs` builds
+   ONE arch-independent tree (pure JS once peers are omitted, so both archives share a
+   resolution), packs per-arch with the pinned Node (`node-runtime.json`: version + sha256 per
+   arch, committed — the live `SHASUMS256.txt` is never trusted; a Node CVE now implies a helper
+   re-release), signs, writes `helper.json`, prints `gh release create --prerelease
+   --latest=false` and **stops**. It refuses if the tag already exists (releases are immutable
+   — the shell pins content). `release-desktop.mjs` refuses to stage a desktop release whose
+   pinned helper tag is not published. Creating either release is an explicit human ask.
 
 ## Consequences
 
 - ADR-0047 §12 is superseded; the threat-model delta gains surface **S9 — the helper download**
   (pinned tag, one signing key, capped/defensive extraction, explicit consent) and retires R-e.
+- No uninstall surface ships in this task (~180 MB on disk per helper); recorded as a residual
+  and a next-steps item. `.old-*`/`.partial-*` litter is reaped on the next install or start.
 - The x86_64 archive cannot be run natively on the owner's arm64 machine; it is verified by
   running the x86_64 `bin/node` under Rosetta and recorded as a residual until an Intel walk.
 - `install:helper` stays for developers; its README line and the release notes for v0.1.2 say

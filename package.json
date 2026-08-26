@@ -11,7 +11,7 @@
     "check-dev": "node --test scripts/dev.test.mjs",
     "check-public-scrub": "node --test scripts/check-public-scrub.test.mjs && node scripts/check-public-scrub.mjs",
     "_comment-check-public-scrub": "LOCAL ONLY (gitignored, owner decision 2026-08-24) — deliberately NOT in `test`: the script is absent from a public clone, so wiring it into the root gate would fail every contributor. Run by hand before a flip or release.",
-    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop && pnpm run check-website-sync && pnpm run check-dev && pnpm run check-deploy-web",
+    "test": "turbo run test && pnpm run check-threat-model && pnpm run check-sandbox-guard && pnpm run check-gate-local && pnpm run check-release-desktop && pnpm run check-release-helper && pnpm run check-website-sync && pnpm run check-dev && pnpm run check-deploy-web",
     "lint": "turbo run lint",
     "smoke": "pnpm --filter server build >/dev/null && pnpm --filter server smoke",
     "update-code-map": "node --test scripts/update-code-map-counts.test.mjs && node scripts/update-code-map-counts.mjs",
@@ -21,6 +21,7 @@
     "check-gate-local": "node --test scripts/gate-local.test.mjs",
     "gate:local": "node scripts/gate-local.mjs",
     "check-release-desktop": "node --test scripts/release-desktop.test.mjs",
+    "check-release-helper": "node --test scripts/release-helper.test.mjs && node --test apps/whatsapp-sidecar/pack-helper.test.mjs",
     "check-website-sync": "node --test scripts/check-website-sync.test.mjs && node scripts/check-website-sync.mjs",
     "check-deploy-web": "node --test scripts/deploy-web.test.mjs",
     "audit:deps": "node --test scripts/audit-deps.test.mjs && node scripts/audit-deps.mjs"
