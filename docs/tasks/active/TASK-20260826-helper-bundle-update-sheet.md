@@ -158,6 +158,6 @@ Order is tests-first per TDD.md; each phase is a commit group. Phase A is indepe
 
 ### 2026-08-26 — Claude — session close (Gate 6)
 - Done: everything above; PR **#151** open against `main` (branch pushed, `0610699`+). Helper pre-release published and verified. Root gate exit 0 on the final commit set.
-- State: **in-review**; CI runs 33013305448 / 33013321480 in progress on #151 at close (an earlier `gh pr checks` had raced the trigger and reported none).
+- State: **in-review**; CI run 33013390501 on HEAD `37bc0de` **GREEN** (`workspace` ✓, `desktop-shell (macos-latest)` ✓) — #151 is mergeable, awaiting the owner.
 - Next step (single): owner merges #151 once `workspace` + `desktop-shell (macos-latest)` are green; then move this file to `docs/tasks/done/` and cut the v0.1.2 shell release (its notes entry is parked above; `release-desktop.mjs` will verify the published helper pin).
 - Open questions: none for the owner beyond the AC14/Intel walks in next-steps.
