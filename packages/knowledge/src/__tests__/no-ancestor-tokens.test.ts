@@ -86,7 +86,33 @@ function recoverOneToken(): string | null {
   return null;
 }
 
-describe('no ancestor tokens in the rendered store', () => {
+// This suite is CPU-BOUND BY DESIGN and needs more than vitest's 5000 ms default.
+//
+// Both tests hash aggressively on purpose: the scan hashes every candidate window of every
+// published length across the whole rendered store, and `recoverOneToken` brute-forces a
+// few hundred thousand SHA-256s. That cost buys the property the file exists for — the
+// forbidden tokens are never written down, so the flip-public scrub grep can reach zero.
+// Making it cheap would mean either publishing the plaintext or deleting the mutation
+// check, and both are worse than a slow test.
+//
+// MEASURED, not guessed (2026-08-26). Locally: ~550 ms and ~340 ms. Under a full
+// `turbo run test --force` fan-out on the same machine: 3279 ms and 1260 ms — a 6x
+// contention penalty with cores to spare. On GitHub's 4-core shared runners the first
+// CI run after the flip hit 6501 ms and 5645 ms, i.e. it crossed the default and the
+// whole workspace leg went red on a suite that passes everywhere.
+//
+// 30 s is ~5x the worst observed time. That is deliberately generous: the number exists
+// to absorb a slow, contended runner, NOT to hide a regression. A genuine break here is a
+// wrong answer (a violation found, or a token that cannot be recovered), which fails in
+// milliseconds and is unaffected by this ceiling. The only thing a tighter timeout was
+// buying was a red X whose cause was the runner.
+//
+// NOT the playground's flake (apps/playground/vitest.config.ts): that one was tests
+// synchronizing on a fixed wall-clock wait instead of on their condition, where raising
+// timeouts was measured NOT to help and was correctly reverted. This suite has no timer
+// and no async race — it is straight-line CPU work that got starved. Same symptom,
+// opposite cause, so the opposite fix applies. Check which you have before copying either.
+describe('no ancestor tokens in the rendered store', { timeout: 30_000 }, () => {
   it('rendered store contains no ancestor identifiers, dead hooks, or sandbox escapes', () => {
     const violations: string[] = [];
     for (const entry of renderedStore()) {
