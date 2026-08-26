@@ -2128,6 +2128,51 @@ img.identity-avatar {
   font-size: var(--text-xs);
   color: var(--fg-muted);
 }
+/* The first-contact callout (ADR-0059, AC6): an inline NOTE above the builder chat —
+   deliberately not .error-note (nothing is wrong) and not an overlay (nothing may
+   gate). Warn accent on the leading edge ties it to the chip's demo state. */
+.demo-brain-callout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.demo-brain-callout-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 1 260px;
+  font-size: var(--text-s);
+}
+.demo-brain-callout-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* The per-turn provenance tag (ADR-0059 rule 3): quiet, but unambiguous — warn-tinted
+   like the chip's demo state so the two surfaces read as one signal. */
+.demo-turn-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-pill);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  line-height: 1.8;
+  width: fit-content;
+}
+
 /* Narrow-header compaction (the 375px overflow tripwire is the guard): a REAL brain's
    label yields to the dot; "demo brain" is the one label that must survive compaction
    — hiding the words would hide exactly the disclosure this chip exists for. The

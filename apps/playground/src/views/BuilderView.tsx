@@ -15,6 +15,7 @@ import { Button } from '../ui/Button.js';
 import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ChatLog } from './ChatLog.js';
+import { DemoBrainCallout } from './DemoBrainCallout.js';
 
 /** Stable per-tab thread id so the server keeps conversation history. */
 function threadIdForTab(): string {
@@ -111,6 +112,10 @@ export function BuilderView(): ReactElement {
 
   return (
     <div className="builder">
+      {/* ADR-0059: the one-time demo-brain note — inline, dismissible, never a gate.
+          Renders only while the demo brain is active and the file has never
+          dismissed it; the header chip carries the story permanently. */}
+      <DemoBrainCallout />
       {chat.messages.length === 0 ? (
         <EmptyState
           glyph="✦"

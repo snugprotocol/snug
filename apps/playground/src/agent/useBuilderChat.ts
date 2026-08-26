@@ -33,6 +33,7 @@ import { needsSynthesizedContract } from './runtimeContractSynthesis.js';
 import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
 import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
+import type { AdapterKind } from './adapter.js';
 import {
   createDirectBuilder,
   createServerBuilder,
@@ -87,6 +88,14 @@ export interface ChatMessage {
    * pick becomes the next USER MESSAGE, routed like any other — never a capability.
    */
   card?: ChatCardState;
+  /**
+   * What this turn actually ran on (TASK-20260826, ADR-0059 rule 3) — stamped by the
+   * builder's `onBrain` from the resolved adapter config, persisted in message meta,
+   * rehydrated on read. Provenance of the ROW, never re-derived from live settings:
+   * a later mode switch must not relabel history. ChatLog tags `'demo'` rows.
+   * Absent on user messages, subscription turns, and rows predating the field.
+   */
+  brainKind?: AdapterKind;
 }
 
 /** A proposal as the chat renders it: the staged change plus how it was resolved. */
@@ -186,6 +195,19 @@ interface PersistedMeta {
   authChoice?: AuthChoiceSeed;
   /** A presented (and possibly resolved) inline choice card (TASK-20260815-inline-cards). */
   card?: ChatCardState;
+  /** The brain this turn ran on (TASK-20260826) — 'demo' is what the tag renders from. */
+  brainKind?: AdapterKind;
+}
+
+const ADAPTER_KINDS: readonly AdapterKind[] = ['webllm', 'local', 'anthropic', 'openai', 'demo'];
+
+/** Strict read of a persisted brain kind — junk in an imported row is no kind at all. */
+function metaToBrainKind(meta: unknown): AdapterKind | undefined {
+  if (typeof meta !== 'object' || meta === null) return undefined;
+  const stored = (meta as PersistedMeta).brainKind;
+  return typeof stored === 'string' && (ADAPTER_KINDS as readonly string[]).includes(stored)
+    ? (stored as AdapterKind)
+    : undefined;
 }
 
 /**
@@ -440,6 +462,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                 const dataWrite = metaToDataWrite(m.meta);
                 const authChoice = metaToAuthChoice(m.meta);
                 const card = metaToCard(m.meta);
+                const brainKind = metaToBrainKind(m.meta);
                 return {
                   id: ++messageSeq,
                   role: m.role === 'user' ? ('user' as const) : ('agent' as const),
@@ -451,6 +474,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   // The DB row id rides along so resolving a REHYDRATED card can persist
                   // (the view id above is synthetic; the row id is the durable address).
                   ...(card !== undefined ? { card: { ...card, messageRowId: m.id } } : {}),
+                  // Row provenance (ADR-0059 rule 3): the demo tag must survive a reload.
+                  ...(brainKind !== undefined ? { brainKind } : {}),
                 };
               }),
       );
@@ -497,7 +522,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       /** One presented card per turn (TASK-20260815-inline-cards) — same single-seat rule. */
       const stagedCard: { current: ChatCardState | undefined } = { current: undefined };
       /** Per-turn state for bootstrap pinning (F9) + artifact-card persistence. */
-      const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean } = { installedV1: false };
+      const turn: { userDbId?: number; artifact?: ArtifactEvent; installedV1: boolean; brainKind?: AdapterKind } = {
+        installedV1: false,
+      };
       /** Subscription-mode artifact fetch+write runs detached — awaited before the turn finalizes. */
       let artifactWork: Promise<void> = Promise.resolve();
 
@@ -707,6 +734,13 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             onActivity: (label) => setActivity(label),
             onStep: (step: BuildStep) => setSteps((current) => applyStep(current, step)),
             onLlmEvent: (event) => onLlmEvent?.(event),
+            // ADR-0059 rule 3: the builder stamps what this turn RUNS ON from its own
+            // resolved config. Patched live (the tag shows while streaming) and held on
+            // the turn so finalize persists it as row provenance below.
+            onBrain: (kind) => {
+              turn.brainKind = kind;
+              patchMessage(agentId, { brainKind: kind });
+            },
           },
           controller.signal,
         );
@@ -863,7 +897,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               directive !== undefined ||
               stagedProposal.current !== undefined ||
               stagedCard.current !== undefined ||
-              authChoice !== undefined
+              authChoice !== undefined ||
+              turn.brainKind !== undefined
                 ? {
                     ...(turn.artifact !== undefined
                       ? {
@@ -886,6 +921,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                     // TASK-20260815-inline-cards AC2: the card outlives the React tree;
                     // re-validated via metaToCard on every read.
                     ...(stagedCard.current !== undefined ? { card: stagedCard.current } : {}),
+                    // ADR-0059 rule 3: what this turn ran on, as row provenance — a
+                    // later settings change must not relabel history, and the demo tag
+                    // must survive a reload.
+                    ...(turn.brainKind !== undefined ? { brainKind: turn.brainKind } : {}),
                   }
                 : undefined;
             const stored = db.appendChatMessage(threadId, 'assistant', finalText, {

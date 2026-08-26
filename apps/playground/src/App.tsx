@@ -14,6 +14,7 @@ import { ModeCoercionNote } from './desktop/ModeCoercionNote.js';
 import { AppUpdateSurface } from './desktop/AppUpdateControls.js';
 import { initAppUpdateLaunchCheck } from './state/appUpdate.js';
 import { refreshAppMeta } from './state/appMeta.js';
+import { initDemoCallout } from './state/demoCallout.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
 import { initSettings } from './state/mode.js';
 import { refreshOllama } from './state/ollama.js';
@@ -69,7 +70,9 @@ export function App(): ReactElement {
       // AFTER settings hydrate: the offer latch reads its keys out of the user file,
       // so it cannot run before the file is open and read. Web AND desktop (D3) —
       // unlike the desktop-only welcome latch above.
-      .then(() => initProtectOffer());
+      .then(() => initProtectOffer())
+      // ADR-0059: the demo-brain first-contact latch — same reasoning, same order.
+      .then(() => initDemoCallout());
     // AL-07: the experimental webllm flag + WebGPU probe (idempotent, flag-gated).
     void initWebllm();
     // W2b: platform-only seam — a no-op on web (no open handler).
