@@ -120,3 +120,5 @@ Dated backlog of OPEN work only (ADR-0027: shipped/superseded history lives in g
 - **2026-08-07 — `http request` doesn't retrieve the connected-API teaching** — left unpinned deliberately; revisit if a live sweep shows a builder actually stranded.
 - **2026-07-31 — Bootstrap remnants (unverified):** npm org registration · Cloudflare email verification click. Launch sequencing lives in the private roadmap + the private launch-ops notes (flip stages owner-gated). Standing rule until flip: fixing a listed good-first-issue closes the tracker issue AND updates `docs/good-first-issues.md` in the same branch.
 - **2026-07-31 — Eval harness for prompt changes** (phase 2 — prompts are eval-addressable by path per ADR-0004).
+
+<!-- required-checks enforcement probe, reverted immediately -->
