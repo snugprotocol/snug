@@ -1,6 +1,6 @@
 # 0060 — Helpers are on-demand, separately released, version-pinned downloads
 
-- **Status:** **draft** (proposed 2026-08-26, owner-directed: "release helpers separately on GitHub; download on demand into `~/Snug/helpers/` when an app needs one; spawn immediately; seamless")
+- **Status:** **accepted** (2026-08-26; plan-review amendments folded in the same day; first helper release `helper-whatsapp-sidecar-v0.1.0` cut under this ADR). Proposed 2026-08-26, owner-directed: "release helpers separately on GitHub; download on demand into `~/Snug/helpers/` when an app needs one; spawn immediately; seamless")
 - **Date:** 2026-08-26
 - **Task:** TASK-20260826-helper-bundle-update-sheet
 - **Amends:** ADR-0047 §12 (helper not distributed by the update channel) and threat-model delta R-e (helper skew residual)

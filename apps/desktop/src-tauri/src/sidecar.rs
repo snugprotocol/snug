@@ -754,9 +754,9 @@ fn node_version_refusal(found: u32) -> String {
 
 /// Refuse before spawning when the helper is not installed.
 ///
-/// Packaging the helper into the app bundle is deliberately out of scope (v1 spawns the
-/// system `node` against `~/Snug/helpers/`), so a missing helper is an ordinary state that
-/// deserves an instruction rather than a spawn failure whose message names the wrong problem.
+/// A missing helper is an ORDINARY state (ADR-0060: public users download it on demand from
+/// the card the webview shows on this exact refusal), so it deserves a named refusal rather
+/// than a spawn failure whose message names the wrong problem.
 fn helper_entry_refusal(snug_dir: &std::path::Path) -> Option<String> {
     let entry = helper_entry(snug_dir);
     // A crash between the installer's two renames leaves the old tree beside a missing

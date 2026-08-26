@@ -1,6 +1,29 @@
 {
   "releases": [
     {
+      "version": "0.1.2",
+      "date": "2026-08-26",
+      "title": "Telepath's helper installs itself",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "The WhatsApp helper Telepath needs is now a one-click download inside the app — about 41 MB from GitHub, signed with the same key as Snug updates — offered the moment you open Telepath or start linking. No developer tools, no separate install.",
+            "The download is checked twice before anything runs: the signature, and a fingerprint this exact version of Snug was built with. Anything else is refused and nothing touches your disk.",
+            "If a linked WhatsApp session is on this computer but its helper is missing, a chip in the header says so instead of failing quietly.",
+            "The update sheet now shows only what changed since the version you are running — the notes for the release you already have no longer appear under the new one, and the sheet can no longer be cut off at the top of a small window."
+          ]
+        },
+        {
+          "title": "Good to know",
+          "items": [
+            "The helper lives in ~/Snug/helpers and brings its own copy of Node, so nothing needs to be installed system-wide. It uses about 140 MB on disk once unpacked.",
+            "Installing the helper is always your click; Snug never downloads it on its own."
+          ]
+        }
+      ]
+    },
+    {
       "version": "0.1.1",
       "date": "2026-08-26",
       "title": "You can always see which brain is thinking",
@@ -8,8 +31,8 @@
         {
           "title": "What's new",
           "items": [
-            "A brain chip in the header always names what is answering you \u2014 the demo brain, your own AI key, a local model, or the hub. It stays accurate as you switch.",
-            "Answers from the demo brain now carry a \"scripted demo\" tag on the turn itself, so canned output is never mistaken for a real model \u2014 including after you reopen the app.",
+            "A brain chip in the header always names what is answering you — the demo brain, your own AI key, a local model, or the hub. It stays accurate as you switch.",
+            "Answers from the demo brain now carry a \"scripted demo\" tag on the turn itself, so canned output is never mistaken for a real model — including after you reopen the app.",
             "Clicking the chip explains the current brain in one sentence and takes you straight to using your own key or a local model.",
             "If a provider was selected but its key was missing, Snug used to quietly fall back to scripted answers with no signal. It now says so."
           ]
@@ -17,7 +40,7 @@
         {
           "title": "Good to know",
           "items": [
-            "Your AI key is saved in your .snug file on this device and sent only to the provider you choose \u2014 never to Snug's servers.",
+            "Your AI key is saved in your .snug file on this device and sent only to the provider you choose — never to Snug's servers.",
             "The demo brain is a tiny offline script: no AI model, no server, no network."
           ]
         }
@@ -31,17 +54,17 @@
         {
           "title": "What's new",
           "items": [
-            "Snug for macOS \u2014 your apps, your data, one portable file, now in a native shell.",
+            "Snug for macOS — your apps, your data, one portable file, now in a native shell.",
             "Native networking for connected apps: no browser CORS wall between you and your own providers.",
             "Your .snug file lives in ~/Snug and opens with a double-click.",
             "Optional passphrase protection for your file, with a Recovery Key that works when you forget.",
-            "Built-in update channel: the app tells you when a new version ships and shows you exactly what changed \u2014 installing is always your call."
+            "Built-in update channel: the app tells you when a new version ships and shows you exactly what changed — installing is always your call."
           ]
         },
         {
           "title": "Good to know",
           "items": [
-            "macOS only through 1.0 \u2014 the Windows WebView cannot yet hold our app-sandbox promise, so we don't ship there.",
+            "macOS only through 1.0 — the Windows WebView cannot yet hold our app-sandbox promise, so we don't ship there.",
             "Telepath's WhatsApp helper is a separate developer install and is not delivered by this download."
           ]
         }
