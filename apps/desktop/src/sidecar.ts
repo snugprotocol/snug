@@ -71,30 +71,9 @@ export async function sidecarWizardFetch(
   });
 }
 
-/** What the shell knows about a helper on disk vs the build's pin (ADR-0060 §3). */
-export interface HelperStatus {
-  name: string;
-  installed: boolean;
-  /** `absent` | `dev` | `downloaded` */
-  kind: 'absent' | 'dev' | 'downloaded';
-  installedVersion?: string;
-  requiredVersion: string;
-  /** Installed version ≠ pinned version (exact). Never blocks — the UI offers the update. */
-  mismatch: boolean;
-  arch: string;
-  /** From the pin, so the consent card can state the size BEFORE any request. */
-  downloadBytes: number;
-  unpackedBytes: number;
-  /** A linked session is on disk, so the shell wants this helper at launch. */
-  linkedSessionOnDisk: boolean;
-}
-
-export interface HelperInstallProgress {
-  name: string;
-  phase: 'downloading' | 'verifying' | 'installing' | 'starting' | 'done';
-  received: number;
-  total: number;
-}
+// ONE definition of the helper seat shapes — the playground's (review: reuse 3).
+import type { HelperInstallProgressSeat as HelperInstallProgress, HelperStatusSeat as HelperStatus } from '@playground/platform/platform';
+export type { HelperInstallProgress, HelperStatus };
 
 export async function helperStatus(name: string): Promise<HelperStatus> {
   return invoke<HelperStatus>('helper_status', { name });

@@ -285,8 +285,9 @@ Helpers are **not** in the `.app`. Each is its own GitHub **pre-release**
 (`helper-whatsapp-sidecar-v0.1.0`: two per-arch `tar.gz` + `.sig` + `helper.json`), self-contained
 — the built helper, a production `node_modules` without sharp, and the official Node 22
 binary pinned by sha256 in `apps/whatsapp-sidecar/node-runtime.json` — and minisign-signed
-with the updater key. The shell **pins by content** (`helper_install.rs` `REQUIRED_HELPERS`:
-tag, version, per-arch sha256/sizes; `check-helper-pin` in the root gate). On a user click —
+with the updater key. The shell **pins by content** (`src-tauri/helpers.json`, written by the release script and
+`include_str!`'d by `helper_install.rs`: tag, version, per-arch sha256/sizes; `check-helper-pin`
+in the root gate; `release-desktop.mjs` requires the published `helper.json` to equal it). On a user click —
 the install landing, the pairing screen, or the header chip when a linked session is on disk
 (`HelperInstallCard`, `helperInstall.ts`) — `helper_install` downloads from the pinned tag
 with manual host-allowlisted redirects, verifies signature then pin, unpacks under admission

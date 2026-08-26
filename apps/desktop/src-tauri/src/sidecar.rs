@@ -280,7 +280,15 @@ pub fn pidfile_path(snug_dir: &std::path::Path) -> PathBuf {
 /// handed to the child; neither is ever accepted from the webview.
 #[derive(Default)]
 pub struct SidecarState {
-    pub(crate) inner: std::sync::Mutex<Option<RunningSidecar>>,
+    pub(crate) inner: std::sync::Arc<std::sync::Mutex<Option<RunningSidecar>>>,
+}
+
+impl SidecarState {
+    /// A handle the installer can carry into `spawn_blocking` (the state itself lives in
+    /// Tauri's managed map and cannot be moved).
+    pub(crate) fn clone_handle(&self) -> std::sync::Arc<std::sync::Mutex<Option<RunningSidecar>>> {
+        std::sync::Arc::clone(&self.inner)
+    }
 }
 
 pub struct RunningSidecar {
@@ -309,16 +317,11 @@ pub struct SidecarResponse {
 
 /// 256 bits of CSPRNG, hex. The nonce is what stops a process that wins a race to the
 /// socket path from completing pairing and minting itself the user's WhatsApp.
-fn mint_nonce() -> String {
+pub(crate) fn mint_nonce() -> String {
     use rand::RngCore;
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The nonce minter, for the helper installer's partial-dir names (helper_install.rs).
-pub fn mint_nonce_pub() -> String {
-    mint_nonce()
 }
 
 /// Stop under an already-held lock — the installer stops, swaps and restarts in ONE
@@ -709,7 +712,8 @@ pub fn shutdown(state: &SidecarState) {
 /// The helper's entry point, under `~/Snug/helpers/`. Never supplied by the webview, for
 /// the same reason the socket path is not.
 fn helper_entry(snug_dir: &std::path::Path) -> PathBuf {
-    snug_dir.join("helpers").join("whatsapp-sidecar").join("index.js")
+    // Derived from the installer's ONE path rule, never restated (ADR-0060).
+    crate::helper_install::helper_dir(snug_dir, "whatsapp-sidecar").join("index.js")
 }
 
 /// The socket file's basename. Mirrors `SIDECAR_SOCKET_BASENAME` in the protocol contract;
@@ -760,7 +764,8 @@ fn node_version_refusal(found: u32) -> String {
 fn helper_entry_refusal(snug_dir: &std::path::Path) -> Option<String> {
     let entry = helper_entry(snug_dir);
     // A crash between the installer's two renames leaves the old tree beside a missing
-    // one (ADR-0060 §7); put it back before deciding anything.
+    // one (ADR-0060 §7); put it back before deciding anything. This runs UNDER the sidecar
+    // lock (start_helper holds it), which is what makes it safe against a live swap.
     if let Some(dir) = entry.parent() {
         crate::helper_install::restore_old_if_needed(dir);
     }
@@ -776,9 +781,9 @@ fn helper_entry_refusal(snug_dir: &std::path::Path) -> Option<String> {
 pub const HELPER_MISSING: &str = "the WhatsApp helper is not installed";
 
 /// `<tree>/bin/node` when the tree ships its own runtime (downloaded), else None (dev install).
+/// The SAME classification `helper_install::status_for` uses, so status and spawn agree.
 fn helper_runtime(snug_dir: &std::path::Path) -> Option<PathBuf> {
-    let node = helper_entry(snug_dir).parent()?.join("bin").join("node");
-    node.is_file().then_some(node)
+    crate::helper_install::helper_runtime(helper_entry(snug_dir).parent()?)
 }
 
 /// Ask the `node` this shell would actually spawn for its version.

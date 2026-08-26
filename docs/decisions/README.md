@@ -76,3 +76,4 @@ Append-only decision log for Snug. One file per decision: `NNNN-short-kebab-titl
 - [0057 — The ancestor codenames stay in git history at flip-public; the scrub tooling does not ship](0057-codenames-in-history-accepted.md)
 - [0058 — CI returns as the merge gate, and this time it enforces](0058-ci-restored-and-enforcing.md)
 - [0059 — The active brain is always disclosed, and scripted output carries its provenance](0059-brain-disclosure.md)
+- [0060 — Helpers are on-demand, separately released, version-pinned downloads](0060-on-demand-helper-distribution.md) — supersedes ADR-0047 §12: pre-release-tagged GitHub artifacts, pinned by content in the shell, downloaded on a click, verified twice, swapped in with two renames.

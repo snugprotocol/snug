@@ -36,7 +36,7 @@ export function HelperInstallCard({
 
   if (getPlatform().helperStatus === undefined) return null;
   if (state.phase === 'unknown') return null;
-  const status = state.phase === 'error' ? state.status : state.status;
+  const status = state.status;
   if (state.phase === 'ready' && !helperNeedsInstall(status)) return null;
 
   const updating = status?.installed === true;

@@ -1,6 +1,6 @@
 # 0047 — Desktop distribution and the shell update channel
 
-- **Status:** accepted (owner plan approval, 2026-08-21; every actual `gh release create` remains its own explicit per-session ask); **§7 amended 2026-08-24 — signing/notarization implemented for real; see [Amendment](#amendment--2026-08-24-signing-and-notarization-implemented-task-20260824-first-signed-release)**
+- **Status:** accepted (owner plan approval, 2026-08-21; every actual `gh release create` remains its own explicit per-session ask); **§7 amended 2026-08-24 — signing/notarization implemented for real; see [Amendment](#amendment--2026-08-24-signing-and-notarization-implemented-task-20260824-first-signed-release)** **§12 superseded 2026-08-26 by [ADR-0060](0060-on-demand-helper-distribution.md) (helpers download on demand) — see the amendment below.**
 - **Date:** 2026-08-21
 - **Task:** TASK-20260821-hardening-polish (P5)
 

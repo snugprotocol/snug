@@ -55,6 +55,8 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFi
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { pinMatchesManifest, readPin } from './check-helper-pin.mjs';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DESKTOP = path.join(ROOT, 'apps', 'desktop');
 const RELEASES_JSON = path.join(ROOT, 'apps', 'playground', 'src', 'desktop', 'desktop-releases.json');
@@ -362,13 +364,21 @@ export function checkSpctlOutput(output) {
  * sends every Telepath user to a 404. Parse the pin out of helper_install.rs (never restate
  * it) and require `gh release view <tag>` to succeed before anything is staged.
  */
-export function pinnedHelperTags(helperInstallRs) {
-  return [...helperInstallRs.matchAll(/tag:\s*"([^"]+)"/g)].map((m) => m[1]);
+export function pinnedHelperTags(pinnedHelpers) {
+  return pinnedHelpers.map((h) => h.tag);
 }
 
-export function pinnedHelperIsPublished(tags, ghView) {
-  for (const tag of tags) {
-    if (!ghView(tag)) return { ok: false, reason: `pinned helper release ${tag} is not published — run scripts/release-helper.mjs and create it first (ADR-0060 §10)` };
+/**
+ * `ghView(tag)` → the PUBLISHED helper.json (parsed) or undefined. Existence alone is not
+ * enough (review: cross-file 1): the published sums must equal the pin, or every user's
+ * download verifies the signature and then refuses on the content pin.
+ */
+export function pinnedHelperIsPublished(pinnedHelpers, ghView) {
+  for (const h of pinnedHelpers) {
+    const manifest = ghView(h.tag);
+    if (manifest === undefined) return { ok: false, reason: `pinned helper release ${h.tag} is not published — run scripts/release-helper.mjs and create it first (ADR-0060 §10)` };
+    const problems = pinMatchesManifest(h, manifest);
+    if (problems.length > 0) return { ok: false, reason: `published ${h.tag} does not match the shell's pin: ${problems.join('; ')}` };
   }
   return { ok: true };
 }
@@ -408,13 +418,12 @@ async function main() {
   }
   console.log('✔ EULA.txt passes the SLA shape check');
 
-  const helperRs = readFileSync(path.join(DESKTOP, 'src-tauri', 'src', 'helper_install.rs'), 'utf8');
-  const helperCheck = pinnedHelperIsPublished(pinnedHelperTags(helperRs), (tag) => {
+  const helperCheck = pinnedHelperIsPublished(readPin(), (tag) => {
     try {
-      execSync(`gh release view ${tag} --repo snugprotocol/snug --json tagName`, { stdio: 'pipe' });
-      return true;
+      const raw = execSync(`curl -fsSL https://github.com/snugprotocol/snug/releases/download/${tag}/helper.json`, { stdio: 'pipe' }).toString();
+      return JSON.parse(raw);
     } catch {
-      return false;
+      return undefined;
     }
   });
   if (!helperCheck.ok) {

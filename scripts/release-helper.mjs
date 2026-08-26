@@ -14,16 +14,20 @@
 // Pure parts are exported for release-helper.test.mjs (root `check-release-helper`).
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { ARCHES, helperArchiveName } from '../apps/whatsapp-sidecar/pack-helper.mjs';
+import { SEMVER } from './release-desktop.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SIDECAR = path.join(ROOT, 'apps', 'whatsapp-sidecar');
 const OUT_DIR = path.join(SIDECAR, 'release-out');
-
-export const SEMVER = /^\d+\.\d+\.\d+$/;
-export const ARCHES = ['aarch64', 'x86_64'];
+/** THE PIN the shell include_str!s — written here, never by hand. */
+const PIN_PATH = path.join(ROOT, 'apps', 'desktop', 'src-tauri', 'helpers.json');
+export { ARCHES, SEMVER };
 
 /** The release tag. `helper-` prefix keeps helper tags apart from desktop `vX.Y.Z` tags. */
 export function helperTag(name, version) {
@@ -33,7 +37,7 @@ export function helperTag(name, version) {
 }
 
 export function helperAssets(name) {
-  return ARCHES.flatMap((arch) => [`${name}-darwin-${arch}.tar.gz`, `${name}-darwin-${arch}.tar.gz.sig`]).concat(['helper.json']);
+  return ARCHES.flatMap((arch) => [helperArchiveName(name, arch), `${helperArchiveName(name, arch)}.sig`]).concat(['helper.json']);
 }
 
 /** helper.json — what the shell reads first: sizes for the consent card, sums as belt beneath minisign. */
@@ -46,28 +50,27 @@ export function buildHelperJson({ name, version, nodeVersion, archives }) {
     if (!/^[0-9a-f]{64}$/.test(a.sha256)) throw new Error(`bad sha256 for ${arch}`);
     if (!Number.isInteger(a.size) || a.size <= 0) throw new Error(`bad size for ${arch}`);
     if (!Number.isInteger(a.unpackedSize) || a.unpackedSize <= 0) throw new Error(`bad unpackedSize for ${arch}`);
-    assets[arch] = { file: `${name}-darwin-${arch}.tar.gz`, sha256: a.sha256, size: a.size, unpackedSize: a.unpackedSize };
+    assets[arch] = { file: helperArchiveName(name, arch), sha256: a.sha256, size: a.size, unpackedSize: a.unpackedSize };
   }
   return { name, version, tag, nodeVersion, assets };
 }
 
 /**
- * The Rust pin the shell must carry for this release (ADR-0060 §3, review finding 2: the
- * signature binds bytes, not identity, so the shell pins CONTENT — per-arch sha256 + sizes —
- * and `helper.json` is display data). Printed so the owner pastes it into sidecar's
- * `REQUIRED_HELPERS`; `check-helper-pin` fails if the two ever disagree.
+ * The pin file the shell include_str!s (ADR-0060 §3; review finding 2: the signature binds
+ * bytes, not identity, so the shell pins CONTENT). Written by this script from the staged
+ * manifest — the same object, minus the file names — so no human pastes hashes.
  */
-export function rustPinSnippet(manifest) {
-  const a = manifest.assets;
-  return [
-    `RequiredHelper {`,
-    `    name: "${manifest.name}",`,
-    `    version: "${manifest.version}",`,
-    `    tag: "${manifest.tag}",`,
-    `    aarch64: HelperAsset { sha256: "${a.aarch64.sha256}", size: ${a.aarch64.size}, unpacked_size: ${a.aarch64.unpackedSize} },`,
-    `    x86_64: HelperAsset { sha256: "${a.x86_64.sha256}", size: ${a.x86_64.size}, unpacked_size: ${a.x86_64.unpackedSize} },`,
-    `}`,
-  ].join('\n');
+export function buildPinFile(manifest) {
+  const assets = {};
+  for (const arch of ARCHES) {
+    const a = manifest.assets[arch];
+    assets[arch] = { sha256: a.sha256, size: a.size, unpackedSize: a.unpackedSize };
+  }
+  return {
+    _comment:
+      "THE HELPER PIN (ADR-0060 §3). Written by scripts/release-helper.mjs from the staged helper.json; include_str!'d by helper_install.rs; read by check-helper-pin.mjs and release-desktop.mjs (which also fetches the PUBLISHED helper.json for the tag and requires byte-equal sha256/sizes). Never edit by hand.",
+    helpers: [{ name: manifest.name, version: manifest.version, tag: manifest.tag, nodeVersion: manifest.nodeVersion, assets }],
+  };
 }
 
 /** PRINTED for the owner — never executed here. `--prerelease --latest=false` is what keeps releases/latest for the desktop (review finding 9). */
@@ -82,11 +85,16 @@ export function ghReleaseCommand(name, version) {
   );
 }
 
+/**
+ * `tauri signer sign` takes the key by FILE (`-f`); the alternative, `-k <contents>`, puts
+ * the private key on the command line (ps, shell history) and is never used here (review
+ * finding). A contents-only environment is materialised into a 0600 temp file.
+ */
 export function signingKeyPlan(env) {
   if (!env.TAURI_SIGNING_PRIVATE_KEY && !env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
     return { ok: false, reason: 'no TAURI_SIGNING_PRIVATE_KEY[_PATH] in the environment — helper archives must be minisign-signed with the updater key (ADR-0060 §5).' };
   }
-  return { ok: true };
+  return { ok: true, viaFile: Boolean(env.TAURI_SIGNING_PRIVATE_KEY_PATH) };
 }
 
 async function main() {
@@ -95,12 +103,19 @@ async function main() {
     console.error(`REFUSED: ${plan.reason}`);
     process.exit(1);
   }
-  const keyPath = (process.env.TAURI_SIGNING_PRIVATE_KEY_PATH ?? '').replace(/^~(?=\/|$)/, process.env.HOME ?? '~');
+  let keyPath = (process.env.TAURI_SIGNING_PRIVATE_KEY_PATH ?? '').replace(/^~(?=\/|$)/, process.env.HOME ?? '~');
   if (keyPath !== '' && !existsSync(keyPath)) {
     console.error(`REFUSED: TAURI_SIGNING_PRIVATE_KEY_PATH points at ${keyPath}, which does not exist.`);
     process.exit(1);
   }
-  const password = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? '';
+  let tempKey;
+  if (keyPath === '') {
+    // contents-only: materialise to a 0600 file so the key never rides on argv
+    tempKey = path.join(mkdtempSync(path.join(tmpdir(), 'snug-sign-')), 'key');
+    writeFileSync(tempKey, process.env.TAURI_SIGNING_PRIVATE_KEY, { mode: 0o600 });
+    keyPath = tempKey;
+  }
+  process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ??= '';
 
   console.log('· building protocol + helper');
   execSync('pnpm --filter @snugprotocol/protocol build && pnpm --filter whatsapp-sidecar build', { cwd: ROOT, stdio: 'inherit' });
@@ -128,8 +143,8 @@ async function main() {
     archives[arch] = { sha256: r.sha256, size: r.size, unpackedSize: r.unpackedSize };
     nodeVersion = r.nodeVersion;
     console.log(`· signing ${path.basename(r.archive)}`);
-    const keyArg = keyPath !== '' ? `-f "${keyPath}"` : `-k "${process.env.TAURI_SIGNING_PRIVATE_KEY}"`;
-    execSync(`pnpm --filter desktop exec tauri signer sign ${keyArg} -p "${password}" "${r.archive}"`, { cwd: ROOT, stdio: 'inherit' });
+    // password via env (TAURI_SIGNING_PRIVATE_KEY_PASSWORD), never on argv
+    execSync(`pnpm --filter desktop exec tauri signer sign -f "${keyPath}" "${r.archive}"`, { cwd: ROOT, stdio: 'inherit' });
     if (!existsSync(`${r.archive}.sig`)) throw new Error(`signing produced no ${r.archive}.sig`);
   }
   const manifest = buildHelperJson({ name, version, nodeVersion, archives });
@@ -137,9 +152,10 @@ async function main() {
   for (const f of helperAssets(name)) {
     if (!existsSync(path.join(OUT_DIR, f))) throw new Error(`asset missing: ${f}`);
   }
+  if (tempKey !== undefined) rmSync(path.dirname(tempKey), { recursive: true, force: true });
+  writeFileSync(PIN_PATH, `${JSON.stringify(buildPinFile(manifest), null, 2)}\n`);
   console.log(`\nstaged → ${OUT_DIR}`);
-  console.log('\nPIN for apps/desktop/src-tauri/src/helper_install.rs REQUIRED_HELPERS (then run pnpm check-helper-pin):\n');
-  console.log(rustPinSnippet(manifest));
+  console.log(`pin written → ${PIN_PATH} (commit it with the release; check-helper-pin verifies it)`);
   console.log('\nNEXT (explicit human ask required — PROCESS.md release rules):\n');
   console.log(`  ${ghReleaseCommand(name, version)}\n`);
 }

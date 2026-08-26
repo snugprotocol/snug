@@ -16,11 +16,12 @@ export const WHATSAPP_HELPER = 'whatsapp-sidecar';
 export type HelperInstallState =
   | { phase: 'unknown' }
   | { phase: 'ready'; status: HelperStatusSeat }
-  | { phase: 'installing'; status: HelperStatusSeat; progress: HelperInstallProgressSeat | undefined }
+  | { phase: 'installing'; status: HelperStatusSeat | undefined; progress: HelperInstallProgressSeat | undefined }
   | { phase: 'error'; status: HelperStatusSeat | undefined; message: string };
 
 const stores = new Map<string, ReturnType<typeof createStore<HelperInstallState>>>();
 const inFlight = new Map<string, Promise<HelperStatusSeat>>();
+const refreshing = new Map<string, Promise<HelperStatusSeat | undefined>>();
 
 function storeFor(name: string) {
   let s = stores.get(name);
@@ -38,6 +39,7 @@ export function useHelperInstall(name: string): HelperInstallState {
 /** Is a download offer warranted? Absent, or a downloaded tree that no longer matches the pin. */
 export function helperNeedsInstall(status: HelperStatusSeat | undefined): boolean {
   if (status === undefined) return false;
+  // absent, or a downloaded tree that lost its runtime (`broken`) — both are "not installed"
   if (!status.installed) return true;
   return status.kind === 'downloaded' && status.mismatch;
 }
@@ -46,16 +48,26 @@ export function helperNeedsInstall(status: HelperStatusSeat | undefined): boolea
 export async function refreshHelperStatus(name: string): Promise<HelperStatusSeat | undefined> {
   const seat = getPlatform().helperStatus;
   if (seat === undefined) return undefined;
+  // Coalesced: the header chip, the run view and the card all ask at the same moment on
+  // mount — one IPC round trip answers all of them (review: efficiency 6).
+  const pending = refreshing.get(name);
+  if (pending !== undefined) return pending;
   const store = storeFor(name);
-  try {
-    const status = await seat(name);
-    const current = store.get();
-    if (current.phase !== 'installing') store.set({ phase: 'ready', status });
-    return status;
-  } catch (err) {
-    store.set({ phase: 'error', status: undefined, message: err instanceof Error ? err.message : String(err) });
-    return undefined;
-  }
+  const run = seat(name)
+    .then((status) => {
+      const current = store.get();
+      if (current.phase !== 'installing') store.set({ phase: 'ready', status });
+      return status;
+    })
+    .catch((err: unknown) => {
+      store.set({ phase: 'error', status: undefined, message: err instanceof Error ? err.message : String(err) });
+      return undefined;
+    })
+    .finally(() => {
+      refreshing.delete(name);
+    });
+  refreshing.set(name, run);
+  return run;
 }
 
 /** THE CLICK. Download → verify → install → start, with progress; joins an in-flight install. */
@@ -66,19 +78,9 @@ export async function installHelper(name: string): Promise<HelperStatusSeat> {
   if (existing !== undefined) return existing;
   const store = storeFor(name);
   const before = store.get();
-  const status = before.phase === 'ready' || before.phase === 'installing' ? before.status : undefined;
-  const placeholder: HelperStatusSeat = status ?? {
-    name,
-    installed: false,
-    kind: 'absent',
-    requiredVersion: '',
-    mismatch: false,
-    arch: '',
-    downloadBytes: 0,
-    unpackedBytes: 0,
-    linkedSessionOnDisk: false,
-  };
-  store.set({ phase: 'installing', status: placeholder, progress: undefined });
+  // Carry whatever status is known (may be none) — never a fabricated one.
+  const status = before.phase === 'unknown' ? undefined : before.status;
+  store.set({ phase: 'installing', status, progress: undefined });
   const run = seat(name, (progress) => {
     const now = store.get();
     if (now.phase === 'installing') store.set({ ...now, progress });
@@ -88,7 +90,7 @@ export async function installHelper(name: string): Promise<HelperStatusSeat> {
       return done;
     })
     .catch((err: unknown) => {
-      store.set({ phase: 'error', status: placeholder, message: err instanceof Error ? err.message : String(err) });
+      store.set({ phase: 'error', status, message: err instanceof Error ? err.message : String(err) });
       throw err;
     })
     .finally(() => {
@@ -106,4 +108,5 @@ export function formatMegabytes(bytes: number): string {
 export function __resetHelperInstallForTests(): void {
   stores.clear();
   inFlight.clear();
+  refreshing.clear();
 }

@@ -13,7 +13,6 @@
 
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
-import { createPortal } from 'react-dom';
 
 import { getPlatform } from '../platform/platform.js';
 import {
@@ -22,6 +21,7 @@ import {
   useAppUpdate,
 } from '../state/appUpdate.js';
 import { Button } from '../ui/Button.js';
+import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 import {
   bundledDesktopReleases,
   compareSemver,
@@ -108,23 +108,23 @@ export function AppUpdateSheet({ onClose }: { onClose: () => void }): ReactEleme
   // rendered the INSTALLED release's own "Good to know" as if it were news — on a v0.1.0
   // install offered v0.1.1 the sheet said "macOS only through 1.0…", a line about the
   // version already running. History lives on the web /download page, not here.
-  // Fetched entries win when they parse; the bundled file (this build's trusted copy)
-  // is the fallback, filtered the same way.
+  // Fetched entries first; the bundled file (this build's trusted copy) contributes any
+  // NEWER entry the fetch omitted — the union the old code kept, so a partial fetched
+  // notes file never hides a version the user is also about to receive.
   const newerThanCurrent = (release: DesktopRelease): boolean =>
     current === undefined || compareSemver(release.version, current) > 0;
   const fetchedNewer = (fetched ?? []).filter(newerThanCurrent);
-  const entries: DesktopRelease[] =
-    fetchedNewer.length > 0 ? fetchedNewer : (bundledDesktopReleases() ?? []).filter(newerThanCurrent);
+  const entries: DesktopRelease[] = [
+    ...fetchedNewer,
+    ...(bundledDesktopReleases() ?? [])
+      .filter(newerThanCurrent)
+      .filter((release) => !fetchedNewer.some((n) => n.version === release.version)),
+  ].sort((a, b) => compareSemver(b.version, a.version));
 
-  // PORTALED TO <body> (TASK-20260826 AC1, the owner's "chopped off at the top" report).
-  // This sheet is mounted from the header nav, and `.shell-header` carries `backdrop-filter`,
-  // which makes it the CONTAINING BLOCK for `position: fixed` descendants (WebKit and
-  // Chromium alike). Rendered in place, `inset: 0` meant "the header's box": the overlay was
-  // 50 px tall, the card centred on it and clipped above the window's top edge. No CSS on the
-  // card can fix a containing block; only rendering outside the header can.
-  return createPortal(
-    <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="desktop update">
-      <div className="net-confirm-card release-notes-card">
+  // Through ConfirmOverlay, which PORTALS to <body> (TASK-20260826 AC1 — the header's
+  // backdrop-filter would otherwise confine this fixed overlay to the header's box).
+  return (
+    <ConfirmOverlay ariaLabel="desktop update" cardClassName="release-notes-card">
         <div className="release-notes-head">
           <h2 className="net-confirm-title">
             update to v{offer.version}
@@ -192,8 +192,6 @@ export function AppUpdateSheet({ onClose }: { onClose: () => void }): ReactEleme
             </Button>
           )}
         </div>
-      </div>
-    </div>,
-    document.body,
+    </ConfirmOverlay>
   );
 }

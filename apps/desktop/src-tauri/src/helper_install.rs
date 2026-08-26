@@ -15,31 +15,41 @@ use tauri::Emitter;
 
 /// One arch's pinned artifact. Sizes are what the consent card shows BEFORE any network
 /// request (§3) and what the download/inflate caps are derived from (§7).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HelperAsset {
-    pub sha256: &'static str,
+    pub sha256: String,
     pub size: u64,
     pub unpacked_size: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RequiredHelper {
-    pub name: &'static str,
-    pub version: &'static str,
-    pub tag: &'static str,
-    pub aarch64: HelperAsset,
-    pub x86_64: HelperAsset,
+    pub name: String,
+    pub version: String,
+    pub tag: String,
+    pub assets: std::collections::HashMap<String, HelperAsset>,
 }
 
-/// THE PIN. Printed by `scripts/release-helper.mjs` after a pack; `check-helper-pin` fails
-/// the root gate if `version` disagrees with `apps/whatsapp-sidecar/package.json`.
-pub const REQUIRED_HELPERS: &[RequiredHelper] = &[RequiredHelper {
-    name: "whatsapp-sidecar",
-    version: "0.1.0",
-    tag: "helper-whatsapp-sidecar-v0.1.0",
-    aarch64: HelperAsset { sha256: "3726e217c78605f207ac02d5434cfd7a9ae354a03e6e7637e70a25da862c601e", size: 42781469, unpacked_size: 142348572 },
-    x86_64: HelperAsset { sha256: "df422e92a463ab324cbf0ce8b7bed5eedf62c7e8a5aded681f7722c6fcd821d3", size: 43996343, unpacked_size: 144851164 },
-}];
+#[derive(Debug, Clone, serde::Deserialize)]
+struct HelperPinFile {
+    helpers: Vec<RequiredHelper>,
+}
+
+/// THE PIN — `src-tauri/helpers.json`, written by `scripts/release-helper.mjs` and never by
+/// hand; ONE file that Rust, `check-helper-pin.mjs` and `release-desktop.mjs` all read, so
+/// there is no Rust-source regex anywhere (review finding: three parsers of one const).
+pub const HELPER_PIN_JSON: &str = include_str!("../helpers.json");
+
+pub fn required_helpers() -> &'static [RequiredHelper] {
+    static PIN: std::sync::OnceLock<Vec<RequiredHelper>> = std::sync::OnceLock::new();
+    PIN.get_or_init(|| {
+        serde_json::from_str::<HelperPinFile>(HELPER_PIN_JSON)
+            .map(|f| f.helpers)
+            .unwrap_or_default()
+    })
+}
 
 /// Where helper releases live. Single-homed like the updater endpoint (ADR-0047 §11) and
 /// MUST-APPEAR in the release binary (`run-release-gate.mjs`).
@@ -55,15 +65,11 @@ pub const HARD_INFLATED_CAP: u64 = 1024 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 50_000;
 
 pub fn required(name: &str) -> Option<&'static RequiredHelper> {
-    REQUIRED_HELPERS.iter().find(|h| h.name == name)
+    required_helpers().iter().find(|h| h.name == name)
 }
 
-pub fn asset_for(helper: &RequiredHelper, arch: &str) -> Option<HelperAsset> {
-    match arch {
-        "aarch64" => Some(helper.aarch64),
-        "x86_64" => Some(helper.x86_64),
-        _ => None,
-    }
+pub fn asset_for<'a>(helper: &'a RequiredHelper, arch: &str) -> Option<&'a HelperAsset> {
+    helper.assets.get(arch)
 }
 
 pub fn archive_file_name(name: &str, arch: &str) -> String {
@@ -71,11 +77,19 @@ pub fn archive_file_name(name: &str, arch: &str) -> String {
 }
 
 pub fn download_url(helper: &RequiredHelper, arch: &str) -> String {
-    format!("{HELPER_RELEASE_BASE}{}/{}", helper.tag, archive_file_name(helper.name, arch))
+    format!("{HELPER_RELEASE_BASE}{}/{}", helper.tag, archive_file_name(&helper.name, arch))
 }
 
+/// THE ONE owner of `~/Snug/helpers/<name>` — `sidecar::helper_entry` derives from this.
 pub fn helper_dir(snug_dir: &Path, name: &str) -> PathBuf {
     snug_dir.join("helpers").join(name)
+}
+
+/// `<tree>/bin/node` when the tree ships its own runtime, else None. ONE classification
+/// shared by status (below) and the spawner (sidecar.rs), so the two cannot disagree.
+pub fn helper_runtime(dir: &Path) -> Option<PathBuf> {
+    let node = dir.join("bin").join("node");
+    node.is_file().then_some(node)
 }
 
 // ---- the stamp -----------------------------------------------------------------------
@@ -105,7 +119,7 @@ pub fn read_stamp(dir: &Path) -> Option<HelperStamp> {
 pub struct HelperStatus {
     pub name: String,
     pub installed: bool,
-    /// `absent` | `dev` | `downloaded`
+    /// `absent` | `dev` | `downloaded` | `broken` (downloaded stamp, runtime missing)
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed_version: Option<String>,
@@ -124,33 +138,41 @@ pub fn current_arch() -> &'static str {
     std::env::consts::ARCH
 }
 
-/// Pure verdict over what is on disk. EXACT equality on the version (review finding 12):
-/// a downgraded shell must not call a newer helper "outdated".
+/// Pure verdict over what is on disk — NO side effects (the `.old-*` restore lives on the
+/// spawn path under the sidecar lock; a status read racing an install's two renames must
+/// never move directories). EXACT equality on the version (review finding 12).
+///
+/// Classification agrees with the spawner: a `downloaded` stamp whose `bin/node` is gone is
+/// `broken` — not installed, offered for re-download — rather than "installed, fine" while
+/// the spawn falls back to the system-Node preflight.
 pub fn status_for(helper: &RequiredHelper, dir: &Path, arch: &str) -> HelperStatus {
-    restore_old_if_needed(dir);
-    let asset = asset_for(helper, arch).unwrap_or(HelperAsset { sha256: "", size: 0, unpacked_size: 0 });
-    let installed = dir.join("index.js").is_file();
+    let (size, unpacked) = asset_for(helper, arch).map(|a| (a.size, a.unpacked_size)).unwrap_or((0, 0));
+    let has_entry = dir.join("index.js").is_file();
     let stamp = read_stamp(dir);
-    let kind = if !installed {
+    let stamped_downloaded = stamp.as_ref().map(|s| s.kind == "downloaded").unwrap_or(false);
+    let runtime = helper_runtime(dir).is_some();
+    let kind = if !has_entry {
         "absent"
+    } else if stamped_downloaded && !runtime {
+        "broken"
+    } else if stamped_downloaded {
+        "downloaded"
     } else {
-        match stamp.as_ref().map(|s| s.kind.as_str()) {
-            Some("downloaded") => "downloaded",
-            _ => "dev",
-        }
+        "dev"
     };
-    let installed_version = if installed { stamp.as_ref().map(|s| s.version.clone()) } else { None };
-    let mismatch = installed && installed_version.as_deref() != Some(helper.version);
+    let installed = matches!(kind, "downloaded" | "dev");
+    let installed_version = if has_entry { stamp.as_ref().map(|s| s.version.clone()) } else { None };
+    let mismatch = installed && installed_version.as_deref() != Some(helper.version.as_str());
     HelperStatus {
-        name: helper.name.to_string(),
+        name: helper.name.clone(),
         installed,
         kind: kind.to_string(),
         installed_version,
-        required_version: helper.version.to_string(),
+        required_version: helper.version.clone(),
         mismatch,
         arch: arch.to_string(),
-        download_bytes: asset.size,
-        unpacked_bytes: asset.unpacked_size,
+        download_bytes: size,
+        unpacked_bytes: unpacked,
         linked_session_on_disk: dir
             .parent()
             .and_then(|helpers| helpers.parent())
@@ -185,6 +207,8 @@ pub fn reap_litter(dir: &Path) {
         let n = entry.file_name().to_string_lossy().to_string();
         if n.starts_with(&format!("{base}.partial-")) || n.starts_with(&format!("{base}.old-")) {
             let _ = std::fs::remove_dir_all(entry.path());
+        } else if n.starts_with(&format!("{base}.download-")) {
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }
@@ -316,22 +340,73 @@ pub fn updater_pubkey_b64() -> Result<String, String> {
         .ok_or_else(|| "tauri.conf.json has no plugins.updater.pubkey".to_string())
 }
 
-/// minisign-verify the archive bytes against `pubkey_b64` (base64 of the whole .pub file,
-/// exactly the shape tauri.conf.json stores) using the `.sig` file's text.
-pub fn verify_signature(bytes: &[u8], sig_text: &str, pubkey_b64: &str) -> Result<(), String> {
+/// A writer that sha256s what passes through it, so the content pin is checked at the last
+/// byte of the download with no second pass over 42 MB (review: efficiency 1).
+pub struct HashingWriter<W: Write> {
+    inner: W,
+    hasher: sha2::Sha256,
+}
+
+impl<W: Write> HashingWriter<W> {
+    pub fn new(inner: W) -> Self {
+        HashingWriter { inner, hasher: sha2::Sha256::new() }
+    }
+    pub fn finish(self) -> (W, String) {
+        let d = self.hasher.finalize();
+        (self.inner, d.iter().map(|b| format!("{b:02x}")).collect())
+    }
+}
+
+impl<W: Write> Write for HashingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Decode the pubkey (base64 of the whole .pub file, exactly what tauri.conf.json stores)
+/// and the signature text (`tauri signer sign` writes base64 of the minisign text; raw
+/// minisign text is accepted too).
+fn decode_key_and_sig(sig_text: &str, pubkey_b64: &str) -> Result<(minisign_verify::PublicKey, minisign_verify::Signature), String> {
     use base64::Engine;
     let pub_txt = base64::engine::general_purpose::STANDARD
         .decode(pubkey_b64.trim())
         .map_err(|e| format!("updater pubkey is not base64: {e}"))?;
     let pub_txt = String::from_utf8(pub_txt).map_err(|_| "updater pubkey is not text".to_string())?;
     let key = minisign_verify::PublicKey::decode(&pub_txt).map_err(|e| format!("updater pubkey unreadable: {e}"))?;
-    // `tauri signer sign` writes the .sig as base64 of the minisign text (the updater's own
-    // convention); accept both that and raw minisign text.
     let sig_txt = match base64::engine::general_purpose::STANDARD.decode(sig_text.trim()) {
         Ok(raw) => String::from_utf8(raw).unwrap_or_else(|_| sig_text.to_string()),
         Err(_) => sig_text.to_string(),
     };
     let sig = minisign_verify::Signature::decode(&sig_txt).map_err(|e| format!("helper signature unreadable: {e}"))?;
+    Ok((key, sig))
+}
+
+/// Streaming minisign verification over a FILE — no 42 MB heap copy.
+pub fn verify_signature_file(archive: &Path, sig_text: &str, pubkey_b64: &str) -> Result<(), String> {
+    use std::io::Read;
+    let (key, sig) = decode_key_and_sig(sig_text, pubkey_b64)?;
+    let mut verifier = key.verify_stream(&sig).map_err(|e| format!("helper signature does not verify: {e}"))?;
+    let mut file = std::fs::File::open(archive).map_err(|e| format!("could not read the download: {e}"))?;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("could not read the download: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        verifier.update(&buf[..n]);
+    }
+    verifier.finalize().map_err(|e| format!("helper signature does not verify: {e}"))
+}
+
+/// minisign-verify the archive bytes against `pubkey_b64` (base64 of the whole .pub file,
+/// exactly the shape tauri.conf.json stores) using the `.sig` file's text.
+pub fn verify_signature(bytes: &[u8], sig_text: &str, pubkey_b64: &str) -> Result<(), String> {
+    let (key, sig) = decode_key_and_sig(sig_text, pubkey_b64)?;
     key.verify(bytes, &sig, false).map_err(|e| format!("helper signature does not verify: {e}"))
 }
 
@@ -381,7 +456,11 @@ fn build_download_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .use_preconfigured_tls(tls)
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(600))
+        // A PER-READ idle timeout, deliberately not `.timeout()`: that is a whole-request
+        // deadline, and a 42 MB body on a slow link would never finish under it (review
+        // finding). The byte cap bounds the total.
+        .read_timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("could not build the download transport: {e}"))
 }
@@ -458,7 +537,7 @@ pub const PROGRESS_EVENT: &str = "snug:helper-install";
 #[tauri::command]
 pub async fn helper_status(name: String) -> Result<HelperStatus, String> {
     let helper = required(&name).ok_or_else(|| format!("'{name}' is not a helper this build knows"))?;
-    let dir = helper_dir(&crate::userfile::snug_dir()?, helper.name);
+    let dir = helper_dir(&crate::userfile::snug_dir()?, &helper.name);
     Ok(status_for(helper, &dir, current_arch()))
 }
 
@@ -474,31 +553,31 @@ pub async fn helper_install(
     let helper = required(&name).ok_or_else(|| format!("'{name}' is not a helper this build knows"))?;
     let arch = current_arch();
     let asset = asset_for(helper, arch).ok_or_else(|| format!("no {} build of the helper for {arch}", helper.name))?;
-    if asset.size == 0 || asset.sha256.chars().all(|c| c == '0') {
+    if asset.size == 0 || asset.sha256.chars().all(|c| c == '0') || asset.sha256.len() != 64 {
         return Err(format!("this build carries no published pin for the {} helper — it cannot be downloaded yet", helper.name));
     }
     {
         let mut guard = install_state.in_flight.lock().map_err(|_| "helper install state is poisoned".to_string())?;
-        if !guard.insert(helper.name.to_string()) {
+        if !guard.insert(helper.name.clone()) {
             return Err(format!("the {} helper is already being installed", helper.name));
         }
     }
     let result = install_inner(helper, asset, arch, &app, &sidecar_state).await;
     if let Ok(mut guard) = install_state.in_flight.lock() {
-        guard.remove(helper.name);
+        guard.remove(&helper.name);
     }
     result
 }
 
 async fn install_inner(
-    helper: &RequiredHelper,
-    asset: HelperAsset,
-    arch: &str,
+    helper: &'static RequiredHelper,
+    asset: &'static HelperAsset,
+    arch: &'static str,
     app: &tauri::AppHandle,
     sidecar_state: &crate::sidecar::SidecarState,
 ) -> Result<HelperStatus, String> {
     let snug_dir = crate::userfile::snug_dir()?;
-    let dir = helper_dir(&snug_dir, helper.name);
+    let dir = helper_dir(&snug_dir, &helper.name);
     let status_now = status_for(helper, &dir, arch);
     if status_now.installed && status_now.kind == "dev" {
         return Err(format!("a developer install of the {} helper is present at {} — not overwriting it", helper.name, dir.display()));
@@ -506,83 +585,112 @@ async fn install_inner(
     std::fs::create_dir_all(dir.parent().unwrap_or(&snug_dir)).map_err(|e| format!("could not create ~/Snug/helpers: {e}"))?;
     reap_litter(&dir);
 
-    let emit = |phase: &str, received: u64, total: u64| {
-        let _ = app.emit(
+    let app_for_emit = app.clone();
+    let name_for_emit = helper.name.clone();
+    let emit = move |phase: &str, received: u64, total: u64| {
+        let _ = app_for_emit.emit(
             PROGRESS_EVENT,
-            HelperInstallProgress { name: helper.name.to_string(), phase: phase.to_string(), received, total },
+            HelperInstallProgress { name: name_for_emit.clone(), phase: phase.to_string(), received, total },
         );
     };
 
-    // 1. download to a temp file beside the target (same filesystem for the rename later).
-    let nonce = crate::sidecar::mint_nonce_pub();
-    let tmp_archive = dir.with_file_name(format!("{}.download-{nonce}.tar.gz", helper.name));
     let client = build_download_client()?;
-    let compressed_cap = (asset.size.saturating_mul(2)).min(HARD_COMPRESSED_CAP);
-    {
-        let mut file = std::fs::File::create(&tmp_archive).map_err(|e| format!("could not create the download file: {e}"))?;
-        let url = download_url(helper, arch);
-        emit("downloading", 0, asset.size);
-        let outcome = fetch_capped(&client, &url, &RedirectPolicy::production(), compressed_cap, &mut file, |r, _| {
-            emit("downloading", r, asset.size)
-        })
-        .await;
-        if let Err(e) = outcome {
-            let _ = std::fs::remove_file(&tmp_archive);
-            return Err(e);
-        }
-    }
+    let policy = RedirectPolicy::production();
 
-    // 2. verify: signature (updater key) then the content pin.
-    emit("verifying", asset.size, asset.size);
-    let verified = async {
-        let bytes = std::fs::read(&tmp_archive).map_err(|e| format!("could not read the download: {e}"))?;
-        let sig_url = format!("{}.sig", download_url(helper, arch));
+    // 1. THE SIGNATURE FIRST (16 KB): a release whose .sig upload failed is refused before
+    //    anyone downloads 42 MB for nothing (review: efficiency 2).
+    let sig_text = {
         let mut sig = Vec::new();
-        fetch_capped(&client, &sig_url, &RedirectPolicy::production(), 16 * 1024, &mut sig, |_, _| {}).await?;
-        let sig_text = String::from_utf8(sig).map_err(|_| "helper signature is not text".to_string())?;
-        verify_archive(&bytes, &sig_text, &updater_pubkey_b64()?, asset.sha256)
+        fetch_capped(&client, &format!("{}.sig", download_url(helper, arch)), &policy, 16 * 1024, &mut sig, |_, _| {}).await?;
+        String::from_utf8(sig).map_err(|_| "helper signature is not text".to_string())?
+    };
+    let pubkey = updater_pubkey_b64()?;
+
+    // 2. download to a temp file beside the target (same filesystem for the rename later),
+    //    sha256-ing as it streams so the content pin is decided at the last byte.
+    let nonce = crate::sidecar::mint_nonce();
+    let tmp_archive = dir.with_file_name(format!("{}.download-{nonce}.tar.gz", helper.name));
+    let compressed_cap = (asset.size.saturating_mul(2)).min(HARD_COMPRESSED_CAP);
+    let emit_dl = emit.clone();
+    let total = asset.size;
+    let downloaded = async {
+        let file = std::fs::File::create(&tmp_archive).map_err(|e| format!("could not create the download file: {e}"))?;
+        let mut sink = HashingWriter::new(file);
+        emit_dl("downloading", 0, total);
+        fetch_capped(&client, &download_url(helper, arch), &policy, compressed_cap, &mut sink, |r, _| emit_dl("downloading", r, total)).await?;
+        let (file, sha) = sink.finish();
+        drop(file);
+        if sha != asset.sha256 {
+            return Err(format!("helper archive is not the pinned build (sha256 {sha}, pinned {}) — refused", asset.sha256));
+        }
+        Ok(())
     }
     .await;
-    if let Err(e) = verified {
+    if let Err(e) = downloaded {
         let _ = std::fs::remove_file(&tmp_archive);
         return Err(e);
     }
 
-    // 3. unpack into a partial dir under admission + inflated cap; validate the shape.
-    emit("installing", asset.size, asset.size);
+    // 3. verify the signature (streaming), unpack under admission + the inflated cap, and
+    //    validate the shape — CPU + disk work, OFF the async runtime thread.
+    emit("verifying", total, total);
     let partial = dir.with_file_name(format!("{}.partial-{nonce}", helper.name));
     let inflated_cap = (asset.unpacked_size.saturating_mul(4)).min(HARD_INFLATED_CAP).max(asset.unpacked_size);
-    let unpacked = unpack_admitted(&tmp_archive, &partial, inflated_cap).and_then(|_| validate_tree(&partial));
+    let stamp = HelperStamp {
+        kind: "downloaded".into(),
+        name: helper.name.clone(),
+        version: helper.version.clone(),
+        tag: Some(helper.tag.clone()),
+        arch: Some(arch.into()),
+    };
+    let (tmp_b, partial_b, emit_b) = (tmp_archive.clone(), partial.clone(), emit.clone());
+    let prepared = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        verify_signature_file(&tmp_b, &sig_text, &pubkey)?;
+        emit_b("installing", total, total);
+        unpack_admitted(&tmp_b, &partial_b, inflated_cap)?;
+        validate_tree(&partial_b)?;
+        std::fs::write(partial_b.join("helper.json"), serde_json::to_string_pretty(&stamp).unwrap_or_default())
+            .map_err(|e| format!("could not write the helper stamp: {e}"))
+    })
+    .await
+    .map_err(|e| format!("helper install task failed: {e}"))?;
     let _ = std::fs::remove_file(&tmp_archive);
-    if let Err(e) = unpacked {
+    if let Err(e) = prepared {
         let _ = std::fs::remove_dir_all(&partial);
         return Err(e);
     }
-    let stamp = HelperStamp {
-        kind: "downloaded".into(),
-        name: helper.name.into(),
-        version: helper.version.into(),
-        tag: Some(helper.tag.into()),
-        arch: Some(arch.into()),
-    };
-    std::fs::write(partial.join("helper.json"), serde_json::to_string_pretty(&stamp).unwrap_or_default())
-        .map_err(|e| format!("could not write the helper stamp: {e}"))?;
 
-    // 4. stop the running helper (it may be the tree being replaced), swap, start.
-    let guard_result = {
-        let mut guard = sidecar_state.inner.lock().map_err(|_| "sidecar state is poisoned".to_string())?;
-        crate::sidecar::stop_locked(&mut guard);
-        swap_in(&partial, &dir, &nonce)?;
-        emit("starting", asset.size, asset.size);
-        crate::sidecar::start_helper(&mut guard)
-    };
-    match guard_result {
-        Ok(_) => {
-            emit("done", asset.size, asset.size);
-            Ok(status_for(helper, &dir, arch))
+    // 4. stop the running helper (it may be the tree being replaced), swap, start — one
+    //    critical section so no start can race the swap; blocking work (SIGTERM grace,
+    //    the 600 ms survival window) stays off the runtime thread. Only the WhatsApp helper
+    //    has a process slot today; another helper would just be swapped in.
+    let is_sidecar = helper.name == "whatsapp-sidecar";
+    let (partial_c, dir_c, nonce_c, emit_c) = (partial.clone(), dir.clone(), nonce.clone(), emit.clone());
+    let sidecar_state = sidecar_state.clone_handle();
+    let swapped = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let mut guard = sidecar_state.lock().map_err(|_| "sidecar state is poisoned".to_string())?;
+        if is_sidecar {
+            crate::sidecar::stop_locked(&mut guard);
         }
-        Err(e) => Err(format!("the helper installed but did not start: {e}")),
-    }
+        if let Err(e) = swap_in(&partial_c, &dir_c, &nonce_c) {
+            // The old tree was put back by swap_in; put the old PROCESS back too, so a
+            // failed update never leaves a previously working helper stopped.
+            if is_sidecar {
+                let _ = crate::sidecar::start_helper(&mut guard);
+            }
+            return Err(e);
+        }
+        if is_sidecar {
+            emit_c("starting", total, total);
+            crate::sidecar::start_helper(&mut guard).map(|_| ()).map_err(|e| format!("the helper installed but did not start: {e}"))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("helper install task failed: {e}"))?;
+    swapped?;
+    emit("done", total, total);
+    Ok(status_for(helper, &dir, arch))
 }
 
 #[cfg(test)]
@@ -713,7 +821,7 @@ mod tests {
 
     #[test]
     fn download_urls_are_single_homed_under_the_pinned_tag() {
-        let h = &REQUIRED_HELPERS[0];
+        let h = &required_helpers()[0];
         let url = download_url(h, "aarch64");
         assert!(url.starts_with(HELPER_RELEASE_BASE));
         assert!(url.contains(&format!("/{}/", h.tag)));
@@ -726,8 +834,8 @@ mod tests {
     #[test]
     fn status_absent_dev_downloaded_and_mismatch_by_exact_equality() {
         let tmp = tempfile::tempdir().unwrap();
-        let h = &REQUIRED_HELPERS[0];
-        let dir = tmp.path().join("helpers").join(h.name);
+        let h = &required_helpers()[0];
+        let dir = tmp.path().join("helpers").join(&h.name);
         let absent = status_for(h, &dir, "aarch64");
         assert!(!absent.installed && absent.kind == "absent" && !absent.mismatch);
 
@@ -740,6 +848,8 @@ mod tests {
         write(&dir.join("helper.json"), format!(r#"{{"kind":"dev","name":"{}","version":"{}"}}"#, h.name, h.version).as_bytes());
         assert_eq!(status_for(h, &dir, "aarch64").mismatch, false);
 
+        // a downloaded tree carries its own runtime; without it the kind is `broken` (own test)
+        write(&dir.join("bin").join("node"), b"#!/bin/sh");
         write(&dir.join("helper.json"), format!(r#"{{"kind":"downloaded","name":"{}","version":"{}"}}"#, h.name, h.version).as_bytes());
         let dl = status_for(h, &dir, "aarch64");
         assert!(dl.kind == "downloaded" && !dl.mismatch);
@@ -747,6 +857,71 @@ mod tests {
         // a NEWER helper than the pin is still a mismatch (exact equality, not ordering)
         write(&dir.join("helper.json"), format!(r#"{{"kind":"downloaded","name":"{}","version":"99.0.0"}}"#, h.name).as_bytes());
         assert!(status_for(h, &dir, "aarch64").mismatch);
+    }
+
+    #[test]
+    fn a_downloaded_stamp_without_its_runtime_is_broken_not_installed() {
+        // Status and spawn must agree (review: altitude 4): the spawner would fall back to the
+        // system-Node preflight here, so status must offer a re-download instead of "fine".
+        let tmp = tempfile::tempdir().unwrap();
+        let h = &required_helpers()[0];
+        let dir = tmp.path().join("helpers").join(&h.name);
+        write(&dir.join("index.js"), b"");
+        write(&dir.join("helper.json"), format!(r#"{{"kind":"downloaded","name":"{}","version":"{}"}}"#, h.name, h.version).as_bytes());
+        let broken = status_for(h, &dir, "aarch64");
+        assert_eq!(broken.kind, "broken");
+        assert!(!broken.installed);
+        write(&dir.join("bin").join("node"), b"#!/bin/sh");
+        assert_eq!(status_for(h, &dir, "aarch64").kind, "downloaded");
+    }
+
+    #[test]
+    fn status_is_pure_it_never_restores_an_old_tree() {
+        // A status read racing an install's two renames must not move directories.
+        let tmp = tempfile::tempdir().unwrap();
+        let h = &required_helpers()[0];
+        let dir = tmp.path().join("helpers").join(&h.name);
+        write(&tmp.path().join("helpers").join(format!("{}.old-x", h.name)).join("index.js"), b"old");
+        let s = status_for(h, &dir, "aarch64");
+        assert_eq!(s.kind, "absent");
+        assert!(!dir.exists(), "status_for must not rename .old-* back");
+    }
+
+    #[test]
+    fn the_pin_file_parses_and_names_a_published_shape() {
+        let pin = required_helpers();
+        assert_eq!(pin.len(), 1);
+        let h = &pin[0];
+        assert_eq!(h.name, "whatsapp-sidecar");
+        assert_eq!(h.tag, format!("helper-{}-v{}", h.name, h.version));
+        for arch in ["aarch64", "x86_64"] {
+            let a = asset_for(h, arch).expect(arch);
+            assert_eq!(a.sha256.len(), 64);
+            assert!(a.size > 0 && a.unpacked_size > a.size);
+        }
+    }
+
+    #[test]
+    fn reap_litter_also_removes_stranded_downloads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("helpers").join("h");
+        write(&dir.join("index.js"), b"keep");
+        write(&tmp.path().join("helpers").join("h.download-a.tar.gz"), b"partial bytes");
+        reap_litter(&dir);
+        assert!(!tmp.path().join("helpers").join("h.download-a.tar.gz").exists());
+        assert!(dir.join("index.js").exists());
+    }
+
+    #[test]
+    fn streaming_signature_verification_matches_the_in_memory_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("a.tar.gz");
+        write(&archive, GOOD);
+        verify_signature_file(&archive, GOOD_SIG, PUB_B64).unwrap();
+        let mut bytes = GOOD.to_vec();
+        bytes[0] ^= 1;
+        write(&archive, &bytes);
+        assert!(verify_signature_file(&archive, GOOD_SIG, PUB_B64).is_err());
     }
 
     // ---- AC6(f)(g): the swap ------------------------------------------------------------
@@ -799,12 +974,13 @@ mod tests {
     #[ignore]
     fn staged_archive_verifies_against_the_production_key_and_pin() {
         let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../whatsapp-sidecar/release-out");
-        let h = &REQUIRED_HELPERS[0];
-        for (arch, asset) in [("aarch64", h.aarch64), ("x86_64", h.x86_64)] {
-            let file = out.join(archive_file_name(h.name, arch));
+        let h = &required_helpers()[0];
+        for arch in ["aarch64", "x86_64"] {
+            let asset = asset_for(h, arch).unwrap();
+            let file = out.join(archive_file_name(&h.name, arch));
             let bytes = std::fs::read(&file).expect("staged archive present");
             let sig = std::fs::read_to_string(format!("{}.sig", file.display())).expect("staged .sig present");
-            verify_archive(&bytes, &sig, &updater_pubkey_b64().unwrap(), asset.sha256).expect(arch);
+            verify_archive(&bytes, &sig, &updater_pubkey_b64().unwrap(), &asset.sha256).expect(arch);
             assert_eq!(bytes.len() as u64, asset.size, "{arch} size pin");
         }
     }
@@ -813,6 +989,6 @@ mod tests {
     fn the_pin_version_matches_the_helper_package_version() {
         let pkg: serde_json::Value =
             serde_json::from_str(include_str!("../../../whatsapp-sidecar/package.json")).unwrap();
-        assert_eq!(pkg["version"].as_str().unwrap(), REQUIRED_HELPERS[0].version, "bump the pin with the helper (check-helper-pin)");
+        assert_eq!(pkg["version"].as_str().unwrap(), required_helpers()[0].version, "bump the pin with the helper (check-helper-pin)");
     }
 }

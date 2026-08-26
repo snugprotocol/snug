@@ -297,11 +297,20 @@ test('checkSpctlOutput: Gatekeeper acceptance, and the notarization-specific rej
 });
 
 test('the desktop release refuses when a pinned helper tag is unpublished (ADR-0060 §10)', () => {
-  const rs = readFileSync(path.join(ROOT, 'apps', 'desktop', 'src-tauri', 'src', 'helper_install.rs'), 'utf8');
-  const tags = pinnedHelperTags(rs);
+  const pinned = JSON.parse(readFileSync(path.join(ROOT, 'apps', 'desktop', 'src-tauri', 'helpers.json'), 'utf8')).helpers;
+  const tags = pinnedHelperTags(pinned);
   assert.ok(tags.length >= 1 && tags.every((t) => /^helper-[a-z0-9-]+-v\d+\.\d+\.\d+$/.test(t)), JSON.stringify(tags));
-  assert.equal(pinnedHelperIsPublished(tags, () => true).ok, true);
-  const refused = pinnedHelperIsPublished(tags, () => false);
-  assert.equal(refused.ok, false);
-  assert.match(refused.reason, /not published/);
+  // published and byte-equal to the pin → ok
+  assert.equal(pinnedHelperIsPublished(pinned, (tag) => pinned.find((h) => h.tag === tag)).ok, true);
+  const missing = pinnedHelperIsPublished(pinned, () => undefined);
+  assert.equal(missing.ok, false);
+  assert.match(missing.reason, /not published/);
+  // published but a DIFFERENT build than the pin → refused (cross-file review finding 1)
+  const drifted = pinnedHelperIsPublished(pinned, (tag) => {
+    const h = structuredClone(pinned.find((x) => x.tag === tag));
+    h.assets.aarch64.sha256 = 'f'.repeat(64);
+    return h;
+  });
+  assert.equal(drifted.ok, false);
+  assert.match(drifted.reason, /does not match the shell's pin/);
 });

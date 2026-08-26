@@ -325,7 +325,7 @@ resurrect the wiped store.
 **R-33 — The helper download is the first path by which the shell fetches and executes code
 other than itself, and its residuals are stated rather than closed.** (ADR-0060; delta S9.)
 Archives are minisign-signed with the updater key AND content-pinned in the shell (per-arch
-sha256 in `REQUIRED_HELPERS`), so a compromised release account can substitute nothing the
+sha256 in `src-tauri/helpers.json`), so a compromised release account can substitute nothing the
 shell will run — the pin, not the signature, is what binds identity. What REMAINS: (1) a
 **developer install** (`kind: "dev"` stamp, or a stampless legacy tree) is never overwritten
 and only *reported* as mismatched — the owner's own machine is exactly this case, so its

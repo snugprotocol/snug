@@ -35,10 +35,10 @@ on a system Node that most Macs lack. Helpers will multiply (Telepath is the fir
    download, paid only by users who install an app that needs the helper. The shell spawns
    `<helper>/bin/node` when present; the bare `node` preflight path survives **only** for a
    developer install (which has no `bin/node`).
-3. **The shell pins the helper by CONTENT, not just by version.** `helper_install.rs` carries a
-   `REQUIRED_HELPERS` table: `name`, `version`, `tag`, and **per-arch sha256 + compressed +
-   unpacked sizes** (printed by `release-helper.mjs` for pasting; `check-helper-pin` fails if
-   it drifts from the published `helper.json`). Downloading from the pinned tag — never from
+3. **The shell pins the helper by CONTENT, not just by version.** `src-tauri/helpers.json`
+   (written by `release-helper.mjs`, `include_str!`'d by `helper_install.rs`) carries `name`,
+   `version`, `tag`, and **per-arch sha256 + compressed + unpacked sizes**; `check-helper-pin`
+   and `release-desktop.mjs` fail if it drifts from the staged/published `helper.json`. Downloading from the pinned tag — never from
    "latest" — means an updated shell always names exactly the helper it was tested with, and
    the consent card can state the size **before** any network request. A downloaded tree's
    `helper.json` stamp is compared to the pin by **exact equality** (not semver order — a
@@ -94,6 +94,28 @@ on a system Node that most Macs lack. Helpers will multiply (Telepath is the fir
    --latest=false` and **stops**. It refuses if the tag already exists (releases are immutable
    — the shell pins content). `release-desktop.mjs` refuses to stage a desktop release whose
    pinned helper tag is not published. Creating either release is an explicit human ask.
+
+## Dependencies (docs/conventions.md: every new dependency is justified here)
+
+Five crates become **direct** dependencies of the shell; all five already ride in the tree
+through `tauri-plugin-updater`, so nothing new is compiled — they are named because this
+crate now calls them, and a plugin upgrade that dropped one must fail at resolution, not with
+a mystifying build error (the reqwest precedent in Cargo.toml):
+- `minisign-verify` — verifies the archive signature against the updater pubkey (§5), streaming.
+- `tar` + `flate2` — unpack the archive under the shell's own admission rules (§7); the
+  alternative, shelling out to `/usr/bin/tar`, cannot refuse an entry *before* writing it.
+- `webpki-roots` — a real root store for the GitHub download; the LAN client is deliberately
+  built with no roots (custom pin verifier) and cannot be reused.
+- `base64` — decodes the pubkey and `.sig` exactly as the updater plugin does.
+
+## The pin file
+
+`apps/desktop/src-tauri/helpers.json` is written by `scripts/release-helper.mjs` from the
+staged manifest, `include_str!`'d by `helper_install.rs`, read by `check-helper-pin.mjs`
+and by `release-desktop.mjs` — which also fetches the **published** `helper.json` for the
+pinned tag and refuses to stage a shell unless the published sums equal the pin (a tag that
+exists with different bytes would make every user's download refuse on the content pin).
+Never edited by hand.
 
 ## Consequences
 

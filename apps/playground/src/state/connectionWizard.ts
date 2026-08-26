@@ -1096,7 +1096,7 @@ export type DeviceLinkStart =
    * pin) — ADR-0060: the screen offers the on-demand download instead of a dead message.
    * `message` is kept so a caller that does not know the card still says something true.
    */
-  | { ok: false; reason: 'helper-missing' | 'helper-mismatch'; message: string }
+  | { ok: false; reason: 'helper-missing'; message: string }
   /**
    * The helper is ALREADY LINKED, so there is nothing to scan — `/pair/qr` withholds the
    * code once linked, by design. This became the common wizard-time state the moment the
@@ -1157,6 +1157,11 @@ export async function beginDeviceLink(): Promise<DeviceLinkStart> {
     const status = await platform.sidecarCtl('start');
     nonce = status.nonce;
   } catch (err) {
+    // The spawner's own refusal (sidecar.rs HELPER_MISSING) reaches here when the status
+    // seat was unavailable or threw — still a typed result, never dead prose.
+    if (err instanceof Error && err.message.includes('helper is not installed')) {
+      return { ok: false, reason: 'helper-missing', message: err.message };
+    }
     return {
       ok: false,
       message: err instanceof Error ? err.message : 'the WhatsApp helper could not be started',

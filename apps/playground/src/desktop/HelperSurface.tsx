@@ -7,10 +7,10 @@
  */
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
-import { createPortal } from 'react-dom';
 
 import { HelperInstallCard } from '../connections/HelperInstallCard.js';
 import { getPlatform } from '../platform/platform.js';
+import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 import { WHATSAPP_HELPER, helperNeedsInstall, refreshHelperStatus, useHelperInstall } from '../state/helperInstall.js';
 
 export function HelperSurface(): ReactElement | null {
@@ -20,8 +20,10 @@ export function HelperSurface(): ReactElement | null {
     if (getPlatform().helperStatus !== undefined) void refreshHelperStatus(WHATSAPP_HELPER);
   }, []);
   if (getPlatform().helperStatus === undefined) return null;
-  const status = state.phase === 'ready' || state.phase === 'installing' ? state.status : undefined;
-  if (status === undefined || !status.linkedSessionOnDisk || !helperNeedsInstall(status)) return null;
+  // `error` keeps its status (and the chip): a refused install must stay visible, not vanish
+  // with the sheet (review: line-by-line 1 — AC15 "nothing is silent" on the failure path).
+  const status = state.phase === 'unknown' ? undefined : state.status;
+  if (status === undefined || !status.linkedSessionOnDisk || (state.phase !== 'error' && !helperNeedsInstall(status))) return null;
   return (
     <>
       <button
@@ -33,18 +35,11 @@ export function HelperSurface(): ReactElement | null {
       >
         WhatsApp helper needed
       </button>
-      {open
-        ? // Portaled for the same reason the update sheet is: the header's backdrop-filter
-          // would otherwise confine this fixed overlay to the header's box.
-          createPortal(
-            <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="WhatsApp helper">
-              <div className="net-confirm-card">
-                <HelperInstallCard name={WHATSAPP_HELPER} appName="Your linked WhatsApp" onInstalled={() => setOpen(false)} onDismiss={() => setOpen(false)} />
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
+      {open ? (
+        <ConfirmOverlay ariaLabel="WhatsApp helper">
+          <HelperInstallCard name={WHATSAPP_HELPER} appName="Your linked WhatsApp" onInstalled={() => setOpen(false)} onDismiss={() => setOpen(false)} />
+        </ConfirmOverlay>
+      ) : null}
     </>
   );
 }

@@ -1,29 +1,6 @@
 {
   "releases": [
     {
-      "version": "0.1.2",
-      "date": "2026-08-26",
-      "title": "Telepath's helper installs itself",
-      "sections": [
-        {
-          "title": "What's new",
-          "items": [
-            "The WhatsApp helper Telepath needs is now a one-click download inside the app — about 41 MB from GitHub, signed with the same key as Snug updates — offered the moment you open Telepath or start linking. No developer tools, no separate install.",
-            "The download is checked twice before anything runs: the signature, and a fingerprint this exact version of Snug was built with. Anything else is refused and nothing touches your disk.",
-            "If a linked WhatsApp session is on this computer but its helper is missing, a chip in the header says so instead of failing quietly.",
-            "The update sheet now shows only what changed since the version you are running — the notes for the release you already have no longer appear under the new one, and the sheet can no longer be cut off at the top of a small window."
-          ]
-        },
-        {
-          "title": "Good to know",
-          "items": [
-            "The helper lives in ~/Snug/helpers and brings its own copy of Node, so nothing needs to be installed system-wide. It uses about 140 MB on disk once unpacked.",
-            "Installing the helper is always your click; Snug never downloads it on its own."
-          ]
-        }
-      ]
-    },
-    {
       "version": "0.1.1",
       "date": "2026-08-26",
       "title": "You can always see which brain is thinking",

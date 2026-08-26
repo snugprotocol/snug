@@ -213,7 +213,8 @@ let readOnce = false;
 export interface HelperStatusSeat {
   name: string;
   installed: boolean;
-  kind: 'absent' | 'dev' | 'downloaded';
+  /** `broken` = a downloaded stamp whose runtime is gone; treated as not installed. */
+  kind: 'absent' | 'dev' | 'downloaded' | 'broken';
   installedVersion?: string;
   requiredVersion: string;
   mismatch: boolean;
