@@ -85,6 +85,8 @@ export interface HelperStatus {
   /** From the pin, so the consent card can state the size BEFORE any request. */
   downloadBytes: number;
   unpackedBytes: number;
+  /** A linked session is on disk, so the shell wants this helper at launch. */
+  linkedSessionOnDisk: boolean;
 }
 
 export interface HelperInstallProgress {

@@ -220,6 +220,8 @@ export interface HelperStatusSeat {
   arch: string;
   downloadBytes: number;
   unpackedBytes: number;
+  /** A linked session is on disk, so the shell wants this helper at launch. */
+  linkedSessionOnDisk: boolean;
 }
 
 export interface HelperInstallProgressSeat {

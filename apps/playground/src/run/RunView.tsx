@@ -53,6 +53,8 @@ import { initialRevealState, revealReduce, type RevealState } from './capability
 import { DocsPanel } from './DocsPanel.js';
 import { downloadBlob, exportDatabase } from './exportDb.js';
 import { RunHeaderActions } from './RunHeaderActions.js';
+import { HelperInstallCard } from '../connections/HelperInstallCard.js';
+import { WHATSAPP_HELPER, helperNeedsInstall, refreshHelperStatus } from '../state/helperInstall.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from './llmInspector.js';
 import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
@@ -409,10 +411,26 @@ export default function RunView(): ReactElement {
    */
   const wizardRevision = useStore(connectionWizardRevisionStore);
   const [connectionSlots, setConnectionSlots] = useState(0);
+  /**
+   * ADR-0060 §9 — THE INSTALL MOMENT and the RUNTIME MOMENT share one surface: an owned
+   * app with a `linked_device` slot whose helper is absent (or a downloaded one that no
+   * longer matches this build's pin) gets the download card above its frame. Re-read on
+   * the same triggers as the slot count, and hidden the moment the status is clean.
+   * `helperNeedsInstall` is the single rule; web (no seat) never sets it.
+   */
+  const [helperWanted, setHelperWanted] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    void getUserDb().then((db) => {
-      if (!cancelled) setConnectionSlots(db.listConnections(id).length);
+    void getUserDb().then(async (db) => {
+      const rows = db.listConnections(id);
+      if (cancelled) return;
+      setConnectionSlots(rows.length);
+      if (rows.some((row) => row.requirement.kind === 'linked_device')) {
+        const status = await refreshHelperStatus(WHATSAPP_HELPER);
+        if (!cancelled) setHelperWanted(helperNeedsInstall(status));
+      } else {
+        setHelperWanted(false);
+      }
     });
     return () => {
       cancelled = true;
@@ -678,6 +696,14 @@ export default function RunView(): ReactElement {
         code-keyed, while the auth-shaped one fires on delivered 401/403s where the
         executor injected credentials.
       */}
+      {helperWanted ? (
+        <HelperInstallCard
+          name={WHATSAPP_HELPER}
+          appName={getAppMeta(id)?.displayName ?? meta?.displayName ?? 'This app'}
+          onInstalled={() => setHelperWanted(false)}
+          onDismiss={() => setHelperWanted(false)}
+        />
+      ) : null}
       {netAuthError !== null ? (
         // AC10: "this app wants to connect" is ORDINARY, not a failure — it was
         // arriving in the same alarm red as a rejected credential. Calm surface, ember

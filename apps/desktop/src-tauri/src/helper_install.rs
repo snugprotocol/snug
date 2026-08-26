@@ -37,8 +37,8 @@ pub const REQUIRED_HELPERS: &[RequiredHelper] = &[RequiredHelper {
     name: "whatsapp-sidecar",
     version: "0.1.0",
     tag: "helper-whatsapp-sidecar-v0.1.0",
-    aarch64: HelperAsset { sha256: "331fa05e157aca339ea6103828078349440b9d74a8c06bb906f2c8acf500bdde", size: 42781510, unpacked_size: 142348572 },
-    x86_64: HelperAsset { sha256: "4c784449999bf4355186ea3d60f3afe54d99851f23bd95166e4c0d2e077b2b81", size: 43996175, unpacked_size: 144851164 },
+    aarch64: HelperAsset { sha256: "3726e217c78605f207ac02d5434cfd7a9ae354a03e6e7637e70a25da862c601e", size: 42781469, unpacked_size: 142348572 },
+    x86_64: HelperAsset { sha256: "df422e92a463ab324cbf0ce8b7bed5eedf62c7e8a5aded681f7722c6fcd821d3", size: 43996343, unpacked_size: 144851164 },
 }];
 
 /// Where helper releases live. Single-homed like the updater endpoint (ADR-0047 §11) and
@@ -114,6 +114,10 @@ pub struct HelperStatus {
     pub arch: String,
     pub download_bytes: u64,
     pub unpacked_bytes: u64,
+    /// A linked WhatsApp session exists on disk (`should_autostart`), so the shell WANTS
+    /// this helper at launch — the header chip's trigger when it is absent/mismatched
+    /// (AC15: autostart failure must not be silent).
+    pub linked_session_on_disk: bool,
 }
 
 pub fn current_arch() -> &'static str {
@@ -147,6 +151,11 @@ pub fn status_for(helper: &RequiredHelper, dir: &Path, arch: &str) -> HelperStat
         arch: arch.to_string(),
         download_bytes: asset.size,
         unpacked_bytes: asset.unpacked_size,
+        linked_session_on_disk: dir
+            .parent()
+            .and_then(|helpers| helpers.parent())
+            .map(crate::sidecar::should_autostart)
+            .unwrap_or(false),
     }
 }
 

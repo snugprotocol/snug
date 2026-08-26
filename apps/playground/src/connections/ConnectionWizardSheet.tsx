@@ -101,6 +101,7 @@ import { chooseAuthOption } from '../state/authKindChoice.js';
 import { hasLiveAppHost, notifyAppRefresh } from '../state/appHosts.js';
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
+import { HelperInstallCard } from './HelperInstallCard.js';
 import { isPrivateNetworkHost } from '../security/privateHost.js';
 import { Sheet } from '../ui/Sheet.js';
 import { ReportErrorLink } from '../feedback/ReportErrorLink.js';
@@ -333,6 +334,8 @@ function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: (
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | undefined>(undefined);
   const [waiting, setWaiting] = useState(false);
+  /** ADR-0060: the helper is absent — show the download card instead of a dead note. */
+  const [helperMissing, setHelperMissing] = useState(false);
 
   const instruction =
     row.requirement.kind === 'linked_device'
@@ -360,9 +363,14 @@ function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: (
     const started = await beginDeviceLink();
     setBusy(false);
     if (!started.ok) {
+      if ('reason' in started && started.reason === 'helper-missing') {
+        setHelperMissing(true);
+        return;
+      }
       setNote(started.message);
       return;
     }
+    setHelperMissing(false);
     if ('alreadyLinked' in started) {
       // The helper is linked and there is nothing to scan (autostart + boot resume make
       // this the common case, ADR-0037): complete directly — the verify read and the mint
@@ -449,6 +457,9 @@ function LinkedDeviceScreen({ row, onLinked }: { row: ConnectionRow; onLinked: (
           </Button>
         </>
       )}
+      {helperMissing ? (
+        <HelperInstallCard name="whatsapp-sidecar" appName="Linking WhatsApp" onInstalled={() => void start()} />
+      ) : null}
       {note !== undefined ? (
         <span className="hint" role="status" data-testid="linked-device-note">
           {note}
