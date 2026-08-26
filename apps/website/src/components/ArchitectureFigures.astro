@@ -1,0 +1,773 @@
+---
+// ArchitectureFigures.astro — the six diagrams on /architecture/ (TASK-20260826).
+//
+// Hand-authored inline SVG, no library, no runtime, no external image. Every colour is a
+// token from the playground's tokens.css (via site.css's @import) — the page must follow
+// the brand and the light theme the tokens carry, never pin its own palette (AC7).
+// Strokes and text use currentColor or a token so a figure inherits the surface it sits on.
+//
+// Each figure is one claim: role="img" + an aria-label carrying the same claim as the
+// visible caption, per the diagramming guidance. Geometry was validated (bounds, text
+// overflow, same-baseline overlap) before and after the token restyle.
+//
+// Every factual label here traces to a public in-repo source — packages/protocol
+// (constants.ts, schemas/), docs/architecture.md, docs/threat-model.md,
+// examples/ledger/connection.json. Nothing derives from the private strategy tree (C4).
+---
+
+<div class="figures">
+  {/* ============ FIG 1 ============ */}
+  <figure class="fig">
+    <div class="fig-head">
+      <span class="fig-num">Fig 1</span>
+      <h2>Codegen hands you an orphan. Snug keeps the wire live.</h2>
+    </div>
+    <p class="fig-lede">
+      The difference is not code quality — it is whether the intelligence is present at runtime. A
+      generated chess app must ship a chess engine. A Snug chess app sends the board over the bridge
+      and animates the reply.
+    </p>
+
+    <div class="fig-box">
+      <svg
+        viewBox="0 0 920 300"
+        role="img"
+        aria-label="A code generator emits a finished static app whose link to the model ends at build time, while Snug keeps a live two-way bridge between the running app and the host agent."
+      >
+        <defs>
+          <marker id="f1-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--fg-faint)"></path>
+          </marker>
+          <marker id="f1-emb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ember)"></path>
+          </marker>
+        </defs>
+
+        <line x1="460" y1="26" x2="460" y2="284" class="d-edge d-dash"></line>
+
+        <text x="24" y="30" class="d-lab">THE USUAL WAY — CODE GENERATION</text>
+        <rect x="24" y="52" width="120" height="52" rx="3" class="d-box"></rect>
+        <text x="84" y="76" class="d-strong" text-anchor="middle">Model</text>
+        <text x="84" y="92" class="d-small" text-anchor="middle">writes the code</text>
+
+        <line x1="144" y1="78" x2="228" y2="78" class="d-line" marker-end="url(#f1-ink)"></line>
+        <text x="186" y="70" class="d-small" text-anchor="middle">emits</text>
+
+        <rect x="228" y="52" width="128" height="52" rx="3" class="d-box"></rect>
+        <text x="292" y="76" class="d-strong" text-anchor="middle">Finished app</text>
+        <text x="292" y="92" class="d-small" text-anchor="middle">static bundle</text>
+
+        <line x1="292" y1="118" x2="292" y2="172" class="d-line d-dash"></line>
+        <line x1="278" y1="138" x2="306" y2="158" class="d-cut"></line>
+        <line x1="306" y1="138" x2="278" y2="158" class="d-cut"></line>
+        <text x="318" y="152" class="d-small d-danger">link ends at build time</text>
+
+        <rect x="228" y="186" width="128" height="46" rx="3" class="d-edge"></rect>
+        <text x="292" y="207" class="d-text" text-anchor="middle">Runs alone</text>
+        <text x="292" y="223" class="d-small" text-anchor="middle">logic frozen in the file</text>
+
+        <text x="24" y="264" class="d-small">To get smarter it must be</text>
+        <text x="24" y="280" class="d-small">regenerated — a new build.</text>
+
+        <text x="496" y="30" class="d-lab d-ember">THE SNUG WAY — RUNTIME BRIDGE</text>
+
+        <rect x="496" y="52" width="150" height="52" rx="3" class="d-box"></rect>
+        <text x="571" y="76" class="d-strong" text-anchor="middle">Micro app</text>
+        <text x="571" y="92" class="d-small" text-anchor="middle">the body · UI + state</text>
+
+        <rect x="748" y="52" width="150" height="52" rx="3" class="d-box"></rect>
+        <text x="823" y="76" class="d-strong" text-anchor="middle">Host agent</text>
+        <text x="823" y="92" class="d-small" text-anchor="middle">the mind · any LLM</text>
+
+        <line x1="646" y1="68" x2="748" y2="68" class="d-bridge" marker-end="url(#f1-emb)"></line>
+        <text x="697" y="60" class="d-mono d-ember" text-anchor="middle">app-message</text>
+        <line x1="748" y1="90" x2="646" y2="90" class="d-bridge" marker-end="url(#f1-emb)"></line>
+        <text x="697" y="104" class="d-mono d-ember" text-anchor="middle">app-response</text>
+
+        <text x="496" y="140" class="d-small">Every move, every question, every turn —</text>
+        <text x="496" y="157" class="d-small">while the app is running.</text>
+
+        <rect x="496" y="180" width="402" height="86" rx="3" class="d-box d-box-ember"></rect>
+        <text x="514" y="204" class="d-strong">The app ships no intelligence of its own.</text>
+        <text x="514" y="226" class="d-small">A chess game carries no chess engine. A budget app carries no</text>
+        <text x="514" y="243" class="d-small">categorizer. They carry a runtime contract — ~1.26 KB/turn — that</text>
+        <text x="514" y="260" class="d-small">tells any brain how to answer. Small local models included.</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>The consequence:</b> the app never goes stale. Point it at a better model next year and it gets
+      better without a rebuild — and because it carries no model-specific logic, “better model” can also
+      mean “smaller model that now runs on your laptop.”
+    </figcaption>
+  </figure>
+
+  {/* ============ FIG 2 ============ */}
+  <figure class="fig">
+    <div class="fig-head">
+      <span class="fig-num">Fig 2</span>
+      <h2>The runtime is a socket. Anyone can be the brain.</h2>
+    </div>
+    <p class="fig-lede">
+      The bridge speaks one versioned wire protocol — thirteen frames, seven message kinds, v1.
+      Whoever supplies the intelligence sits behind an adapter. That is the whole switching cost: an
+      adapter.
+    </p>
+
+    <div class="fig-box">
+      <svg
+        viewBox="0 0 920 396"
+        role="img"
+        aria-label="Apps and the portable user file sit above a frozen envelope protocol; below it an interchangeable adapter layer reaches Anthropic, OpenAI, a local model, or any other runtime, with no change to the app."
+      >
+        <defs>
+          <marker id="f2-emb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ember)"></path>
+          </marker>
+          <marker id="f2-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ok)"></path>
+          </marker>
+        </defs>
+
+        <text x="24" y="28" class="d-lab">THE USER'S DEVICE</text>
+        <rect x="24" y="44" width="872" height="96" rx="4" class="d-box"></rect>
+
+        <rect x="46" y="64" width="150" height="56" rx="3" class="d-edge"></rect>
+        <text x="121" y="86" class="d-strong" text-anchor="middle">Ledger</text>
+        <text x="121" y="103" class="d-small" text-anchor="middle">budget · own DB</text>
+
+        <rect x="210" y="64" width="150" height="56" rx="3" class="d-edge"></rect>
+        <text x="285" y="86" class="d-strong" text-anchor="middle">Rewind</text>
+        <text x="285" y="103" class="d-small" text-anchor="middle">Spotify · own DB</text>
+
+        <rect x="374" y="64" width="150" height="56" rx="3" class="d-edge"></rect>
+        <text x="449" y="86" class="d-strong" text-anchor="middle">Chess</text>
+        <text x="449" y="103" class="d-small" text-anchor="middle">agent plays you</text>
+
+        <rect x="538" y="64" width="150" height="56" rx="3" class="d-edge d-dash"></rect>
+        <text x="613" y="90" class="d-small" text-anchor="middle">…anything the user</text>
+        <text x="613" y="106" class="d-small" text-anchor="middle">describes in chat</text>
+
+        <rect x="702" y="64" width="172" height="56" rx="3" class="d-box d-box-ok"></rect>
+        <text x="788" y="84" class="d-strong d-ok" text-anchor="middle">user.snug</text>
+        <text x="788" y="101" class="d-small" text-anchor="middle">one SQLite file · all of it</text>
+        <text x="788" y="115" class="d-small" text-anchor="middle">code · versions · data · chats</text>
+
+        <line x1="449" y1="140" x2="449" y2="168" class="d-bridge" marker-end="url(#f2-emb)"></line>
+        <line x1="449" y1="232" x2="449" y2="204" class="d-bridge" marker-end="url(#f2-emb)"></line>
+
+        <rect x="24" y="168" width="872" height="64" rx="4" class="d-box d-box-ember"></rect>
+        <text x="46" y="192" class="d-strong d-ember">THE SNUG ENVELOPE — wire protocol v1, frozen</text>
+        <text x="46" y="214" class="d-mono">app-announce · host-ready · app-message · app-response · db-request · net-request · +7</text>
+        <text x="874" y="200" class="d-small" text-anchor="end">13 frames</text>
+        <text x="874" y="216" class="d-small" text-anchor="end">7 kinds</text>
+
+        <text x="24" y="264" class="d-lab d-ok">↕ ADAPTER SEAM — THE ONLY THING THAT CHANGES PER PROVIDER</text>
+
+        <line x1="140" y1="276" x2="140" y2="302" class="d-ok-line" marker-end="url(#f2-ok)"></line>
+        <line x1="356" y1="276" x2="356" y2="302" class="d-ok-line" marker-end="url(#f2-ok)"></line>
+        <line x1="572" y1="276" x2="572" y2="302" class="d-ok-line" marker-end="url(#f2-ok)"></line>
+        <line x1="788" y1="276" x2="788" y2="302" class="d-ok-line" marker-end="url(#f2-ok)"></line>
+
+        <rect x="34" y="302" width="212" height="70" rx="3" class="d-box"></rect>
+        <text x="140" y="326" class="d-strong" text-anchor="middle">Anthropic</text>
+        <text x="140" y="344" class="d-small" text-anchor="middle">shipped adapter</text>
+        <text x="140" y="360" class="d-mono" text-anchor="middle">BYOK or subscription</text>
+
+        <rect x="250" y="302" width="212" height="70" rx="3" class="d-box"></rect>
+        <text x="356" y="326" class="d-strong" text-anchor="middle">OpenAI</text>
+        <text x="356" y="344" class="d-small" text-anchor="middle">shipped adapter</text>
+        <text x="356" y="360" class="d-mono" text-anchor="middle">BYOK or subscription</text>
+
+        <rect x="466" y="302" width="212" height="70" rx="3" class="d-box d-box-ok"></rect>
+        <text x="572" y="326" class="d-strong d-ok" text-anchor="middle">Local model</text>
+        <text x="572" y="344" class="d-small" text-anchor="middle">Ollama · on the laptop</text>
+        <text x="572" y="360" class="d-mono" text-anchor="middle">nothing leaves the device</text>
+
+        <rect x="682" y="302" width="212" height="70" rx="3" class="d-box d-dash"></rect>
+        <text x="788" y="326" class="d-strong" text-anchor="middle">Your runtime</text>
+        <text x="788" y="344" class="d-small" text-anchor="middle">any company, any model</text>
+        <text x="788" y="360" class="d-mono" text-anchor="middle">write one adapter</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>What this buys you:</b> Snug is deliberately not a model company and not a cloud. Every provider
+      is a plug behind one frozen wire format, so “which model?” becomes a settings choice instead of a
+      migration — and any company can host the runtime without owning the apps or the data.
+    </figcaption>
+  </figure>
+
+  {/* ============ FIG 3 ============ */}
+  <figure class="fig">
+    <div class="fig-head">
+      <span class="fig-num">Fig 3</span>
+      <h2>No backend — yet it talks to your bank.</h2>
+    </div>
+    <p class="fig-lede">
+      There is no Snug server in this picture, and that is the point. The app itself has <em
+      >no network at all</em>. Every outside call is made by the host on the app's behalf, with the
+      credential injected after the app is out of the loop.
+    </p>
+
+    <div class="fig-box">
+      <svg
+        viewBox="0 0 920 420"
+        role="img"
+        aria-label="The app iframe has connect-src none and cannot reach the network. It sends a net-request frame to the host, which injects credentials from the user's own file, calls the third party, scrubs the response, and returns data only. Credentials never enter the app or the model."
+      >
+        <defs>
+          <marker id="f3-emb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ember)"></path>
+          </marker>
+          <marker id="f3-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ok)"></path>
+          </marker>
+        </defs>
+
+        <text x="24" y="26" class="d-lab">SANDBOXED APP</text>
+        <rect x="24" y="42" width="212" height="150" rx="4" class="d-box"></rect>
+        <text x="130" y="72" class="d-strong" text-anchor="middle">Micro app</text>
+        <text x="130" y="90" class="d-small" text-anchor="middle">iframe · allow-scripts only</text>
+        <rect x="42" y="106" width="176" height="30" rx="3" class="d-edge d-edge-danger"></rect>
+        <text x="130" y="125" class="d-mono d-danger" text-anchor="middle">connect-src 'none'</text>
+        <text x="130" y="156" class="d-small" text-anchor="middle">It cannot open a socket.</text>
+        <text x="130" y="172" class="d-small" text-anchor="middle">Not restricted — incapable.</text>
+
+        <line x1="236" y1="100" x2="330" y2="100" class="d-bridge" marker-end="url(#f3-emb)"></line>
+        <text x="283" y="92" class="d-mono d-ember" text-anchor="middle">net-request</text>
+        <text x="283" y="116" class="d-small" text-anchor="middle">“get my balances”</text>
+        <text x="283" y="131" class="d-small" text-anchor="middle">no token in it</text>
+
+        <text x="330" y="26" class="d-lab d-ember">THE HOST — TRUST BOUNDARY</text>
+        <rect x="330" y="42" width="252" height="270" rx="4" class="d-box d-box-ember"></rect>
+        <text x="456" y="72" class="d-strong" text-anchor="middle">Connected-fetch executor</text>
+        <text x="456" y="89" class="d-small" text-anchor="middle">the only code that may call out</text>
+
+        <rect x="348" y="106" width="216" height="58" rx="3" class="d-box d-box-ok"></rect>
+        <text x="456" y="127" class="d-strong d-ok" text-anchor="middle">snug_secrets</text>
+        <text x="456" y="145" class="d-small" text-anchor="middle">tokens live inside the user's</text>
+        <text x="456" y="158" class="d-small" text-anchor="middle">own file — never a server vault</text>
+
+        <rect x="348" y="176" width="216" height="52" rx="3" class="d-edge"></rect>
+        <text x="456" y="196" class="d-text" text-anchor="middle">Frozen host ceiling</text>
+        <text x="456" y="214" class="d-small" text-anchor="middle">human-approved scopes · per connection</text>
+
+        <rect x="348" y="240" width="216" height="52" rx="3" class="d-edge"></rect>
+        <text x="456" y="260" class="d-text" text-anchor="middle">Inject → call → scrub</text>
+        <text x="456" y="278" class="d-small" text-anchor="middle">credentials stripped from the reply</text>
+
+        <line x1="582" y1="130" x2="676" y2="130" class="d-ok-line" marker-end="url(#f3-ok)"></line>
+        <text x="629" y="122" class="d-small" text-anchor="middle">authenticated</text>
+        <text x="629" y="146" class="d-small" text-anchor="middle">call</text>
+
+        <text x="676" y="26" class="d-lab">YOUR SERVICES</text>
+        <rect x="676" y="42" width="220" height="52" rx="3" class="d-box"></rect>
+        <text x="786" y="66" class="d-strong" text-anchor="middle">Your bank</text>
+        <text x="786" y="82" class="d-small" text-anchor="middle">SimpleFIN · real balances</text>
+
+        <rect x="676" y="104" width="220" height="52" rx="3" class="d-box"></rect>
+        <text x="786" y="128" class="d-strong" text-anchor="middle">Coinbase</text>
+        <text x="786" y="144" class="d-small" text-anchor="middle">holdings · prices</text>
+
+        <rect x="676" y="166" width="220" height="52" rx="3" class="d-box"></rect>
+        <text x="786" y="190" class="d-strong" text-anchor="middle">Spotify</text>
+        <text x="786" y="206" class="d-small" text-anchor="middle">listening history</text>
+
+        <rect x="676" y="228" width="220" height="52" rx="3" class="d-box d-dash"></rect>
+        <text x="786" y="252" class="d-strong" text-anchor="middle">Gmail · WhatsApp · Hue</text>
+        <text x="786" y="268" class="d-small" text-anchor="middle">and anything with an API</text>
+
+        <path d="M676 296 L620 296 L620 330 L283 330 L283 146" class="d-ok-line d-dash" marker-end="url(#f3-ok)"></path>
+        <text x="452" y="324" class="d-mono d-ok" text-anchor="middle">net-response — data only, credentials scrubbed</text>
+
+        <rect x="24" y="352" width="872" height="52" rx="4" class="d-box"></rect>
+        <text x="46" y="376" class="d-strong">The invariant, enforced in code and tested:</text>
+        <text x="46" y="394" class="d-small">A credential never enters the app iframe · never reaches the LLM · never reaches a publisher · never leaves as telemetry.</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>Read the shape, not the boxes:</b> the app sits on the left with no way out, the credentials sit
+      in the middle behind a boundary, and the model never appears on this path at all. Security here
+      is <em>architectural</em> — there is no policy toggle that could weaken it.
+    </figcaption>
+  </figure>
+
+  {/* ============ FIG 4 ============ */}
+  <figure class="fig">
+    <div class="fig-head">
+      <span class="fig-num">Fig 4</span>
+      <h2>One use case, both worlds: where does your money data live?</h2>
+    </div>
+    <p class="fig-lede">
+      A budget app is the honest test, because the data is the most sensitive a consumer has. Both rows
+      below use a bridge to reach the bank — that part is unavoidable. The difference is what each
+      intermediary is allowed to <em>keep</em>, and where the consolidated picture is assembled.
+    </p>
+
+    <div class="fig-box">
+      <svg
+        viewBox="0 0 920 496"
+        role="img"
+        aria-label="In the aggregator model, banks feed an aggregator that stores consolidated financial history on its servers, and its analytics and hosted model see the user's questions. With Snug, the bridge passes read-only data through under a revocable token, the consolidated history is assembled only on the user's device, and a local model answers questions so nothing leaves the machine."
+      >
+        <defs>
+          <marker id="f4-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--fg-faint)"></path>
+          </marker>
+          <marker id="f4-dgr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--danger)"></path>
+          </marker>
+          <marker id="f4-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ok)"></path>
+          </marker>
+        </defs>
+
+        <text x="24" y="26" class="d-lab d-danger">TODAY — THE AGGREGATOR MODEL</text>
+
+        <rect x="24" y="44" width="118" height="120" rx="3" class="d-box"></rect>
+        <text x="83" y="70" class="d-strong" text-anchor="middle">Your banks</text>
+        <text x="83" y="92" class="d-small" text-anchor="middle">checking</text>
+        <text x="83" y="110" class="d-small" text-anchor="middle">savings</text>
+        <text x="83" y="128" class="d-small" text-anchor="middle">cards</text>
+        <text x="83" y="150" class="d-small" text-anchor="middle">brokerage</text>
+
+        <line x1="142" y1="104" x2="212" y2="104" class="d-line" marker-end="url(#f4-ink)"></line>
+        <text x="177" y="96" class="d-small" text-anchor="middle">creds</text>
+
+        <rect x="212" y="44" width="210" height="120" rx="3" class="d-box d-box-danger"></rect>
+        <text x="317" y="70" class="d-strong d-danger" text-anchor="middle">The aggregator</text>
+        <text x="317" y="88" class="d-small" text-anchor="middle">a company, in the data path</text>
+        <rect x="228" y="100" width="178" height="50" rx="3" class="d-edge"></rect>
+        <text x="317" y="120" class="d-text" text-anchor="middle">Holds your full history</text>
+        <text x="317" y="138" class="d-small" text-anchor="middle">consolidated, on their servers</text>
+
+        <line x1="422" y1="104" x2="492" y2="104" class="d-cut" marker-end="url(#f4-dgr)"></line>
+        <text x="457" y="96" class="d-small d-danger" text-anchor="middle">copies</text>
+
+        <rect x="492" y="44" width="176" height="56" rx="3" class="d-box"></rect>
+        <text x="580" y="68" class="d-strong" text-anchor="middle">Their analytics</text>
+        <text x="580" y="86" class="d-small" text-anchor="middle">categorization · partners</text>
+
+        <rect x="492" y="108" width="176" height="56" rx="3" class="d-box d-edge-danger"></rect>
+        <text x="580" y="132" class="d-strong d-danger" text-anchor="middle">Their hosted model</text>
+        <text x="580" y="150" class="d-small" text-anchor="middle">sees your questions + rows</text>
+
+        <line x1="668" y1="104" x2="738" y2="104" class="d-line" marker-end="url(#f4-ink)"></line>
+
+        <rect x="738" y="44" width="158" height="120" rx="3" class="d-box"></rect>
+        <text x="817" y="76" class="d-strong" text-anchor="middle">You</text>
+        <text x="817" y="98" class="d-small" text-anchor="middle">get a view of data</text>
+        <text x="817" y="116" class="d-small" text-anchor="middle">held somewhere else</text>
+        <text x="817" y="140" class="d-mono d-danger" text-anchor="middle">exit = start over</text>
+
+        <line x1="24" y1="196" x2="896" y2="196" class="d-edge d-dash"></line>
+        <text x="460" y="222" class="d-small" text-anchor="middle">Same bank data. Same question — “where did my money go last month?” — asked of a different architecture.</text>
+
+        <text x="24" y="266" class="d-lab d-ok">WITH SNUG — THE LEDGER APP</text>
+
+        <rect x="24" y="284" width="118" height="120" rx="3" class="d-box"></rect>
+        <text x="83" y="310" class="d-strong" text-anchor="middle">Your banks</text>
+        <text x="83" y="332" class="d-small" text-anchor="middle">checking</text>
+        <text x="83" y="350" class="d-small" text-anchor="middle">savings</text>
+        <text x="83" y="368" class="d-small" text-anchor="middle">cards</text>
+        <text x="83" y="390" class="d-small" text-anchor="middle">brokerage</text>
+
+        <line x1="142" y1="344" x2="212" y2="344" class="d-ok-line" marker-end="url(#f4-ok)"></line>
+        <text x="177" y="336" class="d-small" text-anchor="middle">read-only</text>
+
+        <rect x="212" y="284" width="130" height="120" rx="3" class="d-box"></rect>
+        <text x="277" y="310" class="d-strong" text-anchor="middle">SimpleFIN</text>
+        <text x="277" y="328" class="d-small" text-anchor="middle">a bridge, not a</text>
+        <text x="277" y="344" class="d-small" text-anchor="middle">destination</text>
+        <text x="277" y="368" class="d-mono" text-anchor="middle">token you hold</text>
+        <text x="277" y="386" class="d-mono" text-anchor="middle">and can revoke</text>
+
+        <line x1="342" y1="344" x2="412" y2="344" class="d-ok-line" marker-end="url(#f4-ok)"></line>
+        <text x="377" y="336" class="d-small" text-anchor="middle">passes</text>
+        <text x="377" y="360" class="d-small" text-anchor="middle">through</text>
+
+        <rect x="412" y="266" width="484" height="156" rx="5" class="d-box d-box-ok"></rect>
+        <text x="432" y="288" class="d-lab d-ok">YOUR DEVICE — WHERE THE PICTURE IS ASSEMBLED</text>
+
+        <rect x="432" y="300" width="200" height="52" rx="3" class="d-box"></rect>
+        <text x="532" y="322" class="d-strong" text-anchor="middle">Ledger app</text>
+        <text x="532" y="340" class="d-small" text-anchor="middle">sandboxed · no network</text>
+
+        <rect x="432" y="360" width="200" height="48" rx="3" class="d-box d-box-ok"></rect>
+        <text x="532" y="380" class="d-strong d-ok" text-anchor="middle">user.snug</text>
+        <text x="532" y="397" class="d-small" text-anchor="middle">the only consolidated copy</text>
+
+        <line x1="632" y1="326" x2="676" y2="326" class="d-bridge" marker-end="url(#f4-ok)"></line>
+        <line x1="676" y1="382" x2="632" y2="382" class="d-bridge" marker-end="url(#f4-ok)"></line>
+
+        <rect x="676" y="300" width="200" height="108" rx="3" class="d-box d-box-ok"></rect>
+        <text x="776" y="324" class="d-strong d-ok" text-anchor="middle">Local model</text>
+        <text x="776" y="342" class="d-small" text-anchor="middle">Ollama, on this machine</text>
+        <text x="776" y="366" class="d-small" text-anchor="middle">answers “where did my</text>
+        <text x="776" y="383" class="d-small" text-anchor="middle">money go?” from your rows</text>
+        <text x="776" y="401" class="d-mono" text-anchor="middle">nothing leaves the device</text>
+
+        <rect x="24" y="440" width="872" height="44" rx="4" class="d-box"></rect>
+        <text x="46" y="459" class="d-strong">Who ever holds your consolidated financial picture?</text>
+        <text x="46" y="477" class="d-small">Aggregator model: the aggregator, its analytics, its model provider, and whoever acquires them.  ·  Snug: your device.</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>The one difference:</b> in the top row the consolidated picture is assembled on someone else's
+      server, and that box persists — through acquisitions, policy changes, and shutdowns. In the bottom
+      row every intermediary is a pass-through and consolidation happens only inside <code
+      >user.snug</code>. Note what is <em>not</em> claimed: both rows cross a bridge to reach the
+      bank. SimpleFIN is an aggregator too. The claim is not “no intermediary” — it is <b
+      >no intermediary that accumulates</b>.
+    </figcaption>
+  </figure>
+
+  {/* ============ FIG 5 ============ */}
+  <figure class="fig">
+    <div class="fig-head">
+      <span class="fig-num">Fig 5</span>
+      <h2>Private mode: the whole system, on one machine.</h2>
+    </div>
+    <p class="fig-lede">
+      Same protocol, same apps, same file — with the model moved onto the machine. Nothing in the
+      architecture changes, because the provider was always just an adapter.
+    </p>
+
+    <div class="fig-box">
+      <svg
+        viewBox="0 0 920 300"
+        role="img"
+        aria-label="In private desktop mode the app, the host, the local model and the user file all sit inside one machine boundary; the only outbound traffic is optional user-approved calls to third parties, and there is no Snug server and no telemetry."
+      >
+        <defs>
+          <marker id="f5-emb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ember)"></path>
+          </marker>
+          <marker id="f5-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ok)"></path>
+          </marker>
+        </defs>
+
+        <rect x="24" y="34" width="616" height="240" rx="6" class="d-box d-box-ok"></rect>
+        <text x="44" y="60" class="d-lab d-ok">ONE MACHINE · macOS DESKTOP · SIGNED + NOTARIZED</text>
+
+        <rect x="48" y="80" width="164" height="70" rx="3" class="d-box"></rect>
+        <text x="130" y="104" class="d-strong" text-anchor="middle">Micro apps</text>
+        <text x="130" y="122" class="d-small" text-anchor="middle">sandboxed iframes</text>
+        <text x="130" y="138" class="d-small" text-anchor="middle">no network of their own</text>
+
+        <line x1="212" y1="115" x2="268" y2="115" class="d-bridge" marker-end="url(#f5-emb)"></line>
+        <line x1="268" y1="132" x2="212" y2="132" class="d-bridge" marker-end="url(#f5-emb)"></line>
+        <text x="240" y="107" class="d-mono d-ember" text-anchor="middle">envelope</text>
+
+        <rect x="268" y="80" width="164" height="70" rx="3" class="d-box"></rect>
+        <text x="350" y="104" class="d-strong" text-anchor="middle">Host runtime</text>
+        <text x="350" y="122" class="d-small" text-anchor="middle">native fetch</text>
+        <text x="350" y="138" class="d-small" text-anchor="middle">loopback OAuth</text>
+
+        <line x1="432" y1="115" x2="488" y2="115" class="d-bridge" marker-end="url(#f5-emb)"></line>
+        <line x1="488" y1="132" x2="432" y2="132" class="d-bridge" marker-end="url(#f5-emb)"></line>
+
+        <rect x="488" y="80" width="130" height="70" rx="3" class="d-box d-box-ok"></rect>
+        <text x="553" y="104" class="d-strong d-ok" text-anchor="middle">Local LLM</text>
+        <text x="553" y="122" class="d-small" text-anchor="middle">Ollama</text>
+        <text x="553" y="138" class="d-small" text-anchor="middle">localhost only</text>
+
+        <line x1="350" y1="150" x2="350" y2="182" class="d-ok-line" marker-end="url(#f5-ok)"></line>
+        <rect x="48" y="182" width="570" height="70" rx="3" class="d-box d-box-ok"></rect>
+        <text x="333" y="206" class="d-strong d-ok" text-anchor="middle">~/Snug/user.snug</text>
+        <text x="333" y="224" class="d-small" text-anchor="middle">every app · every version · every row of data · every chat · settings · secrets</text>
+        <text x="333" y="241" class="d-small" text-anchor="middle">optional whole-file encryption · opens with ordinary SQLite tools</text>
+
+        <line x1="640" y1="150" x2="704" y2="150" class="d-ok-line d-dash" marker-end="url(#f5-ok)"></line>
+        <text x="672" y="142" class="d-small" text-anchor="middle">optional</text>
+
+        <rect x="704" y="80" width="192" height="86" rx="3" class="d-edge"></rect>
+        <text x="800" y="104" class="d-text" text-anchor="middle">Third parties</text>
+        <text x="800" y="122" class="d-small" text-anchor="middle">only when the user</text>
+        <text x="800" y="138" class="d-small" text-anchor="middle">approves a connection</text>
+        <text x="800" y="156" class="d-small" text-anchor="middle">— and only these</text>
+
+        <rect x="704" y="182" width="192" height="70" rx="3" class="d-edge d-edge-danger"></rect>
+        <text x="800" y="206" class="d-strong d-danger" text-anchor="middle">No Snug server</text>
+        <text x="800" y="224" class="d-small" text-anchor="middle">no account required</text>
+        <text x="800" y="241" class="d-small" text-anchor="middle">no telemetry</text>
+
+        <text x="24" y="292" class="d-small">In this mode the prompt, the data and the model all stay inside one perimeter — which is what a regulated environment needs.</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>Try it yourself:</b> pull the network cable and keep building apps. The same <code
+      >.snug</code> file then opens on a machine running a frontier model in the cloud — same apps,
+      same data, different brain. Desktop is macOS-only through 1.0 for a stated security reason; see
+      the limits below.
+    </figcaption>
+  </figure>
+
+  {/* ============ FIG 6 ============ */}
+  <figure class="fig">
+    <div class="fig-head">
+      <span class="fig-num">Fig 6</span>
+      <h2>What the user actually carries.</h2>
+    </div>
+    <p class="fig-lede">
+      Most platforms keep your apps as rows in their database. Snug's unit of ownership is a file — and
+      that single decision is what makes portability across devices <em>and</em> vendors possible at all.
+    </p>
+
+    <div class="fig-box">
+      <svg
+        viewBox="0 0 920 316"
+        role="img"
+        aria-label="The user file contains apps with pinned versions, isolated per-app databases, chat threads, wiki docs, settings and secrets; it moves intact between devices, syncs to an origin the user picks, and carries across different model providers."
+      >
+        <defs>
+          <marker id="f6-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ok)"></path>
+          </marker>
+        </defs>
+
+        <rect x="24" y="34" width="330" height="248" rx="5" class="d-box d-box-ok"></rect>
+        <text x="44" y="60" class="d-lab d-ok">ONE FILE — REAL SQLITE</text>
+        <text x="44" y="86" class="d-title">user.snug</text>
+
+        <rect x="44" y="100" width="290" height="34" rx="3" class="d-box"></rect>
+        <text x="58" y="121" class="d-text">Apps + ≥5 pinned versions</text>
+
+        <rect x="44" y="140" width="290" height="34" rx="3" class="d-box"></rect>
+        <text x="58" y="161" class="d-text">Per-app isolated databases</text>
+
+        <rect x="44" y="180" width="290" height="34" rx="3" class="d-box"></rect>
+        <text x="58" y="201" class="d-text">Chat threads + per-app wiki docs</text>
+
+        <rect x="44" y="220" width="290" height="34" rx="3" class="d-box"></rect>
+        <text x="58" y="241" class="d-text">Settings + secrets (stripped on export)</text>
+
+        <text x="44" y="272" class="d-small">Openable with any SQLite tool. No lock-in by construction.</text>
+
+        <line x1="354" y1="98" x2="444" y2="98" class="d-ok-line" marker-end="url(#f6-ok)"></line>
+        <line x1="354" y1="158" x2="444" y2="158" class="d-ok-line" marker-end="url(#f6-ok)"></line>
+        <line x1="354" y1="218" x2="444" y2="218" class="d-ok-line" marker-end="url(#f6-ok)"></line>
+        <text x="399" y="90" class="d-small" text-anchor="middle">move</text>
+        <text x="399" y="150" class="d-small" text-anchor="middle">sync</text>
+        <text x="399" y="210" class="d-small" text-anchor="middle">switch</text>
+
+        <rect x="444" y="72" width="452" height="52" rx="3" class="d-box"></rect>
+        <text x="464" y="94" class="d-strong">Any device</text>
+        <text x="464" y="112" class="d-small">macOS desktop · browser · copied to a drive · emailed to yourself</text>
+
+        <rect x="444" y="132" width="452" height="52" rx="3" class="d-box"></rect>
+        <text x="464" y="154" class="d-strong">Any origin you pick</text>
+        <text x="464" y="172" class="d-small">Dropbox · your own hub · nowhere at all — the sync target is your choice</text>
+
+        <rect x="444" y="192" width="452" height="52" rx="3" class="d-box d-box-ember"></rect>
+        <text x="464" y="214" class="d-strong d-ember">Any provider</text>
+        <text x="464" y="232" class="d-small">Anthropic → OpenAI → a local model: the apps and the data come with you</text>
+
+        <rect x="444" y="252" width="452" height="30" rx="3" class="d-edge d-dash"></rect>
+        <text x="670" y="272" class="d-small" text-anchor="middle">The vendor holds nothing you need back.</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>The inversion:</b> most platforms retain you because leaving costs you your data. Here leaving
+      costs you nothing — the file is already on your disk, in a format that predates the project and
+      will outlive it. Retention has to come from the protocol being good.
+    </figcaption>
+  </figure>
+</div>
+
+<style>
+  .figures {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(3rem, 7vw, 5rem);
+  }
+
+  .fig {
+    margin: 0;
+  }
+
+  .fig-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+
+  .fig-num {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ember-bright);
+  }
+
+  .fig-head h2 {
+    font-family: var(--font-display);
+    font-size: clamp(1.4rem, 3vw, 2rem);
+    font-weight: 500;
+    line-height: 1.18;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .fig-lede {
+    max-width: 68ch;
+    margin: 0 0 var(--space-5);
+    color: var(--fg-muted);
+    line-height: 1.6;
+  }
+
+  .fig-box {
+    padding: clamp(1rem, 2.5vw, 1.75rem);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--bg);
+    box-shadow: var(--shadow-soft);
+    /* A diagram wider than the viewport scrolls INSIDE its own box — the page body must
+       never scroll sideways (lessons 2026-08-23: no horizontal scroll at 375px). */
+    overflow-x: auto;
+  }
+
+  .fig-box svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-width: 660px;
+  }
+
+  figcaption {
+    max-width: 78ch;
+    margin-top: var(--space-4);
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+    line-height: 1.6;
+  }
+
+  figcaption b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  figcaption code,
+  .fig-lede code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    color: var(--fg);
+  }
+
+  /* ---------- diagram vocabulary ----------
+     One class set shared by all six figures, so the drawings read as one system and a
+     token change moves every figure at once. */
+
+  .d-box {
+    fill: var(--surface);
+    stroke: var(--border);
+    stroke-width: 1;
+  }
+
+  .d-box-ember {
+    fill: var(--ember-glow);
+    stroke: var(--ember);
+  }
+
+  .d-box-ok {
+    fill: var(--surface-2);
+    stroke: var(--ok);
+  }
+
+  .d-box-danger {
+    fill: var(--danger-glow);
+    stroke: var(--danger);
+    stroke-width: 1.5;
+  }
+
+  .d-edge {
+    fill: none;
+    stroke: var(--border);
+    stroke-width: 1;
+  }
+
+  .d-edge-danger {
+    stroke: var(--danger);
+  }
+
+  .d-line {
+    fill: none;
+    stroke: var(--fg-faint);
+    stroke-width: 1.25;
+  }
+
+  .d-bridge {
+    fill: none;
+    stroke: var(--ember);
+    stroke-width: 1.75;
+  }
+
+  .d-ok-line {
+    fill: none;
+    stroke: var(--ok);
+    stroke-width: 1.5;
+  }
+
+  .d-cut {
+    fill: none;
+    stroke: var(--danger);
+    stroke-width: 1.5;
+  }
+
+  .d-dash {
+    stroke-dasharray: 4 4;
+  }
+
+  .d-text {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    fill: var(--fg);
+  }
+
+  .d-strong {
+    font-family: var(--font-ui);
+    font-size: 13.5px;
+    font-weight: 600;
+    fill: var(--fg);
+  }
+
+  .d-title {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 600;
+    fill: var(--ok);
+  }
+
+  .d-small {
+    font-family: var(--font-ui);
+    font-size: 11.5px;
+    fill: var(--fg-muted);
+  }
+
+  .d-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--fg-muted);
+  }
+
+  .d-lab {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+    fill: var(--fg-faint);
+  }
+
+  .d-ember {
+    fill: var(--ember-bright);
+  }
+
+  .d-ok {
+    fill: var(--ok);
+  }
+
+  .d-danger {
+    fill: var(--danger);
+  }
+</style>

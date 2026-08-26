@@ -1,0 +1,440 @@
+---
+// architecture.astro — "How it works": the visual argument for the protocol.
+//
+// Route is /architecture/ (durable, linkable); the nav LABEL is "How it works" (owner
+// decision 2026-08-26) — the two are pinned separately in marketingNav.test.ts so neither
+// silently becomes the other.
+//
+// Audience: a cold, skeptical technical reader arriving from a link, not a demo audience.
+// That is why the page carries "What this doesn't do" — five residuals already public in
+// docs/threat-model.md §6. Naming them here is the deliberate credibility trade recorded
+// in the task file; architecturePage.test.ts pins their presence so a later copy edit
+// cannot quietly keep the claims and drop the honest half.
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import ArchitectureFigures from '../components/ArchitectureFigures.astro';
+import { site } from '../config/site';
+---
+
+<MarketingLayout
+  title="How Snug works — the Snug Protocol"
+  description="Six diagrams: the runtime agent bridge, the frozen envelope protocol, how a sandboxed app reaches your bank without ever holding a credential, and why everything lives in one portable file you own."
+>
+  <section class="section hero">
+    <div class="container">
+      <p class="eyebrow">how it works</p>
+      <h1 class="display">The app is a body.<br />The agent is the <em>mind</em>.</h1>
+      <p class="lede">
+        A code generator writes an app and walks away. Snug keeps a <strong>live wire</strong> between
+        the running app and whatever model you point it at — and puts the whole thing, code and data
+        both, in <strong>one file you own</strong>. Six diagrams, no slideware: here is the actual
+        mechanism.
+      </p>
+
+      <div class="claims">
+        <div class="claim">
+          <p class="claim-k">The bridge</p>
+          <p class="claim-v">Any model, same app</p>
+          <p class="claim-n">
+            Anthropic, OpenAI, or Ollama on your laptop. Swap at runtime; the app doesn't change.
+          </p>
+        </div>
+        <div class="claim">
+          <p class="claim-k">The file</p>
+          <p class="claim-v">One portable <code>.snug</code></p>
+          <p class="claim-n">
+            Real SQLite — open it with <code>sqlite3</code> if you want. Apps, versions, data, chats.
+          </p>
+        </div>
+        <div class="claim">
+          <p class="claim-k">The boundary</p>
+          <p class="claim-v">No backend, still connected</p>
+          <p class="claim-n">
+            Your bank, Coinbase, Spotify — called by the host. Tokens never enter the app or the model.
+          </p>
+        </div>
+      </div>
+
+      <div class="tldr">
+        <p class="tldr-h">If you read one thing</p>
+        <p>
+          An app built with Snug has <strong>no intelligence of its own</strong> — a chess app ships no
+          chess engine. It sends the board over a versioned <code>postMessage</code> protocol and the
+          host's model sends back the move. That makes the app tiny, model-agnostic, and cheap enough
+          to run on a local model — which is what makes a fully private, no-server, no-account
+          deployment possible at all.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section figures-section">
+    <div class="container">
+      <ArchitectureFigures />
+    </div>
+  </section>
+
+  <section class="section choices">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">design decisions</p>
+        <h2>Six choices that make it work</h2>
+        <p>
+          None of these are clever code — the whole thing is MIT-licensed and public. They're
+          constraints, and each one closes off something that would otherwise be tempting to build.
+        </p>
+      </div>
+
+      <div class="choice-grid">
+        <article class="choice">
+          <h3>The spec is the product</h3>
+          <p>
+            Specification 1.0 is normative and published, with a conformance checker that fails the
+            build when the paper and the schemas disagree. A protocol others implement is a standard;
+            a product others clone is a feature.
+          </p>
+          <p class="proof">13 frames · 7 kinds · wire v1 frozen</p>
+        </article>
+
+        <article class="choice">
+          <h3>Security by construction</h3>
+          <p>
+            The token boundary and the sandbox have no bypass flag — not “secure by default,” but no
+            switch to flip. The published threat model also states what is <em>accepted and not
+            mitigated</em>, with equal prominence.
+          </p>
+          <p class="proof">threat model re-attacked pre-launch</p>
+        </article>
+
+        <article class="choice">
+          <h3>Provider neutrality</h3>
+          <p>
+            A model vendor has little reason to ship “your apps run just as well on our competitor's
+            model.” Snug's whole premise is that sentence, which is easier to mean when you don't sell
+            inference.
+          </p>
+          <p class="proof">adapters: anthropic · openai · local · mock</p>
+        </article>
+
+        <article class="choice">
+          <h3>Runtime contracts</h3>
+          <p>
+            Apps are cheap enough per turn to run on a small local model — the unlock for private,
+            on-device and regulated deployments. It's what turns “portable in principle” into
+            “portable to a laptop that's offline.”
+          </p>
+          <p class="proof">~1.26 KB/turn · version-pinned per app</p>
+        </article>
+
+        <article class="choice">
+          <h3>Embeddable, so it spreads</h3>
+          <p>
+            Any product drops in the runner and SDK, and their users build micro apps powered by <em
+            >their</em> assistant. Snug wins by being adopted, not by being visited — the hosted
+            Playground is the demo, not the business.
+          </p>
+          <p class="proof">@snugprotocol/runner + /sdk</p>
+        </article>
+
+        <article class="choice">
+          <h3>Shipped, not slideware</h3>
+          <p>
+            A signed, notarized macOS build is in users' hands. The protocol, the threat model, the
+            whitepaper and the reference implementation all exist and are public today.
+          </p>
+          <p class="proof">Developer ID · notarized · MIT</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section limits-section">
+    <div class="container">
+      <div class="limits">
+        <h2>What this doesn't do</h2>
+        <p class="limits-sub">
+          The diagrams above show the design working. These are the parts where it doesn't, or doesn't
+          yet — stated here because you'd find them anyway, and the published threat model lists them
+          in more detail than this page has room for.
+        </p>
+        <ul>
+          <li>
+            <b>The model does see your app's data.</b> That's the entire point of the bridge — if you
+            ask a budget app where your money went, the rows travel to whichever model you chose. What
+            never travels is the <em>credential</em>. Choosing a local model is what makes the data stay
+            put too; with a hosted model, that provider's normal terms apply.
+          </li>
+          <li>
+            <b>Desktop is macOS-only through 1.0.</b> Not a roadmap gap — on Windows, WebView2 injects
+            the shell's IPC key into sandboxed app iframes and no off-switch exists at any layer. That
+            breaks the sandbox guarantee, so no Windows build ships until it's fixed upstream. The
+            browser version runs everywhere.
+          </li>
+          <li>
+            <b>Lose both secrets and the data is gone.</b> Whole-file encryption is opt-in and
+            key-wrapped, with a recovery key as an independent unlock path. If you lose the
+            passphrase <em>and</em> the recovery key, nobody can help you — there is no server-side
+            copy by design.
+          </li>
+          <li>
+            <b>Hosted credential custody isn't built.</b> Credentials live in your own file today. The
+            broker that would let a publisher operate connections on your behalf is deliberately
+            unbuilt and deferred well past 1.0.
+          </li>
+          <li>
+            <b>It's pre-1.0 outside the spec.</b> Specification 1.0 is normative and frozen at wire v1;
+            the implementation packages are still moving and may break between releases.
+          </li>
+          <li>
+            <b>“No telemetry” means the app and this site, not the whole internet.</b> The desktop app
+            has no analytics and no account; this website loads no third-party scripts — check the page
+            source, or your network tab. What it can't speak for is your OS, your browser, or a model
+            provider you choose to connect: those have their own terms.
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="section closer">
+    <div class="container closer-inner">
+      <h2 class="display">Read it, run it, or take it apart.</h2>
+      <p class="muted">
+        MCP connected agents to tools. Snug connects agents to apps — and hands the app to the user.
+        All of it is MIT.
+      </p>
+      <div class="closer-ctas">
+        <a class="btn btn-primary" href="/download/">Download for macOS</a>
+        <a class="btn btn-secondary" href={site.githubRepo} target="_blank" rel="noopener">
+          Read the source
+        </a>
+        <a class="btn btn-ghost" href="/docs/spec/">Specification 1.0 →</a>
+      </div>
+      <p class="closer-note">
+        Or run it with no API key at all: <code>pnpm install &amp;&amp; pnpm dev</code> starts a mock
+        model and the Playground in one command.
+      </p>
+    </div>
+  </section>
+</MarketingLayout>
+
+<style>
+  .hero {
+    padding: clamp(3rem, 7vw, 5rem) 0 clamp(2rem, 4vw, 3rem);
+  }
+
+  .hero h1 {
+    font-size: var(--text-hero);
+    line-height: 1.05;
+    margin: var(--space-3) 0 var(--space-4);
+    text-wrap: balance;
+  }
+
+  .hero h1 em {
+    font-style: italic;
+    color: var(--ember-bright);
+  }
+
+  .lede {
+    max-width: 62ch;
+    font-size: var(--text-l);
+    line-height: 1.55;
+    color: var(--fg-muted);
+  }
+
+  .lede strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .claims {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: var(--space-4);
+    margin-top: var(--space-6);
+  }
+
+  .claim {
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface);
+  }
+
+  .claim-k {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+    margin-bottom: var(--space-2);
+  }
+
+  .claim-v {
+    font-family: var(--font-display);
+    font-size: var(--text-l);
+    line-height: 1.2;
+    color: var(--fg);
+  }
+
+  .claim-n {
+    margin-top: var(--space-2);
+    font-size: var(--text-s);
+    line-height: 1.5;
+    color: var(--fg-muted);
+  }
+
+  .tldr {
+    margin-top: var(--space-6);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--ember);
+    border-radius: var(--radius-m);
+    background: var(--surface);
+  }
+
+  .tldr-h {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ember-bright);
+    margin-bottom: var(--space-2);
+  }
+
+  .tldr p:last-child {
+    max-width: 72ch;
+    color: var(--fg-muted);
+    line-height: 1.6;
+  }
+
+  .tldr strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .figures-section {
+    padding-top: clamp(2rem, 4vw, 3rem);
+  }
+
+  .choice-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: var(--space-4);
+  }
+
+  .choice {
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--ember);
+    border-radius: var(--radius-m);
+    background: var(--surface);
+  }
+
+  .choice h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-l);
+    font-weight: 500;
+    line-height: 1.2;
+    margin-bottom: var(--space-2);
+  }
+
+  .choice p {
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+    line-height: 1.6;
+  }
+
+  .choice .proof {
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-faint);
+  }
+
+  .limits {
+    padding: clamp(1.5rem, 4vw, 2.5rem);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface);
+  }
+
+  .limits h2 {
+    font-family: var(--font-display);
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    font-weight: 500;
+    margin-bottom: var(--space-2);
+  }
+
+  .limits-sub {
+    max-width: 70ch;
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+    line-height: 1.6;
+    margin-bottom: var(--space-5);
+  }
+
+  .limits ul {
+    display: grid;
+    gap: var(--space-4);
+    list-style: none;
+    padding: 0;
+  }
+
+  .limits li {
+    position: relative;
+    max-width: 76ch;
+    padding-left: var(--space-5);
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+    line-height: 1.6;
+  }
+
+  .limits li::before {
+    content: '—';
+    position: absolute;
+    left: 0;
+    color: var(--ember);
+  }
+
+  .limits li b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .closer-inner {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .closer-inner h2 {
+    font-size: clamp(1.75rem, 4vw, 2.5rem);
+    line-height: 1.15;
+  }
+
+  .closer-inner .muted {
+    max-width: 56ch;
+  }
+
+  .closer-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-3);
+  }
+
+  .closer-note {
+    font-size: var(--text-s);
+    color: var(--fg-faint);
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    color: var(--fg);
+  }
+</style>

@@ -46,6 +46,7 @@ const { title, description } = Astro.props;
           <span class="brand-word display">snug.</span>
         </a>
         <div class="nav-links">
+          <a href="/architecture/">How it works</a>
           <a href="/docs/">Docs</a>
           <a href="/docs/spec/">Spec</a>
           <a href={site.playground} target="_blank" rel="noopener">Playground</a>
@@ -56,8 +57,39 @@ const { title, description } = Astro.props;
               ></path>
             </svg>
           </a>
-          <a href="/download/" class="btn btn-primary nav-cta">Download</a>
         </div>
+
+        {/*
+          The mobile disclosure. Below --nav-breakpoint the row above is hidden and this
+          takes its place, carrying THE SAME destinations — the previous layout hid them
+          with nothing behind it, so Docs/Spec/Playground were unreachable on a phone
+          (TASK-20260826, AC4). Native <details>: no JS, no hydration, keyboard and AT
+          support for free, and every link is a real page load so the panel cannot be left
+          stale open. The control keeps a visible "Menu" word beside the geometric mark —
+          a bare glyph would have no accessible name (lessons 2026-08-18), and an emoji
+          would ignore currentColor entirely.
+        */}
+        <details class="nav-mobile">
+          <summary aria-label="Menu">
+            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+              <path
+                d="M2 4.5h14M2 9h14M2 13.5h14"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                fill="none"></path>
+            </svg>
+            <span>Menu</span>
+          </summary>
+          <div class="nav-sheet">
+            <a href="/architecture/">How it works</a>
+            <a href="/docs/">Docs</a>
+            <a href="/docs/spec/">Spec</a>
+            <a href={site.playground} target="_blank" rel="noopener">Playground</a>
+            <a href={site.githubOrg} target="_blank" rel="noopener">GitHub</a>
+            <a href="/download/" class="btn btn-primary nav-sheet-cta">Download for macOS</a>
+          </div>
+        </details>
       </nav>
     </header>
 
@@ -113,7 +145,10 @@ const { title, description } = Astro.props;
 <style>
   .local-banner {
     background: var(--warn);
-    color: #1d1207;
+    /* Was a hard-coded literal, byte-identical to --ember-ink's dark value — so this is a
+       rename, not a recolour, and it now follows the light theme instead of staying dark
+       ink on a light banner. Caught by AC7's no-hard-coded-colour check. */
+    color: var(--ember-ink);
     font-family: var(--font-mono);
     font-size: var(--text-xs);
     text-align: center;
@@ -176,20 +211,114 @@ const { title, description } = Astro.props;
     display: inline-flex;
   }
 
-  /* .nav-links > a (0,1,1) outweighs the global .btn-primary (0,1,0), so the CTA's
-     ink color must be restated at matching specificity or the label washes out. */
-  .nav-links > a.nav-cta {
-    padding: 0.45rem 1.1rem;
+  /* ---------- the responsive nav pair (TASK-20260826, AC4/AC6) ----------
+
+     One breakpoint, stated ONCE, governing two complementary rules: the desktop row
+     shows at >= --nav-breakpoint, the disclosure shows at <= (bp - 0.02px). The 0.02px
+     step is what keeps them mutually exclusive — a `max-width: N` / `min-width: N` pair
+     both match at exactly N, which would show two navs at one width.
+
+     Why 860px and not the old 560px: six items plus the wordmark do not fit an iPad
+     portrait (768px) or a phone in landscape (~850px). Those two device classes sat in
+     the band between the old breakpoint and the desktop layout and got a squeezed row —
+     the exact "band between breakpoints" failure of lessons 2026-08-23.
+
+     These rules are co-located with the base rules they override, deliberately: the
+     other half of that lesson is an equal-specificity media rule placed EARLIER losing
+     the cascade to a later base rule, invisible until geometry is measured. */
+  .nav {
+    --nav-breakpoint: 860px;
+  }
+
+  .nav-mobile {
+    position: relative;
+  }
+
+  .nav-mobile > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--tap);
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-pill);
+    color: var(--fg);
     font-size: var(--text-s);
+    font-weight: 500;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+
+  /* Safari renders a disclosure triangle through this pseudo-element; ::marker covers
+     the rest. Both are needed — neither alone hides it everywhere. */
+  .nav-mobile > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .nav-mobile > summary::marker {
+    content: '';
+  }
+
+  .nav-mobile > summary:hover {
+    border-color: var(--ember);
+  }
+
+  .nav-mobile > summary:focus-visible {
+    outline: 2px solid var(--ember);
+    outline-offset: 2px;
+  }
+
+  .nav-sheet {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.55rem);
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 14rem;
+    padding: var(--space-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-m);
+    /* Opaque, not the translucent nav surface: the panel overlays running text, and a
+       see-through sheet let headline glyphs read through the menu items. */
+    background: var(--surface-2);
+    box-shadow: var(--shadow-lift);
+    z-index: 30;
+  }
+
+  .nav-sheet > a {
+    padding: 0.5rem 0.6rem;
+    border-radius: var(--radius-s);
+    color: var(--fg-muted);
+    text-decoration: none;
+    font-size: var(--text-s);
+    font-weight: 500;
+  }
+
+  .nav-sheet > a:hover {
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+
+  /* .nav-sheet > a (0,1,1) outweighs the global .btn-primary (0,1,0), so the CTA's ink
+     color is restated at matching specificity or the label washes out against the
+     ember fill. (Same cascade fight the old header CTA had.) */
+  .nav-sheet > a.nav-sheet-cta,
+  .nav-sheet > a.nav-sheet-cta:hover {
+    margin-top: var(--space-2);
+    justify-content: center;
     color: var(--ember-ink);
   }
 
-  .nav-links > a.nav-cta:hover {
-    color: var(--ember-ink);
+  @media (min-width: 860px) {
+    .nav-mobile {
+      display: none;
+    }
   }
 
-  @media (max-width: 560px) {
-    .nav-links > a:not(.nav-cta):not(.nav-gh) {
+  @media (max-width: 859.98px) {
+    .nav-links {
       display: none;
     }
   }
