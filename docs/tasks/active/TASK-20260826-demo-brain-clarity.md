@@ -146,6 +146,13 @@ the AI provider you choose — never to Snug's servers."* Demo copy names the me
   the dispatch becomes loud instead of silently re-routing a turn.
 - brainKind is persisted for EVERY direct-mode turn (not just demo): provenance is
   cheap in opaque meta JSON, and a future "built with claude" surface reads it free.
+- **connection-wizard journey 4 flake is PRE-EXISTING, measured as a rate** (lessons
+  2026-08-22): `popup.waitForURL(/oauth/callback)` races the popup's self-close —
+  "Target page has been closed" AFTER the log shows the callback URL was reached.
+  Branch 2-in-6, main 2-in-6 — identical, so not this task's regression and per the
+  2026-08-19 amendment not this task's fix either. Queued for next-steps.
+- The full-suite e2e ✘ rows in starters-connect are the KNOWN test.fail() quarantine
+  (2026-08-20) — expected-fail, counted as passing; only journey 4 was a real red.
 
 - Confirmed gap (2026-08-26 code read): `BuilderModelSelect` returns `null` when
   `provider === 'mock'`; only Settings + the webllm fallback banner ever say "demo

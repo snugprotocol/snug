@@ -2164,6 +2164,7 @@ img.identity-avatar {
   align-items: center;
   gap: var(--space-1);
   margin-top: var(--space-2);
+  margin-left: var(--space-2);
   padding: 0 var(--space-2);
   border: 1px solid var(--warn);
   border-radius: var(--radius-pill);
