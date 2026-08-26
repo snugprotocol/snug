@@ -42,6 +42,7 @@ const reachable = {
   updaterCheckCallbackFired: false,
   updaterInstallCallbackFired: false,
   relaunchCallbackFired: false,
+  helperInstallCallbackFired: false,
 };
 
 describe('decideInvokeRefused — the sentinel is the sensor', () => {
