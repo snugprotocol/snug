@@ -12,6 +12,7 @@ import {
 import { initDesktopFirstRun } from './desktop/firstRun.js';
 import { ModeCoercionNote } from './desktop/ModeCoercionNote.js';
 import { AppUpdateSurface } from './desktop/AppUpdateControls.js';
+import { HelperSurface } from './desktop/HelperSurface.js';
 import { initAppUpdateLaunchCheck } from './state/appUpdate.js';
 import { refreshAppMeta } from './state/appMeta.js';
 import { initDemoCallout } from './state/demoCallout.js';
@@ -201,6 +202,7 @@ export function App(): ReactElement {
               only, renders nothing otherwise; the sheet it opens is the one place the
               flow may occupy the screen, and only because the user clicked. */}
           <AppUpdateSurface />
+          <HelperSurface />
           <Button variant="ghost" onClick={toggleTheme} aria-label={`switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
             {theme === 'dark' ? '☀' : '☾'}
           </Button>

@@ -167,6 +167,7 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | Shell IPC is unreachable from a sandboxed subframe (macOS) | `apps/desktop/src-tauri/capabilities/main.json` + the invoke-key gate | `apps/desktop/src/gate/ipc.ts`, run by the in-shell gate — **see R-11 on cadence** |
 | The token-releasing sidecar command is unreachable from a sandboxed subframe — proven per command, not by family | `apps/desktop/src-tauri/src/lib.rs` registers `sidecar_wizard_fetch` separately from `sidecar_fetch`, and `apps/desktop/src-tauri/src/sidecar.rs` fronts the wizard route table with it (`GET /pair/status` releases the helper's access token); capabilities are per-window, so the invoke-key gate is the actual wall | `apps/desktop/src/gate/ipc.ts` — `ipc-sidecar-wizard-fetch-refused` (a keyless, well-formed invoke of `/pair/status` from a srcdoc frame, on its own callback slot) **plus** `ipc-sidecar-wizard-fetch-dispatchable`, the positive twin — **see R-11 on cadence** |
 | The shell's UPDATE commands are unreachable from a sandboxed subframe — per command, not per family | `apps/desktop/src-tauri/capabilities/main.json` grants `updater:default` + `process:allow-restart` to the main WINDOW only — but capabilities are per-window, never per-frame, so the invoke-key gate is the actual wall | `apps/desktop/src/gate/ipc.ts` — `ipc-updater-check-refused`, `ipc-updater-install-refused`, `ipc-process-relaunch-refused` (keyless well-formed invokes from a srcdoc frame) **plus** `ipc-updater-check-dispatchable`, the positive twin — **see R-11 on cadence** |
+| The shell's HELPER-INSTALL command (download-and-execute-as-user, ADR-0060) is unreachable from a sandboxed subframe — per command | `apps/desktop/src-tauri/src/lib.rs` registers `helper_install` separately; every guard (signature, content pin, admission, caps) is Rust-side | `apps/desktop/src/gate/ipc.ts` — `ipc-helper-install-refused` (keyless well-formed invoke from a srcdoc frame) **plus** `ipc-helper-status-dispatchable`, the positive twin |
 
 ### The network ceiling
 
@@ -320,6 +321,22 @@ extends to a third-party account's device list. Named in the delete confirmation
 *Bounded by:* firing only after the cascade commits, only when no other app holds a sidecar
 fact, and behind a persist tombstone that silences every writer that could otherwise
 resurrect the wiped store.
+
+**R-33 — The helper download is the first path by which the shell fetches and executes code
+other than itself, and its residuals are stated rather than closed.** (ADR-0060; delta S9.)
+Archives are minisign-signed with the updater key AND content-pinned in the shell (per-arch
+sha256 in `src-tauri/helpers.json`), so a compromised release account can substitute nothing the
+shell will run — the pin, not the signature, is what binds identity. What REMAINS: (1) a
+**developer install** (`kind: "dev"` stamp, or a stampless legacy tree) is never overwritten
+and only *reported* as mismatched — the owner's own machine is exactly this case, so its
+hardware walks do not exercise the pinned path unless the dev tree is rebuilt; (2) the
+bundled Node runtime is trusted through a committed sha256 pin (`node-runtime.json`) — a Node
+CVE now implies a helper re-release, and nothing automates noticing one; (3) quarantine does
+NOT apply to files the shell writes (Tauri sets no `LSFileQuarantineEnabled`), which is why an
+unsigned-by-us `bin/node` launches — adding that key would break helper launch, and this is
+the only place that is written down; (4) there is no uninstall surface (~140 MB per helper);
+(5) the x86_64 archive is verified only under Rosetta until an Intel walk.
+*Full surface:* `docs/security/threat-model-delta-desktop-update-channel.md` §S9 / R-e.
 
 **R-2 — A scrubber that matches values cannot survive re-encoding.** `scrubAuthValues` is
 exact-substring over injected values, in raw and percent-encoded form. A provider that
@@ -648,7 +665,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-snug-file-encryption.md` | `77bfcb19bfa3` | §2 assets · §5 C1 · R-3, R-27 |
 | `docs/security/threat-model-delta-starter-update-channel.md` | `5a5625c1f999` | §5 authoring · R-31 |
 | `docs/security/threat-model-delta-multi-provider-byok.md` | `540490f88a1c` | §5 authoring · R-32 |
-| `docs/security/threat-model-delta-desktop-update-channel.md` | `39b94b2a4948` | §5 C2 + authoring · R-28, R-29, R-30 |
+| `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
 
 <!-- DELTA-LEDGER:END -->
 

@@ -104,6 +104,15 @@ export interface SnugPlatform {
     pathAndQuery: string,
     body?: string,
   ) => Promise<{ status: number; body: string }>;
+  /**
+   * THE HELPER SEATS (ADR-0060) — on-demand helper download. Desktop only. `helperStatus`
+   * is a disk + pin read (no network); `helperInstall` fetches from the pinned GitHub
+   * release and must only ever run from a user click (§6) — the card names the size from
+   * `downloadBytes` before asking. Web: undefined, and every surface that would offer the
+   * download stays hidden.
+   */
+  helperStatus?: (name: string) => Promise<HelperStatusSeat>;
+  helperInstall?: (name: string, onProgress?: (p: HelperInstallProgressSeat) => void) => Promise<HelperStatusSeat>;
   /** Userdb + sync-sidecar backend. Web: undefined → detectPersistenceBackend(USERDB_OPFS_DIR). */
   userdbBackend?: PersistenceBackend;
   /** OAuth transport. Web: undefined → popup + BroadcastChannel + `${origin}/oauth/callback`. */
@@ -201,6 +210,28 @@ let readOnce = false;
  * first). Set-once and set-before-first-read: a platform swapped mid-session would
  * split one live flow across two transports, so both misuses throw instead.
  */
+export interface HelperStatusSeat {
+  name: string;
+  installed: boolean;
+  /** `broken` = a downloaded stamp whose runtime is gone; treated as not installed. */
+  kind: 'absent' | 'dev' | 'downloaded' | 'broken';
+  installedVersion?: string;
+  requiredVersion: string;
+  mismatch: boolean;
+  arch: string;
+  downloadBytes: number;
+  unpackedBytes: number;
+  /** A linked session is on disk, so the shell wants this helper at launch. */
+  linkedSessionOnDisk: boolean;
+}
+
+export interface HelperInstallProgressSeat {
+  name: string;
+  phase: 'downloading' | 'verifying' | 'installing' | 'starting' | 'done';
+  received: number;
+  total: number;
+}
+
 export function setPlatform(platform: SnugPlatform): void {
   if (current !== null) {
     throw new Error('setPlatform called twice — the platform is set once, before boot');

@@ -70,3 +70,33 @@ export async function sidecarWizardFetch(
     ...(body !== undefined ? { body } : {}),
   });
 }
+
+// ONE definition of the helper seat shapes — the playground's (review: reuse 3).
+import type { HelperInstallProgressSeat as HelperInstallProgress, HelperStatusSeat as HelperStatus } from '@playground/platform/platform';
+export type { HelperInstallProgress, HelperStatus };
+
+export async function helperStatus(name: string): Promise<HelperStatus> {
+  return invoke<HelperStatus>('helper_status', { name });
+}
+
+/**
+ * Download → verify → install → start (ADR-0060). Only ever called from a user click.
+ * Progress rides a Tauri event; the listener is detached when the invoke settles.
+ */
+export async function helperInstall(
+  name: string,
+  onProgress?: (p: HelperInstallProgress) => void,
+): Promise<HelperStatus> {
+  const { listen } = await import('@tauri-apps/api/event');
+  const unlisten =
+    onProgress === undefined
+      ? undefined
+      : await listen<HelperInstallProgress>('snug:helper-install', (e) => {
+          if (e.payload.name === name) onProgress(e.payload);
+        });
+  try {
+    return await invoke<HelperStatus>('helper_install', { name });
+  } finally {
+    unlisten?.();
+  }
+}

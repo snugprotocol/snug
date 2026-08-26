@@ -1092,6 +1092,12 @@ export async function runLanPairing(): Promise<LanPairingOutcome> {
 export type DeviceLinkStart =
   | { ok: true; qr: string }
   /**
+   * The helper is not on disk (or is a downloaded tree that no longer matches this build's
+   * pin) — ADR-0060: the screen offers the on-demand download instead of a dead message.
+   * `message` is kept so a caller that does not know the card still says something true.
+   */
+  | { ok: false; reason: 'helper-missing'; message: string }
+  /**
    * The helper is ALREADY LINKED, so there is nothing to scan — `/pair/qr` withholds the
    * code once linked, by design. This became the common wizard-time state the moment the
    * shell started autostarting the helper (ADR-0037 §3): without this seat, the poll below
@@ -1132,11 +1138,30 @@ export async function beginDeviceLink(): Promise<DeviceLinkStart> {
     return { ok: false, message: 'linking WhatsApp needs the desktop app' };
   }
   const wizardFetch = platform.sidecarWizardFetch;
+  // THE INSTALL CHECK, before any spawn (ADR-0060 §9): a missing helper is an ordinary
+  // state with a one-click fix, not a failure to report as prose. `mismatch` on a
+  // downloaded tree is offered as an update but NOT refused here — the installed helper
+  // still starts (§3); the card rides alongside from the run surface.
+  if (platform.helperStatus !== undefined) {
+    try {
+      const helper = await platform.helperStatus('whatsapp-sidecar');
+      if (!helper.installed) {
+        return { ok: false, reason: 'helper-missing', message: 'the WhatsApp helper is not installed' };
+      }
+    } catch {
+      /* fall through to the spawn, which reports its own refusal */
+    }
+  }
   let nonce: string | undefined;
   try {
     const status = await platform.sidecarCtl('start');
     nonce = status.nonce;
   } catch (err) {
+    // The spawner's own refusal (sidecar.rs HELPER_MISSING) reaches here when the status
+    // seat was unavailable or threw — still a typed result, never dead prose.
+    if (err instanceof Error && err.message.includes('helper is not installed')) {
+      return { ok: false, reason: 'helper-missing', message: err.message };
+    }
     return {
       ok: false,
       message: err instanceof Error ? err.message : 'the WhatsApp helper could not be started',

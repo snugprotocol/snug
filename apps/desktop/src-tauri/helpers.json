@@ -1,0 +1,23 @@
+{
+  "_comment": "THE HELPER PIN (ADR-0060 \u00a73). Written by scripts/release-helper.mjs from the staged helper.json; include_str!'d by helper_install.rs; read by check-helper-pin.mjs and release-desktop.mjs (which also fetches the PUBLISHED helper.json for the tag and requires byte-equal sha256/sizes). Never edit by hand.",
+  "helpers": [
+    {
+      "name": "whatsapp-sidecar",
+      "version": "0.1.0",
+      "tag": "helper-whatsapp-sidecar-v0.1.0",
+      "nodeVersion": "22.23.2",
+      "assets": {
+        "aarch64": {
+          "sha256": "3726e217c78605f207ac02d5434cfd7a9ae354a03e6e7637e70a25da862c601e",
+          "size": 42781469,
+          "unpackedSize": 142348572
+        },
+        "x86_64": {
+          "sha256": "df422e92a463ab324cbf0ce8b7bed5eedf62c7e8a5aded681f7722c6fcd821d3",
+          "size": 43996343,
+          "unpackedSize": 144851164
+        }
+      }
+    }
+  ]
+}

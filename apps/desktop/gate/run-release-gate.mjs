@@ -57,6 +57,8 @@ const NEEDLES = [
  */
 const MUST_APPEAR = [
   'https://github.com/snugprotocol/snug/releases/latest/download/latest.json',
+  // ADR-0060: the helper download base, single-homed in helper_install.rs (HELPER_RELEASE_BASE).
+  'https://github.com/snugprotocol/snug/releases/download/',
 ];
 
 function log(msg) {

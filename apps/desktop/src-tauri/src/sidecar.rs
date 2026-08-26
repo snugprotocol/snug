@@ -280,7 +280,15 @@ pub fn pidfile_path(snug_dir: &std::path::Path) -> PathBuf {
 /// handed to the child; neither is ever accepted from the webview.
 #[derive(Default)]
 pub struct SidecarState {
-    inner: std::sync::Mutex<Option<RunningSidecar>>,
+    pub(crate) inner: std::sync::Arc<std::sync::Mutex<Option<RunningSidecar>>>,
+}
+
+impl SidecarState {
+    /// A handle the installer can carry into `spawn_blocking` (the state itself lives in
+    /// Tauri's managed map and cannot be moved).
+    pub(crate) fn clone_handle(&self) -> std::sync::Arc<std::sync::Mutex<Option<RunningSidecar>>> {
+        std::sync::Arc::clone(&self.inner)
+    }
 }
 
 pub struct RunningSidecar {
@@ -309,11 +317,19 @@ pub struct SidecarResponse {
 
 /// 256 bits of CSPRNG, hex. The nonce is what stops a process that wins a race to the
 /// socket path from completing pairing and minting itself the user's WhatsApp.
-fn mint_nonce() -> String {
+pub(crate) fn mint_nonce() -> String {
     use rand::RngCore;
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Stop under an already-held lock — the installer stops, swaps and restarts in ONE
+/// critical section so no start can race the swap.
+pub fn stop_locked(guard: &mut Option<RunningSidecar>) {
+    if let Some(running) = guard.take() {
+        reap_child(running);
+    }
 }
 
 /// Start, stop, or report the helper.
@@ -544,7 +560,7 @@ fn reap_stale_helper(snug_dir: &std::path::Path) {
 /// The `start` arm's body, extracted so launch-time autostart (ADR-0037 §3) runs the SAME
 /// spawn — preflights, survival check and bookkeeping included — rather than a second copy
 /// that could drift.
-fn start_helper(guard: &mut Option<RunningSidecar>) -> Result<SidecarStatus, String> {
+pub(crate) fn start_helper(guard: &mut Option<RunningSidecar>) -> Result<SidecarStatus, String> {
     if let Some(running) = guard.as_ref() {
         return Ok(SidecarStatus {
             running: true,
@@ -570,7 +586,9 @@ fn start_helper(guard: &mut Option<RunningSidecar>) -> Result<SidecarStatus, Str
     if let Some(refusal) = helper_entry_refusal(&dir) {
         return Err(refusal);
     }
-    node_version_preflight()?;
+    if helper_runtime(&dir).is_none() {
+        node_version_preflight()?;
+    }
 
     // BEFORE THE SPAWN, NEVER AFTER (TASK-20260818-sidecar-orphan-reap). A helper orphaned
     // by a previous shell's unclean exit still holds the WhatsApp session, and WhatsApp
@@ -583,7 +601,10 @@ fn start_helper(guard: &mut Option<RunningSidecar>) -> Result<SidecarStatus, Str
     // safe because this path is ours and nothing else may write it.
     let _ = std::fs::remove_file(&socket);
     let nonce = mint_nonce();
-    let mut child = std::process::Command::new("node")
+    // A DOWNLOADED helper carries its own runtime (ADR-0060 §2): spawn `<tree>/bin/node`,
+    // and skip the system-Node preflight that only a developer install needs.
+    let runtime = helper_runtime(&dir);
+    let mut child = std::process::Command::new(runtime.as_deref().unwrap_or(std::path::Path::new("node")))
         .arg("--enable-source-maps")
         .arg(helper_entry(&dir))
         .env("SNUG_SIDECAR_SOCKET", &socket)
@@ -691,7 +712,8 @@ pub fn shutdown(state: &SidecarState) {
 /// The helper's entry point, under `~/Snug/helpers/`. Never supplied by the webview, for
 /// the same reason the socket path is not.
 fn helper_entry(snug_dir: &std::path::Path) -> PathBuf {
-    snug_dir.join("helpers").join("whatsapp-sidecar").join("index.js")
+    // Derived from the installer's ONE path rule, never restated (ADR-0060).
+    crate::helper_install::helper_dir(snug_dir, "whatsapp-sidecar").join("index.js")
 }
 
 /// The socket file's basename. Mirrors `SIDECAR_SOCKET_BASENAME` in the protocol contract;
@@ -736,19 +758,32 @@ fn node_version_refusal(found: u32) -> String {
 
 /// Refuse before spawning when the helper is not installed.
 ///
-/// Packaging the helper into the app bundle is deliberately out of scope (v1 spawns the
-/// system `node` against `~/Snug/helpers/`), so a missing helper is an ordinary state that
-/// deserves an instruction rather than a spawn failure whose message names the wrong problem.
+/// A missing helper is an ORDINARY state (ADR-0060: public users download it on demand from
+/// the card the webview shows on this exact refusal), so it deserves a named refusal rather
+/// than a spawn failure whose message names the wrong problem.
 fn helper_entry_refusal(snug_dir: &std::path::Path) -> Option<String> {
     let entry = helper_entry(snug_dir);
+    // A crash between the installer's two renames leaves the old tree beside a missing
+    // one (ADR-0060 §7); put it back before deciding anything. This runs UNDER the sidecar
+    // lock (start_helper holds it), which is what makes it safe against a live swap.
+    if let Some(dir) = entry.parent() {
+        crate::helper_install::restore_old_if_needed(dir);
+    }
     if entry.is_file() {
         return None;
     }
-    Some(format!(
-        "the WhatsApp helper is not installed — expected it at {}. Build and install it with \
-         `pnpm --filter whatsapp-sidecar build && pnpm --filter whatsapp-sidecar install:helper`.",
-        entry.display()
-    ))
+    Some(HELPER_MISSING.to_string())
+}
+
+/// The refusal the webview keys on (`beginDeviceLink` maps it to a typed helper-missing
+/// result and offers the download). User-facing: it names no pnpm command — public users
+/// get the helper from the on-demand download (ADR-0060), developers from `install:helper`.
+pub const HELPER_MISSING: &str = "the WhatsApp helper is not installed";
+
+/// `<tree>/bin/node` when the tree ships its own runtime (downloaded), else None (dev install).
+/// The SAME classification `helper_install::status_for` uses, so status and spawn agree.
+fn helper_runtime(snug_dir: &std::path::Path) -> Option<PathBuf> {
+    crate::helper_install::helper_runtime(helper_entry(snug_dir).parent()?)
 }
 
 /// Ask the `node` this shell would actually spawn for its version.
@@ -1241,12 +1276,10 @@ mod spawn_preconditions_tests {
             refusal.contains("helper"),
             "names what is missing: {refusal}"
         );
-        // The path is named so the owner can see WHERE it was expected — this is a dev/owner
-        // install step (packaging is out of scope), so "install it" needs a location.
-        assert!(
-            refusal.contains("whatsapp-sidecar"),
-            "names the expected location: {refusal}"
-        );
+        // USER-FACING since ADR-0060: public users get the helper from the on-demand download
+        // the webview offers on this exact string, so it must name no pnpm command or path.
+        assert_eq!(refusal, HELPER_MISSING);
+        assert!(!refusal.contains("pnpm"), "no developer instruction reaches the user: {refusal}");
     }
 
     #[test]
@@ -1826,7 +1859,7 @@ mod orphan_reap_tests {
             .expect("start_helper exists")
             .1;
         let reap_at = body.find("reap_stale_helper").expect("start_helper reaps stale helpers");
-        let spawn_at = body.find("Command::new(\"node\")").expect("start_helper spawns node");
+        let spawn_at = body.find("std::process::Command::new(runtime").expect("start_helper spawns the runtime");
         assert!(
             reap_at < spawn_at,
             "the stale reap must run BEFORE the spawn, or two helpers share the session"

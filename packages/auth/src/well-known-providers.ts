@@ -1352,7 +1352,7 @@ const REGISTRY: Record<string, WellKnownOauthProvider> = {
       instructions: [
         'Please read first: linking an automation tool to a personal WhatsApp account is against WhatsApp’s terms of service, and accounts have been banned for it. Only continue if you accept that risk on this account.',
         'This works in the Snug desktop app only — the helper runs on your own computer and is not reachable from a browser tab.',
-        'Snug starts the helper for you. Nothing is sent anywhere: your WhatsApp session stays on this machine, and Snug itself only ever holds a key to the helper.',
+        'The first time, Snug offers to download the helper (about 41 MB, signed) and then starts it for you. Nothing is sent anywhere: your WhatsApp session stays on this machine, and Snug itself only ever holds a key to the helper.',
         'When the code appears, open WhatsApp on your phone → Settings → Linked devices → Link a device, and scan it.',
         'Keep the desktop app open while you use the app — the linked session lives with the helper, and your phone can unlink it at any time.',
       ],

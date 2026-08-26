@@ -31,6 +31,7 @@ publishing account cannot forge.
 | **S6** | **The launch-time update check** — an automatic outbound request on every desktop launch | — (this is a privacy surface, not an integrity one; see R-c) | Toggleable in Settings (`snug:auto-update-check`); only the literal string `'false'` disables, so a corrupted key fails toward the feature. Quiet on failure by design. |
 | **S7** | **The download page** — a public first-acquisition path | Serve a malicious DMG from a lookalike page; or exploit the unsigned state to normalise Gatekeeper bypass | The page links only to the single-homed GitHub Releases asset URL. The unsigned state is DISCLOSED on the page rather than smoothed over (R-b) — teaching a right-click-Open habit is a real cost, and the honest fix is Apple signing, which is wired and env-gated. |
 | **S8** | **The release pipeline** (`scripts/release-desktop.mjs`) | Publish a version whose notes describe something else; publish without the release gate; publish accidentally | It refuses without a matching newest `desktop-releases.json` entry, runs `gate:release`, refuses without a signing key, and **never publishes** — it prints the `gh release create` command and stops. Creating a GitHub Release now requires an explicit human ask in that session (PROCESS.md release rules + the root-file mirrors). |
+| **S9** | **The helper download** (ADR-0060; `helper_install.rs`) — the first path by which the shell fetches and EXECUTES code other than itself | Serve a substituted archive (any artifact ever signed with the updater key, an older helper with a known bug), a gzip bomb, a tar with `..`/symlink entries, a redirect off GitHub; trigger a download the user never asked for from an app iframe | **Content pin**: the shell carries the tag + per-arch sha256 + sizes (`src-tauri/helpers.json`); a valid signature over the wrong bytes is refused (`a_valid_signature_over_the_wrong_artifact_is_refused_by_the_content_pin`). Signature verified with the updater pubkey read from `tauri.conf.json` (one trust root). Manual redirects: ≤5 hops, `https:` only, hosts ∈ {github.com, objects.githubusercontent.com, release-assets.githubusercontent.com}. Compressed cap 2× pin, **inflated** cap 4× pin (≤1 GiB), ≤50k entries, regular files + dirs only, no absolute/`..` paths, unpack via `unpack_in`. Two-rename swap with `.old-*` restore. Explicit click only (§6); `ipc-helper-install-refused` + `ipc-helper-status-dispatchable` in the C2 gate. Helper releases are pre-releases so `releases/latest` (S3/S4) is untouched. `release-desktop.mjs` refuses a shell whose pinned helper tag is unpublished. | A compromised nodejs.org at PACK time is bounded by the committed `node-runtime.json` sha256 pin (a reviewed diff); the bundled Node is Developer-ID signed by the Node.js Foundation; quarantine does not apply to files the shell writes itself (Tauri sets no `LSFileQuarantineEnabled`) — **stated, so that adding it is known to break helper launch**. No uninstall surface yet (~140 MB on disk). |
 
 ## 3. Residual risk — accepted and NOT mitigated
 
@@ -64,12 +65,15 @@ Nothing published today lets a user verify the DMG independently (no checksums p
 signing identity to check while unsigned). The whole first acquisition rests on TLS to
 github.com and on the user having reached the right link.
 
-### R-e — The WhatsApp helper is NOT distributed or updated by this channel
-`install:helper` remains a developer step. So: a publicly downloaded shell has **no
-Telepath helper at all**, and an updated shell will happily drive an older helper left
-in `~/Snug/helpers` — the second-deploy-target class this repo has already been bitten
-by. The spawner version-stamp check remains the filed fix; until it lands, skew is
-undetected.
+### R-e — Helper skew, NARROWED to developer installs (ADR-0060, 2026-08-26)
+Public users now get the helper from the on-demand download, pinned by content to the
+shell that drives it, so shell/helper skew for them is detected (`mismatch`) and offered
+as an update — never refused, so a shell shipped ahead of its helper release cannot brick
+anyone. What remains: a **developer install** (`install:helper`, `kind: "dev"` stamp, or a
+stampless legacy tree) is never overwritten by design and only *reported* as mismatched.
+The owner's own machine is exactly this case; the hardware walks it hosts are unchecked
+for skew unless the dev tree is rebuilt. Also unmitigated: no uninstall surface, and the
+x86_64 archive is verified only under Rosetta until an Intel walk.
 
 ### R-f — Losing the minisign private key orphans the update path
 No escrow. Every installed client verifies against the pinned public key, so a lost

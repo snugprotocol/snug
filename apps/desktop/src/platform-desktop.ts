@@ -34,7 +34,7 @@ import type { SnugPlatform } from '@playground/platform/platform';
 import { createAppUpdates } from './app-updates.js';
 import { createTauriFileFs } from './fs.js';
 import { lanFetch, lanPair } from './lan-fetch.js';
-import { sidecarCtl, sidecarFetch, sidecarWizardFetch } from './sidecar.js';
+import { helperInstall, helperStatus, sidecarCtl, sidecarFetch, sidecarWizardFetch } from './sidecar.js';
 import { remapUrl } from './net-remap.js';
 import { createTauriLoopbackListener, openInSystemBrowser } from './oauth.js';
 
@@ -149,6 +149,9 @@ export function createDesktopPlatform(): SnugPlatform {
     sidecarCtl,
     sidecarFetch,
     sidecarWizardFetch,
+    // THE HELPER SEATS (ADR-0060): what is on disk vs the pin, and the explicit-click download.
+    helperStatus,
+    helperInstall,
     // The directory is the Rust command's concern: read_user_file/write_user_file
     // ALREADY scope every name into ~/Snug and REFUSE any name with a path
     // separator (userfile.rs `valid_name`). So the backend's own `${dir}/${file}`

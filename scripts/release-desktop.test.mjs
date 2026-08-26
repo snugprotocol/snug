@@ -27,6 +27,8 @@ import {
   appleSigningPlan,
   checkStapleOutput,
   checkSpctlOutput,
+  pinnedHelperTags,
+  pinnedHelperIsPublished,
 } from './release-desktop.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -292,4 +294,23 @@ test('checkSpctlOutput: Gatekeeper acceptance, and the notarization-specific rej
   assert.match(wrongSource.reason, /Notarized/i);
   assert.equal(checkSpctlOutput('').ok, false);
   assert.equal(checkSpctlOutput(undefined).ok, false);
+});
+
+test('the desktop release refuses when a pinned helper tag is unpublished (ADR-0060 §10)', () => {
+  const pinned = JSON.parse(readFileSync(path.join(ROOT, 'apps', 'desktop', 'src-tauri', 'helpers.json'), 'utf8')).helpers;
+  const tags = pinnedHelperTags(pinned);
+  assert.ok(tags.length >= 1 && tags.every((t) => /^helper-[a-z0-9-]+-v\d+\.\d+\.\d+$/.test(t)), JSON.stringify(tags));
+  // published and byte-equal to the pin → ok
+  assert.equal(pinnedHelperIsPublished(pinned, (tag) => pinned.find((h) => h.tag === tag)).ok, true);
+  const missing = pinnedHelperIsPublished(pinned, () => undefined);
+  assert.equal(missing.ok, false);
+  assert.match(missing.reason, /not published/);
+  // published but a DIFFERENT build than the pin → refused (cross-file review finding 1)
+  const drifted = pinnedHelperIsPublished(pinned, (tag) => {
+    const h = structuredClone(pinned.find((x) => x.tag === tag));
+    h.assets.aarch64.sha256 = 'f'.repeat(64);
+    return h;
+  });
+  assert.equal(drifted.ok, false);
+  assert.match(drifted.reason, /does not match the shell's pin/);
 });

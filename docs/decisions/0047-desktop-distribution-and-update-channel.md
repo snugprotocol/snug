@@ -1,6 +1,6 @@
 # 0047 — Desktop distribution and the shell update channel
 
-- **Status:** accepted (owner plan approval, 2026-08-21; every actual `gh release create` remains its own explicit per-session ask); **§7 amended 2026-08-24 — signing/notarization implemented for real; see [Amendment](#amendment--2026-08-24-signing-and-notarization-implemented-task-20260824-first-signed-release)**
+- **Status:** accepted (owner plan approval, 2026-08-21; every actual `gh release create` remains its own explicit per-session ask); **§7 amended 2026-08-24 — signing/notarization implemented for real; see [Amendment](#amendment--2026-08-24-signing-and-notarization-implemented-task-20260824-first-signed-release)** **§12 superseded 2026-08-26 by [ADR-0060](0060-on-demand-helper-distribution.md) (helpers download on demand) — see the amendment below.**
 - **Date:** 2026-08-21
 - **Task:** TASK-20260821-hardening-polish (P5)
 
@@ -72,3 +72,14 @@ So the app-specific password **must** be in the build environment. That is a rea
 - The App Store Connect API-key trio remains the better long-term answer and is already supported; it is the path a future CI signer would take.
 
 **General shape, recorded because this is the second time in this ADR:** a credential mechanism is only decided once the tool that consumes it has been checked — `--help` on the CLI you will actually invoke, not the one you would invoke by hand. The 2026-08-26 lessons entry on the updater key's two spellings is the same class one variable over.
+
+## Amendment — 2026-08-26: §12 superseded by ADR-0060 (helpers download on demand)
+
+§12 said the WhatsApp helper is not distributed by this channel and stays a developer
+install. **ADR-0060** replaces that: helpers are separately released GitHub **pre-releases**
+(`helper-<name>-v<semver>`, so `releases/latest` — this ADR's §6 endpoint — is never
+shadowed), signed with the SAME minisign key as §4, and **pinned by content** in the shell
+(`helper_install.rs` `REQUIRED_HELPERS`: tag + per-arch sha256/sizes). The shell downloads
+one only on a user click and only from its pinned tag. The threat-model delta's R-e is
+narrowed to developer installs; surface S9 (the helper download) is added. `install:helper`
+remains for developers and now writes a `kind: "dev"` stamp the downloader never overwrites.
