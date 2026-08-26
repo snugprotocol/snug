@@ -2174,12 +2174,25 @@ img.identity-avatar {
 }
 
 /* Narrow-header compaction (the 375px overflow tripwire is the guard): a REAL brain's
-   label yields to the dot; "demo brain" is the one label that must survive compaction
-   — hiding the words would hide exactly the disclosure this chip exists for. The
-   accessible name rides aria-label either way. */
+   label yields to the dot; the demo label must survive compaction — hiding the words
+   would hide exactly the disclosure this chip exists for — but "demo brain" overflows
+   the 375px header by 7px, so below the nav-compaction breakpoint (760px, the block
+   at the top of this file) it swaps to the short span rendered beside it. The
+   accessible name rides aria-label at every width. */
+.brain-chip-label-short {
+  display: none;
+}
 @media (max-width: 830px) {
   .brain-chip:not([data-brain='demo']) .brain-chip-label {
     display: none;
+  }
+}
+@media (max-width: 760px) {
+  .brain-chip[data-brain='demo'] .brain-chip-label-full {
+    display: none;
+  }
+  .brain-chip[data-brain='demo'] .brain-chip-label-short {
+    display: inline;
   }
 }
 

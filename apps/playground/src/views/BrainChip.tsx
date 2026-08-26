@@ -126,7 +126,18 @@ export function BrainChip(): ReactElement {
         onClick={() => setOpen((prev) => !prev)}
       >
         <span className="brain-dot" aria-hidden="true" />
-        <span className="brain-chip-label">{copy.label}</span>
+        {brain === 'demo' ? (
+          // The demo label must survive every compaction — but "demo brain" is 7px too
+          // wide for the 375px header (the mobile overflow tripwire caught it), so the
+          // narrow band swaps to the one word that still discloses. The full state
+          // always rides the aria-label above.
+          <>
+            <span className="brain-chip-label brain-chip-label-full">{copy.label}</span>
+            <span className="brain-chip-label brain-chip-label-short">demo</span>
+          </>
+        ) : (
+          <span className="brain-chip-label">{copy.label}</span>
+        )}
       </button>
       {open ? (
         <div className="identity-menu brain-menu" data-testid="brain-menu" ref={menuRef} aria-label="what’s thinking">

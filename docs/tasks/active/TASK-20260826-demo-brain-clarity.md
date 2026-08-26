@@ -133,6 +133,20 @@ the AI provider you choose — never to Snug's servers."* Demo copy names the me
 
 ## Decisions & surprises
 
+- **375px overflow, caught by the tripwire as planned:** "demo brain" in the header
+  overflowed by exactly 7px at 375px (all five mobile e2e reds). Fix: below the 760px
+  nav-compaction breakpoint the chip swaps to a short "demo" span (full state stays in
+  the aria-label); mobile spec pins the swap via innerText + visibility.
+- The demo-callout "survives reload" claim is COVERED IN TWO HALVES: unit (re-init
+  after dismiss in demoCallout.test.tsx) + e2e SPA-navigation persistence — an
+  ephemeral Playwright context's OPFS does not survive hard reloads (lessons
+  2026-08-03), so a reload-based e2e would test the harness, not the latch.
+- `createTurnAdapter` now THROWS on a keyed kind with no key (unreachable by
+  construction — adapterKindFor guarantees the key): drift between the derivation and
+  the dispatch becomes loud instead of silently re-routing a turn.
+- brainKind is persisted for EVERY direct-mode turn (not just demo): provenance is
+  cheap in opaque meta JSON, and a future "built with claude" surface reads it free.
+
 - Confirmed gap (2026-08-26 code read): `BuilderModelSelect` returns `null` when
   `provider === 'mock'`; only Settings + the webllm fallback banner ever say "demo
   brain". No ambient surface anywhere in the builder/hub/run shell.

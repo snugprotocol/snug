@@ -44,6 +44,27 @@ test.describe('375px viewport', () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test('the brain chip survives compaction: present, named, and the header still fits (ADR-0059)', async ({ page }) => {
+    await page.goto('/build');
+    const chip = page.getByTestId('brain-chip');
+    await expect(chip).toBeVisible();
+    // The demo label is the one label that must NOT compact away — hiding the words
+    // would hide exactly the disclosure the chip exists for. At this width it is the
+    // SHORT form ("demo"): the full label overflowed the 375px header by 7px, and the
+    // swap is the deliberate fix (toContainText reads innerText, so the hidden full
+    // span cannot satisfy this).
+    await expect(chip).toContainText('demo');
+    await expect(chip.locator('.brain-chip-label-full')).toBeHidden();
+    await expect(chip.locator('.brain-chip-label-short')).toBeVisible();
+    // The accessible name carries the full state at every width (lessons 2026-08-18:
+    // on-screen text is an API; aria-label is the name the e2e contract pins).
+    await expect(chip).toHaveAttribute('aria-label', 'what’s thinking: demo brain — scripted, no AI service');
+    // …and the first-contact callout is up on this route too, so this asserts the
+    // whole disclosure surface inside the 375px budget at once.
+    await expect(page.getByTestId('demo-brain-callout')).toBeVisible();
+    await expectNoHorizontalScroll(page);
+  });
+
   test('builder composer is usable: type, ≥44px touch targets', async ({ page }) => {
     await page.goto('/build');
     const composer = page.getByRole('textbox', { name: 'describe your app' });
