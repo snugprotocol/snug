@@ -2074,6 +2074,129 @@ img.identity-avatar {
   }
 }
 
+/* ---- TASK-20260826 (ADR-0059): the brain chip — "what's thinking", always ---- */
+
+.brain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--tap);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.brain-chip:hover {
+  background: var(--surface-2);
+}
+.brain-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ok);
+}
+/* The demo state is the one worth noticing: warn tint + the same soft breathe the
+   status line's dot uses. Static under reduced motion (belt and braces below). */
+.brain-chip[data-brain='demo'] {
+  color: var(--warn);
+}
+.brain-chip[data-brain='demo'] .brain-dot {
+  background: var(--warn);
+  animation: caret-breathe 1.8s var(--ease-out) infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brain-chip[data-brain='demo'] .brain-dot {
+    animation: none;
+  }
+}
+.brain-menu {
+  max-width: 300px;
+}
+.brain-menu-body {
+  padding: 0 var(--space-2) var(--space-2);
+  font-size: var(--text-s);
+  color: var(--fg);
+}
+.brain-menu-hint {
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+/* The first-contact callout (ADR-0059, AC6): an inline NOTE above the builder chat —
+   deliberately not .error-note (nothing is wrong) and not an overlay (nothing may
+   gate). Warn accent on the leading edge ties it to the chip's demo state. */
+.demo-brain-callout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.demo-brain-callout-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 1 260px;
+  font-size: var(--text-s);
+}
+.demo-brain-callout-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* The per-turn provenance tag (ADR-0059 rule 3): quiet, but unambiguous — warn-tinted
+   like the chip's demo state so the two surfaces read as one signal. */
+.demo-turn-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-pill);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  line-height: 1.8;
+  width: fit-content;
+}
+
+/* Narrow-header compaction (the 375px overflow tripwire is the guard): a REAL brain's
+   label yields to the dot; the demo label must survive compaction — hiding the words
+   would hide exactly the disclosure this chip exists for — but "demo brain" overflows
+   the 375px header by 7px, so below the nav-compaction breakpoint (760px, the block
+   at the top of this file) it swaps to the short span rendered beside it. The
+   accessible name rides aria-label at every width. */
+.brain-chip-label-short {
+  display: none;
+}
+@media (max-width: 830px) {
+  .brain-chip:not([data-brain='demo']) .brain-chip-label {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .brain-chip[data-brain='demo'] .brain-chip-label-full {
+    display: none;
+  }
+  .brain-chip[data-brain='demo'] .brain-chip-label-short {
+    display: inline;
+  }
+}
+
 .tile-installed-badge {
   position: absolute;
   top: var(--space-2);

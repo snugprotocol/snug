@@ -66,6 +66,14 @@ export interface ChatLogProps {
   onSelectCardOption?: (card: ChatCardState, messageId: number, optionId: string) => void;
 }
 
+/**
+ * The demo-turn provenance tag (TASK-20260826, ADR-0059 rule 3) — pinned copy: a
+ * screenshot of scripted output must describe itself. Rendered from the MESSAGE's
+ * persisted brain kind, never from live settings, so history keeps its truth after
+ * a mode switch.
+ */
+export const DEMO_TURN_TAG = 'scripted demo — not an AI response';
+
 /** The streamed conversation: user bubbles, streaming agent text with a soft caret,
     error notes as data, and the artifact card with its "run it" CTA. */
 export function ChatLog({
@@ -97,6 +105,11 @@ export function ChatLog({
               </div>
             ) : null}
             {message.directiveNote !== undefined ? <div className="hint">{message.directiveNote}</div> : null}
+            {message.role === 'agent' && message.brainKind === 'demo' ? (
+              <div className="demo-turn-tag" data-testid="demo-turn-tag">
+                <span aria-hidden="true">🧪</span> {DEMO_TURN_TAG}
+              </div>
+            ) : null}
           </div>
           {message.directive !== undefined ? (
             <Card className="artifact-card" data-testid="auth-directive-card">

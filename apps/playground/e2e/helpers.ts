@@ -12,6 +12,12 @@
 //   data-testid="mobile-view-toggle"          mobile app ⇄ think full-view toggle, named
 //                                             "show/hide watch it think" (TASK-20260821)
 //   aria-label "watch it think"               the rail (desktop) / full think view (mobile)
+//   data-testid="brain-chip"                  header "what's thinking" chip (ADR-0059);
+//                                             demo aria-label pinned by mobile.spec.ts
+//   data-testid="brain-menu[-settings]"       the chip's popover + its settings door
+//   data-testid="demo-brain-callout"          first-contact note in the builder, with
+//                                             demo-callout-settings / demo-callout-dismiss
+//   data-testid="demo-turn-tag"               per-turn scripted-demo provenance tag
 //
 // If the app shell is absent (src/main.tsx not landed), those specs skip with an
 // explicit reason; the CSP / StrictMode / bridge round-trip specs run against the

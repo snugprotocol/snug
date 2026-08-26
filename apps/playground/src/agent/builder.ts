@@ -11,7 +11,7 @@ import { ERROR_CODES } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import { endpointsNeedConfirmStore, getByokKey, type ByokProvider } from '../state/mode.js';
-import { createTurnAdapter, type DirectMode } from './adapter.js';
+import { adapterKindFor, createTurnAdapter, routeOf, type AdapterKind, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
 import { extractAppHtml, WEBLLM_BUILD_SUFFIX } from './webllm/appHtml.js';
@@ -81,6 +81,14 @@ export interface BuildHandlers {
    * round trips happen on the hub and are never serialized to the client, by design.
    */
   onLlmEvent?: (event: AgentTurnEvent) => void;
+  /**
+   * What this turn actually runs on (TASK-20260826, ADR-0059 rule 3), reported once
+   * per send from the SAME resolved config the adapter is constructed from — and
+   * BEFORE the provider is called, because provenance is a property of the route,
+   * not of a successful response. Direct mode only: the server builder never fires
+   * it (subscription turns are the hub's story and are never scripted).
+   */
+  onBrain?: (kind: AdapterKind) => void;
 }
 
 export type BuildResult =
@@ -259,16 +267,18 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
       // captured here at creation would freeze the thread on whatever was chosen when the
       // view mounted. An explicit `options.model` still wins (test pins, existing callers).
       const model = options.model ?? resolveModelForApp(options.appId);
-      const adapter = createTurnAdapter(
-        {
-          mode: options.mode,
-          provider,
-          ...(key !== undefined ? { key } : {}),
-          ...(model !== undefined ? { model } : {}),
-          ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),
-        },
-        'chat',
-      );
+      // ONE config object feeds both the provenance stamp and the constructor
+      // (ADR-0059 rule 2): building them from separate spreads is how a stamp
+      // starts lying about the route.
+      const adapterConfig = {
+        mode: options.mode,
+        provider,
+        ...(key !== undefined ? { key } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),
+      };
+      handlers.onBrain?.(adapterKindFor(routeOf(adapterConfig)));
+      const adapter = createTurnAdapter(adapterConfig, 'chat');
       // Tool-free in webllm mode: `runAgentTurn` treats an empty list as JSON-only
       // mode and offers the adapter NO tools (which would refuse them anyway).
       const tools: AgentTool[] = isWebllm
