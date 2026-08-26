@@ -383,6 +383,34 @@ export function pinnedHelperIsPublished(pinnedHelpers, ghView) {
   return { ok: true };
 }
 
+/**
+ * REFUSE to rebuild over an existing SIGNED build when this run has no Apple credentials.
+ *
+ * Learned the hard way 2026-08-26: a signed+notarized v0.1.2 DMG was already on disk when the
+ * script was re-run (to finish the staging step) WITHOUT the credential trio in the
+ * environment. `tauri build` rebuilt from source, `appleSigned` was false, and the notarized
+ * artifact was replaced by an adhoc one — ~9 minutes of build and an Apple round trip
+ * destroyed by a command whose stated purpose was "stage what is already built". The build is
+ * reproducible, so nothing was unrecoverable; it is refused anyway, because a destructive
+ * rebuild is never what the caller meant.
+ *
+ * `spctlOutput` is the *existing* artifact's verdict (undefined when there is no artifact).
+ */
+export function refuseUnsignedRebuildOverSignedBuild({ appleSigned, existingDmg, spctlOutput }) {
+  if (appleSigned || existingDmg === undefined) return { ok: true };
+  if (spctlOutput !== undefined && /source=Notarized Developer ID/.test(spctlOutput)) {
+    return {
+      ok: false,
+      reason:
+        `${existingDmg} is already SIGNED and NOTARIZED, and this run has no Apple credentials — ` +
+        'rebuilding would replace it with an unsigned artifact. Export the credential trio ' +
+        '(APPLE_SIGNING_IDENTITY + APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID) and re-run, or ' +
+        'delete the bundle directory first if an unsigned build is genuinely what you want.',
+    };
+  }
+  return { ok: true };
+}
+
 /** The gh command PRINTED for the owner — never executed here (PROCESS.md release rules). */
 export function ghReleaseCommand(version) {
   const files = STABLE_ASSETS.map((name) => `release-out/${name}`).join(' ');
@@ -491,6 +519,29 @@ async function main() {
   console.log('running the desktop release gate…');
   execSync('pnpm --filter desktop gate:release', { cwd: ROOT, stdio: 'inherit' });
   console.log('building (universal-apple-darwin, updater artifacts)…');
+  // Guard against the destructive rebuild described on refuseUnsignedRebuildOverSignedBuild.
+  {
+    let existingDmg;
+    try {
+      existingDmg = findOne(path.join(UNIVERSAL_BUNDLE, 'dmg'), '.dmg');
+    } catch {
+      existingDmg = undefined;
+    }
+    let spctlOutput;
+    if (existingDmg !== undefined) {
+      try {
+        spctlOutput = execSync(`spctl -a -t open --context context:primary-signature -vv "${existingDmg}" 2>&1`, { encoding: 'utf8' });
+      } catch (err) {
+        spctlOutput = String(err.stdout ?? '');
+      }
+    }
+    const verdict = refuseUnsignedRebuildOverSignedBuild({ appleSigned, existingDmg, spctlOutput });
+    if (!verdict.ok) {
+      console.error(`REFUSED: ${verdict.reason}`);
+      process.exit(2);
+    }
+  }
+
   execSync('pnpm --filter desktop exec tauri build --target universal-apple-darwin', {
     cwd: ROOT,
     stdio: 'inherit',

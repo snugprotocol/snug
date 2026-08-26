@@ -29,6 +29,7 @@ import {
   checkSpctlOutput,
   pinnedHelperTags,
   pinnedHelperIsPublished,
+  refuseUnsignedRebuildOverSignedBuild,
 } from './release-desktop.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -313,4 +314,17 @@ test('the desktop release refuses when a pinned helper tag is unpublished (ADR-0
   });
   assert.equal(drifted.ok, false);
   assert.match(drifted.reason, /does not match the shell's pin/);
+});
+
+test('an unsigned re-run REFUSES to rebuild over an existing signed+notarized build (2026-08-26)', () => {
+  const notarized = 'Snug.dmg: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Jitendra Maker (2KC5X47563)\n';
+  const refused = refuseUnsignedRebuildOverSignedBuild({ appleSigned: false, existingDmg: '/b/Snug.dmg', spctlOutput: notarized });
+  assert.equal(refused.ok, false);
+  assert.match(refused.reason, /already SIGNED and NOTARIZED/);
+  // a credentialed run proceeds — it will produce a signed artifact itself
+  assert.equal(refuseUnsignedRebuildOverSignedBuild({ appleSigned: true, existingDmg: '/b/Snug.dmg', spctlOutput: notarized }).ok, true);
+  // nothing built yet → nothing to destroy
+  assert.equal(refuseUnsignedRebuildOverSignedBuild({ appleSigned: false, existingDmg: undefined }).ok, true);
+  // an existing UNSIGNED build may be rebuilt unsigned
+  assert.equal(refuseUnsignedRebuildOverSignedBuild({ appleSigned: false, existingDmg: '/b/Snug.dmg', spctlOutput: 'Snug.dmg: rejected\nsource=no usable signature\n' }).ok, true);
 });
