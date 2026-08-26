@@ -20,6 +20,7 @@ describe('build output', () => {
 
   it.each([
     'index.html',
+    join('architecture', 'index.html'),
     join('download', 'index.html'),
     join('docs', 'index.html'),
     join('docs', 'spec', 'index.html'),

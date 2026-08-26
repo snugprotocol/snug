@@ -16,8 +16,14 @@ import { describe, expect, it } from 'vitest';
 const DIST = fileURLToPath(new URL('../../dist', import.meta.url));
 const ORIGIN = 'https://snugprotocol.org';
 
-/** The four pages built from MarketingLayout.astro (src/pages/*.astro). */
-const MARKETING = ['index.html', join('download', 'index.html'), join('privacy', 'index.html'), join('terms', 'index.html')];
+/** The pages built from MarketingLayout.astro (src/pages/*.astro). */
+const MARKETING = [
+  'index.html',
+  join('architecture', 'index.html'),
+  join('download', 'index.html'),
+  join('privacy', 'index.html'),
+  join('terms', 'index.html'),
+];
 
 function walkHtml(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

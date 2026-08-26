@@ -70,10 +70,28 @@
         </p>
       </article>
     </div>
+
+    <p class="diff-more">
+      <a href="/architecture/">See how it works — six diagrams →</a>
+    </p>
   </div>
 </section>
 
 <style>
+  .diff-more {
+    margin-top: var(--space-6);
+  }
+
+  .diff-more a {
+    color: var(--ember-bright);
+    text-decoration: none;
+    font-weight: 500;
+  }
+
+  .diff-more a:hover {
+    color: var(--ember);
+  }
+
   .diff-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
