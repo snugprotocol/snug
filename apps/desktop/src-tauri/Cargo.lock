@@ -3766,9 +3766,12 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 name = "snug-desktop"
 version = "0.1.1"
 dependencies = [
+ "base64 0.22.1",
+ "flate2",
  "futures-util",
  "http",
  "libc",
+ "minisign-verify",
  "rand 0.8.7",
  "rcgen",
  "reqwest 0.12.28",
@@ -3776,6 +3779,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3788,6 +3792,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]

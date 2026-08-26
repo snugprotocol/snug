@@ -114,7 +114,7 @@ async function fetchNodeBinary(pinned, arch, cacheDir) {
     throw new Error(`REFUSED: ${verdict.reason}`);
   }
   const extractDir = mkdtempSync(path.join(tmpdir(), 'snug-node-'));
-  execFileSync('tar', ['-xzf', tarball, '-C', extractDir, '--strip-components=1', '*/bin/node', '*/LICENSE'], { stdio: 'inherit' });
+  execFileSync('/usr/bin/tar', ['-xzf', tarball, '-C', extractDir, '--strip-components=1', '*/bin/node', '*/LICENSE'], { stdio: 'inherit' });
   const bin = path.join(extractDir, 'bin', 'node');
   if (!existsSync(bin)) throw new Error(`Node tarball did not contain bin/node (${tarball})`);
   return { bin, license: path.join(extractDir, 'LICENSE') };
@@ -175,7 +175,7 @@ export async function pack({ arch, outDir, smoke, shared }) {
   const archive = path.join(outDir, helperArchiveName(HELPER_NAME, arch));
   rmSync(archive, { force: true });
   // Root-relative entries, no owner names, no xattrs: what the shell's extractor admits.
-  execFileSync('tar', ['--no-xattrs', '--uid', '0', '--gid', '0', '-czf', archive, '-C', tree, '.'], { stdio: 'inherit' });
+  execFileSync('/usr/bin/tar', ['--no-xattrs', '--uid', '0', '--gid', '0', '-czf', archive, '-C', tree, '.'], { stdio: 'inherit' });
   const bytes = readFileSync(archive);
   const unpackedSize = walk(tree).reduce((n, e) => n + statSync(path.join(tree, e.path)).size, 0);
   rmSync(stage, { recursive: true, force: true });

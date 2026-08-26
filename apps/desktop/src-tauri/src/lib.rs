@@ -11,6 +11,7 @@ mod exportfile;
 /// carries neither the commands nor their strings (P0 amendment 4).
 #[cfg(debug_assertions)]
 mod gate;
+mod helper_install;
 /// The pinned-TLS LAN transport (ADR-0023 Decision 3). Ships in RELEASE too —
 /// unlike the gate, this is a production capability, and every guard it carries
 /// (host class, pin, redirect policy, size cap) is enforced here in Rust.
@@ -118,7 +119,8 @@ pub fn run() {
         // shipped — the commands were written, unit-tested and registered in the handler
         // list, and every one of those signals stayed green while the helper could never be
         // started. `state_registration_tests` in sidecar.rs now pins it.
-        .manage(sidecar::SidecarState::default());
+        .manage(sidecar::SidecarState::default())
+        .manage(helper_install::HelperInstallState::default());
     // The gate commands exist in DEBUG builds only (P4/AC7). The handler list
     // is duplicated under cfg rather than stubbed: a release binary must not
     // contain the command names even as registered no-ops.
@@ -132,6 +134,10 @@ pub fn run() {
         sidecar::sidecar_ctl,
         sidecar::sidecar_fetch,
         sidecar::sidecar_wizard_fetch,
+        // ADR-0060: the on-demand helper download. Explicit-click only; its guards
+        // (signature, content pin, admission, caps) are Rust-side and unconditional.
+        helper_install::helper_status,
+        helper_install::helper_install,
         pending_opened_files,
         close_flush_done,
         gate::shell_gate_config,
@@ -153,6 +159,8 @@ pub fn run() {
         sidecar::sidecar_ctl,
         sidecar::sidecar_fetch,
         sidecar::sidecar_wizard_fetch,
+        helper_install::helper_status,
+        helper_install::helper_install,
         pending_opened_files,
         close_flush_done,
     ]);
