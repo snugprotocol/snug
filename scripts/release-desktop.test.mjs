@@ -266,7 +266,11 @@ test('appleSigningPlan: signed, unsigned, and the REFUSED half-configured states
 });
 
 test('checkStapleOutput: only a real staple acceptance passes', () => {
+  // BOTH Apple wordings: `stapler staple` says "staple and validate", `stapler validate`
+  // says "validate" alone. The script calls it on `validate` output, and accepting only the
+  // first spelling refused a correctly stapled v0.1.2 DMG (2026-08-26).
   assert.deepEqual(checkStapleOutput('Processing: Snug.dmg\nThe staple and validate action worked!\n'), { ok: true });
+  assert.deepEqual(checkStapleOutput('Processing: Snug.dmg\nThe validate action worked!\n'), { ok: true });
   // The exact refusal a never-notarized artifact produces (captured from a real run
   // against an un-stapled app). This is the silent failure the check exists for: a
   // notarization that succeeded but was never STAPLED still fails first launch on a

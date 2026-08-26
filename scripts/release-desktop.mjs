@@ -320,7 +320,14 @@ export function checkStapleOutput(output) {
   if (typeof output !== 'string' || output.trim() === '') {
     return { ok: false, reason: 'no `stapler validate` output — the staple check did not run' };
   }
-  if (/The staple and validate action worked!/i.test(output)) return { ok: true };
+  // BOTH of Apple's success wordings, learned from a real run (2026-08-26):
+  //   `stapler staple <path>`   → "The staple and validate action worked!"
+  //   `stapler validate <path>` → "The validate action worked!"
+  // This function is called on the output of `validate`, so the second is the one that
+  // normally appears; the first was the only accepted spelling until a release refused on
+  // "The validate action worked!" — a correctly stapled artifact rejected by its own check.
+  // Matching the shared suffix accepts both and still refuses every failure wording below.
+  if (/\bvalidate action worked!/i.test(output)) return { ok: true };
   if (/does not have a ticket stapled/i.test(output)) {
     return { ok: false, reason: 'the artifact has NO notarization ticket stapled to it — first launch will fail offline' };
   }
