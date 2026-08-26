@@ -27,6 +27,8 @@ import {
   appleSigningPlan,
   checkStapleOutput,
   checkSpctlOutput,
+  pinnedHelperTags,
+  pinnedHelperIsPublished,
 } from './release-desktop.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -292,4 +294,14 @@ test('checkSpctlOutput: Gatekeeper acceptance, and the notarization-specific rej
   assert.match(wrongSource.reason, /Notarized/i);
   assert.equal(checkSpctlOutput('').ok, false);
   assert.equal(checkSpctlOutput(undefined).ok, false);
+});
+
+test('the desktop release refuses when a pinned helper tag is unpublished (ADR-0060 §10)', () => {
+  const rs = readFileSync(path.join(ROOT, 'apps', 'desktop', 'src-tauri', 'src', 'helper_install.rs'), 'utf8');
+  const tags = pinnedHelperTags(rs);
+  assert.ok(tags.length >= 1 && tags.every((t) => /^helper-[a-z0-9-]+-v\d+\.\d+\.\d+$/.test(t)), JSON.stringify(tags));
+  assert.equal(pinnedHelperIsPublished(tags, () => true).ok, true);
+  const refused = pinnedHelperIsPublished(tags, () => false);
+  assert.equal(refused.ok, false);
+  assert.match(refused.reason, /not published/);
 });

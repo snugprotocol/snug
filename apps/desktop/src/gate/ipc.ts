@@ -68,6 +68,8 @@ export const IPC_CHECK_IDS = [
   'ipc-updater-install-refused',
   'ipc-process-relaunch-refused',
   'ipc-updater-check-dispatchable',
+  'ipc-helper-install-refused',
+  'ipc-helper-status-dispatchable',
 ] as const;
 
 /**
@@ -173,6 +175,18 @@ export const UPDATER_INSTALL_COMMAND = 'plugin:updater|download_and_install';
 export const PROCESS_RELAUNCH_COMMAND = 'plugin:process|restart';
 
 /**
+ * `helper_install` (ADR-0060 §7) is DOWNLOAD-AND-EXECUTE-AS-USER: a dispatched call fetches
+ * an archive from GitHub, unpacks it under ~/Snug/helpers and spawns its `bin/node`. Every
+ * guard (signature, content pin, admission) is Rust-side, but an app iframe that could reach
+ * the command at all could drive an install the user never clicked for. Its own row, per
+ * amendment 16. `helper_status` is the positive twin: a disk read, harmless to dispatch,
+ * and registered in the same handler list — so its reach proves the list the refusal row
+ * guards is the one that shipped.
+ */
+export const HELPER_INSTALL_COMMAND = 'helper_install';
+export const HELPER_STATUS_COMMAND = 'helper_status';
+
+/**
  * The sentinel filename the subframe's keyless write targets. Must match
  * `gate.rs::IPC_SENTINEL_NAME` — the Rust side answers for this name ONLY, so a
  * drift here turns the probe into an error rather than a silent pass.
@@ -276,6 +290,10 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
   var INS_CB = 987654361;
   window['_' + INS_CB] = function () { updaterInstallCallbackFired = true; };
   window['_' + (INS_CB + 1)] = function () { updaterInstallCallbackFired = true; };
+  var helperInstallCallbackFired = false;
+  var HLP_CB = 987654391;
+  window['_' + HLP_CB] = function () { helperInstallCallbackFired = true; };
+  window['_' + (HLP_CB + 1)] = function () { helperInstallCallbackFired = true; };
   var relaunchCallbackFired = false;
   var REL_CB = 987654371;
   window['_' + REL_CB] = function () { relaunchCallbackFired = true; };
@@ -364,6 +382,18 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     });
   }
 
+  function keylessHelperInstallBody() {
+    // A REAL, well-formed helper_install call for the one helper this build pins. On a
+    // runner a DISPATCHED call would start a download (or refuse for a dev tree) and
+    // resolve one of the two slots either way — reach is the breakage.
+    return JSON.stringify({
+      cmd: '${HELPER_INSTALL_COMMAND}',
+      callback: HLP_CB,
+      error: HLP_CB + 1,
+      payload: { name: 'whatsapp-sidecar' }
+    });
+  }
+
   function keylessRelaunchBody() {
     // See PROCESS_RELAUNCH_COMMAND's header: if this ever DISPATCHES the shell
     // restarts mid-gate — a self-announcing catastrophic failure, not a flake.
@@ -383,6 +413,7 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
     try { transports[k].handler.postMessage(keylessUpdaterCheckBody()); } catch (e6) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessUpdaterInstallBody()); } catch (e7) { /* transport rejected the shape */ }
     try { transports[k].handler.postMessage(keylessRelaunchBody()); } catch (e8) { /* transport rejected the shape */ }
+    try { transports[k].handler.postMessage(keylessHelperInstallBody()); } catch (e9) { /* transport rejected the shape */ }
   }
 
   function finishInvoke() {
@@ -399,6 +430,7 @@ const PROBE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>ipc 
         sidecarWizardCallbackFired: sidecarWizardCallbackFired,
         updaterCheckCallbackFired: updaterCheckCallbackFired,
         updaterInstallCallbackFired: updaterInstallCallbackFired,
+        helperInstallCallbackFired: helperInstallCallbackFired,
         relaunchCallbackFired: relaunchCallbackFired
       }
     }, '*');
@@ -423,6 +455,18 @@ interface ProbeReport {
   updaterInstallCallbackFired: boolean;
   /** Per-command: did a keyless `plugin:process|restart` resolve into the subframe? */
   relaunchCallbackFired: boolean;
+  /** Per-command (ADR-0060): did a keyless `helper_install` resolve into the subframe? */
+  helperInstallCallbackFired: boolean;
+}
+
+/** The helper seat's twin verdict: any answer from the command BODY is reach. */
+export function decideHelperStatusDispatchable(dispatch: { resolved: boolean; detail: string }): CheckResult {
+  const id = 'ipc-helper-status-dispatchable';
+  if (dispatch.resolved) return { id, pass: true, detail: 'helper_status resolved from the main frame' };
+  const unregistered = /not (found|allowed)|unknown command|Command .* not found/i.test(dispatch.detail);
+  return unregistered
+    ? { id, pass: false, detail: `helper_status is not dispatchable from the main frame: ${dispatch.detail}` }
+    : { id, pass: true, detail: `helper_status answered from its body (${dispatch.detail})` };
 }
 
 /**
@@ -774,6 +818,8 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
                 updaterInstallCallbackFired:
                   (p as { updaterInstallCallbackFired?: unknown }).updaterInstallCallbackFired === true,
                 relaunchCallbackFired: (p as { relaunchCallbackFired?: unknown }).relaunchCallbackFired === true,
+                helperInstallCallbackFired:
+                  (p as { helperInstallCallbackFired?: unknown }).helperInstallCallbackFired === true,
               },
             }
           : {}),
@@ -836,6 +882,17 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     ),
   );
 
+  byId.set(
+    'ipc-helper-install-refused',
+    decideUpdateChannelCommandRefused(
+      'ipc-helper-install-refused',
+      HELPER_INSTALL_COMMAND,
+      'app code can download and execute a helper as the user (ADR-0060 §7)',
+      report === undefined ? undefined : { ...report, fired: report.helperInstallCallbackFired },
+      keyReachable,
+    ),
+  );
+
   // The POSITIVE twin, driven from the main frame — a real, well-formed app-route call.
   // Any answer from the command BODY passes; only the unregistered shapes fail.
   let dispatch: { resolved: boolean; detail: string };
@@ -870,6 +927,16 @@ export async function runIpcChecks(): Promise<CheckResult[]> {
     updaterDispatch = { resolved: false, detail: String(err) };
   }
   byId.set('ipc-updater-check-dispatchable', decideUpdaterCheckDispatchable(updaterDispatch));
+
+  // The helper seat's positive twin: helper_status is a disk read, safe to dispatch anywhere.
+  let helperDispatch: { resolved: boolean; detail: string };
+  try {
+    await invoke(HELPER_STATUS_COMMAND, { name: 'whatsapp-sidecar' });
+    helperDispatch = { resolved: true, detail: 'resolved' };
+  } catch (err) {
+    helperDispatch = { resolved: false, detail: String(err) };
+  }
+  byId.set('ipc-helper-status-dispatchable', decideHelperStatusDispatchable(helperDispatch));
 
   // EVERY id must be present — a missing verdict is a FAIL (AC7).
   return IPC_CHECK_IDS.map((id) => byId.get(id) ?? { id, pass: false, detail: 'no-verdict' });

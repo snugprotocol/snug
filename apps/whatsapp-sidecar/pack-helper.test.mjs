@@ -7,8 +7,12 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { npmInstallArgs } from './helper-tree.mjs';
+import { mkdirSync, mkdtempSync, existsSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+
 import {
   ARCHES,
+  pruneEmptyDirs,
   checkNodeRuntime,
   checkPackedTree,
   helperArchiveName,
@@ -73,4 +77,16 @@ test('checkPackedTree requires the spawn contract and forbids sharp', () => {
   const strayLink = checkPackedTree([...good, { path: 'node_modules/foo/link', symlink: true }]);
   assert.equal(strayLink.ok, false);
   assert.deepEqual(strayLink.forbidden, ['node_modules/foo/link']);
+});
+
+test('an EMPTY forbidden scope dir is still refused, and pruneEmptyDirs removes it', () => {
+  const emptyScope = checkPackedTree(['index.js', 'package.json', 'bin/node', 'node_modules/baileys/package.json', 'node_modules/zod/package.json', 'node_modules/@snugprotocol/protocol/package.json', { path: 'node_modules/@img/', symlink: false, dir: true }]);
+  assert.equal(emptyScope.ok, false);
+  const root = mkdtempSync(path.join(tmpdir(), 'prune-'));
+  mkdirSync(path.join(root, 'node_modules', '@img'), { recursive: true });
+  mkdirSync(path.join(root, 'node_modules', 'keep'), { recursive: true });
+  writeFileSync(path.join(root, 'node_modules', 'keep', 'f'), '');
+  pruneEmptyDirs(path.join(root, 'node_modules'));
+  assert.equal(existsSync(path.join(root, 'node_modules', '@img')), false);
+  assert.equal(existsSync(path.join(root, 'node_modules', 'keep', 'f')), true);
 });

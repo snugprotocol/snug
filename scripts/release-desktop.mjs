@@ -357,6 +357,22 @@ export function checkSpctlOutput(output) {
   return { ok: true };
 }
 
+/**
+ * ADR-0060 §10 / plan-review finding 6: a shell that pins a helper tag nobody published
+ * sends every Telepath user to a 404. Parse the pin out of helper_install.rs (never restate
+ * it) and require `gh release view <tag>` to succeed before anything is staged.
+ */
+export function pinnedHelperTags(helperInstallRs) {
+  return [...helperInstallRs.matchAll(/tag:\s*"([^"]+)"/g)].map((m) => m[1]);
+}
+
+export function pinnedHelperIsPublished(tags, ghView) {
+  for (const tag of tags) {
+    if (!ghView(tag)) return { ok: false, reason: `pinned helper release ${tag} is not published — run scripts/release-helper.mjs and create it first (ADR-0060 §10)` };
+  }
+  return { ok: true };
+}
+
 /** The gh command PRINTED for the owner — never executed here (PROCESS.md release rules). */
 export function ghReleaseCommand(version) {
   const files = STABLE_ASSETS.map((name) => `release-out/${name}`).join(' ');
@@ -391,6 +407,21 @@ async function main() {
     process.exit(2);
   }
   console.log('✔ EULA.txt passes the SLA shape check');
+
+  const helperRs = readFileSync(path.join(DESKTOP, 'src-tauri', 'src', 'helper_install.rs'), 'utf8');
+  const helperCheck = pinnedHelperIsPublished(pinnedHelperTags(helperRs), (tag) => {
+    try {
+      execSync(`gh release view ${tag} --repo snugprotocol/snug --json tagName`, { stdio: 'pipe' });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!helperCheck.ok) {
+    console.error(`REFUSED: ${helperCheck.reason}`);
+    process.exit(2);
+  }
+  console.log('✔ every pinned helper release is published');
 
   const pkgPath = path.join(DESKTOP, 'package.json');
   const confPath = path.join(DESKTOP, 'src-tauri', 'tauri.conf.json');

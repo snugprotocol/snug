@@ -28,6 +28,9 @@ import {
   SIDECAR_WIZARD_FETCH_COMMAND,
   UPDATER_CHECK_COMMAND,
   UPDATER_INSTALL_COMMAND,
+  HELPER_INSTALL_COMMAND,
+  HELPER_STATUS_COMMAND,
+  decideHelperStatusDispatchable,
 } from '../gate/ipc.js';
 
 const reachable = {
@@ -344,6 +347,7 @@ describe('decideUpdateChannelCommandRefused — the updater/relaunch rows (ADR-0
   const ROWS = [
     { id: 'ipc-updater-check-refused', command: UPDATER_CHECK_COMMAND, flag: 'updaterCheckCallbackFired' },
     { id: 'ipc-updater-install-refused', command: UPDATER_INSTALL_COMMAND, flag: 'updaterInstallCallbackFired' },
+    { id: 'ipc-helper-install-refused', command: HELPER_INSTALL_COMMAND, flag: 'helperInstallCallbackFired' },
     { id: 'ipc-process-relaunch-refused', command: PROCESS_RELAUNCH_COMMAND, flag: 'relaunchCallbackFired' },
   ] as const;
 
@@ -396,6 +400,8 @@ describe('decideUpdateChannelCommandRefused — the updater/relaunch rows (ADR-0
       'ipc-updater-install-refused',
       'ipc-process-relaunch-refused',
       'ipc-updater-check-dispatchable',
+      'ipc-helper-install-refused',
+      'ipc-helper-status-dispatchable',
     ]) {
       expect(IPC_CHECK_IDS).toContain(id);
     }
@@ -420,5 +426,17 @@ describe('decideUpdaterCheckDispatchable — the updater positive twin', () => {
     ]) {
       expect(decideUpdaterCheckDispatchable({ resolved: false, detail }).pass, detail).toBe(false);
     }
+  });
+});
+
+describe('helper seat rows (ADR-0060 §7)', () => {
+  it('names the Rust commands lib.rs registers', () => {
+    expect(HELPER_INSTALL_COMMAND).toBe('helper_install');
+    expect(HELPER_STATUS_COMMAND).toBe('helper_status');
+  });
+  it('the status twin passes on any body answer and fails only on an unregistered command', () => {
+    expect(decideHelperStatusDispatchable({ resolved: true, detail: 'resolved' }).pass).toBe(true);
+    expect(decideHelperStatusDispatchable({ resolved: false, detail: "'x' is not a helper this build knows" }).pass).toBe(true);
+    expect(decideHelperStatusDispatchable({ resolved: false, detail: 'Command helper_status not found' }).pass).toBe(false);
   });
 });

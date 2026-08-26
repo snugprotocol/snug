@@ -37,8 +37,8 @@ pub const REQUIRED_HELPERS: &[RequiredHelper] = &[RequiredHelper {
     name: "whatsapp-sidecar",
     version: "0.1.0",
     tag: "helper-whatsapp-sidecar-v0.1.0",
-    aarch64: HelperAsset { sha256: "0000000000000000000000000000000000000000000000000000000000000000", size: 0, unpacked_size: 0 },
-    x86_64: HelperAsset { sha256: "0000000000000000000000000000000000000000000000000000000000000000", size: 0, unpacked_size: 0 },
+    aarch64: HelperAsset { sha256: "331fa05e157aca339ea6103828078349440b9d74a8c06bb906f2c8acf500bdde", size: 42781510, unpacked_size: 142348572 },
+    x86_64: HelperAsset { sha256: "4c784449999bf4355186ea3d60f3afe54d99851f23bd95166e4c0d2e077b2b81", size: 43996175, unpacked_size: 144851164 },
 }];
 
 /// Where helper releases live. Single-homed like the updater endpoint (ADR-0047 §11) and
@@ -781,6 +781,23 @@ mod tests {
         assert!(lib.contains("helper_install::helper_install"), "helper_install must be in BOTH handler lists");
         assert!(lib.contains("helper_install::helper_status"));
         assert!(lib.contains(".manage(helper_install::HelperInstallState::default())"), "unmanaged State fails the invoke before the body runs (sidecar.rs state_registration_tests)");
+    }
+
+    /// Run by hand after staging (`cargo test -- --ignored staged_archive`): the REAL archive
+    /// in apps/whatsapp-sidecar/release-out must verify against the PRODUCTION updater key
+    /// and the pin above — the exact check a user's shell performs.
+    #[test]
+    #[ignore]
+    fn staged_archive_verifies_against_the_production_key_and_pin() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../whatsapp-sidecar/release-out");
+        let h = &REQUIRED_HELPERS[0];
+        for (arch, asset) in [("aarch64", h.aarch64), ("x86_64", h.x86_64)] {
+            let file = out.join(archive_file_name(h.name, arch));
+            let bytes = std::fs::read(&file).expect("staged archive present");
+            let sig = std::fs::read_to_string(format!("{}.sig", file.display())).expect("staged .sig present");
+            verify_archive(&bytes, &sig, &updater_pubkey_b64().unwrap(), asset.sha256).expect(arch);
+            assert_eq!(bytes.len() as u64, asset.size, "{arch} size pin");
+        }
     }
 
     #[test]

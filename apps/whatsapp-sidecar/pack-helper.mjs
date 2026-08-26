@@ -86,13 +86,24 @@ export function checkPackedTree(entries) {
   return { ok: true, missing: [], forbidden: [] };
 }
 
+export function pruneEmptyDirs(dir) {
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory() && !entry.isSymbolicLink()) pruneEmptyDirs(path.join(dir, entry.name));
+  }
+  if (readdirSync(dir).length === 0) rmSync(dir, { recursive: true });
+}
+
+/** Files AND directories (an empty forbidden dir must still be seen). */
 function walk(dir, base = '') {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const rel = base === '' ? entry.name : `${base}/${entry.name}`;
     if (entry.isSymbolicLink()) out.push({ path: rel, symlink: true });
-    else if (entry.isDirectory()) out.push(...walk(path.join(dir, entry.name), rel));
-    else out.push({ path: rel, symlink: false });
+    else if (entry.isDirectory()) {
+      out.push({ path: `${rel}/`, symlink: false, dir: true });
+      out.push(...walk(path.join(dir, entry.name), rel));
+    } else out.push({ path: rel, symlink: false });
   }
   return out;
 }
@@ -150,6 +161,9 @@ export function buildSharedTree() {
   const { version } = buildHelperTree(tree, { omitPeers: true });
   // npm's `.bin/` is a symlink farm; the helper never invokes it and the extractor refuses symlinks.
   rmSync(path.join(tree, 'node_modules', '.bin'), { recursive: true, force: true });
+  // Omitted peers leave empty scope dirs behind (`node_modules/@img/`); prune them so the
+  // forbidden-prefix check sees the truth and the archive carries nothing it does not need.
+  pruneEmptyDirs(path.join(tree, 'node_modules'));
   return { tree, version };
 }
 
@@ -177,7 +191,7 @@ export async function pack({ arch, outDir, smoke, shared }) {
   // Root-relative entries, no owner names, no xattrs: what the shell's extractor admits.
   execFileSync('/usr/bin/tar', ['--no-xattrs', '--uid', '0', '--gid', '0', '-czf', archive, '-C', tree, '.'], { stdio: 'inherit' });
   const bytes = readFileSync(archive);
-  const unpackedSize = walk(tree).reduce((n, e) => n + statSync(path.join(tree, e.path)).size, 0);
+  const unpackedSize = walk(tree).filter((e) => !e.dir).reduce((n, e) => n + statSync(path.join(tree, e.path)).size, 0);
   rmSync(stage, { recursive: true, force: true });
   return { archive, version, size: statSync(archive).size, unpackedSize, sha256: sha256Hex(bytes), nodeVersion: pinned.version };
 }
