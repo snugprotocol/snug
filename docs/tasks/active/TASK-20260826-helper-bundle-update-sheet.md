@@ -1,6 +1,6 @@
 # TASK-20260826-helper-bundle-update-sheet: bundle the WhatsApp helper (size-gated) + fix the update sheet (clipping, stale "good to know")
 
-- **Status**: in-progress
+- **Status**: in-review — PR [#151](https://github.com/snugprotocol/snug/pull/151)
 - **Owner**: Jeetu
 - **Risk tier**: **High** (auto-escalated: release config/gate + a new download-verify-extract path in the shell + a `packages/auth` text touch). Per PROCESS.md the plan gets a fresh-context AI review before implementation. The update-sheet half alone would be Low.
 - **Branch**: `fix/TASK-20260826-helper-bundle-update-sheet`
