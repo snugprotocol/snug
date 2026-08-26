@@ -9,6 +9,31 @@
     <meta name="theme-color" content="#faf6ef" media="(prefers-color-scheme: light)" />
     <meta name="description" content="snug — build tiny AI apps by talking, then run them in a sandbox you can watch think." />
     <title>snug — playground</title>
+
+    <!-- Social card — og:image MUST stay absolute; scrapers drop a relative one.
+         Rationale + the shipped-bug history: apps/playground/src/__tests__/socialMeta.test.ts -->
+    <meta property="og:title" content="Snug Playground — build tiny AI apps by talking" />
+    <meta
+      property="og:description"
+      content="Describe an app, watch it get built, then run it in a sandbox you can watch think. No install."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://playground.snugprotocol.org/" />
+    <meta property="og:site_name" content="Snug Protocol" />
+    <meta property="og:image" content="https://snugprotocol.org/videos/poster-landscape.jpg" />
+    <meta property="og:image:width" content="1920" />
+    <meta property="og:image:height" content="1080" />
+    <meta
+      property="og:image:alt"
+      content="Snug — an open protocol for tiny, user-built apps that live in one portable file you own."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Snug Playground — build tiny AI apps by talking" />
+    <meta
+      name="twitter:description"
+      content="Describe an app, watch it get built, then run it in a sandbox you can watch think. No install."
+    />
+    <meta name="twitter:image" content="https://snugprotocol.org/videos/poster-landscape.jpg" />
     <script>
       // Theme before first paint — no flash. Mirrors src/state/theme.ts persistence.
       try {
