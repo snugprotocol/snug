@@ -246,6 +246,10 @@ staying red *for the right reason* — and CI has been billing-blocked since ~20
 failing in seconds with zero steps, so a red X from billing is indistinguishable from a red
 X from R-5. That is an owner action tracked in `docs/next-steps.md`. Stated rather than
 implied because R-5's severity makes the strength of its enforcement part of the claim.
+*Errata 2026-08-26: CI is live again (ADR-0058), but the Windows leg was **removed** rather
+than left red — it had been dying at compile (missing `icon.ico`) before ever reaching the
+`keyReachable` assertion, so its red proved nothing. The R-5 detector gap therefore stands
+until Windows returns post-1.0; `ci.yml` records what must come back with it.*
 
 ### Where the walls genuinely end
 
@@ -464,15 +468,21 @@ disclosed and designed around. What bounds it:
 
 ### Enforcement cadence — where "tested" is weaker than it sounds
 
-**R-11 — Several C2 guarantees are proven only by a job that is not currently running.**
-AC3 asks for "the test that would fail if it regressed"; for these rows the honest answer is
-"a CI job that has not executed since ~2026-08-18." Specifically: the in-shell hard gate is
-not part of `pnpm test` (separate `gate` script, CI-only); the 14 real-browser CSP checks
-never run in CI on the **web** path at all (no `e2e` turbo task) — they run in WKWebView and
-WebView2 but not Chromium, which is the engine the hosted Playground ships to; and
+**R-11 — Several C2 guarantees are proven by real-browser probes that CI runs on one
+engine only.** AC3 asks for "the test that would fail if it regressed"; for these rows the
+answer depends on which engine you mean. *Errata 2026-08-26 (ADR-0058,
+TASK-20260826-backlog-hygiene-stale-findings): v3 wrote this row as "a CI job that has not
+executed since ~2026-08-18". CI has been live and enforcing since 2026-08-26 — `workspace`
+and `desktop-shell (macos-latest)` are required checks — so that premise is stale; the
+coverage gap below is not.* What CI proves today: the in-shell hard gate (AC7/AC8) runs on
+every push and PR via the macOS `desktop-shell` job, so the **WKWebView** leg of the 14
+real-browser CSP checks is live evidence. What it still does not prove: the **WebView2**
+leg is parked with the Windows desktop (the leg was removed rather than left red, for the
+reason the workflow file records); the CSP checks never run under **Chromium**, which is the
+engine the hosted Playground ships to (no `e2e` turbo task on the web path); and
 `apps/server`'s CSP-header assertion lives in `smoke.ts`, which CI never invokes. The
-unit-level pins (policy text, decision functions) do run everywhere; what is CI-bound is
-proof of *actual webview behaviour*.
+unit-level pins (policy text, decision functions) do run everywhere; what remains
+unproven in CI is *actual webview behaviour* on the engine most users meet.
 
 **R-12 — Per-command IPC proof is a rule that does not cover every command.** The gate
 identifies commands individually, precisely so a new command inherits nothing.
@@ -714,8 +724,10 @@ this section exists to prevent:**
 
 - **No lane reviewed `packages/adapters` or `packages/sdk`.** A deliberate scoping call, not
   an oversight; both are named here so the gap is visible.
-- **CI has been billing-blocked since ~2026-08-18**, so nothing here was verified by an
-  independent runner — every green below is one machine. The evidence is `pnpm run
+- **CI was billing-blocked at the time (since ~2026-08-18)**, so nothing here was verified by an
+  independent runner — every green below is one machine. *(Errata 2026-08-26: CI has run
+  as a required check on every push and PR since ADR-0058; the v3 evidence itself was
+  still single-machine and is left as written.)* The evidence is `pnpm run
   gate:local --all` at **FULL PASS, 6/6 legs** (its own verdict: "equivalent to ci.yml on
   macOS", with the Windows leg named as having no local counterpart), plus a separate
   `pnpm --filter desktop gate` run at **GATE GREEN in a real WKWebView** — where both new
