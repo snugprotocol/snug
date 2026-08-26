@@ -162,7 +162,8 @@ describe('manual check + offer surfaces (AC13)', () => {
     expect(chip!.textContent).toContain('v0.2.0');
     // NON-BLOCKING is the claim (lessons 2026-08-20): no dialog anywhere, the primary
     // nav is intact and interactive.
-    expect(el.querySelector('[role="dialog"]')).toBeNull();
+    // the sheet is PORTALED to <body> (TASK-20260826 AC1) — closed means absent from the document
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(el.querySelector('nav[aria-label="primary"]')).not.toBeNull();
   });
 
@@ -174,19 +175,19 @@ describe('manual check + offer surfaces (AC13)', () => {
     act(() => {
       (el.querySelector('[data-testid="app-update-chip"]') as HTMLButtonElement).click();
     });
-    const sheet = el.querySelector('[role="dialog"][aria-label="desktop update"]');
+    const sheet = document.querySelector('[role="dialog"][aria-label="desktop update"]');
     expect(sheet).not.toBeNull();
     expect(sheet!.textContent).toContain('update to v0.2.0');
 
     await act(async () => {
-      (el.querySelector('[data-testid="app-update-install"]') as HTMLButtonElement).click();
+      (document.querySelector('[data-testid="app-update-install"]') as HTMLButtonElement).click();
       await Promise.resolve();
     });
     expect(seat.downloadAndInstall).toHaveBeenCalledTimes(1);
     expect(appUpdate.appUpdateStore.get().phase).toBe('ready-to-restart');
 
     await act(async () => {
-      (el.querySelector('[data-testid="app-update-restart"]') as HTMLButtonElement).click();
+      (document.querySelector('[data-testid="app-update-restart"]') as HTMLButtonElement).click();
       await Promise.resolve();
     });
     expect(seat.relaunch).toHaveBeenCalledTimes(1);
@@ -204,7 +205,7 @@ describe('manual check + offer surfaces (AC13)', () => {
     act(() => {
       (el.querySelector('[data-testid="app-update-chip"]') as HTMLButtonElement).click();
     });
-    const sheet = el.querySelector('[role="dialog"][aria-label="desktop update"]')!;
+    const sheet = document.querySelector('[role="dialog"][aria-label="desktop update"]')!;
     // The hostile string may appear as TEXT; it must not become an anchor.
     const anchors = Array.from(sheet.querySelectorAll('a'));
     expect(anchors.filter((a) => a.href.includes('evil.example'))).toHaveLength(0);

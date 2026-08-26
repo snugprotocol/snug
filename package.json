@@ -21,7 +21,7 @@
     "check-gate-local": "node --test scripts/gate-local.test.mjs",
     "gate:local": "node scripts/gate-local.mjs",
     "check-release-desktop": "node --test scripts/release-desktop.test.mjs",
-    "check-release-helper": "node --test scripts/release-helper.test.mjs && node --test apps/whatsapp-sidecar/pack-helper.test.mjs",
+    "check-release-helper": "node --test scripts/release-helper.test.mjs && node --test apps/whatsapp-sidecar/pack-helper.node-test.mjs",
     "check-helper-pin": "node scripts/check-helper-pin.mjs",
     "check-website-sync": "node --test scripts/check-website-sync.test.mjs && node scripts/check-website-sync.mjs",
     "check-deploy-web": "node --test scripts/deploy-web.test.mjs",

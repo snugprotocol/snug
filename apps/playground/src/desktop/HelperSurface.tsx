@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
+import { createPortal } from 'react-dom';
 
 import { HelperInstallCard } from '../connections/HelperInstallCard.js';
 import { getPlatform } from '../platform/platform.js';
@@ -32,13 +33,18 @@ export function HelperSurface(): ReactElement | null {
       >
         WhatsApp helper needed
       </button>
-      {open ? (
-        <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="WhatsApp helper">
-          <div className="net-confirm-card">
-            <HelperInstallCard name={WHATSAPP_HELPER} appName="Your linked WhatsApp" onInstalled={() => setOpen(false)} onDismiss={() => setOpen(false)} />
-          </div>
-        </div>
-      ) : null}
+      {open
+        ? // Portaled for the same reason the update sheet is: the header's backdrop-filter
+          // would otherwise confine this fixed overlay to the header's box.
+          createPortal(
+            <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="WhatsApp helper">
+              <div className="net-confirm-card">
+                <HelperInstallCard name={WHATSAPP_HELPER} appName="Your linked WhatsApp" onInstalled={() => setOpen(false)} onDismiss={() => setOpen(false)} />
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </>
   );
 }

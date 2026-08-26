@@ -202,7 +202,8 @@ describe('HelperSurface — the autostart moment is not silent (AC15)', () => {
       el.querySelector<HTMLButtonElement>('[data-testid="helper-chip"]')!.click();
     });
     await settle();
-    expect(el.querySelector('[data-testid="helper-install-card"]')).not.toBeNull();
+    // the helper sheet is portaled to <body> like the update sheet
+    expect(document.querySelector('[data-testid="helper-install-card"]')).not.toBeNull();
   });
   it('no chip without a linked session, and none when the helper is fine', async () => {
     const el = await mountSurface(ABSENT);

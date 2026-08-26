@@ -12,7 +12,7 @@
 // The shell spawns `<tree>/bin/node <tree>/index.js` when bin/node exists (sidecar.rs).
 // Signing (minisign, updater key) and helper.json are `scripts/release-helper.mjs`'s job.
 //
-// The pure parts are exported for pack-helper.test.mjs (root `check-pack-helper`).
+// The pure parts are exported for pack-helper.node-test.mjs (node:test, NOT vitest — vitest would pick a .test.mjs up and find no suite) (root `check-pack-helper`).
 
 import { createHash } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';

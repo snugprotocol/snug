@@ -90,7 +90,9 @@ async function mountSheet(opts: { current: string; offer: string; fetchOk: boole
   await act(async () => {
     await Promise.resolve();
   });
-  return container;
+  // The sheet is PORTALED to <body>; `container` holds only the mount point. Readers query
+  // the dialog itself (and the portal test below asserts the container does NOT hold it).
+  return document.querySelector<HTMLElement>('[role="dialog"][aria-label="desktop update"]') ?? container;
 }
 
 describe('update sheet — only newer-than-installed entries (AC2)', () => {
@@ -112,13 +114,24 @@ describe('update sheet — only newer-than-installed entries (AC2)', () => {
   });
 
   it('with nothing newer known: shows the manifest notes as the honest fallback', async () => {
-    const el = await mountSheet({ current: '0.1.1', offer: '0.1.2', fetchOk: false });
+    // current = the newest BUNDLED entry, so nothing bundled is newer either
+    const el = await mountSheet({ current: '0.1.2', offer: '0.1.3', fetchOk: false });
     expect(el.textContent).toContain('manifest notes text');
     expect(el.textContent).not.toContain(WINDOWS_LINE);
   });
 });
 
 describe('update sheet — the card fits the window (AC1)', () => {
+  it('is PORTALED out of the header: a backdrop-filter ancestor must never become its containing block', async () => {
+    // The real bug: mounted inside `.shell-header` (backdrop-filter ⇒ containing block for
+    // fixed descendants), the overlay's inset:0 meant the header's box and the card clipped.
+    await mountSheet({ current: '0.1.0', offer: '0.1.1', fetchOk: true });
+    const dialog = document.querySelector('[role="dialog"][aria-label="desktop update"]');
+    expect(dialog).not.toBeNull();
+    expect(container!.contains(dialog)).toBe(false);
+    expect(dialog!.parentElement).toBe(document.body);
+  });
+
   it('the card is border-box and capped below the viewport, and the overlay scrolls', () => {
     const card = rule('.release-notes-card');
     expect(card).toMatch(/box-sizing:\s*border-box/);

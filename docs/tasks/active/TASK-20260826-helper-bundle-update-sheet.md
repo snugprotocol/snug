@@ -22,16 +22,18 @@ A developer install (`install:helper`, no `helper.json` stamp) always wins if pr
 Measured facts: current tree 62 MB (26 MB optional sharp); minus sharp 5.6 MB gz; Node 22
 arm64 35 MB gz; DMG 18 MB. `minisign-verify`, `tar`, `flate2` already in the Cargo tree.
 
-**Part 2 — update sheet.** (a) The sheet from the header chip is clipped at the top: the
-`.release-notes-card` `max-height: 80vh` is content-box, so padding + head + action row exceed
-the window at small heights, and a flex-centred overflowing child clips at the top with no
-scroll (to be confirmed by screenshot at the 800×560 minimum). (b) The "macOS only through
+**Part 2 — update sheet.** (a) The sheet from the header chip is clipped at the top. **Actual
+root cause (found by screenshot repro, not the plan's guess):** the sheet is rendered inside
+the header nav and `.shell-header` has `backdrop-filter`, which makes it the containing block
+for `position: fixed` descendants — the overlay's `inset: 0` was the header's ~50 px box, the
+card centred on it and clipped. Fix: `createPortal` to `document.body` (plus the CSS
+hardening the plan proposed, which is correct but was not the cause). (b) The "macOS only through
 1.0…" line is **v0.1.0's** "Good to know", rendered because the sheet shows the whole bundled
 history beneath the new entry (`AppUpdateControls.tsx:107-116`). Owner decisions: show only
 entries newer than the installed version; leave shipped notes untouched; write v0.1.2 notes.
 
 **Acceptance criteria** (each becomes at least one test):
-1. **AC1 sheet layout** — `.release-notes-card` is `border-box`, capped at `calc(100vh - 2×overlay padding)`, and the overlay scrolls if the card still overflows. jsdom pins the CSS contract (class present, stylesheet rule text); real proof = screenshot at 800×560 in the journal.
+1. **AC1 sheet layout** — the sheet is **portaled to `<body>`** (the real fix; test: the dialog is not a descendant of the header mount point) and the card is `border-box`, capped at `calc(100vh - 2×overlay padding)`, with a scrolling overlay (hardening). Proof: before/after screenshots at 800×560 (journal 2026-08-26).
 2. **AC2 sheet filter** — with `current=0.1.0`, fetched `[0.1.1]`, bundled `[0.1.1, 0.1.0]`: the sheet renders v0.1.1 only; the v0.1.0 "Good to know" text is absent. With no fetched notes it falls back to bundled entries newer than current; with nothing newer it shows the manifest `notes`/"no release notes" hint.
 3. **AC3 pack script** — `apps/whatsapp-sidecar/pack-helper.mjs --arch aarch64|x86_64` produces `<name>-darwin-<arch>.tar.gz` whose tree contains `index.js`, `package.json`, `bin/node`, `node_modules/baileys`, `node_modules/@snugprotocol/protocol`, `node_modules/zod`, and **no** `node_modules/@img` / `sharp`; the Node tarball is verified against `SHASUMS256.txt` (test: tampered sum → refusal). Pure planning functions unit-tested like `release-desktop.test.mjs`.
 4. **AC4 release script** — `scripts/release-helper.mjs` signs both archives with minisign, writes `helper.json` (name, version, per-arch asset/sha256/size), refuses without a signing key, prints `gh release create --prerelease helper-<name>-v<ver>` and **stops** (test asserts the flag and the tag format).
@@ -108,3 +110,11 @@ Order is tests-first per TDD.md; each phase is a commit group. Phase A is indepe
 ### 2026-08-26 — Jeetu/Claude — approval
 - Done: **plan approved by owner** with defaults Q1 (Node in archive: yes), Q2 (pre-releases on snugprotocol/snug), Q3 (updater minisign key). **Explicit ask recorded: create the actual helper GitHub release (`helper-whatsapp-sidecar-v0.1.0`, pre-release) in this session** — PROCESS.md release-rule requirement satisfied by this journal line.
 - Next step: fresh-context AI plan review (High tier) → Phase A.
+
+### 2026-08-26 — Claude — session (implementation)
+- Done: Phases A–E implemented and committed on the branch; helper archives staged (`apps/whatsapp-sidecar/release-out/`, gitignored) and verified against the PRODUCTION updater key + pin from Rust (`staged_archive_verifies_against_the_production_key_and_pin`, run by hand); x86_64 archive's `bin/node` runs and the helper survives a 2 s start under Rosetta; `check-public-scrub` run by hand — OK.
+- **AC1 root cause corrected**: not `max-height` — `.shell-header`'s `backdrop-filter` made the header the containing block for the fixed overlay mounted inside it. Reproduced with a static page + real stylesheets at 800×560 (before: dialog confined to the header, title-only visible; after: full sheet centred). Fix = `createPortal(…, document.body)` for the update sheet and the new helper sheet; CSS hardening kept.
+- Gates: playground 1693/1693, desktop 188/188, cargo 116 (+1 ignored staged check), auth 939, sidecar 177, node:test scripts 12+, check-website-sync OK, root `pnpm test` green after renaming `pack-helper.test.mjs` → `.node-test.mjs` (vitest was collecting the node:test file).
+- State: branch complete pending the helper GitHub release (explicit ask recorded above) and `/code-review`.
+- Next step: create `helper-whatsapp-sidecar-v0.1.0` as a **pre-release, `--latest=false`**, verify `releases/latest/download/latest.json` still resolves to the desktop v0.1.1, then code review → PR.
+- Owner walks owed (AC14): see next-steps 2026-08-26 entry.

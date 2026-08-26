@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
+import { createPortal } from 'react-dom';
 
 import { getPlatform } from '../platform/platform.js';
 import {
@@ -115,7 +116,13 @@ export function AppUpdateSheet({ onClose }: { onClose: () => void }): ReactEleme
   const entries: DesktopRelease[] =
     fetchedNewer.length > 0 ? fetchedNewer : (bundledDesktopReleases() ?? []).filter(newerThanCurrent);
 
-  return (
+  // PORTALED TO <body> (TASK-20260826 AC1, the owner's "chopped off at the top" report).
+  // This sheet is mounted from the header nav, and `.shell-header` carries `backdrop-filter`,
+  // which makes it the CONTAINING BLOCK for `position: fixed` descendants (WebKit and
+  // Chromium alike). Rendered in place, `inset: 0` meant "the header's box": the overlay was
+  // 50 px tall, the card centred on it and clipped above the window's top edge. No CSS on the
+  // card can fix a containing block; only rendering outside the header can.
+  return createPortal(
     <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="desktop update">
       <div className="net-confirm-card release-notes-card">
         <div className="release-notes-head">
@@ -186,6 +193,7 @@ export function AppUpdateSheet({ onClose }: { onClose: () => void }): ReactEleme
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
