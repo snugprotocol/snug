@@ -11,7 +11,7 @@ import { ERROR_CODES } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import { endpointsNeedConfirmStore, getByokKey, type ByokProvider } from '../state/mode.js';
-import { adapterKindFor, createTurnAdapter, type AdapterKind, type DirectMode } from './adapter.js';
+import { adapterKindFor, createTurnAdapter, routeOf, type AdapterKind, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
 import { extractAppHtml, WEBLLM_BUILD_SUFFIX } from './webllm/appHtml.js';
@@ -277,7 +277,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         ...(model !== undefined ? { model } : {}),
         ...(options.localUrl !== undefined ? { localUrl: options.localUrl } : {}),
       };
-      handlers.onBrain?.(adapterKindFor(adapterConfig));
+      handlers.onBrain?.(adapterKindFor(routeOf(adapterConfig)));
       const adapter = createTurnAdapter(adapterConfig, 'chat');
       // Tool-free in webllm mode: `runAgentTurn` treats an empty list as JSON-only
       // mode and offers the adapter NO tools (which would refuse them anyway).

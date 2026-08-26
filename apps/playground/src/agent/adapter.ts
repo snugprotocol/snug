@@ -86,14 +86,36 @@ function demoAppScript(): MockTurn[] {
  * on — a parallel re-derivation would lie exactly where it matters most: a keyed
  * provider with NO key falls through to the demo brain, silently by design here,
  * loudly on the surfaces that consume this.
+ *
+ * The kind VOCABULARY is single-homed here (Gate-5 review): the type derives from
+ * the runtime list, so the meta reader's validation (`useBuilderChat`'s
+ * metaToBrainKind) can never silently strip a newly-added kind.
  */
-export type AdapterKind = 'webllm' | 'local' | 'anthropic' | 'openai' | 'demo';
+export const ADAPTER_KINDS = ['webllm', 'local', 'anthropic', 'openai', 'demo'] as const;
+export type AdapterKind = (typeof ADAPTER_KINDS)[number];
 
-export function adapterKindFor(config: Pick<TurnAdapterConfig, 'mode' | 'provider' | 'key'>): AdapterKind {
-  if (config.mode === 'webllm') return 'webllm';
-  if (config.mode === 'local') return 'local';
-  if (config.provider === 'anthropic' && config.key !== undefined) return 'anthropic';
-  if (config.provider === 'openai' && config.key !== undefined) return 'openai';
+/**
+ * The derivation's input carries key PRESENCE only — a type fact, so a consumer
+ * that knows presence but must never touch values (the brain chip) needs no
+ * sentinel, and a future key-shape-aware edit cannot creep into the routing
+ * decision unnoticed (it would have to change this type).
+ */
+export interface AdapterRoute {
+  mode: DirectMode;
+  provider: ByokProvider;
+  hasKey: boolean;
+}
+
+/** The ONE config→route mapping — both the constructor and the stamp go through it. */
+export function routeOf(config: Pick<TurnAdapterConfig, 'mode' | 'provider' | 'key'>): AdapterRoute {
+  return { mode: config.mode, provider: config.provider, hasKey: config.key !== undefined };
+}
+
+export function adapterKindFor(route: AdapterRoute): AdapterKind {
+  if (route.mode === 'webllm') return 'webllm';
+  if (route.mode === 'local') return 'local';
+  if (route.provider === 'anthropic' && route.hasKey) return 'anthropic';
+  if (route.provider === 'openai' && route.hasKey) return 'openai';
   return 'demo';
 }
 
@@ -109,7 +131,7 @@ export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpos
   const fetchImpl = config.fetch ?? getPlatform().fetchImpl;
   const fetchDep = fetchImpl !== undefined ? { fetch: fetchImpl } : {};
   const modelDep = config.model !== undefined ? { model: config.model } : {};
-  const kind = adapterKindFor(config);
+  const kind = adapterKindFor(routeOf(config));
   switch (kind) {
     case 'webllm':
       // The shared `model` setting holds byok/local wire ids (e.g. "llama3.2") — a

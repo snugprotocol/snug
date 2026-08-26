@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 
@@ -41,6 +41,7 @@ import { WebsiteLink } from './ui/WebsiteLink.js';
 import { FeedbackMenu } from './feedback/FeedbackMenu.js';
 import { ReportErrorLink } from './feedback/ReportErrorLink.js';
 import { Skeleton } from './ui/Skeleton.js';
+import { useDismissableMenu } from './ui/useDismissableMenu.js';
 import { BrainChip } from './views/BrainChip.js';
 import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
@@ -70,9 +71,10 @@ export function App(): ReactElement {
       // AFTER settings hydrate: the offer latch reads its keys out of the user file,
       // so it cannot run before the file is open and read. Web AND desktop (D3) —
       // unlike the desktop-only welcome latch above.
-      .then(() => initProtectOffer())
-      // ADR-0059: the demo-brain first-contact latch — same reasoning, same order.
-      .then(() => initDemoCallout());
+      // The two latch inits are independent one-key reads of the hydrated file —
+      // parallel on purpose (Gate-5 review): serializing them delayed the callout
+      // by the protect-offer init, and a throw in one skipped the other entirely.
+      .then(() => Promise.all([initProtectOffer(), initDemoCallout()]));
     // AL-07: the experimental webllm flag + WebGPU probe (idempotent, flag-gated).
     void initWebllm();
     // W2b: platform-only seam — a no-op on web (no open handler).
@@ -346,37 +348,9 @@ export function OpenUserFileConfirmDialog(): ReactElement | null {
  */
 export function IdentityChip(): ReactElement | null {
   const auth = useAuth();
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Close on Escape and on any pointer landing outside the chip+menu. Both paths
-  // return focus to the trigger so keyboard users are never dropped at the top of
-  // the document (AC2).
-  const close = useCallback((restoreFocus: boolean): void => {
-    setOpen(false);
-    if (restoreFocus) triggerRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') close(true);
-    };
-    const onPointer = (event: MouseEvent): void => {
-      const target = event.target as Node | null;
-      if (target !== null && (menuRef.current?.contains(target) === true || triggerRef.current?.contains(target) === true)) {
-        return;
-      }
-      close(true);
-    };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onPointer);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onPointer);
-    };
-  }, [open, close]);
+  // Escape / outside-pointer close with focus restored to the trigger (AC2) — the
+  // shared contract, extracted once the third popover arrived (useDismissableMenu).
+  const { open, toggle, close, triggerRef, menuRef } = useDismissableMenu();
 
   if (auth.state === 'unavailable') return null;
   if (auth.state === 'unknown') return <Skeleton width="72px" height="28px" />;
@@ -397,7 +371,7 @@ export function IdentityChip(): ReactElement | null {
         aria-haspopup="true"
         aria-expanded={open}
         title={`${label} — account & sync settings`}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={toggle}
       >
         <IdentityAvatar label={label} picture={auth.user.picture} />
         <span className="identity-name">{label}</span>

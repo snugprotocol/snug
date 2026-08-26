@@ -33,7 +33,7 @@ import { needsSynthesizedContract } from './runtimeContractSynthesis.js';
 import { finalizeConnectionDeclaration } from './connectionPipeline.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
 import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
-import type { AdapterKind } from './adapter.js';
+import { ADAPTER_KINDS, type AdapterKind } from './adapter.js';
 import {
   createDirectBuilder,
   createServerBuilder,
@@ -199,9 +199,9 @@ interface PersistedMeta {
   brainKind?: AdapterKind;
 }
 
-const ADAPTER_KINDS: readonly AdapterKind[] = ['webllm', 'local', 'anthropic', 'openai', 'demo'];
-
-/** Strict read of a persisted brain kind — junk in an imported row is no kind at all. */
+/** Strict read of a persisted brain kind — junk in an imported row is no kind at all.
+    Validates against adapter.ts's single-homed ADAPTER_KINDS, so a newly-added kind
+    can never be silently stripped from rehydrated rows (Gate-5 review). */
 function metaToBrainKind(meta: unknown): AdapterKind | undefined {
   if (typeof meta !== 'object' || meta === null) return undefined;
   const stored = (meta as PersistedMeta).brainKind;

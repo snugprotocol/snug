@@ -41,7 +41,7 @@ vi.mock('../agent/webllm/webllmAdapter.js', () => ({
   })),
 }));
 
-const { adapterKindFor, createTurnAdapter } = await import('../agent/adapter.js');
+const { ADAPTER_KINDS, adapterKindFor, createTurnAdapter, routeOf } = await import('../agent/adapter.js');
 
 const constructedKind = (config: TurnAdapterConfig): string => {
   const adapter = createTurnAdapter(config, 'chat') as { __kind?: string };
@@ -57,7 +57,7 @@ describe('adapterKindFor mirrors createTurnAdapter (AC1)', () => {
       for (const provider of providers) {
         for (const key of keys) {
           const config: TurnAdapterConfig = { mode, provider, ...(key !== undefined ? { key } : {}) };
-          expect(adapterKindFor(config), `mode=${mode} provider=${provider} key=${key ?? 'absent'}`).toBe(
+          expect(adapterKindFor(routeOf(config)), `mode=${mode} provider=${provider} key=${key ?? 'absent'}`).toBe(
             constructedKind(config),
           );
         }
@@ -67,31 +67,40 @@ describe('adapterKindFor mirrors createTurnAdapter (AC1)', () => {
 
   it('names the demo brain for a KEYED provider with no key — the silent fall-through', () => {
     // THE trap this task exists for: byok + anthropic chosen, key deleted or never
-    // saved ⇒ the mock adapter answers. The derivation must say so.
-    expect(adapterKindFor({ mode: 'byok', provider: 'anthropic' })).toBe('demo');
-    expect(adapterKindFor({ mode: 'byok', provider: 'openai' })).toBe('demo');
+    // saved ⇒ the mock adapter answers. The derivation must say so. The route input
+    // carries key PRESENCE only (a type fact — the derivation can never see a value).
+    expect(adapterKindFor({ mode: 'byok', provider: 'anthropic', hasKey: false })).toBe('demo');
+    expect(adapterKindFor({ mode: 'byok', provider: 'openai', hasKey: false })).toBe('demo');
   });
 
   it('names the real provider when its key is present', () => {
-    expect(adapterKindFor({ mode: 'byok', provider: 'anthropic', key: 'sk-a' })).toBe('anthropic');
-    expect(adapterKindFor({ mode: 'byok', provider: 'openai', key: 'sk-o' })).toBe('openai');
+    expect(adapterKindFor({ mode: 'byok', provider: 'anthropic', hasKey: true })).toBe('anthropic');
+    expect(adapterKindFor({ mode: 'byok', provider: 'openai', hasKey: true })).toBe('openai');
   });
 
   it('mode outranks provider: local and webllm ignore provider and key entirely', () => {
-    expect(adapterKindFor({ mode: 'local', provider: 'anthropic', key: 'sk-a' })).toBe('local');
-    expect(adapterKindFor({ mode: 'webllm', provider: 'mock' })).toBe('webllm');
+    expect(adapterKindFor({ mode: 'local', provider: 'anthropic', hasKey: true })).toBe('local');
+    expect(adapterKindFor({ mode: 'webllm', provider: 'mock', hasKey: false })).toBe('webllm');
   });
 
   it('the mock provider is the demo brain even if a stray key rides the config', () => {
-    expect(adapterKindFor({ mode: 'byok', provider: 'mock', key: 'sk-stray' })).toBe('demo');
+    expect(adapterKindFor({ mode: 'byok', provider: 'mock', hasKey: true })).toBe('demo');
   });
 
-  it('reads key PRESENCE only — no shape sniffing', () => {
-    // Load-bearing for resolveActiveBrain (AC2), which knows presence but never the
-    // value: any non-undefined key must route exactly like a real one.
-    expect(adapterKindFor({ mode: 'byok', provider: 'anthropic', key: 'present' })).toBe(
-      adapterKindFor({ mode: 'byok', provider: 'anthropic', key: 'sk-ant-real-looking' }),
-    );
-    expect(adapterKindFor({ mode: 'byok', provider: 'anthropic', key: 'present' })).toBe('anthropic');
+  it('routeOf is the ONE config→route mapping: presence, never the value', () => {
+    expect(routeOf({ mode: 'byok', provider: 'anthropic', key: 'sk-a' })).toEqual({
+      mode: 'byok',
+      provider: 'anthropic',
+      hasKey: true,
+    });
+    expect(routeOf({ mode: 'byok', provider: 'anthropic' })).toEqual({
+      mode: 'byok',
+      provider: 'anthropic',
+      hasKey: false,
+    });
+  });
+
+  it('ADAPTER_KINDS is the single-homed kind vocabulary the meta reader validates against', () => {
+    expect(ADAPTER_KINDS).toEqual(['webllm', 'local', 'anthropic', 'openai', 'demo']);
   });
 });

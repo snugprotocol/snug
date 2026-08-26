@@ -20,6 +20,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrainChip, BYOK_HONESTY_COPY, DEMO_BRAIN_BODY } from '../views/BrainChip.js';
+import { builderPickStore } from '../state/builderModel.js';
 import { byokKeyPresenceStore, modeStore, providerStore } from '../state/mode.js';
 import * as mode from '../state/mode.js';
 import { ollamaStore } from '../state/ollama.js';
@@ -62,6 +63,7 @@ beforeEach(async () => {
   webllmFlagStore.set(false);
   webgpuStore.set('unknown');
   ollamaStore.set('unknown');
+  builderPickStore.set(undefined);
 });
 
 afterEach(() => {
@@ -131,6 +133,25 @@ describe('the brain menu (AC4)', () => {
     expect(keyLink).toBeInstanceOf(HTMLAnchorElement);
     expect((keyLink as HTMLAnchorElement).getAttribute('href')).toBe('/settings');
     expect(keyLink!.textContent).toContain('use your own AI key');
+  });
+
+  it('hides "use ollama now" while the webllm override is active — setMode would be inert there', () => {
+    // Gate-5 review: under ?webllm=1 the brain override outranks the configured mode
+    // entirely (ADR-0015), so the shortcut's setMode('local') would visibly do
+    // nothing while silently persisting a mode write. The DesktopWelcome rule —
+    // never offer a button that cannot work — applies to the menu too.
+    act(() => {
+      webllmFlagStore.set(true);
+      webgpuStore.set('no'); // demo fallback: the chip still says demo…
+      ollamaStore.set({ running: true, models: ['llama3.2'] });
+    });
+    render(<BrainChip />);
+    expect(chip().dataset.brain).toBe('demo');
+    act(() => chip().click());
+    expect(menu()).not.toBeNull();
+    // …but the one-gesture switch is withheld; the settings door remains.
+    expect(document.querySelector('[data-testid="brain-menu-ollama"]')).toBeNull();
+    expect(document.querySelector('[data-testid="brain-menu-settings"]')).not.toBeNull();
   });
 
   it('offers "use ollama now" ONLY when the probe found models, and it switches the mode', () => {

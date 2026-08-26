@@ -170,7 +170,7 @@ the session; the load-bearing content is HERE). The orchestrator's verify pass d
 complete before session close, but the items below were **independently re-verified by
 the author against the code** — treat them as confirmed unless marked otherwise.
 
-**MUST FIX before PR (the fix pass — next session's first move):**
+**MUST FIX before PR — ✅ ALL APPLIED (same session, commit noted in journal):**
 1. **Fresh-thread pick divergence (worst finding, confirmed at `useBuilderChat.ts:427`):**
    explicit provider choice (e.g. anthropic) with its key DELETED + a fresh-thread
    builder pick for the OTHER keyed provider ⇒ `providerStore`='anthropic', presence
@@ -188,7 +188,7 @@ the author against the code** — treat them as confirmed unless marked otherwis
    full per-app chip context is QUEUED (below), the per-turn tag + ModelSelect's
    "(key missing)" are the interim disclosure.
 
-**WORTH FIXING in the same pass (drift-proofing, all cheap, all verified):**
+**WORTH FIXING in the same pass — ✅ ALL APPLIED (items 4–8):**
 4. `activeBrain.ts` re-inlines `currentBrain()`/`useBrain()` (webllm.ts:84/88) —
    call them instead; also pass useStore values into the resolver (house pattern:
    `useTurnMode`) or derive a single store, so the subscribe-list and read-list
@@ -282,3 +282,24 @@ meta plumbing, CSS tokens, e2e selector contract all verified.
   sends to a keyed provider.
 - Open questions: none for the fix pass; the QUEUED block's design items (per-app
   chip context, F15 disclosure) are next-steps entries, owner-prioritized.
+
+### 2026-08-26 (fix pass) — Claude (Fable 5) — session (Gate 5 fixes applied)
+- Done: review fix-pass items 1–8, test-first where behavior changed. (1) fresh-thread
+  pick layered into `resolveActiveBrainFrom` with the send path's exact guard —
+  new test row, MUTATION-VERIFIED (dropping the layer reds exactly it); (2) ollama
+  shortcut withheld while the webllm override is armed (new chip test); (3) false
+  scope-note comment replaced with the honest KNOWN EXCLUSION note; (4) resolver is
+  now pure-inputs (`ActiveBrainInputs`) with `currentBrain()`/`useBrain()` reuse —
+  subscribe list ≡ read list by construction; (5) `ADAPTER_KINDS` single-homed in
+  adapter.ts, union derived from the list; (6) `AdapterRoute.hasKey` + `routeOf`
+  replace the 'present' sentinel (presence is now a type fact; sentinel guard test
+  deleted, routeOf test added); (7) `ui/useDismissableMenu.ts` extracted and consumed
+  by BrainChip + IdentityChip + FeedbackMenu (the third-popover extraction
+  FeedbackMenu's comment queued); (8) the two latch inits run `Promise.all`-parallel.
+- Verification: tsc clean · touched suites 7 files green · full playground gate
+  1679/1679 exit 0 · root 25/25 exit 0 (desktop build compiles the changed
+  playground source) · disclosure e2e 3/3 · mobile e2e 6/6.
+- State: branch ready for PR; QUEUED block unchanged (next-steps).
+- Next step: open the PR (needs the owner's go per review flow — AI review done,
+  human review is the diff + this file).
+- Open questions: none.

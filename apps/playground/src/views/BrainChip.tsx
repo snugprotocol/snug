@@ -17,13 +17,14 @@
 // "never leaves your device": the key travels to the provider, and a critical
 // reader who catches an overclaim stops believing the honest claims too.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
 import { setMode } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
 import { useOllama } from '../state/ollama.js';
+import { useBrain } from '../state/webllm.js';
+import { useDismissableMenu } from '../ui/useDismissableMenu.js';
 
 export const DEMO_BRAIN_BODY =
   'a tiny script inside this page fakes the AI so you can try the flow — no AI model or service is called.';
@@ -74,39 +75,12 @@ const BRAINS: Record<ActiveBrainKind, { label: string; aria: string; headline: s
 export function BrainChip(): ReactElement {
   const brain = useActiveBrain();
   const ollama = useOllama();
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  const close = useCallback((restoreFocus: boolean): void => {
-    setOpen(false);
-    if (restoreFocus) triggerRef.current?.focus();
-  }, []);
-
-  // The IdentityChip dismissal contract: Escape and any outside pointer close, both
-  // returning focus to the trigger so keyboard users are never dropped.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') close(true);
-    };
-    const onPointer = (event: MouseEvent): void => {
-      const target = event.target as Node | null;
-      if (
-        target !== null &&
-        (menuRef.current?.contains(target) === true || triggerRef.current?.contains(target) === true)
-      ) {
-        return;
-      }
-      close(true);
-    };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onPointer);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onPointer);
-    };
-  }, [open, close]);
+  // The webllm override outranks the configured mode (ADR-0015), so while it is
+  // armed the menu's setMode('local') shortcut would visibly do nothing yet still
+  // persist a mode write — withhold it (the DesktopWelcome never-offer-a-dead-button
+  // rule; Gate-5 review). The settings door stays: config edits remain meaningful.
+  const overrideArmed = useBrain().kind !== 'settings';
+  const { open, toggle, close, triggerRef, menuRef } = useDismissableMenu();
 
   const copy = BRAINS[brain];
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
@@ -123,7 +97,7 @@ export function BrainChip(): ReactElement {
         aria-expanded={open}
         aria-label={copy.aria}
         title={copy.aria}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={toggle}
       >
         <span className="brain-dot" aria-hidden="true" />
         {brain === 'demo' ? (
@@ -151,7 +125,7 @@ export function BrainChip(): ReactElement {
           >
             {brain === 'demo' ? 'use your own AI key' : 'change in settings'}
           </Link>
-          {brain === 'demo' && models.length > 0 ? (
+          {brain === 'demo' && !overrideArmed && models.length > 0 ? (
             <button
               type="button"
               className="identity-menu-item"

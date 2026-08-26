@@ -10,16 +10,18 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { resolveActiveBrain } from '../state/activeBrain.js';
+import { builderPickStore } from '../state/builderModel.js';
 import { byokKeyPresenceStore, modeStore, providerStore } from '../state/mode.js';
 import { webgpuStore, webllmFlagStore } from '../state/webllm.js';
 
 beforeEach(() => {
-  // The zero-key boot default: byok + mock, no keys, no webllm flag.
+  // The zero-key boot default: byok + mock, no keys, no webllm flag, no pick.
   modeStore.set('byok');
   providerStore.set('mock');
   byokKeyPresenceStore.set({ anthropic: false, openai: false });
   webllmFlagStore.set(false);
   webgpuStore.set('unknown');
+  builderPickStore.set(undefined);
 });
 
 describe('resolveActiveBrain (AC2)', () => {
@@ -53,6 +55,33 @@ describe('resolveActiveBrain (AC2)', () => {
     expect(resolveActiveBrain()).toBe('local');
     modeStore.set('subscription');
     expect(resolveActiveBrain()).toBe('subscription');
+  });
+
+  it('layers the fresh-thread builder pick with the send path’s guard — the review’s worst finding', () => {
+    // The dangerous direction (Gate-5 review): explicit anthropic choice whose key was
+    // deleted (resolved provider stays 'anthropic', presence false) + a fresh-thread
+    // pick for keyed openai. The send path routes freshPick.provider WITH a real key
+    // (useBuilderChat guard: byok && provider !== 'mock' && pick) — so saying 'demo'
+    // here would claim "nothing is called" while a turn spends the user's key.
+    providerStore.set('anthropic');
+    byokKeyPresenceStore.set({ anthropic: false, openai: true });
+    builderPickStore.set({ provider: 'openai', model: 'gpt-test' });
+    expect(resolveActiveBrain()).toBe('openai');
+
+    // A pick to a provider whose key is ALSO missing still lands on demo.
+    byokKeyPresenceStore.set({ anthropic: false, openai: false });
+    expect(resolveActiveBrain()).toBe('demo');
+
+    // Guard parity: under a 'mock' resolved provider the send path ignores the pick
+    // (provider !== 'mock' fails), so the derivation must too.
+    providerStore.set('mock');
+    byokKeyPresenceStore.set({ anthropic: false, openai: true });
+    expect(resolveActiveBrain()).toBe('demo');
+
+    // And the pick is a byok concern only — local mode routes local regardless.
+    providerStore.set('anthropic');
+    modeStore.set('local');
+    expect(resolveActiveBrain()).toBe('local');
   });
 
   it('the webllm brain override outranks everything: webllm on WebGPU, demo otherwise', () => {
