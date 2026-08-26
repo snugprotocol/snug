@@ -1,6 +1,6 @@
 # TASK-20260826-helper-bundle-update-sheet: bundle the WhatsApp helper (size-gated) + fix the update sheet (clipping, stale "good to know")
 
-- **Status**: planned (awaiting plan approval)
+- **Status**: in-progress
 - **Owner**: Jeetu
 - **Risk tier**: **High** (auto-escalated: release config/gate + a new download-verify-extract path in the shell + a `packages/auth` text touch). Per PROCESS.md the plan gets a fresh-context AI review before implementation. The update-sheet half alone would be Low.
 - **Branch**: `fix/TASK-20260826-helper-bundle-update-sheet`
@@ -101,3 +101,7 @@ Order is tests-first per TDD.md; each phase is a commit group. Phase A is indepe
 - State: plan written; **STOPPED for plan approval** (High tier: fresh-context AI plan review comes next, before code).
 - Next step: approval → fresh-context plan review → Phase A.
 - Open questions: Q1–Q3 in the plan.
+
+### 2026-08-26 — Jeetu/Claude — approval
+- Done: **plan approved by owner** with defaults Q1 (Node in archive: yes), Q2 (pre-releases on snugprotocol/snug), Q3 (updater minisign key). **Explicit ask recorded: create the actual helper GitHub release (`helper-whatsapp-sidecar-v0.1.0`, pre-release) in this session** — PROCESS.md release-rule requirement satisfied by this journal line.
+- Next step: fresh-context AI plan review (High tier) → Phase A.
