@@ -113,4 +113,4 @@ Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) explains how outsi
 
 ---
 
-<p align="center">Built by <a href="https://jeetu.tech.voyage">Jeetu Maker</a> · Maintained with support from <a href="https://ai.tech.voyage">TechVoyage</a></p>
+<p align="center">Built by <a href="https://github.com/jeetumaker">Jeetu Maker</a></p>
