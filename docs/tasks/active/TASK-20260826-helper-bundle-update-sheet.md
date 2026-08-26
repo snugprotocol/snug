@@ -119,33 +119,8 @@ Order is tests-first per TDD.md; each phase is a commit group. Phase A is indepe
 - Next step: create `helper-whatsapp-sidecar-v0.1.0` as a **pre-release, `--latest=false`**, verify `releases/latest/download/latest.json` still resolves to the desktop v0.1.1, then code review → PR.
 - Owner walks owed (AC14): see next-steps 2026-08-26 entry.
 
-### Parked: the v0.1.2 release-notes entry (add to desktop-releases.json in the v0.1.2 RELEASE session — the public /download button advertises the newest bundled entry, so it must not land before the DMG does)
+### The v0.1.2 release-notes entry — LANDED 2026-08-26 in the release session (was parked here; `desktop-releases.json` now carries it as the newest entry).
 
-```json
-{
-  "version": "0.1.2",
-  "date": "2026-08-26",
-  "title": "Telepath's helper installs itself",
-  "sections": [
-    {
-      "title": "What's new",
-      "items": [
-        "The WhatsApp helper Telepath needs is now a one-click download inside the app — about 41 MB from GitHub, signed with the same key as Snug updates — offered the moment you open Telepath or start linking. No developer tools, no separate install.",
-        "The download is checked twice before anything runs: the signature, and a fingerprint this exact version of Snug was built with. Anything else is refused and nothing touches your disk.",
-        "If a linked WhatsApp session is on this computer but its helper is missing, a chip in the header says so instead of failing quietly.",
-        "The update sheet now shows only what changed since the version you are running — the notes for the release you already have no longer appear under the new one, and the sheet can no longer be cut off at the top of a small window."
-      ]
-    },
-    {
-      "title": "Good to know",
-      "items": [
-        "The helper lives in ~/Snug/helpers and brings its own copy of Node, so nothing needs to be installed system-wide. It uses about 140 MB on disk once unpacked.",
-        "Installing the helper is always your click; Snug never downloads it on its own."
-      ]
-    }
-  ]
-}
-```
 
 ### 2026-08-26 ~20:42Z — Claude (owner's explicit ask, journaled above) — RELEASE
 - **Published** `helper-whatsapp-sidecar-v0.1.0` on `snugprotocol/snug` as a **pre-release, `--latest=false`**, via the exact `gh release create` line `release-helper.mjs` prints. Assets: `whatsapp-sidecar-darwin-{aarch64,x86_64}.tar.gz` + `.sig`, `helper.json`.
