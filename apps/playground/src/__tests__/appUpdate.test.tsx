@@ -17,6 +17,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// These mount the REAL App. Under turbo's parallel load that is CPU-bound well past vitest's
+// 5000 ms default (the 2026-08-26 db-load flake class): the budget is the fix, not a retry.
+vi.setConfig({ testTimeout: 20_000 });
+
 declare global {
   // eslint-disable-next-line no-var
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
