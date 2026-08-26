@@ -58,7 +58,7 @@ pnpm dev                    # server (mock "demo brain" — no key) + Playground
 Verify the whole stack if you like:
 
 ```bash
-pnpm build && pnpm test     # everything green (~2 min)
+pnpm build && pnpm test     # everything green (under 3 min)
 pnpm smoke                  # headless happy path: build an app via the mock adapter
 ```
 
