@@ -53,6 +53,22 @@ What now exists, in the order the script runs it:
 
 **Credential mechanism: notarytool keychain profile** (owner decision 2026-08-24). `xcrun notarytool store-credentials` stores the Apple ID + app-specific password in the keychain; the build refers to it only as `APPLE_KEYCHAIN_PROFILE=snug`. No app-specific password in the environment, in shell history, or in any file. Cost: the profile is machine-local, so a future CI signer needs a different mechanism (an App Store Connect API key) — acceptable, since §4 already forbids keys in CI.
 
+> **Superseded the same day — see [the 2026-08-24 §7 credential amendment](#amendment--2026-08-24-credential-mechanism-corrected-keychain-profile-does-not-work) below.** The paragraph above records the decision as taken; the mechanism it names does not work, and the code has never implemented it.
+
 **Entitlements are minimal and deliberately so.** `apps/desktop/src-tauri/entitlements.plist` grants `allow-jit` and `allow-unsigned-executable-memory` — the documented WKWebView pair, required because notarization mandates the hardened runtime and the hardened runtime blocks JavaScriptCore's JIT. Nothing else. `disable-library-validation` is absent (the WhatsApp helper is a separate process, not a library, so it does not need it); `allow-dyld-environment-variables` is absent (an injection vector). **Entitlements govern the shell process, not the app iframe** — C1 and C2 are enforced by the CSP, the `sandbox="allow-scripts"` attribute and the capability allowlist, none of which this file can weaken.
 
 **Consequence for §7's last sentence:** it still holds — the minisign updater signature is independent of Apple signing and always applies.
+
+## Amendment — 2026-08-24: credential mechanism corrected (keychain profile does not work)
+
+**The keychain-profile decision recorded above was superseded within the same task, and the paragraph stating it was never updated.** It stood for two days and through two releases reading as current.
+
+`xcrun notarytool` accepts `--keychain-profile`, so the mechanism is sound *for notarizing a file by hand*. But **Tauri's bundler notarizes the `.app` mid-build and never reads a keychain profile** — it looks only for `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID`, or `APPLE_API_KEY` + `APPLE_API_ISSUER` + `APPLE_API_KEY_PATH`, and skips notarization with a warning when neither trio is present. Notarizing only the DMG afterwards leaves the `.app` the user actually runs un-notarized once it is copied to /Applications, which is the failure the 2026-08-25 lessons entry describes.
+
+So the app-specific password **must** be in the build environment. That is a real cost, and the earlier decision was taken specifically to avoid it; it is paid because the alternative is an un-notarized app, not because the privacy goal was wrong. The mitigations are:
+
+- `appleSigningPlan` **refuses** a keychain profile presented alone rather than accepting it as configured — `release-desktop.test.mjs` pins that refusal, with the reason naming this amendment. The code has always behaved this way; only the prose was stale.
+- The owner exports the trio with a leading space (`histignorespace`) for the one command, from 1Password. Nothing is written to a file, and §4's ban on keys in CI is unaffected — this is a local-only, per-release export.
+- The App Store Connect API-key trio remains the better long-term answer and is already supported; it is the path a future CI signer would take.
+
+**General shape, recorded because this is the second time in this ADR:** a credential mechanism is only decided once the tool that consumes it has been checked — `--help` on the CLI you will actually invoke, not the one you would invoke by hand. The 2026-08-26 lessons entry on the updater key's two spellings is the same class one variable over.

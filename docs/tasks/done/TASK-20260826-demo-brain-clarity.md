@@ -303,3 +303,53 @@ meta plumbing, CSS tokens, e2e selector contract all verified.
 - Next step: open the PR (needs the owner's go per review flow — AI review done,
   human review is the diff + this file).
 - Open questions: none.
+
+### 2026-08-26 (ship) — Claude (Opus 5) — session (PR → merge → deploy → release v0.1.1)
+- Done, in order:
+  1. **PR #147 opened and squash-merged** to main as `3da8ef6`. Local gate green before
+     push (root 25/25 exit 0, playground 1679/1679, `check-public-scrub` OK by hand per
+     ADR-0057). Branch deleted.
+  2. **v0.1.1 desktop release notes authored** (`desktop-releases.json`, newest-first) —
+     `release-desktop.mjs` hard-refuses a release whose newest entry does not match the
+     version, so this was a blocker, not a nicety. Verified: everything on main since the
+     v0.1.0 tag other than this task is tests/website/CI, so the notes describe the
+     brain-disclosure work with nothing omitted.
+  3. **Playground deployed to production** (`deploy-web.mjs playground --deploy`,
+     2026-08-26T~17:0xZ UTC). Verified: playground.snugprotocol.org 200, serving the
+     exact bundle just built (`index-DD-Jh4XN.js`), disclosure copy present in the live
+     JS ("demo brain" ×8, "scripted demo" ×2, "no AI model" ×2).
+  4. **Release v0.1.1 published** (owner built and signed it; explicit per-session ask,
+     ADR-0047 §13 / PROCESS.md). Not draft, not prerelease, tagged at `3da8ef6`, five
+     stable-named assets.
+  5. **PR #148** — the release-guard fix + version bumps + lessons entry — merged
+     `1703674`. **PR #149** — the ADR-0047 credential amendment — opened.
+- **Landmine hit and fixed:** the owner's build died with *"A public key has been found,
+  but no private key"* after a full universal compile. `release-desktop.mjs` gated on
+  `TAURI_SIGNING_PRIVATE_KEY || ..._PATH`, but `tauri build` reads only the key CONTENTS
+  from the first spelling; `tauri signer sign -f` later in the SAME script takes a file,
+  which is why both spellings looked interchangeable. The guard now materialises the
+  contents from `_PATH` instead of asserting a disjunction. Lesson recorded.
+- **Verification of the release was done independently, because the build exited before
+  the script's own staging/verification steps** (no `release-out/` existed). Re-ran every
+  gate by hand: `lipo` → `x86_64 arm64`; `stapler validate` + `spctl` → `source=Notarized
+  Developer ID` on **both** the DMG and the inner `.app`; `verifyDmgCarriesEula` → ok;
+  staged assets byte-identical (sha256) to the signed originals; the DMG **re-downloaded
+  from GitHub** byte-identical and still Gatekeeper-accepted.
+- **Auto-update is LIVE and proven end-to-end**: `latest.json` 200 at the single-homed
+  URL advertising 0.1.1 with both darwin keys → one universal artifact; that tarball URL
+  resolves 200 with matching bytes; `/releases/latest/download/Snug.dmg` redirects to
+  v0.1.1, so the website needed no change (it links version-agnostically).
+- **Owner walked the v0.1.0 → v0.1.1 update** and confirmed it — closing the standing
+  open thread that needed a SECOND release to be runnable at all.
+- **CI note (not a defect):** GitHub Actions went into a **major outage** ~1 min after the
+  first push and throttled inbound traffic, dropping `push`/`pull_request` events while
+  `workflow_dispatch` still worked. PR #147 sat `BLOCKED`/"no checks reported" for ~40 min
+  with green `workflow_dispatch` runs that branch protection correctly would not accept
+  (required checks match on the check-run name from a `pull_request` event). Resolved by
+  itself; an empty commit drew the real PR run. Branch protection behaved exactly as
+  designed — worth knowing before anyone "fixes" the ruleset next time this happens.
+- State: main at `1703674`, clean, all three version declarations at 0.1.1 (repo matches
+  what shipped). PR #149 open, CI running.
+- Next step: merge PR #149 once green, then move this task file to `done/`.
+- Open questions: none. The QUEUED design block (per-app chip context, F15 disclosure)
+  remains next-steps, owner-prioritized.
