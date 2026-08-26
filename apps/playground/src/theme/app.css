@@ -2074,6 +2074,70 @@ img.identity-avatar {
   }
 }
 
+/* ---- TASK-20260826 (ADR-0059): the brain chip — "what's thinking", always ---- */
+
+.brain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--tap);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.brain-chip:hover {
+  background: var(--surface-2);
+}
+.brain-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ok);
+}
+/* The demo state is the one worth noticing: warn tint + the same soft breathe the
+   status line's dot uses. Static under reduced motion (belt and braces below). */
+.brain-chip[data-brain='demo'] {
+  color: var(--warn);
+}
+.brain-chip[data-brain='demo'] .brain-dot {
+  background: var(--warn);
+  animation: caret-breathe 1.8s var(--ease-out) infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brain-chip[data-brain='demo'] .brain-dot {
+    animation: none;
+  }
+}
+.brain-menu {
+  max-width: 300px;
+}
+.brain-menu-body {
+  padding: 0 var(--space-2) var(--space-2);
+  font-size: var(--text-s);
+  color: var(--fg);
+}
+.brain-menu-hint {
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+/* Narrow-header compaction (the 375px overflow tripwire is the guard): a REAL brain's
+   label yields to the dot; "demo brain" is the one label that must survive compaction
+   — hiding the words would hide exactly the disclosure this chip exists for. The
+   accessible name rides aria-label either way. */
+@media (max-width: 830px) {
+  .brain-chip:not([data-brain='demo']) .brain-chip-label {
+    display: none;
+  }
+}
+
 .tile-installed-badge {
   position: absolute;
   top: var(--space-2);

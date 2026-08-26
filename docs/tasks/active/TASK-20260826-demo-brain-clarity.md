@@ -1,6 +1,6 @@
 # TASK-20260826-demo-brain-clarity: Make demo-brain mode unmistakable and invite BYOK/local honestly
 
-- **Status**: planned (awaiting plan approval)
+- **Status**: in-progress (plan approved by owner 2026-08-26)
 - **Owner**: Jeetu
 - **Risk tier**: Medium (Playground logic — full TDD + AI review + human review; no protocol/runner/auth touch)
 - **Branch**: `feat/TASK-20260826-demo-brain-clarity`

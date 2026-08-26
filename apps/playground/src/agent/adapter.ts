@@ -79,40 +79,63 @@ function demoAppScript(): MockTurn[] {
 }
 
 /**
+ * What a turn with this config actually runs on (TASK-20260826, ADR-0059 rule 2).
+ *
+ * THE routing decision, extracted so disclosure surfaces (the brain chip, the
+ * per-turn provenance tag) consume the SAME derivation the constructor dispatches
+ * on — a parallel re-derivation would lie exactly where it matters most: a keyed
+ * provider with NO key falls through to the demo brain, silently by design here,
+ * loudly on the surfaces that consume this.
+ */
+export type AdapterKind = 'webllm' | 'local' | 'anthropic' | 'openai' | 'demo';
+
+export function adapterKindFor(config: Pick<TurnAdapterConfig, 'mode' | 'provider' | 'key'>): AdapterKind {
+  if (config.mode === 'webllm') return 'webllm';
+  if (config.mode === 'local') return 'local';
+  if (config.provider === 'anthropic' && config.key !== undefined) return 'anthropic';
+  if (config.provider === 'openai' && config.key !== undefined) return 'openai';
+  return 'demo';
+}
+
+/**
  * A FRESH adapter per turn (the mock adapter consumes its script sequentially).
- * local mode ignores provider/key; byok needs a key for anthropic/openai.
+ * local mode ignores provider/key; byok needs a key for anthropic/openai — keyless
+ * falls through to the demo brain (see `adapterKindFor`, which every disclosure
+ * surface reads so this fall-through is never silent to the user).
  */
 export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpose): AgentAdapter {
   // The platform seam at the LLM choke point: desktop supplies its native fetch here,
   // web supplies nothing and the adapters keep their own `globalThis.fetch` default.
   const fetchImpl = config.fetch ?? getPlatform().fetchImpl;
   const fetchDep = fetchImpl !== undefined ? { fetch: fetchImpl } : {};
-  if (config.mode === 'webllm') {
-    // The shared `model` setting holds byok/local wire ids (e.g. "llama3.2") — a
-    // different namespace from web-llm prebuilt ids, so it is deliberately IGNORED:
-    // the spike always loads the ADR-0015 default; the model picker is GA scope.
-    return webllmAdapter();
+  const modelDep = config.model !== undefined ? { model: config.model } : {};
+  const kind = adapterKindFor(config);
+  switch (kind) {
+    case 'webllm':
+      // The shared `model` setting holds byok/local wire ids (e.g. "llama3.2") — a
+      // different namespace from web-llm prebuilt ids, so it is deliberately IGNORED:
+      // the spike always loads the ADR-0015 default; the model picker is GA scope.
+      return webllmAdapter();
+    case 'local':
+      return localAdapter({
+        ...(config.localUrl !== undefined ? { baseUrl: config.localUrl } : {}),
+        ...modelDep,
+        ...fetchDep,
+      });
+    case 'anthropic':
+    case 'openai': {
+      const { key } = config;
+      if (key === undefined) {
+        // Unreachable by construction — adapterKindFor names a keyed provider only
+        // when its key exists. Loud on purpose: if the derivation ever drifts from
+        // this dispatch, a throw beats silently routing the user's turn elsewhere.
+        throw new Error(`adapterKindFor said '${kind}' without a key`);
+      }
+      return kind === 'anthropic'
+        ? anthropicAdapter({ apiKey: key, ...modelDep, ...fetchDep })
+        : openaiAdapter({ apiKey: key, ...modelDep, ...fetchDep });
+    }
+    case 'demo':
+      return mockAdapter(purpose === 'chat' ? demoChatScript() : demoAppScript());
   }
-  if (config.mode === 'local') {
-    return localAdapter({
-      ...(config.localUrl !== undefined ? { baseUrl: config.localUrl } : {}),
-      ...(config.model !== undefined ? { model: config.model } : {}),
-      ...fetchDep,
-    });
-  }
-  if (config.provider === 'anthropic' && config.key !== undefined) {
-    return anthropicAdapter({
-      apiKey: config.key,
-      ...(config.model !== undefined ? { model: config.model } : {}),
-      ...fetchDep,
-    });
-  }
-  if (config.provider === 'openai' && config.key !== undefined) {
-    return openaiAdapter({
-      apiKey: config.key,
-      ...(config.model !== undefined ? { model: config.model } : {}),
-      ...fetchDep,
-    });
-  }
-  return mockAdapter(purpose === 'chat' ? demoChatScript() : demoAppScript());
 }

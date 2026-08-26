@@ -40,6 +40,7 @@ import { WebsiteLink } from './ui/WebsiteLink.js';
 import { FeedbackMenu } from './feedback/FeedbackMenu.js';
 import { ReportErrorLink } from './feedback/ReportErrorLink.js';
 import { Skeleton } from './ui/Skeleton.js';
+import { BrainChip } from './views/BrainChip.js';
 import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
 import { HubView } from './views/HubView.js';
@@ -185,6 +186,10 @@ export function App(): ReactElement {
           >
             ⚙️
           </NavLink>
+          {/* ADR-0059: the always-on "what's thinking" status chip — the demo brain is
+              never active without saying so, on any route. Sits by the gear because
+              the chip's menu routes to Settings for every switch that needs config. */}
+          <BrainChip />
           {/* ADR-0052: the ONE persistent feedback affordance — quiet, no badge. */}
           <FeedbackMenu />
           {/* ADR-0047 §9: a header WHISPER when a shell update is in play — desktop
