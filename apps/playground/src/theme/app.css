@@ -2156,6 +2156,19 @@ img.identity-avatar {
   gap: var(--space-2);
   flex: none;
 }
+/* The ownership line (TASK-20260827): separated by a rule so it reads as a standing
+   property of Snug rather than another sentence about the demo brain, which is temporary
+   by definition. Quiet — this is a developer demo, not a landing page. */
+.demo-brain-callout-own {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  line-height: 1.55;
+}
+.demo-brain-callout-own strong {
+  color: var(--fg);
+}
 
 /* The per-turn provenance tag (ADR-0059 rule 3): quiet, but unambiguous — warn-tinted
    like the chip's demo state so the two surfaces read as one signal. */

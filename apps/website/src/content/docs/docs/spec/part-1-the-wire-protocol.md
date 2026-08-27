@@ -9,8 +9,11 @@ banner:
 
 ## 1. Overview
 
-Snug connects agents to apps: LLM-authored single-file HTML micro-apps run in a sandboxed
-iframe and think through the **host's** agent at runtime, over two coupled contracts:
+Snug is an open protocol for persistent, portable, agent-backed applications. The
+application and its state remain independent of the LLM provider (§7), while a conforming
+host supplies runtime intelligence. Concretely: LLM-authored single-file HTML micro-apps
+run in a sandboxed iframe and think through the **host's** agent at runtime, over two
+coupled contracts:
 
 1. **Frames** — postMessage messages between the app iframe and the host runner.
 2. **Chat envelope** — the tagged message a host sends to its own agent endpoint for an

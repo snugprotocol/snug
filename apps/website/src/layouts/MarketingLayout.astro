@@ -65,9 +65,10 @@ const { title, description } = Astro.props;
           with nothing behind it, so Docs/Spec/Playground were unreachable on a phone
           (TASK-20260826, AC4). Native <details>: no JS, no hydration, keyboard and AT
           support for free, and every link is a real page load so the panel cannot be left
-          stale open. The control keeps a visible "Menu" word beside the geometric mark —
-          a bare glyph would have no accessible name (lessons 2026-08-18), and an emoji
-          would ignore currentColor entirely.
+          stale open. The control is the geometric mark alone (owner call 2026-08-27); its
+          accessible name comes from the summary's aria-label, so the lesson behind the
+          former visible "Menu" word — a bare glyph must not be nameless (2026-08-18) — is
+          still satisfied. The glyph stays SVG on currentColor, never an emoji.
         */}
         <details class="nav-mobile">
           <summary aria-label="Menu">
@@ -79,7 +80,6 @@ const { title, description } = Astro.props;
                 stroke-linecap="round"
                 fill="none"></path>
             </svg>
-            <span>Menu</span>
           </summary>
           <div class="nav-sheet">
             <a href="/architecture/">How it works</a>
@@ -87,7 +87,6 @@ const { title, description } = Astro.props;
             <a href="/docs/spec/">Spec</a>
             <a href={site.playground} target="_blank" rel="noopener">Playground</a>
             <a href={site.githubOrg} target="_blank" rel="noopener">GitHub</a>
-            <a href="/download/" class="btn btn-primary nav-sheet-cta">Download for macOS</a>
           </div>
         </details>
       </nav>
@@ -234,17 +233,20 @@ const { title, description } = Astro.props;
     position: relative;
   }
 
+  /* Icon-only since the visible "Menu" word was dropped (owner call 2026-08-27): the
+     control is square rather than a text-shaped pill, and keeps the full --tap target in
+     BOTH axes — a 44px-tall, 30px-wide button is still a miss on a phone. The accessible
+     name now rests entirely on the summary's aria-label. */
   .nav-mobile > summary {
     display: inline-flex;
     align-items: center;
-    gap: var(--space-2);
+    justify-content: center;
     min-height: var(--tap);
-    padding: 0.4rem 0.75rem;
+    min-width: var(--tap);
+    padding: 0;
     border: 1px solid var(--border-strong);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-m);
     color: var(--fg);
-    font-size: var(--text-s);
-    font-weight: 500;
     cursor: pointer;
     list-style: none;
     user-select: none;
@@ -299,16 +301,6 @@ const { title, description } = Astro.props;
   .nav-sheet > a:hover {
     background: var(--surface-2);
     color: var(--fg);
-  }
-
-  /* .nav-sheet > a (0,1,1) outweighs the global .btn-primary (0,1,0), so the CTA's ink
-     color is restated at matching specificity or the label washes out against the
-     ember fill. (Same cascade fight the old header CTA had.) */
-  .nav-sheet > a.nav-sheet-cta,
-  .nav-sheet > a.nav-sheet-cta:hover {
-    margin-top: var(--space-2);
-    justify-content: center;
-    color: var(--ember-ink);
   }
 
   @media (min-width: 860px) {

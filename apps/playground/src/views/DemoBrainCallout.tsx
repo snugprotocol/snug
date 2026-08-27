@@ -7,6 +7,12 @@
 // story; the honesty sentence is the byte-pinned BYOK claim (ADR-0059 rule 4).
 // Once a real brain is active this renders nothing regardless of the latch — the
 // ambient chip carries the story from then on.
+//
+// TASK-20260827: this is also where "apps that outlive the AI that created them"
+// belongs. The user is looking at WHICH intelligence is running and is one click
+// from changing it — the only place on the surface where that claim is something
+// they can act on rather than read. It goes UNDER the mechanism sentence, never
+// in front of it: what the demo brain is stays the first thing said.
 
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
@@ -28,6 +34,11 @@ export function DemoBrainCallout(): ReactElement | null {
           {DEMO_BRAIN_BODY} poke around freely — then bring your own AI to build with real answers and real data.
         </span>
         <span className="hint">{BYOK_HONESTY_COPY}</span>
+        <span className="demo-brain-callout-own">
+          <strong>apps that outlive the AI that created them.</strong> keep the application, keep its
+          state, change models or hosts without starting over — and run it locally when you want the
+          whole system on your machine.
+        </span>
       </div>
       <div className="demo-brain-callout-actions">
         <Link

@@ -115,6 +115,12 @@ function cardSvg({ wordmark, headline, sub }) {
  * Deliberately NOT a product screenshot: this replaces one (hub-talk-build-run.png), and a
  * screenshot of the hub shows the UI rather than the proposition. The org page is read by
  * people who do not yet know what Snug is.
+ *
+ * TASK-20260827: the headline was "MCP connects agents to tools. / Snug connects agents to
+ * apps." — a definition by comparison, with another protocol as the reference point. It is
+ * now the site's own headline plus the SHORT subline (owner call): the full website
+ * subheadline does not fit this canvas at a readable size, and shrinking type to fit is how
+ * a banner becomes unreadable on a phone.
  */
 function bannerSvg() {
   const colY = 372;
@@ -130,15 +136,16 @@ function bannerSvg() {
   <text x="${x}" y="${colY + 66}" font-family="${UI}" font-size="25" fill="${palette.muted}">${line}</text>`;
 
   // SVG text neither wraps nor shrinks to fit — an overlong line runs off the canvas and
-  // renders with no warning (the first draft lost "apps." off the right edge). The
-  // positioning line is therefore set as TWO explicit lines at a size measured to fit
-  // 1088px of usable width, not one line trusted to be short enough.
+  // renders with no warning (an early draft lost the last word off the right edge). Both
+  // lines below are therefore SET, not trusted: the headline at 52px and the subline at
+  // 27px each measure inside the 1088px of usable width (1280 less the two 96px margins),
+  // which is why the longer website subheadline is not used here.
   return frame(
     BANNER,
     `${lockup(96, 84, 2.0, 58)}
 
-  <text x="96" y="248" font-family="${DISPLAY}" font-size="44" fill="${palette.muted}">MCP connects agents to tools.</text>
-  <text x="96" y="304" font-family="${DISPLAY}" font-size="44" fill="${palette.fg}">Snug connects agents to <tspan fill="${palette.emberBright}">apps</tspan>.</text>
+  <text x="96" y="252" font-family="${DISPLAY}" font-size="52" fill="${palette.fg}">Your software shouldn&#8217;t need a <tspan fill="${palette.emberBright}" font-style="italic">landlord</tspan>.</text>
+  <text x="96" y="306" font-family="${UI}" font-size="27" fill="${palette.muted}">Your app. Your data. Your choice of intelligence.</text>
 ${column(left, 'SNUGPROTOCOL/SNUG', 'The reference implementation')}
 ${column(right, 'SNUGPROTOCOL/SPEC', 'The protocol specification')}`,
   );

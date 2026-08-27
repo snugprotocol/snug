@@ -1,0 +1,143 @@
+---
+// PersonalSoftware.astro — "Not every app needs to become a service." (TASK-20260827)
+//
+// The section sits between the differentiators and the try-it split: by this point the
+// reader knows the mechanism, and this is the consequence stated in human terms.
+//
+// CLAIMS DISCIPLINE — the whole reason this component has a comment. The defensible claim
+// is that Snug removes the need for an APPLICATION-SPECIFIC SaaS backend accumulating the
+// user's application state. It is NOT that external services disappear: a budget app still
+// crosses an aggregator to reach a bank, and a hosted model still sees what is sent to it
+// for inference. The closing line names both out loud rather than letting a reader infer a
+// stronger claim and discover the caveat later — a reader who catches one overclaim stops
+// believing the honest claims too (the standing rule, ADR-0059 rule 4).
+//
+// positioning.test.ts pins the "application-specific" scoping and asserts the absence of
+// "never leaves your machine" / "no third party sees" / "100% private" here.
+---
+
+<section class="section personal" aria-labelledby="personal-title">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">personal software</p>
+      <h2 id="personal-title">Not every app needs to become a service.</h2>
+    </div>
+
+    <div class="personal-grid">
+      <div class="personal-lede">
+        <p>
+          A budget tracker. A reading log. A personal CRM. A family organiser. A research tool for
+          one recurring question. None of these are businesses — and none of them should need
+          another account, another application-specific cloud database, and another company
+          accumulating a permanent copy of what you put in.
+        </p>
+        <p>
+          <strong>Snug lets the application and its accumulated state live with you instead.</strong>
+          The app runs against the intelligence your host provides, and everything it remembers
+          stays in your <code>.snug</code> file — no backend of its own to sign up for, and nothing
+          for a shutdown notice to take away.
+        </p>
+      </div>
+
+      <aside class="personal-honest">
+        <p class="personal-honest-h">What that does and doesn't mean</p>
+        <p>
+          Snug removes the need for an <strong>application-specific</strong> SaaS backend
+          accumulating your data. It does not remove every external service: an app that reads your
+          bank still crosses an aggregator, and a hosted model still sees what an app sends it for
+          inference. What changes is <strong>who ends up holding the accumulated picture</strong> —
+          and with local inference, how little has to leave at all.
+        </p>
+        <p class="personal-more">
+          <a href="/architecture/">See where the data actually sits — Fig 4 →</a>
+        </p>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<style>
+  .personal {
+    border-top: 1px solid var(--border);
+  }
+
+  .personal-grid {
+    display: grid;
+    grid-template-columns: 1.35fr 1fr;
+    gap: var(--space-7);
+    align-items: start;
+  }
+
+  .personal-lede p {
+    margin: 0 0 var(--space-4);
+    color: var(--fg-muted);
+    font-size: var(--text-l);
+    line-height: 1.6;
+  }
+
+  .personal-lede p:last-child {
+    margin-bottom: 0;
+  }
+
+  .personal-lede strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  /* The caveat is set as a margin note, not hidden in fine print: same border vocabulary
+     as the architecture page's limits box, one step down in size. */
+  .personal-honest {
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--ember);
+    border-radius: var(--radius-m);
+    background: var(--surface);
+  }
+
+  .personal-honest-h {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ember-bright);
+    margin: 0 0 var(--space-3);
+  }
+
+  .personal-honest p {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+    line-height: 1.65;
+  }
+
+  .personal-honest strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .personal-more {
+    margin-top: var(--space-4) !important;
+  }
+
+  .personal-more a {
+    color: var(--ember-bright);
+    text-decoration: none;
+    font-weight: 500;
+  }
+
+  .personal-more a:hover {
+    color: var(--ember);
+  }
+
+  .personal code {
+    font-family: var(--font-mono);
+    color: var(--ember-bright);
+  }
+
+  @media (max-width: 860px) {
+    .personal-grid {
+      grid-template-columns: 1fr;
+      gap: var(--space-5);
+    }
+  }
+</style>

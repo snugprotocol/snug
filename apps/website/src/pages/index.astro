@@ -2,9 +2,22 @@
 // index.astro — the landing page. Positioning and the three differentiators come from
 // docs/product-vision.md (tracked in docs-sync.json — when the vision moves, the gate
 // goes red and this page gets walked).
+//
+// The page leads with the CONSEQUENCE, not the mechanism (TASK-20260827): the user is the
+// durable owner of the application and its accumulated state, and the host supplies the
+// intelligence. Portability, model choice and local-first operation are consequences of
+// that boundary, so they are stated in that order. The page deliberately does NOT define
+// Snug against MCP — MCP is complementary infrastructure (whitepaper §11), and leading
+// with the comparison makes MCP the reference point and Snug the derivative.
+//
+// Claims discipline, pinned in positioning.test.ts: the anti-SaaS section scopes itself to
+// an APPLICATION-SPECIFIC backend, and no unqualified "nothing leaves your machine" claim
+// appears on this page at all — that sentence is true only of the fully local
+// configuration, which is Fig 5's job on /architecture/.
 import AudienceSplit from '../components/AudienceSplit.astro';
 import Differentiators from '../components/Differentiators.astro';
 import ImplementorPitch from '../components/ImplementorPitch.astro';
+import PersonalSoftware from '../components/PersonalSoftware.astro';
 import TeaserVideo from '../components/TeaserVideo.astro';
 import WireDemo from '../components/WireDemo.astro';
 import MarketingLayout from '../layouts/MarketingLayout.astro';
@@ -12,20 +25,22 @@ import { site } from '../config/site';
 ---
 
 <MarketingLayout
-  title="Snug — the protocol that connects agents to apps"
-  description="An open protocol for tiny, user-built apps that think through their host's AI agent at runtime — and live in one portable file you own."
+  title="Snug Protocol — AI apps that belong to you"
+  description="Snug is an open protocol for portable, agent-backed personal software. Keep the app and its state, choose the intelligence, and run locally when privacy matters."
 >
   <section class="hero">
     <div class="container hero-inner">
       <p class="eyebrow rise">The Snug Protocol · open spec · MIT</p>
       <h1 class="hero-title display rise rise-2">
-        <span class="hero-line-muted">MCP connects agents to tools.</span><br />
-        Snug connects agents to <em class="hero-em">apps</em>.
+        Your software shouldn't need a <em class="hero-em">landlord</em>.
       </h1>
       <p class="hero-sub rise rise-3">
-        Describe a tiny app in chat and the agent writes it. It runs in a hard sandbox, thinks
-        through the host agent at runtime, and lives — code, data, versions, chats — in{' '}
-        <strong>one portable file you own</strong>.
+        Snug lets AI-native apps <strong>live with you</strong> — your app, your data, your choice
+        of intelligence.
+      </p>
+      <p class="hero-mech rise rise-3">
+        Build personal apps with an AI agent, keep the app and its state in a portable{' '}
+        <code>.snug</code> file, and let the host supply the intelligence at runtime.
       </p>
       <div class="hero-ctas rise rise-4">
         <a class="btn btn-primary" href="/download/">Download for macOS</a>
@@ -38,17 +53,65 @@ import { site } from '../config/site';
     </div>
   </section>
 
+  <section class="section thesis" aria-labelledby="thesis-title">
+    <div class="container">
+      <p class="eyebrow">the thesis</p>
+      <h2 id="thesis-title" class="thesis-title display">
+        Agents are becoming portable. Tools are becoming standardised. Models are already
+        interchangeable. <em>Why are the applications they create still trapped?</em>
+      </h2>
+      <div class="thesis-body">
+        <p>
+          An AI-generated application today usually stays where it was made — tied to the platform
+          that generated it, the runtime that executes it, the backend that stores its rows, or the
+          model environment it was written against. Every other layer of the stack learned to move.
+          The application did not.
+        </p>
+        <p>
+          Snug draws the boundary somewhere else: <strong>the application and its accumulated state
+          belong to the user</strong>, and the intelligence is supplied by the host at runtime. That
+          is one design decision, and the rest of this page is what follows from it.
+        </p>
+      </div>
+
+      <div class="own-grid">
+        <div class="own">
+          <h3>Own it.</h3>
+          <p>
+            The application and its accumulated state can live in a <code>.snug</code> file you
+            control — real SQLite, openable with ordinary tools.
+          </p>
+        </div>
+        <div class="own">
+          <h3>Move it.</h3>
+          <p>
+            Take the application between compatible Snug hosts, and change the intelligence behind
+            it without rebuilding the app around another provider.
+          </p>
+        </div>
+        <div class="own">
+          <h3>Keep it private.</h3>
+          <p>
+            The app needs no SaaS backend of its own. Pair Snug with local inference when the
+            workload has to stay on-device.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <WireDemo />
   <Differentiators />
+  <PersonalSoftware />
   <AudienceSplit />
   <ImplementorPitch />
 
   <section class="section closer" aria-labelledby="closer-title">
     <div class="container closer-inner">
-      <h2 id="closer-title" class="display">talk. build. run.</h2>
+      <h2 id="closer-title" class="display">Software that stays yours.</h2>
       <p class="muted">
-        Software that's yours in the oldest sense: it sits with you, works for you, and fits in
-        your pocket when you go.
+        Yours in the oldest sense: it sits with you, works for you, and comes along when you go.
+        Build one in about a minute and see what you end up holding.
       </p>
       <div class="closer-ctas">
         <a class="btn btn-primary" href="/download/">Get the desktop app</a>
@@ -59,6 +122,85 @@ import { site } from '../config/site';
 </MarketingLayout>
 
 <style>
+  /* The thesis is a question, set at display size with room around it — a provocation the
+     reader finishes, not another product slogan. The three-part framework under it reuses
+     the Differentiators rule-and-column vocabulary rather than introducing cards. */
+  .thesis {
+    border-top: 1px solid var(--border);
+  }
+
+  .thesis-title {
+    max-width: 30ch;
+    font-size: clamp(1.6rem, 3.6vw, 2.6rem);
+    line-height: 1.2;
+    margin: var(--space-3) 0 var(--space-6);
+    text-wrap: balance;
+  }
+
+  .thesis-title em {
+    font-style: italic;
+    color: var(--ember-bright);
+  }
+
+  .thesis-body {
+    display: grid;
+    /* min() against 100% so the track can shrink below its 24rem preference — a bare
+       minmax(24rem, …) overflows a 375px viewport, which is the standing no-horizontal-
+       scroll tripwire (lessons 2026-08-23). */
+    grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+    gap: var(--space-5);
+    max-width: 84ch;
+  }
+
+  .thesis-body p {
+    margin: 0;
+    color: var(--fg-muted);
+    line-height: 1.65;
+  }
+
+  .thesis-body strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .own-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-6);
+    margin-top: clamp(2.5rem, 5vw, 4rem);
+  }
+
+  .own {
+    padding-top: var(--space-4);
+    border-top: 2px solid var(--border-strong);
+  }
+
+  .own h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-l);
+    font-weight: 500;
+    margin: 0 0 var(--space-3);
+  }
+
+  .own p {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+    line-height: 1.6;
+  }
+
+  .own code {
+    font-family: var(--font-mono);
+    color: var(--ember-bright);
+  }
+
+  @media (max-width: 760px) {
+    .own-grid {
+      grid-template-columns: 1fr;
+      gap: var(--space-5);
+    }
+  }
+
   .hero {
     padding: clamp(4rem, 9vw, 6.5rem) 0 clamp(3rem, 7vw, 5rem);
   }
@@ -71,14 +213,11 @@ import { site } from '../config/site';
   }
 
   .hero-title {
-    font-size: clamp(2.1rem, 5.4vw, 3.9rem);
-    line-height: 1.12;
-    margin: var(--space-4) 0 0;
-    max-width: 18ch;
-  }
-
-  .hero-line-muted {
-    color: var(--fg-faint);
+    font-size: clamp(2.4rem, 6.2vw, 4.4rem);
+    line-height: 1.08;
+    margin: var(--space-5) 0 0;
+    max-width: 16ch;
+    text-wrap: balance;
   }
 
   .hero-em {
@@ -96,6 +235,21 @@ import { site } from '../config/site';
 
   .hero-sub strong {
     color: var(--fg);
+  }
+
+  /* The mechanism, one notch quieter than the promise above it: a developer landing cold
+     still learns what Snug actually is without the hero turning into a paragraph. */
+  .hero-mech {
+    max-width: 60ch;
+    font-size: var(--text-s);
+    line-height: 1.65;
+    color: var(--fg-faint);
+    margin: var(--space-4) 0 0;
+  }
+
+  .hero-mech code {
+    font-family: var(--font-mono);
+    color: var(--ember-bright);
   }
 
   .hero-ctas {

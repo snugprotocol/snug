@@ -48,6 +48,13 @@ capability seats (`webRedirectPosture`, `webRegistration`). (4) Editorial promot
 normative status, post-1.0 versioning semantics, stability table. No JSON schema bytes
 changed from the v0.3 publication.
 
+**Editorial correction, 1.0 (2026-08-27, TASK-20260827-ownership-positioning):** §1's
+opening sentence now states the protocol's architectural definition — the application and
+its state are independent of the LLM provider, while a conforming host supplies runtime
+intelligence — in place of a one-line comparison to another protocol. **Prose only.** No
+normative requirement, constant, schema byte, conformance rule or protocol mechanic
+changed; the version stays 1.0 per the versioning note above.
+
 ## Conventions
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are used in the sense of
@@ -60,8 +67,11 @@ mechanically against the reference implementation.
 
 ## 1. Overview
 
-Snug connects agents to apps: LLM-authored single-file HTML micro-apps run in a sandboxed
-iframe and think through the **host's** agent at runtime, over two coupled contracts:
+Snug is an open protocol for persistent, portable, agent-backed applications. The
+application and its state remain independent of the LLM provider (§7), while a conforming
+host supplies runtime intelligence. Concretely: LLM-authored single-file HTML micro-apps
+run in a sandboxed iframe and think through the **host's** agent at runtime, over two
+coupled contracts:
 
 1. **Frames** — postMessage messages between the app iframe and the host runner.
 2. **Chat envelope** — the tagged message a host sends to its own agent endpoint for an
