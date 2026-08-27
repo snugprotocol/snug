@@ -1,6 +1,6 @@
 # TASK-20260827-ownership-positioning: pivot public positioning from "agents to apps" to user ownership
 
-- **Status**: in-review
+- **Status**: done (merged `ecdc3ce` #154; website + playground DEPLOYED and verified live 2026-08-27T20:27Z)
 - **Owner**: Jeetu
 - **Risk tier**: low (owner call, Gate-1 interview 2026-08-27) — strictly copy, metadata and presentation; no logic, no protocol, no schema, no sandbox behaviour. Playground files touched are view/copy only.
 - **Branch**: `feat/TASK-20260827-ownership-positioning`
@@ -110,3 +110,23 @@ Order, tests FIRST per TDD.md:
 - **State:** committed on `feat/TASK-20260827-ownership-positioning`; PR next, then merge, then the two deploys (website + playground) — all at the owner's explicit ask this session.
 - **Next step:** open the PR, merge it, then `node scripts/deploy-web.mjs all` → `--deploy` from clean `main`.
 - **Open questions:** none. Three 🔑 items remain owed and are recorded in next-steps: push `snugprotocol/spec` (PREPARED entry awaiting SHA), commit+push `snugprotocol/.github` (banner), and the social re-scrape.
+
+### 2026-08-27 — Jeetu — session (merge + PRODUCTION DEPLOY)
+
+- **Merged.** PR #154, squash `ecdc3ce`, branch deleted. Both required checks green on the PR: `workspace` (3m47s) and `desktop-shell (macos-latest)` (5m1s); merge state `CLEAN / MERGEABLE`.
+- **🔑 DEPLOYED to production on the owner's explicit ask** ("now deploy the website & playground"). `node scripts/deploy-web.mjs all --deploy` from clean `main` == `origin/main` @ `ecdc3ce`.
+  - **When (UTC):** started 2026-08-27T20:26:42Z, finished 20:27:29Z.
+  - **website** — deployment `9df8c8cd-48e2-4753-8781-566173dc3f72`, 16 files uploaded / 69 unchanged.
+  - **playground** — deployment `b773cb66-c26b-4846-9bf7-b983977507c8`, 10 files uploaded / 121 unchanged.
+  - Both deployments carry commit `ecdc3ce`; pre-flight built both fresh (`turbo --force` over a deleted dist) and verified Pages limits + the ADR-0013 hosted-posture invariants before either upload.
+- **Verification performed (runbook "Verify", against the APEX hosts — never the pages.dev URLs):**
+  - `snugprotocol.org` **200**, `playground.snugprotocol.org` **200**.
+  - **ADR-0013 posture re-confirmed post-deploy: 0 `cdn-cgi` hits on both hosts.**
+  - Homepage `<title>` = "Snug Protocol — AI apps that belong to you"; meta description is the ownership one; the landlord hero, the thesis section, "Not every app needs to become a service." and "What changes when the app belongs to you." are all present; **"connects agents to" returns 0** — the old slogan is gone from the live page.
+  - `/architecture/` `<title>` = "How Snug Works — Ownership, Portability & Runtime Intelligence"; "Ownership means you can leave", "isn't access. It's accumulation", "Nothing leaves the machine", "Build the host" and **"What this doesn't do"** all present; the MCP-as-foil line returns **0**.
+  - Playground `<title>` = "Snug Playground — Build an AI app you can take with you".
+  - **Checked the SHIPPED JS, not just the metadata** (the 2026-08-26 lesson): `/assets/index-D0iqioQ-.js` contains "belongs to you" (2), "outlive the AI that created them", "describe an app you wish existed" and "this file is the app".
+  - `og:image` is absolute (`https://snugprotocol.org/videos/poster-landscape.jpg`) and the asset returns **200** — a well-formed URL at a 404 is the same blank card.
+  - The live docs shell's spec page carries the new §1 opener and returns **0** for the old one.
+- **⚠️ The spec divergence is now REAL and PUBLIC**, exactly as predicted before the deploy: `snugprotocol.org/docs/spec/part-1-the-wire-protocol/` serves the new architectural definition while `snugprotocol/spec` still serves "Snug connects agents to apps". Closing it is the 🔑 spec push, which stays owner-gated — `spec/SPEC.md` is staged locally and `docs/spec-changelog.md` holds the PREPARED entry awaiting the SHA and UTC time.
+- **Next step:** owner-gated only — (1) push `snugprotocol/spec`, (2) commit+push `snugprotocol/.github` (banner staged in `.github-org/`), (3) the X/LinkedIn/Facebook re-scrape, now that the card copy changed.
