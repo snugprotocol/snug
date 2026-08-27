@@ -26,6 +26,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TOKENS = join(ROOT, 'apps', 'playground', 'src', 'theme', 'tokens.css');
 const OUT_DIR = join(ROOT, 'docs', 'assets', 'social');
+/** The site card ships WITH the site, so it lives under the website's public/ tree. */
+const WEBSITE_PUBLIC = join(ROOT, 'apps', 'website', 'public', 'social');
 
 /** GitHub's repo social preview; anything else is cropped or upscaled. */
 const CARD = { width: 1280, height: 640 };
@@ -33,6 +35,12 @@ const CARD = { width: 1280, height: 640 };
 /** The org profile banner (snugprotocol/.github → profile/README.md), rendered at 800px
  *  wide in the README. Shorter than a repo card so the org's own copy stays above the fold. */
 const BANNER = { width: 1280, height: 520 };
+
+/** The WEBSITE's own social card — what unfurls when snugprotocol.org is pasted anywhere.
+ *  1200×630 is Open Graph's documented size; X, LinkedIn, Facebook, Slack and iMessage all
+ *  lay out against it. Served by the site (apps/website/public/), NOT hand-uploaded — see
+ *  docs/runbooks/social-preview.md §2 and apps/website/src/config/socialImage.ts. */
+const OG = { width: 1200, height: 630 };
 
 /**
  * Read a CSS custom property's value from the FIRST (dark) block of tokens.css.
@@ -151,6 +159,33 @@ ${column(right, 'SNUGPROTOCOL/SPEC', 'The protocol specification')}`,
   );
 }
 
+/**
+ * The site card. Until TASK-20260827 this slot was filled by the landing teaser's poster
+ * frame — a real screenshot, but a screenshot OF THE PLAYGROUND HUB, so it showed the
+ * product's old "talk. build. run." hero long after the site stopped saying it. A card
+ * whose picture contradicts its own title is worse than a plain one, and social caches are
+ * keyed per URL and sticky, so the wrong image outlives the fix by weeks.
+ *
+ * This is therefore drawn, not captured: it carries the positioning itself, so it cannot
+ * go stale behind a UI change. Same lockup, palette and rules as the org banner — one
+ * visual system across every surface a link can land on.
+ */
+function ogCardSvg() {
+  return frame(
+    OG,
+    `${lockup(84, 74, 1.8, 52)}
+
+  <text x="84" y="270" font-family="${DISPLAY}" font-size="62" fill="${palette.fg}">Your software shouldn&#8217;t need</text>
+  <text x="84" y="344" font-family="${DISPLAY}" font-size="62" fill="${palette.fg}">a <tspan fill="${palette.emberBright}" font-style="italic">landlord</tspan>.</text>
+
+  <text x="84" y="410" font-family="${UI}" font-size="29" fill="${palette.muted}">Your app. Your data. Your choice of intelligence.</text>
+
+  <rect x="84" y="470" width="52" height="3" fill="${palette.ember}"/>
+  <text x="84" y="522" font-family="${UI}" font-size="25" fill="${palette.muted}">An open protocol for portable, agent-backed personal software.</text>
+  <text x="84" y="562" font-family="${UI}" font-size="23" fill="${palette.ember}" letter-spacing="2.4">SNUGPROTOCOL.ORG &#183; OPEN SPEC &#183; MIT</text>`,
+  );
+}
+
 /** GitHub's card is small on a phone — keep to short, high-contrast lines. */
 const OUTPUTS = [
   {
@@ -174,6 +209,9 @@ const OUTPUTS = [
       }),
   },
   { file: 'org-profile-banner.png', size: BANNER, svg: bannerSvg },
+  // The one output the WEBSITE serves rather than a human uploading: it is written into
+  // apps/website/public/social/ so a deploy ships it (see the OUT_DIRS note below).
+  { file: 'site-og-card.png', size: OG, svg: ogCardSvg, out: WEBSITE_PUBLIC },
 ];
 
 function has(bin) {
@@ -222,8 +260,15 @@ function renderPng(svgPath, pngPath, { width, height }) {
 mkdirSync(OUT_DIR, { recursive: true });
 
 for (const output of OUTPUTS) {
+  // Most outputs are hand-uploaded or committed elsewhere, so they land in docs/assets/social/.
+  // An output carrying `out` ships WITH the site instead (the OG card), and its directory is
+  // created here rather than assumed to exist — a fresh clone has no public/social/.
+  const pngDir = output.out ?? OUT_DIR;
+  if (pngDir !== OUT_DIR) mkdirSync(pngDir, { recursive: true });
+  // The SVG source stays beside its siblings in docs/assets/social/ either way: it is the
+  // editable original, not a shipped asset, and the website's public/ tree is served verbatim.
   const svgPath = join(OUT_DIR, output.file.replace(/\.png$/, '.svg'));
-  const pngPath = join(OUT_DIR, output.file);
+  const pngPath = join(pngDir, output.file);
   writeFileSync(svgPath, output.svg(), 'utf8');
   renderPng(svgPath, pngPath, output.size);
 
@@ -240,6 +285,6 @@ for (const output of OUTPUTS) {
   console.log(`  ${output.file}  ${got.width}×${got.height}  ${(bytes.length / 1024).toFixed(0)} KB`);
 }
 
-console.log('\nwritten to docs/assets/social/');
-console.log('Repo cards upload by hand; the org banner is committed to snugprotocol/.github');
-console.log('— see docs/runbooks/social-preview.md');
+console.log('\nwritten to docs/assets/social/ (site-og-card.png → apps/website/public/social/)');
+console.log('Repo cards upload by hand; the org banner is committed to snugprotocol/.github;');
+console.log('the site card ships with the next website deploy — see docs/runbooks/social-preview.md');

@@ -406,6 +406,25 @@ describe('AC10 — metadata carries the new positioning', () => {
     expect(description(html) ?? '').toMatch(/portable file|fully local|runtime intelligence/i);
   });
 
+  it('the social card image is the drawn card, not the stale Playground screenshot', () => {
+    // The card was the teaser's poster frame — a screenshot of the hub showing the OLD
+    // "talk. build. run." hero, i.e. a picture contradicting its own title. Social caches
+    // are keyed per URL and sticky, so a stale image outlives the fix by weeks.
+    const html = distPage('index.html');
+    expect(meta(html, 'og:image')).toMatch(/\/social\/site-og-card\.png$/);
+    expect(existsSync(join(DIST, 'social', 'site-og-card.png')), 'card asset not shipped').toBe(true);
+  });
+
+  it('the card alt text describes the CURRENT positioning', () => {
+    // This string is single-homed in socialImage.ts and was missed by the first
+    // consistency pass — it still read "tiny, user-built apps…" after every visible
+    // surface had moved. Alt text is exactly where a stale claim hides.
+    const alt = meta(distPage('index.html'), 'og:image:alt') ?? '';
+    expect(alt).toMatch(/landlord/i);
+    expect(alt).not.toMatch(/tiny, user-built apps/i);
+    expect(alt).not.toMatch(/connects agents to/i);
+  });
+
   it('no built marketing page still advertises the old slogan', () => {
     for (const page of ['index.html', join('architecture', 'index.html'), join('download', 'index.html')]) {
       const html = distPage(page);
