@@ -9,10 +9,17 @@
 // delivered image's container dimensions are not its content's dimensions, and declaring
 // the wrong ones tells a scraper to allocate a box the image does not fill.
 //
-// This is the landing teaser's poster frame — a real, on-brand 16:9 still that already
-// ships with the site. It is deliberately NOT the 1280×640 repo previews in
-// docs/assets/social/: those are GitHub's repo-page format and are uploaded by hand to
-// each repo's settings, not served by the website (see docs/runbooks/social-preview.md).
+// TASK-20260827: this was the landing teaser's POSTER FRAME — a real still, but a still of
+// the Playground hub, so the card kept showing the product's old "talk. build. run." hero
+// long after the site stopped saying it. A card whose picture contradicts its own title is
+// worse than a plain one, and social caches are keyed per URL and sticky, so a stale image
+// outlives the fix by weeks. It is now a DRAWN card carrying the positioning itself
+// (scripts/build-social-previews.mjs → ogCardSvg), which cannot go stale behind a UI change
+// and shares the org banner's lockup and palette.
+//
+// 1200×630 is Open Graph's documented size. It is deliberately NOT the 1280×640 repo
+// previews in docs/assets/social/: those are GitHub's repo-page format and are uploaded by
+// hand to each repo's settings, not served by the website (docs/runbooks/social-preview.md).
 
 export interface SocialImage {
   /** Root-relative path within the built site; made absolute against `Astro.site`. */
@@ -23,8 +30,11 @@ export interface SocialImage {
 }
 
 export const OG_IMAGE: SocialImage = {
-  path: '/videos/poster-landscape.jpg',
-  width: 1920,
-  height: 1080,
-  alt: 'Snug — an open protocol for tiny, user-built apps that live in one portable file you own.',
+  path: '/social/site-og-card.png',
+  width: 1200,
+  height: 630,
+  // Describes what the card SHOWS — the words on it, in reading order — because that is
+  // what a reader who cannot see it is missing. Not a restatement of the page's own
+  // description, which the card already carries in og:description beside this.
+  alt: 'Snug — “Your software shouldn’t need a landlord. Your app. Your data. Your choice of intelligence.” An open protocol for portable, agent-backed personal software.',
 };

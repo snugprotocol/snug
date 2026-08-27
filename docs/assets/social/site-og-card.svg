@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f4a259" stop-opacity="0.20"/>
+      <stop offset="55%" stop-color="#e8873a" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#100d0b" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f4a259"/>
+      <stop offset="100%" stop-color="#e8873a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#100d0b"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <rect x="0" y="624" width="1200" height="6" fill="url(#mark)"/>
+  <g transform="translate(84, 74) scale(1.8)">
+    <path fill="url(#mark)" fill-rule="evenodd" d="M10 2h12a8 8 0 0 1 8 8v12a8 8 0 0 1-8 8H10a8 8 0 0 1-8-8V10a8 8 0 0 1 8-8zm6 9a5 5 0 0 0-5 5v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-6a5 5 0 0 0-5-5z"/>
+  </g>
+  <text x="167.6" y="117.2" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="52" fill="#f3ece1">snug.</text>
+
+  <text x="84" y="270" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="62" fill="#f3ece1">Your software shouldn&#8217;t need</text>
+  <text x="84" y="344" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="62" fill="#f3ece1">a <tspan fill="#f4a259" font-style="italic">landlord</tspan>.</text>
+
+  <text x="84" y="410" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="29" fill="#b3a48f">Your app. Your data. Your choice of intelligence.</text>
+
+  <rect x="84" y="470" width="52" height="3" fill="#e8873a"/>
+  <text x="84" y="522" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="25" fill="#b3a48f">An open protocol for portable, agent-backed personal software.</text>
+  <text x="84" y="562" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="23" fill="#e8873a" letter-spacing="2.4">SNUGPROTOCOL.ORG &#183; OPEN SPEC &#183; MIT</text>
+</svg>
