@@ -24,7 +24,7 @@ The owner wants the ChatGPT/Claude-desktop shape: the web app offers the downloa
 10. **Update flow reaps before it relaunches.** Verdict from the Tauri source/docs, recorded here: `AppHandle::restart()` — which `plugin-process`'s `relaunch()` rides — explicitly *skips* `RunEvent::ExitRequested`/`Exit` delivery when invoked on the main thread, so the shell's exit-time sidecar reap CANNOT be assumed to run. The flow is therefore `downloadAndInstall` → explicit sidecar reap (the existing TERM-first shutdown + pidfile removal) → `relaunch()`. The real relaunch (single-instance lock race included) is on the owner manual-test list — no suite can perform it.
 11. **Pre-flip testing uses a dev-only `--config` overlay, not code.** `apps/desktop/updater-dev.json` points the updater at a local static stub (`tauri dev --config updater-dev.json`; a deliberate test bundle the same way). No override code path exists in the shell at all — nothing to env-gate, nothing to leak. The enforcement is a **MUST-APPEAR** check in `run-release-gate.mjs`: the release binary must contain the production endpoint byte-for-byte, which fails both "endpoint dropped from config" and "release accidentally built with the overlay" through one self-controlling mechanism. No GitHub token ever rides in the shell — the header-token idea is rejected outright (github.com asset downloads don't header-auth, and a PAT in the updater transport is a credential path with a redirect-forwarding failure class, lessons 2026-08-12).
 12. **The WhatsApp helper is NOT distributed or updated by this channel** — it remains a repo-installed artifact (`install:helper`), so a publicly-downloaded shell has no Telepath helper and an updated shell may drive an older helper. Disclosed residual in the threat-model delta; the spawner version-stamp check stays the filed next-steps fix.
-13. **Release rules grow one line** (PROCESS.md §Release & publish rules + the root-file mirrors): creating or editing a GitHub Release on snugprotocol repos requires an explicit human ask in that session and a journal record — the standing list predates the repo having anything binary to publish.
+13. **Release rules grow one line** *(mechanics amended 2026-08-26 — see the amendment below)* (PROCESS.md §Release & publish rules + the root-file mirrors): creating or editing a GitHub Release on snugprotocol repos requires an explicit human ask in that session and a journal record — the standing list predates the repo having anything binary to publish.
 
 ## Alternatives considered
 
@@ -83,3 +83,32 @@ shadowed), signed with the SAME minisign key as §4, and **pinned by content** i
 one only on a user click and only from its pinned tag. The threat-model delta's R-e is
 narrowed to developer installs; surface S9 (the helper download) is added. `install:helper`
 remains for developers and now writes a `kind: "dev"` stamp the downloader never overwrites.
+
+## Amendment — 2026-08-26: the release script may publish, on an explicit flag (v0.1.2)
+
+§13 said the script never publishes and prints the `gh release create` line for the owner to
+run. Three releases in, that split was the *source* of failures rather than a safeguard: the
+script's own refusals (staple wording, key-spelling conflict) surfaced only after a full
+build+notarization round trip, and the hand-run publish step re-typed five environment
+variables whose mistakes cost two more builds.
+
+**`scripts/release-desktop.mjs --publish` now performs the release itself.** The rule §13
+states is unchanged in substance — a GitHub Release still requires an explicit human ask in
+the session and a journal record — but **the flag IS that ask**: it is typed by a person, on
+the command line, for one named version, and it cannot be reached by any default path. Without
+it the command is printed exactly as before. An UNSIGNED build refuses to publish at all.
+
+The same change makes the credentials self-resolving (updater key from `~/.tauri` custody, the
+signing identity and team id parsed from `security find-identity` with **ambiguity refused
+rather than guessed**, the Apple ID from git config) and PROMPTS for the one secret a machine
+cannot derive — the app-specific password — with echo suppressed, never written to disk and
+never placed on argv. `--no-prompt` preserves a fully-explicit non-interactive path. This
+supersedes the 2026-08-24 amendment's "owner exports the trio with a leading space" mitigation,
+which stays valid but is no longer the expected route.
+
+**Why this is not a loosening.** The dangerous act was never "the script types `gh`"; it is
+publishing bytes nobody verified. That verification is what the script does best and a human
+does worst: universality, staple, Gatekeeper source, EULA presence, updater-signature freshness,
+and — since ADR-0060 — that the pinned helper release is published and byte-equal. Moving the
+publish inside the script puts those checks *between* the build and the release, where a
+hand-run `gh release create` had nothing between them at all.

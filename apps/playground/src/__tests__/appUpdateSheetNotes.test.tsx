@@ -114,8 +114,10 @@ describe('update sheet — only newer-than-installed entries (AC2)', () => {
   });
 
   it('with nothing newer known: shows the manifest notes as the honest fallback', async () => {
-    // current = the newest BUNDLED entry, so nothing bundled is newer either
-    const el = await mountSheet({ current: '0.1.1', offer: '0.1.2', fetchOk: false });
+    // `current` must be >= the newest BUNDLED entry, or the bundled fallback legitimately
+    // has something to show. Kept far ahead deliberately so landing a new release entry in
+    // desktop-releases.json never silently re-points this case (it did, at v0.1.2).
+    const el = await mountSheet({ current: '99.0.0', offer: '99.0.1', fetchOk: false });
     expect(el.textContent).toContain('manifest notes text');
     expect(el.textContent).not.toContain(WINDOWS_LINE);
   });

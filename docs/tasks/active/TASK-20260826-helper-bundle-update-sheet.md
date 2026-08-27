@@ -119,33 +119,8 @@ Order is tests-first per TDD.md; each phase is a commit group. Phase A is indepe
 - Next step: create `helper-whatsapp-sidecar-v0.1.0` as a **pre-release, `--latest=false`**, verify `releases/latest/download/latest.json` still resolves to the desktop v0.1.1, then code review → PR.
 - Owner walks owed (AC14): see next-steps 2026-08-26 entry.
 
-### Parked: the v0.1.2 release-notes entry (add to desktop-releases.json in the v0.1.2 RELEASE session — the public /download button advertises the newest bundled entry, so it must not land before the DMG does)
+### The v0.1.2 release-notes entry — LANDED 2026-08-26 in the release session (was parked here; `desktop-releases.json` now carries it as the newest entry).
 
-```json
-{
-  "version": "0.1.2",
-  "date": "2026-08-26",
-  "title": "Telepath's helper installs itself",
-  "sections": [
-    {
-      "title": "What's new",
-      "items": [
-        "The WhatsApp helper Telepath needs is now a one-click download inside the app — about 41 MB from GitHub, signed with the same key as Snug updates — offered the moment you open Telepath or start linking. No developer tools, no separate install.",
-        "The download is checked twice before anything runs: the signature, and a fingerprint this exact version of Snug was built with. Anything else is refused and nothing touches your disk.",
-        "If a linked WhatsApp session is on this computer but its helper is missing, a chip in the header says so instead of failing quietly.",
-        "The update sheet now shows only what changed since the version you are running — the notes for the release you already have no longer appear under the new one, and the sheet can no longer be cut off at the top of a small window."
-      ]
-    },
-    {
-      "title": "Good to know",
-      "items": [
-        "The helper lives in ~/Snug/helpers and brings its own copy of Node, so nothing needs to be installed system-wide. It uses about 140 MB on disk once unpacked.",
-        "Installing the helper is always your click; Snug never downloads it on its own."
-      ]
-    }
-  ]
-}
-```
 
 ### 2026-08-26 ~20:42Z — Claude (owner's explicit ask, journaled above) — RELEASE
 - **Published** `helper-whatsapp-sidecar-v0.1.0` on `snugprotocol/snug` as a **pre-release, `--latest=false`**, via the exact `gh release create` line `release-helper.mjs` prints. Assets: `whatsapp-sidecar-darwin-{aarch64,x86_64}.tar.gz` + `.sig`, `helper.json`.
@@ -161,3 +136,26 @@ Order is tests-first per TDD.md; each phase is a commit group. Phase A is indepe
 - State: **in-review**; CI run 33013390501 on HEAD `37bc0de` **GREEN** (`workspace` ✓, `desktop-shell (macos-latest)` ✓) — #151 is mergeable, awaiting the owner.
 - Next step (single): owner merges #151 once `workspace` + `desktop-shell (macos-latest)` are green; then move this file to `docs/tasks/done/` and cut the v0.1.2 shell release (its notes entry is parked above; `release-desktop.mjs` will verify the published helper pin).
 - Open questions: none for the owner beyond the AC14/Intel walks in next-steps.
+
+### 2026-08-26 — Claude — v0.1.2 release: PREPARED, blocked on owner credentials
+- Done: PR #151 **squash-merged** to main (`f1f2d58`), branch deleted. Branch `release/v0.1.2` created off main with the parked release-notes entry LANDED in `desktop-releases.json` (newest = v0.1.2).
+- Dry run (`node scripts/release-desktop.mjs 0.1.2 --dry`, with `TAURI_SIGNING_PRIVATE_KEY_PATH=~/.tauri/snug-updater.key`) passes: notes present ✔, EULA shape ✔, **every pinned helper release is published ✔** (ADR-0060's new gate, verified against the live `helper-whatsapp-sidecar-v0.1.0`), three version declarations bump cleanly, updater key read from its path. Version files were reverted after each dry run — the real run bumps them itself.
+- **BLOCKED (owner only):** `APPLE_SIGNING_IDENTITY` + `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` are not in the environment, and ADR-0047's 2026-08-24 amendment is explicit that Tauri's bundler reads only those env trios — a keychain profile is refused. Without them the build is UNSIGNED, which would regress v0.1.0/v0.1.1 (both Developer ID-signed + notarized) and break Gatekeeper for updating users. Not shipped for that reason.
+- Next step (owner, one command from `release/v0.1.2`, leading space for histignorespace):
+  `  APPLE_SIGNING_IDENTITY="Developer ID Application: Jitendra Maker (2KC5X47563)" APPLE_ID=… APPLE_PASSWORD=… APPLE_TEAM_ID=2KC5X47563 TAURI_SIGNING_PRIVATE_KEY_PATH=~/.tauri/snug-updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" node scripts/release-desktop.mjs 0.1.2`
+  then commit the version bumps, merge `release/v0.1.2`, and run the printed `gh release create v0.1.2 …` (explicit-ask + journal per PROCESS.md). The identity above is already in the keychain (verified); the notary password comes from 1Password.
+
+### 2026-08-26 — Claude — v0.1.2: bumps committed; MY ERROR destroyed the signed build
+- Done: PR #151 merged (`f1f2d58`). On `release/v0.1.2`: notes entry landed, **version bumps committed (`d622801`)** across package.json / tauri.conf.json / Cargo.toml / Cargo.lock, desktop suite 188/188.
+- **Incident (mine, no user impact):** the owner built a signed+notarized v0.1.2 DMG (16:27, `stapler validate` ✔, `spctl` = `source=Notarized Developer ID`, universal x86_64+arm64) but the run stopped before staging — `release-out/` still held v0.1.1. I re-ran `release-desktop.mjs 0.1.2` to finish staging **without the Apple trio**; it rebuilt from source, took the unsigned branch, and replaced the notarized artifacts with adhoc ones (`Signature=adhoc`, `does not have a ticket stapled`). Nothing was published. Cost: one rebuild + notarization round trip.
+- Guard added in the same commit: `refuseUnsignedRebuildOverSignedBuild` — an uncredentialed run now REFUSES when the existing DMG is notarized, with a test (`release-desktop.test.mjs`, 18/18). Lesson recorded in `docs/lessons.md`.
+- **NOT done, deliberately:** `gh release create v0.1.2` — the staged artifacts are the unsigned ones. Publishing them would ship a Gatekeeper-blocked DMG and regress v0.1.0/v0.1.1.
+- Next step (owner, one command from `release/v0.1.2`; the guard makes the uncredentialed path refuse rather than destroy): `APPLE_SIGNING_IDENTITY="Developer ID Application: Jitendra Maker (2KC5X47563)" APPLE_ID=… APPLE_PASSWORD=… APPLE_TEAM_ID=2KC5X47563 TAURI_SIGNING_PRIVATE_KEY_PATH=~/.tauri/snug-updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" node scripts/release-desktop.mjs 0.1.2` — then I create the release, close the session, and merge the branch.
+
+### 2026-08-27T00:17Z — Claude + owner — v0.1.2 RELEASED (explicit ask: "yes published")
+- **Published** `v0.1.2` on `snugprotocol/snug` (Latest, not a draft/pre-release) with all five assets: `Snug.dmg`, `Snug.app.tar.gz`(+`.sig`), `latest.json`, `desktop-releases.json`. Owner ran `node scripts/release-desktop.mjs 0.1.2 --publish`.
+- Verification performed (by me, after the fact): `gh release view` — tag/flags/assets as above; `releases/latest/download/latest.json` → **0.1.2**, both darwin keys, 400-byte signature; **the published DMG re-downloaded and checked as a user receives it** — `stapler validate` ✔, `spctl` → `source=Notarized Developer ID`, `origin=Developer ID Application: Jitendra Maker (2KC5X47563)`; `gh release list` confirms `helper-whatsapp-sidecar-v0.1.0` is still a **Pre-release** beneath it (ADR-0060's `releases/latest` invariant holds in production).
+- **Three release-script defects found and fixed on the way (each cost the owner a build):** (1) `checkStapleOutput` accepted only `stapler staple`'s wording, so a correctly stapled DMG was refused by its own check; (2) the updater re-sign passed `-f` while the key CONTENTS were in the env — `tauri signer sign` refuses both; (3) removing the flag left both env spellings set — the same refusal one layer down. Fix (3) was proven by signing the real `Snug.app.tar.gz` before handing it back. All three pinned by tests (`check-release-desktop` 21/21), plus `refuseUnsignedRebuildOverSignedBuild` from my earlier incident.
+- **Script is now one command** (`--publish`, `--no-prompt`; identity/team/apple-id/key resolve themselves, password prompted hidden and never stored) — the owner's ask, and it removes the five-variable export that produced two of these failures.
+- State: released and verified. `release/v0.1.2` ready to merge.
+- Next step: merge `release/v0.1.2`; then the **v0.1.1→v0.1.2 update walk** (owner, real hardware — the one thing no test covers), the AC14 helper walk and an Intel walk (next-steps).
