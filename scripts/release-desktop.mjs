@@ -771,13 +771,16 @@ async function main() {
       stdio: 'inherit',
     });
     // Re-sign it with the updater key: the .sig tauri produced belonged to the old bytes.
-    // KEY BY ENV, NOT BY FLAG. `TAURI_SIGNING_PRIVATE_KEY` (contents) is materialised
-    // above because `tauri build` reads only that spelling — and `tauri signer sign`
-    // then REFUSES `--private-key-path` alongside it ("cannot be used with
-    // '--private-key'", 2026-08-26). Both the key and the password therefore ride in the
-    // environment, which is also the only place a password belongs: a `-p` flag puts it
-    // in `ps` output and shell history.
+    // KEY BY ENV, EXACTLY ONE SPELLING. `tauri signer sign` maps `-k` to
+    // TAURI_SIGNING_PRIVATE_KEY and `-f` to TAURI_SIGNING_PRIVATE_KEY_PATH (`--help`), and
+    // refuses the pair however it arrives — as flags OR as two env vars. This script
+    // materialises the CONTENTS form above because `tauri build` reads only that one, so
+    // the PATH form must be dropped for this child. Twice on 2026-08-26: first as a `-f`
+    // flag beside the env contents, then as both env vars at once.
+    const signerEnv = { ...process.env };
+    delete signerEnv.TAURI_SIGNING_PRIVATE_KEY_PATH;
     execSync(`pnpm --filter desktop exec tauri signer sign "${staleTar}"`, {
+      env: signerEnv,
       cwd: ROOT,
       stdio: 'inherit',
     });

@@ -383,3 +383,17 @@ test('resolveSigningCredentials derives identity/team/apple-id and PROMPTS only 
   await resolveSigningCredentials(ci, { interactive: false, exec, prompt: async () => { throw new Error('must not prompt'); } });
   assert.equal(ci.APPLE_PASSWORD, undefined);
 });
+
+test('the updater re-sign passes EXACTLY ONE key spelling to `tauri signer sign`', () => {
+  // `tauri signer sign` maps -k → TAURI_SIGNING_PRIVATE_KEY and -f →
+  // TAURI_SIGNING_PRIVATE_KEY_PATH, and refuses the pair however it arrives. This script
+  // materialises the CONTENTS form for `tauri build`, so the child that re-signs the
+  // stapled tarball must have the PATH form removed. Both spellings reaching it broke a
+  // real release twice on 2026-08-26 — first as a stray `-f` flag, then as two env vars.
+  const src = readFileSync(new URL('./release-desktop.mjs', import.meta.url), 'utf8');
+  const block = src.slice(src.indexOf('KEY BY ENV, EXACTLY ONE SPELLING'), src.indexOf('updater tarball rebuilt'));
+  assert.match(block, /delete signerEnv\.TAURI_SIGNING_PRIVATE_KEY_PATH/, 'the PATH spelling must be dropped for the signer child');
+  assert.match(block, /env: signerEnv/, 'the signer child must run with the pruned env');
+  assert.ok(!/signer sign\s+-[kf]\s/.test(block), 'the key must ride in the env, never as a flag');
+  assert.ok(!/-p\s+"/.test(block), 'the password must ride in the env, never on argv');
+});
