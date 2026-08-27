@@ -5,6 +5,12 @@
 //
 //   node scripts/release-desktop.mjs <semver>          # e.g. 0.1.0
 //   node scripts/release-desktop.mjs <semver> --dry    # everything except gate+build
+//   node scripts/release-desktop.mjs <semver> --publish # ...and create the GitHub Release
+//   node scripts/release-desktop.mjs <semver> --no-prompt  # never prompt; env must be complete
+//
+// Credentials resolve themselves where the machine can answer (updater key path, Apple
+// identity + team id from the keychain, Apple ID from git config); the app-specific
+// password is PROMPTED, hidden, and never stored.
 //
 // Steps, in order — each refusal is loud and names its fix:
 //   1. refuse unless <semver> has a matching NEWEST entry in
@@ -418,6 +424,106 @@ export function refuseUnsignedRebuildOverSignedBuild({ appleSigned, existingDmg,
   return { ok: true };
 }
 
+/**
+ * The signing identity this machine actually holds, from the keychain.
+ *
+ * `security find-identity` output looks like:
+ *   1) E9B4…BB2 "Developer ID Application: Jitendra Maker (2KC5X47563)"
+ * Returns `{ identity, teamId }` — the team id is the parenthesised suffix, which is
+ * exactly what APPLE_TEAM_ID wants, so neither has to be typed or remembered.
+ */
+export function parseSigningIdentity(securityOutput) {
+  const lines = String(securityOutput ?? '')
+    .split('\n')
+    .map((l) => l.match(/"(Developer ID Application: [^"]+)"/))
+    .filter(Boolean)
+    .map((m) => m[1]);
+  if (lines.length === 0) return { ok: false, reason: 'no "Developer ID Application" identity in the keychain' };
+  if (lines.length > 1) {
+    return { ok: false, reason: `the keychain holds ${lines.length} Developer ID identities; set APPLE_SIGNING_IDENTITY explicitly: ${lines.join(' | ')}` };
+  }
+  const identity = lines[0];
+  const teamId = (identity.match(/\(([A-Z0-9]{10})\)\s*$/) ?? [])[1];
+  return teamId === undefined ? { ok: false, reason: `could not read a team id out of ${JSON.stringify(identity)}` } : { ok: true, identity, teamId };
+}
+
+/** Read a secret from the TTY without echoing it, and without it reaching argv or history. */
+async function promptSecret(question) {
+  const { createInterface } = await import('node:readline');
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  return new Promise((resolve) => {
+    const onData = (char) => {
+      // Re-render the prompt with no echo while the user types.
+      if (['\n', '\r', '\u0004'].includes(String(char))) return;
+      process.stdout.clearLine?.(0);
+      process.stdout.cursorTo?.(0);
+      process.stdout.write(question);
+    };
+    process.stdin.on('data', onData);
+    rl.question(question, (answer) => {
+      process.stdin.off('data', onData);
+      rl.close();
+      process.stdout.write('\n');
+      resolve(answer.trim());
+    });
+  });
+}
+
+/**
+ * Fill the release environment in place: the updater key path (custody is fixed by
+ * ADR-0047 §4), the Apple identity + team id from the keychain, the Apple ID from git
+ * config or the environment, and the app-specific password by PROMPT.
+ *
+ * Nothing is written to disk and nothing reaches argv — the password is read from the TTY
+ * and stays in this process's environment for the child builds.
+ */
+export async function resolveSigningCredentials(env, { interactive, exec = execSync, prompt = promptSecret } = {}) {
+  const notes = [];
+  const DEFAULT_KEY = path.join(process.env.HOME ?? '~', '.tauri', 'snug-updater.key');
+  if (!env.TAURI_SIGNING_PRIVATE_KEY && !env.TAURI_SIGNING_PRIVATE_KEY_PATH && existsSync(DEFAULT_KEY)) {
+    env.TAURI_SIGNING_PRIVATE_KEY_PATH = DEFAULT_KEY;
+    notes.push(`· updater key ← ${DEFAULT_KEY} (ADR-0047 §4 custody)`);
+  }
+  if (!env.APPLE_SIGNING_IDENTITY || !env.APPLE_TEAM_ID) {
+    let found;
+    try {
+      found = parseSigningIdentity(exec('security find-identity -v -p codesigning', { encoding: 'utf8' }));
+    } catch (err) {
+      found = { ok: false, reason: `could not read the keychain: ${err}` };
+    }
+    if (found.ok) {
+      if (!env.APPLE_SIGNING_IDENTITY) {
+        env.APPLE_SIGNING_IDENTITY = found.identity;
+        notes.push(`· APPLE_SIGNING_IDENTITY ← keychain (${found.identity})`);
+      }
+      if (!env.APPLE_TEAM_ID) {
+        env.APPLE_TEAM_ID = found.teamId;
+        notes.push(`· APPLE_TEAM_ID ← ${found.teamId} (from the identity)`);
+      }
+    } else {
+      notes.push(`· ${found.reason}`);
+    }
+  }
+  if (!env.APPLE_ID) {
+    try {
+      const email = exec('git config --get user.email', { encoding: 'utf8' }).trim();
+      if (email !== '') {
+        env.APPLE_ID = email;
+        notes.push(`· APPLE_ID ← git config user.email (${email})`);
+      }
+    } catch {
+      /* no git identity; the refusal below names it */
+    }
+  }
+  if (!env.APPLE_PASSWORD && env.APPLE_SIGNING_IDENTITY && interactive) {
+    // The ONE secret a machine cannot derive. Prompted, never echoed, never stored.
+    env.APPLE_PASSWORD = await prompt(`app-specific password for ${env.APPLE_ID ?? 'your Apple ID'} (from 1Password; input hidden): `);
+    notes.push('· APPLE_PASSWORD ← prompt (not stored)');
+  }
+  for (const note of notes) console.log(note);
+  return env;
+}
+
 /** The gh command PRINTED for the owner — never executed here (PROCESS.md release rules). */
 export function ghReleaseCommand(version) {
   const files = STABLE_ASSETS.map((name) => `release-out/${name}`).join(' ');
@@ -474,6 +580,15 @@ async function main() {
   writeFileSync(confPath, bumpedJsonConfig(readFileSync(confPath, 'utf8'), version));
   writeFileSync(cargoPath, bumpedCargoToml(readFileSync(cargoPath, 'utf8'), version));
   console.log(`✔ version ${version} written to package.json, tauri.conf.json, Cargo.toml`);
+
+  // Fill in what the machine can answer for, and PROMPT for the one secret that lives in
+  // a vault. Before this the caller had to export five variables by hand, and every
+  // mistake surfaced only after the slowest step (2026-08-26: a wrong flag combination
+  // after a full notarization round trip). `--no-prompt` keeps the old fully-explicit
+  // behaviour for a non-interactive caller.
+  if (!flags.includes('--no-prompt')) {
+    await resolveSigningCredentials(process.env, { interactive: process.stdin.isTTY === true });
+  }
 
   if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !process.env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
     console.error(
@@ -656,7 +771,13 @@ async function main() {
       stdio: 'inherit',
     });
     // Re-sign it with the updater key: the .sig tauri produced belonged to the old bytes.
-    execSync(`pnpm --filter desktop exec tauri signer sign -f "${process.env.TAURI_SIGNING_PRIVATE_KEY_PATH}" -p "${process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? ''}" "${staleTar}"`, {
+    // KEY BY ENV, NOT BY FLAG. `TAURI_SIGNING_PRIVATE_KEY` (contents) is materialised
+    // above because `tauri build` reads only that spelling — and `tauri signer sign`
+    // then REFUSES `--private-key-path` alongside it ("cannot be used with
+    // '--private-key'", 2026-08-26). Both the key and the password therefore ride in the
+    // environment, which is also the only place a password belongs: a `-p` flag puts it
+    // in `ps` output and shell history.
+    execSync(`pnpm --filter desktop exec tauri signer sign "${staleTar}"`, {
       cwd: ROOT,
       stdio: 'inherit',
     });
@@ -696,7 +817,22 @@ async function main() {
   writeFileSync(path.join(OUT_DIR, 'latest.json'), `${JSON.stringify(latest, null, 2)}\n`);
   console.log(`✔ staged ${OUT_DIR} (${STABLE_ASSETS.join(', ')})${appleSigned ? '' : ' — UNSIGNED build'}`);
 
-  console.log('\nThis script never publishes. When (and only when) the owner asks, run:');
+  if (!appleSigned) {
+    console.log('\nUNSIGNED build — not publishable. Nothing was released.');
+    return;
+  }
+
+  // PUBLISH is opt-in and explicit (PROCESS.md release rules: a GitHub Release needs an
+  // explicit human ask in the session). `--publish` IS that ask, given on the command
+  // line by the person running it; without the flag the command is printed, as before.
+  if (flags.includes('--publish')) {
+    console.log(`\npublishing v${version}…`);
+    execSync(ghReleaseCommand(version), { cwd: DESKTOP, stdio: 'inherit' });
+    console.log(`✔ released v${version} — record it in the task journal (PROCESS.md release rules).`);
+    return;
+  }
+
+  console.log('\nStaged but NOT published. To publish (an explicit ask), re-run with --publish, or:');
   console.log(`  cd apps/desktop && ${ghReleaseCommand(version)}`);
   console.log('…and record the publish in the task journal (PROCESS.md release rules).');
 }

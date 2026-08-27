@@ -30,6 +30,8 @@ import {
   pinnedHelperTags,
   pinnedHelperIsPublished,
   refuseUnsignedRebuildOverSignedBuild,
+  parseSigningIdentity,
+  resolveSigningCredentials,
 } from './release-desktop.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -331,4 +333,53 @@ test('an unsigned re-run REFUSES to rebuild over an existing signed+notarized bu
   assert.equal(refuseUnsignedRebuildOverSignedBuild({ appleSigned: false, existingDmg: undefined }).ok, true);
   // an existing UNSIGNED build may be rebuilt unsigned
   assert.equal(refuseUnsignedRebuildOverSignedBuild({ appleSigned: false, existingDmg: '/b/Snug.dmg', spctlOutput: 'Snug.dmg: rejected\nsource=no usable signature\n' }).ok, true);
+});
+
+test('parseSigningIdentity reads the identity AND the team id out of the keychain', () => {
+  const out = [
+    '  1) E9B44A1E40E2C31AB449619BA90CDC9E21131BB2 "Developer ID Application: Jitendra Maker (2KC5X47563)"',
+    '     1 valid identities found',
+  ].join('\n');
+  assert.deepEqual(parseSigningIdentity(out), {
+    ok: true,
+    identity: 'Developer ID Application: Jitendra Maker (2KC5X47563)',
+    teamId: '2KC5X47563',
+  });
+  assert.equal(parseSigningIdentity('0 valid identities found').ok, false);
+  // AMBIGUITY IS REFUSED, never guessed: signing with the wrong identity is a release-day
+  // failure that only shows up at notarization.
+  const two = parseSigningIdentity(
+    '  1) AAA "Developer ID Application: One (1111111111)"\n  2) BBB "Developer ID Application: Two (2222222222)"',
+  );
+  assert.equal(two.ok, false);
+  assert.match(two.reason, /2 Developer ID identities/);
+});
+
+test('resolveSigningCredentials derives identity/team/apple-id and PROMPTS only for the password', async () => {
+  const exec = (cmd) => {
+    if (cmd.startsWith('security find-identity')) return '  1) X "Developer ID Application: Jitendra Maker (2KC5X47563)"\n';
+    if (cmd.startsWith('git config')) return 'jeetumaker@gmail.com\n';
+    throw new Error(`unexpected command: ${cmd}`);
+  };
+  let prompted = 0;
+  const env = {};
+  await resolveSigningCredentials(env, { interactive: true, exec, prompt: async () => { prompted += 1; return 'abcd-efgh-ijkl-mnop'; } });
+  assert.equal(env.APPLE_SIGNING_IDENTITY, 'Developer ID Application: Jitendra Maker (2KC5X47563)');
+  assert.equal(env.APPLE_TEAM_ID, '2KC5X47563');
+  assert.equal(env.APPLE_ID, 'jeetumaker@gmail.com');
+  assert.equal(env.APPLE_PASSWORD, 'abcd-efgh-ijkl-mnop');
+  assert.equal(prompted, 1);
+
+  // Already-exported values WIN and no prompt happens for them.
+  let prompted2 = 0;
+  const preset = { APPLE_SIGNING_IDENTITY: 'Developer ID Application: Someone Else (9999999999)', APPLE_TEAM_ID: '9999999999', APPLE_ID: 'a@b.c', APPLE_PASSWORD: 'already-set' };
+  await resolveSigningCredentials(preset, { interactive: true, exec, prompt: async () => { prompted2 += 1; return 'x'; } });
+  assert.equal(preset.APPLE_SIGNING_IDENTITY, 'Developer ID Application: Someone Else (9999999999)');
+  assert.equal(prompted2, 0);
+
+  // NON-INTERACTIVE never prompts — a CI-shaped caller gets a refusal downstream instead
+  // of a process blocked forever on a TTY read.
+  const ci = {};
+  await resolveSigningCredentials(ci, { interactive: false, exec, prompt: async () => { throw new Error('must not prompt'); } });
+  assert.equal(ci.APPLE_PASSWORD, undefined);
 });
