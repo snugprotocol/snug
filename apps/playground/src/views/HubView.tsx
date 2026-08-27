@@ -238,15 +238,18 @@ function HubHome(): ReactElement {
     <div>
       <div className="hub-hero">
         <h1>
-          talk. build. <span style={{ color: 'var(--ember)' }}>run.</span>
+          build something that <span style={{ color: 'var(--ember)' }}>belongs to you.</span>
         </h1>
-        <p>describe a tiny app and the agent writes it — then run it in a sandbox you can watch think.</p>
+        <p>
+          describe a small app and the agent writes it. run it against the host&rsquo;s intelligence,
+          keep its state, and export the whole thing as a <code>.snug</code> file.
+        </p>
       </div>
 
       <div className="create-bar">
         <input
           value={idea}
-          placeholder="build something… a chess coach, a habit tracker, a quiz host"
+          placeholder="describe an app you wish existed… a chess coach, a habit tracker, a quiz host"
           aria-label="describe the app to build"
           onChange={(event) => setIdea(event.target.value)}
           onKeyDown={onIdeaKeyDown}
@@ -286,7 +289,7 @@ function HubHome(): ReactElement {
         <EmptyState
           glyph="✦"
           title="nothing here yet"
-          lesson="type an idea above — your first app takes about a minute."
+          lesson="type an idea above — your first app takes about a minute. build it here, take it with you."
         />
       ) : (
         <div className="tile-grid">

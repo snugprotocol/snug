@@ -22,6 +22,7 @@
       <span class="fig-num">Fig 1</span>
       <h2>Codegen hands you an orphan. Snug keeps the wire live.</h2>
     </div>
+    <p class="fig-takeaway">The app can improve when the model improves — without rebuilding the app.</p>
     <p class="fig-lede">
       The difference is not code quality — it is whether the intelligence is present at runtime. A
       generated chess app must ship a chess engine. A Snug chess app sends the board over the bridge
@@ -107,6 +108,7 @@
       <span class="fig-num">Fig 2</span>
       <h2>The runtime is a socket. Anyone can be the brain.</h2>
     </div>
+    <p class="fig-takeaway">The model becomes a choice, not an application dependency.</p>
     <p class="fig-lede">
       The bridge speaks one versioned wire protocol — thirteen frames, seven message kinds, v1.
       Whoever supplies the intelligence sits behind an adapter. That is the whole switching cost: an
@@ -202,10 +204,12 @@
       <span class="fig-num">Fig 3</span>
       <h2>No backend — yet it talks to your bank.</h2>
     </div>
+    <p class="fig-takeaway">Connected doesn't have to mean credential-exposed.</p>
     <p class="fig-lede">
       There is no Snug server in this picture, and that is the point. The app itself has <em
-      >no network at all</em>. Every outside call is made by the host on the app's behalf, with the
-      credential injected after the app is out of the loop.
+      >no network at all</em>. The host performs approved external requests on the app's behalf,
+      injecting the credential after the app is out of the loop — so credentials stay outside
+      generated app code and never reach the model.
     </p>
 
     <div class="fig-box">
@@ -297,6 +301,7 @@
       <span class="fig-num">Fig 4</span>
       <h2>One use case, both worlds: where does your money data live?</h2>
     </div>
+    <p class="fig-takeaway fig-takeaway-major">The difference isn't access. It's accumulation.</p>
     <p class="fig-lede">
       A budget app is the honest test, because the data is the most sensitive a consumer has. Both rows
       below use a bridge to reach the bank — that part is unavoidable. The difference is what each
@@ -419,6 +424,10 @@
       bank. SimpleFIN is an aggregator too. The claim is not “no intermediary” — it is <b
       >no intermediary that accumulates</b>.
     </figcaption>
+    <p class="fig-coda">
+      Your budget app can know your financial life without another SaaS company permanently
+      storing it.
+    </p>
   </figure>
 
   {/* ============ FIG 5 ============ */}
@@ -427,6 +436,7 @@
       <span class="fig-num">Fig 5</span>
       <h2>Private mode: the whole system, on one machine.</h2>
     </div>
+    <p class="fig-takeaway fig-takeaway-major">Same app. Same protocol. Nothing leaves the machine.</p>
     <p class="fig-lede">
       Same protocol, same apps, same file — with the model moved onto the machine. Nothing in the
       architecture changes, because the provider was always just an adapter.
@@ -501,6 +511,14 @@
       same data, different brain. Desktop is macOS-only through 1.0 for a stated security reason; see
       the limits below.
     </figcaption>
+    <p class="fig-coda">
+      Cloud when you want it. Local when you need it. Your app either way.
+      <span class="fig-coda-note">
+        “Nothing leaves the machine” describes <em>this</em> configuration — local model, local
+        host, local file. Point the same app at a hosted provider and that provider sees what is
+        sent to it for inference, under its own terms.
+      </span>
+    </p>
   </figure>
 
   {/* ============ FIG 6 ============ */}
@@ -509,9 +527,11 @@
       <span class="fig-num">Fig 6</span>
       <h2>What the user actually carries.</h2>
     </div>
+    <p class="fig-takeaway fig-takeaway-major">Ownership means you can leave.</p>
     <p class="fig-lede">
-      Most platforms keep your apps as rows in their database. Snug's unit of ownership is a file — and
-      that single decision is what makes portability across devices <em>and</em> vendors possible at all.
+      Most hosted platforms represent an application and its state as records inside the provider's
+      infrastructure. Snug's unit of ownership is a file — and that single decision is what makes
+      portability across devices <em>and</em> vendors possible at all.
     </p>
 
     <div class="fig-box">
@@ -570,8 +590,14 @@
     <figcaption>
       <b>The inversion:</b> most platforms retain you because leaving costs you your data. Here leaving
       costs you nothing — the file is already on your disk, in a format that predates the project and
-      will outlive it. Retention has to come from the protocol being good.
+      will outlive it. Retention has to come from the protocol being good. Portability is not
+      magic: another host has to implement the protocol to open the file, which is exactly why the
+      spec is normative, published and conformance-checked.
     </figcaption>
+    <p class="fig-coda">
+      Leaving a host shouldn't mean leaving your application behind. The thing you take with you
+      is the app itself.
+    </p>
   </figure>
 </div>
 
@@ -611,11 +637,59 @@
     text-wrap: balance;
   }
 
+  /* The takeaway sits between the figure's title and its lede: one sentence naming the
+     consequence, so a reader who only scans the headings still leaves with the argument.
+     Set in the display face at body-copy weight — emphasis by type, not by a box. */
+  .fig-takeaway {
+    max-width: 60ch;
+    margin: 0 0 var(--space-4);
+    font-family: var(--font-display);
+    font-size: clamp(1.05rem, 1.9vw, 1.3rem);
+    line-height: 1.35;
+    color: var(--fg);
+    text-wrap: balance;
+  }
+
+  /* Fig 4 (accumulation) and Fig 6 (exitability) carry the ownership consequence of the
+     whole architecture, and Fig 5 the privacy one — they get the larger setting and the
+     ember rule so the page has three peaks instead of six equal beats. */
+  .fig-takeaway-major {
+    font-size: clamp(1.3rem, 2.8vw, 1.9rem);
+    line-height: 1.2;
+    padding-left: var(--space-4);
+    border-left: 3px solid var(--ember);
+  }
+
   .fig-lede {
     max-width: 68ch;
     margin: 0 0 var(--space-5);
     color: var(--fg-muted);
     line-height: 1.6;
+  }
+
+  /* The coda closes a figure after its caption: the consumer-facing sentence, plus (Fig 5)
+     the caveat that scopes it. Kept adjacent to the claim it qualifies — a caveat a scroll
+     away from its claim is not a caveat. */
+  .fig-coda {
+    max-width: 78ch;
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border);
+    font-family: var(--font-display);
+    font-size: var(--text-l);
+    line-height: 1.4;
+    color: var(--fg);
+    text-wrap: balance;
+  }
+
+  .fig-coda-note {
+    display: block;
+    margin-top: var(--space-3);
+    font-family: var(--font-ui);
+    font-size: var(--text-s);
+    line-height: 1.6;
+    color: var(--fg-muted);
+    text-wrap: initial;
   }
 
   .fig-box {

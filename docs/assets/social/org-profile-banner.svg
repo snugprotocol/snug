@@ -19,8 +19,8 @@
   </g>
   <text x="186" y="132" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="58" fill="#f3ece1">snug.</text>
 
-  <text x="96" y="248" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="44" fill="#b3a48f">MCP connects agents to tools.</text>
-  <text x="96" y="304" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="44" fill="#f3ece1">Snug connects agents to <tspan fill="#f4a259">apps</tspan>.</text>
+  <text x="96" y="252" font-family="Iowan Old Style, Georgia, 'Times New Roman', serif" font-size="52" fill="#f3ece1">Your software shouldn&#8217;t need a <tspan fill="#f4a259" font-style="italic">landlord</tspan>.</text>
+  <text x="96" y="306" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="27" fill="#b3a48f">Your app. Your data. Your choice of intelligence.</text>
 
   <rect x="96" y="342" width="44" height="3" fill="#e8873a"/>
   <text x="96" y="398" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="22" fill="#e8873a" letter-spacing="2.2">SNUGPROTOCOL/SNUG</text>

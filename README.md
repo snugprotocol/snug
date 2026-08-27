@@ -4,12 +4,13 @@
 
 <h1 align="center">Snug — the Snug Protocol</h1>
 
-<p align="center"><strong>MCP connects agents to tools. Snug connects agents to apps.</strong></p>
+<p align="center"><strong>An open protocol for portable, agent-backed personal software.</strong></p>
 
 <p align="center">
-  Describe a tiny app in chat and the agent writes it. It runs in a hard sandbox,<br />
-  <em>thinks through the host agent at runtime</em>, and lives — code, data, versions, chats —<br />
-  in <strong>one portable file you own</strong>.
+  Describe a small app in chat and the agent writes it. It runs in a hard sandbox and
+  <em>thinks through the host's agent at runtime</em>,<br />
+  while the app and its accumulated state — code, data, versions, chats — live in
+  <strong>one portable <code>.snug</code> file the user keeps</strong>.
 </p>
 
 <p align="center">

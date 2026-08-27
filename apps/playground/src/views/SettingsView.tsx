@@ -860,9 +860,10 @@ function DataCard(): ReactElement {
           </label>
         </div>
         <span className="hint">
-          the export is the whole file — take it to another hub, a personal origin, or a local runner. secrets stay
-          out unless you opt in; with &quot;include secrets&quot; checked, the exported file then carries every saved
-          key and token. imported files ask you to re-confirm model endpoints before running.
+          the export is the whole file — every app you built, its versions, its data and its chats. this file is the
+          app: take it to another hub, a personal origin, or a local runner. secrets stay out unless you opt in; with
+          &quot;include secrets&quot; checked, the exported file then carries every saved key and token. imported
+          files ask you to re-confirm model endpoints before running.
         </span>
       </div>
     </Card>

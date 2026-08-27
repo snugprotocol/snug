@@ -4,6 +4,35 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-08-27 — **PREPARED, NOT PUSHED** — spec 1.0 editorial correction (§1 opener) — TASK-20260827-ownership-positioning — spec commit _pending_
+
+One sentence in `SPEC.md` §1, version held at 1.0 (ADR-0050's editorial-correction path).
+The Overview opened "Snug connects agents to apps" — a one-line comparison to another
+protocol standing in for a definition. It now states the architectural definition
+directly:
+
+> Snug is an open protocol for persistent, portable, agent-backed applications. The
+> application and its state remain independent of the LLM provider (§7), while a conforming
+> host supplies runtime intelligence.
+
+The owner's preferred wording said "intelligence provider" and "compatible host"; both were
+mapped to the spec's own established terms — **LLM provider** (§7's three actors) and
+**conforming host** (§12.5, §12.9, §16 and Part VI) — per the owner's instruction to
+preserve established terminology while retaining the meaning. The sentence that followed is
+kept verbatim behind "Concretely:", so the mechanical description of the protocol is
+unchanged.
+
+**Prose only.** Zero normative requirements, constants, MUST/SHOULD/MAY sentences,
+conformance rules or protocol mechanics changed. `packages/protocol/` untouched; `schemas/`
+untouched (`git status` clean in both trees). The §1 block is byte-identical between the
+master draft (`docs/spec-drafts/SPEC-1.0.md`) and the publication (`spec/SPEC.md`); the
+website's generated spec pages were re-synced via `pnpm --filter website sync-docs` and
+`check-website-sync` is green. A dated revision note is recorded in the document's own
+"Revisions" block, matching the 2026-08-22 correction's precedent.
+
+**Awaiting the owner's explicit push ask** (PROCESS.md release rules). On push, this entry
+gets the date/UTC time and the spec commit SHA.
+
 ## 2026-08-22 — **PUSHED** — whitepaper edition-3 PDF refresh — TASK-20260822-public-spec-presentation + TASK-20260822-whitepaper-mark-niche — spec commit `dcda2c6`
 
 PDF-only, no spec text or schema bytes changed: the cover self-identifies

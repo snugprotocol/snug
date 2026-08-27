@@ -96,8 +96,10 @@ describe('the protection offer reaches the screen', () => {
     await render();
     const text = container?.textContent ?? '';
     expect(text).toMatch(/protect this file/i);
-    // ...AND the hub itself is right there underneath it.
-    expect(text).toMatch(/talk\. build\. run\./i);
+    // ...AND the hub itself is right there underneath it. The marker is the hub hero
+    // headline (TASK-20260827 replaced "talk. build. run." with the ownership line); what
+    // this pins is that the hub RENDERED, not which words it renders.
+    expect(text).toMatch(/build something that belongs to you/i);
     expect(container?.querySelector('.create-bar')).not.toBeNull();
   });
 
@@ -106,7 +108,7 @@ describe('the protection offer reaches the screen', () => {
     await render();
     expect(container?.textContent ?? '').not.toMatch(/protect this file/i);
     // The hub is unaffected either way.
-    expect(container?.textContent ?? '').toMatch(/talk\. build\. run\./i);
+    expect(container?.textContent ?? '').toMatch(/build something that belongs to you/i);
   });
 
   it('the desktop welcome still comes FIRST — it is the one real gate', async () => {

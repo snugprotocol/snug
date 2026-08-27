@@ -5,12 +5,18 @@ description: Everything you need to use Snug, build Snug apps, or implement the 
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-> **MCP connects agents to tools. Snug connects agents to apps.**
+> **An open protocol for portable, agent-backed personal software.**
 
-Snug is an open protocol for **tiny, user-built apps that think through their host's AI agent
-at runtime**. A Snug app is a small sandboxed app — usually one HTML file — created through
+Snug is an open protocol for **small, user-built apps that think through their host's AI agent
+at runtime**. A Snug app is a sandboxed app — usually one HTML file — created through
 conversation. At runtime it exchanges versioned JSON **envelopes** with the host agent: the
-agent is the app's mind, the app is a body. Users own everything as one portable `.snug` file.
+agent is the app's mind, the app is a body.
+
+The boundary that makes it a protocol rather than a product: **the application and its
+accumulated state belong to the user** — code, versions, data and chats in one portable
+`.snug` file — while the host supplies the intelligence. That is what lets the same app move
+between compatible hosts, change the model behind it, and run entirely on-device when paired
+with local inference.
 
 <CardGrid stagger>
   <Card title="Try it" icon="rocket">

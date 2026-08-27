@@ -5,6 +5,12 @@
 // decision 2026-08-26) — the two are pinned separately in marketingNav.test.ts so neither
 // silently becomes the other.
 //
+// TASK-20260827: the page's argument now runs runtime separation → provider choice →
+// secure connectivity → data ownership → private/local mode → portability/exitability, made
+// explicit by a takeaway line under each figure head. The closer no longer defines Snug
+// through MCP: MCP is complementary infrastructure (whitepaper §11), and a protocol that
+// introduces itself by comparison makes the other thing the reference point.
+//
 // Audience: a cold, skeptical technical reader arriving from a link, not a demo audience.
 // That is why the page carries "What this doesn't do" — five residuals already public in
 // docs/threat-model.md §6. Naming them here is the deliberate credibility trade recorded
@@ -16,18 +22,19 @@ import { site } from '../config/site';
 ---
 
 <MarketingLayout
-  title="How Snug works — the Snug Protocol"
-  description="Six diagrams: the runtime agent bridge, the frozen envelope protocol, how a sandboxed app reaches your bank without ever holding a credential, and why everything lives in one portable file you own."
+  title="How Snug Works — Ownership, Portability & Runtime Intelligence"
+  description="See how Snug separates apps from their runtime intelligence, keeps application state in a portable file, protects credentials, and supports fully local operation."
 >
   <section class="section hero">
     <div class="container">
       <p class="eyebrow">how it works</p>
       <h1 class="display">The app is a body.<br />The agent is the <em>mind</em>.</h1>
+      <p class="hero-kicker">The app stays with you. The intelligence comes from the host.</p>
       <p class="lede">
         A code generator writes an app and walks away. Snug keeps a <strong>live wire</strong> between
         the running app and whatever model you point it at — and puts the whole thing, code and data
         both, in <strong>one file you own</strong>. Six diagrams, no slideware: here is the actual
-        mechanism.
+        mechanism, and what each part of it means for what you end up owning.
       </p>
 
       <div class="claims">
@@ -197,10 +204,10 @@ import { site } from '../config/site';
 
   <section class="section closer">
     <div class="container closer-inner">
-      <h2 class="display">Read it, run it, or take it apart.</h2>
+      <h2 class="display">Build the host. The user keeps the app.</h2>
       <p class="muted">
-        MCP connected agents to tools. Snug connects agents to apps — and hands the app to the user.
-        All of it is MIT.
+        Snug is an open protocol for agent-backed personal software. Implement the host, extend the
+        runtime, or take the <code>.snug</code> file somewhere else. All of it is MIT.
       </p>
       <div class="closer-ctas">
         <a class="btn btn-primary" href="/download/">Download for macOS</a>
@@ -232,6 +239,18 @@ import { site } from '../config/site';
   .hero h1 em {
     font-style: italic;
     color: var(--ember-bright);
+  }
+
+  /* The ownership sentence sits between the body/mind headline and the lede — the frame
+     the six figures are read through, without crowding the hero into a paragraph. */
+  .hero-kicker {
+    max-width: 52ch;
+    margin: 0 0 var(--space-4);
+    font-family: var(--font-display);
+    font-size: clamp(1.1rem, 2.2vw, 1.45rem);
+    line-height: 1.35;
+    color: var(--ember-bright);
+    text-wrap: balance;
   }
 
   .lede {

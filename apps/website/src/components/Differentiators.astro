@@ -1,13 +1,19 @@
 ---
 // Differentiators.astro — the three-point pitch, from docs/product-vision.md.
 // Glyphs are geometric SVG (currentColor), never emoji — lessons 2026-08-18.
+//
+// TASK-20260827: the heading was "Three things no app platform gives you" — an absolute
+// competitive claim about every platform that exists, which cannot be checked and does not
+// need to be made. The three technical concepts are unchanged (runtime relationship, one
+// portable file, credentials outside generated code); each now states what it means for
+// what the reader OWNS, which is the thing the architecture actually earns.
 ---
 
 <section class="section" aria-labelledby="diff-title">
   <div class="container">
     <div class="section-head">
-      <p class="eyebrow">why it's different</p>
-      <h2 id="diff-title">Three things no app platform gives you.</h2>
+      <p class="eyebrow">what ownership buys</p>
+      <h2 id="diff-title">What changes when the app belongs to you.</h2>
     </div>
 
     <div class="diff-grid">
@@ -17,11 +23,12 @@
           <circle cx="21" cy="14" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
           <path d="M11.5 14h5" stroke="currentColor" stroke-width="1.8"></path>
         </svg>
-        <h3>A runtime relationship, not codegen</h3>
+        <h3>The intelligence isn't trapped inside the app</h3>
         <p>
-          Each app carries a compact <strong>runtime contract</strong> — what it is, what a good
-          answer looks like — so its turns cost ~nothing and the same app runs well on a frontier
-          model or a small local one. The agent plays chess with your app every move, forever.
+          The host supplies the intelligence at runtime, so you can change models without
+          rebuilding the application around another provider. Each app carries a compact{' '}
+          <strong>runtime contract</strong> — what it is, what a good answer looks like — so its
+          turns cost ~nothing and the same app runs well on a frontier model or a small local one.
         </p>
       </article>
 
@@ -35,12 +42,12 @@
             stroke-linejoin="round"></path>
           <path d="M10 15l3 3 5-6" fill="none" stroke="currentColor" stroke-width="1.8"></path>
         </svg>
-        <h3>One file. Yours.</h3>
+        <h3>The app and its state are yours</h3>
         <p>
-          Every app you build — code, versions, its own isolated database, its chats — lives in{' '}
-          <strong>one portable <code>.snug</code> file</strong> (real SQLite, openable with ordinary
-          tools, optionally sealed with a passphrase only you hold). Any hub, any LLM provider, sync
-          where you choose. Leave whenever you like and take everything.
+          Code, versions, the app's own isolated data and its chats live in{' '}
+          <strong>one portable <code>.snug</code> file</strong> — real SQLite, openable with
+          ordinary tools, optionally sealed with a passphrase only you hold. Move it between
+          compatible hosts, sync it where you choose, and leave whenever you like with everything.
         </p>
       </article>
 
@@ -61,12 +68,12 @@
             stroke="currentColor"
             stroke-width="1.8"></path>
         </svg>
-        <h3>Secure by construction</h3>
+        <h3>Credentials stay outside generated code</h3>
         <p>
-          Apps run in a hard sandbox with <strong>zero network of their own</strong>. Your
-          credentials never enter the app, never reach the LLM, never reach a publisher — every
-          connected request goes through a host executor inside a ceiling you approved and the host
-          froze.
+          Apps run in a hard sandbox with <strong>no network of their own</strong>. Connected
+          requests pass through the host boundary, so your credentials never enter generated app
+          code, never reach the model, and never reach a publisher — every call is made by a host
+          executor inside a ceiling you approved and the host froze.
         </p>
       </article>
     </div>
