@@ -44,6 +44,9 @@ export function BuilderView(): ReactElement {
       // The bubble shows the raw idea; the KB template only travels on the wire.
       chat.send(trimmed, buildUserMessage(trimmed, prompt));
       setDraft('');
+      // Back to the natural (CSS) height: a grown multi-line box must not stay tall
+      // over an empty draft.
+      if (composerRef.current !== null) composerRef.current.style.height = '';
     },
     [chat, prompt],
   );
@@ -80,9 +83,15 @@ export function BuilderView(): ReactElement {
     }
   };
 
+  // The box's NATURAL height, captured on the first keystroke before autogrow touches
+  // it (AC11, owner follow-up): `scrollHeight` of a one-line draft can come in under the
+  // rendered single-row height, so writing it back shrank the box on the first
+  // character of every new conversation. Autogrow never goes below this floor.
+  const composerFloor = useRef<number | undefined>(undefined);
   const autogrow = (element: HTMLTextAreaElement): void => {
+    const floor = composerFloor.current ?? (composerFloor.current = element.offsetHeight);
     element.style.height = 'auto';
-    element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
+    element.style.height = `${Math.max(floor, Math.min(element.scrollHeight, 200))}px`;
   };
 
   return (

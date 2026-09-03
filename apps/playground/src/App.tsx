@@ -14,6 +14,7 @@ import { ModeCoercionNote } from './desktop/ModeCoercionNote.js';
 import { AppUpdateSurface } from './desktop/AppUpdateControls.js';
 import { HelperSurface } from './desktop/HelperSurface.js';
 import { initAppUpdateLaunchCheck } from './state/appUpdate.js';
+import { openBuildMenu } from './state/buildThread.js';
 import { refreshAppMeta } from './state/appMeta.js';
 import { initDemoCallout } from './state/demoCallout.js';
 import { login, refreshAuth, useAuth } from './state/auth.js';
@@ -174,7 +175,9 @@ export function App(): ReactElement {
           <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
             your apps
           </NavLink>
-          <NavLink to="/build" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
+          {/* The menu opens a NEW conversation unless the last one is still building
+              (TASK-20260903 AC12); a finished build stays one click away in the sidebar. */}
+          <NavLink to="/build" onClick={openBuildMenu} className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
             build
           </NavLink>
           <WebsiteLink />

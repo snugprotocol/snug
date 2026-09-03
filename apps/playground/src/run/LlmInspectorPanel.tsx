@@ -239,9 +239,16 @@ export function LlmInspectorPanel({ state, mode }: LlmInspectorPanelProps): Reac
           across identity boundaries. `entry.index` is already unique within a turn:
           the reducer resets on `onTurnStart`, so positions add nothing but the bug.
         */}
-        {state.entries.map((entry) => (
-          <RoundTrip key={entry.index} entry={entry} />
-        ))}
+        {/* NEWEST FIRST (TASK-20260903 AC13, owner call): the latest round trip is what
+            the user is waiting on, and this list sits in a scrolling box on both the
+            build page and the run rail — top-of-list is the one position that is always
+            in view without any auto-scroll. Tools stay chronological inside an entry. */}
+        {state.entries
+          .slice()
+          .reverse()
+          .map((entry) => (
+            <RoundTrip key={entry.index} entry={entry} />
+          ))}
       </ol>
     </div>
   );

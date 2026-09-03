@@ -7,6 +7,7 @@
 // "your apps" continued whatever thread the tab held, and silently became an EDIT of the
 // app that thread was pinned to.
 
+import { peekThreadSession } from '../agent/threadSessions.js';
 import { createStore, useStore } from './store.js';
 
 export const BUILD_THREAD_KEY = 'snug:thread';
@@ -51,4 +52,25 @@ export function mintBuildThread(): string {
   const minted = mintThreadId();
   setActiveBuildThread(minted);
   return minted;
+}
+
+/**
+ * The header’s "build" link (TASK-20260903 AC12, owner follow-up #2): the menu opens a
+ * NEW conversation unless the current one still has a turn in flight. A finished
+ * build is history — one click away in the sidebar — not the thing to land on again.
+ *
+ * Decided from the in-memory session only, synchronously: a busy session is kept; an
+ * empty one (the hub's fresh handoff, a first visit) is kept so nothing double-mints;
+ * a session with messages is left behind; and NO session — a thread stored by a
+ * previous page load — is by definition not in progress, so the menu starts fresh.
+ * A direct arrival on /build (deep link, tab restore, sidebar pick) never goes through
+ * here and still shows the stored thread.
+ */
+export function openBuildMenu(): void {
+  const session = peekThreadSession(activeBuildThreadStore.get());
+  if (session !== undefined) {
+    const { busy, messages } = session.store.get();
+    if (busy || messages.length === 0) return;
+  }
+  mintBuildThread();
 }

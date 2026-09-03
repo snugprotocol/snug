@@ -12,6 +12,9 @@
 //        switch — in memory — and AC14 still holds at the byte level: nothing from it
 //        reaches the user DB, localStorage or sessionStorage.
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ReactElement } from 'react';
@@ -22,7 +25,7 @@ import type { AgentTurnEvent } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
 
 import { dispatchLlmEvent, resetThreadSessions } from '../agent/threadSessions.js';
-import { activeBuildThreadStore, setActiveBuildThread } from '../state/buildThread.js';
+import { activeBuildThreadStore, openBuildMenu, setActiveBuildThread } from '../state/buildThread.js';
 import { modeStore } from '../state/mode.js';
 import { BuilderView } from '../views/BuilderView.js';
 import { HubView } from '../views/HubView.js';
@@ -283,3 +286,101 @@ describe('the audit trail is retained in memory — and only in memory (AC6/AC14
     expect(roundTrips(el), 'thread a’s round trips are still there').toBe(1);
   });
 });
+
+describe('the build menu opens a NEW conversation unless the last one is still building (AC12)', () => {
+  it('a finished conversation is left behind — the menu lands on a fresh thread and lists the old one', async () => {
+    db.upsertThread('thr-done', { title: 'a haiku machine' });
+    db.appendChatMessage('thr-done', 'user', 'a haiku machine');
+    db.appendChatMessage('thr-done', 'assistant', 'here is your haiku machine');
+    setActiveBuildThread('thr-done');
+    const { el, navigate } = mountApp('/build');
+    await settle(20);
+    expect(chatText(el), 'a direct arrival still shows the stored thread').toContain('haiku');
+    navigate('/');
+    await settle();
+    act(() => openBuildMenu());
+    navigate('/build');
+    await settle(20);
+    expect(activeBuildThreadStore.get()).not.toBe('thr-done');
+    expect(el.textContent).toContain('build something');
+    expect(chatText(el)).not.toContain('haiku');
+    const rows = [...el.querySelectorAll<HTMLElement>('[data-testid="thread-row"]')];
+    expect(rows.some((r) => r.textContent?.includes('a haiku machine'))).toBe(true);
+  });
+
+  it('a conversation with a turn in flight is resumed, not abandoned', async () => {
+    let signal: AbortSignal | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          signal = init?.signal ?? undefined;
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+    );
+    const { el, navigate } = mountApp('/build');
+    await settle();
+    typeInComposer(el, 'a haiku machine');
+    await settle();
+    const busyThread = activeBuildThreadStore.get();
+    navigate('/');
+    await settle();
+    act(() => openBuildMenu());
+    navigate('/build');
+    await settle(20);
+    expect(activeBuildThreadStore.get()).toBe(busyThread);
+    expect(chatText(el)).toContain('a haiku machine');
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it('an empty fresh thread is kept, so the hub handoff is never double-minted', async () => {
+    setActiveBuildThread('thr-fresh');
+    mountApp('/build');
+    await settle(20);
+    act(() => openBuildMenu());
+    expect(activeBuildThreadStore.get()).toBe('thr-fresh');
+  });
+
+  it('with no session in memory (a fresh page load) the stored thread is history — the menu starts new', () => {
+    setActiveBuildThread('thr-from-last-visit');
+    openBuildMenu();
+    expect(activeBuildThreadStore.get()).not.toBe('thr-from-last-visit');
+  });
+
+  it('the header\'s build link is wired to it (source pin)', () => {
+    const source = readFileSync(path.resolve(process.cwd(), 'src', 'App.tsx'), 'utf8');
+    const link = source.slice(source.indexOf('to="/build"') - 200, source.indexOf('to="/build"') + 200);
+    expect(link, 'the build NavLink must call openBuildMenu on click').toContain('onClick={openBuildMenu}');
+  });
+});
+
+describe('the composer keeps its loaded height (AC11)', () => {
+  it('typing the first character never shrinks the box below its rendered height', async () => {
+    const { el } = mountApp('/build');
+    await settle();
+    const textarea = el.querySelector('textarea')!;
+    // jsdom has no layout: model the real numbers — the box renders 58px tall (one row
+    // plus padding), and scrollHeight reports less than that once autogrow zeroes the
+    // height. Before the fix, autogrow wrote the smaller number and the box shrank.
+    Object.defineProperty(textarea, 'offsetHeight', { configurable: true, get: () => 58 });
+    Object.defineProperty(textarea, 'scrollHeight', { configurable: true, get: () => 50 });
+    setInputValue(textarea, 'b');
+    expect(textarea.style.height).toBe('58px');
+    // A taller draft still grows past the floor.
+    Object.defineProperty(textarea, 'scrollHeight', { configurable: true, get: () => 120 });
+    setInputValue(textarea, 'b\nc\nd');
+    expect(textarea.style.height).toBe('120px');
+  });
+
+  it('submitting returns the box to its natural height', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse(['event: done\ndata: {"text":"ok"}\n\n']));
+    const { el } = mountApp('/build');
+    await settle();
+    const textarea = el.querySelector('textarea')!;
+    Object.defineProperty(textarea, 'offsetHeight', { configurable: true, get: () => 58 });
+    Object.defineProperty(textarea, 'scrollHeight', { configurable: true, get: () => 120 });
+    typeInComposer(el, 'a\nb\nc');
+    await settle(10);
+    expect(textarea.style.height).toBe('');
+  });
+});
+
