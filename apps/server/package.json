@@ -20,7 +20,7 @@
     "@snugprotocol/protocol": "workspace:*",
     "@snugprotocol/runner": "workspace:*",
     "better-sqlite3": "^12.2.0",
-    "fastify": "^5.4.0",
+    "fastify": "^5.12.1",
     "openid-client": "^6.8.4",
     "zod": "^4"
   },
