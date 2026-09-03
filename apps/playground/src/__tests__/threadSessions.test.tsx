@@ -273,7 +273,8 @@ describe('swap seams reset the registry (AC8)', () => {
     const r = renderChats(['thr-a']);
     act(() => r.chat('thr-a').send('build'));
     await settle();
-    expect(peekThreadSession('thr-a')?.store.get().busy).toBe(true);
+    const wiped = peekThreadSession('thr-a');
+    expect(wiped?.store.get().busy).toBe(true);
 
     act(() => resetThreadSessions());
     expect(captureFor('thr-a').signal?.aborted, 'a swap aborts the turn').toBe(true);
@@ -281,6 +282,47 @@ describe('swap seams reset the registry (AC8)', () => {
     // The mounted hook re-resolves a FRESH session: not busy, no streaming placeholder.
     expect(r.chat('thr-a').busy).toBe(false);
     expect(r.chat('thr-a').messages.some((m) => m.streaming === true)).toBe(false);
+    // A wiped session STAYS wiped: the aborted turn's own settle wrote into the detached
+    // store (by reference), never back into the registry under the old id.
+    expect(peekThreadSession('thr-a')).not.toBe(wiped);
+    expect(wiped?.store.get().busy, 'the detached store saw the turn settle').toBe(false);
+    expect(peekThreadSession('thr-a')?.store.get().messages.some((m) => m.streaming === true)).toBe(false);
+  });
+
+  it('a turn that outlived its thread does not resurrect the thread row on install (Gate-5 review)', async () => {
+    const app = db.installApp({ displayName: 'Pocket Ledger', html: HTML });
+    let seenSignal: AbortSignal | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/invoke') {
+        seenSignal = init?.signal ?? undefined;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('event: artifact\ndata: {"artifactId":"srv-x","displayName":"X"}\n\n'));
+              // Never closes: the artifact fetch below is where the delete lands.
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        );
+      }
+      if (url === '/artifacts/srv-x') {
+        // The hub fetch resolves only AFTER the thread has been deleted.
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        return new Response(HTML, { status: 200 });
+      }
+      return new Response('', { status: 404 });
+    });
+    const r = renderChats(['thr-z']);
+    act(() => r.chat('thr-z').send('build'));
+    await settle();
+    expect(db.getThread('thr-z'), 'the user row created the thread').toBeDefined();
+    resetThreadSessions({ threadId: 'thr-z' });
+    db.deleteThread('thr-z');
+    expect(seenSignal?.aborted).toBe(true);
+    await settle(40);
+    expect(db.getThread('thr-z'), 'a deleted thread must not come back through onInstall').toBeUndefined();
+    expect(db.getApp(app.appId)).toBeDefined();
   });
 
   it('resetThreadSessions({ appId }) drops only the sessions pinned to that app', () => {

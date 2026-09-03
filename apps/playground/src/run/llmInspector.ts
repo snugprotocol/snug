@@ -150,6 +150,24 @@ function addField(a: number | undefined, b: number | undefined): number | undefi
   return a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
 }
 
+/**
+ * Merge two independently-reduced timelines for ONE panel (ADR-0062): the run view shows
+ * the thread session's builder round trips (which survive navigation) beside its own
+ * app-frame transport trips (per mount). Merged AFTER reduction, so each reducer's
+ * index-based pending matching stays private to its own source; ordered by start time.
+ * Display only — nothing here feeds back into either reducer.
+ */
+export function mergeLlmInspectorStates(a: LlmInspectorState, b: LlmInspectorState): LlmInspectorState {
+  if (b.entries.length === 0 && b.totalDurationMs === 0) return a;
+  if (a.entries.length === 0 && a.totalDurationMs === 0) return b;
+  return {
+    entries: [...a.entries, ...b.entries].sort((x, y) => x.startedAt - y.startedAt),
+    totalDurationMs: a.totalDurationMs + b.totalDurationMs,
+    totalUsage: addUsage(a.totalUsage, b.totalUsage),
+    totalBytes: a.totalBytes + b.totalBytes,
+  };
+}
+
 function addUsage(total: TokenUsage, next: TokenUsage | undefined): TokenUsage {
   if (next === undefined) return total;
   const summed = {

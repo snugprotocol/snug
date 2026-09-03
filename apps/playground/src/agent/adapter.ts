@@ -188,7 +188,24 @@ export function paced(adapter: AgentAdapter, ms: number): AgentAdapter {
   if (ms <= 0) return adapter;
   return {
     async complete(request) {
-      await new Promise<void>((resolve) => setTimeout(resolve, ms));
+      // The wait honours the turn's abort: a stopped or deleted paced demo build must
+      // not go on executing scripted tool calls for seconds after the user said stop.
+      await new Promise<void>((resolve, reject) => {
+        const signal = request.signal;
+        if (signal?.aborted === true) {
+          reject(new DOMException('aborted', 'AbortError'));
+          return;
+        }
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, ms);
+        function onAbort(): void {
+          clearTimeout(timer);
+          reject(new DOMException('aborted', 'AbortError'));
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
       return adapter.complete(request);
     },
   };

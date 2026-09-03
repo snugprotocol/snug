@@ -4,11 +4,13 @@ import { useSyncExternalStore } from 'react';
 export function useMediaQuery(query: string): boolean {
   return useSyncExternalStore(
     (notify) => {
+      // No matchMedia (jsdom, some embedded webviews): never matches, never notifies.
+      if (typeof window.matchMedia !== 'function') return () => {};
       const list = window.matchMedia(query);
       list.addEventListener('change', notify);
       return () => list.removeEventListener('change', notify);
     },
-    () => window.matchMedia(query).matches,
+    () => (typeof window.matchMedia === 'function' ? window.matchMedia(query).matches : false),
     () => false,
   );
 }

@@ -282,6 +282,10 @@ export async function exportUserFile(includeSecrets: boolean): Promise<Blob> {
 export async function importUserFile(file: { arrayBuffer(): Promise<ArrayBuffer> }): Promise<void> {
   const db = await getUserDb();
   const bytes = new Uint8Array(await file.arrayBuffer());
+  // Abort BEFORE the swap (Gate-5 review): a turn still holding `db` could otherwise
+  // land a row inside the freshly imported file during the import's own awaits.
+  // `afterForeignBytes` resets again afterwards — that call also serves the pull path.
+  resetThreadSessions();
   await db.importUserDb(bytes);
   await afterForeignBytes();
 }

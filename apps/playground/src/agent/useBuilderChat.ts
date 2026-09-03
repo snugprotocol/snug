@@ -25,7 +25,7 @@ import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
 import { resolveTurnMode, useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
-import { patchSession, stopThread, useThreadSession } from './threadSessions.js';
+import { patchSession, peekThreadSession, stopThread, useThreadSession } from './threadSessions.js';
 import { buildAppTurnContext } from './appContext.js';
 import { buildIntentTurnContext } from './intentContext.js';
 import { routeChatMessage, type ChatRoute } from './chatRouter.js';
@@ -370,6 +370,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       // the thread routed on it, so the app it produced must keep routing there.
       applyBuilderPickToApp(appId);
       void getUserDb().then((db) => {
+        // A turn that outlived its thread (deleted from the sidebar, or a DB swap) must
+        // not resurrect the thread row: the install itself is the user's work and
+        // stays, but the row it would re-create was just deleted (Gate-5 review).
+        if (peekThreadSession(threadId) !== session) return;
         db.upsertThread(threadId, { appId });
       });
     },
@@ -441,7 +445,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       const persisted = db.listChatMessages(threadId);
       patchSession(session, (current) => ({
         hydrated: true,
-        ...(row?.appId !== undefined ? { threadAppId: row.appId } : {}),
+        // The pin is mirrored from the row OR from the caller's pinned app (RunView):
+        // the app-delete seam matches sessions on it, so a run-rail turn on a thread
+        // with no row yet must still be findable when its app is deleted (Gate-5 review).
+        ...(row?.appId !== undefined ? { threadAppId: row.appId } : pinnedAppId !== undefined ? { threadAppId: pinnedAppId } : {}),
         // A turn may already have appended to this session (the hub's handed-over idea
         // sends before this read lands): the live messages win over the persisted ones.
         messages:
@@ -478,7 +485,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     return () => {
       cancelled = true;
     };
-  }, [session, threadId]);
+  }, [session, threadId, pinnedAppId]);
 
   const patchMessage = useCallback(
     (id: number, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>)): void => {
@@ -567,6 +574,11 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         // Context is built BEFORE persisting this turn's user message, so history
         // holds strictly prior turns.
         const contextTarget = pinnedAppId ?? session.store.get().threadAppId;
+        // Same mirror at send time: hydration is async, and a turn may start before it
+        // lands. Without this, deleting the app mid-turn would miss this session.
+        if (contextTarget !== undefined && session.store.get().threadAppId !== contextTarget) {
+          patchSession(session, { threadAppId: contextTarget });
+        }
         /**
          * ADR-0019 D6 — CLASSIFY FIRST, for a message beside an INSTALLED app.
          *

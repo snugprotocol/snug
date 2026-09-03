@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { isThreadBusy, resetThreadSessions, useSessionsChanged } from '../agent/threadSessions.js';
+import { useMediaQuery } from '../run/useMediaQuery.js';
 import { getUserDb } from '../state/userdb.js';
 import { Button } from '../ui/Button.js';
 
@@ -46,9 +47,12 @@ export function ThreadSidebar({ activeThreadId, onSelect, onNew }: ThreadSidebar
   const [refresh, setRefresh] = useState(0);
   const [renaming, setRenaming] = useState<string | undefined>(undefined);
   const [confirming, setConfirming] = useState<string | undefined>(undefined);
-  // Collapsed by default on a phone-width viewport; the summary is hidden by CSS above
-  // the mobile breakpoint, where the list is simply the left column.
-  const [open, setOpen] = useState(() => (globalThis.innerWidth || 1280) > 760);
+  // Collapsed by default on a phone-width viewport; above the breakpoint the summary is
+  // hidden by CSS and the list is simply the left column — so it must be OPEN there no
+  // matter what the user did on a phone, or a window widened past 760px would show a
+  // blank column with no toggle (Gate-5 review). Same breakpoint as app.css.
+  const isMobile = useMediaQuery('(max-width: 760px)');
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,7 +103,11 @@ export function ThreadSidebar({ activeThreadId, onSelect, onNew }: ThreadSidebar
 
   return (
     <aside className="thread-sidebar" aria-label="conversations">
-      <details className="thread-sidebar-details" open={open} onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}>
+      <details
+        className="thread-sidebar-details"
+        open={!isMobile || open}
+        onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}
+      >
         <summary className="thread-sidebar-summary">conversations · {rows.length}</summary>
         <div className="thread-sidebar-head">
           <span className="thread-sidebar-title">conversations</span>
