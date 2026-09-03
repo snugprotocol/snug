@@ -143,6 +143,34 @@ describe('chat threads + messages', () => {
     await db.close();
   });
 
+  /**
+   * TASK-20260903-build-thread-continuity AC5b: the build page's thread sidebar can
+   * delete a conversation. The thread row and its messages go — pinned rows included,
+   * exactly as the app cascade treats them — and NOTHING else: the app a thread is
+   * pinned to is the user's work and is never touched by a thread delete (D4).
+   */
+  it('deleteThread removes the thread and its messages, and nothing else', async () => {
+    const db = await open(backend);
+    const app = db.installApp({ displayName: 'Chess', html: '<!DOCTYPE html><html><body>chess</body></html>' });
+    db.upsertThread('thr-a', { appId: app.appId, title: 'first build' });
+    db.appendChatMessage('thr-a', 'user', 'build chess', { pinned: true });
+    db.appendChatMessage('thr-a', 'assistant', 'done', { pinned: true });
+    db.upsertThread('thr-b', { title: 'unrelated' });
+    db.appendChatMessage('thr-b', 'user', 'hello');
+
+    db.deleteThread('thr-a');
+
+    expect(db.getThread('thr-a')).toBeUndefined();
+    expect(db.listChatMessages('thr-a')).toEqual([]);
+    expect(db.listThreads().map((t) => t.threadId)).toEqual(['thr-b']);
+    expect(db.listChatMessages('thr-b')).toHaveLength(1);
+    expect(db.getApp(app.appId), 'a thread delete must never delete the app').toBeDefined();
+    // A stale id (already deleted, never existed) is a no-op: the caller is a UI click.
+    expect(() => db.deleteThread('thr-a')).not.toThrow();
+    expect(() => db.deleteThread('thr-never')).not.toThrow();
+    await db.close();
+  });
+
   it('updating meta for an unknown message id is a silent no-op, never a throw', async () => {
     // The caller is a UI click handler; a stale id (pruned thread, deleted app) must not
     // take down the surface.

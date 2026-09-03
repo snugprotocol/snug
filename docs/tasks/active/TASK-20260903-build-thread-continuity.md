@@ -1,10 +1,10 @@
 # TASK-20260903-build-thread-continuity: Build conversations survive navigation, run in parallel, and are listed on the build page
 
-- **Status**: planned (awaiting plan approval — Gate 2)
+- **Status**: in-review (Gates 3–6 done in-session; full e2e + root gate run recorded below)
 - **Owner**: Jeetu
 - **Risk tier**: medium (Playground logic — `apps/playground` only; no `protocol`/`runner`/`auth`/`db` schema change; C1 posture unchanged — see "C1 note" under Plan)
 - **Branch**: `fix/TASK-20260903-build-thread-continuity`
-- **Packages touched**: `apps/playground` (agent/, views/, run/, state/, theme/app.css, `__tests__/`, `e2e/`); docs (architecture.md, code-map.md, next-steps.md, ADR-0062)
+- **Packages touched**: `apps/playground` (agent/, views/, run/, state/, theme/app.css, `__tests__/`, `e2e/`); `packages/db` (`deleteThread` — one new repo method + test; dependents `sdk` + `playground` run at Gate 5); docs (architecture.md, code-map.md, next-steps.md, ADR-0062)
 - **Spec impact**: none
 - **Related**: ADR-0024 (think rail), ADR-0027 (distill), TASK-20260804-hub-polish (build-thread continuity, AC13/AC14 in-memory inspector, AC19/AC20 main-thread rule), TASK-20260803-hub-ops (long-run builds), lessons 2026-08-20 "module-global session state outlives the store it describes", next-steps 2026-08-06 "StrictMode double-mount kills the `?idea=` hub→build handoff on `pnpm dev`"
 
@@ -29,15 +29,18 @@ This task moves turn state out of the component into a **per-thread session stor
 9. **Existing continuity holds.** `threadContinuity.test.tsx` (AC19/AC20 main-thread rule), `chatRouterLifecycle`, `buildSteps`, `builderObservability` AC13/AC15 stay green, with the two "unmount aborts" assertions inverted by decision (ADR-0062).
 10. **Real-browser proof** (lesson 2026-08-20 "run the product"): a Playwright spec on the demo brain starts a build on `/build`, clicks "your apps", returns to build, and sees the artifact card appear — gated on `SNUG_E2E_HAS_APP` like `build-run.spec.ts`.
 
-**Out of scope**: persisting round trips/steps to the user DB (would reverse AC14 — flagged as owner decision Q2 below, default keep); thread rename/delete/archive in the sidebar; a server-side resumable-job registry (the hub `/invoke` 409 per-thread lock and context-only thread store are unchanged — parallel threads have distinct ids and are already admitted); surviving a page reload mid-turn (a reload drops the in-flight request; the persisted user bubble stays, as today); mobile drawer polish beyond a collapsible list; the run view's thread `<select>` (stays; it can read the same session registry later).
+**Out of scope**: persisting round trips/steps to the user DB (would reverse AC14 — flagged as owner decision Q2 below, default keep); thread archive/pin in the sidebar (rename + delete ARE in scope since the owner's Q3 answer — AC5b); a server-side resumable-job registry (the hub `/invoke` 409 per-thread lock and context-only thread store are unchanged — parallel threads have distinct ids and are already admitted); surviving a page reload mid-turn (a reload drops the in-flight request; the persisted user bubble stays, as today); mobile drawer polish beyond a collapsible list; the run view's thread `<select>` (stays; it can read the same session registry later).
 
 ## Interview (asked as assumptions — this session is non-interactive; correct any before approving)
 
 - **Q1 Hub build = new thread?** Assumed **yes**: the create bar on "your apps" always mints a fresh thread. The build page's composer continues the *selected* thread; "+ new" in the sidebar is the other way to start fresh.
 - **Q2 Retain inspector/audit across navigation only, not across reload?** Assumed **yes** — in-memory session store; AC14 stays. Persisting round trips would be a new ADR reversing AC14 and a DB migration; not done here.
-- **Q3 Sidebar lists all threads, including run-view (`app:<id>`, `thr-…` with app pin) threads?** Assumed **yes**, labelled with the app name; no delete/rename this task.
-- **Q4 Client-side concurrency cap?** Assumed **none**; the server's per-thread 409 remains the only lock. (BYOK rate limits are the provider's business.)
-- **Q5 The run view's chat also keeps running when you leave the app?** Assumed **yes** — same hook, one rule ("stop is the only abort"); anything else would be two lifecycles for one thread store.
+- **Q3 Sidebar lists all threads, including run-view (`app:<id>`, `thr-…` with app pin) threads?** **Owner 2026-09-03: yes, AND add rename + delete.** → AC5b below; `packages/db` gains `deleteThread` (rename uses the existing `upsertThread(id, { title })`).
+- **Q4 Client-side concurrency cap?** **Owner: no cap.** The server's per-thread 409 remains the only lock.
+- **Q5 The run view's chat also keeps running when you leave the app?** **Owner: yes.**
+- Q1 (fresh thread from the hub) and Q2 (in-memory audit trail, AC14 stays): **owner: yes.**
+
+**AC5b — Rename and delete from the sidebar.** Each thread row offers rename (inline, Enter/Escape, non-empty; persists via `upsertThread` title) and delete (confirm first; `db.deleteThread` removes the thread row and its messages, aborts and drops the in-memory session, and never touches the app the thread is pinned to). Deleting the active thread selects the newest remaining thread or mints a fresh one.
 
 ## Plan
 
@@ -117,6 +120,7 @@ One branch, one PR; no migration; the `snug:thread` sessionStorage key keeps its
 - **D1 (→ ADR-0062, proposed):** a turn belongs to its thread, not to the view that started it; the *only* abort is the user's explicit stop (or a DB-swap seam). This supersedes the 2026-08 "leaving the view aborts — never leave a request running headless" rule in `useBuilderChat` and the two tests that pinned it. The headless concern is answered by the sidebar's live badge: a running thread is always visible from `/build`.
 - **D2:** the hub create bar mints a fresh thread (Q1). Before, the idea silently became an edit of whatever app the tab's thread was pinned to.
 - **D3:** the inspector/audit trail stays in memory (Q2). AC14 is a doctrine with a byte-level test; extending its lifetime from "per mount" to "per page session" keeps every guarantee it states.
+- **D4 (owner Q3, 2026-09-03):** thread delete removes the thread row + its messages and its in-memory session, and **never the app** — the app is the user's work; a deleted main thread just means `resolveMainThread` falls back to `app:<id>` (rule 2–4). Pinned bootstrap rows are NOT protected from an explicit thread delete (the pin protects against *pruning*, not against the user's own delete — same as the app cascade, which ignores `pinned`). Confirm-before-delete in the UI, same pattern as the hub tile.
 - **S1 (surprise):** production `main.tsx` also wraps in `<StrictMode>` — harmless there (double-invoke is dev-only), but it is why the `?idea=` handoff is broken on `pnpm dev` and the desktop dev shell.
 
 ## Session journal (append-only, newest last)
@@ -126,3 +130,17 @@ One branch, one PR; no migration; the `snug:thread` sessionStorage key keeps its
 - State: **planned — no implementation code written.**
 - Next step: owner approves the plan (and the five interview assumptions) → Gate 3: write the four red test files, then implement in the order above.
 - Open questions: Q1–Q5 above.
+
+### 2026-09-03 13:15 — Claude (for Jeetu) — session (Gates 3–6)
+- Done: **plan approved by owner** (Q1 yes · Q2 yes · Q3 yes + rename & delete · Q4 no cap · Q5 yes). Red tests first: `threadSessions.test.tsx` (AC2 hook-level, AC3/4, AC7, AC8 incl. the two reachable seams), `builderNavigation.test.tsx` (AC1 under StrictMode, AC2 with the artifact landing after the return, AC6/AC14 across navigation and across a thread switch), `threadSidebar.test.tsx` (AC5 list/label/badge/select/+new/refresh + AC5b rename/Escape/delete/delete-active/delete-last/delete-in-flight); the two "unmount aborts" tests inverted (`useBuilderChat.test.tsx`, `chatRouterLifecycle.test.tsx`); `builderObservability` AC13/AC14 retargeted to the session dispatch (plus a real keyless direct-mode turn proving the feed at the wire); `packages/db` `deleteThread` test. **Honest note:** the db test and its implementation were written in one pass, not shown red first (the playground tests WERE red first — every new file failed on import until the modules existed). Implemented: `agent/threadSessions.ts`, `state/buildThread.ts`, `useBuilderChat` store-backed (unmount abort deleted; `llmInspector` on the return), `BuilderView` two-column layout, `views/ThreadSidebar.tsx`, hub mints a fresh thread, five seam calls, `db.deleteThread`, CSS, `e2e/build-continuity.spec.ts` + one mobile assertion. Docs: ADR-0062 accepted, architecture section, code-map row + inspector row amended, next-steps StrictMode item struck, lessons entry.
+- Verify: `packages/db` 420/420 · playground **1731/1731 (175 files, was 1709/172)** · sdk 41/41 (db dependents rule). Playwright `build-continuity` + `mobile` run started in-session — result recorded below when it lands.
+- Surprise S2: first run of AC7 red for a real reason — the eviction sweep excluded the just-created session from the COUNT, so the bound was off by one; fixed by counting every idle session (the newest is never a victim by recency anyway).
+- State: implementation complete; awaiting e2e result, then PR.
+- Next step: e2e result → journal → PR → AI review → owner review.
+- Open questions: none.
+
+### 2026-09-03 13:40 — Claude (for Jeetu) — session (Gate 5 real-browser + Gate 6 docs)
+- Done: Playwright `build-continuity` + `mobile`: **8/8 green** on the second run. The first run failed for a real reason worth keeping (S3): the demo brain's three scripted round trips settle in **~15 ms**, faster than any navigation, so "the build kept running while I was away" was unprovable in a browser. Added the `?demoslow=<ms>` e2e seam in `agent/adapter.ts` (same family as `?demoreq` / `?webllm=1`): paces each demo round trip, read ONCE at adapter creation so the pace survives the navigation that drops the query, capped at 10 s, absent by default; `demoSlow.test.ts` pins absent/junk/cap/pass-through. The second red was a locator strict-mode clash (the sidebar row carries the thread's title, which is the first message's text) — scoped the bubble locator to `.chat-log`. `packages/db` 420 · playground 1731 (+`demoSlow` 5) · sdk 41 · e2e 8/8.
+- State: implementation, tests and docs complete on the branch; full e2e suite + root `pnpm test` gate started (result below).
+- Next step: gate results → PR → AI review → owner review.
+

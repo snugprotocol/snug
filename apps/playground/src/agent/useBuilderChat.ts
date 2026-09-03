@@ -12,7 +12,7 @@
 //   pinned in the DB and survives any pruning for the life of the app (AC5).
 // - Artifact cards persist in message `meta` and re-render on rehydration.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 
 import type { AgentTool, AgentTurnEvent } from '@snugprotocol/adapters';
 import { AUTH_WIZARD_DIRECTIVE_KIND, type AuthWizardDirective, type RenderDirective } from '@snugprotocol/protocol';
@@ -24,6 +24,8 @@ import { applyBuilderPickToApp, useBuilderPick } from '../state/builderModel.js'
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
 import { resolveTurnMode, useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
+import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
+import { patchSession, stopThread, useThreadSession } from './threadSessions.js';
 import { buildAppTurnContext } from './appContext.js';
 import { buildIntentTurnContext } from './intentContext.js';
 import { routeChatMessage, type ChatRoute } from './chatRouter.js';
@@ -138,6 +140,11 @@ export interface BuilderChat {
   attachedAppId: string | undefined;
   /** Bumped when the app's schema or wiki docs change — refresh signal for panels. */
   knowledgeEpoch: number;
+  /**
+   * The thread's LLM round-trip inspector (ADR-0062): lives on the thread session, so
+   * it survives navigation and thread switches — in memory only, redacted, bounded.
+   */
+  llmInspector: LlmInspectorState;
   /**
    * `displayText` is what the user's bubble shows; `wireText` (defaults to
    * `displayText`) is what the transport actually sends — internal prompt templates
@@ -338,7 +345,7 @@ function metaToArtifact(meta: unknown): ArtifactEvent | undefined {
 }
 
 export function useBuilderChat(threadId: string, options: UseBuilderChatOptions = {}): BuilderChat {
-  const { pinnedAppId, onLlmEvent, onTurnStart } = options;
+  const { pinnedAppId, onLlmEvent: onLlmEventOption, onTurnStart: onTurnStartOption } = options;
   const mode = useMode();
   const provider = useProvider();
   const model = useModel();
@@ -346,30 +353,19 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   const brain = useBrain();
   /** The build page's pending pick for a thread with no app yet (TASK-20260821 AC12). */
   const builderPick = useBuilderPick();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [activity, setActivity] = useState<string | undefined>(undefined);
-  const [steps, setSteps] = useState<BuildStepView[]>([]);
-  const [lastArtifact, setLastArtifact] = useState<ArtifactEvent | undefined>(undefined);
-  const [knowledgeEpoch, setKnowledgeEpoch] = useState(0);
-  /** Durable thread→app pin (review F10): loaded from the thread row, set on install. */
-  const [threadAppId, setThreadAppId] = useState<string | undefined>(undefined);
-  const threadAppIdRef = useRef<string | undefined>(undefined);
-  const abortRef = useRef<AbortController | null>(null);
-  /** Message ids whose approval is mid-execution — the double-click guard's state. */
-  const approvalsInFlight = useRef<Set<number>>(new Set());
-  const streamAccumRef = useRef('');
-
-  useEffect(() => {
-    threadAppIdRef.current = threadAppId;
-  }, [threadAppId]);
+  // ADR-0062: every piece of turn state lives on the thread's SESSION — a module-level
+  // store that outlives this hook. Two views of one thread share one session, and a view
+  // that unmounts mid-turn leaves the turn streaming into it; the only abort is the
+  // user's explicit stop (or a user-DB swap seam, see threadSessions.ts).
+  const { session, state } = useThreadSession(threadId);
+  const { messages, busy, activity, steps, lastArtifact, threadAppId, knowledgeEpoch, llmInspector } = state;
 
   const attachedAppId = pinnedAppId ?? threadAppId;
 
   const onInstall = useCallback(
     (appId: string): void => {
-      setThreadAppId(appId);
-      threadAppIdRef.current = appId;
+      // Durable thread→app pin (review F10): mirrored on the session, recorded on the row.
+      patchSession(session, { threadAppId: appId });
       // The build page's pending pick becomes the new app's pin (TASK-20260821 AC12):
       // the thread routed on it, so the app it produced must keep routing there.
       applyBuilderPickToApp(appId);
@@ -377,7 +373,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         db.upsertThread(threadId, { appId });
       });
     },
-    [threadId],
+    [session, threadId],
   );
 
   const sink = useMemo(
@@ -433,26 +429,25 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
   }, [brain, mode, provider, model, localUrl, threadId, sink, attachedAppId, builderPick]);
 
   // AC4: a fresh session over the same user DB re-renders the persisted thread —
-  // including artifact cards (from message meta) and the durable app pin.
+  // including artifact cards (from message meta) and the durable app pin. ONCE per
+  // session (ADR-0062): a view re-mounting over a session that is already streaming
+  // must find the live turn, never an empty re-read of the DB.
   useEffect(() => {
+    if (session.store.get().hydrated) return;
     let cancelled = false;
-    setMessages([]);
-    setLastArtifact(undefined);
-    setThreadAppId(undefined);
-    threadAppIdRef.current = undefined;
     void getUserDb().then((db) => {
-      if (cancelled) return;
+      if (cancelled || session.store.get().hydrated) return;
       const row = db.getThread(threadId);
-      if (row?.appId !== undefined) {
-        setThreadAppId(row.appId);
-        threadAppIdRef.current = row.appId;
-      }
       const persisted = db.listChatMessages(threadId);
-      if (persisted.length === 0) return;
-      setMessages((current) =>
-        current.length > 0
-          ? current
-          : persisted
+      patchSession(session, (current) => ({
+        hydrated: true,
+        ...(row?.appId !== undefined ? { threadAppId: row.appId } : {}),
+        // A turn may already have appended to this session (the hub's handed-over idea
+        // sends before this read lands): the live messages win over the persisted ones.
+        messages:
+          current.messages.length > 0 || persisted.length === 0
+            ? current.messages
+            : persisted
               .filter((m) => m.role !== 'system')
               .map((m) => {
                 const artifact = metaToArtifact(m.meta);
@@ -478,28 +473,60 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                   ...(brainKind !== undefined ? { brainKind } : {}),
                 };
               }),
-      );
+      }));
     });
     return () => {
       cancelled = true;
     };
-  }, [threadId]);
+  }, [session, threadId]);
 
-  const patchMessage = useCallback((id: number, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>)): void => {
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === id ? { ...message, ...(typeof patch === 'function' ? patch(message) : patch) } : message,
-      ),
-    );
-  }, []);
+  const patchMessage = useCallback(
+    (id: number, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>)): void => {
+      patchSession(session, (current) => ({
+        messages: current.messages.map((message) =>
+          message.id === id ? { ...message, ...(typeof patch === 'function' ? patch(message) : patch) } : message,
+        ),
+      }));
+    },
+    [session],
+  );
 
   const send = useCallback(
     (displayText: string, wireText?: string): void => {
       const wire = wireText ?? displayText;
-      if (busy || displayText.trim() === '' || wire.trim() === '') return;
+      // The turn binds to THIS session object (ADR-0062): every write below goes through
+      // it BY REFERENCE, so a turn that outlives a registry reset writes into a detached
+      // store rather than resurrecting the dropped thread by id. `busy` is read live from
+      // the store, not from render state — the guard is per thread, never per page.
+      if (session.store.get().busy || displayText.trim() === '' || wire.trim() === '') return;
+      const setBusy = (next: boolean): void => patchSession(session, { busy: next });
+      const setActivity = (next: string | undefined): void => patchSession(session, { activity: next });
+      const setSteps = (next: BuildStepView[] | ((current: BuildStepView[]) => BuildStepView[])): void =>
+        patchSession(session, (current) => ({ steps: typeof next === 'function' ? next(current.steps) : next }));
+      const setLastArtifact = (next: ArtifactEvent | undefined): void => patchSession(session, { lastArtifact: next });
+      const setKnowledgeEpoch = (): void => patchSession(session, (current) => ({ knowledgeEpoch: current.knowledgeEpoch + 1 }));
+      const setMessages = (next: (current: ChatMessage[]) => ChatMessage[]): void =>
+        patchSession(session, (current) => ({ messages: next(current.messages) }));
+      const patchMessage = (id: number, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>)): void =>
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === id ? { ...message, ...(typeof patch === 'function' ? patch(message) : patch) } : message,
+          ),
+        );
+      // Builder round trips fold into the SESSION's inspector — the build view reads it
+      // from the thread, so it survives navigation — and still reach the caller's
+      // optional observer (RunView's shared think panel). In memory only (AC14).
+      const onLlmEvent = (event: AgentTurnEvent): void => {
+        patchSession(session, (current) => ({ llmInspector: llmInspectorReduce(current.llmInspector, event) }));
+        onLlmEventOption?.(event);
+      };
+      const onTurnStart = (): void => {
+        patchSession(session, { llmInspector: initialLlmInspectorState });
+        onTurnStartOption?.();
+      };
       const userId = ++messageSeq;
       const agentId = ++messageSeq;
-      const isFirstMessage = messages.length === 0;
+      const isFirstMessage = session.store.get().messages.length === 0;
       setMessages((current) => [
         ...current,
         { id: userId, role: 'user', displayText, wireText: wire },
@@ -511,10 +538,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       setSteps([]);
       // Same for the LLM inspector — without this its ring buffer accumulates across the
       // whole session and retains the largest (latest) entries by construction.
-      onTurnStart?.();
-      streamAccumRef.current = '';
+      onTurnStart();
+      session.streamAccum = '';
       const controller = new AbortController();
-      abortRef.current = controller;
+      session.abort = controller;
       /** True once this turn has staged a write proposal — one card per turn (see below). */
       // Holds the proposal itself (not just a flag) so turn finalization can persist it
       // onto the assistant message's meta — the card must survive a reload (R-M5).
@@ -539,7 +566,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         const db = await getUserDb();
         // Context is built BEFORE persisting this turn's user message, so history
         // holds strictly prior turns.
-        const contextTarget = pinnedAppId ?? threadAppIdRef.current;
+        const contextTarget = pinnedAppId ?? session.store.get().threadAppId;
         /**
          * ADR-0019 D6 — CLASSIFY FIRST, for a message beside an INSTALLED app.
          *
@@ -568,7 +595,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
               threadId,
               adapter: live.adapter,
               signal: controller.signal,
-              ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+              onLlmEvent,
             });
           }
         }
@@ -591,7 +618,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           patchMessage(agentId, { streaming: false });
           setBusy(false);
           setActivity(undefined);
-          abortRef.current = null;
+          session.abort = null;
           return;
         }
 
@@ -605,7 +632,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           patchMessage(agentId, { streaming: false, displayText: route.question });
           setBusy(false);
           setActivity(undefined);
-          abortRef.current = null;
+          session.abort = null;
           return;
         }
 
@@ -701,10 +728,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           {
             onDelta: (delta) => {
               setActivity(undefined);
-              streamAccumRef.current += delta;
+              session.streamAccum += delta;
               patchMessage(agentId, (m) => ({ displayText: m.displayText + delta }));
             },
-            onKnowledge: () => setKnowledgeEpoch((epoch) => epoch + 1),
+            onKnowledge: () => setKnowledgeEpoch(),
             onArtifact: (artifact) => {
               if (serverTurn) {
                 // F4 client-authoritative: the hub's artifact store is a transient
@@ -733,7 +760,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
             },
             onActivity: (label) => setActivity(label),
             onStep: (step: BuildStep) => setSteps((current) => applyStep(current, step)),
-            onLlmEvent: (event) => onLlmEvent?.(event),
+            onLlmEvent,
             // ADR-0059 rule 3: the builder stamps what this turn RUNS ON from its own
             // resolved config. Patched live (the tag shows while streaming) and held on
             // the turn so finalize persists it as row provenance below.
@@ -750,7 +777,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
 
         if (result.ok) {
           // A done event with empty/missing text must not wipe the streamed deltas.
-          const finalText = result.text !== '' ? result.text : streamAccumRef.current;
+          const finalText = result.text !== '' ? result.text : session.streamAccum;
           // D9: validate BEFORE any UI effect. A malformed claimed directive is
           // dropped with a visible note, never partially rendered and never persisted.
           const scan = finalText !== '' ? scanForRenderDirective(finalText) : null;
@@ -866,7 +893,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
                       html: appHtml,
                       adapter: live.adapter,
                       signal: controller.signal,
-                      ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+                      onLlmEvent,
                     });
                   }
                 } catch {
@@ -962,10 +989,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
         .finally(() => {
           setBusy(false);
           setActivity(undefined);
-          abortRef.current = null;
+          session.abort = null;
         });
     },
-    [agent, busy, messages.length, serverTurn, onLlmEvent, onTurnStart, patchMessage, pinnedAppId, sink, hubArtifacts, threadId],
+    [agent, session, serverTurn, onLlmEventOption, onTurnStartOption, pinnedAppId, sink, hubArtifacts, threadId],
   );
 
   /**
@@ -979,8 +1006,8 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     // inside that window would BOTH reach `executeApprovedWrite`, and a non-idempotent
     // INSERT would land twice. Each run passes its own drift check, so the TOCTOU guard
     // cannot catch this: it is a re-entrancy problem, not a staleness one.
-    if (approvalsInFlight.current.has(messageId)) return;
-    approvalsInFlight.current.add(messageId);
+    if (session.approvalsInFlight.has(messageId)) return;
+    session.approvalsInFlight.add(messageId);
     void (async () => {
       try {
       const db = await getUserDb();
@@ -994,17 +1021,17 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
       patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), ...resolved } }));
       persistResolution(db, threadId, proposal, resolved);
       } finally {
-        approvalsInFlight.current.delete(messageId);
+        session.approvalsInFlight.delete(messageId);
       }
     })();
-  }, [patchMessage]);
+  }, [patchMessage, session]);
 
   const declineDataWrite = useCallback((proposal: DataWriteCardState, messageId: number): void => {
     // Nothing to undo: a proposal never touched the real database.
     const resolved: DataWriteCardState = { ...proposal, outcome: 'declined' as const };
     patchMessage(messageId, (m) => ({ dataWrite: { ...(m.dataWrite ?? proposal), ...resolved } }));
     void (async () => persistResolution(await getUserDb(), threadId, proposal, resolved))();
-  }, [patchMessage]);
+  }, [patchMessage, session]);
 
   /**
    * Resolve a presented card (TASK-20260815-inline-cards AC3/AC4). Single-shot: the
@@ -1054,12 +1081,12 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     [patchMessage, send, threadId],
   );
 
+  // The user's explicit stop — the ONE abort a view may trigger (ADR-0062). There is
+  // deliberately no unmount cleanup any more: leaving the view leaves the turn running
+  // in its session, visible from the build page's thread sidebar.
   const stop = useCallback((): void => {
-    abortRef.current?.abort();
-  }, []);
-
-  // Leaving the view aborts any in-flight turn — never leave a request running headless.
-  useEffect(() => () => abortRef.current?.abort(), []);
+    stopThread(threadId);
+  }, [threadId]);
 
   return {
     messages,
@@ -1069,6 +1096,7 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     lastArtifact,
     attachedAppId,
     knowledgeEpoch,
+    llmInspector,
     send,
     stop,
     approveDataWrite,

@@ -711,6 +711,13 @@ export interface UserDb {
   listThreads(): ChatThread[];
   getThread(threadId: string): ChatThread | undefined;
   listChatMessages(threadId: string): ChatMessage[];
+  /**
+   * Delete one conversation: the thread row and every message in it, pinned rows
+   * included (the pin protects against PRUNING, not against the user's own delete —
+   * the same rule the app cascade applies). Never touches the app the thread is pinned
+   * to; a stale id is a no-op (TASK-20260903-build-thread-continuity AC5b, D4).
+   */
+  deleteThread(threadId: string): void;
 
   getSetting(key: string): unknown;
   setSetting(key: string, value: unknown): void;
@@ -3077,6 +3084,13 @@ function construct(
         createdAt: String(row[3]),
         updatedAt: String(row[4]),
       }));
+    },
+
+    deleteThread(threadId) {
+      assertOpen();
+      // Messages first — they join through thread_id (same order the app cascade uses).
+      run(`DELETE FROM ${USERDB_TABLES.chatMessages} WHERE thread_id = ?`, [threadId]);
+      run(`DELETE FROM ${USERDB_TABLES.chatThreads} WHERE thread_id = ?`, [threadId]);
     },
 
     listChatMessages(threadId) {

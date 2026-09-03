@@ -14,6 +14,7 @@ import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { locateWasm } from '../run/wasm.js';
+import { resetThreadSessions } from '../agent/threadSessions.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { createStore, useStore } from './store.js';
 
@@ -205,6 +206,7 @@ export async function restoreUserDbFromBytes(bytes: Uint8Array): Promise<void> {
   // Overwrite the stored file, then re-run the real open over the new bytes. The
   // sidecar identity harvest is scoped to one user-file identity (TASK-20260820).
   resetSidecarIdentitySession();
+  resetThreadSessions(); // ADR-0062 swap seam: the sessions mirror the file being replaced
   await backend.save(USERDB_FILE, bytes);
   corruptResult = undefined;
   userDbStatusStore.set({ state: 'opening' });
@@ -228,6 +230,7 @@ export function getUserDb(): Promise<UserDb> {
 /** Explicit recovery decision (F6): start fresh; the quarantined copy stays on disk. */
 export async function recoverFresh(): Promise<UserDb> {
   if (corruptResult === undefined) throw new Error('recoverFresh: user DB is not in the corrupt state');
+  resetThreadSessions(); // ADR-0062 swap seam
   const fresh = await corruptResult.openFresh();
   corruptResult = undefined;
   userDbStatusStore.set({ state: 'ready' });
@@ -251,6 +254,7 @@ export function setUserDbForTests(db: UserDb): void {
 /** Test seam: reset module state between tests. */
 export function resetUserDbForTests(): void {
   resetSidecarIdentitySession();
+  resetThreadSessions();
   opened = false;
   corruptResult = undefined;
   readyPromise = undefined;

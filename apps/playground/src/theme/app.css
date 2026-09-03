@@ -2714,3 +2714,194 @@ img.identity-avatar {
     padding: var(--space-3);
   }
 }
+
+/* ---------------------------------------------------------------- thread sidebar
+   (TASK-20260903-build-thread-continuity, ADR-0062). The build page is a two-column
+   grid above the shell's 760px breakpoint: every conversation on the left, the chat on
+   the right. Below it the list collapses into a <details> above the chat. */
+
+.builder-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.thread-sidebar {
+  position: sticky;
+  top: var(--space-4);
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+/* Above the breakpoint the disclosure is always open and its summary is hidden — the
+   <details> exists for the phone. `open` is React-controlled, so the summary hides only
+   where a click cannot reach it. */
+.thread-sidebar-summary {
+  display: none;
+}
+
+.thread-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.thread-sidebar-title {
+  color: var(--fg-muted);
+  font-size: var(--text-s);
+  font-weight: 700;
+}
+
+.thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.thread-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--radius-m);
+  min-width: 0;
+}
+
+.thread-row:hover,
+.thread-row:focus-within {
+  background: var(--surface);
+}
+
+.thread-row.is-active {
+  background: var(--surface-2);
+}
+
+.thread-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  min-height: var(--tap);
+  cursor: pointer;
+  border-radius: var(--radius-m);
+}
+
+.thread-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The live badge: same pulse as the status line — this thread has a turn in flight. */
+.thread-busy {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ember);
+  box-shadow: 0 0 0 0 var(--ember-glow);
+  animation: thread-pulse 1.6s ease-out infinite;
+}
+
+@keyframes thread-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--ember-glow);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-busy {
+    animation: none;
+  }
+}
+
+.thread-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.thread-row:hover .thread-row-actions,
+.thread-row:focus-within .thread-row-actions,
+.thread-row.is-active .thread-row-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .thread-row-actions {
+    opacity: 1;
+  }
+}
+
+.thread-row-editor {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+}
+
+.thread-row-editor input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-s, 6px);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+}
+
+.thread-confirm-copy {
+  flex: 1 1 100%;
+  color: var(--fg-muted);
+  font-size: var(--text-s);
+}
+
+@media (max-width: 760px) {
+  .builder-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .thread-sidebar {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .thread-sidebar-summary {
+    display: flex;
+    align-items: center;
+    min-height: var(--tap);
+    cursor: pointer;
+    color: var(--fg-muted);
+    font-size: var(--text-s);
+    font-weight: 700;
+  }
+}

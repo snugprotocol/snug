@@ -1,6 +1,6 @@
 # 0062 — A turn belongs to its thread, not to the view: navigation never aborts, only stop does
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-03
 - **Task:** TASK-20260903-build-thread-continuity
 

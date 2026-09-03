@@ -77,6 +77,10 @@ test.describe('375px viewport', () => {
     const box = await build.boundingBox();
     expect(box, 'build button must have a bounding box').not.toBeNull();
     expect(box!.height, 'build button touch target ≥44px').toBeGreaterThanOrEqual(44);
+    // The thread sidebar (TASK-20260903) collapses to a disclosure at this width: the
+    // summary is the only visible part, so the composer keeps the screen.
+    await expect(page.getByText(/^conversations · \d+$/)).toBeVisible();
+    await expect(page.getByTestId('thread-list')).toBeHidden();
     await expectNoHorizontalScroll(page);
   });
 
