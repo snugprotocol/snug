@@ -35,15 +35,16 @@ treats the presence of a requirement as permission to attach a credential.
 **A running app may never propose a connection.** There is no frame, no SDK call, and no
 announce field through which app code can ask for a credential grant. (The open-url frames
 of §4 carry no credential seat and open nothing without the host's own confirm.) Exactly
-three proposers exist:
+four proposers exist:
 
 | Proposer | Channel | Review |
 |---|---|---|
 | the user | Settings / connect CTA | manual entry |
 | the app's builder assistant | a `connection_requirement` directive in the build conversation | strong, unless the registry rung pinned the values |
 | the install act | the starter's own `connection.json`, vouched at install | **always strong** (field-by-field) |
+| the share act | the `connections[]` of an app bundle another person shared (§12.14) | **always strong**; admitted on the `shared` channel with the registry-borrow ban and the confusable guard, never vouched |
 
-Two obligations bind all three: **a proposer may write `declared` rows only** (a write
+Two obligations bind all four: **a proposer may write `declared` rows only** (a write
 aimed at an `approved` row stages instead — §12.3; a write aimed at a `revoked` row is
 refused outright, and reconnecting discloses the prior revocation), and **approval is the
 only writer of grants**.
@@ -89,7 +90,7 @@ CREATE TABLE IF NOT EXISTS snug_connections (
 | `slot` | stable connection id **within** the app, `^[a-z0-9][a-z0-9-]{0,39}$`. Lowercase and dash-only by construction: SQLite compares bytes exactly, so a mixed-case form would fork one provider into two rows. |
 | `requirement_json` | the requirement (§12.5), credential-free, schema-valid. |
 | `requirement_version` | integer, bumped on every persisted replacement whose **canonical form** differs. |
-| `provenance` | `registry` \| `inference` \| `user_docs` \| `starter` \| `user`. Drives review posture. |
+| `provenance` | `registry` \| `inference` \| `user_docs` \| `starter` \| `user` \| `shared`. Drives review posture. `shared` (revision 2026-09-04) is a requirement that arrived inside an app bundle from a third party; it is admitted on its own channel and is never vouched. Widening this set is a write-time enum change, not a storage-version change. |
 | `confidence` | model-derived confidence when provenance is model-derived. **Display-only** — never an approval input. |
 | `status` | `declared` \| `approved` \| `revoked`. Exactly three values. |
 | `pending_requirement_json` | a changed requirement staged against an **approved** row (§12.3). |
@@ -445,6 +446,31 @@ computes provenance from the channel it actually received the directive on and r
 confidence from the ladder rung it resolved; no gating decision reads the claimed values.
 A registry-resolved proposal MAY carry the entry's alternative flows for the user to pick
 between; the pick is reviewed like any declared requirement.
+
+### 12.14 App bundles — the share act (internal draft, revision 2026-09-04)
+
+An **app bundle** (`snug-app-bundle/1`; reference schema `packages/protocol/src/app-bundle.ts`,
+outside the published `schemas/` set) is one app lifted out of a user file so another person
+can install it: the app's identity fields, the **current** version's html only, its runtime
+contract, its registered data schema as `CREATE …` DDL (structure — never rows), the wiki
+docs the sharer chose, and every non-revoked connection's **requirement half only**
+(§12.2's split). It carries no `snug_secrets`, no grant field, no version history, no chat,
+no app data, no `userLayer` (§12.10), and no identity field — the receiver computes the
+bundle's identity (sha-256 of the key-sorted, whitespace-free JSON, array order preserved)
+from the bytes it holds. The bundle is `strictObject` at every level with a whole-bundle
+byte cap; a host MUST validate it at the boundary before rendering anything from it.
+
+The share act is the fourth proposer of §12.1. Its requirements land `declared` with
+`provenance = 'shared'` after admission on the `shared` channel — the registry-borrow ban
+(§12.12), the confusable guard (§12.6) and the `userLayer` refusal (§12.10) all apply, and a
+bundle's requirements are **never vouched**: `install_source` is minted by the host from the
+bundle's UUID-charset lineage under a `share:` prefix, so a bundle cannot spell a starter's
+identity. A host MUST NOT run a bundle's html with an LLM transport, write any of its rows,
+or execute its DDL before the user's explicit install; a bundle's runtime contract reaches
+the system slot only through that install act after being shown to the user as plain text
+(the one channel on which ADR-0018's untrusted-contract rule is amended). The bundle's
+transports — a `.snug` file, or an end-to-end-encrypted relay whose key rides only in a URL
+fragment — are host implementation; the format is what a second host must agree on.
 
 ## 13. Credential custody
 
