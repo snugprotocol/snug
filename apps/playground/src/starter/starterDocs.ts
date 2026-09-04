@@ -19,6 +19,7 @@
  *    starting point rather than an all-or-nothing branch.
  */
 
+import { seedDocsAbsentOnly } from '@snugprotocol/db';
 import type { UserDb } from '@snugprotocol/db';
 
 /**
@@ -100,28 +101,27 @@ export async function installStarterDocs(db: UserDb, appId: string): Promise<voi
     const bundle = (await bundledStarterAuthoring())[folder];
     if (bundle === undefined) return; // no authoring bundle — an LLM-free starter, typically
 
-    const existing = new Set(db.listAppDocs(appId).map((doc) => doc.slug));
-
+    // The seed set: one doc per authoring file, plus the prompts concatenated into ONE
+    // `build-prompt` page in numbered order — chapters of a single story (the brief,
+    // then each follow-up); the owner asked for "the prompt which drove the app
+    // building" as a readable thing, not a file listing.
+    const docs: { slug: string; title?: string; content: string }[] = [];
     for (const [filename, content] of Object.entries(bundle.docs)) {
-      const slug = slugOf(filename);
-      if (existing.has(slug) || content.trim().length === 0) continue;
+      if (content.trim().length === 0) continue;
       const title = titleOf(content);
-      db.putAppDoc(appId, slug, { ...(title !== undefined ? { title } : {}), content });
+      docs.push({ slug: slugOf(filename), ...(title !== undefined ? { title } : {}), content });
     }
+    const ordered = Object.keys(bundle.prompts).sort();
+    const body = ordered
+      .map((name) => bundle.prompts[name] ?? '')
+      .filter((content) => content.trim().length > 0)
+      .join('\n\n---\n\n');
+    if (body.trim().length > 0) docs.push({ slug: 'build-prompt', title: 'Build prompt', content: body });
 
-    // The prompts concatenate into ONE `build-prompt` page, in numbered order: they are
-    // chapters of a single story (the brief, then each follow-up), and the owner asked for
-    // "the prompt which drove the app building" as a readable thing, not a file listing.
-    if (!existing.has('build-prompt')) {
-      const ordered = Object.keys(bundle.prompts).sort();
-      const body = ordered
-        .map((name) => bundle.prompts[name] ?? '')
-        .filter((content) => content.trim().length > 0)
-        .join('\n\n---\n\n');
-      if (body.trim().length > 0) {
-        db.putAppDoc(appId, 'build-prompt', { title: 'Build prompt', content: body });
-      }
-    }
+    // ABSENT-ONLY, through the one generic seeder a shared bundle's install uses too
+    // (TASK-20260904, plan-review finding 20): a starter and a shared app seed docs by
+    // the same rule, from one definition.
+    seedDocsAbsentOnly(db, appId, docs);
   } catch {
     // A glob miss, a malformed file, a write refusal — all the same outcome: no seed.
   }
