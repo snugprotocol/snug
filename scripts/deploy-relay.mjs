@@ -43,9 +43,18 @@ export function parseArgs(argv) {
   const args = argv.slice(2);
   const init = args.includes('init');
   const deploy = args.includes('--deploy');
-  const unknown = args.filter((a) => a !== 'init' && a !== '--deploy');
+  const devIndex = args.indexOf('--dev-origin');
+  let devOrigin;
+  if (devIndex !== -1) {
+    devOrigin = args[devIndex + 1];
+    if (devOrigin === undefined || devOrigin.startsWith('--')) {
+      throw new UsageError('--dev-origin needs a value, e.g. --dev-origin http://localhost:5173');
+    }
+  }
+  const consumed = new Set(['init', '--deploy', '--dev-origin', devOrigin]);
+  const unknown = args.filter((a) => !consumed.has(a));
   if (unknown.length) throw new UsageError(`unknown argument(s): ${unknown.join(' ')}`);
-  return { init, deploy };
+  return { init, deploy, ...(devOrigin !== undefined ? { devOrigin } : {}) };
 }
 
 export function initCommands() {
@@ -91,9 +100,45 @@ export function configPreflight(config) {
   if (problems.length) throw new Refusal(`REFUSED: ${RELAY_CONFIG} is not the blind shape ADR-0064 promises:\n  - ${problems.join('\n  - ')}`);
 }
 
-/** `DEPLOY_SHA` is a Worker var the handler never reads or serves — it exists so `wrangler deployments list` names the commit. */
-export function wranglerCommand({ sha }) {
-  return ['pnpm', 'exec', 'wrangler', 'deploy', '--config', RELAY_CONFIG, '--var', `DEPLOY_SHA:${sha}`];
+/**
+ * `DEPLOY_SHA` is a Worker var the handler never reads or serves — it exists so
+ * `wrangler deployments list` names the commit.
+ *
+ * `--dev-origin <origin>` ADDS one browser origin to the CORS allowlist for this deploy
+ * only, on top of the config's production list. It exists so a developer can exercise the
+ * copy-link path against a local playground (`http://localhost:5173`), which the shipped
+ * allowlist rightly refuses. Three properties keep it from becoming a hole: it is
+ * ADDITIVE (never replaces the pinned origins), it is refused unless the origin is
+ * loopback, and it is **not sticky** — the next ordinary deploy drops it, because the
+ * committed `wrangler.jsonc` is the only durable statement of who may write. A relay
+ * carrying a dev origin should never be the one serving real users for long.
+ */
+export function wranglerCommand({ sha, devOrigin, configOrigins }) {
+  const argv = ['pnpm', 'exec', 'wrangler', 'deploy', '--config', RELAY_CONFIG, '--var', `DEPLOY_SHA:${sha}`];
+  if (devOrigin !== undefined) {
+    argv.push('--var', `ALLOWED_ORIGINS:${[...configOrigins, devOrigin].join(',')}`);
+  }
+  return argv;
+}
+
+/** Loopback only — a dev override must never admit a public origin. */
+export function assertLoopbackOrigin(origin) {
+  let url;
+  try {
+    url = new URL(origin);
+  } catch {
+    throw new Refusal(`REFUSED: --dev-origin ${origin} is not a URL (want e.g. http://localhost:5173).`);
+  }
+  if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1' && url.hostname !== '[::1]') {
+    throw new Refusal(
+      `REFUSED: --dev-origin ${origin} is not loopback. This flag exists for local development only; ` +
+        'a public origin belongs in apps/share-relay/wrangler.jsonc, reviewed.',
+    );
+  }
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    throw new Refusal(`REFUSED: --dev-origin ${origin} must be a bare origin (scheme://host:port).`);
+  }
+  return `${url.protocol}//${url.host}`;
 }
 
 export const realIo = {
@@ -140,7 +185,16 @@ export function main(argv, io = realIo) {
     configPreflight(parseJsonc(io.readConfig()));
     const tests = io.exec('pnpm', ['--filter', 'share-relay', 'test']);
     if (tests.status !== 0) throw new Refusal('REFUSED: the relay test suite is red.');
-    const argvOut = wranglerCommand({ sha: head.slice(0, 12) });
+    const config = parseJsonc(io.readConfig());
+    const devOrigin = parsed.devOrigin === undefined ? undefined : assertLoopbackOrigin(parsed.devOrigin);
+    if (devOrigin !== undefined) {
+      io.log(`⚠ --dev-origin ${devOrigin} — this deploy ALSO accepts writes from that loopback origin.`);
+      io.log('  It is additive and NOT sticky: the next ordinary deploy restores the config-only allowlist.');
+    }
+    const argvOut = wranglerCommand({
+      sha: head.slice(0, 12),
+      ...(devOrigin !== undefined ? { devOrigin, configOrigins: String(config.vars?.ALLOWED_ORIGINS ?? '').split(',').filter(Boolean) } : {}),
+    });
     io.log(`relay ${WORKER_NAME} → ${RELAY_HOST} (account ${accountId}, main @ ${head.slice(0, 12)})`);
     io.log(shellQuote(argvOut));
     if (!parsed.deploy) {
