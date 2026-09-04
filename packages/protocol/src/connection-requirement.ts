@@ -73,8 +73,15 @@ export type ConnectionKind = (typeof CONNECTION_KINDS)[number];
  * the strong field-by-field review) and the `user_confirmed`-wins rule (R3: a `user`
  * requirement is never overwritten by inference). Persisted column values — never
  * prose-only literals.
+ *
+ * `shared` (TASK-20260904, ADR-0063 §3) is the untrusted declaration channel ADR-0016
+ * clause 6 anticipated: a requirement that arrived inside an app bundle from someone
+ * the user may not know. It is its own literal — never `starter` reused — so the review
+ * copy can say honestly who wrote it. Widening this set is a WRITE-TIME enum change on
+ * a TEXT column, not a storage-schema change: no `USERDB_SCHEMA_VERSION` bump (the
+ * `linked_device` precedent; a bump would make every older hub refuse the whole file).
  */
-export const CONNECTION_PROVENANCES = ['registry', 'inference', 'user_docs', 'starter', 'user'] as const;
+export const CONNECTION_PROVENANCES = ['registry', 'inference', 'user_docs', 'starter', 'user', 'shared'] as const;
 
 export type ConnectionProvenance = (typeof CONNECTION_PROVENANCES)[number];
 
