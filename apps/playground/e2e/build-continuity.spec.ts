@@ -64,4 +64,23 @@ test.describe('a build keeps running while the user is elsewhere', () => {
     await expect(page.getByTestId('thread-row')).toHaveCount(2);
     await expect(page.getByTestId('thread-row').filter({ hasText: 'tic-tac-toe' })).toBeVisible();
   });
+
+  test('the composer keeps its width and height on the first keystroke of a new conversation (AC11)', async ({ page }) => {
+    // Owner report: the box "shrank" on the first character. The cause was the grid
+    // column being fit-content sized once the suggestion chips vanished — a WIDTH
+    // change (measured in WebKit; Chromium happened to keep a wide child) — so this pins
+    // both dimensions, with the demo callout dismissed so no wide child masks it.
+    await page.goto('/build');
+    const dismiss = page.getByTestId('demo-callout-dismiss');
+    if ((await dismiss.count()) > 0) await dismiss.click();
+    const composer = page.getByRole('textbox', { name: 'describe your app' });
+    const before = await composer.boundingBox();
+    await composer.type('b');
+    const after = await composer.boundingBox();
+    expect(after?.width, 'width must not change on the first keystroke').toBeCloseTo(before!.width, 0);
+    expect(after?.height, 'height must not change on the first keystroke').toBeCloseTo(before!.height, 0);
+    const column = await page.locator('.builder').boundingBox();
+    expect(column!.width, 'the build column fills its grid cell up to its max width').toBeGreaterThan(700);
+  });
 });
+

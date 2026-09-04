@@ -620,6 +620,15 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  /* `width: 100%` is load-bearing since the page became a grid (TASK-20260903 AC11).
+     As a GRID ITEM with auto margins and no width, this column is FIT-CONTENT sized —
+     per the grid spec the auto margins absorb the free space instead of stretching —
+     so its width followed whatever child was widest: the suggestion chips while the
+     draft was empty, then ~390px once the first keystroke hid them. The composer
+     "shrank" on every new conversation (owner report, WebKit shows it; Chromium
+     happened to keep a wide child). An explicit width restores the stretch; the
+     max-width still caps it and the auto margins still center it in a wider cell. */
+  width: 100%;
   max-width: 780px;
   margin: 0 auto;
   min-height: calc(100dvh - 140px);
