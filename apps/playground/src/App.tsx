@@ -131,9 +131,6 @@ export function App(): ReactElement {
         {/* Finding 5: THE state where a user double-clicks their backup. Without
             the dialog here the open event parks invisibly behind this screen. */}
         <OpenUserFileConfirmDialog />
-      {/* A received bundle asks to be previewed from a non-React caller (the open
-          seam, the Settings picker); this navigates and clears the request (ADR-0063). */}
-      <SharedOpenNavigator />
       </div>
     );
   }
@@ -263,6 +260,9 @@ export function App(): ReactElement {
       {/* Desktop .snug open-with confirm (W2b): app-level for the same reason as the
           wizard — an OS open event can arrive on any route. Renders nothing on web. */}
       <OpenUserFileConfirmDialog />
+      {/* A received bundle asks to be previewed from a non-React caller (the open
+          seam, the Settings picker); this navigates and clears the request (ADR-0063). */}
+      <SharedOpenNavigator />
       {/* The mutating-request confirm (TASK-20260815 AC12, plan-review F3): app-level
           because the confirm gate's callers are no longer only RunView's app frame —
           a provider-lane chat turn can park a confirm from the builder view too, and a

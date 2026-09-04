@@ -27,8 +27,11 @@ test.describe('AC8 — marketplace install dedup', () => {
     // SPA navigation back (ephemeral-context OPFS does not survive hard reloads —
     // 2026-08-03 lesson; persistence-across-reload is AC2's covered claim, not ours).
     await page.getByRole('link', { name: 'your apps' }).click();
-    // the tile now shows its installed state…
+    // the tile now shows its installed state… (strict single-element proof — the shared
+    // shelf's badge is its OWN class, `.tile-shared-badge`, so an empty shelf and a
+    // full one both leave this selector single; TASK-20260904)
     await expect(page.locator('.tile-installed-badge')).toBeVisible();
+    await expect(page.locator('.tile-shared-badge')).toHaveCount(0);
     // …and clicking it OPENS the existing copy instead of installing another
     await page.getByRole('button', { name: /open chess/i }).click();
     await expect(page).toHaveURL(firstUrl, { timeout: 20_000 });
