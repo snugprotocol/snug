@@ -146,8 +146,14 @@ export interface SnugPlatform {
   saveFile?(bytes: Uint8Array, suggestedName: string): Promise<void>;
   /** Probe local Ollama. Web: undefined → no probe. */
   probeOllama?(): Promise<{ running: boolean; models: string[] }>;
-  /** Registers the .snug open handler. Desktop only. */
-  onOpenUserFile?(cb: (bytes: Uint8Array, path: string) => void): void;
+  /**
+   * Registers the `.snug` open handler — bytes + path of a file the OS asked us to open,
+   * WHATEVER kind it is (a user file or an app bundle since ADR-0063; the playground's
+   * `dispatchOpenedSnugFile` sniffs and routes above this seat). Desktop only. Renamed
+   * from `onOpenUserFile` in TASK-20260904 so the name does not promise a kind the seat
+   * no longer decides (lesson 2026-08-23: a purpose-named seam is not its generic self).
+   */
+  onOpenSnugFile?(cb: (bytes: Uint8Array, path: string) => void): void;
   /**
    * THE SHELL UPDATE CHANNEL (ADR-0047, TASK-20260821). Desktop only; absence means
    * "this build cannot update itself" and every update surface renders nothing — the

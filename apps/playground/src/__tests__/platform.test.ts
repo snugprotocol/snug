@@ -36,7 +36,7 @@ describe('getPlatform default', () => {
     expect(p.oauth).toBeUndefined();
     expect(p.saveFile).toBeUndefined();
     expect(p.probeOllama).toBeUndefined();
-    expect(p.onOpenUserFile).toBeUndefined();
+    expect(p.onOpenSnugFile).toBeUndefined();
   });
 });
 

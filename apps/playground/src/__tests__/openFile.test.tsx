@@ -143,7 +143,7 @@ describe('registerPlatformOpenFile — the App boot wiring (W2b item 5)', () => 
     let captured: ((bytes: Uint8Array, path: string) => void) | undefined;
     const platform: SnugPlatform = {
       kind: 'desktop',
-      onOpenUserFile: (cb) => {
+      onOpenSnugFile: (cb) => {
         captured = cb;
       },
       capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: true },
@@ -168,7 +168,7 @@ describe('registerPlatformOpenFile — the App boot wiring (W2b item 5)', () => 
     expect(harness.openFile.openUserFileConfirmStore.get()).toBeNull();
   });
 
-  it('is a no-op on web: no onOpenUserFile seam, nothing registered', async () => {
+  it('is a no-op on web: no onOpenSnugFile seam, nothing registered', async () => {
     const harness = await fresh();
     expect(() => harness.openFile.registerPlatformOpenFile()).not.toThrow();
     expect(harness.openFile.openUserFileConfirmStore.get()).toBeNull();

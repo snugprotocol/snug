@@ -1,5 +1,12 @@
 // RunHeaderActions.tsx — the per-app controls in the run header: which model this app
-// uses, its connections, and the (currently hidden) .snug export.
+// uses, its connections, and the share control (TASK-20260904-app-sharing).
+//
+// THE PER-APP `.snug` EXPORT IS GONE (ADR-0063 §2). It was a SQLite slice of the app's
+// DATA named `.snug` — byte-indistinguishable from a whole user file, so the desktop
+// open path would have offered to REPLACE the recipient's file with it. Sharing an app
+// is now the share sheet (code + connection shapes + docs, never data); the whole-file
+// export stays in Settings. The dormant control, its flag and its two props are deleted,
+// and their tests are classified in the task journal (lesson 2026-08-10).
 //
 // Extracted from RunView so the cluster can be tested as a unit (RunView itself needs a
 // route, a user DB, a runner and an iframe to render at all). RunView keeps the
@@ -10,10 +17,8 @@
 //
 //   1. A glyph is not a name. `🔌` announces as "electric plug" or as nothing, so each
 //      button carries an explicit `aria-label` — which is also what test and e2e
-//      locators find. (The header export control is HIDDEN behind `SHOW_APP_EXPORT`
-//      since TASK-20260821, so its "export .snug" name is no longer what e2e locates —
-//      the Settings 'export snug file' surface carries the load-bearing string now;
-//      docs/lessons.md 2026-08-18 rule.)
+//      locators find (the Settings 'export snug file' surface carries the load-bearing
+//      export string; docs/lessons.md 2026-08-18 rule).
 //   2. `title` is the hover tooltip and NOTHING else. A title alone would leave the
 //      control unnamed to a screen reader — the same distinction the rail toggle in
 //      RunView already documents.
@@ -30,24 +35,13 @@ import { Button } from '../ui/Button.js';
 import { ModelSelect } from './ModelSelect.js';
 import { AuthRepairChip } from './AuthRepairChip.js';
 
-/**
- * TASK-20260821-hardening-polish (owner ask): the per-app export control is
- * deliberately HIDDEN, not removed. The export code path, props, and wiring stay
- * intact behind this ONE flag so the owner may re-enable the surface later by
- * flipping it; Settings keeps the whole-file export either way. Exported so tests
- * can pin the shipped value and drive the gate both ways via `showExport`.
- */
-export const SHOW_APP_EXPORT = false;
-
 export interface RunHeaderActionsProps {
   /** The library id of the app whose header this is. */
   appId: string;
-  /** A read-only bundled starter, not yet owned by the user. */
+  /** A read-only preview the user does not own yet — a bundled starter or a shared bundle. */
   isStarter: boolean;
   /** How many connection rows this app has, connected or not. */
   connectionSlots: number;
-  /** Whether this app has touched its database (the export moment has been earned). */
-  canExport: boolean;
   /**
    * Linked-device sync state, pump-reported (ADR-0037 §4). Undefined for the
    * overwhelmingly common case — an app with no sidecar connection — and the capsule
@@ -61,23 +55,20 @@ export interface RunHeaderActionsProps {
     names?: number;
   };
   onManageConnections: () => void;
-  onExport: () => void;
   /**
-   * Test seam for the SHOW_APP_EXPORT gate (defaults to the shipped flag). Lets the
-   * suite prove BOTH states — hidden now, restorable later — without module mocking.
+   * Opens the share sheet (ADR-0063). Supplied for OWNED apps only — a preview has
+   * nothing of the user's to share — so absence hides the control.
    */
-  showExport?: boolean;
+  onShare?: () => void;
 }
 
 export function RunHeaderActions({
   appId,
   isStarter,
   connectionSlots,
-  canExport,
   syncState,
   onManageConnections,
-  onExport,
-  showExport = SHOW_APP_EXPORT,
+  onShare,
 }: RunHeaderActionsProps): ReactElement {
   return (
     <>
@@ -165,18 +156,22 @@ export function RunHeaderActions({
           ⚯
         </Button>
       ) : null}
-      {showExport && canExport ? (
+      {/*
+        THE SHARE CONTROL (TASK-20260904, AC10) — last in the cluster, which places it
+        between the connections door and RunView's theme toggle (owner ask). Owned apps
+        only: `onShare` is absent for a starter or a shared preview. Glyph `⇪` — the
+        share arrow, monochrome like its neighbours; the accessible name is "share".
+      */}
+      {onShare !== undefined && !isStarter ? (
         <Button
           variant="ghost"
-          onClick={onExport}
+          onClick={onShare}
           className="btn-icon"
-          data-testid="export-sqlite"
-          // Kept verbatim while dormant, so flipping SHOW_APP_EXPORT restores the
-          // control under its established name rather than a drifted one.
-          aria-label="export .snug"
-          title="download this app’s database as a real .snug file"
+          data-testid="share-app"
+          aria-label="share"
+          title="share this app — code, connection shapes and docs; never your data or keys"
         >
-          ⤓
+          ⇪
         </Button>
       ) : null}
     </>

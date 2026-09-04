@@ -72,6 +72,8 @@ import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { downloadBlob } from '../run/exportDb.js';
+import { sniffSnugFile } from '@snugprotocol/db';
+import { receiveSharedBundle, sharedOpenRequestStore } from '../share/sharedInbox.js';
 import { FeedbackCard } from '../feedback/FeedbackCard.js';
 import { ADAPTER_DEFAULTS, labelFor, PROVIDER_LABELS } from '../run/ModelSelect.js';
 import { Button } from '../ui/Button.js';
@@ -742,12 +744,58 @@ function DataCard(): ReactElement {
       .catch((err: unknown) => setDataError(err instanceof Error ? err.message : String(err)));
   };
 
+  // BOTH importers SNIFF (TASK-20260904 AC15, owner Q4): a `.snug` is a user file OR an
+  // app bundle, told apart by its first bytes. Hand the wrong kind to either button and
+  // it says so and points at the other — a bundle can never reach `importUserFile`
+  // (which replaces the whole file), a user file can never land on the shared shelf.
   const onImport = (file: File | undefined): void => {
     if (file === undefined) return;
     setDataError(undefined);
-    void importUserFile(file).catch((err: unknown) =>
-      setDataError(err instanceof Error ? err.message : String(err)),
-    );
+    void file
+      .arrayBuffer()
+      .then(async (buffer) => {
+        const bytes = new Uint8Array(buffer);
+        if (sniffSnugFile(bytes) === 'app-bundle') {
+          await addSharedFromBytes(bytes);
+          setDataError('that file is a shared app, not a whole snug file — it has been added to “shared with you” on your apps page');
+          return;
+        }
+        await importUserFile({ arrayBuffer: () => Promise.resolve(buffer) });
+      })
+      .catch((err: unknown) => setDataError(err instanceof Error ? err.message : String(err)));
+  };
+
+  const onAddSharedApp = (file: File | undefined): void => {
+    if (file === undefined) return;
+    setDataError(undefined);
+    void file
+      .arrayBuffer()
+      .then(async (buffer) => {
+        const bytes = new Uint8Array(buffer);
+        if (sniffSnugFile(bytes) === 'user-file') {
+          setDataError('that is a whole snug file, not a shared app — use “import snug file” to replace your data with it');
+          return;
+        }
+        await addSharedFromBytes(bytes);
+      })
+      .catch((err: unknown) => setDataError(err instanceof Error ? err.message : String(err)));
+  };
+
+  /** Parse + keep on the shelf (the picker IS the explicit act) + open the preview. Throws a readable reason. */
+  const addSharedFromBytes = async (bytes: Uint8Array): Promise<void> => {
+    const result = await receiveSharedBundle(new TextDecoder().decode(bytes), { source: 'settings', persist: true });
+    if (!result.ok) {
+      throw new Error(
+        result.reason === 'shelf-full'
+          ? (result.detail ?? 'your shared shelf is full')
+          : result.reason === 'too-large'
+            ? 'that shared app file is larger than Snug accepts'
+            : result.reason === 'not-a-bundle' || result.reason === 'not-json'
+              ? 'that file is not a shared Snug app'
+              : `that shared app file is not valid: ${result.detail ?? 'unknown issue'}`,
+      );
+    }
+    sharedOpenRequestStore.set(result.entry.bundleId);
   };
 
   return (
@@ -858,12 +906,24 @@ function DataCard(): ReactElement {
               onChange={(event) => onImport(event.target.files?.[0])}
             />
           </label>
+          {/* The THIRD button (owner Q4): a shared app someone sent as a `.snug` attachment
+              joins "shared with you" — it never replaces this file (ADR-0063 §6). */}
+          <label className="btn file-btn" data-testid="add-shared-app">
+            add shared app
+            <input
+              type="file"
+              accept=".snug,application/json"
+              style={{ display: 'none' }}
+              onChange={(event) => onAddSharedApp(event.target.files?.[0])}
+            />
+          </label>
         </div>
         <span className="hint">
           the export is the whole file — every app you built, its versions, its data and its chats. this file is the
           app: take it to another hub, a personal origin, or a local runner. secrets stay out unless you opt in; with
           &quot;include secrets&quot; checked, the exported file then carries every saved key and token. imported
-          files ask you to re-confirm model endpoints before running.
+          files ask you to re-confirm model endpoints before running. a shared app (a `.snug` someone sent you
+          from an app’s share button) is added to your apps page to try and install — it never replaces this file.
         </span>
       </div>
     </Card>

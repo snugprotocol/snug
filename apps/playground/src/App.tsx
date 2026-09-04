@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
-import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 import {
   clearOpenUserFileError,
@@ -50,6 +50,7 @@ import { DownloadView } from './views/DownloadView.js';
 import { HubView } from './views/HubView.js';
 import { SettingsView } from './views/SettingsView.js';
 import { WebllmBanner } from './views/WebllmBanner.js';
+import { hydrateSharedInbox, sharedOpenRequestStore } from './share/sharedInbox.js';
 
 // The Run view carries the runner + sql.js driver — code-split so the hub stays light.
 const RunView = lazy(() => import('./run/RunView.js'));
@@ -76,7 +77,10 @@ export function App(): ReactElement {
       // The two latch inits are independent one-key reads of the hydrated file —
       // parallel on purpose (Gate-5 review): serializing them delayed the callout
       // by the protect-offer init, and a throw in one skipped the other entirely.
-      .then(() => Promise.all([initProtectOffer(), initDemoCallout()]));
+      .then(() => Promise.all([initProtectOffer(), initDemoCallout()]))
+      // The "shared with you" shelf mirrors `sharedApp:` rows of the file (ADR-0063 §4)
+      // — read after settings, like the latches, because it needs the open file.
+      .then(() => hydrateSharedInbox());
     // AL-07: the experimental webllm flag + WebGPU probe (idempotent, flag-gated).
     void initWebllm();
     // W2b: platform-only seam — a no-op on web (no open handler).
@@ -127,6 +131,9 @@ export function App(): ReactElement {
         {/* Finding 5: THE state where a user double-clicks their backup. Without
             the dialog here the open event parks invisibly behind this screen. */}
         <OpenUserFileConfirmDialog />
+      {/* A received bundle asks to be previewed from a non-React caller (the open
+          seam, the Settings picker); this navigates and clears the request (ADR-0063). */}
+      <SharedOpenNavigator />
       </div>
     );
   }
@@ -264,6 +271,22 @@ export function App(): ReactElement {
       <OpenUrlConfirmDialog />
     </div>
   );
+}
+
+/**
+ * Navigates to a shared preview when something outside the tree asks for one — the
+ * platform open seam after a double-clicked `.snug` bundle, the Settings "add shared
+ * app" picker. One consumer, so the request cannot be double-handled; cleared on read.
+ */
+function SharedOpenNavigator(): null {
+  const navigate = useNavigate();
+  const request = useStore(sharedOpenRequestStore);
+  useEffect(() => {
+    if (request === null) return;
+    sharedOpenRequestStore.set(null);
+    navigate(`/run/shared--${request}`);
+  }, [request, navigate]);
+  return null;
 }
 
 /**

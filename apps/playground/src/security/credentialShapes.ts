@@ -118,3 +118,66 @@ export function redactCredentialShapes(value: string): string {
 export function scrubCredentialProse(value: string): string {
   return redact(value, 'prose');
 }
+
+// ------------------------------------------------------------ share scan (ADR-0063)
+
+export interface CredentialShapeHit {
+  /** 1-based line of the match. */
+  line: number;
+  /** A short label for the shape family, for the warning copy. */
+  family: string;
+  /** The first characters of the match, enough to recognise it — never the whole value. */
+  preview: string;
+}
+
+/**
+ * THE SHARE SCAN (TASK-20260904, AC5) — finds, never rewrites. A sharer is about to hand
+ * their app's html and docs to someone else, so the question is "does this look like it
+ * contains a key?", answered as a NAMED WARNING with a line number that the sharer can
+ * act on ("share anyway" stays theirs — they own the code).
+ *
+ * A third MODE rather than a third list (lesson 2026-08-23: single-home the shapes, keep
+ * tolerance a per-consumer mode): the high-precision prefixed shapes run as-is; the
+ * scheme / pair / query shapes run DIGIT-GUARDED (their alphabets overlap ordinary prose
+ * and code — "Basic credentials" in a shipped starter, `token endpoint` in a doc); the
+ * long-run shape does not run at all (base64 images and minified code trip it, and a
+ * shipped starter that cannot be shared is a scan that will be ignored — finding 3).
+ */
+export function findCredentialShapes(value: string): CredentialShapeHit[] {
+  const hits: CredentialShapeHit[] = [];
+  if (!value) return hits;
+  for (const { pattern, digitGuardInProse, proseOnly } of CREDENTIAL_SHAPES) {
+    if (proseOnly === true) continue;
+    const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+    for (const match of value.matchAll(re)) {
+      const prefix = typeof match[1] === 'string' ? match[1] : '';
+      const target = match[0].slice(prefix.length);
+      // Every shape with a leading capture group (scheme word, `key:` name, `?param=`)
+      // is digit-guarded here, whether or not prose mode guards it: in code and docs
+      // those alphabets are ordinary text. The prefixed key shapes have no group and
+      // need no guard.
+      if ((digitGuardInProse === true || prefix !== '') && !/\d/.test(target)) continue;
+      // A scheme word followed by a SHORT digit-bearing word is prose about tokens
+      // ("Token base64-encodes a URL", the Ledger lessons doc); real scheme-carried
+      // tokens are long. Twenty characters clears every prose collision measured
+      // against the shipped starters and still catches a bearer/basic value.
+      if (/^(?:Bearer|Basic|Token|Digest|Negotiate)\s+$/i.test(prefix) && target.length < 20) continue;
+      const index = match.index ?? 0;
+      const line = value.slice(0, index).split('\n').length;
+      hits.push({ line, family: familyOf(pattern), preview: `${match[0].slice(0, 12)}…` });
+    }
+  }
+  return hits;
+}
+
+function familyOf(pattern: RegExp): string {
+  const source = pattern.source;
+  if (source.includes('sk-')) return 'an API key (sk-…)';
+  if (source.includes('AIza')) return 'a Google API key';
+  if (source.includes('gh[pousr]') || source.includes('github_pat')) return 'a GitHub token';
+  if (source.includes('AKIA')) return 'an AWS access key';
+  if (source.includes('xox')) return 'a Slack token';
+  if (source.includes('Bearer|Basic')) return 'a scheme-carried token';
+  if (source.includes('[?&]')) return 'a credential in a URL';
+  return 'a key/value credential pair';
+}

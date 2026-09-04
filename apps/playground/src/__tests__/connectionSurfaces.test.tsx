@@ -71,8 +71,10 @@ describe('AC9 — the app header offers a way back to its connections', () => {
     // applies it. Both halves are asserted so neither can be dropped silently, and the
     // rendered negative ("a starter shows no connections control") is pinned in
     // `runHeaderIcons.test.tsx`.
+    // Re-pointed again (TASK-20260904, ADR-0063): a SHARED preview is unowned the same
+    // way, so RunView hands the cluster `isUnownedId(id)` (starter OR shared).
     expect(headerActions).toMatch(/connectionSlots > 0 && !isStarter/);
-    expect(runView).toMatch(/isStarter=\{isStarterId\(id\)\}/);
+    expect(runView).toMatch(/isStarter=\{isUnownedId\(id\)\}/);
   });
 
   it('sits in the app-level action cluster, ahead of the theme toggle', () => {
@@ -83,21 +85,17 @@ describe('AC9 — the app header offers a way back to its connections', () => {
     // model selector was swapped ahead of connections; the rendered document order is
     // pinned by `runHeaderIcons.test.tsx`, which measures nodes rather than strings.
     //
-    // MIGRATED again (TASK-20260821-hardening-polish): the export button is now hidden
-    // behind SHOW_APP_EXPORT, so the visible header order is model select → connections
-    // and the manage-<-export index claim moved to the DORMANT path: the export control
-    // must survive in source, behind the one flag, after connections. Settings owns the
-    // visible export surface.
+    // MIGRATED again (TASK-20260904-app-sharing, ADR-0063 §2): the dormant per-app
+    // export is DELETED (a SQLite slice named like a user file was a latent
+    // replace-your-file shape), and the SHARE control takes the last slot after
+    // connections. Settings owns the whole-file export surface.
     const select = headerActions.indexOf('<ModelSelect');
     const manage = headerActions.indexOf('data-testid="manage-connections"');
-    const exportBtn = headerActions.indexOf('data-testid="export-sqlite"');
+    const share = headerActions.indexOf('data-testid="share-app"');
     expect(select).toBeGreaterThan(-1);
     expect(select).toBeLessThan(manage);
-    // Hidden, not removed: the dormant export path still follows connections…
-    expect(manage).toBeLessThan(exportBtn);
-    // …and only ever renders behind the single flag.
-    expect(headerActions).toMatch(/showExport && canExport \?/);
-    expect(headerActions).toMatch(/showExport = SHOW_APP_EXPORT/);
+    expect(manage).toBeLessThan(share);
+    expect(headerActions).not.toMatch(/export-sqlite|SHOW_APP_EXPORT/);
     // The app-level cluster renders before the workspace-level theme toggle in RunView.
     expect(runView.indexOf('<RunHeaderActions')).toBeLessThan(runView.indexOf('switch to ${theme'));
   });
