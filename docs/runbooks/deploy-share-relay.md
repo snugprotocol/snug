@@ -68,37 +68,42 @@ Until then the hosted playground ships the attachment path alone, by design.
 
 ## Deploy log
 
-- **2026-09-04T19:16:11Z — first deploy.** Worker `snug-share-relay` version
-  `8e431bbd-4c1e-432e-b7a5-f2845a670baa`, from `main @ 2fe537d`, bindings confirmed at
-  upload (`env.BUNDLES` → `snug-share-bundles`, `TTL_DAYS=30`, the origins allowlist).
-  Bucket `snug-share-bundles` created 19:15:45Z with lifecycle rule `expire-shares`
-  (expire after 31 days, all prefixes) — read back with `lifecycle list`.
-  **Verified through `wrangler dev --remote` against the REAL bucket** (the custom domain
-  was not serving — see below): root → bodiless 404; `POST /v1/bundles` → 201 with a
-  22-char id, a +30d `expiresAt` and a 43-char revoke token; `GET` returned the bytes;
-  `DELETE` with a WRONG token → 404 (no existence oracle); with the real token → 204;
-  `GET` after revoke → 404. The contract holds end to end against real R2.
-  **NOT verified:** the public hostname (below), and the WAF rate-limit rule is not yet
-  created.
+- **2026-09-04T19:16:11Z — first deploy, LIVE and verified on the public host.** Worker
+  `snug-share-relay` version `8e431bbd-4c1e-432e-b7a5-f2845a670baa`, from `main @ 2fe537d`,
+  bindings confirmed at upload (`env.BUNDLES` → `snug-share-bundles`, `TTL_DAYS=30`, the
+  origins allowlist). Bucket created 19:15:45Z with lifecycle rule `expire-shares`
+  (expire after 31 days, all prefixes), read back with `lifecycle list`.
 
-### Known issue — `share.snugprotocol.org` returns 500 / error 1104
+  **Verified against `https://share.snugprotocol.org` itself** (~13 min after the deploy):
+  root and an unknown id → bodiless 404 · `POST` → 201 with a 22-char id, a +30d
+  `expiresAt` and a 43-char revoke token · `GET` → the exact bytes, with
+  `content-type: application/octet-stream`, `cache-control: private, no-store, max-age=0`,
+  `x-content-type-options: nosniff` and `x-snug-expires-at` · a **foreign** Origin's POST →
+  403 and its preflight → 404, while the playground origin's preflight → 204 with the
+  expected `access-control-allow-*` · a WRONG revoke token → 404 **and the object survives**
+  (no existence oracle, no accidental delete) · the real token → 204, after which `GET` →
+  404 and `wrangler r2 bucket info` reports `object_count: 0` (deleted from storage, not
+  just from the API's view) · a 1.2 MiB body → 413 · an empty body → 400 · `/v2/bundles`
+  → 404.
 
-The first deploy bound the custom domain (`Deployed snug-share-relay triggers` names it),
-DNS resolves to Cloudflare's proxy, and TLS completes — but every path returns a 500 with
-`error code: 1104`, including paths that never touch R2. **`wrangler tail` shows the
-Worker receiving nothing**, so the request is failing at the edge BEFORE the Worker runs:
-this is a routing/provisioning fault, not application code. Ruled out: the Worker itself
-(the full round trip passes against the real bucket via `--remote`), a stale deploy (one
-version, 100%), a conflicting CNAME (none — only Cloudflare A records), the zone
-(`snugprotocol.org` and `playground.snugprotocol.org` both serve 200), and slow
-certificate provisioning (unchanged across ~10 minutes of polling).
+  **Still owed:** the WAF rate-limit rule (below) — the host is live and currently
+  unrated-limited.
 
-Next steps when picking this up: check **Workers & Pages → snug-share-relay → Settings →
-Domains & Routes** in the dashboard for the domain's status (it may show a pending or
-errored certificate), and if it is stuck, remove and re-add the custom domain there. Do
-NOT "fix" this by turning on `workers_dev` — the config pins `workers_dev: false` on
-purpose (a `*.workers.dev` name is a second, unpinned host for a blind relay) and
-`deploy-relay.mjs`'s config preflight refuses that change.
+### Note — the custom domain takes longer than ~10 minutes to start routing
+
+Between the deploy and roughly 13 minutes later, every path on `share.snugprotocol.org`
+returned **500 / `error code: 1104`** while DNS resolved and TLS completed. It resolved
+itself with no intervention. **This is normal propagation for a newly bound Workers custom
+domain — do not treat it as a fault and do not start removing/re-adding the domain.**
+
+Two things made it look worse than it was, worth knowing for the next deploy: `wrangler
+tail` showed the Worker receiving nothing during the 500s (consistent with the edge failing
+before the Worker, which is exactly what propagation looks like), and the dashboard showed
+the domain attached with **0 errors** the whole time — the dashboard was right and the curl
+was early. If it is ever genuinely stuck, check **Workers & Pages → snug-share-relay →
+Settings → Domains & Routes**. Do NOT "fix" routing by enabling `workers_dev`: the config
+pins it false on purpose (a `*.workers.dev` name is a second, unpinned host for a blind
+relay) and `deploy-relay.mjs`'s preflight refuses the change.
 
 ## Rollback
 
