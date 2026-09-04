@@ -281,7 +281,14 @@ grant goes into `snug_settings` under a namespaced key rather than a new table �
 settings key is host-internal machinery. Two exist today and both travel in the file, so
 they are documented for transparency: `appModel:<appId>` (a per-app model preference;
 absent means inherit the global setting, live) and `sidecarIdentityDirectory` (a
-third-party-identity directory with its own lifecycle rules — §20).
+third-party-identity directory with its own lifecycle rules — §20). The app-sharing
+revision (2026-09-04, §12.14) adds three more, all host-internal: `sharedApp:<bundleId>`
+(a received bundle the user kept on their shelf — the bundle's text, keyed by its
+content id; never per-app), `sharedBundle:<appId>` (which bundle an installed shared
+copy currently reflects, so a re-share is detected by identity), and
+`shareLink:<appId>:<linkId>` (the public record of a link the user minted: id and
+expiry; the revoke token and decryption key live in `snug_secrets` under `share:<linkId>`
+and never travel with a hub-bound copy). The per-app keys are cascaded on app delete.
 
 ### 8.2 Per-app data: native namespaced tables
 
