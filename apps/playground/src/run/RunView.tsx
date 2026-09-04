@@ -440,6 +440,22 @@ export default function RunView(): ReactElement {
   }, [id, wizardRevision]);
 
   const installLatch = useRef(false);
+  /**
+   * Is this view still mounted? The install act is a chain of awaits — starter HTML, the
+   * library save, the connection/contract/doc copies — and it ends by clearing its own
+   * spinner. Nothing cancelled those on unmount, so a view closed mid-install set state
+   * on a dead tree: harmless in a browser (React warns), fatal in CI, where the whole
+   * suite fails on the unhandled `window is not defined` thrown after jsdom is torn
+   * down. The install itself must still FINISH — it is writing the user's app — so this
+   * guards the setState, never the work.
+   */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const installThisStarter = useCallback(async (): Promise<void> => {
     if (installLatch.current || !isStarterId(id)) return;
     installLatch.current = true;
@@ -479,10 +495,10 @@ export default function RunView(): ReactElement {
       }
       navigate(`/run/${entry.id}`, { replace: true });
     } catch (err) {
-      setInstallError(err instanceof Error ? err.message : String(err));
+      if (mounted.current) setInstallError(err instanceof Error ? err.message : String(err));
     } finally {
       installLatch.current = false;
-      setInstalling(false);
+      if (mounted.current) setInstalling(false);
     }
   }, [id, navigate]);
 

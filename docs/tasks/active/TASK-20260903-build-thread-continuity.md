@@ -1,6 +1,6 @@
 # TASK-20260903-build-thread-continuity: Build conversations survive navigation, run in parallel, and are listed on the build page
 
-- **Status**: in-review — **PR #159** open (https://github.com/snugprotocol/snug/pull/159); owner review + merge next
+- **Status**: in-review — **PR #159**; owner asked to merge at close of session 2026-09-03
 - **Owner**: Jeetu
 - **Risk tier**: medium (Playground logic — `apps/playground` only; no `protocol`/`runner`/`auth`/`db` schema change; C1 posture unchanged — see "C1 note" under Plan)
 - **Branch**: `fix/TASK-20260903-build-thread-continuity`
@@ -168,4 +168,12 @@ One branch, one PR; no migration; the `snug:thread` sessionStorage key keeps its
 - Why the in-app Chromium probe hid it: some wide child kept Chromium's column at 780 in the app (the static page collapses in Chromium too) — the owner is on WebKit (desktop shell), where it always collapsed. Lesson written.
 - Headless WebKit cannot open the app's OPFS user file here ("unknown transient reason"), so the WebKit half is proven on the static harness, not on the app.
 - Commit `5ec8d0d` (CSS + e2e); this journal/lesson/code-map follow in the next commit.
+
+### 2026-09-03 17:30 — Claude (for Jeetu) — session (Gate 6 close + CI red investigated)
+- **CI `workspace` went red on `ded072d`**, and the failure is NOT a failing test: all 1744 passed and the run failed on `Errors 1 error` — an unhandled `ReferenceError: window is not defined` thrown from `RunView.tsx` `setInstalling(false)` (the install chain's `finally`) after vitest tore the jsdom environment down. Vitest fails the whole run on an unhandled error even when every test is green.
+- **Verdict: a pre-existing flake, not this branch.** Evidence, in the order it was gathered: (1) the branch does not touch the failing suite (`starterInstallDisclosure.test.tsx`) nor RunView's install path — the only RunView change is the inspector merge, and the only `library.ts` change is on the DELETE seam, which that suite never exercises; (2) it did not reproduce locally in 2 full branch runs, nor in 3 full runs on a clean `main` worktree; (3) **decisive** — CI PASSED twice on this same branch with the identical test files (`ae5b9ab`, `7433d47`) and failed once on `ded072d`, a docs+CSS commit. Same code, different outcome ⇒ load-dependent interleaving on the slower runner.
+- **Fixed the real defect anyway** (one line each): `installThisStarter` now guards its two setState calls with a `mounted` ref. The install itself still runs to completion — it is writing the user's app — only the state writes are skipped. This is the line the CI stack names.
+- **Honest gap, deliberately shipped without a regression test.** Four attempts at a deterministic test all passed with the guard REMOVED, i.e. proved nothing, so none were kept (never keep a green test that cannot fail): (a) unmount mid-install + listen for errors — the whole install chain resolves inside one `act()` window, so nothing is pending at teardown; (b) same, deleting `globalThis.window` — same reason; (c) gating the last await (`installStarterDocs`) via `vi.mock` so the chain is genuinely parked, then deleting `window` — the released continuation is still queued when the test ends, so `finally` never ran inside the assertion window (instrumented and confirmed: a probe inside `finally` never printed); (d) same with the view left MOUNTED to match the CI shape — same outcome. What would actually pin it is a test that can await the post-teardown continuation, which vitest's environment lifecycle does not expose. Recorded rather than faked.
+- Gates re-run after the fix: typecheck clean, install suites 48/48, **playground 1744/1744 with no `Errors` line**.
+- Next step: merge PR #159 (owner asked); then move this file to `done/`.
 
