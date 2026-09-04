@@ -271,7 +271,7 @@ export function createDesktopPlatform(): SnugPlatform {
         return { running: false, models: [] };
       }
     },
-    onOpenUserFile(cb: (bytes: Uint8Array, path: string) => void) {
+    onOpenSnugFile(cb: (bytes: Uint8Array, path: string) => void) {
       const deliver = async (path: string): Promise<void> => {
         try {
           const raw = await invoke<ArrayBuffer>('read_opened_file', { path });
