@@ -155,6 +155,12 @@ export interface SnugPlatform {
    */
   onOpenSnugFile?(cb: (bytes: Uint8Array, path: string) => void): void;
   /**
+   * Registers the `snug://` share-link handler (ADR-0064): the full URL string as the
+   * OS delivered it, for `snug://s/<id>#<key>` only. Desktop only; the web receiver is
+   * the `/s/:id` route. The playground parses strictly and fetches from the pinned relay.
+   */
+  onOpenShareLink?(cb: (url: string) => void): void;
+  /**
    * THE SHELL UPDATE CHANNEL (ADR-0047, TASK-20260821). Desktop only; absence means
    * "this build cannot update itself" and every update surface renders nothing — the
    * web hub instead offers the /download page.

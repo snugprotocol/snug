@@ -19,6 +19,7 @@
     "oauth:allow-cancel",
     "updater:default",
     "process:allow-restart",
+    "deep-link:default",
     {
       "identifier": "http:default",
       "allow": [

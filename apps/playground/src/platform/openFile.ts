@@ -18,6 +18,7 @@
 import { importUserFile } from '../state/sync.js';
 import { isEncryptedContainer, sniffSnugFile } from '@snugprotocol/db';
 import { receiveSharedBundle, sharedInboxNoteStore, sharedOpenRequestStore } from '../share/sharedInbox.js';
+import { receiveShareLinkUrl, type ShareLinkFailure } from '../share/receiveShareLink.js';
 
 import { restoreUserDbFromBytes, userDbNeedsRestore, userDbStatusStore } from '../state/userdb.js';
 import { createStore, type Store } from '../state/store.js';
@@ -182,4 +183,31 @@ export function registerPlatformOpenFile(): void {
       openUserFileErrorStore.set(err instanceof Error ? err.message : String(err));
     });
   });
+  // ADR-0064: a `snug://s/<id>#<key>` share link delivered by the OS. Same act as the
+  // web `/s/:id` page — fetch, decrypt, shelf-in-memory, open the preview — and every
+  // refusal reaches the same banner. Web: no seam, no-op.
+  getPlatform().onOpenShareLink?.((url) => {
+    openUserFileErrorStore.set(null);
+    void receiveShareLinkUrl(url)
+      .then((result) => {
+        if (result.ok) {
+          sharedOpenRequestStore.set(result.bundleId);
+          return;
+        }
+        openUserFileErrorStore.set(SHARE_LINK_FAILURE_COPY[result.reason]);
+      })
+      .catch((err: unknown) => {
+        openUserFileErrorStore.set(err instanceof Error ? err.message : String(err));
+      });
+  });
 }
+
+const SHARE_LINK_FAILURE_COPY: Record<ShareLinkFailure, string> = {
+  'bad-link': 'that is not a Snug share link',
+  'no-relay': 'share links are not available in this build',
+  gone: 'that share link has expired or was revoked',
+  unreachable: 'could not reach the share relay',
+  'bad-key': 'that share link is damaged — ask the sender to copy it again',
+  invalid: 'the shared app behind that link cannot be opened',
+  'shelf-full': 'your shared shelf is full — install or dismiss an app first',
+};
