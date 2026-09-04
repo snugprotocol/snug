@@ -20,6 +20,7 @@ import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
 import { refreshAppMeta } from './appMeta.js';
 import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
+import { resetThreadSessions } from '../agent/threadSessions.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
@@ -60,6 +61,9 @@ async function afterForeignBytes(): Promise<void> {
   // reset, the previous file's third-party contacts would be re-persisted into the
   // imported/pulled file on the next harvest (TASK-20260820, Gate-5 review).
   resetSidecarIdentitySession();
+  // Same seam for the per-thread build sessions (ADR-0062): they mirror rows of the
+  // file that was just replaced, and any in-flight turn would write into the new one.
+  resetThreadSessions();
   markEndpointsNeedConfirm();
   const db = await getUserDb();
   hydrateSettings(db);
@@ -278,6 +282,10 @@ export async function exportUserFile(includeSecrets: boolean): Promise<Blob> {
 export async function importUserFile(file: { arrayBuffer(): Promise<ArrayBuffer> }): Promise<void> {
   const db = await getUserDb();
   const bytes = new Uint8Array(await file.arrayBuffer());
+  // Abort BEFORE the swap (Gate-5 review): a turn still holding `db` could otherwise
+  // land a row inside the freshly imported file during the import's own awaits.
+  // `afterForeignBytes` resets again afterwards — that call also serves the pull path.
+  resetThreadSessions();
   await db.importUserDb(bytes);
   await afterForeignBytes();
 }

@@ -208,10 +208,11 @@ describe('AC7/AC8 — the live timer belongs to its round trip and stops when it
     expect(el.querySelectorAll('[data-testid="llm-pending"]')).toHaveLength(1);
     const rows = el.querySelectorAll('[data-testid="llm-round-trip"]');
     expect(rows).toHaveLength(3);
-    // The pending marker sits on the LAST row, the one that actually started.
-    expect(rows[2].querySelector('[data-testid="llm-pending"]')).not.toBeNull();
-    expect(rows[0].querySelector('[data-testid="llm-pending"]')).toBeNull();
+    // The pending marker sits on the row of the round trip that actually started —
+    // the NEWEST, which renders FIRST since TASK-20260903 AC13 (newest on top).
+    expect(rows[0].querySelector('[data-testid="llm-pending"]')).not.toBeNull();
     expect(rows[1].querySelector('[data-testid="llm-pending"]')).toBeNull();
+    expect(rows[2].querySelector('[data-testid="llm-pending"]')).toBeNull();
   });
 
   it('AC8 — a pending entry keeps its ticker when an OLDER entry is dropped from the list', () => {
@@ -362,3 +363,24 @@ describe('AC13 — cached % is shown only when the provider reported caching', (
     expect(el.querySelector('[data-testid="llm-cached"]')).not.toBeNull();
   });
 });
+
+describe('newest first (TASK-20260903 AC13)', () => {
+  it('renders the most recent round trip at the TOP, so the latest progress is in view without scrolling', () => {
+    const start = (index: number): Parameters<typeof llmInspectorReduce>[1] =>
+      ({ type: 'round_trip_start', index, request: { system: 's', messages: [] } }) as Parameters<
+        typeof llmInspectorReduce
+      >[1];
+    const el = mount(
+      <LlmInspectorPanel
+        state={state([start(0), completed({ index: 0, response: { ok: true, text: 'first', toolCalls: [], stopReason: 'end' } }), start(1)])}
+        mode="byok"
+      />,
+    );
+    const rows = [...el.querySelectorAll('[data-testid="llm-round-trip"]')];
+    expect(rows).toHaveLength(2);
+    // The pending (newest) entry is first in DOM order; the settled one below it.
+    expect(rows[0]?.querySelector('[data-testid="llm-pending"]')).not.toBeNull();
+    expect(rows[1]?.querySelector('[data-testid="llm-pending"]')).toBeNull();
+  });
+});
+

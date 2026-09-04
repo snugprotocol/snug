@@ -3,13 +3,15 @@
 //      KB-templated wire text is what actually reaches the transport.
 //   8. a `done` SSE event with empty/missing text falls back to the accumulated deltas
 //      instead of wiping the streamed reply.
-//   9. unmounting mid-turn aborts the in-flight request.
+//   9. unmounting mid-turn does NOT abort the in-flight request (inverted by ADR-0062 —
+//      the turn belongs to the thread session; only an explicit stop aborts).
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stopThread } from '../agent/threadSessions.js';
 import { useBuilderChat, type BuilderChat } from '../agent/useBuilderChat.js';
 import { modeStore } from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -154,7 +156,14 @@ describe('useBuilderChat (server mode)', () => {
     expect(agent?.displayText).toBe('the full reply');
   });
 
-  it('aborts the in-flight turn on unmount (fix 9)', async () => {
+  /**
+   * INVERTED by ADR-0062 (TASK-20260903-build-thread-continuity). Fix 9 used to abort the
+   * turn on unmount ("never leave a request running headless"); React Router unmounts the
+   * view on every route change, so leaving /build for "your apps" killed a 30-minute build.
+   * A turn now belongs to its THREAD SESSION, which outlives every view — the only abort
+   * is the user's explicit stop (or a user-DB swap seam).
+   */
+  it('keeps the in-flight turn alive on unmount — stop is the only abort (ADR-0062)', async () => {
     let seenSignal: AbortSignal | undefined;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       (_input: RequestInfo | URL, init?: RequestInit) =>
@@ -171,6 +180,9 @@ describe('useBuilderChat (server mode)', () => {
     expect(seenSignal).toBeDefined();
     expect(seenSignal?.aborted).toBe(false);
     r.unmount();
-    expect(seenSignal?.aborted).toBe(true);
+    await settle();
+    expect(seenSignal?.aborted, 'leaving the view must NOT abort the turn').toBe(false);
+    stopThread('thr-test');
+    expect(seenSignal?.aborted, 'an explicit stop still aborts it').toBe(true);
   });
 });

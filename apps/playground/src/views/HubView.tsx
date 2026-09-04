@@ -8,6 +8,7 @@ import { DesktopWelcome } from '../desktop/DesktopWelcome.js';
 import { useDesktopFirstRun } from '../desktop/firstRun.js';
 import { getPlatform } from '../platform/platform.js';
 import { refreshAppMeta, useAppMetaMap } from '../state/appMeta.js';
+import { mintBuildThread } from '../state/buildThread.js';
 import { userLibrary, type LibraryEntry } from '../state/library.js';
 import { listStarterApps, starterInstallSource } from '../starter/starterApps.js';
 import { starterUpdateStatus } from '../starter/starterUpdate.js';
@@ -201,6 +202,10 @@ function HubHome(): ReactElement {
   const startBuild = (text: string): void => {
     const trimmed = text.trim();
     if (trimmed === '') return;
+    // A NEW app gets a NEW thread (ADR-0062 D2). Before this the idea continued whatever
+    // thread the tab held — and if that thread was pinned to an app, the "new" idea
+    // silently became an edit of it.
+    mintBuildThread();
     navigate(`/build?idea=${encodeURIComponent(trimmed)}`);
   };
 

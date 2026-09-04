@@ -6,6 +6,7 @@
 
 import type { UserDb } from '@snugprotocol/db';
 
+import { resetThreadSessions } from '../agent/threadSessions.js';
 import { markAppRenamed } from './appMeta.js';
 import { forgetSidecarSession } from './sidecarForget.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
@@ -96,6 +97,9 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
       // deleteApp's cascade may have wiped the persisted identity directory; drop the
       // session's in-memory harvest with it (TASK-20260820, Gate-5 review).
       resetSidecarIdentitySession();
+      // The cascade also deleted the app's chat threads — drop their in-memory sessions
+      // (aborting any turn still editing the app) on the same seam (ADR-0062).
+      resetThreadSessions({ appId: id });
       // AFTER the committed cascade, so a dead helper can never fail the delete: logout
       // the linked device and erase the helper's on-disk session store.
       if (unlinkDevice) await forgetSidecarSession();

@@ -158,6 +158,55 @@ export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpos
         : openaiAdapter({ apiKey: key, ...modelDep, ...fetchDep });
     }
     case 'demo':
-      return mockAdapter(purpose === 'chat' ? demoChatScript() : demoAppScript());
+      return paced(mockAdapter(purpose === 'chat' ? demoChatScript() : demoAppScript()), demoSlowMs());
   }
+}
+
+/**
+ * E2E seam (`?demoslow=<ms>`, the same family as `?demoreq` / `?webllm=1`): pace each
+ * demo round trip so a real browser can observe a build IN FLIGHT. The scripted turns
+ * otherwise settle in ~15 ms — faster than any navigation — which makes "the build kept
+ * running while I was on another page" unprovable in Playwright (TASK-20260903 AC10).
+ * Read ONCE when the adapter is built, so a turn started on `/build?demoslow=…` keeps its
+ * pace after the page navigates away (the flag is not in the URL any more by then).
+ * Capped so a typo cannot park the demo forever; absent or invalid → no pacing at all.
+ */
+export const DEMO_SLOW_MAX_MS = 10_000;
+
+export function demoSlowMs(search: string = typeof window === 'undefined' ? '' : window.location.search): number {
+  try {
+    const raw = new URLSearchParams(search).get('demoslow');
+    if (raw === null) return 0;
+    const ms = Number(raw);
+    return Number.isFinite(ms) && ms > 0 ? Math.min(Math.round(ms), DEMO_SLOW_MAX_MS) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function paced(adapter: AgentAdapter, ms: number): AgentAdapter {
+  if (ms <= 0) return adapter;
+  return {
+    async complete(request) {
+      // The wait honours the turn's abort: a stopped or deleted paced demo build must
+      // not go on executing scripted tool calls for seconds after the user said stop.
+      await new Promise<void>((resolve, reject) => {
+        const signal = request.signal;
+        if (signal?.aborted === true) {
+          reject(new DOMException('aborted', 'AbortError'));
+          return;
+        }
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, ms);
+        function onAbort(): void {
+          clearTimeout(timer);
+          reject(new DOMException('aborted', 'AbortError'));
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      return adapter.complete(request);
+    },
+  };
 }

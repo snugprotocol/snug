@@ -55,7 +55,7 @@ import { downloadBlob, exportDatabase } from './exportDb.js';
 import { RunHeaderActions } from './RunHeaderActions.js';
 import { HelperInstallCard } from '../connections/HelperInstallCard.js';
 import { WHATSAPP_HELPER, helperNeedsInstall, refreshHelperStatus } from '../state/helperInstall.js';
-import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from './llmInspector.js';
+import { initialLlmInspectorState, llmInspectorReduce, mergeLlmInspectorStates, type LlmInspectorState } from './llmInspector.js';
 import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
@@ -201,14 +201,16 @@ export default function RunView(): ReactElement {
   const [mainThreadId, setMainThreadId] = useState<string | undefined>(undefined);
   const threadId = threadOverride ?? mainThreadId ?? `app:${id}`;
   const [appThreads, setAppThreads] = useState<Array<{ threadId: string; title?: string }>>([]);
-  // The LLM inspector's feed. In-memory only (AC14) — this reducer state is the ONLY
-  // place round trips live, and it dies with the view.
-  const [llmInspector, dispatchRoundTrip] = useReducer(llmInspectorReduce, initialLlmInspectorState as LlmInspectorState);
+  // The APP-FRAME transport's round trips: in-memory only (AC14), per mount. The
+  // builder chat's round trips live on the THREAD SESSION since ADR-0062 (they survive
+  // navigation, so a turn that kept running while the user was elsewhere is still fully
+  // inspectable on return) — the panel below merges the two for display. The chat's
+  // turn start still resets this reducer, as it always did.
+  const [frameInspector, dispatchRoundTrip] = useReducer(llmInspectorReduce, initialLlmInspectorState as LlmInspectorState);
   const onLlmEvent = useCallback((event: AgentTurnEvent): void => dispatchRoundTrip(event), []);
   const onTurnStart = useCallback((): void => dispatchRoundTrip('reset'), []);
   const chat = useBuilderChat(threadId, {
     ...(isStarterId(id) ? {} : { pinnedAppId: id }),
-    onLlmEvent,
     onTurnStart,
     // Provider-lane failures reuse the SAME repairable-code CTA as app-runtime net
     // errors (TASK-20260815 AC5) — one mapping, code-keyed, M12 filter included.
@@ -438,6 +440,22 @@ export default function RunView(): ReactElement {
   }, [id, wizardRevision]);
 
   const installLatch = useRef(false);
+  /**
+   * Is this view still mounted? The install act is a chain of awaits — starter HTML, the
+   * library save, the connection/contract/doc copies — and it ends by clearing its own
+   * spinner. Nothing cancelled those on unmount, so a view closed mid-install set state
+   * on a dead tree: harmless in a browser (React warns), fatal in CI, where the whole
+   * suite fails on the unhandled `window is not defined` thrown after jsdom is torn
+   * down. The install itself must still FINISH — it is writing the user's app — so this
+   * guards the setState, never the work.
+   */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const installThisStarter = useCallback(async (): Promise<void> => {
     if (installLatch.current || !isStarterId(id)) return;
     installLatch.current = true;
@@ -477,10 +495,10 @@ export default function RunView(): ReactElement {
       }
       navigate(`/run/${entry.id}`, { replace: true });
     } catch (err) {
-      setInstallError(err instanceof Error ? err.message : String(err));
+      if (mounted.current) setInstallError(err instanceof Error ? err.message : String(err));
     } finally {
       installLatch.current = false;
-      setInstalling(false);
+      if (mounted.current) setInstalling(false);
     }
   }, [id, navigate]);
 
@@ -607,7 +625,7 @@ export default function RunView(): ReactElement {
         ) : null}
       </div>
       {railTab === 'inspector' ? (
-        <ThinkPanel llm={llmInspector} mode={turnMode} />
+        <ThinkPanel llm={mergeLlmInspectorStates(chat.llmInspector, frameInspector)} mode={turnMode} />
       ) : railTab === 'docs' ? (
         <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} mode={turnMode} />
       ) : railTab === 'versions' ? (

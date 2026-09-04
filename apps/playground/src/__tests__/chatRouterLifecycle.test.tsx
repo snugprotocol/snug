@@ -5,7 +5,8 @@
  * The router's routing rules are tested in `chatRouter.test.ts`. This file tests the
  * things a new stage inside `send()` can break that have nothing to do with routing:
  *
- *  (a) ABORT — the classifier takes the turn's signal, so stop and unmount cancel it.
+ *  (a) ABORT — the classifier takes the turn's signal, so stop cancels it (unmount no
+ *      longer does — ADR-0062: the turn belongs to the thread session, not the view).
  *  (b) SETTLEMENT + PERSISTENCE — the clarify path settles the already-rendered streaming
  *      placeholder AND persists the exchange. A stage that returns early without doing
  *      both leaves a forever-spinner that also vanishes on reload.
@@ -20,6 +21,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stopThread } from '../agent/threadSessions.js';
 import { useBuilderChat, type BuilderChat } from '../agent/useBuilderChat.js';
 import { modeStore } from '../state/mode.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -206,7 +208,12 @@ describe('F-M4a — the classifier takes the turn’s abort signal', () => {
     expect(sawSignal?.aborted, 'stop must reach the classifier').toBe(true);
   });
 
-  it('unmounting aborts a classifier still in flight', async () => {
+  /**
+   * INVERTED by ADR-0062 (TASK-20260903-build-thread-continuity): the turn — classifier
+   * included — belongs to the thread session, not to the view. Leaving the view leaves the
+   * request RUNNING; the explicit stop (through the session) is what cancels it.
+   */
+  it('unmounting does NOT abort a classifier still in flight — stop does (ADR-0062)', async () => {
     classifierBehavior = 'hang';
     const { chat, unmount } = renderChat();
 
@@ -216,7 +223,9 @@ describe('F-M4a — the classifier takes the turn’s abort signal', () => {
     unmount();
     await settle();
 
-    expect(sawSignal?.aborted, 'leaving the view must not leave a headless request').toBe(true);
+    expect(sawSignal?.aborted, 'leaving the view must not cancel the turn').toBe(false);
+    stopThread(THREAD);
+    expect(sawSignal?.aborted, 'the explicit stop must still reach the classifier').toBe(true);
   });
 
   /**

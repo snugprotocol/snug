@@ -23,6 +23,8 @@ import type { UserDb } from '@snugprotocol/db';
 import { DocsPanel } from '../run/DocsPanel.js';
 import { LlmInspectorPanel } from '../run/LlmInspectorPanel.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
+import { dispatchLlmEvent, resetThreadSessions } from '../agent/threadSessions.js';
+import { activeBuildThreadStore, mintBuildThread } from '../state/buildThread.js';
 import { modeStore, type PlaygroundMode } from '../state/mode.js';
 import { BuilderView } from '../views/BuilderView.js';
 import { installTestUserDb } from './userdbTestHelper.js';
@@ -80,6 +82,8 @@ beforeEach(async () => {
   sessionStorage.clear();
   modeStore.set('byok');
   db = await installTestUserDb();
+  resetThreadSessions();
+  mintBuildThread();
 });
 
 afterEach(() => {
@@ -98,49 +102,16 @@ describe('BuilderView round-trip surface (AC13)', () => {
     expect(el.querySelector('[data-testid="builder-llm"]')).not.toBeNull();
   });
 
-  it('feeds useBuilderChat an onLlmEvent AND an onTurnStart handler', async () => {
-    // The item-10 bug, asserted at the seam: BuilderView must pass BOTH callbacks. A
-    // spy on the hook proves it, since the handlers are otherwise unobservable until a
-    // real round trip flows.
-    const hook = await import('../agent/useBuilderChat.js');
-    const spy = vi.spyOn(hook, 'useBuilderChat');
-    mountBuilder();
-    expect(spy).toHaveBeenCalled();
-    const options = spy.mock.calls[0]?.[1];
-    expect(options, 'BuilderView called useBuilderChat with no options object').toBeDefined();
-    expect(typeof options?.onLlmEvent).toBe('function');
-    expect(typeof options?.onTurnStart).toBe('function');
-  });
-
-  it('keeps the handlers referentially stable across re-renders', async () => {
-    // useBuilderChat's send() dep array includes them: inline arrows would recreate
-    // send() every render and churn every consumer.
-    const hook = await import('../agent/useBuilderChat.js');
-    const spy = vi.spyOn(hook, 'useBuilderChat');
+  // ADR-0062: BuilderView no longer owns a per-mount reducer fed through hook options —
+  // the inspector lives on the THREAD SESSION and the view renders it from there, which
+  // is what lets it survive navigation. The seam under test is therefore the session
+  // dispatch, not a pair of handlers.
+  it('renders round trips folded into the thread session, and clears them on the next turn', () => {
     const el = mountBuilder();
-    const first = spy.mock.calls.at(-1)?.[1];
-    // Force a re-render through real UI state (the composer's draft).
-    const textarea = el.querySelector('textarea');
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-      setter?.call(textarea, 'a new idea');
-      textarea!.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    await settle();
-    const latest = spy.mock.calls.at(-1)?.[1];
-    expect(spy.mock.calls.length).toBeGreaterThan(1);
-    expect(latest?.onLlmEvent).toBe(first?.onLlmEvent);
-    expect(latest?.onTurnStart).toBe(first?.onTurnStart);
-  });
-
-  it('renders round trips the handler receives, and clears them on the next turn', async () => {
-    const hook = await import('../agent/useBuilderChat.js');
-    const spy = vi.spyOn(hook, 'useBuilderChat');
-    const el = mountBuilder();
-    const options = spy.mock.calls[0]?.[1];
+    const threadId = activeBuildThreadStore.get();
 
     act(() => {
-      options?.onLlmEvent?.({
+      dispatchLlmEvent(threadId, {
         type: 'round_trip',
         index: 0,
         request: { system: 'you are snug', messages: [{ role: 'user', content: 'hi' }] },
@@ -151,9 +122,27 @@ describe('BuilderView round-trip surface (AC13)', () => {
     expect(el.querySelectorAll('[data-testid="llm-round-trip"]')).toHaveLength(1);
 
     act(() => {
-      options?.onTurnStart?.();
+      dispatchLlmEvent(threadId, 'reset');
     });
     expect(el.querySelectorAll('[data-testid="llm-round-trip"]')).toHaveLength(0);
+  });
+
+  it('a real builder turn feeds the session inspector (the item-10 bug, at the wire)', async () => {
+    // The item-10 bug: useBuilderChat was called with NO observer and every round trip
+    // was dropped. Now the hook folds its own events into the session unconditionally —
+    // proven here with a direct-mode turn on the keyless (mock) ladder, no handler spy.
+    const el = mountBuilder();
+    const textarea = el.querySelector('textarea');
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+      setter?.call(textarea, 'build me a thing');
+      textarea!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => {
+      el.querySelector<HTMLButtonElement>('.composer button')?.click();
+    });
+    await settle(50);
+    expect(el.querySelectorAll('[data-testid="llm-round-trip"]').length).toBeGreaterThan(0);
   });
 });
 
@@ -161,14 +150,11 @@ describe('BuilderView round-trip surface (AC13)', () => {
 
 describe('builder round trips reach no storage (AC14)', () => {
   it('a round trip fed through the builder surface for real leaves no bytes anywhere', async () => {
-    const hook = await import('../agent/useBuilderChat.js');
-    const spy = vi.spyOn(hook, 'useBuilderChat');
     const el = mountBuilder();
-    const options = spy.mock.calls[0]?.[1];
-    expect(typeof options?.onLlmEvent).toBe('function');
+    const threadId = activeBuildThreadStore.get();
 
     act(() => {
-      options!.onLlmEvent!({
+      dispatchLlmEvent(threadId, {
         type: 'round_trip',
         index: 0,
         request: {
@@ -199,10 +185,8 @@ describe('builder round trips reach no storage (AC14)', () => {
       sseResponse([`event: done\ndata: {"text":"visible builder reply"}\n\n`]),
     );
     modeStore.set('subscription');
-    const hook = await import('../agent/useBuilderChat.js');
-    const spy = vi.spyOn(hook, 'useBuilderChat');
     const el = mountBuilder();
-    const options = spy.mock.calls[0]?.[1];
+    const threadId = activeBuildThreadStore.get();
 
     const textarea = el.querySelector('textarea');
     act(() => {
@@ -215,9 +199,9 @@ describe('builder round trips reach no storage (AC14)', () => {
     });
     await settle(20);
 
-    // The round trip arrives through the handler the same way a direct-mode turn would.
+    // The round trip reaches the session the same way a direct-mode turn's would.
     act(() => {
-      options!.onLlmEvent!({
+      dispatchLlmEvent(threadId, {
         type: 'round_trip',
         index: 0,
         request: { system: BUILDER_MARKER, messages: [] },
