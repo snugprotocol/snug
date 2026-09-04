@@ -69,6 +69,8 @@ import {
   appProviderSettingKey,
   appRenamedSettingKey,
   starterVersionSettingKey,
+  shareLinkSettingPrefixFor,
+  sharedBundleSettingKey,
 } from './app-settings-keys.js';
 import { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './sidecar-identity-keys.js';
 import { base64ToBytes } from '../base64.js';
@@ -2322,6 +2324,13 @@ function construct(
         //     app-provider-setting.test.ts.
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [appProviderSettingKey(appId)]);
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [appRenamedSettingKey(appId)]);
+        //     … and the share rows (TASK-20260904, ADR-0063): the one-per-app installed
+        //     bundle marker by equality, and the MANY-per-app minted-link records by the
+        //     same escaped prefix delete the `auth:` slice uses — mutation-checked by
+        //     app-bundle.test.ts.
+        db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [sharedBundleSettingKey(appId)]);
+        const linkPrefix = shareLinkSettingPrefixFor(appId).replace(/([!%_])/g, '!$1');
+        db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key LIKE ? ESCAPE '!'`, [`${linkPrefix}%`]);
         // 3d. The sidecar identity directory, when this app held the LAST approved
         //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the
         //     transaction: the check reads the connection rows step 3 just deleted, so

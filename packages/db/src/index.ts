@@ -100,7 +100,36 @@ export {
   appProviderSettingKey,
   appRenamedSettingKey,
   starterVersionSettingKey,
+  SHARED_APP_SETTING_PREFIX,
+  SHARED_BUNDLE_SETTING_PREFIX,
+  SHARE_LINK_SETTING_PREFIX,
+  appIdFromSharedBundleSettingKey,
+  bundleIdFromSharedAppSettingKey,
+  shareLinkSettingKey,
+  shareLinkSettingPrefixFor,
+  sharedAppSettingKey,
+  sharedBundleSettingKey,
 } from './userdb/app-settings-keys.js';
+
+// App sharing (TASK-20260904, ADR-0063): build / install / update one app as a bundle, and
+// the first-bytes sniff that tells a bundle from a user file.
+export {
+  SHARE_INSTALL_SOURCE_PREFIX,
+  buildAppBundle,
+  declareSharedConnections,
+  installAppFromBundle,
+  seedDocsAbsentOnly,
+  shareInstallSource,
+  sniffSnugFile,
+  stripRequirementForShare,
+  updateAppFromBundle,
+  type AppBundleInstallOptions,
+  type AppBundleInstallResult,
+  type AppBundleUpdateResult,
+  type BuildAppBundleOptions,
+  type RefusedSlot,
+  type SnugFileKind,
+} from './userdb/app-bundle.js';
 
 export { SIDECAR_IDENTITY_DIRECTORY_SETTING_KEY } from './userdb/sidecar-identity-keys.js';
 export {

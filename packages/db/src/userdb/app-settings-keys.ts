@@ -102,3 +102,70 @@ export function appIdFromStarterVersionSettingKey(key: string): string | undefin
   const appId = key.slice(STARTER_VERSION_SETTING_PREFIX.length);
   return appId.length === 0 ? undefined : appId;
 }
+
+// ------------------------------------------------ app sharing (TASK-20260904, ADR-0063)
+
+/** The `sharedBundle:` namespace prefix. */
+export const SHARED_BUNDLE_SETTING_PREFIX = 'sharedBundle:';
+
+/**
+ * `sharedBundle:<appId>` — the content id (`appBundleId`) of the bundle this shared
+ * install currently reflects. Written by install and by update; read to decide whether a
+ * re-received bundle of the same lineage is an UPDATE (ids differ) or already current
+ * (ids equal) — identity, never html byte-equality, so a docs-only re-share is offered
+ * (lesson 2026-08-21). One row per app ⇒ equality-deleted in `deleteApp`'s cascade.
+ */
+export function sharedBundleSettingKey(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${SHARED_BUNDLE_SETTING_PREFIX}${appId}`;
+}
+
+/** The appId a settings key names, or `undefined` if the key is not a shared-bundle marker. */
+export function appIdFromSharedBundleSettingKey(key: string): string | undefined {
+  if (!key.startsWith(SHARED_BUNDLE_SETTING_PREFIX)) return undefined;
+  const appId = key.slice(SHARED_BUNDLE_SETTING_PREFIX.length);
+  return appId.length === 0 ? undefined : appId;
+}
+
+/** The `shareLink:` namespace prefix. */
+export const SHARE_LINK_SETTING_PREFIX = 'shareLink:';
+
+/**
+ * `shareLink:<appId>:<linkId>` — the PUBLIC record of a link the user minted for this app
+ * (`{ id, expiresAt }`); the revoke token and the decryption key live in `snug_secrets`
+ * under `share:<linkId>`, which hub-origin sync and default exports never carry. MANY rows
+ * per app, so the cascade is a prefix delete on `shareLink:<appId>:` with the same
+ * `!`-escaping the `auth:` prefix uses.
+ */
+export function shareLinkSettingKey(appId: string, linkId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  if (linkId.length === 0) throw new Error('linkId must be non-empty');
+  return `${shareLinkSettingPrefixFor(appId)}${linkId}`;
+}
+
+/** The per-app prefix every `shareLink:` row of one app shares — the cascade's LIKE pattern base. */
+export function shareLinkSettingPrefixFor(appId: string): string {
+  if (appId.length === 0) throw new Error('appId must be non-empty');
+  return `${SHARE_LINK_SETTING_PREFIX}${appId}:`;
+}
+
+/** The `sharedApp:` namespace prefix — the "shared with you" shelf (NOT app-scoped). */
+export const SHARED_APP_SETTING_PREFIX = 'sharedApp:';
+
+/**
+ * `sharedApp:<bundleId>` — a received bundle the user chose to keep on the shelf (its JSON
+ * text, plus receipt metadata). Keyed by CONTENT id, so the same bundle received twice is
+ * one row. Not per-app — nothing installed owns it — so `deleteApp` owes it nothing; the
+ * row is removed by dismiss or by install.
+ */
+export function sharedAppSettingKey(bundleId: string): string {
+  if (bundleId.length === 0) throw new Error('bundleId must be non-empty');
+  return `${SHARED_APP_SETTING_PREFIX}${bundleId}`;
+}
+
+/** The bundleId a settings key names, or `undefined` if the key is not a shelf row. */
+export function bundleIdFromSharedAppSettingKey(key: string): string | undefined {
+  if (!key.startsWith(SHARED_APP_SETTING_PREFIX)) return undefined;
+  const bundleId = key.slice(SHARED_APP_SETTING_PREFIX.length);
+  return bundleId.length === 0 ? undefined : bundleId;
+}
