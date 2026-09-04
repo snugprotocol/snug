@@ -176,7 +176,7 @@ describe('receiveShareLink + SharedLinkView (AC20)', () => {
   it('a good link lands the bundle on the shelf IN MEMORY, strips the fragment, and navigates to the preview', async () => {
     const sealed = await encryptBundle(new TextEncoder().encode(bundleText));
     const id = 'C'.repeat(22);
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(sealed.ciphertext, { status: 200 })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sealed.ciphertext as unknown as BodyInit, { status: 200 })));
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const { path } = await renderLink(`/s/${id}#${sealed.key}`);
     expect(path()).toMatch(/^\/run\/shared--[0-9a-f]{64}$/);
@@ -203,7 +203,7 @@ describe('receiveShareLink + SharedLinkView (AC20)', () => {
     container?.remove();
 
     const sealed = await encryptBundle(new TextEncoder().encode(bundleText));
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(sealed.ciphertext, { status: 200 })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sealed.ciphertext as unknown as BodyInit, { status: 200 })));
     view = await renderLink(`/s/${'D'.repeat(22)}#${'x'.repeat(43)}`);
     expect(view.el.querySelector('[data-testid="shared-link-failure"]')?.getAttribute('data-reason')).toBe('bad-key');
     if (root !== undefined) act(() => root?.unmount());
