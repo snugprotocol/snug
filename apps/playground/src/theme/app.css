@@ -3027,3 +3027,27 @@ img.identity-avatar {
   font-size: 0.88rem;
   line-height: 1.5;
 }
+
+.share-link-field {
+  flex: 1 1 260px;
+  min-width: 0;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  padding: 6px 8px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--hairline, #8884);
+  background: var(--surface);
+  color: inherit;
+}
+.share-active-links {
+  list-style: none;
+  padding-left: 0;
+}
+.share-active-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.shared-link-view {
+  padding: var(--space-4);
+}

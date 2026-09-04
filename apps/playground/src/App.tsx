@@ -49,6 +49,7 @@ import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
 import { HubView } from './views/HubView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { SharedLinkView } from './views/SharedLinkView.js';
 import { WebllmBanner } from './views/WebllmBanner.js';
 import { hydrateSharedInbox, sharedOpenRequestStore } from './share/sharedInbox.js';
 
@@ -238,6 +239,9 @@ export function App(): ReactElement {
               </Suspense>
             }
           />
+          {/* The share LINK receiver (ADR-0064): every platform's landing page for
+              `/s/<id>#<key>`; opens the preview from memory, never writes the file. */}
+          <Route path="/s/:id" element={<SharedLinkView />} />
           <Route path="/settings" element={<SettingsView />} />
           <Route path="/download" element={<DownloadView />} />
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />

@@ -44,7 +44,9 @@ import { installSharedEntry } from '../share/installShared.js';
 import { ShareSheet } from '../share/ShareSheet.js';
 import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
 import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
-import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, sharedInboxStore } from '../share/sharedInbox.js';
+import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, keepSharedEntry, sharedInboxStore } from '../share/sharedInbox.js';
+import { desktopLinkFor } from '../share/relayClient.js';
+import { getPlatform } from '../platform/platform.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { installStarterDocs } from '../starter/starterDocs.js';
@@ -635,6 +637,9 @@ export default function RunView(): ReactElement {
   // The shelf entry behind a shared preview route, for the header and the docs tab.
   const shelf = useStore(sharedInboxStore);
   const sharedEntry = isSharedId(id) ? shelf.find((entry) => entry.bundleId === bundleIdFromSharedRouteId(id)) : undefined;
+  // "open in Snug for Mac" is offered on a macOS BROWSER only: the desktop shell is
+  // already there, and no other platform has the app (ADR-0021 D8).
+  const desktopOffer = getPlatform().kind === 'web' && /Mac/i.test(globalThis.navigator?.platform ?? '') && !/iPhone|iPad/i.test(globalThis.navigator?.userAgent ?? '');
 
   const onReset = useCallback((): void => {
     setExhausted(false);
@@ -867,6 +872,32 @@ export default function RunView(): ReactElement {
             */}
             {isSharedId(id) && sharedEntry !== undefined ? (
               <>
+                {/* A link preview lives in memory until kept (finding 12); an opened file is already kept. */}
+                {!sharedEntry.kept ? (
+                  <Button
+                    variant="ghost"
+                    data-testid="shared-keep"
+                    aria-label="keep this shared app on your shelf"
+                    title="keep it on your apps page (in your snug file) without installing yet"
+                    onClick={() => void keepSharedEntry(sharedEntry.bundleId)}
+                  >
+                    keep
+                  </Button>
+                ) : null}
+                {/* macOS web only: offer the desktop app — never auto-launch (ADR-0063 §7). */}
+                {sharedEntry.link !== undefined && desktopOffer ? (
+                  <Button
+                    variant="ghost"
+                    data-testid="shared-open-desktop"
+                    aria-label="open in Snug for Mac"
+                    title="if you have the Snug desktop app installed, open this shared app there"
+                    onClick={() => {
+                      window.location.href = desktopLinkFor(sharedEntry.link!.id, sharedEntry.link!.key);
+                    }}
+                  >
+                    open in Snug for Mac
+                  </Button>
+                ) : null}
                 <Button
                   variant="ghost"
                   data-testid="shared-run-with-ai"

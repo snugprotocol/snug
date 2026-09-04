@@ -44,6 +44,12 @@ export interface SharedEntry {
   source: SharedSource;
   /** True once the row is in the user file (opened attachment, or "keep" on a link). */
   kept: boolean;
+  /**
+   * For a LINK receipt only, in memory only — never persisted: the relay id and the
+   * fragment key, so the preview can offer "open in Snug for Mac" (the desktop deep
+   * link carries both) without the page keeping the key in its address bar.
+   */
+  link?: { id: string; key: string };
 }
 
 export type ReceiveResult =
@@ -106,7 +112,7 @@ function keptBytes(entries: readonly SharedEntry[]): number {
  */
 export async function receiveSharedBundle(
   text: string,
-  options: { source: SharedSource; persist: boolean },
+  options: { source: SharedSource; persist: boolean; link?: { id: string; key: string } },
 ): Promise<ReceiveResult> {
   const parsed = parseAppBundle(text);
   if (!parsed.ok) {
@@ -130,6 +136,7 @@ export async function receiveSharedBundle(
     receivedAt: new Date().toISOString(),
     source: options.source,
     kept: false,
+    ...(options.link !== undefined ? { link: options.link } : {}),
   };
   sharedInboxStore.set([...current, entry]);
   if (options.persist) {
