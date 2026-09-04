@@ -435,3 +435,12 @@ describe('sniffSnugFile — the first bytes say what a .snug file is', () => {
     expect(sniffSnugFile(big)).toBe('app-bundle');
   });
 });
+
+describe('listSettingKeys — the prefix readers’ enumeration', () => {
+  it('lists every settings key sorted, so a namespaced reader can parse rather than guess', () => {
+    db.setSetting('mode', 'byok');
+    db.setSetting('sharedApp:aaaa', { text: '{}' });
+    db.setSetting('sharedApp:bbbb', { text: '{}' });
+    expect(db.listSettingKeys()).toEqual(['mode', 'sharedApp:aaaa', 'sharedApp:bbbb']);
+  });
+});

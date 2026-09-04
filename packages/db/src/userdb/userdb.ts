@@ -725,6 +725,8 @@ export interface UserDb {
   setSetting(key: string, value: unknown): void;
   /** Remove one settings row entirely — `setSetting(key, undefined)` stores JSON null. */
   deleteSetting(key: string): void;
+  /** Every settings key, sorted — for namespaced-prefix readers (`sharedApp:`, `shareLink:`) that parse the key rather than trusting a prefix test. */
+  listSettingKeys(): string[];
   /**
    * Every app that has PINNED a model, as `{ [appId]: modelId }` (TASK-20260817).
    * Apps that inherit the global `model` setting are simply absent — inheritance is an
@@ -3125,6 +3127,10 @@ function construct(
     deleteSetting(key) {
       assertOpen();
       run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [key]);
+    },
+    listSettingKeys() {
+      assertOpen();
+      return select(`SELECT key FROM ${USERDB_TABLES.settings} ORDER BY key`).map((row) => String(row[0]));
     },
     listAppModels() {
       assertOpen();
