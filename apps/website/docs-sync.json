@@ -7,7 +7,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -17,7 +17,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -27,7 +27,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -37,7 +37,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -47,7 +47,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -57,7 +57,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -67,7 +67,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -77,7 +77,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -159,7 +159,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "446f68feebbc19b943d02bc76a32c6a533c82511a1149ae68e4f90656f3a5f97"
+          "sha256": "a926a4726fc781b6ebd237bcabea2987997ad1ddc09ba22392757df7efa548fd"
         }
       ]
     },
@@ -169,7 +169,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "446f68feebbc19b943d02bc76a32c6a533c82511a1149ae68e4f90656f3a5f97"
+          "sha256": "a926a4726fc781b6ebd237bcabea2987997ad1ddc09ba22392757df7efa548fd"
         }
       ]
     },
@@ -179,7 +179,7 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "446f68feebbc19b943d02bc76a32c6a533c82511a1149ae68e4f90656f3a5f97"
+          "sha256": "a926a4726fc781b6ebd237bcabea2987997ad1ddc09ba22392757df7efa548fd"
         }
       ]
     },
@@ -189,11 +189,11 @@
       "sources": [
         {
           "path": "docs/product-vision.md",
-          "sha256": "446f68feebbc19b943d02bc76a32c6a533c82511a1149ae68e4f90656f3a5f97"
+          "sha256": "a926a4726fc781b6ebd237bcabea2987997ad1ddc09ba22392757df7efa548fd"
         },
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -213,7 +213,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         },
         {
           "path": "packages/sdk/src/types.ts",
@@ -231,7 +231,7 @@
         },
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -241,7 +241,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -251,7 +251,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -261,7 +261,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -271,7 +271,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -281,7 +281,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },
@@ -291,7 +291,7 @@
       "sources": [
         {
           "path": "docs/spec-drafts/SPEC-1.0.md",
-          "sha256": "d82619d7f1f00da325c2a6cf0827cd0cec4a37b28c8b7c2d5329a5ab4d4ce2d7"
+          "sha256": "517267b57cdaba51070d82ee4fb7647b60a662cd10e14607789821ae83b461ff"
         }
       ]
     },

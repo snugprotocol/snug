@@ -36,23 +36,23 @@ describe('the import picker accepts what the product exports (AC4)', () => {
   });
 });
 
-describe('a per-app export is named .snug too (AC5)', () => {
-  it('uses the canonical extension', () => {
-    expect(read('run/RunView.tsx')).toContain(".snug`");
+describe('a shared app is named .snug too (AC5, re-pointed by TASK-20260904)', () => {
+  it('uses the canonical extension for the share download', () => {
+    // MIGRATED (ADR-0063 §2): the per-app SQLite export is deleted (it was byte-
+    // indistinguishable from a user file); the share bundle is the per-app artifact
+    // now, and it carries the one extension.
+    expect(read('share/exportShare.ts')).toContain('.snug`');
+    expect(read('run/RunView.tsx')).not.toContain('exportDatabase');
   });
 
   it('the user-facing export surface says snug, never the legacy sqlite', () => {
-    // MIGRATED (TASK-20260821-hardening-polish): the per-app header control is hidden
-    // behind SHOW_APP_EXPORT, so the Settings whole-file export is the surface a user
-    // actually sees — its control copy and its download name carry this claim now.
     const settings = read('views/SettingsView.tsx');
     expect(settings).toContain('export snug file');
     expect(settings).toContain("'snug-user.snug'");
     expect(settings).not.toContain('export .sqlite');
-    // The dormant header path keeps its established name, so re-enabling the one flag
-    // cannot resurrect the old two-names bug.
+    // OBSOLETE half (TASK-20260904): the dormant header export and its name are gone.
     const header = read('run/RunHeaderActions.tsx');
-    expect(header).toContain('export .snug');
+    expect(header).not.toContain('export .snug');
     expect(header).not.toContain('export .sqlite');
   });
 });

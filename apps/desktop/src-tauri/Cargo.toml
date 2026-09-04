@@ -50,6 +50,10 @@ futures-util = "0.3"
 tokio = { version = "1", default-features = false, features = ["net", "io-util"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# ADR-0064 / TASK-20260904: the `snug://` scheme for share links. The plugin registers
+# CFBundleURLTypes at bundle time and delivers URLs through its own seat; a URL is data,
+# not a read capability, so there is no allowlist command for it (plan-review finding 11).
+tauri-plugin-deep-link = "2"
 # ---- `helper_install` (ADR-0060) --------------------------------------------
 # All four ALREADY ride in via tauri-plugin-updater (minisign-verify, tar, flate2, webpki-roots)
 # and are named here for the same reason reqwest is above: this crate now calls them

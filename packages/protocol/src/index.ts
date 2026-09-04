@@ -253,6 +253,31 @@ export {
   type CredentialScan,
 } from './security.js';
 
+// App bundle (TASK-20260904-app-sharing, ADR-0063) — the portable-starter format. Internal
+// draft, OUT of the json-schemas SOURCES; the receiver validates at this boundary (C5).
+export {
+  APP_BUNDLE_DDL_STATEMENT_RULE,
+  APP_BUNDLE_DOC_SLUG_RULE,
+  APP_BUNDLE_FORMAT,
+  APP_BUNDLE_LINEAGE_RULE,
+  APP_BUNDLE_MAX_BYTES,
+  APP_BUNDLE_MAX_DDL_STATEMENTS,
+  APP_BUNDLE_MAX_DDL_STATEMENT_CHARS,
+  APP_BUNDLE_MAX_DOCS,
+  APP_BUNDLE_MAX_DOC_CONTENT_CHARS,
+  APP_BUNDLE_MAX_DOC_TITLE_CHARS,
+  APP_BUNDLE_MAX_HTML_CHARS,
+  APP_BUNDLE_MAX_HUB_VERSION_CHARS,
+  appBundleId,
+  appBundleSchema,
+  canonicalAppBundleJson,
+  isStructureOnlyDdl,
+  parseAppBundle,
+  type AppBundle,
+  type AppBundleDoc,
+  type AppBundleParse,
+} from './app-bundle.js';
+
 export { buildJsonSchemas } from './json-schemas.js';
 export { CONNECTION_URL_SCHEME, parseConnectionUrl, type ConnectionUrlParse } from './connection-url.js';
 

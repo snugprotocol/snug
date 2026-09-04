@@ -13,6 +13,7 @@ import { userLibrary, type LibraryEntry } from '../state/library.js';
 import { listStarterApps, starterInstallSource } from '../starter/starterApps.js';
 import { starterUpdateStatus } from '../starter/starterUpdate.js';
 import { getUserDb } from '../state/userdb.js';
+import { SharedShelf } from '../share/SharedShelf.js';
 import { Button } from '../ui/Button.js';
 import { Card } from '../ui/Card.js';
 import { Chip } from '../ui/Chip.js';
@@ -418,6 +419,15 @@ function HubHome(): ReactElement {
           })}
         </div>
       )}
+
+      {/*
+        "shared with you" (TASK-20260904, ADR-0063) sits between the user's own apps and
+        the starters: it is the shelf of apps other PEOPLE handed this user — not yet
+        theirs, not first-party. Renders nothing when the shelf is empty (no empty-state
+        noise), reports only (the install act lives in the preview's header — the
+        hub-never-writes doctrine, see `openStarter`).
+      */}
+      <SharedShelf installedBySource={installedBySource} />
 
       <h2 className="section-title">starter apps</h2>
       {starters.length === 0 ? (

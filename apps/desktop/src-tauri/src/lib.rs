@@ -112,6 +112,12 @@ pub fn run() {
         // AppHandle::restart() skips RunEvent::Exit on the main thread.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // ADR-0064: `snug://s/<id>#<key>` share links. The plugin owns the OS scheme
+        // registration and hands every URL to the webview through `deep-link://new-url`
+        // (plus `get_current` for a cold start); the playground validates the grammar
+        // in TS. `RunEvent::Opened` below keeps filtering to FILE paths — a `snug://`
+        // URL is not a file and never enters the open-file allowlist.
+        .plugin(tauri_plugin_deep_link::init())
         .manage(OpenedFiles::default())
         // WITHOUT THIS, both sidecar commands fail at the IPC boundary before their bodies
         // run: Tauri resolves `tauri::State<'_, SidecarState>` from managed state, and an

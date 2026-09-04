@@ -150,19 +150,35 @@ function plainKind(requirement: ConnectionRequirement): string {
   }
 }
 
-/** Provenance copy, split so the model-guess framing NEVER rides on a pinned channel. */
+/**
+ * Provenance copy, split so the model-guess framing NEVER rides on a pinned channel.
+ *
+ * EXHAUSTIVE BY THE COMPILER: no `default` arm — a new provenance literal is a TS2366
+ * here until it gets honest copy (that is how `shared` arrived, TASK-20260904). The
+ * trailing `never` check is the runtime fallback for a value this build does not know
+ * (a row written by a NEWER hub — files roam), and it says so rather than rendering
+ * nothing.
+ */
 function provenanceCopy(row: ConnectionRow): string {
   switch (row.provenance) {
     case 'registry':
       return 'these details are pinned by Snug for this provider — not proposed by a model.';
     case 'starter':
       return 'this connection ships with this starter, as its author wrote it.';
+    case 'shared':
+      // ADR-0063 §3 — the share act. Its author is a third party, not Snug and not
+      // this user; the copy names that, and asks for the field-by-field check.
+      return 'a shared app proposed this — its author wrote it, not Snug. Check every host against what you know before you approve.';
     case 'user':
       return 'you entered these details yourself.';
     case 'user_docs':
       return 'a model read the provider documentation you pasted and proposed this — a guess, not an authority. Check it against what you know.';
     case 'inference':
       return 'a model proposed this from what it knows about this provider — a guess, not an authority. Check it against what you know.';
+    default: {
+      const unknown: never = row.provenance;
+      return `proposed by a channel this version of Snug does not know (${String(unknown)}) — treat it as unverified and check every detail.`;
+    }
   }
 }
 

@@ -27,11 +27,13 @@ import {
 import { createFileBackend } from '@snugprotocol/db';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrent as deepLinkGetCurrent, onOpenUrl as deepLinkOnOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 import type { SnugPlatform } from '@playground/platform/platform';
 
 import { createAppUpdates } from './app-updates.js';
+import { createOnOpenShareLink } from './share-links.js';
 import { createTauriFileFs } from './fs.js';
 import { lanFetch, lanPair } from './lan-fetch.js';
 import { helperInstall, helperStatus, sidecarCtl, sidecarFetch, sidecarWizardFetch } from './sidecar.js';
@@ -271,7 +273,10 @@ export function createDesktopPlatform(): SnugPlatform {
         return { running: false, models: [] };
       }
     },
-    onOpenUserFile(cb: (bytes: Uint8Array, path: string) => void) {
+    // ADR-0064: `snug://s/<id>#<key>` share links through the deep-link plugin's own
+    // seats; the playground validates and fetches (share-links.ts).
+    onOpenShareLink: createOnOpenShareLink({ onOpenUrl: deepLinkOnOpenUrl, getCurrent: deepLinkGetCurrent }),
+    onOpenSnugFile(cb: (bytes: Uint8Array, path: string) => void) {
       const deliver = async (path: string): Promise<void> => {
         try {
           const raw = await invoke<ArrayBuffer>('read_opened_file', { path });

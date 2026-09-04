@@ -26,11 +26,12 @@ describe('feedback mounts', () => {
     expect(app).toMatch(/ReportErrorLink[\s\S]{0,200}surface: 'boot'/);
   });
 
-  it('RunView offers report-this on the install and export failures', () => {
+  it('RunView offers report-this on the install failure (the export failure surface is gone with the per-app export, ADR-0063)', () => {
     const runView = src('run/RunView.tsx');
     const mounts = runView.match(/<ReportErrorLink/g) ?? [];
-    expect(mounts.length).toBeGreaterThanOrEqual(2);
+    expect(mounts.length).toBeGreaterThanOrEqual(1);
     expect(runView).toMatch(/surface: 'run'/);
+    expect(runView).toMatch(/install failed/);
   });
 
   it('the connection wizard offers report-this on the connect error', () => {

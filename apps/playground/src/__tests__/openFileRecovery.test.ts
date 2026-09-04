@@ -68,7 +68,7 @@ async function fresh(backend: PersistenceBackend): Promise<Harness> {
   const harness: Harness = {} as Harness;
   platformModule.setPlatform({
     ...desktopPlatform(backend),
-    onOpenUserFile: (cb) => {
+    onOpenSnugFile: (cb) => {
       harness.capturedOpen = cb;
     },
   });

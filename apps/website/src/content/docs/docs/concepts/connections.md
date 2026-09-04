@@ -26,8 +26,10 @@ sandbox.
 
 Because a connection is a credential grant, *who may propose one* is a protocol-level
 posture. An app can never propose a connection at runtime — no frame exists that can do it.
-The three channels that can (the user directly, the already-reviewed builder agent, and a
-starter's install manifest) each get a defined review strength.
+The four channels that can (the user directly, the already-reviewed builder agent, a
+starter's install manifest, and an app bundle someone shared with you) each get a defined
+review strength — and a shared app's request is always the strongest, field-by-field
+review, never vouched.
 
 ## The executor: where C1 lives
 

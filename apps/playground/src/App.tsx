@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
-import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 import {
   clearOpenUserFileError,
@@ -49,7 +49,9 @@ import { BuilderView } from './views/BuilderView.js';
 import { DownloadView } from './views/DownloadView.js';
 import { HubView } from './views/HubView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { SharedLinkView } from './views/SharedLinkView.js';
 import { WebllmBanner } from './views/WebllmBanner.js';
+import { hydrateSharedInbox, sharedOpenRequestStore } from './share/sharedInbox.js';
 
 // The Run view carries the runner + sql.js driver — code-split so the hub stays light.
 const RunView = lazy(() => import('./run/RunView.js'));
@@ -76,7 +78,10 @@ export function App(): ReactElement {
       // The two latch inits are independent one-key reads of the hydrated file —
       // parallel on purpose (Gate-5 review): serializing them delayed the callout
       // by the protect-offer init, and a throw in one skipped the other entirely.
-      .then(() => Promise.all([initProtectOffer(), initDemoCallout()]));
+      .then(() => Promise.all([initProtectOffer(), initDemoCallout()]))
+      // The "shared with you" shelf mirrors `sharedApp:` rows of the file (ADR-0063 §4)
+      // — read after settings, like the latches, because it needs the open file.
+      .then(() => hydrateSharedInbox());
     // AL-07: the experimental webllm flag + WebGPU probe (idempotent, flag-gated).
     void initWebllm();
     // W2b: platform-only seam — a no-op on web (no open handler).
@@ -234,6 +239,9 @@ export function App(): ReactElement {
               </Suspense>
             }
           />
+          {/* The share LINK receiver (ADR-0064): every platform's landing page for
+              `/s/<id>#<key>`; opens the preview from memory, never writes the file. */}
+          <Route path="/s/:id" element={<SharedLinkView />} />
           <Route path="/settings" element={<SettingsView />} />
           <Route path="/download" element={<DownloadView />} />
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
@@ -256,6 +264,9 @@ export function App(): ReactElement {
       {/* Desktop .snug open-with confirm (W2b): app-level for the same reason as the
           wizard — an OS open event can arrive on any route. Renders nothing on web. */}
       <OpenUserFileConfirmDialog />
+      {/* A received bundle asks to be previewed from a non-React caller (the open
+          seam, the Settings picker); this navigates and clears the request (ADR-0063). */}
+      <SharedOpenNavigator />
       {/* The mutating-request confirm (TASK-20260815 AC12, plan-review F3): app-level
           because the confirm gate's callers are no longer only RunView's app frame —
           a provider-lane chat turn can park a confirm from the builder view too, and a
@@ -264,6 +275,22 @@ export function App(): ReactElement {
       <OpenUrlConfirmDialog />
     </div>
   );
+}
+
+/**
+ * Navigates to a shared preview when something outside the tree asks for one — the
+ * platform open seam after a double-clicked `.snug` bundle, the Settings "add shared
+ * app" picker. One consumer, so the request cannot be double-handled; cleared on read.
+ */
+function SharedOpenNavigator(): null {
+  const navigate = useNavigate();
+  const request = useStore(sharedOpenRequestStore);
+  useEffect(() => {
+    if (request === null) return;
+    sharedOpenRequestStore.set(null);
+    navigate(`/run/shared--${request}`);
+  }, [request, navigate]);
+  return null;
 }
 
 /**

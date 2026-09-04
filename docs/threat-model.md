@@ -1,6 +1,12 @@
 # Snug — Threat Model
 
-- **Version:** 3.0 · **Date:** 2026-08-21 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2) · TASK-20260821-launch-security-review (v3)
+- **Version:** 3.1 · **Date:** 2026-09-04 · **Tasks:** TASK-20260820-threat-model-v1 (v1) · TASK-20260821-hardening-polish (v2) · TASK-20260821-launch-security-review (v3) · TASK-20260904-app-sharing (v3.1)
+- **What v3.1 added (2026-09-04).** App sharing (ADR-0063/0064): third-party app code can
+  now enter a hub as a shared bundle and propose connections on its own `shared` channel;
+  and the hosted instance runs its first endpoint — a content-blind relay for share links.
+  Rows in §5 (authoring, C1, C2) and residuals R-34 through R-39 carry it; the delta
+  `threat-model-delta-app-sharing.md` is the detailed record. A targeted pass, not a
+  re-attack of the whole surface: v3's §9 boundary still describes the last full pass.
 - **Status:** current as of commit-time. This document is audited, not transcribed — every
   enforcement claim below was checked against the code by an adversarial pass that tried to
   break it, and defects those passes found were fixed before each version was written.
@@ -67,7 +73,7 @@ personal sync origin the user connected — that is [ADR-0014](decisions/0014-cr
 custody working as designed; denial of service against the user's own browser tab or own
 self-hosted server; and third-party self-hosted infrastructure misconfiguration.
 
-**This document consolidates twelve per-change threat-model deltas** (§8). A delta is written
+**This document consolidates thirteen per-change threat-model deltas** (§8). A delta is written
 for someone who already knows the system and is reading one change; this is written for a
 stranger deciding whether to trust the whole thing. Where a delta's residual is restated
 here it is marked as inherited, because a model that re-sells an old residual as new is as
@@ -129,7 +135,9 @@ Five boundaries. Everything security-relevant happens at one of them.
    *on macOS*. On Windows it is not, which is why Windows does not ship.
 5. **The user's device ↔ everywhere else.** The custody line. Hub origins never receive
    secrets; personal sync origins carry the full file by explicit opt-in; default exports
-   strip secrets and VACUUM.
+   strip secrets and VACUUM. Since v3.1 one more crossing sits here: a share link's bytes
+   go to the relay **encrypted in the browser with a key that stays in the URL fragment**
+   (ADR-0064) — the relay is on the far side of this line and is designed to be blind.
 
 ---
 
@@ -155,6 +163,8 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | Host-bound injection is strict always — no bypass flag exists | `packages/auth/src/app-host-freeze.ts` (exact-hostname, punycode-normalized both sides) | `packages/auth/src/__tests__/browser-safe.test.ts` — source lint **plus a runtime signature walk** over real exports |
 | Hub-bound sync and default exports carry no secrets | `packages/db/src/userdb/userdb.ts` — strip then VACUUM | `packages/db/src/userdb/__tests__/auth-custody.test.ts` |
 | Credentials never reach the LLM's context | `apps/playground/src/agent/providerTools.ts` renders the already-scrubbed result | `apps/playground/src/__tests__/providerTools.test.ts` — asserts the credential reached the *wire* and is absent from the *model-bound string* |
+| A shared app bundle carries no secret, no grant field, no history, no chat, no data row — and a `lanHost` row exports without the sharer's collected address | `packages/db/src/userdb/app-bundle.ts` — `buildAppBundle` reads identity, current html, contract, DDL, chosen docs and requirement halves only; `stripRequirementForShare` | `packages/db/src/userdb/__tests__/app-bundle.test.ts` — byte-scan of the serialized bundle for the secret value and every grant column |
+| A share link's key never reaches the relay — not in the URL, a header or the body — and the revoke token/key never reach a hub origin or a default export | `apps/playground/src/share/relayClient.ts` (takes ciphertext / id / token only); `apps/playground/src/share/shareLinks.ts` (token + key in `snug_secrets`) | `apps/playground/src/__tests__/shareLink.test.tsx` — fetch spy; default-export scan |
 
 ### C2 — sandbox integrity
 
@@ -164,6 +174,7 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | Apps have no network of their own (`connect-src 'none'`) | `packages/runner/src/csp.ts` — frozen `RUNNER_CSP`, injected via DOM parse | `packages/runner/src/__tests__/csp.test.ts`; real-browser probes in `apps/desktop/src/gate/csp.ts` |
 | The CDN allowlist is fixed and the policy is not parameterizable | `packages/protocol/src/constants.ts` — module-level `as const`; `injectCsp` has arity 1 | `packages/runner/src/__tests__/source-guard.test.ts` |
 | A self-navigating app is permanently cut off | `packages/runner/src/host.ts` — navigation credits, consumed in full, fail closed | `packages/runner/src/__tests__/host-lifecycle.test.ts` |
+| A SHARED preview runs without the LLM transport until the user arms it, and nothing from a received bundle is rendered as HTML | `apps/playground/src/share/consentTransport.ts` (named `CONSENT_REQUIRED` refusal); `apps/playground/src/run/RunView.tsx` (`isSharedId && !aiArmed`); text-node rendering in `apps/playground/src/share/SharedShelf.tsx` | `apps/playground/src/__tests__/sharedSurfaces.test.tsx` — frame keyed to the un-armed preview; hostile-bundle render test |
 | Shell IPC is unreachable from a sandboxed subframe (macOS) | `apps/desktop/src-tauri/capabilities/main.json` + the invoke-key gate | `apps/desktop/src/gate/ipc.ts`, run by the in-shell gate — **see R-11 on cadence** |
 | The token-releasing sidecar command is unreachable from a sandboxed subframe — proven per command, not by family | `apps/desktop/src-tauri/src/lib.rs` registers `sidecar_wizard_fetch` separately from `sidecar_fetch`, and `apps/desktop/src-tauri/src/sidecar.rs` fronts the wizard route table with it (`GET /pair/status` releases the helper's access token); capabilities are per-window, so the invoke-key gate is the actual wall | `apps/desktop/src/gate/ipc.ts` — `ipc-sidecar-wizard-fetch-refused` (a keyless, well-formed invoke of `/pair/status` from a srcdoc frame, on its own callback slot) **plus** `ipc-sidecar-wizard-fetch-dispatchable`, the positive twin — **see R-11 on cadence** |
 | The shell's UPDATE commands are unreachable from a sandboxed subframe — per command, not per family | `apps/desktop/src-tauri/capabilities/main.json` grants `updater:default` + `process:allow-restart` to the main WINDOW only — but capabilities are per-window, never per-frame, so the invoke-key gate is the actual wall | `apps/desktop/src/gate/ipc.ts` — `ipc-updater-check-refused`, `ipc-updater-install-refused`, `ipc-process-relaunch-refused` (keyless well-formed invokes from a srcdoc frame) **plus** `ipc-updater-check-dispatchable`, the positive twin — **see R-11 on cadence** |
@@ -190,6 +201,13 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | An LLM-authored requirement cannot borrow a registry provider's identity to author its own credential prompts | `packages/auth/src/requirement-admission.ts` — borrow ban with boundary-aware segment matching | `packages/auth/src/__tests__/channel-admission.test.ts` |
 | A header template may only reference pinned helpers and declared fields, and lint and engine agree on every quoting shape | `packages/auth/src/template-lint.ts` + `packages/auth/src/template-engine.ts` — enforced at the render seat | `packages/auth/src/__tests__/template-parity.test.ts` |
 | An app cannot forge starter authoring provenance | `apps/playground/src/starter/starterDeclaration.ts` — install source **and** both HTML versions must match bundled bytes | `apps/playground/src/__tests__/starterDeclaration.test.ts` |
+| A shared bundle's connections are admitted on their OWN channel — borrow ban, confusable guard, `userLayer` refusal, LAN-class check — at install and again at the db write boundary, and can never spell a starter's identity | `packages/auth/src/requirement-admission.ts` (`shared` in `ADMISSION_CHANNELS`); `packages/protocol/src/app-bundle.ts` (UUID-charset `lineage`, `userLayer` refused by shape); `packages/db/src/userdb/app-bundle.ts` (`install_source` minted under `share:`) | `packages/auth/src/__tests__/shared-channel-admission.test.ts`; `apps/playground/src/__tests__/sharedAdmissionWiring.test.ts` — the SHIPPING gate refuses a borrowing bundle; `packages/protocol/src/__tests__/app-bundle.test.ts` |
+| A bundle's DDL is structure only — one `CREATE …` statement per entry, no CTAS — and runs only inside the install and update acts against the app's own runtime; an update runs DDL before landing new html | `packages/protocol/src/app-bundle.ts` — `isStructureOnlyDdl` (the driver's `MULTI_STATEMENT` refusal in `packages/db/src/driver.ts` is the last resort); `packages/db/src/userdb/app-bundle.ts` — install failure removes the app, update orders DDL first | `packages/protocol/src/__tests__/app-bundle.test.ts`; `packages/db/src/userdb/__tests__/app-bundle.test.ts` |
+| A shared UPDATE of an installed lineage is reachable only from the new bundle's preview and always confirms, naming the approved connections the new code inherits | `apps/playground/src/run/RunView.tsx` — the update act + confirm live on the `shared--` route; `apps/playground/src/share/SharedUpdateControls.tsx` is a door, not a write; `apps/playground/src/share/SharedShelf.tsx` routes an update to the preview | `apps/playground/src/__tests__/sharedSurfaces.test.tsx` — the update journey names the inherited grant |
+| A shared preview's "run with AI" consent is per preview and the un-armed transport really refuses | `apps/playground/src/run/RunView.tsx` — `aiArmed` reset on id; `apps/playground/src/share/consentTransport.ts` | `apps/playground/src/__tests__/sharedConsentGate.test.tsx` — captures the transport handed to the frame; A→B reset |
+| A received bundle is inert until install: a link visit writes nothing, an opened file writes only its shelf row, and the shelf refuses rather than evicts at its cap | `apps/playground/src/share/sharedInbox.ts` — memory-first, `persist` only on an explicit act | `apps/playground/src/__tests__/sharedInbox.test.ts` — table sweep; cap refusal |
+| A `.snug` file's kind is decided by its first bytes before any confirm — a bundle can never reach the replace-your-file path, a user file can never land on the shelf | `packages/db/src/userdb/app-bundle.ts` — `sniffSnugFile`; `apps/playground/src/platform/openFile.ts` — `dispatchOpenedSnugFile` | `apps/playground/src/__tests__/sharedSurfaces.test.tsx` — dispatch + both Settings pickers |
+| The relay stores ciphertext under server-minted ids, enforces expiry at read, compares hashed revoke tokens, and answers every other path with a bodiless 404 — and its config cannot grow a second binding | `apps/share-relay/handler.mjs`; `scripts/deploy-relay.mjs` — `configPreflight` | `apps/share-relay/handler.node-test.mjs`; `scripts/deploy-relay.test.mjs` |
 | An app cannot claim a runtime contract, and an untrusted import cannot dictate one | `packages/db/src/userdb/userdb.ts` — canonical-bytes reconciliation, `trustedOrigin` keyed on the caller | `packages/db/src/userdb/__tests__/userdb.test.ts` |
 | LLM-authored SQL cannot reach hub tables or other apps' data | `packages/db/src/driver.ts` — physical namespace separation; the bytes were never there | `packages/db/src/userdb/__tests__/scratch-run.test.ts` |
 | Sidecar routes are admitted by an enumerated table in Rust, traversal checked on the decoded form | `apps/desktop/src-tauri/src/sidecar.rs` | cargo tests in the same file + `apps/desktop/src/__tests__/sidecarContract.test.ts` (parses the Rust source for drift) |
@@ -337,6 +355,43 @@ unsigned-by-us `bin/node` launches — adding that key would break helper launch
 the only place that is written down; (4) there is no uninstall surface (~140 MB per helper);
 (5) the x86_64 archive is verified only under Rosetta until an Intel walk.
 *Full surface:* `docs/security/threat-model-delta-desktop-update-channel.md` §S9 / R-e.
+
+**R-34 — A shared app's connection can be approved by its recipient.** The share act is
+the untrusted declaration channel ADR-0016 clause 6 named. Every guard applies and the
+review copy names a third-party author, but the recipient may still approve — after which
+the app reaches exactly the frozen ceiling, inside the sandbox, with mutating calls still
+confirming and the credential never in the iframe. The same risk an LLM-built app carries;
+the reviewer is the control. ([ADR-0063](decisions/0063-app-sharing-portable-starter.md))
+*Full surface:* `docs/security/threat-model-delta-app-sharing.md` §S2 / R-a.
+
+**R-35 — The share link IS the secret, and revocation is best-effort.** Anyone holding
+`…/s/<id>#<key>` can fetch and decrypt until expiry or revoke; a recipient who already
+fetched keeps the bytes. The share sheet states both. ([ADR-0064](decisions/0064-blind-share-relay.md))
+
+**R-36 — The relay is a blind blob drop, so it is also a generic anonymous file host for 30
+days.** It cannot validate content it cannot read. Bounded by the size cap, the TTL, and
+a per-IP rate-limiting rule configured outside the code (runbook); Turnstile is queued if
+abuse appears. Its blindness is a claim about the DEPLOYED code — enforced by the config
+preflight and the handler's tests, the same class as R-1 for a hostile operator.
+
+**R-37 — A shared bundle's runtime contract is third-party LLM system-slot text, admitted
+through consent, not verification.** ADR-0018 D3 is amended for this one channel (owner
+Q6b): the preview shows the contract verbatim before install. A user can install an app
+whose contract instructs the model in ways they did not read; the blast radius is the
+app's own frame — no secret is in any LLM context (C1) and the app has no network.
+
+**R-39 — A shared update offer is as trustworthy as its lineage, which is public.**
+Anyone who ever received a bundle knows its `lineage` and can craft a "newer version" for
+it; the recipient sees an update to an app they trust, and approved grants survive the
+update by ADR-0045's design. Mitigated by the preview-only update path and the always-on
+confirm that names the inherited grants; not mitigated by any authentication of the sharer
+(bundle signing is a v1 non-goal). Demoting approved rows on a shared update is a sixth
+`snug_connections` writer — a spec change queued in next-steps, not done here.
+*Full surface:* `docs/security/threat-model-delta-app-sharing.md` §S12 / R-i.
+
+**R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
+and every doc is a per-doc choice with a first-line preview, but the share scan looks for
+credential shapes only, not names or addresses. A sharer who ticks a doc ships it.
 
 **R-2 — A scrubber that matches values cannot survive re-encoding.** `scrubAuthValues` is
 exact-substring over injected values, in raw and percent-encoded form. A provider that
@@ -666,6 +721,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-starter-update-channel.md` | `5a5625c1f999` | §5 authoring · R-31 |
 | `docs/security/threat-model-delta-multi-provider-byok.md` | `540490f88a1c` | §5 authoring · R-32 |
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
+| `docs/security/threat-model-delta-app-sharing.md` | `08d6283f7d21` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 
 <!-- DELTA-LEDGER:END -->
 

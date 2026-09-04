@@ -7,6 +7,7 @@
 import type { UserDb } from '@snugprotocol/db';
 
 import { resetThreadSessions } from '../agent/threadSessions.js';
+import { revokeShareLinksForApp } from '../share/shareLinks.js';
 import { markAppRenamed } from './appMeta.js';
 import { forgetSidecarSession } from './sidecarForget.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
@@ -93,6 +94,11 @@ export function createUserDbLibrary(getDb: () => Promise<UserDb> = getUserDb): L
       // reads. Deleting the LAST sidecar app is the user forgetting their WhatsApp
       // (TASK-20260821 AC5); a sidecar fact on any OTHER app vetoes the unlink (AC6).
       const unlinkDevice = appHoldsLastSidecarFact(db, id);
+      // Share links minted for this app die with it (Gate-5 finding 10): revoke each at
+      // the relay BEFORE the cascade deletes the records and secrets that could — best
+      // effort, never a reason the delete fails (the relay may be unreachable; the TTL
+      // is the backstop, and the cascade removes the local token+key either way).
+      await revokeShareLinksForApp(db, id);
       await db.deleteApp(id);
       // deleteApp's cascade may have wiped the persisted identity directory; drop the
       // session's in-memory harvest with it (TASK-20260820, Gate-5 review).

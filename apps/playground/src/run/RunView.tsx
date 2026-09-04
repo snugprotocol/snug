@@ -1,7 +1,7 @@
 // RunView — the star. SnugAppFrame center-stage inside the sandbox chrome:
 // capability-reveal header (announce upgrades it), the Inspector rail ("watch it
 // think"), a chat rail to keep talking to the agent, budget-exhausted reset, the
-// navigation cutoff error state, live theme, and the .sqlite export moment.
+// navigation cutoff error state, live theme, and the share sheet (ADR-0063).
 //
 // This module is the heavy chunk (runner + sql.js driver) — it loads lazily.
 
@@ -39,6 +39,15 @@ import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { toggleRailShown, useRailShown } from '../state/railLayout.js';
 import { STARTER_PREFIX, isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
+import { createConsentGateTransport } from '../share/consentTransport.js';
+import { applySharedUpdate, installSharedEntry, installedCopyForBundle, type InstalledCopyForBundle } from '../share/installShared.js';
+import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
+import { ShareSheet } from '../share/ShareSheet.js';
+import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
+import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
+import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, keepSharedEntry, sharedInboxStore } from '../share/sharedInbox.js';
+import { desktopLinkFor } from '../share/relayClient.js';
+import { getPlatform } from '../platform/platform.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { installStarterDocs } from '../starter/starterDocs.js';
@@ -51,7 +60,6 @@ import { RailDivider } from '../ui/RailDivider.js';
 import { Skeleton } from '../ui/Skeleton.js';
 import { initialRevealState, revealReduce, type RevealState } from './capability.js';
 import { DocsPanel } from './DocsPanel.js';
-import { downloadBlob, exportDatabase } from './exportDb.js';
 import { RunHeaderActions } from './RunHeaderActions.js';
 import { HelperInstallCard } from '../connections/HelperInstallCard.js';
 import { WHATSAPP_HELPER, helperNeedsInstall, refreshHelperStatus } from '../state/helperInstall.js';
@@ -71,7 +79,7 @@ type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { pha
 //
 // The frame FEED (inspector.ts, value-blind and byte-locked) is still wired below and
 // must stay: `inspector.inFlight` drives the app-frame "thinking" pulse and
-// `inspector.sawDbOp` gates the export button. Only its rendering was dropped.
+// `inspector.sawDbOp` records that the app uses its database. Only its rendering was dropped.
 type RailTab = 'chat' | 'inspector' | 'docs' | 'versions';
 
 /**
@@ -173,10 +181,12 @@ export default function RunView(): ReactElement {
   // conversation with full context). A starter has NO chat tab at all (AC18) — the
   // chat rail is exactly where a starter edit used to fork a hidden app — so it opens
   // on the inspector and can never land on 'chat'.
-  const [railTabRaw, setRailTab] = useState<RailTab>(isStarterId(id) ? 'inspector' : 'chat');
-  // Belt and braces for AC18: even if some future path sets 'chat' for a starter (a
-  // stale state across an id change, a restored tab), the starter renders the inspector.
-  const railTab: RailTab = isStarterId(id) && railTabRaw === 'chat' ? 'inspector' : railTabRaw;
+  // A SHARED preview (ADR-0063) is unowned the same way, and opens on its docs — the
+  // "check around before installing" the owner asked for — never on a chat lane.
+  const [railTabRaw, setRailTab] = useState<RailTab>(isSharedId(id) ? 'docs' : isStarterId(id) ? 'inspector' : 'chat');
+  // Belt and braces for AC18: even if some future path sets 'chat' for an unowned
+  // preview (a stale state across an id change, a restored tab), it renders the inspector.
+  const railTab: RailTab = isUnownedId(id) && railTabRaw === 'chat' ? 'inspector' : railTabRaw;
   // Mobile is an EITHER/OR: the full app view or the full think view, never both
   // (TASK-20260821 item 5, replacing the bottom-sheet modal). Deliberately local
   // state, NEVER persisted — owner decision: "default should always be app view", so
@@ -210,7 +220,7 @@ export default function RunView(): ReactElement {
   const onLlmEvent = useCallback((event: AgentTurnEvent): void => dispatchRoundTrip(event), []);
   const onTurnStart = useCallback((): void => dispatchRoundTrip('reset'), []);
   const chat = useBuilderChat(threadId, {
-    ...(isStarterId(id) ? {} : { pinnedAppId: id }),
+    ...(isUnownedId(id) ? {} : { pinnedAppId: id }),
     onTurnStart,
     // Provider-lane failures reuse the SAME repairable-code CTA as app-runtime net
     // errors (TASK-20260815 AC5) — one mapping, code-keyed, M12 filter included.
@@ -222,7 +232,7 @@ export default function RunView(): ReactElement {
   // Thread list for the picker AND the main-thread resolution — refreshed when the turn
   // settles (new threads get their row on the first message).
   useEffect(() => {
-    if (isStarterId(id) || chat.busy) return;
+    if (isUnownedId(id) || chat.busy) return;
     let cancelled = false;
     void getUserDb().then((db) => {
       if (cancelled) return;
@@ -271,7 +281,7 @@ export default function RunView(): ReactElement {
   // `post()` drops anything late. The pump itself is epoch-tokened, so StrictMode's
   // mount→unmount→remount never runs two loops against one cursor.
   useEffect(() => {
-    if (isStarterId(id)) return; // a starter is uninstalled by definition — no connection row
+    if (isUnownedId(id)) return; // a preview is uninstalled by definition — no connection row
     let cancelled = false;
     let stopPump: (() => void) | undefined;
     void startSidecarLiveForApp(
@@ -302,10 +312,26 @@ export default function RunView(): ReactElement {
   // It is a memo dep for correctness on app-to-app navigation; the contract itself is
   // read PER SEND inside the transport, so an edit or revert needs no rebuild here
   // (fold F-M1 — there is no contentEpoch dependency and there does not need to be).
-  const transport = useMemo(
+  const realTransport = useMemo(
     () => createAppTransport(mode, provider, onLlmEvent, id, onTurnStart),
     [mode, provider, onLlmEvent, id, onTurnStart],
   );
+  // A SHARED PREVIEW runs WITHOUT the LLM transport until the user arms it (ADR-0063
+  // §4, plan-review finding 2): a stranger's code must not spend the user's tokens on
+  // a click. A starter keeps the real transport — the pillar demo is the point. The
+  // consent gate answers every llm-request with a named, non-retryable refusal, which
+  // the app renders like any other envelope error. Local state, never persisted: every
+  // preview mount starts un-armed. Part of the frame key below, so arming remounts the
+  // frame onto the real transport (the host captures its transport at mount).
+  const [aiArmed, setAiArmed] = useState(false);
+  // Consent is per PREVIEW, never inherited across an id change (Gate-5 finding 3): the
+  // route element is not keyed by id, so `/run/shared--A` → `/run/shared--B` would carry
+  // A's "run with AI" onto B — and B may have arrived through a drive-by `snug://` link.
+  useEffect(() => {
+    setAiArmed(false);
+  }, [id]);
+  const consentGate = useMemo(() => createConsentGateTransport(), []);
+  const transport = isSharedId(id) && !aiArmed ? consentGate : realTransport;
   // The envelope net capability (AL-03): a value-blind NetHandler the runner routes
   // net-request frames to. The executor (in state/net.ts) reads the app's frozen host
   // ceiling + credentials from the page user DB per use — the runner never sees a token.
@@ -318,7 +344,7 @@ export default function RunView(): ReactElement {
   const [netAuthError, setNetAuthError] = useState<{ appId: string; code: string } | null>(null);
   const netHandler = useMemo(
     () =>
-      isStarterId(id)
+      isUnownedId(id)
         ? undefined
         : createNetHandlerFor({
             onNetError: (appId, code) => {
@@ -332,7 +358,7 @@ export default function RunView(): ReactElement {
   // The open-url capability (ADR-0038 D5): installed apps only — a read-only starter
   // keeps the flag false, so its copy-the-link fallback renders instead of a dialog a
   // browse session should never see. Host-assigned id, same rule as net.
-  const openUrlHandler = useMemo(() => (isStarterId(id) ? undefined : createOpenUrlHandlerFor(id)), [id]);
+  const openUrlHandler = useMemo(() => (isUnownedId(id) ? undefined : createOpenUrlHandlerFor(id)), [id]);
   // The db driver is the SHARED user DB's materialized face (ADR-0010) — never closed
   // here; it lives as long as the page. App data lands as native app_* tables.
   //
@@ -347,7 +373,7 @@ export default function RunView(): ReactElement {
   const [db, setDb] = useState<SnugDbDriver | null>(null);
   useEffect(() => {
     let cancelled = false;
-    if (isStarterId(id)) {
+    if (isUnownedId(id)) {
       const ephemeral = createDbDriver({ backend: createMemoryBackend(), locateWasm });
       setDb(ephemeral);
       return () => {
@@ -456,6 +482,31 @@ export default function RunView(): ReactElement {
       mounted.current = false;
     };
   }, []);
+  /**
+   * Install THIS shared bundle (ADR-0063 §1): the same act, a different source — the
+   * db's `installAppFromBundle` runs the starter chain under the `shared` provenance and
+   * the composition root's admission gate. On success the shelf entry is gone and the
+   * route replaces itself with the user's own copy.
+   */
+  const installThisShared = useCallback(async (): Promise<void> => {
+    const bundleId = bundleIdFromSharedRouteId(id);
+    if (installLatch.current || bundleId === undefined) return;
+    installLatch.current = true;
+    setInstalling(true);
+    setInstallError(undefined);
+    try {
+      const outcome = await installSharedEntry(bundleId);
+      if (outcome.refusedSlots.length > 0) {
+        console.warn('[snug] shared install: connection slots refused admission', outcome.refusedSlots);
+      }
+      navigate(`/run/${outcome.appId}`, { replace: true });
+    } catch (err) {
+      if (mounted.current) setInstallError(err instanceof Error ? err.message : String(err));
+    } finally {
+      installLatch.current = false;
+      if (mounted.current) setInstalling(false);
+    }
+  }, [id, navigate]);
   const installThisStarter = useCallback(async (): Promise<void> => {
     if (installLatch.current || !isStarterId(id)) return;
     installLatch.current = true;
@@ -520,7 +571,11 @@ export default function RunView(): ReactElement {
     setHtmlState({ phase: 'loading' });
     setReadySeen(false);
     setAnnounceTimedOut(false);
-    const load = isStarterId(id) ? loadStarterHtml(id) : userLibrary().getHtml(id);
+    const load = isSharedId(id)
+      ? Promise.resolve(getSharedEntry(bundleIdFromSharedRouteId(id) ?? '')?.bundle.html)
+      : isStarterId(id)
+        ? loadStarterHtml(id)
+        : userLibrary().getHtml(id);
     load
       .then((html) => {
         if (cancelled) return;
@@ -530,7 +585,9 @@ export default function RunView(): ReactElement {
         if (!cancelled) setHtmlState({ phase: 'missing' });
       });
     // Library display name — the header's fallback when the app never announces.
-    if (isStarterId(id)) {
+    if (isSharedId(id)) {
+      setFallbackName(getSharedEntry(bundleIdFromSharedRouteId(id) ?? '')?.bundle.app.displayName);
+    } else if (isStarterId(id)) {
       setFallbackName(listStarterApps().find((starter) => starter.id === id)?.name);
     } else {
       setFallbackName(undefined);
@@ -575,24 +632,54 @@ export default function RunView(): ReactElement {
     [id],
   );
 
-  // First observed db op → remember it (gates the export button across visits).
-  const sawDbOp = inspector.sawDbOp || getAppMeta(id)?.usesDb === true;
+  // First observed db op → remember it (the app's `usesDb` fact, carried by the app row
+  // and by a share bundle). Previews never record: there is no row to record onto.
   useEffect(() => {
-    if (inspector.sawDbOp) recordAppMeta(id, { usesDb: true });
+    if (inspector.sawDbOp && !isUnownedId(id)) recordAppMeta(id, { usesDb: true });
   }, [inspector.sawDbOp, id]);
 
-  const [exportError, setExportError] = useState<string | undefined>(undefined);
-  const onExport = useCallback(async (): Promise<void> => {
-    if (db === null) return;
-    setExportError(undefined);
-    const result = await exportDatabase(db, id);
-    if (!result.ok) {
-      setExportError(result.message);
-      return;
+  // The share sheet (ADR-0063, AC10) — owned apps only; the header control is absent
+  // for a preview, so this can only open for an app the user has.
+  const [shareOpen, setShareOpen] = useState(false);
+  // The shelf entry behind a shared preview route, for the header and the docs tab.
+  const shelf = useStore(sharedInboxStore);
+  const sharedEntry = isSharedId(id) ? shelf.find((entry) => entry.bundleId === bundleIdFromSharedRouteId(id)) : undefined;
+  // Is this bundle's lineage already installed? Then the preview's act is UPDATE (from
+  // here, where the docs and contract are readable — Gate-5 finding 1), or just "open".
+  const [installedCopy, setInstalledCopy] = useState<InstalledCopyForBundle | undefined>(undefined);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setInstalledCopy(undefined);
+    setUpdateConfirmOpen(false);
+    if (sharedEntry === undefined) return;
+    void getUserDb().then((db) => {
+      if (!cancelled) setInstalledCopy(installedCopyForBundle(db, sharedEntry));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sharedEntry]);
+  const updateThisShared = useCallback(async (): Promise<void> => {
+    const bundleId = bundleIdFromSharedRouteId(id);
+    if (installLatch.current || bundleId === undefined || installedCopy === undefined) return;
+    installLatch.current = true;
+    setUpdateConfirmOpen(false);
+    setInstalling(true);
+    setInstallError(undefined);
+    try {
+      await applySharedUpdate(installedCopy.appId, bundleId);
+      navigate(`/run/${installedCopy.appId}`, { replace: true });
+    } catch (err) {
+      if (mounted.current) setInstallError(err instanceof Error ? err.message : String(err));
+    } finally {
+      installLatch.current = false;
+      if (mounted.current) setInstalling(false);
     }
-    const name = reveal.phase === 'live' ? reveal.meta.displayName : 'snug-app';
-    downloadBlob(result.blob, `${name.replace(/[^a-z0-9-_ ]/gi, '').trim() || 'snug-app'}.snug`);
-  }, [db, id, reveal]);
+  }, [id, installedCopy, navigate]);
+  // "open in Snug for Mac" is offered on a macOS BROWSER only: the desktop shell is
+  // already there, and no other platform has the app (ADR-0021 D8).
+  const desktopOffer = getPlatform().kind === 'web' && /Mac/i.test(globalThis.navigator?.platform ?? '') && !/iPhone|iPad/i.test(globalThis.navigator?.userAgent ?? '');
 
   const onReset = useCallback((): void => {
     setExhausted(false);
@@ -615,9 +702,11 @@ export default function RunView(): ReactElement {
       <div className="seg seg-icons" role="group" aria-label="rail tabs" style={{ margin: '0 0 var(--space-3)' }}>
         {/* AC18: no chat tab until the starter is installed. The chat rail is where a
             starter edit forked a hidden app — a read-only starter must not offer it. */}
-        {!isStarterId(id) ? <RailTabButton tab="chat" active={railTab} onSelect={setRailTab} /> : null}
+        {!isUnownedId(id) ? <RailTabButton tab="chat" active={railTab} onSelect={setRailTab} /> : null}
         <RailTabButton tab="inspector" active={railTab} onSelect={setRailTab} />
-        {!isStarterId(id) ? (
+        {/* A shared preview shows the bundle's docs read-only (AC13) — no versions, no chat. */}
+        {isSharedId(id) ? <RailTabButton tab="docs" active={railTab} onSelect={setRailTab} /> : null}
+        {!isUnownedId(id) ? (
           <>
             <RailTabButton tab="docs" active={railTab} onSelect={setRailTab} />
             <RailTabButton tab="versions" active={railTab} onSelect={setRailTab} />
@@ -626,6 +715,8 @@ export default function RunView(): ReactElement {
       </div>
       {railTab === 'inspector' ? (
         <ThinkPanel llm={mergeLlmInspectorStates(chat.llmInspector, frameInspector)} mode={turnMode} />
+      ) : railTab === 'docs' && sharedEntry !== undefined ? (
+        <SharedDocsPanel bundle={sharedEntry.bundle} />
       ) : railTab === 'docs' ? (
         <DocsPanel appId={id} refreshToken={chat.knowledgeEpoch} mode={turnMode} />
       ) : railTab === 'versions' ? (
@@ -639,7 +730,7 @@ export default function RunView(): ReactElement {
         />
       ) : (
         <>
-          {!isStarterId(id) && (appThreads.length > 1 || threadOverride !== undefined) ? (
+          {!isUnownedId(id) && (appThreads.length > 1 || threadOverride !== undefined) ? (
             <div className="thread-picker" role="group" aria-label="conversation threads">
               <select
                 value={threadId}
@@ -808,11 +899,90 @@ export default function RunView(): ReactElement {
               gains the chat tab. The route redirects to the copy if one already exists,
               so this button only ever appears for a starter the user does not have.
             */}
-            {isStarterId(id) && installError !== undefined ? (
+            {isUnownedId(id) && installError !== undefined ? (
               <span className="error-note" role="alert" style={{ padding: '2px 8px' }}>
                 install failed — {installError}{' '}
-                <ReportErrorLink context={{ surface: 'run', errorText: `install failed — ${installError}`, starterId: id }} />
+                <ReportErrorLink context={{ surface: 'run', errorText: `install failed — ${installError}`, ...(isStarterId(id) ? { starterId: id } : {}) }} />
               </span>
+            ) : null}
+            {/*
+              A SHARED preview (ADR-0063): "run with AI" arms the real transport for this
+              mount only (a toggle, aria-pressed, never persisted), and install makes the
+              app the user's own — the same act a starter gets, one trust rung lower.
+            */}
+            {isSharedId(id) && sharedEntry !== undefined ? (
+              <>
+                {/* A link preview lives in memory until kept (finding 12); an opened file is already kept. */}
+                {!sharedEntry.kept ? (
+                  <Button
+                    variant="ghost"
+                    data-testid="shared-keep"
+                    aria-label="keep this shared app on your shelf"
+                    title="keep it on your apps page (in your snug file) without installing yet"
+                    onClick={() => void keepSharedEntry(sharedEntry.bundleId)}
+                  >
+                    keep
+                  </Button>
+                ) : null}
+                {/* macOS web only: offer the desktop app — never auto-launch (ADR-0063 §7). */}
+                {sharedEntry.link !== undefined && desktopOffer ? (
+                  <Button
+                    variant="ghost"
+                    data-testid="shared-open-desktop"
+                    aria-label="open in Snug for Mac"
+                    title="if you have the Snug desktop app installed, open this shared app there"
+                    onClick={() => {
+                      window.location.href = desktopLinkFor(sharedEntry.link!.id, sharedEntry.link!.key);
+                    }}
+                  >
+                    open in Snug for Mac
+                  </Button>
+                ) : null}
+                <Button
+                  variant="ghost"
+                  data-testid="shared-run-with-ai"
+                  aria-pressed={aiArmed}
+                  aria-label={aiArmed ? 'stop letting this preview use your AI' : 'run with AI'}
+                  title={
+                    aiArmed
+                      ? 'this preview is using your AI — press to stop'
+                      : 'let this preview use your AI (it spends your tokens; off by default because you did not write this app)'
+                  }
+                  onClick={() => setAiArmed((armed) => !armed)}
+                >
+                  {aiArmed ? '✦ AI on' : '✧ run with AI'}
+                </Button>
+                {installedCopy === undefined ? (
+                  <Button
+                    variant="primary"
+                    data-testid="shared-install"
+                    disabled={installing}
+                    onClick={() => void installThisShared()}
+                    title="add this shared app to your snug file — its connections stay unconnected until you review and approve them"
+                  >
+                    {installing ? 'installing…' : 'install'}
+                  </Button>
+                ) : installedCopy.current ? (
+                  <Button
+                    variant="primary"
+                    data-testid="shared-open-copy"
+                    onClick={() => navigate(`/run/${installedCopy.appId}`)}
+                    title="this shared app is already in your snug file — open your copy"
+                  >
+                    open your copy
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    data-testid="shared-update-apply"
+                    disabled={installing}
+                    onClick={() => setUpdateConfirmOpen(true)}
+                    title="replace your copy's code with this newer shared version — your data, credentials and connections stay"
+                  >
+                    {installing ? 'updating…' : 'update · keeps your data'}
+                  </Button>
+                )}
+              </>
             ) : null}
             {isStarterId(id) ? (
               <Button
@@ -831,12 +1001,15 @@ export default function RunView(): ReactElement {
               ahead. Self-nulls for apps that are not installed starters; read-only
               starter views (isStarterId) show the install button above instead.
             */}
-            {!isStarterId(id) ? (
-              <StarterUpdateControls
-                appId={id}
-                refreshToken={contentEpoch}
-                onUpdated={() => setContentEpoch((epoch) => epoch + 1)}
-              />
+            {!isUnownedId(id) ? (
+              <>
+                <StarterUpdateControls
+                  appId={id}
+                  refreshToken={contentEpoch}
+                  onUpdated={() => setContentEpoch((epoch) => epoch + 1)}
+                />
+                <SharedUpdateControls appId={id} refreshToken={contentEpoch} />
+              </>
             ) : null}
             {/*
               The per-APP controls — model, connections, export — live in one component
@@ -846,12 +1019,11 @@ export default function RunView(): ReactElement {
             */}
             <RunHeaderActions
               appId={id}
-              isStarter={isStarterId(id)}
+              isStarter={isUnownedId(id)}
               connectionSlots={connectionSlots}
-              canExport={sawDbOp}
               syncState={sidecarSync}
               onManageConnections={() => void openConnectionWizardForApp(id, 'settings')}
-              onExport={() => void onExport()}
+              {...(isUnownedId(id) ? {} : { onShare: () => setShareOpen(true) })}
             />
             <Button variant="ghost" onClick={toggleTheme} aria-label={`switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
               {theme === 'dark' ? '☀ light' : '☾ dark'}
@@ -922,10 +1094,55 @@ export default function RunView(): ReactElement {
             . installing only copies the app — nothing is connected until you review and approve it yourself.
           </div>
         ) : null}
-        {exportError !== undefined ? (
-          <div className="error-note" style={{ margin: 'var(--space-3) var(--space-4) 0' }} role="alert">
-            export failed — {exportError}{' '}
-            <ReportErrorLink context={{ surface: 'run', errorText: `export failed — ${exportError}` }} />
+        {/*
+          The SHARED preview disclosure (ADR-0063 §4): what this is, that nothing is saved
+          until install, and — like the starter teaser — which providers it will ask to
+          connect to, by name only. `fields` are deliberately not rendered here, for the
+          reason the starter disclosure states above.
+        */}
+        {updateConfirmOpen && installedCopy !== undefined && sharedEntry !== undefined ? (
+          <ConfirmOverlay ariaLabel="confirm updating from a shared version" data-testid="shared-update-confirm">
+            <h2 className="net-confirm-title">update {installedCopy.displayName} from this shared version?</h2>
+            <p className="net-confirm-body">
+              Your copy&apos;s code becomes this version. Your data, chat and credentials stay, and your current
+              version stays in the versions panel, revertable.
+              {installedCopy.edited ? ' You have customized your copy — the edited version is what gets replaced.' : ''}
+            </p>
+            {installedCopy.approvedProviders.length > 0 ? (
+              <p className="net-confirm-body" data-testid="shared-update-inherits">
+                The new code will run with the connections you already approved:{' '}
+                <strong>{installedCopy.approvedProviders.join(', ')}</strong>. Anyone who knows this app&apos;s
+                lineage can offer an update — you are the reviewer. Read its docs and what it tells the AI first if
+                you have not.
+              </p>
+            ) : null}
+            <div className="field-row net-confirm-actions">
+              <Button variant="ghost" onClick={() => setUpdateConfirmOpen(false)}>
+                keep mine
+              </Button>
+              <Button variant="primary" data-testid="shared-update-confirm-apply" onClick={() => void updateThisShared()}>
+                update
+              </Button>
+            </div>
+          </ConfirmOverlay>
+        ) : null}
+        {shareOpen && meta !== undefined ? (
+          <ShareSheet appId={id} displayName={getAppMeta(id)?.displayName ?? meta.displayName} onClose={() => setShareOpen(false)} />
+        ) : shareOpen ? (
+          <ShareSheet appId={id} displayName={fallbackName ?? 'this app'} onClose={() => setShareOpen(false)} />
+        ) : null}
+        {isSharedId(id) && sharedEntry !== undefined ? (
+          <div className="hint" data-testid="shared-preview-disclosure" style={{ margin: 'var(--space-3) var(--space-4) 0' }}>
+            {installedCopy !== undefined && !installedCopy.current
+              ? `shared app · preview of a NEWER version of ${installedCopy.displayName}, which is already in your file · nothing changes until you update.`
+              : 'shared app · preview · nothing is saved until you install.'}
+            {sharedEntry.bundle.connections.length > 0
+              ? ` it will ask to connect to ${sharedEntry.bundle.connections.map((c) => c.provider.name).join(', ')} — you review and approve each one yourself; its author never sees your keys.`
+              : ''}
+          </div>
+        ) : isSharedId(id) ? (
+          <div className="hint" data-testid="shared-preview-disclosure" style={{ margin: 'var(--space-3) var(--space-4) 0' }}>
+            this shared app is no longer on your shelf — <Link to="/">back to your apps</Link>.
           </div>
         ) : null}
 
@@ -943,7 +1160,7 @@ export default function RunView(): ReactElement {
             <SnugAppFrame
               // provider is part of the identity: a BYOK provider switch must remount
               // the frame so the mount-captured transport can't go stale (Gate-5).
-              key={`${id}:${mode}:${provider}:${frameEpoch}`}
+              key={`${id}:${mode}:${provider}:${frameEpoch}:${aiArmed ? 'ai' : 'preview'}`}
               html={htmlState.html}
               transport={transport}
               budgetKey={`app:${id}`}

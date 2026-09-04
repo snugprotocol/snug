@@ -182,7 +182,7 @@ describe('AC1 — the Coinbase-shaped requirement parses in FULL (the defect thi
     expect(CONNECTION_SLOT_RULE.source).toBe('^[a-z0-9][a-z0-9-]{0,39}$');
     expect(AUTH_MAX_SLOTS_PER_APP).toBe(8);
     expect([...CONNECTION_PROVENANCES].sort()).toEqual(
-      ['registry', 'inference', 'user_docs', 'starter', 'user'].sort(),
+      ['registry', 'inference', 'user_docs', 'starter', 'user', 'shared'].sort(),
     );
   });
 

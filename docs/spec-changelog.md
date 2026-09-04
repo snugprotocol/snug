@@ -4,6 +4,30 @@ Every change pushed to `snugprotocol/spec`, newest first. Format: `## YYYY-MM-DD
 
 ---
 
+## 2026-09-04 — INTERNAL DRAFT, not staged for any push — TASK-20260904-app-sharing (ADR-0063/0064)
+**Excluded from every spec push.** `connection-requirement` and the new `app-bundle` module
+are both outside `json-schemas.ts` SOURCES, so zero schema bytes changed and wire protocol v1
+is untouched. No push to `snugprotocol/spec` (needs an explicit ask).
+
+**The `shared` provenance / admission channel.** `CONNECTION_PROVENANCES`
+(`packages/protocol/src/connection-requirement.ts`) and `ADMISSION_CHANNELS`
+(`packages/auth/src/requirement-admission.ts`) both gain `shared` — APPENDED, never
+inserted, and now pinned structurally equal by a test rather than a comment. It names a
+requirement that arrived inside an app bundle from a third party (the untrusted declaration
+channel ADR-0016 clause 6 anticipated). **No `USERDB_SCHEMA_VERSION` bump** — `provenance`
+is a TEXT column enforced at write time (the `linked_device` precedent above); a bump would
+have made every fielded v6 hub refuse the whole file. The draft's §12.1 proposer table gains
+the share act, §12.2's enum line carries the value, and every guard (borrow ban, confusable
+guard, `userLayer` refusal, LAN-class check) is pinned on the new channel explicitly.
+
+**The app-bundle format** (`packages/protocol/src/app-bundle.ts`, new; SPEC-1.0 §12.14):
+`snug-app-bundle/1`, `strictObject` throughout, per-field and whole-bundle byte caps, DDL
+entries restricted to single `CREATE …` statements, `userLayer` refused by shape, lineage a
+UUID so `install_source` can never spell a starter identity, and NO identity field — the
+receiver computes `appBundleId` (sha-256 over key-sorted canonical JSON). The reader
+`parseAppBundle` distinguishes too-large / not-json / not-a-bundle / invalid so a user who
+picked the wrong file kind is told that.
+
 ## 2026-08-27 — **PREPARED, NOT PUSHED** — spec 1.0 editorial correction (§1 opener) — TASK-20260827-ownership-positioning — spec commit _pending_
 
 One sentence in `SPEC.md` §1, version held at 1.0 (ADR-0050's editorial-correction path).

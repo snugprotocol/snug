@@ -40,3 +40,11 @@
 - **Brain chip** — the header status surface (`BrainChip.tsx`) consuming
   `resolveActiveBrain`, the live evaluation of `adapterKindFor` — the ONE adapter
   routing derivation (ADR-0059 rule 2).
+
+**App bundle** — one app lifted out of a user file as strict JSON (`snug-app-bundle/1`), carried in a `.snug` file or an encrypted link: the current code, connection *requirements* (shapes, never grants or credentials), the runtime contract, the data schema as `CREATE` DDL (structure, never rows), and the wiki docs the sharer chose. Never carries data, secrets, history or chat (ADR-0063).
+
+**Lineage** — the sharer's app id carried in a bundle, minted by the recipient's installer into `install_source = 'share:<lineage>'`. It is what makes a re-share recognisable as an *update* of an installed copy rather than a second app. Public by construction — anyone holding a bundle knows it (threat-model R-39).
+
+**Shared shelf** — the hub's "shared with you" section between "your apps" and "starter apps". Memory-first: a received bundle persists only after an explicit act (opening an attachment, or "keep" on a link preview), and is inert until install.
+
+**Blind relay** — the one hosted endpoint (ADR-0064): a Worker + R2 bucket that stores app bundles already encrypted in the sharer's browser, with the key carried only in the link's URL fragment. It can neither read what it holds nor substitute it.

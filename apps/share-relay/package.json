@@ -1,0 +1,13 @@
+{
+  "name": "share-relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The one blind endpoint (ADR-0064): a Cloudflare Worker + R2 bucket that stores end-to-end-encrypted app bundles it cannot read, for a bounded time.",
+  "scripts": {
+    "test": "node --test handler.node-test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "echo 'deploys go through: node scripts/deploy-relay.mjs --deploy (explicit owner ask, ADR-0054/0064)' && exit 1"
+  },
+  "license": "MIT"
+}
