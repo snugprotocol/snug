@@ -29,8 +29,17 @@ test('the wrangler argv names the config and carries the sha; init prints the on
   const argv = wranglerCommand({ sha: 'abc123' });
   assert.deepEqual(argv.slice(0, 6), ['pnpm', 'exec', 'wrangler', 'deploy', '--config', RELAY_CONFIG]);
   assert.ok(argv.includes('DEPLOY_SHA:abc123'));
-  assert.ok(initCommands().some((l) => /r2 bucket create/.test(l)));
-  assert.ok(initCommands().some((l) => /Rate limiting/.test(l)));
+  const init = initCommands();
+  assert.ok(init.some((l) => /r2 bucket create/.test(l)));
+  assert.ok(init.some((l) => /Rate limiting/.test(l)));
+  // The two facts the owner's first real run needed (2026-09-04): the deploy refuses off
+  // main, so MERGE comes before every other step; and the lifecycle rule is a wrangler
+  // command, not a dashboard-only act (verified against `wrangler r2 bucket lifecycle
+  // add --help`). Both are printed, so a reader of `init` cannot walk into the refusal
+  // or into the dashboard for something the CLI does.
+  assert.ok(init.some((l) => /git switch main/.test(l)), 'init must say merge-then-main first');
+  assert.ok(init.some((l) => /r2 bucket lifecycle add .* --expire-days 31/.test(l)), 'the lifecycle rule is a CLI command');
+  assert.ok(init.some((l) => /dashboard ONLY/.test(l)), 'the WAF rule is the one dashboard step, and says so');
 });
 
 test('main prints and STOPS without --deploy; deploys only with it (the exec seam is observed)', () => {

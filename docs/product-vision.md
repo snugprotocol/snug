@@ -27,7 +27,7 @@ Portability, model choice, local-first operation and reduced SaaS custody are **
 `protocol` · `runner` · `sdk` · `db` (new build) · `knowledge` · `adapters` · Playground · minimal server. MIT. v1.1: `auth` (dual-layer credential broker) as a second launch moment.
 
 ## Roadmap shape
-v0.1 spec + v1 packages → launch → auth v1.1 → community-driven: multi-implementation (other languages/frameworks), hub features (pin/share/install), KeyProvider/KMS for true host-blind credentials.
+v0.1 spec + v1 packages → launch → auth v1.1 → community-driven: multi-implementation (other languages/frameworks), remaining hub features (pin), KeyProvider/KMS for true host-blind credentials. **Share/install shipped early** (2026-09-04, ADR-0063/0064): an app travels as a `.snug` bundle or an end-to-end-encrypted link, and installs on the recipient's own file — ownership is only real if what you own can be handed to someone else.
 
 ## Origin
 Extracted from the "Native Apps" feature the founder built twice in production — first as an original implementation, then hardened in a second system — where an 11-year-old built a flying-pig game that plays against the AI.

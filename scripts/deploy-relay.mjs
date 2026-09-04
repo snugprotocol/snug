@@ -50,12 +50,15 @@ export function parseArgs(argv) {
 
 export function initCommands() {
   return [
+    `# 0. FIRST: the relay's code must be on main — this script refuses anything but a clean tree on main == origin/main.`,
+    `#    Merge the PR, then: git switch main && git pull`,
     `# 1. the bucket (once): pnpm exec wrangler r2 bucket create ${BUCKET_NAME}`,
-    `# 2. the lifecycle janitor (once, dashboard → R2 → ${BUCKET_NAME} → Settings → Object lifecycle): delete objects 31 days after upload`,
-    `#    (expiry is ALSO enforced at read time by the Worker — the rule only reclaims storage)`,
+    `# 2. the lifecycle janitor (once): pnpm exec wrangler r2 bucket lifecycle add ${BUCKET_NAME} expire-shares --expire-days 31`,
+    `#    (verify: pnpm exec wrangler r2 bucket lifecycle list ${BUCKET_NAME} — expiry is ALSO enforced at read time by the Worker, so the rule only reclaims storage)`,
     `# 3. the custom domain: the Worker config declares ${RELAY_HOST}; the first deploy binds it (the zone must be on this account)`,
-    `# 4. the rate limit (once, dashboard → Security → WAF → Rate limiting rules): POST to /v1/bundles, 20 per minute per IP, block 10 minutes`,
-    `# 5. deploy: node scripts/deploy-relay.mjs --deploy`,
+    `# 4. the rate limit (once, dashboard ONLY — Security → WAF → Rate limiting rules): POST to /v1/bundles, 20 per minute per IP, block 10 minutes`,
+    `# 5. dry run: node scripts/deploy-relay.mjs   (pre-flight + relay tests + prints the wrangler argv, then stops)`,
+    `# 6. deploy: node scripts/deploy-relay.mjs --deploy`,
   ];
 }
 

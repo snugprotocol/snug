@@ -7,24 +7,33 @@ is deployed **only on an explicit owner ask**, by the owner, from a clean `main`
 (PROCESS.md release rules; ADR-0054's discipline). Every deploy is journaled with UTC
 time and the verification performed.
 
-## One-time setup (the owner, in the Cloudflare dashboard + wrangler)
+## One-time setup (the owner, from the repo root)
 
 `node scripts/deploy-relay.mjs init` prints these; in order:
 
+0. **The relay's code must be on `main`.** The deploy refuses anything but a clean tree
+   on `main == origin/main` (`gitPreflight`, shared with `deploy-web.mjs`), so a relay
+   living only on a feature branch cannot be deployed: **merge first**, then
+   `git switch main && git pull`. Stated because the natural reading of `init`'s output
+   is "run these now", and step 1 on a branch would refuse four steps later.
 1. **Bucket:** `pnpm exec wrangler r2 bucket create snug-share-bundles` on the account
    that holds the `snugprotocol.org` zone (`CLOUDFLARE_ACCOUNT_ID` in the gitignored root
    `.env`, as for `deploy-web.mjs`).
-2. **Lifecycle janitor:** dashboard → R2 → `snug-share-bundles` → Settings → Object
-   lifecycle → delete objects **31 days** after upload. This reclaims storage; it is NOT
-   the expiry authority — the Worker stamps `expiresAt` (`TTL_DAYS`, 30) at upload and
-   refuses reads past it, so a lapsed rule cannot extend a link.
+2. **Lifecycle janitor:**
+   `pnpm exec wrangler r2 bucket lifecycle add snug-share-bundles expire-shares --expire-days 31`
+   (verified against `wrangler r2 bucket lifecycle add --help` on wrangler 4.125 — the
+   dashboard path R2 → the bucket → Settings → Object lifecycle does the same thing).
+   This reclaims storage; it is NOT the expiry authority — the Worker stamps `expiresAt`
+   (`TTL_DAYS`, 30) at upload and refuses reads past it, so a lapsed rule cannot extend
+   a link. Confirm with `pnpm exec wrangler r2 bucket lifecycle list snug-share-bundles`.
 3. **Custom domain:** `apps/share-relay/wrangler.jsonc` declares
    `share.snugprotocol.org` with `custom_domain: true`; the first deploy binds it (the
    zone must be on this account). `workers_dev` is `false` — there is no second host.
-4. **Rate limit:** dashboard → Security → WAF → Rate limiting rules → for
-   `share.snugprotocol.org`, method `POST`, path `/v1/bundles`: **20 requests per minute
-   per IP, block for 10 minutes**. This is the abuse control for the blind blob drop
-   (threat-model R-36); it lives outside the code, so it is written here.
+4. **Rate limit — the one genuinely dashboard-only step:** Security → WAF → Rate
+   limiting rules → for `share.snugprotocol.org`, method `POST`, path `/v1/bundles`:
+   **20 requests per minute per IP, block for 10 minutes**. This is the abuse control for
+   the blind blob drop (threat-model R-36); it lives outside the code and outside
+   wrangler, which is exactly why it is written here.
 5. **Nothing else.** No Workers Analytics, no Logpush, no KV/D1 — `deploy-relay.mjs`
    refuses a config that carries any of them (`configPreflight`).
 
