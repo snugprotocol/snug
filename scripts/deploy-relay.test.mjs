@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { RELAY_CONFIG, configPreflight, initCommands, main, parseArgs, parseJsonc, wranglerCommand } from './deploy-relay.mjs';
+import { RELAY_CONFIG, assertLoopbackOrigin, configPreflight, initCommands, main, parseArgs, parseJsonc, wranglerCommand } from './deploy-relay.mjs';
 
 const shipped = () => parseJsonc(readFileSync(new URL(`../${RELAY_CONFIG}`, import.meta.url), 'utf8'));
 
@@ -40,6 +40,27 @@ test('the wrangler argv names the config and carries the sha; init prints the on
   assert.ok(init.some((l) => /git switch main/.test(l)), 'init must say merge-then-main first');
   assert.ok(init.some((l) => /r2 bucket lifecycle add .* --expire-days 31/.test(l)), 'the lifecycle rule is a CLI command');
   assert.ok(init.some((l) => /dashboard ONLY/.test(l)), 'the WAF rule is the one dashboard step, and says so');
+});
+
+test('--dev-origin is ADDITIVE, loopback-only, and never sticky', async () => {
+  const { assertLoopbackOrigin } = await import('./deploy-relay.mjs');
+  // Additive: the config's pinned origins survive and the dev origin is appended.
+  const argv = wranglerCommand({ sha: 'abc', devOrigin: 'http://localhost:5173', configOrigins: ['https://playground.snugprotocol.org', 'tauri://localhost'] });
+  const varArg = argv[argv.indexOf('--var', argv.indexOf('--var') + 1) + 1];
+  assert.equal(varArg, 'ALLOWED_ORIGINS:https://playground.snugprotocol.org,tauri://localhost,http://localhost:5173');
+  // Absent by default — an ordinary deploy carries no origin override at all, which is
+  // what makes the flag non-sticky (the next deploy restores the config-only list).
+  assert.ok(!wranglerCommand({ sha: 'abc' }).some((a) => String(a).startsWith('ALLOWED_ORIGINS:')));
+  // Loopback only: a public origin belongs in the reviewed config, not in a flag.
+  assert.equal(assertLoopbackOrigin('http://localhost:5173'), 'http://localhost:5173');
+  assert.equal(assertLoopbackOrigin('http://127.0.0.1:4173'), 'http://127.0.0.1:4173');
+  assert.throws(() => assertLoopbackOrigin('https://evil.example'), /not loopback/);
+  assert.throws(() => assertLoopbackOrigin('https://playground.snugprotocol.org'), /not loopback/);
+  assert.throws(() => assertLoopbackOrigin('not-a-url'), /not a URL/);
+  assert.throws(() => assertLoopbackOrigin('http://localhost:5173/path'), /bare origin/);
+  // The flag needs a value.
+  assert.throws(() => parseArgs(['n', 'x', '--dev-origin']), /needs a value/);
+  assert.throws(() => parseArgs(['n', 'x', '--dev-origin', '--deploy']), /needs a value/);
 });
 
 test('main prints and STOPS without --deploy; deploys only with it (the exec seam is observed)', () => {
