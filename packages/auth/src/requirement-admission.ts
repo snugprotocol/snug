@@ -78,11 +78,14 @@ import {
 } from './well-known-providers.js';
 
 /**
- * The five authoring channels — the same literals as `CONNECTION_PROVENANCES`
+ * The six authoring channels — the same literals as `CONNECTION_PROVENANCES`
  * (packages/protocol), which are PERSISTED column values. Kept structurally identical so
- * a channel and the provenance it writes can never drift apart.
+ * a channel and the provenance it writes can never drift apart — and since
+ * TASK-20260904 that identity is a TEST (`shared-channel-admission.test.ts`), not a
+ * comment. `shared` is the app-bundle channel (ADR-0063 §3): a third party's declaration,
+ * judged by every guard below exactly as `inference` and `starter` are.
  */
-export const ADMISSION_CHANNELS = ['registry', 'inference', 'user_docs', 'starter', 'user'] as const;
+export const ADMISSION_CHANNELS = ['registry', 'inference', 'user_docs', 'starter', 'user', 'shared'] as const;
 
 export type AdmissionChannel = (typeof ADMISSION_CHANNELS)[number];
 
