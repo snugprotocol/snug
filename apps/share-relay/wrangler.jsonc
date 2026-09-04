@@ -1,0 +1,24 @@
+// wrangler.jsonc — the share relay (ADR-0064), the repo's first Worker config.
+//
+// ONE endpoint, content-blind: `POST /v1/bundles` stores ciphertext the sharer's browser
+// produced (the key never leaves the link's fragment), `GET /v1/bundles/:id` returns it
+// until `expiresAt`, `DELETE /v1/bundles/:id` revokes with the token minted at upload.
+// No identity, no listing, no logging of bodies. Deployed ONLY by
+// `node scripts/deploy-relay.mjs --deploy` on an explicit owner ask (ADR-0054's
+// discipline); the bucket's 31-day lifecycle rule is set once in the dashboard (the
+// runbook says how) and `expiresAt` is ALSO enforced at read time, so a lifecycle lapse
+// cannot extend a link.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "snug-share-relay",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "routes": [{ "pattern": "share.snugprotocol.org", "custom_domain": true }],
+  "observability": { "enabled": false },
+  "r2_buckets": [{ "binding": "BUNDLES", "bucket_name": "snug-share-bundles" }],
+  "vars": {
+    "TTL_DAYS": "30",
+    "ALLOWED_ORIGINS": "https://playground.snugprotocol.org,tauri://localhost,http://tauri.localhost"
+  }
+}
