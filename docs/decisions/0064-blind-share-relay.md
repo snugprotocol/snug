@@ -21,7 +21,7 @@ fetch them. The options, with what each costs the doctrine:
 | **B — bundle in the URL fragment** | none | **no** — Telegram (4 096 chars), Discord (2 000), SMS, X, Outlook line-wrapping; a typical bundle is 15–30 KB of URL | zero infra |
 | **C — attachment only at launch** | none | n/a | ADR-0052's shape; link parked |
 | Run `apps/server` in production | a full authenticated server | yes | contradicts ADR-0013 outright; far more than a blob store |
-| Sharer's own storage (Dropbox share links) | none | only sharers with Dropbox connected | CORS on content links is unreliable; friction defeats "super easy" |
+| **D — sharer's own sync origin** (Dropbox shared link + `#key`) | none | every messenger, but only sharers with an origin connected | keeps ADR-0013 unamended; Dropbox content-link CORS for web recipients needs a probe before it can be promised |
 
 ## Decision (proposed)
 
@@ -56,6 +56,9 @@ fetch them. The options, with what each costs the doctrine:
 See the table. **B** was seriously considered because it keeps ADR-0013 byte-for-byte:
 it is rejected as the primary path only because the links break in the channels people
 actually paste into; it may return as a hidden fallback for self-hosters without a relay.
+**D** (raised by the fresh-context plan review) also keeps ADR-0013 unamended and is the
+owner's to weigh against A: no endpoint to operate, at the cost of "copy link" existing
+only for users who connected a sync origin — which today is nobody by default.
 
 ## Consequences
 
