@@ -1,6 +1,6 @@
 # TASK-20260904-app-sharing: Share an app by link or by `.snug` attachment — a portable starter anyone can install
 
-- **Status**: draft — **STOPPED at Gate 2 for plan approval** (interview Q1–Q7 below; plan written under the stated defaults; fresh-context plan review DONE and folded in — see Decisions & surprises)
+- **Status**: in-progress — **plan APPROVED by owner 2026-09-04 ("go with defaults": Q1 = A blind relay · Q2 = `.snug` · Q3 = update act · Q4 = third button + mutual sniff · Q5 = 30 d / 1 MiB / revocable · Q6 = b, contract as reviewed text · Q7 = per-doc toggles, `memory` off)**; fresh-context plan review done and folded in
 - **Owner**: Jeetu
 - **Risk tier**: **high** — touches `packages/protocol` (new internal-draft app-bundle format + a sixth connection provenance), `packages/auth` (the untrusted declaration channel ADR-0016 clause 6 anticipated), C1 negative tests (a bundle must never carry a credential), the desktop shell (file-open dispatch, a `snug://` scheme), and — if the owner accepts Q1 option A — a **new hosted surface** (the first since ADR-0013). High extras: negative tests · fresh-context AI plan review BEFORE implementation (done 2026-09-04, 24 findings, all folded) · journal self-sign-off.
 - **Branch**: `feat/TASK-20260904-app-sharing` (cut from `main` @ `9bd3804`)
@@ -16,7 +16,7 @@ This task adds **app sharing**: from the app's own header, one share control pro
 
 The framing that makes this small: **a shared app is a starter that travels.** The hub already knows how to show, preview, install, declare connections for, seed docs into, and update a starter. This task adds the untrusted-origin version of that path, with the review posture ADR-0016 already specified for it.
 
-### Interview (owner) — answers pending; plan written under the stated defaults
+### Interview (owner) — ANSWERED 2026-09-04: "go with defaults" (every default below stands)
 
 - **Q1 — the link's host.** The hosted playground has no backend (ADR-0013) and `apps/server` is not deployed anywhere; ADR-0052 rejected a Cloudflare Worker receiver by name. Pick one (full argument in [ADR-0064 draft](../../decisions/0064-blind-share-relay.md)):
   - **A (recommended) — a *blind* relay.** A ~150-line Cloudflare Worker + R2 (`apps/share-relay`, same Cloudflare account as the Pages deploys) storing **ciphertext only**, ≤ 1 MiB per bundle, 30-day TTL, unguessable 128-bit ids, IP rate-limited, no listing, no accounts, no content logs. The key never leaves the link's fragment, so "we collect nothing" survives *in substance* and the falsifiability claim becomes "one blind endpoint, verifiable by reading the Worker". Needs ADR-0064 amending ADR-0013; deployed only on an explicit owner ask; owner operates it. Residual: a 1 MiB encrypted blob drop is a generic anonymous file host for 30 days.
@@ -157,3 +157,7 @@ The framing that makes this small: **a shared app is a starter that travels.** T
 - State: **draft, stopped for plan approval.** No implementation code.
 - Next step: owner answers Q1–Q7 (defaults stated) → Phase 0 docs → Phase 1 tests.
 - Open questions: Q1–Q7 above.
+
+### 2026-09-04 01:20 — Claude (Fable 5.1) — session (approval → Gate 3/4)
+- Owner: **"go with defaults"** — Q1 A (blind relay; ADR-0064 accepted; the Worker is BUILT in phase 2 but deployed only on a separate explicit ask), Q2 `.snug`, Q3 update act, Q4 third button + mutual sniff, Q5 30 d / 1 MiB / revocable, Q6 (b) contract as reviewed text (ADR-0018 amended for this one channel via ADR-0063 §8), Q7 per-doc toggles with `memory` off.
+- State: Phase 0 → Phase 1 starting; tests first per TDD.md.

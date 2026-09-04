@@ -1,6 +1,6 @@
 # 0064 — One blind relay for share links (amends ADR-0013)
 
-- **Status:** proposed — **awaiting the owner's Q1 call** (TASK-20260904-app-sharing). If the owner picks attachment-only or bundle-in-URL, this ADR is rejected and stays as the record of why.
+- **Status:** accepted (owner Q1 = A, plan approval 2026-09-04, "go with defaults"; amends ADR-0013 — the relay is BUILT under TASK-20260904 and DEPLOYED only on a separate explicit owner ask per the release rules)
 - **Date:** 2026-09-04
 - **Task:** TASK-20260904-app-sharing
 
@@ -23,7 +23,7 @@ fetch them. The options, with what each costs the doctrine:
 | Run `apps/server` in production | a full authenticated server | yes | contradicts ADR-0013 outright; far more than a blob store |
 | **D — sharer's own sync origin** (Dropbox shared link + `#key`) | none | every messenger, but only sharers with an origin connected | keeps ADR-0013 unamended; Dropbox content-link CORS for web recipients needs a probe before it can be promised |
 
-## Decision (proposed)
+## Decision
 
 1. **The hosted instance grows exactly one endpoint, and it is blind.** `apps/share-relay`
    is a Cloudflare Worker with an R2 binding exposing `POST /v1/bundles` (octet-stream,

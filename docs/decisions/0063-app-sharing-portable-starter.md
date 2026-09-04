@@ -1,6 +1,6 @@
 # 0063 — App sharing: a shared app is a starter that travels
 
-- **Status:** proposed (Gate 2 draft, 2026-09-04, revised the same day after the fresh-context plan review — becomes accepted on owner plan approval of TASK-20260904-app-sharing; Q1–Q7 in the task file may amend §2/§4/§6/§8)
+- **Status:** accepted (owner plan approval 2026-09-04, "go with defaults": `.snug` for bundles, update act included, contract carried as reviewed text — §8(b) — which amends ADR-0018 D3 for this one channel; drafted at Gate 2 and revised after the fresh-context plan review the same day)
 - **Date:** 2026-09-04
 - **Task:** TASK-20260904-app-sharing
 
