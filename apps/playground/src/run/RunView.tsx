@@ -40,7 +40,8 @@ import { toggleTheme, useTheme } from '../state/theme.js';
 import { toggleRailShown, useRailShown } from '../state/railLayout.js';
 import { STARTER_PREFIX, isStarterId, listStarterApps, loadStarterHtml, starterInstallSource } from '../starter/starterApps.js';
 import { createConsentGateTransport } from '../share/consentTransport.js';
-import { installSharedEntry } from '../share/installShared.js';
+import { applySharedUpdate, installSharedEntry, installedCopyForBundle, type InstalledCopyForBundle } from '../share/installShared.js';
+import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 import { ShareSheet } from '../share/ShareSheet.js';
 import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
 import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
@@ -323,6 +324,12 @@ export default function RunView(): ReactElement {
   // preview mount starts un-armed. Part of the frame key below, so arming remounts the
   // frame onto the real transport (the host captures its transport at mount).
   const [aiArmed, setAiArmed] = useState(false);
+  // Consent is per PREVIEW, never inherited across an id change (Gate-5 finding 3): the
+  // route element is not keyed by id, so `/run/shared--A` → `/run/shared--B` would carry
+  // A's "run with AI" onto B — and B may have arrived through a drive-by `snug://` link.
+  useEffect(() => {
+    setAiArmed(false);
+  }, [id]);
   const consentGate = useMemo(() => createConsentGateTransport(), []);
   const transport = isSharedId(id) && !aiArmed ? consentGate : realTransport;
   // The envelope net capability (AL-03): a value-blind NetHandler the runner routes
@@ -637,6 +644,39 @@ export default function RunView(): ReactElement {
   // The shelf entry behind a shared preview route, for the header and the docs tab.
   const shelf = useStore(sharedInboxStore);
   const sharedEntry = isSharedId(id) ? shelf.find((entry) => entry.bundleId === bundleIdFromSharedRouteId(id)) : undefined;
+  // Is this bundle's lineage already installed? Then the preview's act is UPDATE (from
+  // here, where the docs and contract are readable — Gate-5 finding 1), or just "open".
+  const [installedCopy, setInstalledCopy] = useState<InstalledCopyForBundle | undefined>(undefined);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setInstalledCopy(undefined);
+    setUpdateConfirmOpen(false);
+    if (sharedEntry === undefined) return;
+    void getUserDb().then((db) => {
+      if (!cancelled) setInstalledCopy(installedCopyForBundle(db, sharedEntry));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sharedEntry]);
+  const updateThisShared = useCallback(async (): Promise<void> => {
+    const bundleId = bundleIdFromSharedRouteId(id);
+    if (installLatch.current || bundleId === undefined || installedCopy === undefined) return;
+    installLatch.current = true;
+    setUpdateConfirmOpen(false);
+    setInstalling(true);
+    setInstallError(undefined);
+    try {
+      await applySharedUpdate(installedCopy.appId, bundleId);
+      navigate(`/run/${installedCopy.appId}`, { replace: true });
+    } catch (err) {
+      if (mounted.current) setInstallError(err instanceof Error ? err.message : String(err));
+    } finally {
+      installLatch.current = false;
+      if (mounted.current) setInstalling(false);
+    }
+  }, [id, installedCopy, navigate]);
   // "open in Snug for Mac" is offered on a macOS BROWSER only: the desktop shell is
   // already there, and no other platform has the app (ADR-0021 D8).
   const desktopOffer = getPlatform().kind === 'web' && /Mac/i.test(globalThis.navigator?.platform ?? '') && !/iPhone|iPad/i.test(globalThis.navigator?.userAgent ?? '');
@@ -912,15 +952,36 @@ export default function RunView(): ReactElement {
                 >
                   {aiArmed ? '✦ AI on' : '✧ run with AI'}
                 </Button>
-                <Button
-                  variant="primary"
-                  data-testid="shared-install"
-                  disabled={installing}
-                  onClick={() => void installThisShared()}
-                  title="add this shared app to your snug file — its connections stay unconnected until you review and approve them"
-                >
-                  {installing ? 'installing…' : 'install'}
-                </Button>
+                {installedCopy === undefined ? (
+                  <Button
+                    variant="primary"
+                    data-testid="shared-install"
+                    disabled={installing}
+                    onClick={() => void installThisShared()}
+                    title="add this shared app to your snug file — its connections stay unconnected until you review and approve them"
+                  >
+                    {installing ? 'installing…' : 'install'}
+                  </Button>
+                ) : installedCopy.current ? (
+                  <Button
+                    variant="primary"
+                    data-testid="shared-open-copy"
+                    onClick={() => navigate(`/run/${installedCopy.appId}`)}
+                    title="this shared app is already in your snug file — open your copy"
+                  >
+                    open your copy
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    data-testid="shared-update-apply"
+                    disabled={installing}
+                    onClick={() => setUpdateConfirmOpen(true)}
+                    title="replace your copy's code with this newer shared version — your data, credentials and connections stay"
+                  >
+                    {installing ? 'updating…' : 'update · keeps your data'}
+                  </Button>
+                )}
               </>
             ) : null}
             {isStarterId(id) ? (
@@ -947,11 +1008,7 @@ export default function RunView(): ReactElement {
                   refreshToken={contentEpoch}
                   onUpdated={() => setContentEpoch((epoch) => epoch + 1)}
                 />
-                <SharedUpdateControls
-                  appId={id}
-                  refreshToken={contentEpoch}
-                  onUpdated={() => setContentEpoch((epoch) => epoch + 1)}
-                />
+                <SharedUpdateControls appId={id} refreshToken={contentEpoch} />
               </>
             ) : null}
             {/*
@@ -1043,6 +1100,32 @@ export default function RunView(): ReactElement {
           connect to, by name only. `fields` are deliberately not rendered here, for the
           reason the starter disclosure states above.
         */}
+        {updateConfirmOpen && installedCopy !== undefined && sharedEntry !== undefined ? (
+          <ConfirmOverlay ariaLabel="confirm updating from a shared version" data-testid="shared-update-confirm">
+            <h2 className="net-confirm-title">update {installedCopy.displayName} from this shared version?</h2>
+            <p className="net-confirm-body">
+              Your copy&apos;s code becomes this version. Your data, chat and credentials stay, and your current
+              version stays in the versions panel, revertable.
+              {installedCopy.edited ? ' You have customized your copy — the edited version is what gets replaced.' : ''}
+            </p>
+            {installedCopy.approvedProviders.length > 0 ? (
+              <p className="net-confirm-body" data-testid="shared-update-inherits">
+                The new code will run with the connections you already approved:{' '}
+                <strong>{installedCopy.approvedProviders.join(', ')}</strong>. Anyone who knows this app&apos;s
+                lineage can offer an update — you are the reviewer. Read its docs and what it tells the AI first if
+                you have not.
+              </p>
+            ) : null}
+            <div className="field-row net-confirm-actions">
+              <Button variant="ghost" onClick={() => setUpdateConfirmOpen(false)}>
+                keep mine
+              </Button>
+              <Button variant="primary" data-testid="shared-update-confirm-apply" onClick={() => void updateThisShared()}>
+                update
+              </Button>
+            </div>
+          </ConfirmOverlay>
+        ) : null}
         {shareOpen && meta !== undefined ? (
           <ShareSheet appId={id} displayName={getAppMeta(id)?.displayName ?? meta.displayName} onClose={() => setShareOpen(false)} />
         ) : shareOpen ? (
@@ -1050,7 +1133,9 @@ export default function RunView(): ReactElement {
         ) : null}
         {isSharedId(id) && sharedEntry !== undefined ? (
           <div className="hint" data-testid="shared-preview-disclosure" style={{ margin: 'var(--space-3) var(--space-4) 0' }}>
-            shared app · preview · nothing is saved until you install.
+            {installedCopy !== undefined && !installedCopy.current
+              ? `shared app · preview of a NEWER version of ${installedCopy.displayName}, which is already in your file · nothing changes until you update.`
+              : 'shared app · preview · nothing is saved until you install.'}
             {sharedEntry.bundle.connections.length > 0
               ? ` it will ask to connect to ${sharedEntry.bundle.connections.map((c) => c.provider.name).join(', ')} — you review and approve each one yourself; its author never sees your keys.`
               : ''}

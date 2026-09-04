@@ -164,7 +164,7 @@ describe('appBundleSchema — html, docs, schema bounds', () => {
       'CREATE UNIQUE INDEX ix ON t(id)',
       'CREATE VIEW v AS SELECT 1',
       'CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END',
-      'CREATE VIRTUAL TABLE ft USING fts5(body)',
+      'CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES (1); UPDATE t SET n = n + 1; END;',
       '  CREATE TABLE padded (id INTEGER)',
     ];
     for (const ddl of ok) expect(parses({ ...minimal, schema: { ddl: [ddl] } }), ddl).toBe(true);
@@ -176,6 +176,13 @@ describe('appBundleSchema — html, docs, schema bounds', () => {
       'CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1)',
       'CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END; INSERT INTO t VALUES (1); -- END',
       'CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END; INSERT INTO t VALUES (1); /* END */',
+      // the trigger SANDWICH (Gate-5 finding 7): a second statement between two triggers
+      'CREATE TRIGGER a AFTER INSERT ON t BEGIN SELECT 1; END; DROP TABLE t; CREATE TRIGGER b AFTER INSERT ON t BEGIN SELECT 1; END',
+      // CTAS seeds rows (finding 8)
+      'CREATE TABLE seeded AS SELECT 1 AS id',
+      'create table seeded as select * from other',
+      // virtual tables are refused by applyAppDdl anyway — dead grammar removed
+      'CREATE VIRTUAL TABLE ft USING fts5(body)',
       'CREATEX TABLE t (id INTEGER)',
       '',
     ];

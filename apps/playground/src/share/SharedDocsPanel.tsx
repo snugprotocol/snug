@@ -33,6 +33,21 @@ export function SharedDocsPanel({ bundle }: SharedDocsPanelProps): ReactElement 
           {contract.personaNote !== undefined ? <pre className="shared-doc-body">{contract.personaNote}</pre> : null}
           {contract.stateGuidance !== undefined ? <pre className="shared-doc-body">{contract.stateGuidance}</pre> : null}
           {contract.responseGuidance !== undefined ? <pre className="shared-doc-body">{contract.responseGuidance}</pre> : null}
+          {/* EVERY field the assembly renders into the system slot is shown (Gate-5
+              finding 2): `settings` become "Current Settings" lines the model reads, and
+              the output cap shapes every answer — neither may hide behind "verbatim". */}
+          {contract.settings !== undefined && Object.keys(contract.settings).length > 0 ? (
+            <pre className="shared-doc-body" data-testid="shared-contract-settings">
+              {Object.entries(contract.settings)
+                .map(([key, value]) => `${key}: ${String(value)}`)
+                .join('\n')}
+            </pre>
+          ) : null}
+          {contract.maxOutputTokens !== undefined ? (
+            <p className="hint" data-testid="shared-contract-cap">
+              answers are capped at {contract.maxOutputTokens} output tokens.
+            </p>
+          ) : null}
         </section>
       ) : null}
       {docs.length === 0 ? (

@@ -38,6 +38,9 @@ function fakeDb(rows: Array<{ appId: string; allowedHosts: string[] }>): {
   const db = {
     deleteApp,
     listConnections: vi.fn(() => rows),
+    // The delete act revokes the app's share links first (TASK-20260904, best-effort) —
+    // it reads the settings keys to find them; none here.
+    listSettingKeys: vi.fn(() => []),
   } as unknown as UserDb;
   return { db, deleteApp };
 }

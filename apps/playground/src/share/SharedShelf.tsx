@@ -71,7 +71,10 @@ export function SharedShelf({ installedBySource }: SharedShelfProps): ReactEleme
             const installed = installedAppId !== undefined;
             const updateAvailable = installed && installedIds.get(entry.bundleId) !== entry.bundleId;
             const style = { '--tile-color': app.iconColor ?? 'var(--ember)' } as CSSProperties;
-            const target = installed ? `/run/${installedAppId}` : `/run/${sharedRouteIdFor(entry.bundleId)}`;
+            // An available UPDATE opens the PREVIEW, not the installed copy (Gate-5
+            // finding 1): the new bundle's docs and contract are readable only there,
+            // and the update act lives in that preview's header.
+            const target = installed && !updateAvailable ? `/run/${installedAppId}` : `/run/${sharedRouteIdFor(entry.bundleId)}`;
             return (
               <Card key={entry.bundleId} interactive className="app-tile" style={style} data-testid="shared-tile" data-shared-name={app.displayName}>
                 {installed ? (
@@ -90,13 +93,13 @@ export function SharedShelf({ installedBySource }: SharedShelfProps): ReactEleme
                 <button
                   type="button"
                   className="tile-link tile-card-button"
-                  data-testid={installed ? 'shared-open-installed' : 'shared-open-card'}
+                  data-testid={installed && !updateAvailable ? 'shared-open-installed' : 'shared-open-card'}
                   onClick={() => navigate(target)}
                   aria-label={`open ${app.displayName}`}
                   title={
                     installed
                       ? updateAvailable
-                        ? `open your copy of ${app.displayName} — a newer shared version is waiting in its header`
+                        ? `preview the newer shared version of ${app.displayName} — read it, then update your copy`
                         : `open your copy of ${app.displayName}`
                       : `open ${app.displayName} — it stays read-only until you install it`
                   }
@@ -108,7 +111,7 @@ export function SharedShelf({ installedBySource }: SharedShelfProps): ReactEleme
                   <span className="tile-sub">
                     {app.description !== undefined && app.description !== '' ? `${app.description} — ` : ''}
                     {receivedLabel(entry)}
-                    {installed ? (updateAvailable ? ' — update available, open your copy to take it' : ' — already in your snug file') : ' — try it first, install it if you like it'}
+                    {installed ? (updateAvailable ? ' — a newer version: preview it, then update your copy' : ' — already in your snug file') : ' — try it first, install it if you like it'}
                   </span>
                 </button>
                 <div className="tile-actions">

@@ -43,9 +43,9 @@ system-slot text arriving on an untrusted channel (§8).
    `snug-app-bundle/1` is an internal-draft schema in `packages/protocol`
    (`strictObject` at every level, size caps, OUT of `schemas/` like the net frames and
    the connection requirement). It carries: app identity fields; the **current version's
-   html only**; the registered schema DDL (structure, never rows — every entry must be a
-   `CREATE …` statement, and a replay failure fails the install rather than shipping an
-   app whose first query is `no such table`); the wiki docs (each doc opt-out; `memory`
+   html only**; the registered schema DDL (structure, never rows — every entry must be one
+   `CREATE …` statement, no `AS SELECT`, and a replay failure fails the install rather
+   than shipping an app whose first query is `no such table`); the wiki docs (each doc opt-out; `memory`
    off by default because it is defined as what the app learned about the user); every
    **non-revoked** connection's **requirement half only** — exported as the **bare
    borrower** (`slot`, provider name, kind, hosts, scopes) whenever the provider resolves
@@ -114,7 +114,12 @@ system-slot text arriving on an untrusted channel (§8).
    contracts for that reason. Either the shared app runs on the lean generic layers
    until re-authored (a), or — recommended — the contract travels and is admitted only
    through the preview-then-install act, rendered verbatim as plain text under "what
-   this app tells the AI" before install, amending ADR-0018 for this one channel (b).
+   this app tells the AI" — every field the assembly puts in the slot, settings and
+   output cap included — before install, amending ADR-0018 for this one channel (b).
+   **An update of an installed lineage runs from that same preview**, never from the
+   installed app's header (which only opens the preview), and always confirms while
+   naming the approved connections the new code inherits — because a lineage is public
+   and anyone who knows it can offer an "update" (threat-model R-39).
 
 ## Alternatives considered
 

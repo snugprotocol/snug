@@ -118,7 +118,7 @@ describe('receiveSharedBundle — memory first, persisted on an explicit act', (
 });
 
 describe('hydrateSharedInbox — the file is the truth for kept rows', () => {
-  it('reads kept rows back, keeps memory-only entries, and drops a row whose bytes do not match its key', async () => {
+  it('reads kept rows back, keeps memory-only entries, drops a row whose bytes do not match its key, and leaves an unparseable row alone (finding 11)', async () => {
     const kept = await receiveSharedBundle(bundleText(), { source: 'file', persist: true });
     const memoryOnly = await receiveSharedBundle(bundleText({ app: { displayName: 'Link Only', usesDb: false } }), {
       source: 'link',
@@ -133,7 +133,10 @@ describe('hydrateSharedInbox — the file is the truth for kept rows', () => {
     const names = listSharedEntries().map((e) => e.bundle.app.displayName).sort();
     expect(names).toEqual(['Link Only', 'Weather Wall']);
     expect(db.getSetting(sharedAppSettingKey('f'.repeat(64)))).toBeUndefined();
-    expect(db.getSetting(sharedAppSettingKey('e'.repeat(64)))).toBeUndefined();
+    // A row THIS build cannot parse may be a newer format a newer hub reads — invisible
+    // here, never deleted (the hydrate runs after every sync pull and would sync the
+    // deletion back).
+    expect(db.getSetting(sharedAppSettingKey('e'.repeat(64)))).toBeDefined();
     expect(sharedInboxNoteStore.get()).toBeNull();
   });
 });

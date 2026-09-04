@@ -58,6 +58,40 @@ export function sharedUpdateStatus(db: UserDb, appId: string): SharedUpdateStatu
   return { entry, edited };
 }
 
+export interface InstalledCopyForBundle {
+  appId: string;
+  displayName: string;
+  /** The installed copy already reflects this bundle (same id) — nothing to update. */
+  current: boolean;
+  /** The recipient re-authored their copy (current ≠ newest pinned). */
+  edited: boolean;
+  /** Provider names of APPROVED connections the updated code would inherit (Gate-5 finding 4). */
+  approvedProviders: string[];
+}
+
+/**
+ * The preview's view of an installed copy of a bundle's lineage (Gate-5 finding 1): the
+ * update act runs FROM the preview — the only route where the new bundle's docs and
+ * contract can be read — so the preview needs to know what it would replace and what
+ * that replacement inherits.
+ */
+export function installedCopyForBundle(db: UserDb, entry: SharedEntry): InstalledCopyForBundle | undefined {
+  const app = db.getAppByInstallSource(shareInstallSource(entry.bundle.lineage));
+  if (app === undefined) return undefined;
+  const current = db.getSetting(sharedBundleSettingKey(app.appId)) === entry.bundleId;
+  const versions = db.listAppVersions(app.appId);
+  const newestPinned = versions.filter((v) => v.pinned).sort((a, b) => b.version - a.version)[0];
+  const edited =
+    newestPinned !== undefined && newestPinned.version !== app.currentVersion
+      ? db.getAppHtml(app.appId) !== db.getAppHtml(app.appId, newestPinned.version)
+      : false;
+  const approvedProviders = db
+    .listConnections(app.appId)
+    .filter((row) => row.status === 'approved')
+    .map((row) => row.requirement.provider.name);
+  return { appId: app.appId, displayName: app.displayName, current, edited, approvedProviders };
+}
+
 export async function applySharedUpdate(appId: string, bundleId: string): Promise<{ version: number } | { status: 'already-current' }> {
   const entry = getSharedEntry(bundleId);
   if (entry === undefined) throw new Error('that shared app is no longer on your shelf');

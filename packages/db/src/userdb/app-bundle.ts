@@ -164,7 +164,10 @@ function uniqueDisplayName(db: UserDb, wanted: string): string {
   const taken = new Set(db.listApps().map((app) => app.displayName.trim().toLowerCase()));
   if (!taken.has(wanted.trim().toLowerCase())) return wanted;
   for (let n = 2; n < 1000; n++) {
-    const candidate = `${wanted} (${n})`.slice(0, 80);
+    // Trim the NAME, never the suffix — an 80-char name sliced after suffixing would
+    // shed the suffix and come back a duplicate (Gate-5 finding 14).
+    const suffix = ` (${n})`;
+    const candidate = `${wanted.slice(0, 80 - suffix.length).trimEnd()}${suffix}`;
     if (!taken.has(candidate.trim().toLowerCase())) return candidate;
   }
   return `${wanted} (${crypto.randomUUID().slice(0, 8)})`.slice(0, 80);
@@ -287,11 +290,10 @@ export async function updateAppFromBundle(
   }
   if (db.getSetting(sharedBundleSettingKey(appId)) === options.bundleId) return { status: 'already-current' };
 
-  const meta = db.saveAppVersion(appId, bundle.html, 'shared update', undefined, {
-    pinned: true,
-    ...(bundle.contract !== undefined ? { contract: bundle.contract } : {}),
-  });
-
+  // DDL FIRST (Gate-5 finding 5): CREATE-only statements are additive and harmless under
+  // the old html, so a failure at statement N leaves the OLD code current with a few
+  // extra objects — never new code on a partial schema. Only once every statement has
+  // applied (or was already there) does the new version land.
   for (const statement of bundle.schema?.ddl ?? []) {
     try {
       await db.applyAppDdl(appId, [statement]);
@@ -301,6 +303,11 @@ export async function updateAppFromBundle(
       throw new UserDbError(USERDB_ERROR_CODES.DDL_FAILED, `could not update "${app.displayName}": ${message}`);
     }
   }
+
+  const meta = db.saveAppVersion(appId, bundle.html, 'shared update', undefined, {
+    pinned: true,
+    ...(bundle.contract !== undefined ? { contract: bundle.contract } : {}),
+  });
 
   seedDocsAbsentOnly(db, appId, bundle.docs ?? []);
   const refusedSlots = declareSharedConnections(db, appId, bundle.connections);

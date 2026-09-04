@@ -269,11 +269,18 @@ describe('installAppFromBundle — the share act (AC6)', () => {
     expect(db.getSetting(sharedBundleSettingKey(result.appId))).toBe('b'.repeat(64));
   });
 
-  it('gives the app a UNIQUE display name when one already exists (finding 18)', async () => {
+  it('gives the app a UNIQUE display name when one already exists (finding 18), even at the 80-char cap', async () => {
     const other = await sharerBundle();
     const forked = { ...other, lineage: '11111111-2222-4333-8444-555555555555' };
     const second = await installAppFromBundle(db, forked, { bundleId: 'd'.repeat(64) });
     expect(db.getApp(second.appId)?.displayName).toBe('Weather Wall (2)');
+    const long = 'L'.repeat(80);
+    db.installApp({ displayName: long, html: '<html>l</html>' });
+    const longBundle = { ...other, lineage: '22222222-2222-4333-8444-555555555555', app: { ...other.app, displayName: long } };
+    const third = await installAppFromBundle(db, longBundle, { bundleId: 'e'.repeat(64) });
+    const name = db.getApp(third.appId)?.displayName ?? '';
+    expect(name.length).toBeLessThanOrEqual(80);
+    expect(name.endsWith(' (2)')).toBe(true);
   });
 
   it('(N) never writes a starter identity — install_source is minted from the lineage', () => {
@@ -379,6 +386,23 @@ describe('updateAppFromBundle — update · keeps your data (AC12)', () => {
     expect(db.listAppVersions(installed.appId)).toHaveLength(1);
   });
 
+  it('a DDL failure during an update leaves the OLD code current and the marker unmoved (finding 5)', async () => {
+    const first = await sharerBundle([]);
+    db = await open();
+    const installed = await installAppFromBundle(db, first, { bundleId: 'b'.repeat(64) });
+    const broken: AppBundle = {
+      ...first,
+      html: '<html>should not land</html>',
+      // The first statement applies; the second fails for real (an index on a table that
+      // does not exist is not an "already exists" skip) — the new html must NOT land.
+      schema: { ddl: ['CREATE TABLE extra_ok (id INTEGER)', 'CREATE INDEX ix_missing ON no_such_table (col)'] },
+    };
+    await expect(updateAppFromBundle(db, installed.appId, broken, { bundleId: 'x'.repeat(64) })).rejects.toThrow(/no_such_table|no such table/i);
+    expect(db.getAppHtml(installed.appId)).toBe(V2_HTML);
+    expect(db.listAppVersions(installed.appId)).toHaveLength(1);
+    expect(db.getSetting(sharedBundleSettingKey(installed.appId))).toBe('b'.repeat(64));
+  });
+
   it('refuses to update an app that is not a shared install of this lineage', async () => {
     const first = await sharerBundle([]);
     db = await open();
@@ -400,8 +424,16 @@ describe('deleteApp cascade — the share settings rows', () => {
     db.setSetting(sharedBundleSettingKey(sibling.appId), 'z'.repeat(64));
     db.setSetting(shareLinkSettingKey(sibling.appId, 'link9'), { id: 'link9', expiresAt: '2026-10-04T00:00:00Z' });
 
+    db.setSecret('share:link1', JSON.stringify({ revokeToken: 't1', key: 'k1' }));
+    db.setSecret('share:link2', JSON.stringify({ revokeToken: 't2', key: 'k2' }));
+    db.setSecret('share:link9', JSON.stringify({ revokeToken: 't9', key: 'k9' }));
+
     await db.deleteApp(a.appId);
 
+    // The link SECRETS go with the app's link records (Gate-5 finding 10); the sibling's survive.
+    expect(db.getSecret('share:link1')).toBeUndefined();
+    expect(db.getSecret('share:link2')).toBeUndefined();
+    expect(db.getSecret('share:link9')).toBeDefined();
     expect(db.getSetting(sharedBundleSettingKey(a.appId))).toBeUndefined();
     expect(db.getSetting(shareLinkSettingKey(a.appId, 'link1'))).toBeUndefined();
     expect(db.getSetting(shareLinkSettingKey(a.appId, 'link2'))).toBeUndefined();

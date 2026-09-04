@@ -69,6 +69,31 @@ const NO_STORE = {
   'Referrer-Policy': 'no-referrer',
 };
 
+/** Read at most `cap` bytes from the request; `null` when the body exceeds it. */
+async function readCapped(request, cap) {
+  if (request.body === null) return new ArrayBuffer(0);
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > cap) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out.buffer;
+}
+
 function respond(status, body, headers) {
   return new Response(body ?? null, { status, headers: { ...NO_STORE, ...headers } });
 }
@@ -105,9 +130,12 @@ export async function handleRequest(request, env, seams = {}) {
     if (originIsForeign) return respond(403, null, {});
     const declared = Number(request.headers.get('Content-Length') ?? '0');
     if (declared > MAX_BODY_BYTES) return respond(413, null, cors);
-    const body = await request.arrayBuffer();
+    // STREAM the body and stop at the cap (Gate-5 finding 13): a lying or absent
+    // Content-Length must not make the Worker buffer the platform's whole 100 MB
+    // allowance before it can say 413.
+    const body = await readCapped(request, MAX_BODY_BYTES);
+    if (body === null) return respond(413, null, cors);
     if (body.byteLength === 0) return respond(400, null, cors);
-    if (body.byteLength > MAX_BODY_BYTES) return respond(413, null, cors);
     const ttlDays = Number(env.TTL_DAYS ?? DEFAULT_TTL_DAYS) || DEFAULT_TTL_DAYS;
     const expiresAt = new Date(now().getTime() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
     const newId = base64url(randomBytes(16));
@@ -123,7 +151,12 @@ export async function handleRequest(request, env, seams = {}) {
   if (id === undefined || !ID_RULE.test(id)) return respond(404, null, cors);
 
   if (request.method === 'GET' || request.method === 'HEAD') {
-    const object = await env.BUNDLES.get(`${KEY_PREFIX}${id}`);
+    // HEAD reads metadata only (R2 `head`); the in-memory test store has no `head`, so
+    // fall back to `get` there — the bytes are never sent on HEAD either way.
+    const object =
+      request.method === 'HEAD' && typeof env.BUNDLES.head === 'function'
+        ? await env.BUNDLES.head(`${KEY_PREFIX}${id}`)
+        : await env.BUNDLES.get(`${KEY_PREFIX}${id}`);
     if (object === null) return respond(404, null, cors);
     const expiresAt = object.customMetadata?.expiresAt;
     if (expiresAt === undefined || Number.isNaN(Date.parse(expiresAt)) || Date.parse(expiresAt) <= now().getTime()) {

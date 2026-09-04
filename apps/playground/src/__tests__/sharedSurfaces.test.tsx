@@ -249,6 +249,81 @@ describe('the shared preview route (AC13)', () => {
     expect(listSharedEntries()).toEqual([]);
   });
 
+  it('the docs tab shows the contract SETTINGS and the output cap too (Gate-5 finding 2)', async () => {
+    const received = await receiveSharedBundle(
+      bundleText({ contract: { overview: 'Summarize.', settings: { tone: 'terse', locale: 'nb-NO' }, maxOutputTokens: 512 } }),
+      { source: 'file', persist: true },
+    );
+    if (!received.ok) throw new Error('receive failed');
+    const { el } = await renderRun(sharedRouteIdFor(received.entry.bundleId));
+    await settleUntil(() => q(el, 'shared-contract-settings') !== null, 'the settings block');
+    expect(q(el, 'shared-contract-settings')?.textContent).toContain('tone: terse');
+    expect(q(el, 'shared-contract-settings')?.textContent).toContain('locale: nb-NO');
+    expect(q(el, 'shared-contract-cap')?.textContent).toContain('512');
+  });
+
+  it('an installed lineage: a NEWER bundle previews with "update · keeps your data", confirms naming inherited grants, applies, and navigates to the copy (findings 1, 4)', async () => {
+    // Install v1.
+    const first = await receiveSharedBundle(bundleText(), { source: 'file', persist: true });
+    if (!first.ok) throw new Error('receive failed');
+    let view = await renderRun(sharedRouteIdFor(first.entry.bundleId));
+    await settleUntil(() => q(view.el, 'shared-install') !== null, 'install');
+    await act(async () => {
+      q(view.el, 'shared-install')!.click();
+    });
+    await settleUntil(() => db.getAppByInstallSource(`share:${LINEAGE}`) !== undefined, 'installed');
+    const app = db.getAppByInstallSource(`share:${LINEAGE}`)!;
+    // The recipient approves the connection — the grant the new code would inherit.
+    db.approveConnection(app.appId, 'weather');
+    unmountCurrent();
+
+    // A newer bundle of the same lineage arrives: the shelf card routes to the PREVIEW.
+    const newer = await receiveSharedBundle(bundleText({ html: '<!doctype html><html><body>v2</body></html>', docs: [{ slug: 'vision', content: 'v2 vision' }] }), { source: 'link', persist: false });
+    if (!newer.ok) throw new Error('receive failed');
+    const hub = await renderHub();
+    await settleUntil(() => q(hub, 'shared-update-badge') !== null, 'the update badge');
+    expect(q(hub, 'shared-open-card')).not.toBeNull();
+    expect(q(hub, 'shared-open-installed')).toBeNull();
+    unmountCurrent();
+
+    view = await renderRun(sharedRouteIdFor(newer.entry.bundleId));
+    await settleUntil(() => q(view.el, 'shared-update-apply') !== null, 'the update button');
+    expect(q(view.el, 'shared-install')).toBeNull();
+    expect(q(view.el, 'shared-preview-disclosure')?.textContent).toMatch(/NEWER version/);
+    await act(async () => {
+      q(view.el, 'shared-update-apply')!.click();
+    });
+    await settleUntil(() => document.body.querySelector('[data-testid="shared-update-confirm"]') !== null, 'the confirm');
+    expect(document.body.querySelector('[data-testid="shared-update-inherits"]')?.textContent).toContain('Unaffiliated Weather Co');
+    await act(async () => {
+      (document.body.querySelector('[data-testid="shared-update-confirm-apply"]') as HTMLElement).click();
+    });
+    await settleUntil(() => db.getAppHtml(app.appId)?.includes('v2') === true, 'the update to land');
+    await settleUntil(() => view.path() === `/run/${app.appId}`, 'navigation to the copy');
+    expect(db.getConnection(app.appId, 'weather')?.status).toBe('approved');
+    expect(db.getAppDoc(app.appId, 'vision')?.content).toContain('A wall.'); // absent-only: the recipient's doc survives
+    expect(listSharedEntries()).toEqual([]);
+  });
+
+  it('an installed lineage whose bundle is CURRENT previews with "open your copy"', async () => {
+    const first = await receiveSharedBundle(bundleText(), { source: 'file', persist: true });
+    if (!first.ok) throw new Error('receive failed');
+    let view = await renderRun(sharedRouteIdFor(first.entry.bundleId));
+    await settleUntil(() => q(view.el, 'shared-install') !== null, 'install');
+    await act(async () => {
+      q(view.el, 'shared-install')!.click();
+    });
+    await settleUntil(() => db.getAppByInstallSource(`share:${LINEAGE}`) !== undefined, 'installed');
+    unmountCurrent();
+    // The same bundle arrives again (a friend forwarded it).
+    const again = await receiveSharedBundle(bundleText(), { source: 'link', persist: false });
+    if (!again.ok) throw new Error('receive failed');
+    view = await renderRun(sharedRouteIdFor(again.entry.bundleId));
+    await settleUntil(() => q(view.el, 'shared-open-copy') !== null, 'open your copy');
+    expect(q(view.el, 'shared-update-apply')).toBeNull();
+    expect(q(view.el, 'shared-install')).toBeNull();
+  });
+
   it('a route for a bundle that is not on the shelf says so instead of rendering a blank', async () => {
     const { el } = await renderRun(sharedRouteIdFor('a'.repeat(64)));
     await settleUntil(() => q(el, 'shared-preview-disclosure') !== null, 'the disclosure');

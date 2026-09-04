@@ -164,7 +164,14 @@ export async function keepSharedEntry(bundleId: string): Promise<SharedEntry | u
   }
   const db = await getUserDb();
   const row: PersistedSharedRow = { text: entry.text, receivedAt: entry.receivedAt, source: entry.source };
-  db.setSetting(sharedAppSettingKey(bundleId), row);
+  try {
+    db.setSetting(sharedAppSettingKey(bundleId), row);
+  } catch (error) {
+    // The file's byte cap (TOO_LARGE) is the only writer failure here; say so rather
+    // than swallowing it behind a `void` (Gate-5 finding 14).
+    sharedInboxNoteStore.set(`could not keep this shared app: ${error instanceof Error ? error.message : String(error)}`);
+    return entry;
+  }
   const kept: SharedEntry = { ...entry, kept: true };
   sharedInboxStore.set(sharedInboxStore.get().map((e) => (e.bundleId === bundleId ? kept : e)));
   return kept;
@@ -199,7 +206,10 @@ export async function hydrateSharedInbox(): Promise<void> {
     }
     const parsed = parseAppBundle(row.text);
     if (!parsed.ok) {
-      db.deleteSetting(key);
+      // NOT deleted (Gate-5 finding 11): a row this build cannot parse may be a bundle
+      // from a NEWER format that a newer hub reads fine — files roam, and this hydrate
+      // runs after every sync pull, so a deletion here would sync back and destroy a
+      // share the user kept elsewhere. Unreadable here means invisible here, no more.
       continue;
     }
     // Recompute identity from the bytes — never trust the key alone (a hand-edited file

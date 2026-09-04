@@ -24,5 +24,6 @@ export const SHARE_RELAY_ORIGIN: string = (import.meta.env?.VITE_SNUG_SHARE_RELA
 
 // Where a share LINK lands: the hosted playground's `/s/<id>#<key>` page (the receiver
 // on every platform; the desktop is offered from there, never auto-launched).
-export const SHARE_LINK_ORIGIN = 'https://playground.snugprotocol.org';
+export const SHARE_LINK_ORIGIN: string =
+  (import.meta.env?.VITE_SNUG_SHARE_LINK_ORIGIN ?? '').replace(/\/+$/, '') || 'https://playground.snugprotocol.org';
 export const SHARE_LINK_PATH = '/s';

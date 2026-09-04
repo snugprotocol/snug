@@ -103,6 +103,14 @@ export async function prepareShare(appId: string, docs: readonly string[]): Prom
     const hits = findCredentialShapes(doc.content);
     if (hits.length > 0) warnings.push({ where: doc.slug, hits });
   }
+  // The contract and the DDL travel too (Gate-5 finding 12): a key in a contract setting
+  // or a `DEFAULT '…'` literal is as much a leak as one in the html.
+  if (bundle.contract !== undefined) {
+    const hits = findCredentialShapes(JSON.stringify(bundle.contract));
+    if (hits.length > 0) warnings.push({ where: 'what it tells the AI', hits });
+  }
+  const ddlHits = findCredentialShapes((bundle.schema?.ddl ?? []).join('\n'));
+  if (ddlHits.length > 0) warnings.push({ where: 'data schema', hits: ddlHits });
   return {
     bundle,
     bundleId,

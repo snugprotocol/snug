@@ -4,7 +4,7 @@
 - **What v3.1 added (2026-09-04).** App sharing (ADR-0063/0064): third-party app code can
   now enter a hub as a shared bundle and propose connections on its own `shared` channel;
   and the hosted instance runs its first endpoint — a content-blind relay for share links.
-  Rows in §5 (authoring, C1, C2) and residuals R-34 through R-38 carry it; the delta
+  Rows in §5 (authoring, C1, C2) and residuals R-34 through R-39 carry it; the delta
   `threat-model-delta-app-sharing.md` is the detailed record. A targeted pass, not a
   re-attack of the whole surface: v3's §9 boundary still describes the last full pass.
 - **Status:** current as of commit-time. This document is audited, not transcribed — every
@@ -202,7 +202,9 @@ Credentials never enter the app iframe, never reach the LLM, never reach a publi
 | A header template may only reference pinned helpers and declared fields, and lint and engine agree on every quoting shape | `packages/auth/src/template-lint.ts` + `packages/auth/src/template-engine.ts` — enforced at the render seat | `packages/auth/src/__tests__/template-parity.test.ts` |
 | An app cannot forge starter authoring provenance | `apps/playground/src/starter/starterDeclaration.ts` — install source **and** both HTML versions must match bundled bytes | `apps/playground/src/__tests__/starterDeclaration.test.ts` |
 | A shared bundle's connections are admitted on their OWN channel — borrow ban, confusable guard, `userLayer` refusal, LAN-class check — at install and again at the db write boundary, and can never spell a starter's identity | `packages/auth/src/requirement-admission.ts` (`shared` in `ADMISSION_CHANNELS`); `packages/protocol/src/app-bundle.ts` (UUID-charset `lineage`, `userLayer` refused by shape); `packages/db/src/userdb/app-bundle.ts` (`install_source` minted under `share:`) | `packages/auth/src/__tests__/shared-channel-admission.test.ts`; `apps/playground/src/__tests__/sharedAdmissionWiring.test.ts` — the SHIPPING gate refuses a borrowing bundle; `packages/protocol/src/__tests__/app-bundle.test.ts` |
-| A bundle's DDL is structure only — one `CREATE …` statement per entry — and runs only inside the install act against the app's own runtime | `packages/protocol/src/app-bundle.ts` — `isStructureOnlyDdl`; `packages/db/src/userdb/app-bundle.ts` — install-time replay, failure removes the app | `packages/protocol/src/__tests__/app-bundle.test.ts`; `packages/db/src/userdb/__tests__/app-bundle.test.ts` |
+| A bundle's DDL is structure only — one `CREATE …` statement per entry, no CTAS — and runs only inside the install and update acts against the app's own runtime; an update runs DDL before landing new html | `packages/protocol/src/app-bundle.ts` — `isStructureOnlyDdl` (the driver's `MULTI_STATEMENT` refusal in `packages/db/src/driver.ts` is the last resort); `packages/db/src/userdb/app-bundle.ts` — install failure removes the app, update orders DDL first | `packages/protocol/src/__tests__/app-bundle.test.ts`; `packages/db/src/userdb/__tests__/app-bundle.test.ts` |
+| A shared UPDATE of an installed lineage is reachable only from the new bundle's preview and always confirms, naming the approved connections the new code inherits | `apps/playground/src/run/RunView.tsx` — the update act + confirm live on the `shared--` route; `apps/playground/src/share/SharedUpdateControls.tsx` is a door, not a write; `apps/playground/src/share/SharedShelf.tsx` routes an update to the preview | `apps/playground/src/__tests__/sharedSurfaces.test.tsx` — the update journey names the inherited grant |
+| A shared preview's "run with AI" consent is per preview and the un-armed transport really refuses | `apps/playground/src/run/RunView.tsx` — `aiArmed` reset on id; `apps/playground/src/share/consentTransport.ts` | `apps/playground/src/__tests__/sharedConsentGate.test.tsx` — captures the transport handed to the frame; A→B reset |
 | A received bundle is inert until install: a link visit writes nothing, an opened file writes only its shelf row, and the shelf refuses rather than evicts at its cap | `apps/playground/src/share/sharedInbox.ts` — memory-first, `persist` only on an explicit act | `apps/playground/src/__tests__/sharedInbox.test.ts` — table sweep; cap refusal |
 | A `.snug` file's kind is decided by its first bytes before any confirm — a bundle can never reach the replace-your-file path, a user file can never land on the shelf | `packages/db/src/userdb/app-bundle.ts` — `sniffSnugFile`; `apps/playground/src/platform/openFile.ts` — `dispatchOpenedSnugFile` | `apps/playground/src/__tests__/sharedSurfaces.test.tsx` — dispatch + both Settings pickers |
 | The relay stores ciphertext under server-minted ids, enforces expiry at read, compares hashed revoke tokens, and answers every other path with a bodiless 404 — and its config cannot grow a second binding | `apps/share-relay/handler.mjs`; `scripts/deploy-relay.mjs` — `configPreflight` | `apps/share-relay/handler.node-test.mjs`; `scripts/deploy-relay.test.mjs` |
@@ -377,6 +379,15 @@ through consent, not verification.** ADR-0018 D3 is amended for this one channel
 Q6b): the preview shows the contract verbatim before install. A user can install an app
 whose contract instructs the model in ways they did not read; the blast radius is the
 app's own frame — no secret is in any LLM context (C1) and the app has no network.
+
+**R-39 — A shared update offer is as trustworthy as its lineage, which is public.**
+Anyone who ever received a bundle knows its `lineage` and can craft a "newer version" for
+it; the recipient sees an update to an app they trust, and approved grants survive the
+update by ADR-0045's design. Mitigated by the preview-only update path and the always-on
+confirm that names the inherited grants; not mitigated by any authentication of the sharer
+(bundle signing is a v1 non-goal). Demoting approved rows on a shared update is a sixth
+`snug_connections` writer — a spec change queued in next-steps, not done here.
+*Full surface:* `docs/security/threat-model-delta-app-sharing.md` §S12 / R-i.
 
 **R-38 — Shared docs may carry the sharer's personal data.** `memory` is off by default
 and every doc is a per-doc choice with a first-line preview, but the share scan looks for
@@ -710,7 +721,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-starter-update-channel.md` | `5a5625c1f999` | §5 authoring · R-31 |
 | `docs/security/threat-model-delta-multi-provider-byok.md` | `540490f88a1c` | §5 authoring · R-32 |
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
-| `docs/security/threat-model-delta-app-sharing.md` | `41e4f8846fbb` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38 |
+| `docs/security/threat-model-delta-app-sharing.md` | `08d6283f7d21` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 
 <!-- DELTA-LEDGER:END -->
 

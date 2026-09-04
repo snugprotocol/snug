@@ -465,10 +465,12 @@ The share act is the fourth proposer of §12.1. Its requirements land `declared`
 (§12.12), the confusable guard (§12.6) and the `userLayer` refusal (§12.10) all apply, and a
 bundle's requirements are **never vouched**: `install_source` is minted by the host from the
 bundle's UUID-charset lineage under a `share:` prefix, so a bundle cannot spell a starter's
-identity. A host MUST NOT run a bundle's html with an LLM transport, write any of its rows,
-or execute its DDL before the user's explicit install; a bundle's runtime contract reaches
-the system slot only through that install act after being shown to the user as plain text
-(the one channel on which ADR-0018's untrusted-contract rule is amended). The bundle's
+identity. A host MUST NOT write any of a bundle's rows or execute its DDL before the user's
+explicit install (or update of an installed copy), and MUST NOT hand a bundle's html an
+LLM transport before install without the user's explicit, per-preview consent; a bundle's
+runtime contract reaches the system slot only through that install or update act after
+being shown to the user as plain text — every field the host renders into the slot (the
+one channel on which ADR-0018's untrusted-contract rule is amended). The bundle's
 transports — a `.snug` file, or an end-to-end-encrypted relay whose key rides only in a URL
 fragment — are host implementation; the format is what a second host must agree on.
 

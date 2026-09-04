@@ -2332,6 +2332,16 @@ function construct(
         //     app-bundle.test.ts.
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [sharedBundleSettingKey(appId)]);
         const linkPrefix = shareLinkSettingPrefixFor(appId).replace(/([!%_])/g, '!$1');
+        //     … whose `share:<linkId>` SECRETS (revoke token + key) go with them (Gate-5
+        //     finding 10): read the link ids from the rows being deleted, then delete
+        //     each secret by equality. A surviving secret would keep a link the user has
+        //     no surface left to revoke.
+        const linkIds = selectRows(db, `SELECT key FROM ${USERDB_TABLES.settings} WHERE key LIKE ? ESCAPE '!'`, [
+          `${linkPrefix}%`,
+        ]).map((row) => String(row[0]).slice(shareLinkSettingPrefixFor(appId).length));
+        for (const linkId of linkIds) {
+          db.run(`DELETE FROM ${USERDB_TABLES.secrets} WHERE key = ?`, [`share:${linkId}`]);
+        }
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key LIKE ? ESCAPE '!'`, [`${linkPrefix}%`]);
         // 3d. The sidecar identity directory, when this app held the LAST approved
         //     sidecar-ceiling connection (TASK-20260820, R-9 lifecycle). Inside the

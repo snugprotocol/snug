@@ -75,16 +75,34 @@ export const APP_BUNDLE_LINEAGE_RULE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
  * verbatim) satisfy this; a hand-edited file that does not simply does not travel.
  */
 export const APP_BUNDLE_DDL_STATEMENT_RULE =
-  /^\s*CREATE\s+(?:UNIQUE\s+|TEMP\s+|TEMPORARY\s+)?(?:TABLE|INDEX|VIEW|TRIGGER|VIRTUAL\s+TABLE)\b/i;
+  /^\s*CREATE\s+(?:UNIQUE\s+|TEMP\s+|TEMPORARY\s+)?(?:TABLE|INDEX|VIEW|TRIGGER)\b/i;
 
 const TRIGGER_PREFIX_RULE = /^\s*CREATE\s+(?:TEMP\s+|TEMPORARY\s+)?TRIGGER\b/i;
 const TRIGGER_TAIL_RULE = /\bEND\s*;?\s*$/i;
 const SINGLE_STATEMENT_RULE = /^[^;]*;?\s*$/;
+/** A trigger body may hold INSERT/UPDATE/DELETE/SELECT only; any of these after a `;` is a second statement riding a trigger sandwich. */
+const TRIGGER_SMUGGLE_RULE = /;\s*(?:CREATE|DROP|ALTER|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|BEGIN|COMMIT|ROLLBACK|END\s*;\s*\S)/i;
+/** `CREATE TABLE … AS SELECT …` seeds rows — structure only means no CTAS (a VIEW's `AS SELECT` is structure). */
+const CTAS_RULE = /^\s*CREATE\s+(?:TEMP\s+|TEMPORARY\s+)?TABLE\b[\s\S]*\bAS\s+SELECT\b/i;
 
+/**
+ * Structure only, one statement. The driver's own multi-statement refusal
+ * (`packages/db/src/driver.ts`, `MULTI_STATEMENT`) is the enforcement of last resort;
+ * this is the boundary's honest first pass, so a bad bundle fails at parse with a named
+ * reason rather than at install.
+ */
 export function isStructureOnlyDdl(sql: string): boolean {
   if (!APP_BUNDLE_DDL_STATEMENT_RULE.test(sql)) return false;
+  if (CTAS_RULE.test(sql)) return false;
   if (TRIGGER_PREFIX_RULE.test(sql)) {
-    return TRIGGER_TAIL_RULE.test(sql) && !sql.includes('--') && !sql.includes('/*');
+    const begins = sql.match(/\bBEGIN\b/gi)?.length ?? 0;
+    return (
+      begins === 1 &&
+      TRIGGER_TAIL_RULE.test(sql) &&
+      !TRIGGER_SMUGGLE_RULE.test(sql) &&
+      !sql.includes('--') &&
+      !sql.includes('/*')
+    );
   }
   return SINGLE_STATEMENT_RULE.test(sql);
 }

@@ -197,8 +197,8 @@ export function ShareSheet({ appId, displayName, onClose }: ShareSheetProps): Re
             what stays home
           </h3>
           <p className="hint" data-testid="share-stays">
-            your data, your credentials and connections, chat history, version history, and your model pick. nothing in
-            this file can reach them.
+            your data, your credentials and every approved connection, chat history, version history, and your model
+            pick. the connection shapes above say what to connect — never that you did, and never with what.
           </p>
         </section>
 

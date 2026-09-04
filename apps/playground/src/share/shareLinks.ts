@@ -99,3 +99,16 @@ export async function revokeShareLink(appId: string, id: string): Promise<boolea
   db.deleteSecret(shareSecretKey(id));
   return revoked;
 }
+
+/** Every link of one app, revoked at the relay best-effort (used by app delete; the cascade removes the rows). */
+export async function revokeShareLinksForApp(db: UserDb, appId: string): Promise<void> {
+  for (const record of listShareLinks(db, appId)) {
+    const secret = readSecret(db, record.id);
+    if (secret === undefined) continue;
+    try {
+      await revokeShare(record.id, secret.revokeToken);
+    } catch {
+      /* unreachable relay: the TTL is the backstop */
+    }
+  }
+}

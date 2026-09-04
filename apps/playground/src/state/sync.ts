@@ -21,7 +21,7 @@ import { getPlatform } from '../platform/platform.js';
 import { refreshAppMeta } from './appMeta.js';
 import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
-import { hydrateSharedInbox } from '../share/sharedInbox.js';
+import { hydrateSharedInbox, resetSharedInbox } from '../share/sharedInbox.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { createStore, useStore } from './store.js';
 import { getUserDb } from './userdb.js';
@@ -290,6 +290,10 @@ export async function importUserFile(file: { arrayBuffer(): Promise<ArrayBuffer>
   // land a row inside the freshly imported file during the import's own awaits.
   // `afterForeignBytes` resets again afterwards — that call also serves the pull path.
   resetThreadSessions();
+  // The shelf mirrors rows of the file being replaced (ADR-0063 §4); drop it before the
+  // swap so a memory entry cannot be "kept" into the wrong file mid-import, then
+  // `afterForeignBytes` re-hydrates from the file that is now local.
+  resetSharedInbox();
   await db.importUserDb(bytes);
   await afterForeignBytes();
 }
