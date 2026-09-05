@@ -148,9 +148,13 @@ plugin ALWAYS stamps `Origin` from the webview URL — `tauri://localhost` in a 
 `http://localhost:41419` under `tauri dev` — so a dev shell is a foreign origin to the
 production relay too; `deploy-relay.mjs --dev-origin http://localhost:41419` is the sanctioned,
 non-sticky door for that.) Then `VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120` in `apps/playground/.env.local` (with
-`VITE_SNUG_SHARE_LINK_ORIGIN=http://localhost:5173`; restart `pnpm dev`) and
-`VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120 pnpm --filter desktop dev`. Links read
-`http://localhost:5173/s/<id>#<key>`; "open in Snug for Mac" hands the same id to the dev
+`VITE_SNUG_SHARE_LINK_ORIGIN=http://localhost:5173`; restart `pnpm dev` AND hard-reload the
+tab at exactly `http://localhost:5173` — a tab opened before the change still holds the
+production relay, and `127.0.0.1:5173` is a different origin to the allowlist; both surface
+as "failed to fetch") and
+`VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120 VITE_SNUG_SHARE_LINK_ORIGIN=http://localhost:5173 pnpm --filter desktop dev`
+(the link origin is a SEPARATE variable — without it the desktop mints production links).
+Links read `http://localhost:5173/s/<id>#<key>`; "open in Snug for Mac" hands the same id to the dev
 shell, which fetches from the same local store. Do not run the in-shell gate at the same
 time (it owns 43120), and put `.env.local` back before testing production behaviour.
 
