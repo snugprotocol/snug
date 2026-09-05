@@ -69,7 +69,7 @@ export interface SnugPlatform {
    * Which host the kit woke up in (TASK-20260905-host-kit P6) — disclosure and the
    * per-binding recipes read it; nothing routes on it (feature flags do). Host kit only.
    */
-  binding?: 'artifact' | 'artifact-chat' | 'local-host' | 'file';
+  binding?: 'artifact' | 'artifact-static' | 'artifact-chat' | 'local-host' | 'file';
   /** The pinned brain — see `PlatformBrain`. Absent → the user file decides (web, desktop). */
   brain?: PlatformBrain;
   /**

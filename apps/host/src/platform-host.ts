@@ -38,6 +38,9 @@ export function createHostPlatform(probe: ProbeResult, sqlJsWasmBinary: Uint8Arr
       sync: false,
       connections: false,
       share: false,
+      // T4 AC6: the per-app bundle download stays — it is how a kit-edited app goes back
+      // to the agent (plan review A5); only the LINK acts (`share`) are off.
+      appExport: true,
     },
   };
 }

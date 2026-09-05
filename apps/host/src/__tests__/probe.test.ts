@@ -5,7 +5,9 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 
-import { decideBinding, probeBrain, probeStorage, readBindingEnv, type BindingEnv } from '../probe.js';
+import { measurePrompt } from '../brains/prompt.js';
+import type { SampleFn } from '../brains/sample.js';
+import { decideBinding, probeBrain, probeStorage, readBindingEnv, resolveHostNamespaces, runProbe, type BindingEnv } from '../probe.js';
 
 const env = (over: Partial<BindingEnv>): BindingEnv => ({
   protocol: 'https:',
@@ -183,15 +185,161 @@ describe('probeStorage — tries the ladder, never trusts presence', () => {
   });
 });
 
-describe('probeBrain — T2 pins the demo brain and records what it saw', () => {
-  it('is the demo brain whatever the host offers; the legs are typed seats for T3/T4', () => {
-    expect(probeBrain(env({}))).toEqual({
+describe('probeBrain — the demo brain when nothing answered; the legs record what was seen', () => {
+  it('with no host namespaces it is the demo brain; a detected-but-unresolved leg stays `detected` (the T2 shape)', () => {
+    expect(probeBrain(env({}))).toMatchObject({
       brain: { kind: 'demo' },
       legs: { sample: 'absent', complete: 'absent', local: 'absent' },
     });
-    expect(probeBrain(env({ claudeUse: true, claudeComplete: true }))).toEqual({
+    expect(probeBrain(env({ claudeUse: true, claudeComplete: true }))).toMatchObject({
       brain: { kind: 'demo' },
       legs: { sample: 'detected', complete: 'detected', local: 'absent' },
     });
+  });
+});
+
+// ---- T4: the host namespaces (AC1/AC2/AC5) -------------------------------------------
+
+type Fn = (...args: never[]) => unknown;
+function fakeSample(limits: { maxPromptBytes: number } | 'reject'): SampleFn {
+  const fn = (async () => ({ text: '', truncated: false, modelTierApplied: 'quick' as const })) as unknown as SampleFn;
+  fn.limits = () => (limits === 'reject' ? Promise.reject(new Error('no')) : Promise.resolve(limits));
+  fn.json = async () => ({});
+  return fn;
+}
+const artifactNs = { publish: async () => ({ version: 'v1' }) };
+const downloadsNs = { save: async () => ({}) };
+
+/** A `window.claude.use` that answers per name — `undefined` entries resolve `null`, `'hang'` never resolves. */
+function fakeUse(answers: Record<string, unknown | 'hang'>): (name: string) => Promise<unknown> {
+  return (name) => (answers[name] === 'hang' ? new Promise(() => undefined) : Promise.resolve(answers[name] ?? null));
+}
+
+describe('resolveHostNamespaces — every capability asked together, behind one guard', () => {
+  it('records resolved / null per capability and hands the namespaces back', async () => {
+    const sample = fakeSample({ maxPromptBytes: 65536 });
+    const host = await resolveHostNamespaces(fakeUse({ sample, artifact: artifactNs }), { guardMs: 50 });
+    expect(host.legs).toEqual({ sample: 'resolved', artifact: 'resolved', downloads: 'null' });
+    expect(host.sample).toBe(sample);
+    expect(host.artifact).toBe(artifactNs);
+    expect(host.downloads).toBeUndefined();
+  });
+
+  it('a `use` that never answers trips the guard: every leg `null`, the kit still boots (never a hang)', async () => {
+    const host = await resolveHostNamespaces(fakeUse({ sample: 'hang', artifact: 'hang', downloads: 'hang' }), { guardMs: 20 });
+    expect(host.legs).toEqual({ sample: 'null', artifact: 'null', downloads: 'null' });
+    expect(host.guardTripped).toBe(true);
+  });
+
+  it('a `use` that throws is a null leg too', async () => {
+    const host = await resolveHostNamespaces(() => Promise.reject(new Error('boom')), { guardMs: 20 });
+    expect(host.legs).toEqual({ sample: 'null', artifact: 'null', downloads: 'null' });
+  });
+});
+
+describe('decideBinding with the host’s answer (AC5 — artifact-static)', () => {
+  it('claude.use present but sample AND artifact null → artifact-static (served top-level on the artifact host)', () => {
+    expect(decideBinding(env({ claudeUse: true, hostAnswered: { sample: false, artifact: false } }))).toBe('artifact-static');
+  });
+  it('either namespace resolved → artifact; no answer recorded (guard tripped) → artifact (the T2 shape)', () => {
+    expect(decideBinding(env({ claudeUse: true, hostAnswered: { sample: true, artifact: false } }))).toBe('artifact');
+    expect(decideBinding(env({ claudeUse: true, hostAnswered: { sample: false, artifact: true } }))).toBe('artifact');
+    expect(decideBinding(env({ claudeUse: true }))).toBe('artifact');
+  });
+});
+
+describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () => {
+  it('sample resolved → the host brain: two adapters (quick app, default chat), the ruler, the cap from limits()', async () => {
+    const sample = fakeSample({ maxPromptBytes: 65536 });
+    const result = probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false });
+    expect(result.legs).toEqual({ sample: 'resolved', complete: 'absent', local: 'absent' });
+    const brain = result.brain;
+    expect(brain.kind).toBe('host');
+    if (brain.kind !== 'host') return;
+    expect(brain.label).toBe('Claude · this artifact’s viewer');
+    expect(brain.streaming).toBe(true);
+    expect(brain.tools).toBe(false);
+    expect(brain.promptBytes).toBe(measurePrompt);
+    expect(brain.chatAdapter).toBeDefined();
+    expect(brain.chatAdapter).not.toBe(brain.adapter);
+    // The cap arrives asynchronously from limits(); `pinCap` resolves it onto the seat.
+    await result.ready;
+    expect(brain.maxPromptBytes).toBe(65536);
+  });
+
+  it('limits() rejecting → the documented 65,536 fallback', async () => {
+    const result = probeBrain(env({ claudeUse: true }), { sample: fakeSample('reject'), legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false });
+    await result.ready;
+    expect(result.brain.kind === 'host' && result.brain.maxPromptBytes).toBe(65536);
+  });
+
+  it('sample null (artifact resolved or not) → the demo brain, leg `null`', () => {
+    const result = probeBrain(env({ claudeUse: true }), { artifact: artifactNs, legs: { sample: 'null', artifact: 'resolved', downloads: 'null' }, guardTripped: false });
+    expect(result.brain).toEqual({ kind: 'demo' });
+    expect(result.legs.sample).toBe('null');
+  });
+
+  it('window.claude.complete alone → the chat brain: one adapter, no streaming, no cap (unmeasured), the ruler still pinned', () => {
+    const complete = async (): Promise<unknown> => 'reply';
+    const result = probeBrain(env({ claudeComplete: true }), undefined, complete);
+    expect(result.legs).toEqual({ sample: 'absent', complete: 'resolved', local: 'absent' });
+    const brain = result.brain;
+    if (brain.kind !== 'host') throw new Error('expected the chat brain');
+    expect(brain.label).toBe('Claude · this chat');
+    expect(brain.streaming).toBe(false);
+    expect(brain.tools).toBe(false);
+    expect(brain.maxPromptBytes).toBeUndefined();
+    expect(brain.chatAdapter).toBeUndefined();
+    expect(brain.promptBytes).toBe(measurePrompt);
+  });
+
+  it('neither brain makes a call when pinned (never on load)', async () => {
+    let calls = 0;
+    const sample = (async () => {
+      calls += 1;
+      return { text: '', truncated: false, modelTierApplied: 'quick' as const };
+    }) as unknown as SampleFn;
+    sample.limits = async () => ({ maxPromptBytes: 1 });
+    sample.json = async () => ({});
+    const result = probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false });
+    await result.ready;
+    expect(calls).toBe(0);
+  });
+});
+
+describe('runProbe — the whole boot, from a window', () => {
+  const baseWindow = () => ({ location: { protocol: 'https:', hostname: 'x.frame.claudeusercontent.com' }, navigator: undefined, indexedDB: undefined });
+
+  it('a hosted viewer: binding artifact, the host brain, the namespaces carried for the record and the export seat', async () => {
+    const sample = fakeSample({ maxPromptBytes: 65536 });
+    const win = { ...baseWindow(), claude: { use: fakeUse({ sample, artifact: artifactNs, downloads: downloadsNs }) } };
+    const result = await runProbe(win, { guardMs: 50 });
+    expect(result.binding).toBe('artifact');
+    expect(result.brain.brain.kind).toBe('host');
+    expect(result.host?.artifact).toBe(artifactNs);
+    expect(result.host?.downloads).toBe(downloadsNs);
+    expect(result.brain.brain.kind === 'host' && result.brain.brain.maxPromptBytes).toBe(65536);
+  });
+
+  it('the artifact host serving the page top-level (every use() null): artifact-static, demo brain, no namespaces', async () => {
+    const win = { ...baseWindow(), claude: { use: fakeUse({}) } };
+    const result = await runProbe(win, { guardMs: 50 });
+    expect(result.binding).toBe('artifact-static');
+    expect(result.brain.brain).toEqual({ kind: 'demo' });
+    expect(result.host?.artifact).toBeUndefined();
+  });
+
+  it('a chat viewer (flat window.claude): artifact-chat with the chat brain', async () => {
+    const win = { ...baseWindow(), claude: { complete: async () => 'ok' } };
+    const result = await runProbe(win);
+    expect(result.binding).toBe('artifact-chat');
+    expect(result.brain.brain.kind === 'host' && result.brain.brain.label).toBe('Claude · this chat');
+  });
+
+  it('a plain file: nothing asked, nothing waited for', async () => {
+    const result = await runProbe({ location: { protocol: 'file:', hostname: '' } });
+    expect(result.binding).toBe('file');
+    expect(result.brain.brain).toEqual({ kind: 'demo' });
+    expect(result.host).toBeUndefined();
   });
 });
