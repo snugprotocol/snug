@@ -553,53 +553,29 @@ for (const app of APPS) {
   });
 }
 
-test('AC9: the shelf glob can never bundle authoring/ content (derived from the producer)', () => {
-  // Parse the ACTUAL glob literal out of starterApps.ts rather than restating it — a
-  // widened pattern (e.g. `examples/**/*.html`) would silently ship provenance files.
-  const producer = readFileSync(
-    path.join(REPO_ROOT, 'apps', 'playground', 'src', 'starter', 'starterApps.ts'),
-    'utf8',
+test('AC9 / ADR-0035 / ADR-0045 / TASK-20260905-host-kit AC14: starterSource.ts owns EXACTLY the five examples globs, and no other starter module declares one', () => {
+  // The producers are PARSED, never restated: a widened pattern (e.g. `examples/**/*.html`)
+  // would silently ship provenance files, and a glob smuggled back into a consumer module
+  // would let the host kit's single alias miss it (the kit keeps the ≈ 1 MB of starter
+  // bytes out of its bundle by aliasing this ONE module — TASK-20260905-host-kit A3).
+  const STARTER_DIR = path.join(REPO_ROOT, 'apps', 'playground', 'src', 'starter');
+  const globsOf = (file) =>
+    [...readFileSync(path.join(STARTER_DIR, file), 'utf8').matchAll(/import\.meta\.glob\(\s*'([^']+)'/g)].map((m) => m[1]);
+  const owned = globsOf('starterSource.ts').map((g) => g.replace(/^(\.\.\/)+/, ''));
+  assert.deepEqual(
+    owned.sort(),
+    [
+      'examples/*/app.html', // the shelf: exactly one app.html per folder, never deeper
+      'examples/*/authoring/{docs,prompts}/*.md', // ADR-0035: the ONE provenance channel
+      'examples/*/connection.json', // the declaration manifest
+      'examples/*/runtime-contract.json', // ADR-0018: the authored contract
+      'examples/*/starter.json', // ADR-0045: release metadata
+    ],
+    'starterSource.ts declares exactly the five pinned globs',
   );
-  const globs = [...producer.matchAll(/import\.meta\.glob\(\s*'([^']+)'/g)].map((m) => m[1]);
-  assert.ok(globs.length >= 1, 'starterApps.ts declares its shelf glob');
-  for (const pattern of globs) {
-    assert.ok(
-      pattern.endsWith('/examples/*/app.html'),
-      `shelf glob must match exactly one app.html per folder, never deeper (got ${pattern})`,
-    );
+  for (const consumer of ['starterApps.ts', 'starterMeta.ts', 'starterDocs.ts', 'starterRuntimeContract.ts', 'starterDeclaration.ts']) {
+    assert.deepEqual(globsOf(consumer), [], `${consumer} declares no glob of its own — it reads through starterSource`);
   }
-});
-
-test('ADR-0045: the starter-metadata glob reaches starter.json and nothing else', () => {
-  // Sibling of the AC9 pin above, same rationale: the producer is parsed, never restated,
-  // so a widened pattern (or a second glob smuggled into the module) fails here.
-  const producer = readFileSync(
-    path.join(REPO_ROOT, 'apps', 'playground', 'src', 'starter', 'starterMeta.ts'),
-    'utf8',
-  );
-  const globs = [...producer.matchAll(/import\.meta\.glob\(\s*'([^']+)'/g)].map((m) => m[1]);
-  assert.equal(globs.length, 1, 'starterMeta.ts declares exactly one glob');
-  assert.ok(
-    globs[0].endsWith('/examples/*/starter.json'),
-    `starter-metadata glob must match exactly one starter.json per folder (got ${globs[0]})`,
-  );
-});
-
-test('ADR-0035: the doc-ingestion glob reaches authoring/{docs,prompts} and nothing else', () => {
-  // The SIBLING of the pin above, and deliberately a separate assertion rather than a
-  // loosening of it. ADR-0035 reverses "provenance never ships" — but only through ONE
-  // named channel, whose shape is pinned here so it can never widen into "bundle whatever
-  // sits under the starter folder". The producer is parsed, never restated.
-  const producer = readFileSync(
-    path.join(REPO_ROOT, 'apps', 'playground', 'src', 'starter', 'starterDocs.ts'),
-    'utf8',
-  );
-  const globs = [...producer.matchAll(/import\.meta\.glob\(\s*'([^']+)'/g)].map((m) => m[1]);
-  assert.equal(globs.length, 1, 'starterDocs.ts declares exactly one glob');
-  assert.ok(
-    globs[0].endsWith('/examples/*/authoring/{docs,prompts}/*.md'),
-    `doc-ingestion glob must match only authoring docs and prompts (got ${globs[0]})`,
-  );
 });
 
 // ---------------------------------------------------------------------------

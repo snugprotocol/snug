@@ -34,6 +34,7 @@ import { admitConnectionRequirement } from '@snugprotocol/auth';
 import type { UserDb } from '@snugprotocol/db';
 
 import { STARTER_PREFIX } from './starterApps.js';
+import { starterSource } from './starterSource.js';
 
 /**
  * Raw glob, exactly like `starterApps.ts`'s `app.html` pattern. `query: '?raw'` is
@@ -42,15 +43,7 @@ import { STARTER_PREFIX } from './starterApps.js';
  * nothing", which is the state every non-declaring example (chess, flying-pig, the
  * pillar games) is already in.
  */
-const manifestModules = import.meta.glob('../../../../examples/*/connection.json', {
-  query: '?raw',
-  import: 'default',
-}) as Record<string, () => Promise<string>>;
-
-const htmlModules = import.meta.glob('../../../../examples/*/app.html', {
-  query: '?raw',
-  import: 'default',
-}) as Record<string, () => Promise<string>>;
+// (The manifest and html globs live in `starterSource.ts` — TASK-20260905-host-kit AC14.)
 
 /** Why a declaration that exists on disk did not reach the user. Never a silent drop. */
 export type DeclarationMismatch = 'html_mismatch';
@@ -88,21 +81,12 @@ export function __resetDeclarationManifestsForTests(): void {
   fixtures = undefined;
 }
 
-function folderOf(path: string, file: string): string {
-  const match = new RegExp(`examples/([^/]+)/${file.replace('.', '\\.')}$`).exec(path);
-  return match?.[1] ?? path;
-}
-
 async function bundled(folder: string): Promise<{ manifest: string; html: string } | null> {
   if (fixtures !== undefined) return fixtures[folder] ?? null;
-
-  const manifestEntry = Object.entries(manifestModules).find(
-    ([path]) => folderOf(path, 'connection.json') === folder,
-  );
-  const htmlEntry = Object.entries(htmlModules).find(([path]) => folderOf(path, 'app.html') === folder);
-  if (manifestEntry === undefined || htmlEntry === undefined) return null;
-
-  return { manifest: await manifestEntry[1](), html: await htmlEntry[1]() };
+  const source = starterSource();
+  const [manifest, html] = await Promise.all([source.manifest(folder), source.html(folder)]);
+  if (manifest === undefined || html === undefined) return null;
+  return { manifest, html };
 }
 
 /**

@@ -4,11 +4,10 @@
  * its cumulative changelog, which the run header renders as release notes and the update
  * channel compares against the installed copy's recorded version.
  *
- * OWN MODULE, OWN GLOB — the shelf glob in `starterApps.ts` is pinned by the examples
- * validator to one app.html per folder and nothing else, exactly so a widened pattern
- * can never ship provenance files. This follows the `starterDocs` and
- * `starterRuntimeContract` precedent: one artifact class per module, each with its own
- * pinned glob.
+ * OWN MODULE, SHARED SOURCE — the glob lives in `starterSource.ts` beside the other four
+ * (TASK-20260905-host-kit AC14: one owner, one alias for the host kit), and the examples
+ * validator pins each pattern to exactly its file so a widened one can never ship
+ * provenance files. This module keeps the artifact class's parsing and its test seam.
  *
  * TOLERANT AT RUNTIME, STRICT AT THE GATE. The examples validator enforces the full
  * shape (including the `appHash` byte-binding) before a starter can ship; here a
@@ -18,10 +17,7 @@
  * and bytes against bytes — the hash exists to make the authoring rule enforceable.
  */
 
-const metaModules = import.meta.glob('../../../../examples/*/starter.json', {
-  query: '?raw',
-  import: 'default',
-}) as Record<string, () => Promise<string>>;
+import { starterSource } from './starterSource.js';
 
 export interface StarterReleaseSection {
   title: string;
@@ -51,10 +47,6 @@ export function __setStarterMetaFixturesForTests(next: Record<string, string>): 
 
 export function __resetStarterMetaFixturesForTests(): void {
   fixtures = undefined;
-}
-
-function folderOf(path: string): string {
-  return /examples\/([^/]+)\/starter\.json$/.exec(path)?.[1] ?? path;
 }
 
 /** Parse-and-drop: anything short of a well-formed meta reads as "unversioned". */
@@ -95,10 +87,9 @@ export async function starterMetaFor(folder: string): Promise<StarterMeta | unde
     const raw = fixtures[folder];
     return raw === undefined ? undefined : parseStarterMeta(raw);
   }
-  const entry = Object.entries(metaModules).find(([path]) => folderOf(path) === folder);
-  if (entry === undefined) return undefined;
   try {
-    return parseStarterMeta(await entry[1]());
+    const raw = await starterSource().meta(folder);
+    return raw === undefined ? undefined : parseStarterMeta(raw);
   } catch {
     return undefined;
   }

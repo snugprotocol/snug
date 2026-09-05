@@ -9,10 +9,10 @@
  *
  * SAME SHAPE AS `installStarterRuntimeContract` (its `?raw` glob, its degrade-quietly
  * posture, its never-overwrite rule), with two deliberate differences:
- *  - THE GLOB LIVES HERE, in its own module. `starterApps.ts` stays single-glob because the
- *    AC9 shape pin asserts every glob in THAT file is app-html-shaped — a second glob there
- *    would fail it, and loosening that assertion would weaken the guard that keeps
- *    provenance out of the shipped artifact.
+ *  - THE GLOB LIVES IN `starterSource.ts` with the other four (TASK-20260905-host-kit AC14),
+ *    pinned there to `authoring/{docs,prompts}/*.md` and nothing wider by the examples
+ *    validator — the guard that keeps provenance out of the shipped artifact is the
+ *    pattern, wherever it is declared.
  *  - SEEDING IS PER SLUG, absent-only. The wiki is the app's LIVING memory (ADR-0010), so a
  *    re-install fills gaps and never clobbers what the user's sessions have written — and a
  *    PARTIAL prior state (a deleted page, an install that died mid-loop) is a supported
@@ -22,25 +22,9 @@
 import { seedDocsAbsentOnly } from '@snugprotocol/db';
 import type { UserDb } from '@snugprotocol/db';
 
-/**
- * The authoring bundle, raw. `?raw` for the same reason the manifest glob uses it: Vite
- * never parses these at transform time, so a malformed file degrades to "this starter
- * seeds nothing" instead of breaking the build.
- *
- * The pattern reaches ONLY `authoring/docs/*.md` and `authoring/prompts/*.md` — pinned by
- * its own assertion in `examples/validate.test.mjs`, so this channel can never quietly
- * widen into "bundle whatever sits under the starter folder".
- */
-const docModules = import.meta.glob('../../../../examples/*/authoring/{docs,prompts}/*.md', {
-  query: '?raw',
-  import: 'default',
-}) as Record<string, () => Promise<string>>;
+import { starterSource, type StarterAuthoringBundle } from './starterSource.js';
 
-/** One starter's bundle: `{ docs: { 'vision.md': '…' }, prompts: { '01-build.md': '…' } }`. */
-export interface StarterAuthoringBundle {
-  docs: Record<string, string>;
-  prompts: Record<string, string>;
-}
+export type { StarterAuthoringBundle } from './starterSource.js';
 
 /** Test seam: starter folder → bundle. */
 let fixtures: Record<string, StarterAuthoringBundle> | undefined;
@@ -56,16 +40,7 @@ export function __resetStarterDocFixturesForTests(): void {
 /** Every bundled starter's authoring files, keyed by starter folder. */
 export async function bundledStarterAuthoring(): Promise<Record<string, StarterAuthoringBundle>> {
   if (fixtures !== undefined) return fixtures;
-  const out: Record<string, StarterAuthoringBundle> = {};
-  for (const [path, load] of Object.entries(docModules)) {
-    const match = /examples\/([^/]+)\/authoring\/(docs|prompts)\/([^/]+\.md)$/.exec(path);
-    if (match === null) continue;
-    const [, folder, kind, file] = match as unknown as [string, string, 'docs' | 'prompts', string];
-    const bundle = out[folder] ?? { docs: {}, prompts: {} };
-    bundle[kind][file] = await load();
-    out[folder] = bundle;
-  }
-  return out;
+  return starterSource().authoring();
 }
 
 const STARTER_SOURCE_PREFIX = 'starter:';

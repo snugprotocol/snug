@@ -1,10 +1,9 @@
 // starterApps.ts — the "starter apps" shelf: curated single-file example apps from
-// examples/*/app.html, bundled lazily via vite glob so they run without any server.
+// examples/*/app.html, read through the ONE starter source (`starterSource.ts` owns the
+// glob — TASK-20260905-host-kit AC14) so they run without any server on web and desktop,
+// and on demand in the host kit.
 
-const modules = import.meta.glob('../../../../examples/*/app.html', {
-  query: '?raw',
-  import: 'default',
-}) as Record<string, () => Promise<string>>;
+import { starterSource } from './starterSource.js';
 
 export const STARTER_PREFIX = 'starter--';
 
@@ -15,17 +14,20 @@ export interface StarterApp {
   load: () => Promise<string>;
 }
 
-function folderName(path: string): string {
-  const match = /examples\/([^/]+)\/app\.html$/.exec(path);
-  return match?.[1] ?? path;
-}
-
 export function listStarterApps(): StarterApp[] {
-  return Object.entries(modules)
-    .map(([path, load]) => {
-      const folder = folderName(path);
-      return { id: `${STARTER_PREFIX}${folder}`, name: folder.replace(/-/g, ' '), load };
-    })
+  const source = starterSource();
+  return source
+    .appFolders()
+    .map((folder) => ({
+      id: `${STARTER_PREFIX}${folder}`,
+      name: folder.replace(/-/g, ' '),
+      load: async () => {
+        const html = await source.html(folder);
+        // Unreachable for a listed folder — the catalogue and the html come from one source.
+        if (html === undefined) throw new Error(`starter '${folder}' listed but its app.html is missing`);
+        return html;
+      },
+    }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
