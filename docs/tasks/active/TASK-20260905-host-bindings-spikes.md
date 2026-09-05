@@ -1,9 +1,9 @@
 # TASK-20260905-host-bindings-spikes: go/no-go spikes for the host bindings (T1 of TASK-20260904-skill-only-snug)
 
-- **Status**: planned — starts on the program's plan approval
+- **Status**: in-progress (started 2026-09-05 after the owner approved the program with defaults)
 - **Owner**: Jeetu
 - **Risk tier**: low — scratch probes under `scripts/spikes/` (deleted at Gate 6), no product code, no protocol, no sandbox change; the only durable output is numbers and decisions in this journal and in the parent record
-- **Branch**: `feat/TASK-20260905-host-bindings-spikes` (off `main` after the parent's docs PR merges)
+- **Branch**: `feat/TASK-20260905-host-bindings-spikes` — stacked on `feat/TASK-20260904-skill-only-snug` (PR #171); rebases onto `main` when #171 merges
 - **Packages touched**: none (scratch only); `docs/` (this file, the parent record, `lessons.md` at Gate 6)
 - **Spec impact**: none
 - **Related**: parent [TASK-20260904-skill-only-snug](TASK-20260904-skill-only-snug.md) (D2, D3, D11, D14 depend on these answers); ADR-0065 (proposed); the `artifact-capabilities` skill (runtime contract 0.2.41 — `sample.d.ts`, `artifact.d.ts`, `downloads.d.ts`, `db.d.ts`); `packages/runner/src/csp.ts` (`RUNNER_CSP`, "srcdoc documents also inherit the EMBEDDER's CSP"); `examples/chess/` (the envelope + runtime contract the probes use)
@@ -54,7 +54,10 @@ Delete `scripts/spikes/`; unpublish the probe artifacts (or leave them private a
 
 ## Decisions & surprises
 
-(empty until the spikes run)
+- **2026-09-05 — incidental starter defect (not this task's to fix; queue in next-steps at Gate 6):** `examples/chess/runtime-contract.json`'s `responseGuidance` tells the model to reply `{"from","to","say"}`, while the app's `RESPONSE_SCHEMA` (rides in every envelope) and its reader (`app.html` ~line 580: `d.move.from`, `d.move.to`, `d.message`) expect `{move:{from,to}, message}`. A contract-obedient reply is handled as "it answered off-script — a legal move was played for it". The S3 probe tallies BOTH shapes so the finding gets a number (which instruction the model follows, per tier).
+- **2026-09-05 — S7 RESULT: GO (widget binding can carry React starters).** `scripts/spikes/s7-widget-size.mjs` (Node 22; `@babel/standalone` 7.29.8, preset `react` only, no env pass, no source maps; react 18.3.1 = 10,751 B, react-dom 18.3.1 = 131,835 B, both from jsDelivr with versions read from `x-jsd-version`; a 6,555 B handshake-only stub micro-runner that nests the app in an `allow-scripts` srcdoc with `RUNNER_CSP` injected and posts a protocol-correct `snug:host-ready`). **Chess: 182,199 bytes / 182,100 chars — fits under 262,144 with ~80 KB of headroom**; Playwright chromium render check PASSED with the harness as the ONLY attempted request, 0 aborted, 0 console/page errors (pass rule requires the enforcement signal, not just a rendered root; the positive control is whatsapp's external chart.js tag, which the harness recorded as attempted AND aborted). **10 of 12 starters fit** (adventure-quest, chess, flying-pig, github, gmail, hue, ledger, quiz-me, spotify, weather); trade-copilot (270,460 B) and whatsapp (262,493 B + an un-inlined chart.js) do not; with a whitespace-compacted JS variant all 12 fit by size (only chess's compact variant was render-checked). **Fixed floor per widget = 149,243 B** (React + stub), leaving ~113 KB chars for the compiled app — and T5's real `WidgetBridge` + state-in-page shim will spend part of it. Caveats for T5: the sizes are the optimistic bound (in-browser `@babel/standalone` with no `data-presets` would also apply `env` + inline source maps — the pre-compile step must ship preset `react` only); the 256 KB cap's unit (bytes vs chars) is assumed from the docs and is verified only by S6. Full table: `scripts/spikes/out/s7-report.md` (scratch; the numbers here are the durable record).
+- **2026-09-05 — Chromium observation from the S1 harness (headless, not yet the real artifact):** an embedder policy of `frame-src 'none'; child-src 'none'` did NOT stop an `about:srcdoc` child from loading in Chromium, while a missing `'unsafe-eval'` in the embedder's policy WAS inherited by the srcdoc child (the runner's own CSP grants it, the intersection does not). So what decides S1 in the real artifact is the viewer's actual CSP, which the probe records violation by violation, attributing each to the embedder or to `RUNNER_CSP`.
+- **2026-09-05 — S3 fixture facts:** the exact runtime turn is 3,439 bytes of system text (`buildHostSystemPrompt({appRuntime:true})` + separator + `renderRuntimeContract`) + a 1,392-byte wire = 4,831 bytes per call, well under `sample`'s 65,536-byte input cap; the chess contract's `maxOutputTokens` is 512 but a schema-bearing wire is never bound by it (transport.ts lines 155–169).
 
 ## Session journal (append-only, newest last)
 
@@ -63,3 +66,9 @@ Delete `scripts/spikes/`; unpublish the probe artifacts (or leave them private a
 - State: planned; waits for the program's plan approval.
 - Next step: `/pickup TASK-20260905-host-bindings-spikes` → branch → S7 → publish S1 + S4 → publish S3 → hand S2/S10 and S9 to the owner.
 - Open questions: none beyond the parent's D-batch.
+
+### 2026-09-05 03:50 UTC — Jeetu (via Claude Code) — session (Gate 3–4: probes authored)
+- Done: branch cut (stacked on #171); `.gitignore` entries for `scripts/spikes/{vendor,out}/`; `scripts/spikes/fixtures.mjs` generates the exact Chess runtime system text + wire into `out/chess-fixtures.json`; `scripts/spikes/s9-cowork.md` written (both URLs verified: the release asset answers 302 → asset, jsDelivr `/gh/` answers 200); the four probe pages + the S7 script are being authored and adversarially verified by a workflow (two lenses each: contract conformance vs the 0.2.41 `.d.ts` files, measurement validity vs this file's pass conditions; fix; re-verify).
+- State: waiting on the workflow; nothing published yet.
+- Next step: publish S1 + S4 (private), run S7's report into this journal, publish S3, hand `s2-s10-chat.html` + `s9-cowork.md` to the owner.
+- Open questions: none.
