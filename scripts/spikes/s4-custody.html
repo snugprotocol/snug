@@ -1,0 +1,359 @@
+<title>S4 Custody Probe</title>
+<style>
+  :root{--bg:#f7f7f5;--fg:#1b1b1b;--mut:#6a6a66;--line:#d9d9d3;--pre:#efefea;--btn:#fff;--ok:#1a7f37;--bad:#b42318}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151515;--fg:#e9e9e6;--mut:#9c9c97;--line:#343434;--pre:#1e1e1e;--btn:#242424;--ok:#3fb950;--bad:#f2655a}}
+  :root[data-theme="dark"]{--bg:#151515;--fg:#e9e9e6;--mut:#9c9c97;--line:#343434;--pre:#1e1e1e;--btn:#242424;--ok:#3fb950;--bad:#f2655a}
+  body{background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,sans-serif;margin:0;padding:16px 20px;max-width:980px}
+  h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;margin:18px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+  .mut{color:var(--mut)}code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+  ol.steps{padding-left:0;list-style:none;margin:12px 0}ol.steps li{display:grid;grid-template-columns:200px 1fr;gap:10px;align-items:start;padding:8px 0;border-top:1px solid var(--line)}
+  button{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--btn);color:var(--fg);cursor:pointer;width:100%}
+  button:disabled{opacity:.5;cursor:wait}
+  .r{display:block;margin-top:4px;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all}
+  .ok{color:var(--ok)}.bad{color:var(--bad)}
+  pre{background:var(--pre);border:1px solid var(--line);border-radius:6px;padding:10px;overflow-x:auto;font-size:12px;line-height:1.35;max-height:60vh;white-space:pre-wrap;word-break:break-all}
+  #caps,#dbs{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .howto{border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin:10px 0;font-size:13px}.howto li{margin:2px 0}
+</style>
+
+<h1>S4 — custody in a hosted artifact</h1>
+<p class="mut">Runtime contract 0.2.41. Files-form <code>artifact.publish</code> of a 2 MiB binary → reload → same-origin <code>fetch</code> → sha256 compare → Artifact-tool html republish → re-check → <code>downloads.save</code>. Every step writes the full result object to db <code>results/s4</code> and to sessionStorage, and prints it below. Page build tag: <code id="build">?</code> (loaded <code id="loaded">?</code>).</p>
+<div id="caps">capabilities: resolving… (buttons enable when <code>claude.use</code> has answered)</div>
+<div class="howto"><b>Operator walk</b>
+  <ol>
+    <li>Wait for the capabilities line to resolve. Click <b>1 generate</b>, then <b>2 publish as file</b>. For a latency median click <b>2</b> twice more, a few seconds apart (each click mints a version; the samples accumulate under <code>publish.samples</code>, <code>publish.medianMs</code>). The record is append-only: every attempt of every click stays under <code>publish.attempts</code> (tagged by <code>run</code>), <code>publish.accepted</code> is the first success and never changes, and a rejected re-click (<code>rate_limited</code>) lands in <code>publish.lastRun</code> only.</li>
+    <li><b>Reload the page</b> (a files publish does not reload this view; relative URLs still serve the version it loaded). Click <b>3 verify</b> — it passes only when this page load began after the last accepted publish (<code>verify.loadedAfterPublish</code>); an un-reloaded click reads red with "reload first". Tell the session "verified".</li>
+    <li>The session bumps <code>BUILD</code> in this file (r1 → r2) and republishes the html through the Artifact tool — same <code>file_path</code>, <code>capabilities</code> and <code>contract</code> OMITTED so the stored declaration carries forward, a <code>conflict</code> resolved by read → publish, never <code>force</code> (force would discard the data file). <b>If the page did not reload on its own, reload it.</b> Confirm the build tag above reads <code>r2</code>, then click <b>4 re-check after tool republish</b>.</li>
+    <li>Click <b>5 export</b>; accept the save prompt for <code>snug-user.snug.json</code> (the first call, <code>snug-user.snug</code>, is expected to be refused before any prompt).</li>
+    <li>Click <b>6 storage limits + env</b>. Say "done": the session then fills <code>sessionChecks</code> (version picker readable, the tool republish's version id) with a <code>write_db update</code> on <code>results/s4</code>. The page re-adopts those slots from the db before each of its own writes (get → merge → set), so a later click does not erase them. Session-side reset = <code>write_db delete results/s4</code>.</li>
+  </ol>
+</div>
+
+<ol class="steps">
+  <li><button id="b1" disabled>1 · generate</button><div>2 MiB <code>Uint8Array</code>, mulberry32 seed <code>0x534e5547</code>, first 16 bytes = <code>SQLite format 3\0</code>, sha256 via <code>crypto.subtle</code>, compared to the reference sha reproduced in Node.<span id="s1" class="r"></span></div></li>
+  <li><button id="b2" disabled>2 · publish as file</button><div>Files form, first success wins: <code>data/user.snug</code> bare Blob (octet-stream, the AC's literal shape) → wrapped octet-stream → vnd.sqlite3 → x-sqlite3 → <code>data/user.snug.bin</code> octet-stream → <code>data/user.snug.txt</code> base64 text/plain. Each attempt is saved before the next; the chain stops on a permanent lifecycle code, <code>conflict</code>, <code>too_large</code> (the remaining payloads are the same size or larger) or a 60 s probe timeout (a late answer lands under <code>publish.lateResults</code>). Append-only across clicks: <code>attempts</code> keeps every run, <code>accepted</code> is the first success and is never overwritten by a later rejection.<span id="s2" class="r"></span></div></li>
+  <li><button id="b3" disabled>3 · verify</button><div>Reload FIRST. <code>fetch(path, {cache:'no-store'})</code> with a 30 s timeout, hash the bytes (base64-decode for the .txt form), compare to the sha recorded at publish; records status, content-type (an html fallback is not "found"), byteLength, first bytes, page-load time, build tag, whether this is still the view that published, and <code>loadedAfterPublish</code> (page load &gt; last accepted publish) — pass = equal + loadedAfterPublish.<span id="s3" class="r"></span></div></li>
+  <li><button id="b4" disabled>4 · re-check after tool republish</button><div>Same check under <code>afterToolRepublish</code>, plus <code>loadedAfterVerify</code> (page load time &gt; verify time) and <code>buildChangedSinceVerify</code> (r2 vs r1). Pass = all three.<span id="s4" class="r"></span></div></li>
+  <li><button id="b5" disabled>5 · export</button><div><code>downloads.save</code> of a Blob <code>{format:'snug-user-file/1', sha256, bytesBase64}</code> — first as <code>snug-user.snug</code> (expect <code>rejected_extension</code>), then as <code>snug-user.snug.json</code> (a prompt; accept it).<span id="s5" class="r"></span></div></li>
+  <li><button id="b6" disabled>6 · storage limits + env</button><div>Namespace members, whether any <code>limits()</code> exists, documented caps from the d.ts files, origin, <code>claude.use</code> presence, version ids seen, empty <code>sessionChecks</code> slots for the session.<span id="s6" class="r"></span></div></li>
+  <li><button id="b0" disabled>reset results</button><div class="mut">Two clicks within 8 s. Clears sessionStorage and deletes db <code>results/s4</code> for a clean rerun.</div></li>
+</ol>
+<div>last db write: <span id="dbs">—</span></div>
+<h2>results/s4 (live copy of the db document)</h2>
+<pre id="out">{}</pre>
+<h2>log</h2>
+<pre id="log"></pre>
+
+<script>
+(() => {
+'use strict';
+const BUILD = 'r1';                      // the session bumps this to r2 before its Artifact-tool republish (AC step b)
+const EXPECTED_SHA = '1c18da96ea52f8176e8c493ae1eeecb8c2706c0910ad4576cb4e45c226250240'; // sha256 of generate(), reproduced in Node 2026-09-05
+const SEED = 0x534e5547;                 // 'SNUG'
+const SIZE = 2 * 1024 * 1024;            // 2 MiB
+const MAGIC = 'SQLite format 3\0';       // 16 bytes
+const SS_KEY = 's4-custody';
+const PUBLISH_TIMEOUT_MS = 60000, FETCH_TIMEOUT_MS = 30000, RESET_ARM_MS = 8000;
+const PAGE_LOADED_AT = new Date(performance.timeOrigin).toISOString();
+const BUTTONS = ['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b0'];
+const ATTEMPTS = [
+  { path: 'data/user.snug',     form: 'bare-blob', contentType: 'application/octet-stream', encoding: 'binary' },
+  { path: 'data/user.snug',     form: 'wrapped',   contentType: 'application/octet-stream', encoding: 'binary' },
+  { path: 'data/user.snug',     form: 'wrapped',   contentType: 'application/vnd.sqlite3',  encoding: 'binary' },
+  { path: 'data/user.snug',     form: 'wrapped',   contentType: 'application/x-sqlite3',    encoding: 'binary' },
+  { path: 'data/user.snug.bin', form: 'wrapped',   contentType: 'application/octet-stream', encoding: 'binary' },
+  { path: 'data/user.snug.txt', form: 'wrapped',   contentType: 'text/plain',               encoding: 'base64' },
+];
+// artifact.d.ts: lifecycle codes are permanent for the view; consent_required = not_granted; conflict = the view is
+// already reloading; rate_limited = never retry-loop. too_large / probe_timeout: the remaining attempts add nothing.
+const STOP_REASON = {
+  not_granted: 'permanent lifecycle code', not_writer: 'permanent lifecycle code', not_declared: 'permanent lifecycle code',
+  capability_disabled: 'permanent lifecycle code', capability_removed: 'permanent lifecycle code', consent_required: 'treat like not_granted',
+  rate_limited: 'never retry-loop', conflict: 'the shell is reloading this view to the winning version',
+  too_large: 'every remaining attempt carries the same 2 MiB or the larger base64 form — the cap is the observation',
+  probe_timeout: 'the publish call has not settled after 60 s; a late result is recorded under publish.lateResults',
+};
+const SESSION_SLOTS = ['versionPickerReadable', 'toolRepublishVersion'];   // session-owned (write_db update); the page only ever writes null there
+
+let R = {};                                   // the results document, mirrored to db + sessionStorage + screen
+let caps = { artifact: null, downloads: null, db: null };
+let capsMs = null;
+let bytes = null, sha = null;                 // regenerated on demand — deterministic
+let publishedThisView = false;                // true only in the JS context that ran a successful files publish
+let resetArmed = null;
+
+const $ = (id) => document.getElementById(id);
+const now = () => new Date().toISOString();
+const ms = (t0) => Math.round(performance.now() - t0);
+const median = (s) => { if (!s.length) return null; const v = s.map((x) => x.ms).sort((a, b) => a - b), m = v.length >> 1; return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2); };
+const timer = (t, code) => new Promise((_, rej) => setTimeout(() => rej({ code, message: 'probe gave up after ' + t + ' ms (the call itself is not cancelled)' }), t));
+function log(...a) { $('log').textContent += now().slice(11, 23) + ' ' + a.map((x) => typeof x === 'string' ? x : JSON.stringify(x)).join(' ') + '\n'; }
+function errData(e) {
+  if (!e || typeof e !== 'object') return { code: null, name: null, message: String(e) };
+  const d = { code: e.code ?? null, name: e.name ?? null, message: String(e.message ?? e) };
+  if (e.live !== undefined) d.live = e.live;                         // never a present-but-undefined key (db bodies are plain JSON)
+  return d;
+}
+function show(id, obj, good) { const el = $(id); el.textContent = obj === '' ? '' : JSON.stringify(obj); el.className = 'r ' + (good === true ? 'ok' : good === false ? 'bad' : ''); }
+function render() { $('out').textContent = JSON.stringify(R, null, 2); }
+function summarize() {
+  const v = R.verify, b = R.afterToolRepublish, p = R.publish, x = R.export;
+  R.ac = { a_roundTrip: v ? v.equal === true && v.loadedAfterPublish === true : null,   // AC (a) says RELOAD: a same-view fetch proves nothing
+    b_survivesToolRepublish: b ? b.pass === true : null,
+    c_exportAccepted: x?.snugJson ? x.snugJson.accepted === true : null,
+    c_snugExtRejectedAsExpected: x?.snugExt?.asExpected ?? null,      // an allowlist observation, not part of (c)
+    d_latencyWithin5s: p?.medianMs != null ? p.medianMs <= 5000 : null,
+    d_historyReadable: R.sessionChecks?.versionPickerReadable ?? null,
+    note: 'a = equal + this page load began after the last accepted publish; b = equal + page loaded after verify + build tag changed; d_historyReadable and sessionChecks are session-owned' };
+}
+async function adoptSessionChecks() {                                // db set() is a full replace: re-adopt the session's write_db update before every page write
+  try {
+    const snap = await caps.db.doc('results/s4').get();
+    const sc = snap.exists ? snap.data()?.sessionChecks : null;
+    if (sc) for (const k of SESSION_SLOTS) if (sc[k] != null) (R.sessionChecks ||= {})[k] = sc[k];
+  } catch (e) { log('db get before save failed', errData(e)); }
+}
+function stashAndRender() {                                          // SYNCHRONOUS: the sessionStorage stash must precede any await,
+  summarize();                                                        // so a reload (the shell's own on `conflict`, or the operator's)
+  const body = JSON.parse(JSON.stringify(R));                        // landing during a db round trip still finds this attempt's record
+  try { sessionStorage.setItem(SS_KEY, JSON.stringify(body)); } catch (e) { log('sessionStorage write failed', errData(e)); }
+  render();
+  return body;
+}
+async function save() {
+  (R.meta ||= {}).lastSaveAt = now(); R.meta.build = BUILD;
+  let body = stashAndRender();                                        // 1. stash first, before the network
+  if (!caps.db) { $('dbs').textContent = 'db unavailable (claude.use("db") resolved null) — sessionStorage + screen only'; return; }
+  await adoptSessionChecks();                                         // 2. re-adopt the session's write_db slots (db set() is a full replace)
+  body = stashAndRender();                                            // 3. re-stash with the adopted slots, still before the set()
+  try { await caps.db.doc('results/s4').set(body); $('dbs').textContent = 'ok ' + R.meta.lastSaveAt; }
+  catch (e) { const d = errData(e); $('dbs').textContent = 'FAILED ' + d.code + ' ' + d.message; log('db set failed', d); }
+}
+
+// ---- bytes ----------------------------------------------------------------
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return (t ^ t >>> 14) >>> 0; }; }
+function generate() {
+  const u8 = new Uint8Array(SIZE);
+  for (let i = 0; i < MAGIC.length; i++) u8[i] = MAGIC.charCodeAt(i);
+  const rnd = mulberry32(SEED), dv = new DataView(u8.buffer);
+  for (let o = MAGIC.length; o < SIZE; o += 4) dv.setUint32(o, rnd(), true);
+  return u8;
+}
+async function sha256(u8) { const h = await crypto.subtle.digest('SHA-256', u8); return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join(''); }
+function toB64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+function fromB64(txt) { const s = atob(txt.replace(/\s+/g, '')); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; }
+const hexHead = (u8, n = 16) => [...u8.subarray(0, n)].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+const asciiHead = (u8, n = 16) => [...u8.subarray(0, n)].map((b) => b >= 32 && b < 127 ? String.fromCharCode(b) : '·').join('');
+async function ensureBytes() {
+  if (bytes && sha) return { genMs: 0, shaMs: 0, cached: true };
+  let t0 = performance.now(); bytes = generate(); const genMs = ms(t0);
+  t0 = performance.now(); sha = await sha256(bytes); const shaMs = ms(t0);
+  return { genMs, shaMs, cached: false };
+}
+
+// ---- steps ----------------------------------------------------------------
+async function step1() {
+  const prevSha = R.generate?.sha256 ?? null;
+  bytes = null; sha = null;
+  const t = await ensureBytes();
+  R.generate = { at: now(), build: BUILD, byteLength: bytes.byteLength, prng: 'mulberry32', seed: '0x' + SEED.toString(16), headHex: hexHead(bytes), headAscii: asciiHead(bytes),
+    sha256: sha, referenceSha256: EXPECTED_SHA, matchesReference: sha === EXPECTED_SHA, genMs: t.genMs, shaMs: t.shaMs, subtleAvailable: !!(crypto && crypto.subtle),
+    previousSha256: prevSha, deterministicVsPrevious: prevSha ? prevSha === sha : null };
+  show('s1', { sha256: sha, matchesReference: R.generate.matchesReference, bytes: bytes.byteLength, head: R.generate.headAscii }, R.generate.matchesReference);
+  log('generate', R.generate);
+  await save();
+}
+
+async function step2() {
+  const art = caps.artifact;
+  if (!art) { R.publish = { at: now(), skipped: 'claude.use("artifact") resolved null' }; show('s2', R.publish, false); await save(); return; }
+  await ensureBytes();
+  const b64 = toB64(bytes);
+  // Append-only across clicks: every attempt of every run stays under publish.attempts (tagged by run), publish.accepted is the FIRST
+  // success and is never overwritten — a rejected re-click (rate_limited is the documented outcome of 'publishing too often') must
+  // not erase the evidence — and samples accumulate for the median. A previous run's uncaught error is not carried forward.
+  const { uncaught: _u, uncaughtAt: _ua, ...prev } = R.publish?.skipped ? {} : (R.publish || {});
+  const attempts = Array.isArray(prev.attempts) ? prev.attempts : [], samples = Array.isArray(prev.samples) ? prev.samples : [];
+  const run = (prev.runs || 0) + 1; let accepted = null;
+  R.publish = { ...prev, at: prev.at ?? now(), lastRunAt: now(), build: BUILD, inProgress: true, runs: run, expectedSha256: sha, attempts, samples, medianMs: median(samples),
+    accepted: prev.accepted ?? null, withinBudget5s: prev.withinBudget5s ?? null, lastRun: null, publishedThisView };
+  for (const a of ATTEMPTS) {
+    const blob = new Blob([bytes], { type: a.contentType });
+    const file = a.encoding === 'base64' ? { content: b64, contentType: a.contentType } : a.form === 'bare-blob' ? blob : { content: blob, contentType: a.contentType };
+    const rec = { run, ...a, size: a.encoding === 'base64' ? b64.length : bytes.byteLength, contentKind: a.encoding === 'base64' ? 'string' : 'Blob', at: now() };
+    log('publish attempt', rec); show('s2', { run, trying: rec.path, form: rec.form, contentType: rec.contentType });
+    const t0 = performance.now();
+    const call = art.publish({ [a.path]: file });
+    try {
+      const res = await Promise.race([call, timer(PUBLISH_TIMEOUT_MS, 'probe_timeout')]);
+      rec.ms = ms(t0); rec.ok = true; rec.version = res?.version ?? null; rec.resultKeys = res && typeof res === 'object' ? Object.keys(res) : String(res);
+      attempts.push(rec); accepted = rec; publishedThisView = true;
+      (R.versions ||= []).push({ version: rec.version, from: 'files publish ' + a.path + ' (' + a.form + ' ' + a.contentType + ')', at: rec.at, ms: rec.ms });
+      samples.push({ run, ms: rec.ms, version: rec.version, at: rec.at, path: a.path, form: a.form, contentType: a.contentType, encoding: a.encoding });
+      break;
+    } catch (e) {
+      rec.ms = ms(t0); rec.ok = false; Object.assign(rec, errData(e)); attempts.push(rec);
+      log('rejected', rec);
+      if (rec.code === 'probe_timeout') {                              // recorded whatever R.publish is by then (a reset, a later run)
+        const late = (extra) => { ((R.publish ||= {}).lateResults ||= []).push({ run, attempt: rec.path + ' ' + rec.contentType, at: now(), ms: ms(t0), ...extra }); return save(); };
+        call.then((r) => late({ ok: true, version: r?.version ?? null }), (e2) => late({ ok: false, ...errData(e2) }));
+      }
+      if (STOP_REASON[rec.code]) rec.stoppedChain = STOP_REASON[rec.code];
+      await save();                                                   // per attempt: a conflict-triggered reload keeps the log
+      if (rec.stoppedChain) break;
+    }
+  }
+  const last = attempts.at(-1) ?? null;
+  const lastRun = { run, at: R.publish.lastRunAt, outcome: accepted ? 'accepted' : 'rejected', path: last?.path ?? null, form: last?.form ?? null, contentType: last?.contentType ?? null,
+    code: last?.code ?? null, message: last?.message ?? null, ms: last?.ms ?? null, version: last?.version ?? null };
+  Object.assign(R.publish, { inProgress: false, finishedAt: now(), medianMs: median(samples), publishedThisView, lastRun,
+    accepted: R.publish.accepted ?? (accepted ? { run, path: accepted.path, form: accepted.form, contentType: accepted.contentType, encoding: accepted.encoding, size: accepted.size, publishMs: accepted.ms, version: accepted.version, at: accepted.at } : null),
+    withinBudget5s: R.publish.withinBudget5s ?? (accepted ? accepted.ms <= 5000 : null) });
+  if (accepted) Object.assign(R.publish, { lastAcceptedAt: now(), lastAcceptedVersion: accepted.version, lastAcceptedPageLoadedAt: PAGE_LOADED_AT });   // check(): reload = a page load after this
+  const acc = R.publish.accepted;
+  show('s2', accepted ? { run, accepted: acc.path, form: acc.form, contentType: acc.contentType, thisRunMs: accepted.ms, medianMs: R.publish.medianMs, samples: samples.length, version: accepted.version }
+    : { run, thisRun: 'rejected', code: lastRun.code, message: lastRun.message, acceptedEarlier: acc ? acc.path + ' (' + acc.contentType + ', run ' + acc.run + ')' : null, samples: samples.length }, !!accepted);
+  await save();
+}
+
+async function check() {
+  await ensureBytes();
+  const p = R.publish, acc = p?.accepted ?? p?.samples?.at(-1) ?? null;   // the first accepted form (never overwritten); a sample as the fallback
+  const path = acc?.path || 'data/user.snug', encoding = acc?.encoding || 'binary';
+  const ref = p?.expectedSha256 ?? null;                             // the sha recorded when the bytes were published
+  const out = { at: now(), build: BUILD, pageLoadedAt: PAGE_LOADED_AT, loadCount: R.meta?.loads ?? null, path, url: new URL(path, location.href).href, encoding,
+    publishedSha256: ref, regeneratedSha256: sha, expectedSha256: ref ?? sha, expectedMatchesPublished: ref ? ref === sha : null, expectedBytes: bytes.byteLength,
+    sameViewAsPublish: publishedThisView, publishedVersion: p?.lastAcceptedVersion ?? acc?.version ?? null, lastAcceptedAt: p?.lastAcceptedAt ?? null,
+    loadedAfterPublish: p?.lastAcceptedAt ? PAGE_LOADED_AT > p.lastAcceptedAt : null,   // ISO strings order lexicographically; survives the reload via db + sessionStorage
+    found: false, equal: false, status: null, contentType: null, byteLength: null, sha256: null };
+  const t0 = performance.now();
+  try {
+    const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(FETCH_TIMEOUT_MS) : undefined;
+    const res = await fetch(path, { cache: 'no-store', signal });
+    out.status = res.status; out.ok = res.ok; out.contentType = res.headers.get('content-type'); out.contentLength = res.headers.get('content-length'); out.headersMs = ms(t0);
+    const isHtml = /^text\/html/i.test(out.contentType || '');
+    if (res.ok && !isHtml) {
+      let u8;
+      if (encoding === 'base64') { const txt = await res.text(); out.textLength = txt.length; out.textPreview = txt.slice(0, 120); u8 = fromB64(txt); }
+      else u8 = new Uint8Array(await res.arrayBuffer());
+      out.found = true; out.byteLength = u8.byteLength; out.headHex = hexHead(u8); out.headAscii = asciiHead(u8);
+      out.magicOk = asciiHead(u8, 15) === 'SQLite format 3';
+      out.sha256 = await sha256(u8);
+      out.equal = out.sha256 === out.expectedSha256 && out.byteLength === bytes.byteLength;
+    } else { out.htmlFallback = res.ok && isHtml; out.bodyPreview = (await res.text()).slice(0, 200); }
+  } catch (e) { out.error = errData(e); out.timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError'; }
+  out.ms = ms(t0);
+  return out;
+}
+async function step3() {
+  const v = R.verify = await check();
+  const note = v.loadedAfterPublish === false ? 'reload first — this page load began before the last accepted publish' : v.loadedAfterPublish == null ? 'no accepted publish on record — click 2 first' : undefined;
+  show('s3', { status: v.status, type: v.contentType, bytes: v.byteLength, equal: v.equal, loadedAfterPublish: v.loadedAfterPublish, sameViewAsPublish: v.sameViewAsPublish, build: v.build, note },
+    v.equal && v.loadedAfterPublish === true);                       // the same conjunction as ac.a_roundTrip
+  log('verify', v); await save();
+}
+async function step4() {
+  const v = await check();
+  v.verifyAt = R.verify?.at ?? null; v.verifyBuild = R.verify?.build ?? null;
+  v.loadedAfterVerify = v.verifyAt ? v.pageLoadedAt > v.verifyAt : null;        // ISO strings order lexicographically
+  v.buildChangedSinceVerify = v.verifyBuild ? v.build !== v.verifyBuild : null;
+  v.pass = v.equal && v.loadedAfterVerify === true && v.buildChangedSinceVerify === true;
+  R.afterToolRepublish = v;
+  show('s4', { found: v.found, equal: v.equal, status: v.status, type: v.contentType, loadedAfterVerify: v.loadedAfterVerify, build: v.build + ' vs ' + v.verifyBuild, pass: v.pass }, v.pass);
+  log('afterToolRepublish', v); await save();
+}
+
+async function step5() {
+  const dl = caps.downloads;
+  if (!dl) { R.export = { at: now(), skipped: 'claude.use("downloads") resolved null' }; show('s5', R.export, false); await save(); return; }
+  await ensureBytes();
+  const json = JSON.stringify({ format: 'snug-user-file/1', sha256: sha, bytesBase64: toB64(bytes) });
+  const data = new Blob([json]);                                     // downloads.d.ts: prefer a Blob for large files; MIME comes from the extension
+  const tryOne = async (filename) => {
+    const rec = { filename, dataChars: json.length, dataBytes: data.size, dataKind: 'Blob', at: now() }; const t0 = performance.now();
+    show('s5', { offering: filename });
+    try { const r = await dl.save({ filename, data }); rec.resolved = r; rec.status = r?.status ?? null; rec.accepted = r?.status === 'saved'; rec.outcome = 'resolved:' + rec.status; }
+    catch (e) { Object.assign(rec, errData(e)); rec.accepted = false; rec.outcome = 'rejected:' + rec.code; }
+    rec.ms = ms(t0);
+    rec.offeredInferred = rec.accepted || rec.code === 'declined';   // inference only: a prompt was shown iff the viewer could answer it
+    return rec;
+  };
+  const snugExt = await tryOne('snug-user.snug');
+  snugExt.expected = 'rejected_extension'; snugExt.asExpected = snugExt.code === 'rejected_extension';
+  const snugJson = await tryOne('snug-user.snug.json');
+  R.export = { at: now(), build: BUILD, wrapperFormat: 'snug-user-file/1', sha256: sha, dataChars: json.length, dataBytes: data.size, snugExt, snugJson };
+  show('s5', { 'snug-user.snug': snugExt.outcome + (snugExt.asExpected ? '' : ' (allowlist surprise — recorded, not part of AC c)'), 'snug-user.snug.json': snugJson.outcome }, snugJson.accepted);
+  log('export', R.export);
+  await save();
+}
+
+async function step6() {
+  const names = (o) => o ? Object.getOwnPropertyNames(o).sort() : null;
+  const art = caps.artifact;
+  R.env = { at: now(), build: BUILD, origin: location.origin, pathname: location.pathname, framed: window.top !== window.self, secureContext: window.isSecureContext,
+    claudeUseExists: typeof window.claude?.use === 'function', windowClaudeKeys: names(window.claude), capabilityResolveMs: capsMs,
+    capabilityResolved: { artifact: !!caps.artifact, downloads: !!caps.downloads, db: !!caps.db },
+    namespaceMembers: { artifact: names(caps.artifact), downloads: names(caps.downloads), db: names(caps.db) },
+    namespaceFrozen: { artifact: art ? Object.isFrozen(art) : null, downloads: caps.downloads ? Object.isFrozen(caps.downloads) : null },
+    limitsFnOnArtifact: !!(art && typeof art.limits === 'function'),
+    limitsNote: 'artifact.d.ts 0.2.41 declares publish/edit/sync only — no limits() and no size constant; the files-form cap surfaces only as code too_large',
+    documentedLimits: { filesPublish: 'undocumented (too_large)', dbDocument: '256 KiB serialized, 32 levels deep', dbPerArtifact: '5000 documents', downloadsOrdinarySave: 'no size limit', downloadsExportAnswer: '16 MiB', liveDocRendered: '8 MiB (live docs only)' },
+    versions: R.versions || [], userAgent: navigator.userAgent };
+  if (R.env.limitsFnOnArtifact) { try { R.env.limits = await art.limits(); } catch (e) { R.env.limits = errData(e); } }
+  R.sessionChecks = { versionPickerReadable: R.sessionChecks?.versionPickerReadable ?? null, toolRepublishVersion: R.sessionChecks?.toolRepublishVersion ?? null,
+    filledBy: 'the session (write_db update on results/s4) from the Artifact tool publish result and the version picker — not observable from the page; the page re-adopts these slots from the db before each of its own set() writes' };
+  show('s6', { origin: R.env.origin, use: R.env.claudeUseExists, artifactMembers: R.env.namespaceMembers.artifact, limitsFn: R.env.limitsFnOnArtifact });
+  log('env', R.env);
+  await save();
+}
+
+async function reset() {                                             // two clicks: confirm() is inert in a sandboxed frame without allow-modals
+  if (!resetArmed) { $('b0').textContent = 'confirm reset (click again within 8 s)'; resetArmed = setTimeout(() => { resetArmed = null; $('b0').textContent = 'reset results'; }, RESET_ARM_MS); return; }
+  clearTimeout(resetArmed); resetArmed = null; $('b0').textContent = 'reset results';
+  R = {}; bytes = null; sha = null; publishedThisView = false;
+  try { sessionStorage.removeItem(SS_KEY); } catch (e) {}
+  for (const id of ['s1', 's2', 's3', 's4', 's5', 's6']) show(id, '');
+  if (caps.db) { try { await caps.db.doc('results/s4').delete(); $('dbs').textContent = 'deleted ' + now(); } catch (e) { $('dbs').textContent = 'delete FAILED ' + errData(e).code; } }
+  render(); log('reset');
+}
+
+function wire(id, key, fn) {
+  $(id).addEventListener('click', async () => {
+    const b = $(id); b.disabled = true;
+    try { await fn(); }
+    catch (e) { const d = errData(e); if (key) { R[key] = { ...(R[key] || {}), uncaught: d, uncaughtAt: now() }; show(id.replace('b', 's'), { uncaught: d }, false); } log('uncaught in ' + (key || id), d); await save(); }
+    finally { b.disabled = false; }
+  });
+}
+wire('b1', 'generate', step1); wire('b2', 'publish', step2); wire('b3', 'verify', step3);
+wire('b4', 'afterToolRepublish', step4); wire('b5', 'export', step5); wire('b6', 'env', step6); wire('b0', null, reset);
+
+// ---- boot -----------------------------------------------------------------
+(async function boot() {                                             // buttons stay disabled until claude.use has answered (up to 10 s)
+  $('build').textContent = BUILD; $('loaded').textContent = PAGE_LOADED_AT;
+  try {
+    let fromSession = null;
+    try { const s = sessionStorage.getItem(SS_KEY); if (s) fromSession = JSON.parse(s); } catch (e) { log('sessionStorage read failed', errData(e)); }
+    if (fromSession) { R = fromSession; render(); log('restored from sessionStorage, lastSaveAt=' + (R.meta?.lastSaveAt ?? '?')); }
+    if (typeof window.claude?.use !== 'function') { $('caps').textContent = 'window.claude.use missing — not a hosted artifact view (plain file or chat artifact). Screen + sessionStorage only.'; return; }
+    const t0 = performance.now();
+    const [a, d, b] = await Promise.all([claude.use('artifact'), claude.use('downloads'), claude.use('db')]);
+    caps = { artifact: a, downloads: d, db: b }; capsMs = ms(t0);
+    $('caps').textContent = 'capabilities via claude.use (' + capsMs + ' ms): artifact=' + !!a + ' downloads=' + !!d + ' db=' + !!b;
+    if (b) {
+      try {
+        const snap = await b.doc('results/s4').get();
+        if (snap.exists) {
+          const fromDb = JSON.parse(JSON.stringify(snap.data()));   // snapshots are frozen — clone before mutating
+          const dbNewer = !fromSession || String(fromDb.meta?.lastSaveAt ?? '') >= String(fromSession.meta?.lastSaveAt ?? '');
+          R = dbNewer ? Object.assign({}, fromSession, fromDb) : Object.assign({}, fromDb, fromSession);
+          log('results/s4 loaded from db (db newer: ' + dbNewer + ')');
+        } else log('results/s4 not in db yet');
+      } catch (e) { log('db get failed', errData(e)); }
+    }
+    (R.meta ||= {}).loads = (R.meta.loads || 0) + 1; R.meta.lastLoadAt = now(); R.meta.pageLoadedAt = PAGE_LOADED_AT;
+    await save();
+  } finally { for (const id of BUTTONS) $(id).disabled = false; }
+})();
+})();
+</script>
