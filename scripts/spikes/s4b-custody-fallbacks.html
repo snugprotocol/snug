@@ -22,7 +22,7 @@ pre{background:var(--card);border:1px solid var(--line);border-radius:6px;paddin
 // Everything is recorded to db doc results/s4b (sequential awaited sets — a handful of writes) and shown on screen.
 // The page carries its OWN canonical source: the html this page republishes is rebuilt from the constants below
 // (never from the live DOM), so a reloaded view runs exactly this logic again and can verify what it embedded.
-const BUILD = 'b1';
+const BUILD = 'b2';
 const SIZE = 2 * 1024 * 1024, SEED = 0x534e5547, CHUNK = 200000;
 const STYLE = (document.querySelector('style') && document.querySelector('style').textContent) || '';
 const LOGIC = document.getElementById('logic').textContent;
@@ -139,12 +139,11 @@ async function env() {
 function render() {
   $('app').innerHTML = `
 <h1>S4b — custody fallbacks <small style="font-weight:normal;color:var(--muted)">html republish · db chunks · localStorage — build ${BUILD}, loaded ${PAGE_LOADED_AT}</small></h1>
-<div class="ops"><b>Operator walk</b><ol>
-<li>Wait for the capabilities line. Click <b>1 generate</b>.</li>
-<li>Click <b>2A publish as html</b>. The view reloads by itself (that is the html form's contract). After the reload, row <b>3A</b> fills in on its own — it says whether the embedded bytes came back byte-identical. Then click <b>1 generate</b> again (the reload cleared the in-memory bytes) before the next step.</li>
-<li>Click <b>2B write db chunks</b> (14 writes of ~200 KB; ~10–60 s), then <b>3B verify db chunks</b>. Reload the page and click <b>3B</b> again.</li>
-<li>Click <b>2C write localStorage</b>, then <b>3C verify localStorage</b>; reload and click <b>3C</b> again.</li>
-<li>Click <b>4 env</b>. Say "done". Nothing to paste — every step is written to <code>results/s4b</code>.</li></ol></div>
+<div class="ops"><b>Operator walk (build b2 — automatic)</b><ol>
+<li>Open the page. It regenerates the 2 MiB by itself. If the html republish (A) has not been verified yet, click <b>2A publish as html</b>; the view reloads by itself and row 3A fills in.</li>
+<li>Once A is verified, the page runs B and C by itself: writes the db chunks, verifies them, writes localStorage, verifies it, records env. Watch the <b>auto</b> line.</li>
+<li>When the auto line says <b>reload once</b>, reload the page: it re-verifies B and C after a reload and then says <b>ALL DONE</b>. Then say "done". Nothing to paste.</li></ol></div>
+<div id="auto" class="row warn">auto: waiting for capabilities…</div>
 <div id="caps" class="row warn">capabilities: resolving…</div>
 <div id="dbs" class="row">db: not attempted yet</div>
 <h2>steps</h2>
@@ -173,9 +172,33 @@ async function boot() {
     caps.db = db; caps.art = art;
     $('caps').textContent = 'capabilities: db=' + (db ? 'yes' : 'null') + ' artifact=' + (art ? 'yes' : 'null'); $('caps').className = 'row ' + (db && art ? 'ok' : 'warn');
   }
+  // a fresh tab has no sessionStorage: adopt the stored record so the auto flow knows what is already verified
+  if (caps.db && !R.generate) { try { const snap = await caps.db.doc('results/s4b').get(); if (snap && snap.exists) { R = snap.data() || {}; R.meta = R.meta || {}; R.meta.adoptedFromDb = now(); } } catch (e) { (R.meta ||= {}).adoptError = err(e); } }
   if (document.getElementById('snug-db')) { $('b3a').disabled = false; await verifyEmbedded(); }
   else if (R.htmlPublish && R.htmlPublish.ok && !R.htmlVerify) { R.htmlVerify = { at: now(), found: false, note: 'reloaded after an accepted html publish but no #snug-db element is present — the served page is not the one published?', pageLoadedAt: PAGE_LOADED_AT }; show('s3a', R.htmlVerify, 'bad'); }
   await save();
+  await autoFlow();
+}
+const setAuto = (t, cls) => { $('auto').textContent = 'auto: ' + t; $('auto').className = 'row ' + (cls || 'warn'); };
+async function autoFlow() {
+  await step1();                                                     // deterministic bytes — no click needed
+  const aOk = !!(R.htmlVerify && R.htmlVerify.equal === true);
+  if (!aOk) { setAuto('A (html republish) not verified yet — click 2A publish as html; after the reload the rest runs by itself', 'warn'); return; }
+  const bDone = !!(R.dbChunks && R.dbChunks.ok), cDone = !!(R.localStorage && R.localStorage.ok);
+  if (!bDone || !cDone) {
+    if (!bDone) { setAuto('A verified · writing db chunks (B)…'); await step2b(); setAuto('A verified · verifying db chunks…'); await verifyChunks(); }
+    if (!cDone) { setAuto('A + B done · writing localStorage (C)…'); await step2c(); await verifyLocal(); }
+    await env();
+    setAuto('A, B, C written and verified in THIS load — now reload once so B and C are re-verified after a reload', 'warn'); return;
+  }
+  // B and C already written in an earlier load: this IS the post-reload verification
+  setAuto('re-verifying B and C after the reload…');
+  await verifyChunks(); R.dbVerifyAfterReload = R.dbVerify;
+  await verifyLocal(); R.localVerifyAfterReload = R.localVerify;
+  if (!R.env) await env();
+  await save();
+  const ok = R.dbVerifyAfterReload && R.dbVerifyAfterReload.equal === true && R.localVerifyAfterReload && R.localVerifyAfterReload.equal === true;
+  setAuto((ok ? 'ALL DONE — say "done" to the session' : 'post-reload verification has a failure (see rows 3B / 3C) — say "done" anyway; the record carries it'), ok ? 'ok' : 'bad');
 }
 boot();
 </script>
