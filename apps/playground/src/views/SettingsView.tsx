@@ -54,7 +54,7 @@ import { useOllama } from '../state/ollama.js';
 import { ProtectSetupFlow } from '../vault/ProtectSetupFlow.js';
 import { disableProtection } from '../vault/enableProtection.js';
 import { SETTING_PROTECTION_ENABLED, markProtectionDisabled } from '../vault/protectOffer.js';
-import { getPlatform } from '../platform/platform.js';
+import { allows, getPlatform, secretsUsable } from '../platform/platform.js';
 import { autoCheckEnabled, checkForAppUpdate, setAutoCheckEnabled, useAppUpdate } from '../state/appUpdate.js';
 import { login, useAuth } from '../state/auth.js';
 import {
@@ -126,10 +126,16 @@ export function SettingsView(): ReactElement {
     <div className="settings">
       <header className="settings-hero">
         <h1>settings</h1>
-        <p className="settings-hero-sub">your brain, your file, your connections — everything lives with you.</p>
+        <p className="settings-hero-sub">
+          {allows('brainSettings')
+            ? 'your brain, your file, your connections — everything lives with you.'
+            : 'your file, your apps — everything lives with you.'}
+        </p>
       </header>
 
-      {needsConfirm ? (
+      {/* F15's card asks the user to confirm the FILE's endpoints — meaningless where no
+          brain can be chosen (the host kit pins its own; TASK-20260905-host-kit P3). */}
+      {needsConfirm && allows('brainSettings') ? (
         <Card className="settings-attention">
           <div className="field">
             <label>imported settings need a look</label>
@@ -142,139 +148,145 @@ export function SettingsView(): ReactElement {
         </Card>
       ) : null}
 
-      <Section label="brain">
-        <Card className="settings-group">
-          <div className="field settings-row">
-            <label id="mode-label">where the agent runs</label>
-            <div className="seg" role="group" aria-labelledby="mode-label">
-              {/* Decision 10: the platform decides which modes exist — the desktop shell
-                  never offers subscription, and that is a capability, not a hidden flag. */}
-              {availableModes().map((option) => (
-                <button key={option} type="button" aria-pressed={mode === option} onClick={() => setMode(option)}>
-                  {MODE_LABELS[option]}
-                </button>
-              ))}
-            </div>
-            <span className="hint">
-              {mode === 'byok'
-                ? 'everything runs in this browser — your key goes straight to the provider, never to the hub.'
-                : mode === 'local'
-                  ? 'fully on-device: the agent talks to an OpenAI-compatible endpoint on your machine (e.g. Ollama).'
-                  : 'requests go through the hub server (:8787) and its LLM subscription — run `pnpm dev` in apps/server.'}
-            </span>
-          </div>
-
-          <WebllmExperimentCard />
-
-          {mode === 'byok' ? <ByokProvidersRows /> : null}
-
-          {mode === 'local' ? (
-            <>
-              <div className="field settings-row">
-                <label htmlFor="local-url">endpoint</label>
-                <input
-                  id="local-url"
-                  type="text"
-                  value={localUrl}
-                  onChange={(event) => setLocalUrl(event.target.value)}
-                  placeholder="http://localhost:11434/v1"
-                />
-                {ollama !== 'unknown' && !ollama.running ? (
-                  <span className="hint">Ollama not found — install it from ollama.com or paste an endpoint.</span>
-                ) : ollama !== 'unknown' && ollama.running && ollama.models.length === 0 ? (
-                  /* P3 item 3 (W2b): running-but-empty is its own state — the install
-                     succeeded, only a model is missing. Free text stays available. */
-                  <span className="hint">
-                    Ollama is installed but has no models yet — try: <code>ollama pull llama3.2</code>
-                  </span>
-                ) : (
-                  <span className="hint">
-                    any OpenAI-compatible server. for Ollama, set OLLAMA_ORIGINS to allow this hub, and mind that an
-                    https hub cannot reach http://localhost in Safari.
-                  </span>
-                )}
-                <LocalEndpointBand url={localUrl} />
-              </div>
-              {/* The old standalone model card's LOCAL half, moved in-section
-                  (TASK-20260821 AC11): same ids, same states, same hints. */}
-              <div className="field settings-row">
-                <label htmlFor={detectedModels !== undefined ? 'model-select' : 'model-id'}>model</label>
-                {detectedModels !== undefined ? (
-                  <select
-                    id="model-select"
-                    value={modelSelectValue}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (value === OTHER_MODEL_CHOICE) {
-                        setModelOther(true);
-                        return;
-                      }
-                      setModelOther(false);
-                      setModel(value);
-                    }}
-                  >
-                    <option value="">let the endpoint choose</option>
-                    {detectedModels.map((detected) => (
-                      <option key={detected} value={detected}>
-                        {detected}
-                      </option>
-                    ))}
-                    <option value={OTHER_MODEL_CHOICE}>other…</option>
-                  </select>
-                ) : null}
-                {showModelInput ? (
-                  <input
-                    id="model-id"
-                    type="text"
-                    value={model ?? ''}
-                    onChange={(event) => setModel(event.target.value)}
-                    placeholder="llama3.2"
-                  />
-                ) : null}
-                <span className="hint">
-                  {detectedModels !== undefined
-                    ? 'these models are installed in your Ollama — pick one, or choose other… to type a name.'
-                    : 'leave empty for the provider’s default.'}
-                </span>
-              </div>
-            </>
-          ) : null}
-
-          {mode === 'subscription' ? (
-            /* The old model card's SUBSCRIPTION half: a free-text default-model
-               override for the hub's adapters, still the global `model` setting. */
+      {allows('brainSettings') ? (
+        <Section label="brain">
+          <Card className="settings-group">
             <div className="field settings-row">
-              <label htmlFor="model-id">default model</label>
-              <input
-                id="model-id"
-                type="text"
-                value={model ?? ''}
-                onChange={(event) => setModel(event.target.value)}
-                placeholder="claude-sonnet-5"
-              />
-              <span className="hint">leave empty for the provider’s default.</span>
+              <label id="mode-label">where the agent runs</label>
+              <div className="seg" role="group" aria-labelledby="mode-label">
+                {/* Decision 10: the platform decides which modes exist — the desktop shell
+                    never offers subscription, and that is a capability, not a hidden flag. */}
+                {availableModes().map((option) => (
+                  <button key={option} type="button" aria-pressed={mode === option} onClick={() => setMode(option)}>
+                    {MODE_LABELS[option]}
+                  </button>
+                ))}
+              </div>
+              <span className="hint">
+                {mode === 'byok'
+                  ? 'everything runs in this browser — your key goes straight to the provider, never to the hub.'
+                  : mode === 'local'
+                    ? 'fully on-device: the agent talks to an OpenAI-compatible endpoint on your machine (e.g. Ollama).'
+                    : 'requests go through the hub server (:8787) and its LLM subscription — run `pnpm dev` in apps/server.'}
+              </span>
             </div>
-          ) : null}
-        </Card>
-      </Section>
 
-      <Section label="account">
-        <AccountCard />
-      </Section>
+            <WebllmExperimentCard />
+
+            {mode === 'byok' ? <ByokProvidersRows /> : null}
+
+            {mode === 'local' ? (
+              <>
+                <div className="field settings-row">
+                  <label htmlFor="local-url">endpoint</label>
+                  <input
+                    id="local-url"
+                    type="text"
+                    value={localUrl}
+                    onChange={(event) => setLocalUrl(event.target.value)}
+                    placeholder="http://localhost:11434/v1"
+                  />
+                  {ollama !== 'unknown' && !ollama.running ? (
+                    <span className="hint">Ollama not found — install it from ollama.com or paste an endpoint.</span>
+                  ) : ollama !== 'unknown' && ollama.running && ollama.models.length === 0 ? (
+                    /* P3 item 3 (W2b): running-but-empty is its own state — the install
+                       succeeded, only a model is missing. Free text stays available. */
+                    <span className="hint">
+                      Ollama is installed but has no models yet — try: <code>ollama pull llama3.2</code>
+                    </span>
+                  ) : (
+                    <span className="hint">
+                      any OpenAI-compatible server. for Ollama, set OLLAMA_ORIGINS to allow this hub, and mind that an
+                      https hub cannot reach http://localhost in Safari.
+                    </span>
+                  )}
+                  <LocalEndpointBand url={localUrl} />
+                </div>
+                {/* The old standalone model card's LOCAL half, moved in-section
+                    (TASK-20260821 AC11): same ids, same states, same hints. */}
+                <div className="field settings-row">
+                  <label htmlFor={detectedModels !== undefined ? 'model-select' : 'model-id'}>model</label>
+                  {detectedModels !== undefined ? (
+                    <select
+                      id="model-select"
+                      value={modelSelectValue}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (value === OTHER_MODEL_CHOICE) {
+                          setModelOther(true);
+                          return;
+                        }
+                        setModelOther(false);
+                        setModel(value);
+                      }}
+                    >
+                      <option value="">let the endpoint choose</option>
+                      {detectedModels.map((detected) => (
+                        <option key={detected} value={detected}>
+                          {detected}
+                        </option>
+                      ))}
+                      <option value={OTHER_MODEL_CHOICE}>other…</option>
+                    </select>
+                  ) : null}
+                  {showModelInput ? (
+                    <input
+                      id="model-id"
+                      type="text"
+                      value={model ?? ''}
+                      onChange={(event) => setModel(event.target.value)}
+                      placeholder="llama3.2"
+                    />
+                  ) : null}
+                  <span className="hint">
+                    {detectedModels !== undefined
+                      ? 'these models are installed in your Ollama — pick one, or choose other… to type a name.'
+                      : 'leave empty for the provider’s default.'}
+                  </span>
+                </div>
+              </>
+            ) : null}
+
+            {mode === 'subscription' ? (
+              /* The old model card's SUBSCRIPTION half: a free-text default-model
+                 override for the hub's adapters, still the global `model` setting. */
+              <div className="field settings-row">
+                <label htmlFor="model-id">default model</label>
+                <input
+                  id="model-id"
+                  type="text"
+                  value={model ?? ''}
+                  onChange={(event) => setModel(event.target.value)}
+                  placeholder="claude-sonnet-5"
+                />
+                <span className="hint">leave empty for the provider’s default.</span>
+              </div>
+            ) : null}
+          </Card>
+        </Section>
+      ) : null}
+
+      {allows('account') ? (
+        <Section label="account">
+          <AccountCard />
+        </Section>
+      ) : null}
 
       <Section label="your file">
         <DataCard />
         <ProtectionCard />
       </Section>
 
-      <Section label="connections">
-        {/*
-          P3 (fold B1): the v4 slot-aware card replaces AL-03's app-keyed ConnectionsCard.
-          One row per (app, SLOT) rather than one per app — the same provider connected in
-          two apps is two independent grants, and the old card could not say so.
-        */}
-        <ConnectionSlotsCard />
-      </Section>
+      {allows('connections') ? (
+        <Section label="connections">
+          {/*
+            P3 (fold B1): the v4 slot-aware card replaces AL-03's app-keyed ConnectionsCard.
+            One row per (app, SLOT) rather than one per app — the same provider connected in
+            two apps is two independent grants, and the old card could not say so.
+          */}
+          <ConnectionSlotsCard />
+        </Section>
+      ) : null}
 
       <Section label="feedback">
         <FeedbackCard />
@@ -800,6 +812,9 @@ function DataCard(): ReactElement {
 
   return (
     <Card className="settings-group">
+      {/* The sync-origin picker exists only where an origin can be reached (the host kit
+          inside an artifact reaches none — TASK-20260905-host-kit P3, `sync` off). */}
+      {allows('sync') ? (
       <div className="field settings-row">
         <label id="origin-label">your snug file</label>
         <span className="hint">
@@ -880,6 +895,7 @@ function DataCard(): ReactElement {
           </div>
         ) : null}
       </div>
+      ) : null}
       <div className="field settings-row field-gap">
         <label>portability</label>
         {dataError !== undefined ? (
@@ -889,14 +905,18 @@ function DataCard(): ReactElement {
         ) : null}
         <div className="field-row field-row-wrap">
           <Button onClick={onExport}>export snug file</Button>
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={includeSecrets}
-              onChange={(event) => setIncludeSecrets(event.target.checked)}
-            />
-            include secrets
-          </label>
+          {/* Offered only where a credential has a use (C1: `secretsUsable`) — the host kit
+              inside an artifact can use none, so an export from it never carries one. */}
+          {secretsUsable() ? (
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={includeSecrets}
+                onChange={(event) => setIncludeSecrets(event.target.checked)}
+              />
+              include secrets
+            </label>
+          ) : null}
           <label className="btn file-btn">
             import snug file
             <input
@@ -920,10 +940,12 @@ function DataCard(): ReactElement {
         </div>
         <span className="hint">
           the export is the whole file — every app you built, its versions, its data and its chats. this file is the
-          app: take it to another hub, a personal origin, or a local runner. secrets stay out unless you opt in; with
-          &quot;include secrets&quot; checked, the exported file then carries every saved key and token. imported
-          files ask you to re-confirm model endpoints before running. a shared app (a `.snug` someone sent you
-          from an app’s share button) is added to your apps page to try and install — it never replaces this file.
+          app: take it to another hub, a personal origin, or a local runner.{' '}
+          {secretsUsable()
+            ? 'secrets stay out unless you opt in; with "include secrets" checked, the exported file then carries every saved key and token. imported files ask you to re-confirm model endpoints before running. '
+            : 'secrets never travel with it here — this host can use none, so an imported file’s keys and tokens are left behind too. '}
+          a shared app (a `.snug` someone sent you from an app’s share button) is added to your apps page to try and
+          install — it never replaces this file.
         </span>
       </div>
     </Card>

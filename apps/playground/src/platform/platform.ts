@@ -264,6 +264,17 @@ export function allows(surface: HostSurface): boolean {
   return getPlatform().capabilities[surface] !== false;
 }
 
+/**
+ * Whether ANY credential has a use on this platform (C1, TASK-20260905-host-kit AC9):
+ * BYOK keys need the brain settings, connection tokens need connections. Where both are
+ * off (the host kit inside an artifact) a secret can only leak, never work — so the
+ * "include secrets" export is not offered and an imported file's `snug_secrets` are
+ * stripped before the store adopts them. ONE rule for both sides.
+ */
+export function secretsUsable(): boolean {
+  return allows('brainSettings') || allows('connections');
+}
+
 const WEB_DEFAULT: SnugPlatform = {
   kind: 'web',
   capabilities: {

@@ -464,6 +464,15 @@ export interface UserDbImportOptions {
    * devices. Absent or non-matching secrets REJECT; they never clobber local state.
    */
   secrets?: ContainerSecrets;
+  /**
+   * Drop `snug_secrets` from the CANDIDATE before it becomes live (TASK-20260905-host-kit
+   * AC9, C1). For a host where no credential can be used — no BYOK rows, no connections
+   * (the host kit inside an artifact) — an imported file's keys and tokens would sit in a
+   * store nothing reads and every export path must then remember to strip. Stripping on
+   * the candidate means the secret bytes never touch the live store at all. Default off:
+   * the playground and the desktop adopt secrets exactly as before.
+   */
+  stripSecrets?: boolean;
 }
 
 /** What `importUserDb` surfaces about the auth reconciliation passes (plan D5/N1). */
@@ -3340,6 +3349,13 @@ function construct(
       // orphaned credential slice is no less orphaned for having arrived over sync.
       healMissingTables(next);
       if (importMigration.found < USERDB_SCHEMA_VERSION) wipeLegacyAuthSlice(next);
+      // AC9 (C1): on a host that can use no credential, the candidate loses its secrets
+      // HERE — before reconciliation reads it and before it is adopted — so no path below
+      // (and no later export) ever sees a value the host has no use for.
+      if (options?.stripSecrets === true) {
+        next.run(`DELETE FROM ${USERDB_TABLES.secrets}`);
+        next.run('VACUUM'); // deleted rows would otherwise linger in free pages (the exportUserDb rule)
+      }
       // Auth reconciliation (plan D5/N1 + fold T-M5): snapshot the locally-APPROVED rows
       // from the still-open handle, then run the delta-aware passes on the candidate
       // BEFORE it becomes live. Every import path (pull-merge, applyRemote, recovery

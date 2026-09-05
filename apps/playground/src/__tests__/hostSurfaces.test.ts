@@ -17,6 +17,25 @@ afterEach(() => {
   vi.resetModules();
 });
 
+describe('secretsUsable() — whether any credential has a use on this platform (C1)', () => {
+  it('web default: usable (BYOK keys and connection tokens both have consumers)', async () => {
+    const platform = await fresh();
+    expect(platform.secretsUsable()).toBe(true);
+  });
+
+  it('host posture with brainSettings AND connections off: NOT usable; either one alone keeps it usable', async () => {
+    const off = await fresh();
+    off.setPlatform({ kind: 'host', capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: false, brainSettings: false, connections: false } });
+    expect(off.secretsUsable()).toBe(false);
+    const brainOnly = await fresh();
+    brainOnly.setPlatform({ kind: 'host', capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: false, connections: false } });
+    expect(brainOnly.secretsUsable()).toBe(true);
+    const connectionsOnly = await fresh();
+    connectionsOnly.setPlatform({ kind: 'host', capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: false, brainSettings: false } });
+    expect(connectionsOnly.secretsUsable()).toBe(true);
+  });
+});
+
 describe('allows(surface)', () => {
   it('the web default allows every surface (absence = enabled)', async () => {
     const platform = await fresh();

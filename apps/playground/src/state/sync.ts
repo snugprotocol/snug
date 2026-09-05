@@ -17,7 +17,7 @@ import {
 } from '@snugprotocol/db';
 import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 
-import { getPlatform } from '../platform/platform.js';
+import { allows, getPlatform, secretsUsable } from '../platform/platform.js';
 import { refreshAppMeta } from './appMeta.js';
 import { hydrateSettings, markEndpointsNeedConfirm } from './mode.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
@@ -174,6 +174,13 @@ async function startLoop(kind: SyncOriginKind): Promise<void> {
 
 /** Boot hook: resume the configured origin (config travels inside the user DB). */
 export async function initSync(): Promise<void> {
+  // No origin is reachable from a host that allows no sync (the kit inside an artifact:
+  // TASK-20260905-host-kit P3) — the file's configured origin stays recorded, untouched,
+  // and this session simply never starts a loop.
+  if (!allows('sync')) {
+    syncStatusStore.set({ origin: 'none', state: 'off' });
+    return;
+  }
   const db = await getUserDb();
   const config = db.getSyncConfig('origin') as { kind?: SyncOriginKind } | undefined;
   const kind = config?.kind ?? 'none';
@@ -294,6 +301,8 @@ export async function importUserFile(file: { arrayBuffer(): Promise<ArrayBuffer>
   // swap so a memory entry cannot be "kept" into the wrong file mid-import, then
   // `afterForeignBytes` re-hydrates from the file that is now local.
   resetSharedInbox();
-  await db.importUserDb(bytes);
+  // C1 (TASK-20260905-host-kit AC9): where no credential can be used, the candidate loses
+  // `snug_secrets` BEFORE it becomes live — the same rule that hides the export checkbox.
+  await db.importUserDb(bytes, secretsUsable() ? undefined : { stripSecrets: true });
   await afterForeignBytes();
 }
