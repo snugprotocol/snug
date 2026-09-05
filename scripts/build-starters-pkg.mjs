@@ -19,6 +19,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { escapeForInlineScript } from './lib/page-blocks.mjs';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_EXAMPLES_DIR = path.join(ROOT, 'examples');
 export const DEFAULT_OUT_DIR = path.join(ROOT, 'apps/host/starters-pkg');
@@ -28,10 +30,8 @@ export const STARTERS_INDEX_FORMAT = 'snug-starters-index/1';
 export const STARTER_PAYLOAD_FORMAT = 'snug-starter/1';
 export const STARTER_REGISTER_GLOBAL = '__snugStarterRegister';
 
-/** JSON text → JS-safe text with no `<` at all (still valid JSON). Twin of the kit plugin's function. */
-export function escapeForInlineScript(json) {
-  return json.replace(/</g, '\\u003c');
-}
+/** The ONE escape (scripts/lib/page-blocks.mjs) — re-exported for this script's own test. */
+export { escapeForInlineScript } from './lib/page-blocks.mjs';
 
 const readIf = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : undefined);
 

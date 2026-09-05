@@ -329,6 +329,15 @@ describe('runProbe — the whole boot, from a window', () => {
     expect(result.host?.artifact).toBeUndefined();
   });
 
+  it('a host whose use() never answers: the guard trips, the binding stays `artifact` (never static — nothing was ANSWERED), the demo brain boots', async () => {
+    const win = { ...baseWindow(), claude: { use: fakeUse({ sample: 'hang', artifact: 'hang', downloads: 'hang' }) } };
+    const result = await runProbe(win, { guardMs: 20 });
+    expect(result.binding).toBe('artifact');
+    expect(result.brain.brain).toEqual({ kind: 'demo' });
+    expect(result.brain.legs.sample).toBe('null');
+    expect(result.host?.guardTripped).toBe(true);
+  });
+
   it('a chat viewer (flat window.claude): artifact-chat with the chat brain', async () => {
     const win = { ...baseWindow(), claude: { complete: async () => 'ok' } };
     const result = await runProbe(win);

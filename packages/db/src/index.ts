@@ -25,6 +25,7 @@ export {
   createMemoryBackend,
   createOpfsBackend,
   detectPersistenceBackend,
+  SYNC_SIDECAR_MAGIC,
   type MemoryBackend,
   type PersistenceBackend,
   type PersistenceKind,
