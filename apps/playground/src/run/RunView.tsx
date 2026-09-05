@@ -34,7 +34,7 @@ import { useStore } from '../state/store.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
-import { useTurnMode } from '../state/webllm.js';
+import { hostReadyStreaming, useBrain, useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { toggleRailShown, useRailShown } from '../state/railLayout.js';
@@ -68,7 +68,7 @@ import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
 import { useMediaQuery } from './useMediaQuery.js';
-import { missingAppCopy, starterInstallDisclosureTail } from './copy.js';
+import { isNamedLoadRefusal, missingAppCopy, starterInstallDisclosureTail } from './copy.js';
 import { sqlJsEngineOptions } from './sqlJsEngine.js';
 import { ChatLog } from '../views/ChatLog.js';
 
@@ -162,6 +162,8 @@ export default function RunView(): ReactElement {
   // The run-rail panels' copy depends on where turns EXECUTE — the effective turn
   // mode with the webllm brain override applied, never the raw mode (review F3).
   const turnMode = useTurnMode();
+  // P7/AC6: the pinned brain's streaming truth rides to host-ready; undefined = the runner's default.
+  const streaming = hostReadyStreaming(useBrain());
   const theme = useTheme();
   // Whether the "watch it think" rail is shown (AC6). Global, like the theme — it is a
   // workspace preference, not a property of any one app.
@@ -585,9 +587,10 @@ export default function RunView(): ReactElement {
         setHtmlState(html === undefined ? { phase: 'missing' } : { phase: 'ready', html });
       })
       .catch((err: unknown) => {
-        // A NAMED failure (the host kit's starter loader refusing offline) becomes the
-        // lesson the user reads — never a dead "app not found" (TASK-20260905-host-kit AC2).
-        if (!cancelled) setHtmlState({ phase: 'missing', reason: err instanceof Error ? err.message : String(err) });
+        // ONLY a NAMED failure (the host kit's starter loader refusing offline) becomes the
+        // lesson the user reads (TASK-20260905-host-kit AC2); any other rejection — a driver
+        // or library error — stays the library miss it always was, never raw internals as copy.
+        if (!cancelled) setHtmlState({ phase: 'missing', ...(isNamedLoadRefusal(err) ? { reason: err.message } : {}) });
       });
     // Library display name — the header's fallback when the app never announces.
     if (isSharedId(id)) {
@@ -1160,6 +1163,7 @@ export default function RunView(): ReactElement {
               budgetKey={`app:${id}`}
               db={db}
               dbNamespace={id}
+              {...(streaming !== undefined ? { streaming } : {})}
               {...netProps}
               openUrl={openUrlHandler}
               theme={theme}

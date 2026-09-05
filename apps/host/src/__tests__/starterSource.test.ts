@@ -172,6 +172,10 @@ describe('the loader — one pinned script element per starter', () => {
     const pending = source.html('chess');
     register({ folder: 'chess', html: 'x' }); // no format
     await expect(pending).rejects.toMatchObject({ reason: 'bad_payload' });
+    // `authoring: null` must settle as bad_payload too — never throw inside the hook.
+    const again = source.html('chess');
+    expect(() => register({ ...payload('chess'), authoring: null })).not.toThrow();
+    await expect(again).rejects.toMatchObject({ reason: 'bad_payload' });
     expect(() => register(payload('weather'))).not.toThrow(); // unsolicited — dropped
     expect(await source.authoring()).toEqual({});
   });

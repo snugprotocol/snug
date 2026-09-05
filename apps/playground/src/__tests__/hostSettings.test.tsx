@@ -194,6 +194,19 @@ describe('importUserFile under the host platform strips snug_secrets before adop
     return { arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer };
   }
 
+  it('host: an import arms nothing the kit cannot clear — endpointsNeedConfirm() stays false while the file’s flag is kept', async () => {
+    const g = await fresh(hostPlatform());
+    await g.sync.importUserFile(await donor());
+    expect(g.mode.endpointsNeedConfirmStore.get()).toBe(true); // the portable file still carries it
+    expect(g.mode.endpointsNeedConfirm()).toBe(false); // but no turn is gated where no card can clear it
+  });
+
+  it('web (positive twin): an import arms F15 and the reader says so', async () => {
+    const g = await fresh();
+    await g.sync.importUserFile(await donor());
+    expect(g.mode.endpointsNeedConfirm()).toBe(true);
+  });
+
   it('host: the imported file keeps its settings and loses every secret — a byte scan finds no trace', async () => {
     const g = await fresh(hostPlatform());
     await g.sync.importUserFile(await donor());
@@ -216,6 +229,8 @@ describe('the share-link route under the host platform (the relay is unreachable
     await render(<g.App />, ['/s/some-share-id']);
     expect(byTestId('shared-link-loading')).toBeNull();
     expect(byTestId('shared-link-failure')).toBeNull();
+    // Never an empty main region: a pasted link lands on a named refusal.
+    expect(byTestId('shared-link-unavailable')?.textContent).toContain('share links can’t open here');
   });
 
   it('web (positive twin): /s/:id mounts the shared-link view', async () => {

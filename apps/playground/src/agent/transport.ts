@@ -14,7 +14,7 @@ import type { AgentTransport } from '@snugprotocol/runner';
 import { getPlatform } from '../platform/platform.js';
 import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
 import {
-  endpointsNeedConfirmStore,
+  endpointsNeedConfirm,
   getByokKey,
   localUrlStore,
   providerStore,
@@ -97,7 +97,7 @@ async function readRuntimeContract(appId: string): Promise<RuntimeContract | und
 
 export function createDirectAppTransport(options: DirectTransportOptions): AgentTransport {
   const readKey = options.getKey ?? getByokKey;
-  const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
+  const needsConfirm = options.needsConfirm ?? endpointsNeedConfirm;
   const readContract = options.getRuntimeContract ?? readRuntimeContract;
   // The RUNTIME assembly (ADR-0018 D1) — identity + runtime doctrine + response format.
   // The app-builder layers and the inlined KB summary used to ride every app turn here;

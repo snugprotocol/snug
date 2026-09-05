@@ -37,7 +37,10 @@ async function updateWith(source: StarterSource): Promise<typeof import('../star
   return import('../starter/starterUpdate.js');
 }
 
-const rejecting = (): Promise<string> => Promise.reject(new Error('starters load from the network — this page is offline'));
+const named = (): Error => Object.assign(new Error('starters load from the network — this page is offline'), { name: 'StarterLoadError' });
+const rejecting = (): Promise<string> => Promise.reject(named());
+/** A rejection that is NOT the loader's named refusal — must keep propagating. */
+const foreign = (): Promise<string> => Promise.reject(new Error('database disk image is malformed'));
 
 afterEach(() => {
   vi.doUnmock('../starter/starterSource.js');
@@ -48,6 +51,11 @@ describe('starterDeclarationForStarterId when the html cannot be loaded', () => 
   it('a rejecting html load resolves null — the declaration cannot be vouched for, so there is none', async () => {
     const mod = await declarationWith(sourceWith(rejecting));
     await expect(mod.starterDeclarationForStarterId('starter--weather')).resolves.toBeNull();
+  });
+
+  it('a FOREIGN rejection still propagates — only the named refusal degrades', async () => {
+    const mod = await declarationWith(sourceWith(foreign));
+    await expect(mod.starterDeclarationForStarterId('starter--weather')).rejects.toThrow(/malformed/);
   });
 
   it('positive twin: a resolving html load yields the declaration when the manifest vouches for it', async () => {
@@ -71,6 +79,13 @@ describe('starterUpdateStatus when the html cannot be loaded', () => {
     const mod = await updateWith(sourceWith(rejecting));
     const { db, appId } = await installedWeather();
     await expect(mod.starterUpdateStatus(db, appId)).resolves.toBeUndefined();
+    await db.close();
+  });
+
+  it('a FOREIGN rejection still propagates from the update question too', async () => {
+    const mod = await updateWith(sourceWith(foreign));
+    const { db, appId } = await installedWeather();
+    await expect(mod.starterUpdateStatus(db, appId)).rejects.toThrow(/malformed/);
     await db.close();
   });
 

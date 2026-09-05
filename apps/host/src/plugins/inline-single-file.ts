@@ -32,6 +32,8 @@ const SCRIPT_SRC = /<script\b([^>]*?)\ssrc="([^"]+)"([^>]*)><\/script>/g;
 const LINK_STYLESHEET = /<link\b[^>]*\brel="stylesheet"[^>]*\bhref="([^"]+)"[^>]*>/g;
 const LINK_MODULEPRELOAD = /[ \t]*<link\b[^>]*\brel="modulepreload"[^>]*>\n?/g;
 const ASSET_REF = /(?:src|href)="(?:\.\/)?(assets\/[^"]+)"/g;
+/** A placeholder no bundle can contain (NUL-delimited) for the script spliced in last. */
+const SCRIPT_SLOT = '\0snug-host-script\0';
 
 const escapeAttr = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -48,11 +50,27 @@ export function refuseUnsafeScript(code: string, label: string): void {
     throw new Error(`inline-single-file: ${label} contains "</script" — it would close the inlined script:\n  ${closers.join('\n  ')}`);
   }
   if (code.includes('__VITE_PRELOAD__')) {
-    throw new Error(`inline-single-file: ${label} still contains Vite's unresolved "__VITE_PRELOAD__" marker — every lazy import would throw at runtime (build.modulePreload must be { polyfill: false }, never false)`);
+    throw new Error(`inline-single-file: ${label} still contains Vite's unresolved "__VITE_PRELOAD__" marker — every lazy import would throw at runtime (this hook must run AFTER vite:build-import-analysis: keep generateBundle at order:'post')`);
   }
   const lastOpen = code.lastIndexOf('<!--');
   if (lastOpen !== -1 && code.indexOf('-->', lastOpen + 4) === -1) {
     throw new Error(`inline-single-file: ${label} contains an UNCLOSED "<!--" — script-data escaping could hide the page's closing tag:\n  ${neighbourhoods(code.slice(lastOpen), /<!--/g, 1).join('')}`);
+  }
+}
+
+/** Module ids that must never be in the page — exact, no byte ceiling to re-measure (AC14, P5). */
+const FOREIGN_MODULE = [
+  {
+    re: /\/examples\/[^/]+\/(app\.html|starter\.json|runtime-contract\.json|connection\.json|authoring\/)/,
+    why: 'a starter file — starters load on click from the pinned package',
+  },
+  { re: /node_modules\/@mlc-ai\/web-llm\//, why: 'the WebLLM engine — the kit pins its brain and aliases the engine to a stub' },
+];
+
+export function refuseForeignModules(moduleIds: string[], label: string): void {
+  for (const { re, why } of FOREIGN_MODULE) {
+    const hit = moduleIds.find((id) => re.test(id));
+    if (hit !== undefined) throw new Error(`inline-single-file: ${label} bundles ${hit} — ${why}`);
   }
 }
 
@@ -84,13 +102,20 @@ export function inlineSingleFile(options: InlineSingleFileOptions): Plugin {
       const page = bundle[htmlKey] as Rollup.OutputAsset;
       let html = typeof page.source === 'string' ? page.source : new TextDecoder().decode(page.source);
 
+      // The link, preload, stamp and leftover-reference passes run over the page BEFORE the
+      // 1.5 MB script is spliced in — after it they would scan JS string literals (the
+      // knowledge base's app templates carry `<link rel="stylesheet" href="https://…">`
+      // text) and refuse or delete text that is not markup (Gate-5 finding, 2026-09-05).
+      const scripts: string[] = [];
       html = html.replace(SCRIPT_SRC, (_match, _before: string, src: string) => {
         const key = keyOf(src);
         const item = bundle[key];
         if (item === undefined || item.type !== 'chunk') throw new Error(`inline-single-file: <script src="${src}"> is not an emitted chunk`);
+        refuseForeignModules(Object.keys(item.modules), key);
         refuseUnsafeScript(item.code, key);
         delete bundle[key];
-        return `<script type="module">${item.code}</script>`;
+        scripts.push(item.code);
+        return `<script type="module">${SCRIPT_SLOT}${scripts.length - 1}${SCRIPT_SLOT}</script>`;
       });
 
       html = html.replace(LINK_STYLESHEET, (_match, href: string) => {
@@ -113,6 +138,9 @@ export function inlineSingleFile(options: InlineSingleFileOptions): Plugin {
 
       const leftoverFiles = Object.keys(bundle).filter((k) => k !== htmlKey);
       if (leftoverFiles.length > 0) throw new Error(`inline-single-file: files other than the page would be emitted: ${leftoverFiles.join(', ')}`);
+
+      // Splice the script LAST, after every markup pass.
+      html = html.replace(new RegExp(`${SCRIPT_SLOT}(\\d+)${SCRIPT_SLOT}`, 'g'), (_m, n: string) => scripts[Number(n)]!);
 
       delete bundle[htmlKey];
       page.fileName = options.fileName;

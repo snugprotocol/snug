@@ -101,6 +101,17 @@ export function resolveBrain(flagOn: boolean, webgpu: WebGpuStatus, pinned?: Pla
 }
 
 /** Non-hook read for factories (transport creation happens outside render). */
+/**
+ * What `host-ready.capabilities.streaming` should say for this brain (TASK-20260905-host-kit
+ * P7/AC6): a pinned host brain declares it; every other arm leaves the runner's default
+ * (`true` — the file-configured transports and the demo brain stream). RunView forwards it to
+ * `SnugAppFrame`, which forwards it to the runner — an omitted forward is silent, so the
+ * value is derived here and pinned, never re-spelled at the call site.
+ */
+export function hostReadyStreaming(brain: Brain): boolean | undefined {
+  return brain.kind === 'host' ? brain.streaming : undefined;
+}
+
 export function currentBrain(): Brain {
   return resolveBrain(webllmFlagStore.get(), webgpuStore.get(), getPlatform().brain);
 }

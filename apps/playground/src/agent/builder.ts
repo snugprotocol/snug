@@ -10,7 +10,7 @@ import { ERROR_CODES } from '@snugprotocol/protocol';
 
 import { getPlatform } from '../platform/platform.js';
 import { appProviderPinFor, resolveModelForApp } from '../state/appModel.js';
-import { endpointsNeedConfirmStore, getByokKey, type ByokProvider } from '../state/mode.js';
+import { endpointsNeedConfirm, getByokKey, type ByokProvider } from '../state/mode.js';
 import { adapterKindFor, createTurnAdapter, routeOf, type AdapterKind, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
@@ -218,7 +218,7 @@ export interface DirectBuilderOptions {
 
 export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent {
   const readKey = options.getKey ?? getByokKey;
-  const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
+  const needsConfirm = options.needsConfirm ?? endpointsNeedConfirm;
   const isWebllm = options.mode === 'webllm';
   // A platform-pinned host brain that cannot call tools builds tool-free too — the
   // webllm arm generalised (TASK-20260905-host-kit P2 / A5: `PlatformBrain.tools`).

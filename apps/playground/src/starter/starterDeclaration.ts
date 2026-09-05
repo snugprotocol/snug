@@ -34,6 +34,7 @@ import { admitConnectionRequirement } from '@snugprotocol/auth';
 import type { UserDb } from '@snugprotocol/db';
 
 import { STARTER_PREFIX } from './starterApps.js';
+import { isNamedLoadRefusal } from '../run/copy.js';
 import { starterSource } from './starterSource.js';
 
 /**
@@ -88,12 +89,15 @@ async function bundled(folder: string): Promise<{ manifest: string; html: string
     const [manifest, html] = await Promise.all([source.manifest(folder), source.html(folder)]);
     if (manifest === undefined || html === undefined) return null;
     return { manifest, html };
-  } catch {
-    // The host kit loads a starter's html on demand and REJECTS by name when the page is
+  } catch (err) {
+    // The host kit loads a starter's html on demand and REJECTS BY NAME when the page is
     // offline (TASK-20260905-host-kit AC14); a declaration that cannot be vouched for is
     // no declaration — the same degrade-quietly posture as a missing file, never an
     // unhandled rejection on the run view (found by the kit's file:// e2e, 2026-09-05).
-    return null;
+    // ONLY that named refusal: any other failure keeps propagating to the install's own
+    // error path (a swallowed chunk 404 on web would install a starter that declares nothing).
+    if (isNamedLoadRefusal(err)) return null;
+    throw err;
   }
 }
 

@@ -21,3 +21,12 @@ export function missingAppCopy(reason?: string): { title: string; lesson: string
     ? { title: 'app not found', lesson: 'it may live in the other mode — check settings, or build a new one.' }
     : { title: 'this app didn’t load', lesson: reason };
 }
+
+/**
+ * The ONE shape of failure the run view may quote: the host kit's starter loader rejects
+ * with `name === 'StarterLoadError'` (apps/host/src/starterLoader.ts) — checked by name
+ * because the playground never imports the kit. Everything else is internals.
+ */
+export function isNamedLoadRefusal(err: unknown): err is Error {
+  return err instanceof Error && err.name === 'StarterLoadError';
+}

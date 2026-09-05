@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { storageDisclosure } from '../platform/copy.js';
-import { missingAppCopy } from '../run/copy.js';
+import { isNamedLoadRefusal, missingAppCopy } from '../run/copy.js';
 
 describe('storageDisclosure — names the rung that WORKED', () => {
   it('has one sentence per backend kind and nothing when the platform did not say', () => {
@@ -27,5 +27,13 @@ describe('missingAppCopy — a named failure becomes the lesson', () => {
   it('with a reason the reason is what the user reads (the starter loader’s offline refusal)', () => {
     const reason = 'starters load from the network — this page is offline or the starters package is unreachable';
     expect(missingAppCopy(reason)).toEqual({ title: 'this app didn’t load', lesson: reason });
+  });
+});
+
+describe('isNamedLoadRefusal — the only failure the run view quotes', () => {
+  it('matches the loader\'s named error by NAME and nothing else', () => {
+    expect(isNamedLoadRefusal(Object.assign(new Error('starters load from the network'), { name: 'StarterLoadError' }))).toBe(true);
+    expect(isNamedLoadRefusal(new Error('database disk image is malformed'))).toBe(false);
+    expect(isNamedLoadRefusal('starters load from the network')).toBe(false);
   });
 });

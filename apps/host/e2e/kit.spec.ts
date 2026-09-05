@@ -139,7 +139,10 @@ test.describe('the host kit served over http — the artifact shape', () => {
     await expect(app.locator('#fetch')).toHaveText(/^blocked:/, { timeout: 20_000 });
     await expect(app.locator('#csp')).toContainText('connect-src');
     // The pinned brain answered the probe turn.
-    await expect(app.locator('#status')).toHaveText(/^(done|error)$/, { timeout: 30_000 });
+    // A reply from the pinned brain: `done`, or an app-level error that is NOT the F15
+    // consent gate — CONSENT_REQUIRED would mean an imported file killed every turn.
+    await expect(app.locator('#status')).toHaveText(/^(done|error:(?!CONSENT_REQUIRED).+)$/, { timeout: 30_000 });
+    await expect(app.locator('#status')).not.toContainText('CONSENT_REQUIRED');
     expect(policy.blocked).toEqual([]);
     expect(policy.passed).toEqual([]);
     expect(noWasm(policy.all)).toEqual([]);

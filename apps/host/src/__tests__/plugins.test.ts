@@ -13,12 +13,12 @@ import { buildStamp } from '../plugins/build-stamp.js';
 import { inlineSingleFile } from '../plugins/inline-single-file.js';
 import { STARTERS_INDEX_MODULE, startersIndexPlugin } from '../plugins/starters-index.js';
 
-type Bundle = Record<string, { type: 'chunk'; fileName: string; code: string; isEntry: boolean } | { type: 'asset'; fileName: string; source: string | Uint8Array }>;
+type Bundle = Record<string, { type: 'chunk'; fileName: string; code: string; isEntry: boolean; modules: Record<string, unknown> } | { type: 'asset'; fileName: string; source: string | Uint8Array }>;
 
 const HTML = (head: string): string =>
   `<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="UTF-8" />\n    <meta name="snug-host-build" content="dev" />\n    <title>Snug</title>\n${head}  </head>\n  <body>\n    <div id="root"></div>\n  </body>\n</html>\n`;
 
-function viteShapedBundle(over: { js?: string; css?: string; extra?: Bundle; head?: string } = {}): Bundle {
+function viteShapedBundle(over: { js?: string; css?: string; extra?: Bundle; head?: string; modules?: Record<string, unknown> } = {}): Bundle {
   const js = over.js ?? 'console.log("hi")';
   const css = over.css ?? 'body{margin:0}';
   const head =
@@ -26,7 +26,7 @@ function viteShapedBundle(over: { js?: string; css?: string; extra?: Bundle; hea
     '    <script type="module" crossorigin src="./assets/index-AbC123.js"></script>\n    <link rel="stylesheet" crossorigin href="./assets/index-DeF456.css">\n';
   return {
     'index.html': { type: 'asset', fileName: 'index.html', source: HTML(head) },
-    'assets/index-AbC123.js': { type: 'chunk', fileName: 'assets/index-AbC123.js', code: js, isEntry: true },
+    'assets/index-AbC123.js': { type: 'chunk', fileName: 'assets/index-AbC123.js', code: js, isEntry: true, modules: over.modules ?? { '/repo/apps/host/src/main.tsx': {} } },
     'assets/index-DeF456.css': { type: 'asset', fileName: 'assets/index-DeF456.css', source: css },
     ...over.extra,
   };
@@ -92,6 +92,21 @@ describe('inlineSingleFile', () => {
 
   it("REFUSES a script still carrying Vite's unresolved `__VITE_PRELOAD__` marker (a lazy import that would throw at runtime)", () => {
     expect(() => run(viteShapedBundle({ js: 'const m = __vitePreload(() => import("./x"), __VITE_PRELOAD__)' }))).toThrow(/__VITE_PRELOAD__/);
+  });
+
+  it('REFUSES a chunk that bundles a starter file or the WebLLM engine — the exact facts the size ceiling only approximates', () => {
+    expect(() => run(viteShapedBundle({ modules: { '/repo/examples/chess/app.html?raw': {} } }))).toThrow(/examples\/chess\/app\.html/);
+    expect(() => run(viteShapedBundle({ modules: { '/repo/examples/chess/authoring/docs/vision.md?raw': {} } }))).toThrow(/starter file/);
+    expect(() => run(viteShapedBundle({ modules: { '/repo/node_modules/.pnpm/@mlc-ai+web-llm@0.2.84/node_modules/@mlc-ai/web-llm/lib/index.js': {} } }))).toThrow(/WebLLM/);
+    // The kit's own modules and the inline starters index are not starter files.
+    expect(() => run(viteShapedBundle({ modules: { '/repo/apps/host/src/starterSource.ts': {}, '\0virtual:snug-starters-index': {}, '/repo/examples/starters-package.json': {} } }))).not.toThrow();
+  });
+
+  it('markup passes run BEFORE the script is spliced in: tag-like strings inside the script are neither refused nor rewritten', () => {
+    const js = 'const kb = `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">` + `<link rel="modulepreload" href="./assets/x.js">` + `<img src="./assets/logo.png">`';
+    const html = run(viteShapedBundle({ js }));
+    expect(html).toContain('rel="modulepreload" href="./assets/x.js"');
+    expect(html).toContain('<img src="./assets/logo.png">');
   });
 
   it('REFUSES a stylesheet containing `</style`', () => {

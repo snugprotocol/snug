@@ -22,6 +22,7 @@ import { createIdbBackend, createMemoryBackend, createOpfsBackend, type Persiste
 import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 
 import type { PlatformBrain } from '@playground/platform/platform';
+import { isLocalEndpointHost } from '@playground/security/privateHost';
 
 // ---------------------------------------------------------------------------- binding
 
@@ -54,14 +55,6 @@ export function readBindingEnv(win: BindingWindowLike): BindingEnv {
   };
 }
 
-/** `localhost`, `*.localhost`, the whole 127/8 block, and IPv6 loopback (bracketed or bare). */
-export function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  if (h === 'localhost' || h.endsWith('.localhost')) return true;
-  if (h === '[::1]' || h === '::1') return true;
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
-}
-
 /**
  * The host globals outrank the origin: an artifact viewer is always https, and a page
  * served from anywhere ELSE with nothing wired is, for every purpose the kit has, a plain
@@ -73,7 +66,8 @@ export function decideBinding(env: BindingEnv): Binding {
   if (env.claudeUse) return 'artifact';
   if (env.claudeComplete) return 'artifact-chat';
   if (env.protocol === 'file:') return 'file';
-  if ((env.protocol === 'http:' || env.protocol === 'https:') && isLoopbackHost(env.hostname)) return 'local-host';
+  // The repo's ONE host classifier (security/privateHost.ts) — not a second loopback regex.
+  if ((env.protocol === 'http:' || env.protocol === 'https:') && isLocalEndpointHost(env.hostname)) return 'local-host';
   return 'file';
 }
 

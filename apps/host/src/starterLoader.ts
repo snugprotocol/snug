@@ -141,7 +141,7 @@ function parsePayload(value: unknown, version: string): StarterPayload | undefin
   if (typeof p.folder !== 'string' || typeof p.html !== 'string') return undefined;
   if (p.version !== version) return undefined;
   const authoring = p.authoring as { docs?: unknown; prompts?: unknown } | undefined;
-  if (authoring === undefined || !isStringRecord(authoring.docs) || !isStringRecord(authoring.prompts)) return undefined;
+  if (typeof authoring !== 'object' || authoring === null || !isStringRecord(authoring.docs) || !isStringRecord(authoring.prompts)) return undefined;
   for (const key of ['meta', 'contract', 'manifest'] as const) {
     if (p[key] !== undefined && typeof p[key] !== 'string') return undefined;
   }

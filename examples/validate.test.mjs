@@ -573,7 +573,12 @@ test('AC9 / ADR-0035 / ADR-0045 / TASK-20260905-host-kit AC14: starterSource.ts 
     ],
     'starterSource.ts declares exactly the five pinned globs',
   );
-  for (const consumer of ['starterApps.ts', 'starterMeta.ts', 'starterDocs.ts', 'starterRuntimeContract.ts', 'starterDeclaration.ts']) {
+  // EVERY other module in the directory, discovered rather than listed: a glob smuggled into
+  // a file this test never named (starterUpdate.ts, a future starterX.ts) would otherwise
+  // ship its bytes past the kit's single alias.
+  const consumers = readdirSync(STARTER_DIR).filter((f) => f.endsWith('.ts') && f !== 'starterSource.ts');
+  assert.ok(consumers.length >= 5, `expected the starter consumers, found ${consumers.length}`);
+  for (const consumer of consumers) {
     assert.deepEqual(globsOf(consumer), [], `${consumer} declares no glob of its own — it reads through starterSource`);
   }
 });

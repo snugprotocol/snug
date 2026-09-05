@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import vm from 'node:vm';
 
-import { buildStartersPackage, escapeForInlineScript, wrapperSource, STARTER_PAYLOAD_FORMAT, STARTERS_INDEX_FORMAT } from './build-starters-pkg.mjs';
+import { buildStartersPackage, escapeForInlineScript, starterFolders, wrapperSource, STARTER_PAYLOAD_FORMAT, STARTER_REGISTER_GLOBAL, STARTERS_INDEX_FORMAT } from './build-starters-pkg.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXAMPLES = path.join(REPO, 'examples');
@@ -136,4 +136,23 @@ test('the real examples/: every folder with an app.html becomes a wrapper whose 
   // The connected starters carry their manifest inline (the hub's badge needs it at first paint).
   assert.ok(result.index.starters.github.inline.manifest !== undefined);
   assert.ok(result.index.starters.chess.inline.meta !== undefined);
+});
+
+test('cross-pin: the kit loader and its index plugin spell the SAME protocol literals as this script (producer ↔ consumer)', () => {
+  const loader = readFileSync(path.join(REPO, 'apps/host/src/starterLoader.ts'), 'utf8');
+  const plugin = readFileSync(path.join(REPO, 'apps/host/src/plugins/starters-index.ts'), 'utf8');
+  assert.ok(loader.includes(`export const STARTERS_INDEX_FORMAT = '${STARTERS_INDEX_FORMAT}';`), 'index format literal drifted');
+  assert.ok(loader.includes(`export const STARTER_PAYLOAD_FORMAT = '${STARTER_PAYLOAD_FORMAT}';`), 'payload format literal drifted');
+  assert.ok(loader.includes(`export const STARTER_REGISTER_GLOBAL = '${STARTER_REGISTER_GLOBAL}';`), 'register global drifted');
+  assert.equal(escapeForInlineScript('<'), '\\u003c');
+  assert.ok(plugin.includes("json.replace(/</g, '\\\\u003c')"), 'the plugin escaper drifted from escapeForInlineScript');
+});
+
+test('cross-pin: the package catalogue equals the examples validator’s curated APPS list', () => {
+  const validator = readFileSync(path.join(EXAMPLES, 'validate.test.mjs'), 'utf8');
+  const block = /const APPS = \[([\s\S]*?)\];/.exec(validator);
+  assert.ok(block !== null, 'APPS list not found in validate.test.mjs');
+  const noComments = block[1].replace(/^\s*\/\/.*$/gm, ''); // apostrophes in the comments are not quotes
+  const apps = [...noComments.matchAll(/'([^']+)'/g)].map((m) => m[1]).sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(starterFolders(EXAMPLES), apps, 'a folder with an app.html the validator never gates would be packaged and published');
 });

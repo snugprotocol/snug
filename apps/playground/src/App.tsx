@@ -53,6 +53,7 @@ import { SharedLinkView } from './views/SharedLinkView.js';
 import { WebllmBanner } from './views/WebllmBanner.js';
 import { hydrateSharedInbox, sharedOpenRequestStore } from './share/sharedInbox.js';
 import { allows } from './platform/platform.js';
+import { EmptyState } from './ui/EmptyState.js';
 
 // The Run view carries the runner + sql.js driver — code-split so the hub stays light.
 const RunView = lazy(() => import('./run/RunView.js'));
@@ -242,7 +243,29 @@ export function App(): ReactElement {
           />
           {/* The share LINK receiver (ADR-0064): every platform's landing page for
               `/s/<id>#<key>`; opens the preview from memory, never writes the file. */}
-          {allows('share') ? <Route path="/s/:id" element={<SharedLinkView />} /> : null}
+          <Route
+            path="/s/:id"
+            element={
+              allows('share') ? (
+                <SharedLinkView />
+              ) : (
+                // The relay is unreachable from this host (P3): a pasted link lands on a
+                // named refusal, never an empty main region.
+                <div className="run-overlay" data-testid="shared-link-unavailable">
+                  <EmptyState
+                    glyph="🔗"
+                    title="share links can’t open here"
+                    lesson="this host can’t reach the share relay — open the link in the Snug playground or in Snug for Mac."
+                    action={
+                      <Link to="/" className="btn">
+                        back to your apps
+                      </Link>
+                    }
+                  />
+                </div>
+              )
+            }
+          />
           <Route path="/settings" element={<SettingsView />} />
           <Route path="/download" element={<DownloadView />} />
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />

@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 import type { Page } from '@playwright/test';
 import { createMemoryBackend, openUserDb } from '@snugprotocol/db';
+import { JSDOM } from 'jsdom';
 
 export const KIT_PORT = 43123;
 export const KIT_ORIGIN = `http://127.0.0.1:${KIT_PORT}`;
@@ -27,12 +28,15 @@ export function startersIndex(): StartersIndex {
 }
 
 /**
- * `RUNNER_CSP` from the runner's BUILT module, by file path: importing the package's index in
- * Node evaluates its browser CSP template (DOMParser) at import time, and the spec runs in Node.
+ * `RUNNER_CSP` from the runner package. Its index evaluates the browser CSP template at
+ * import time (DOMParser), so the spec shims DOMParser with jsdom first — the same shape as
+ * apps/playground/e2e/csp.spec.ts.
  */
 export async function runnerCsp(): Promise<string> {
-  const file = path.join(hostDir(), 'node_modules', '@snugprotocol', 'runner', 'dist', 'csp.js');
-  const mod = (await import(pathToFileURL(file).href)) as { RUNNER_CSP: string };
+  if (typeof globalThis.DOMParser === 'undefined') {
+    (globalThis as { DOMParser?: unknown }).DOMParser = new JSDOM('').window.DOMParser;
+  }
+  const mod = (await import('@snugprotocol/runner')) as { RUNNER_CSP: string };
   return mod.RUNNER_CSP;
 }
 
@@ -162,7 +166,9 @@ export function capsAppHtml(): string {
     }
     if (d.type === 'snug:app-response' && d.requestId === 'req-1') {
       if (d.streaming) { set('status', 'streaming'); return; }
-      set('status', d.ok ? 'done' : 'error');
+      // The error CODE is part of the truth: CONSENT_REQUIRED here would mean the F15 gate
+      // armed with no card to clear it (Gate-5 finding, 2026-09-05).
+      set('status', d.ok ? 'done' : 'error:' + ((d.error && d.error.code) || 'unknown'));
     }
   });
 })();

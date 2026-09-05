@@ -19,7 +19,10 @@ function uaBrief(ua: string): string {
 }
 
 export function reportEnvironment(): string {
-  const kind = getPlatform().kind;
+  const platform = getPlatform();
   const ua = uaBrief(globalThis.navigator?.userAgent ?? 'unknown');
-  return `${kind === 'desktop' ? 'desktop shell' : 'web'} / ${ua} / ${modeStore.get()}`;
+  // The host kit names itself and its binding, and its brain is pinned by the host — the
+  // file's mode is not what routed the turn (TASK-20260905-host-kit, Gate-5 finding).
+  if (platform.kind === 'host') return `host kit (${platform.binding ?? 'unknown binding'}) / ${ua} / brain pinned by the host`;
+  return `${platform.kind === 'desktop' ? 'desktop shell' : 'web'} / ${ua} / ${modeStore.get()}`;
 }
