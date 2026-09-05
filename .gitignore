@@ -58,3 +58,7 @@ playwright-report/
 # here on so a per-release 35 MB does not repeat.
 apps/desktop/release-out/
 apps/whatsapp-sidecar/release-out/
+
+# The starters package the host kit build emits from examples/ (TASK-20260905-host-kit AC14) —
+# derived, rebuilt by `pnpm --filter host build:starters`; the published copy lives on npm.
+apps/host/starters-pkg/

@@ -1,0 +1,5 @@
+{
+  "name": "@snugprotocol/starters",
+  "version": "0.1.0",
+  "description": "The Snug starter apps as a content-pinned package: one classic-script wrapper per starter (html + docs + contract + meta), loaded on demand by the host kit. Built from examples/ by scripts/build-starters-pkg.mjs; publishing is an owner act."
+}

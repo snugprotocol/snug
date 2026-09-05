@@ -1,0 +1,24 @@
+{
+  "format": "snug-starters-index/1",
+  "name": "@snugprotocol/starters",
+  "version": "0.1.0-fixture",
+  "starters": {
+    "chess": {
+      "file": "chess.js",
+      "sha384": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "bytes": 12,
+      "inline": {
+        "meta": "{\"version\":2,\"changelog\":[{\"version\":2,\"date\":\"2026-08-21\",\"sections\":[{\"title\":\"What's new\",\"items\":[\"x\"]}]}]}",
+        "contract": "{\"format\":\"snug-runtime-contract/1\"}"
+      }
+    },
+    "weather": {
+      "file": "weather.js",
+      "sha384": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "bytes": 34,
+      "inline": {
+        "manifest": "{\"id\":\"weather\"}"
+      }
+    }
+  }
+}

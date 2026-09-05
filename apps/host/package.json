@@ -1,0 +1,35 @@
+{
+  "name": "host",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Snug host kit — the playground built as ONE self-contained page (snug-host.html) for foreign hosts (TASK-20260905-host-kit, ADR-0065)",
+  "license": "MIT",
+  "scripts": {
+    "build:starters": "node ../../scripts/build-starters-pkg.mjs",
+    "build": "pnpm build:starters && tsc -p tsconfig.json --noEmit && vite build",
+    "test": "tsc -p tsconfig.test.json && vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@snugprotocol/adapters": "workspace:*",
+    "@snugprotocol/auth": "workspace:*",
+    "@snugprotocol/db": "workspace:*",
+    "@snugprotocol/knowledge": "workspace:*",
+    "@snugprotocol/protocol": "workspace:*",
+    "@snugprotocol/runner": "workspace:*",
+    "@snugprotocol/sdk": "workspace:*",
+    "react": "^18",
+    "react-dom": "^18",
+    "react-router-dom": "^6.26.0",
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@vitejs/plugin-react": "^4.3.0",
+    "fake-indexeddb": "^6.0.1",
+    "jsdom": "^30.0.1",
+    "vite": "^6.4.3"
+  }
+}
