@@ -3,8 +3,8 @@
 // path and the key from the fragment, STRIP the fragment from the address bar (history,
 // bookmarks and history-sync must not keep the key), fetch the ciphertext from the
 // relay, decrypt, validate at the boundary, and open the preview FROM MEMORY — nothing
-// is written into the user file by a link visit (finding 12); "keep" and install are
-// explicit acts in the preview's header.
+// is written into the user file by a link visit (finding 12); install is the explicit
+// act in the preview's header, straight from memory.
 //
 // Router-aware reads only (`useParams`, `useLocation`) — never `window.location.search`
 // (the HashRouter trap the desktop gate documents). This route is never mounted under
@@ -23,7 +23,7 @@ import { sharedRouteIdFor } from '../share/sharedInbox.js';
 const FAILURE_COPY: Record<ShareLinkFailure, { title: string; lesson: string }> = {
   'bad-link': { title: 'this link is not a Snug share link', lesson: 'a share link looks like …/s/<id>#<key> — the key after the # is part of it. ask for it again.' },
   'no-relay': { title: 'share links are not available here', lesson: 'this build has no share relay. ask the sender for the .snug file instead — you can add it from settings.' },
-  gone: { title: 'this link has expired or was revoked', lesson: 'share links live 30 days, and the sender can revoke them earlier. ask for a fresh one, or for the .snug file.' },
+  gone: { title: 'this link has expired or was revoked', lesson: 'the sender picks how long a link lasts (a day, a week or a month) and can revoke it earlier. ask for a fresh one, or for the .snug file.' },
   unreachable: { title: 'could not reach the share relay', lesson: 'check your connection and try again. nothing was changed.' },
   'bad-key': { title: 'this link is damaged', lesson: 'the key after the # does not open what the relay holds. ask the sender to copy the link again.' },
   invalid: { title: 'this shared app cannot be opened', lesson: 'the file behind the link is not a valid Snug app, or it is newer than this version of Snug.' },

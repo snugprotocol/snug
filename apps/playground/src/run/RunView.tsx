@@ -45,7 +45,7 @@ import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 import { ShareSheet } from '../share/ShareSheet.js';
 import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
 import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
-import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, keepSharedEntry, sharedInboxStore } from '../share/sharedInbox.js';
+import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, sharedInboxStore } from '../share/sharedInbox.js';
 import { desktopLinkFor } from '../share/relayClient.js';
 import { getPlatform } from '../platform/platform.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
@@ -912,18 +912,7 @@ export default function RunView(): ReactElement {
             */}
             {isSharedId(id) && sharedEntry !== undefined ? (
               <>
-                {/* A link preview lives in memory until kept (finding 12); an opened file is already kept. */}
-                {!sharedEntry.kept ? (
-                  <Button
-                    variant="ghost"
-                    data-testid="shared-keep"
-                    aria-label="keep this shared app on your shelf"
-                    title="keep it on your apps page (in your snug file) without installing yet"
-                    onClick={() => void keepSharedEntry(sharedEntry.bundleId)}
-                  >
-                    keep
-                  </Button>
-                ) : null}
+                {/* A link preview lives in memory and installs from there (finding 12; no "keep" step). */}
                 {/* macOS web only: offer the desktop app — never auto-launch (ADR-0063 §7). */}
                 {sharedEntry.link !== undefined && desktopOffer ? (
                   <Button

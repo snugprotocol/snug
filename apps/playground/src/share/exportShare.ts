@@ -126,25 +126,31 @@ export function downloadShare(prepared: PreparedShare): void {
   downloadBlob(new Blob([prepared.text], { type: 'application/json' }), prepared.fileName);
 }
 
-/** Whether this browser can hand a FILE to the OS share sheet (mobile sheets, macOS AirDrop). */
-export function canShareFile(prepared: PreparedShare): boolean {
-  const nav = globalThis.navigator as Navigator & { canShare?: (data: ShareData) => boolean };
-  if (typeof nav?.canShare !== 'function' || typeof nav.share !== 'function') return false;
-  try {
-    return nav.canShare({ files: [new File([prepared.text], prepared.fileName, { type: 'application/json' })] });
-  } catch {
-    return false;
-  }
+/**
+ * Whether this browser can hand a LINK to the OS share sheet (mobile sheets, macOS
+ * Messages/Mail/Notes/AirDrop). A link, never a file: Chrome's `canShare({ files })`
+ * validates count and size only — the extension allowlist lives in the browser process
+ * and surfaces as `NotAllowedError: Permission denied` from `share()`, and `.snug` is
+ * not on it (owner-reported 2026-09-04). Every Web Share implementation accepts a URL.
+ */
+export function canShareLink(): boolean {
+  return typeof (globalThis.navigator as Navigator | undefined)?.share === 'function';
 }
 
-/** Open the OS share sheet with the `.snug` file. Resolves false when the user dismissed it. */
-export async function shareViaOs(prepared: PreparedShare): Promise<boolean> {
-  const file = new File([prepared.text], prepared.fileName, { type: 'application/json' });
+export type OsShareOutcome = 'shared' | 'dismissed' | 'not-allowed';
+
+/**
+ * Open the OS share sheet with the link. `dismissed` = the user closed it; `not-allowed`
+ * = the browser refused, which after an upload means its transient-activation window
+ * closed before the link was ready — the caller then shows and copies the link instead.
+ */
+export async function shareLinkViaOs(share: { url: string; title: string }): Promise<OsShareOutcome> {
   try {
-    await navigator.share({ files: [file], title: prepared.bundle.app.displayName });
-    return true;
+    await navigator.share({ title: `${share.title} — a Snug app`, text: 'open this link to preview and install it', url: share.url });
+    return 'shared';
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') return false;
+    if (error instanceof DOMException && error.name === 'AbortError') return 'dismissed';
+    if (error instanceof DOMException && error.name === 'NotAllowedError') return 'not-allowed';
     throw error;
   }
 }

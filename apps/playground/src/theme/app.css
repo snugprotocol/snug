@@ -3039,6 +3039,21 @@ img.identity-avatar {
   background: var(--surface);
   color: inherit;
 }
+.share-expiry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.share-expiry select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 4px 6px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--hairline, #8884);
+  background: var(--surface);
+  color: inherit;
+}
 .share-active-links {
   list-style: none;
   padding-left: 0;

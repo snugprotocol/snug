@@ -15,6 +15,15 @@ import { getPlatform } from '../platform/platform.js';
 export const SHARE_ID_RULE = /^[A-Za-z0-9_-]{22}$/;
 export const SHARE_TOKEN_RULE = /^[A-Za-z0-9_-]{43}$/;
 
+/** The sharer's lifetime choices — the relay's closed set (`handler.mjs` EXPIRY_CHOICES). */
+export type ShareExpiry = '1d' | '7d' | '30d';
+export const SHARE_EXPIRY_CHOICES: readonly { value: ShareExpiry; label: string }[] = [
+  { value: '1d', label: '24 hours' },
+  { value: '7d', label: '1 week' },
+  { value: '30d', label: '1 month' },
+];
+export const DEFAULT_SHARE_EXPIRY: ShareExpiry = '7d';
+
 export interface UploadedShare {
   id: string;
   expiresAt: string;
@@ -33,8 +42,8 @@ function relayUrl(path: string): string {
   return `${SHARE_RELAY_ORIGIN}${path}`;
 }
 
-export async function uploadCiphertext(ciphertext: Uint8Array): Promise<UploadedShare> {
-  const response = await fetchImpl()(relayUrl('/v1/bundles'), {
+export async function uploadCiphertext(ciphertext: Uint8Array, expires: ShareExpiry = DEFAULT_SHARE_EXPIRY): Promise<UploadedShare> {
+  const response = await fetchImpl()(relayUrl(`/v1/bundles?expires=${expires}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
     body: ciphertext as unknown as BodyInit,

@@ -2,11 +2,14 @@
 //
 // A received bundle is INERT until the user installs it, and it is MEMORY-FIRST: it
 // lands in this module store (which outlives every view and dies with the page) and is
-// written into the user file only after an explicit act — opening an attachment (a
-// double-click or a Settings pick IS the act), or clicking "keep" on a link preview.
-// A bare link visit never writes third-party bytes into the file, so a drive-by URL
-// cannot fill the shelf (finding 12). Persistence is one `snug_settings` row per bundle
-// (`sharedApp:<bundleId>`), keyed by CONTENT id so the same bundle twice is one row.
+// written into the user file only when it arrived through an explicit act — opening an
+// attachment (a double-click or a Settings pick IS the act). A LINK receipt stays in
+// memory and installs directly from there (TASK-20260904-share-link-ux dropped the
+// "keep" step: install never needed it, and a bookmark the messenger already holds was
+// one concept too many). A bare link visit never writes third-party bytes into the
+// file, so a drive-by URL cannot fill the shelf (finding 12). Persistence is one
+// `snug_settings` row per bundle (`sharedApp:<bundleId>`), keyed by CONTENT id so the
+// same bundle twice is one row.
 //
 // THE CAP REFUSES, NEVER EVICTS (finding 21): a share the user never saw must not be
 // silently dropped to make room; the 13th arrival is refused with a note.
@@ -38,11 +41,11 @@ export type SharedSource = 'file' | 'link' | 'settings';
 export interface SharedEntry {
   bundleId: string;
   bundle: AppBundle;
-  /** The exact text that was received — what "keep" persists and what install re-parses. */
+  /** The exact text that was received — what an attachment receipt persists and what install re-parses. */
   text: string;
   receivedAt: string;
   source: SharedSource;
-  /** True once the row is in the user file (opened attachment, or "keep" on a link). */
+  /** True once the row is in the user file (an opened attachment); a link receipt is never kept. */
   kept: boolean;
   /**
    * For a LINK receipt only, in memory only — never persisted: the relay id and the
@@ -123,7 +126,7 @@ export async function receiveSharedBundle(
   const current = sharedInboxStore.get();
   const existing = current.find((entry) => entry.bundleId === bundleId);
   if (existing !== undefined) {
-    if (options.persist && !existing.kept) return keepSharedEntry(bundleId).then((entry) => ({ ok: true, entry: entry ?? existing, duplicate: true }));
+    if (options.persist && !existing.kept) return persistSharedEntry(bundleId).then((entry) => ({ ok: true, entry: entry ?? existing, duplicate: true }));
     return { ok: true, entry: existing, duplicate: true };
   }
   if (current.length >= MAX_SHARED_INBOX) {
@@ -140,7 +143,7 @@ export async function receiveSharedBundle(
   };
   sharedInboxStore.set([...current, entry]);
   if (options.persist) {
-    const kept = await keepSharedEntry(bundleId);
+    const kept = await persistSharedEntry(bundleId);
     return { ok: true, entry: kept ?? entry, duplicate: false };
   }
   return { ok: true, entry, duplicate: false };
@@ -152,8 +155,8 @@ interface PersistedSharedRow {
   source: SharedSource;
 }
 
-/** Write the entry into the user file (the explicit "keep" act). Returns the kept entry. */
-export async function keepSharedEntry(bundleId: string): Promise<SharedEntry | undefined> {
+/** Write the entry into the user file (an attachment receipt). Returns the kept entry. */
+export async function persistSharedEntry(bundleId: string): Promise<SharedEntry | undefined> {
   const entry = getSharedEntry(bundleId);
   if (entry === undefined) return undefined;
   if (entry.kept) return entry;

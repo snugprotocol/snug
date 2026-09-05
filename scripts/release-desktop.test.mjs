@@ -32,6 +32,9 @@ import {
   refuseUnsignedRebuildOverSignedBuild,
   parseSigningIdentity,
   resolveSigningCredentials,
+  DESKTOP_PINNED_BUILD_ENV,
+  desktopBuildEnv,
+  isAppEnvFile,
 } from './release-desktop.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -396,4 +399,23 @@ test('the updater re-sign passes EXACTLY ONE key spelling to `tauri signer sign`
   assert.match(block, /env: signerEnv/, 'the signer child must run with the pruned env');
   assert.ok(!/signer sign\s+-[kf]\s/.test(block), 'the key must ride in the env, never as a flag');
   assert.ok(!/-p\s+"/.test(block), 'the password must ride in the env, never on argv');
+});
+
+// ---------------------------------------------------------------------------
+// TASK-20260904-share-link-ux AC8 — the desktop build knows the share relay
+// ---------------------------------------------------------------------------
+
+test('the desktop build env pins the share relay and refuses an environment that overrides it', () => {
+  assert.equal(DESKTOP_PINNED_BUILD_ENV.VITE_SNUG_SHARE_RELAY, 'https://share.snugprotocol.org');
+  assert.equal(Object.isFrozen(DESKTOP_PINNED_BUILD_ENV), true);
+  const env = desktopBuildEnv({ HOME: '/h', APPLE_ID: 'x' }, []);
+  assert.equal(env.VITE_SNUG_SHARE_RELAY, 'https://share.snugprotocol.org');
+  assert.equal(env.HOME, '/h');
+  // the same value is fine; a DIFFERENT relay is refused, not silently overridden
+  assert.doesNotThrow(() => desktopBuildEnv({ VITE_SNUG_SHARE_RELAY: 'https://share.snugprotocol.org' }, []));
+  assert.throws(() => desktopBuildEnv({ VITE_SNUG_SHARE_RELAY: 'https://share.test' }, []), /VITE_SNUG_SHARE_RELAY/);
+  assert.throws(() => desktopBuildEnv({ VITE_SNUG_SHARE_RELAY: '' }, []), /VITE_SNUG_SHARE_RELAY/);
+  // an app-level .env* file in apps/desktop could put VITE_* values into the release that no clean-tree check sees
+  assert.throws(() => desktopBuildEnv({}, ['apps/desktop/.env.local']), /\.env\.local/);
+  assert.deepEqual(['.env', '.env.local', '.env.production', '.env.example', 'x.env'].map(isAppEnvFile), [true, true, true, false, false]);
 });

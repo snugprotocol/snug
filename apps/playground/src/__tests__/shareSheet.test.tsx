@@ -18,6 +18,14 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+// This file pins the sheet WITHOUT a relay (the self-hoster / pre-relay build); the link
+// panel has its own file. Pinned by mock because vitest reads a developer's gitignored
+// `.env.local`, which may carry VITE_SNUG_SHARE_RELAY (lost-context note, 2026-09-04).
+vi.mock('../config/site.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/site.js')>();
+  return { ...actual, SHARE_RELAY_ORIGIN: '' };
+});
+
 let container: HTMLDivElement | undefined;
 let root: Root | undefined;
 let db: UserDb;
@@ -128,6 +136,23 @@ describe('what the sheet says', () => {
       expect(text).not.toContain('Lives in Oslo');
     } finally {
       click.mockRestore();
+    }
+  });
+});
+
+describe('a build with no relay (TASK-20260904-share-link-ux AC3)', () => {
+  it('renders neither link act — even when the browser could share — and no file ever goes to the OS sheet', async () => {
+    Object.defineProperty(globalThis.navigator, 'share', { configurable: true, value: vi.fn(async () => undefined) });
+    Object.defineProperty(globalThis.navigator, 'canShare', { configurable: true, value: vi.fn(() => true) });
+    try {
+      await renderSheet(furnish());
+      expect(q('share-link-panel')).toBeNull();
+      expect(q('share-copy-link')).toBeNull();
+      expect(q('share-os')).toBeNull();
+      expect(q('share-download')).not.toBeNull();
+    } finally {
+      delete (globalThis.navigator as { share?: unknown }).share;
+      delete (globalThis.navigator as { canShare?: unknown }).canShare;
     }
   });
 });

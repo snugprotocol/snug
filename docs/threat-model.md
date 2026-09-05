@@ -368,10 +368,12 @@ the reviewer is the control. ([ADR-0063](decisions/0063-app-sharing-portable-sta
 `…/s/<id>#<key>` can fetch and decrypt until expiry or revoke; a recipient who already
 fetched keeps the bytes. The share sheet states both. ([ADR-0064](decisions/0064-blind-share-relay.md))
 
-**R-36 — The relay is a blind blob drop, so it is also a generic anonymous file host for 30
-days.** It cannot validate content it cannot read. Bounded by the size cap, the TTL, and
-a per-IP rate-limiting rule configured outside the code (runbook); Turnstile is queued if
-abuse appears. Its blindness is a claim about the DEPLOYED code — enforced by the config
+**R-36 — The relay is a blind blob drop, so it is also a generic anonymous file host for up
+to 30 days.** It cannot validate content it cannot read. Bounded by the size cap, the TTL
+(the uploader's choice from a closed set — 1 / 7 / 30 days, default 7 — under a ceiling the
+relay refuses to exceed; TASK-20260904-share-link-ux), and a per-IP rate-limiting rule
+written by `deploy-relay.mjs ratelimit` through the WAF rulesets API and clamped to the
+zone's plan (runbook); Turnstile is queued if abuse appears. Its blindness is a claim about the DEPLOYED code — enforced by the config
 preflight and the handler's tests, the same class as R-1 for a hostile operator.
 
 **R-37 — A shared bundle's runtime contract is third-party LLM system-slot text, admitted
@@ -721,7 +723,7 @@ cannot fail a hash check). Its content is not new; the record is.
 | `docs/security/threat-model-delta-starter-update-channel.md` | `5a5625c1f999` | §5 authoring · R-31 |
 | `docs/security/threat-model-delta-multi-provider-byok.md` | `540490f88a1c` | §5 authoring · R-32 |
 | `docs/security/threat-model-delta-desktop-update-channel.md` | `2f6321918cce` | §5 C2 + authoring · R-28, R-29, R-30, R-33 |
-| `docs/security/threat-model-delta-app-sharing.md` | `08d6283f7d21` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
+| `docs/security/threat-model-delta-app-sharing.md` | `806ca935aa18` | §4 boundary 5 · §5 C1 + C2 + authoring · R-34, R-35, R-36, R-37, R-38, R-39 |
 
 <!-- DELTA-LEDGER:END -->
 

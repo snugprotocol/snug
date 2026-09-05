@@ -2,9 +2,11 @@
 // deploy-relay.mjs — TASK-20260904-app-sharing (ADR-0064): the share relay's deploy,
 // run BY THE OWNER from the repo root, in ADR-0054's discipline:
 //
-//   node scripts/deploy-relay.mjs init        # print the one-time setup (bucket, domain, lifecycle, rate limit)
-//   node scripts/deploy-relay.mjs             # pre-flight, test, PRINT the wrangler argv, STOP
-//   node scripts/deploy-relay.mjs --deploy    # …and deploy (the explicit ask)
+//   node scripts/deploy-relay.mjs init               # print the one-time setup (bucket, domain, lifecycle, rate limit)
+//   node scripts/deploy-relay.mjs                    # pre-flight, test, PRINT the wrangler argv, STOP
+//   node scripts/deploy-relay.mjs --deploy           # …and deploy (the explicit ask)
+//   node scripts/deploy-relay.mjs ratelimit          # PRINT the WAF rate-limit rule the zone would get, STOP
+//   node scripts/deploy-relay.mjs ratelimit --apply  # …and write it (the explicit ask)
 //
 // Steps, each refusal loud and naming its fix:
 //   1. resolve CLOUDFLARE_ACCOUNT_ID (process env, else root .env) and check the
@@ -27,7 +29,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { gitPreflight, resolveAccountId, shellQuote } from './deploy-web.mjs';
+import { gitPreflight, readDotEnv, resolveAccountId, shellQuote } from './deploy-web.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const RELAY_DIR = 'apps/share-relay';
@@ -43,6 +45,9 @@ export function parseArgs(argv) {
   const args = argv.slice(2);
   const init = args.includes('init');
   const deploy = args.includes('--deploy');
+  const ratelimit = args.includes('ratelimit');
+  const apply = args.includes('--apply');
+  if (apply && !ratelimit) throw new UsageError('--apply belongs to ratelimit: node scripts/deploy-relay.mjs ratelimit --apply');
   const devIndex = args.indexOf('--dev-origin');
   let devOrigin;
   if (devIndex !== -1) {
@@ -51,10 +56,10 @@ export function parseArgs(argv) {
       throw new UsageError('--dev-origin needs a value, e.g. --dev-origin http://localhost:5173');
     }
   }
-  const consumed = new Set(['init', '--deploy', '--dev-origin', devOrigin]);
+  const consumed = new Set(['init', '--deploy', '--dev-origin', devOrigin, 'ratelimit', '--apply']);
   const unknown = args.filter((a) => !consumed.has(a));
   if (unknown.length) throw new UsageError(`unknown argument(s): ${unknown.join(' ')}`);
-  return { init, deploy, ...(devOrigin !== undefined ? { devOrigin } : {}) };
+  return { init, deploy, ...(devOrigin !== undefined ? { devOrigin } : {}), ...(ratelimit ? { ratelimit, apply } : {}) };
 }
 
 export function initCommands() {
@@ -65,7 +70,8 @@ export function initCommands() {
     `# 2. the lifecycle janitor (once): pnpm exec wrangler r2 bucket lifecycle add ${BUCKET_NAME} expire-shares --expire-days 31`,
     `#    (verify: pnpm exec wrangler r2 bucket lifecycle list ${BUCKET_NAME} — expiry is ALSO enforced at read time by the Worker, so the rule only reclaims storage)`,
     `# 3. the custom domain: the Worker config declares ${RELAY_HOST}; the first deploy binds it (the zone must be on this account)`,
-    `# 4. the rate limit (once, dashboard ONLY — Security → WAF → Rate limiting rules): POST to /v1/bundles, 20 per minute per IP, block 10 minutes`,
+    `# 4. the rate limit (once): node scripts/deploy-relay.mjs ratelimit   (prints the WAF Rate limiting rule: POST /v1/bundles, 20 per minute per IP, block 10 minutes — clamped to the zone's plan, and says so)`,
+    `#    then: node scripts/deploy-relay.mjs ratelimit --apply   (needs CLOUDFLARE_WAF_TOKEN — a Zone WAF:Edit + Zone:Read token for snugprotocol.org — in the root .env; NOT CLOUDFLARE_API_TOKEN, which wrangler would adopt)`,
     `# 5. dry run: node scripts/deploy-relay.mjs   (pre-flight + relay tests + prints the wrangler argv, then stops)`,
     `# 6. deploy: node scripts/deploy-relay.mjs --deploy`,
   ];
@@ -141,6 +147,136 @@ export function assertLoopbackOrigin(origin) {
   return `${url.protocol}//${url.host}`;
 }
 
+// ---------------------------------------------------------------------------
+// The WAF rate-limit rule (TASK-20260904-share-link-ux AC9; threat-model R-36)
+// ---------------------------------------------------------------------------
+//
+// The abuse control for an anonymous-upload endpoint, written through the rulesets API's
+// `http_ratelimit` phase rather than the dashboard — so it is reviewable, repeatable and
+// journaled like every other deploy act. Wrangler's OAuth session cannot do this (its
+// token is not a REST API token — `9109 Invalid access token` — and carries `zone
+// (read)` only), so the act needs ONE scoped API token: `Zone.Zone:Read` +
+// `Zone.Zone WAF:Edit` on the snugprotocol.org zone, held as CLOUDFLARE_WAF_TOKEN in the
+// gitignored root `.env`. Deliberately NOT `CLOUDFLARE_API_TOKEN`: wrangler reads that
+// name from the environment and the root .env and would silently switch every deploy
+// from the OAuth session to a token that cannot deploy Workers.
+//
+// Plan limits (developers.cloudflare.com/waf/rate-limiting-rules, read 2026-09-04): the
+// Free plan allows only a 10 s counting period and a 10 s mitigation timeout; Pro allows
+// periods up to 60 s and timeouts up to 1 h; Business periods up to 10 min and timeouts
+// up to 1 day; Enterprise everything. The rule is clamped to the plan with the SAME rate
+// (requests scale with the period) and every clamp is printed — never silently.
+
+export const ZONE_NAME = 'snugprotocol.org';
+export const RATE_LIMIT_TARGET = Object.freeze({ requests: 20, period: 60, timeout: 600 });
+export const RATE_LIMIT_DESCRIPTION = 'snug-share-relay: uploads per IP (deploy-relay.mjs ratelimit)';
+const CF_API = 'https://api.cloudflare.com/client/v4';
+const PERIODS = [10, 15, 20, 30, 40, 45, 60, 90, 120, 180, 240, 300, 480, 600, 900, 1200, 1800, 2400, 3600];
+const TIMEOUTS = [10, 15, 20, 30, 40, 45, 60, 90, 120, 180, 240, 300, 480, 600, 900, 1200, 1800, 2400, 3600, 86400];
+const PLAN_CEILINGS = {
+  free: { period: 10, timeout: 10 },
+  pro: { period: 60, timeout: 3600 },
+  business: { period: 600, timeout: 86400 },
+  enterprise: { period: 3600, timeout: 86400 },
+};
+
+function largestAllowed(values, ceiling, wanted) {
+  return values.filter((v) => v <= ceiling && v <= wanted).at(-1) ?? values[0];
+}
+
+/** The rule for a zone plan (`plan.legacy_id`), with every clamp named. Pure. */
+export function rateLimitRuleFor(plan) {
+  const ceilings = PLAN_CEILINGS[plan];
+  if (ceilings === undefined) throw new Refusal(`REFUSED: unknown plan ${JSON.stringify(plan)} — add its ceilings to PLAN_CEILINGS from the docs before applying anything.`);
+  const clamped = [];
+  const period = largestAllowed(PERIODS, ceilings.period, RATE_LIMIT_TARGET.period);
+  let requests = RATE_LIMIT_TARGET.requests;
+  if (period !== RATE_LIMIT_TARGET.period) {
+    requests = Math.max(1, Math.ceil((RATE_LIMIT_TARGET.requests * period) / RATE_LIMIT_TARGET.period));
+    clamped.push(`period ${RATE_LIMIT_TARGET.period} s → ${period} s (the ${plan} plan's ceiling), so ${RATE_LIMIT_TARGET.requests}/${RATE_LIMIT_TARGET.period} s becomes ${requests}/${period} s`);
+  }
+  const timeout = largestAllowed(TIMEOUTS, ceilings.timeout, RATE_LIMIT_TARGET.timeout);
+  if (timeout !== RATE_LIMIT_TARGET.timeout) clamped.push(`timeout ${RATE_LIMIT_TARGET.timeout} s → ${timeout} s (the ${plan} plan's ceiling)`);
+  const rule = {
+    description: RATE_LIMIT_DESCRIPTION,
+    expression: `(http.host eq "${RELAY_HOST}" and http.request.method eq "POST" and http.request.uri.path eq "/v1/bundles")`,
+    action: 'block',
+    enabled: true,
+    ratelimit: { characteristics: ['ip.src', 'cf.colo.id'], period, requests_per_period: requests, mitigation_timeout: timeout },
+  };
+  return { rule, clamped };
+}
+
+/** Replace our rule by description (keeping its id so the PUT updates in place); keep every other rule. Pure. */
+export function mergeRateLimitRules(existing, rule) {
+  const index = existing.findIndex((r) => r.description === RATE_LIMIT_DESCRIPTION);
+  if (index === -1) return [...existing, rule];
+  const kept = existing[index].id !== undefined ? { ...rule, id: existing[index].id } : rule;
+  return existing.map((r, i) => (i === index ? kept : r));
+}
+
+export function resolveWafToken(env, dotEnvText) {
+  const fromEnv = env?.CLOUDFLARE_WAF_TOKEN;
+  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') return fromEnv.trim();
+  const fromFile = readDotEnv(dotEnvText).CLOUDFLARE_WAF_TOKEN;
+  if (typeof fromFile === 'string' && fromFile.trim() !== '') return fromFile.trim();
+  throw new Refusal(
+    'REFUSED: CLOUDFLARE_WAF_TOKEN is not set. Create an API token scoped to the snugprotocol.org zone with ' +
+      'Zone.Zone:Read + Zone.Zone WAF:Edit (dash.cloudflare.com → My Profile → API Tokens → Create Token → custom), ' +
+      'put it in the gitignored root .env as CLOUDFLARE_WAF_TOKEN, and rerun. Not CLOUDFLARE_API_TOKEN — wrangler would adopt that name for every deploy.',
+  );
+}
+
+async function cfRequest(io, token, method, path, body) {
+  const url = `${CF_API}${path}`;
+  const { status, json } = await io.http(method, url, body, token);
+  return { status, json };
+}
+
+/** The `ratelimit` act: resolve the zone, compute, PRINT, and write only with --apply. */
+export async function ratelimitMain(parsed, io) {
+  try {
+    const token = resolveWafToken(io.env, io.readDotEnvFile());
+    const zones = await cfRequest(io, token, 'GET', `/zones?name=${ZONE_NAME}`);
+    const zone = zones.json?.result?.[0];
+    if (zones.status !== 200 || zone === undefined) {
+      throw new Refusal(`REFUSED: could not read the ${ZONE_NAME} zone with CLOUDFLARE_WAF_TOKEN (HTTP ${zones.status}: ${JSON.stringify(zones.json?.errors ?? [])}). The token needs Zone.Zone:Read on this zone.`);
+    }
+    const plan = zone.plan?.legacy_id ?? 'unknown';
+    const { rule, clamped } = rateLimitRuleFor(plan);
+    const entry = await cfRequest(io, token, 'GET', `/zones/${zone.id}/rulesets/phases/http_ratelimit/entrypoint`);
+    const existing = entry.status === 200 ? (entry.json?.result?.rules ?? []) : [];
+    if (entry.status !== 200 && entry.status !== 404) {
+      throw new Refusal(`REFUSED: could not read the zone's rate-limit ruleset (HTTP ${entry.status}: ${JSON.stringify(entry.json?.errors ?? [])}). The token needs Zone.Zone WAF:Edit.`);
+    }
+    const rules = mergeRateLimitRules(existing, rule);
+    const ours = existing.find((r) => r.description === RATE_LIMIT_DESCRIPTION);
+    io.log(`zone ${zone.id} (${ZONE_NAME}, plan ${plan}) — ${existing.length} existing rate-limit rule(s), ours ${ours === undefined ? 'absent' : `present (${ours.id})`}`);
+    io.log(`rule: ${rule.description}`);
+    io.log(`  when ${rule.expression}`);
+    io.log(`  ${rule.ratelimit.requests_per_period} requests per ${rule.ratelimit.period} s per IP, block ${rule.ratelimit.mitigation_timeout} s`);
+    if (rule.ratelimit.requests_per_period !== RATE_LIMIT_TARGET.requests || rule.ratelimit.period !== RATE_LIMIT_TARGET.period || rule.ratelimit.mitigation_timeout !== RATE_LIMIT_TARGET.timeout) {
+      io.log(`  (target: ${RATE_LIMIT_TARGET.requests} requests per ${RATE_LIMIT_TARGET.period} s per IP, block ${RATE_LIMIT_TARGET.timeout} s)`);
+    }
+    for (const line of clamped) io.log(`  clamped: ${line}`);
+    io.log(`PUT /zones/${zone.id}/rulesets/phases/http_ratelimit/entrypoint with ${rules.length} rule(s)`);
+    if (!parsed.apply) {
+      io.log('printed, not applied — re-run with --apply on an explicit owner ask (ADR-0054 §16 / ADR-0064 §4).');
+      return 0;
+    }
+    const put = await cfRequest(io, token, 'PUT', `/zones/${zone.id}/rulesets/phases/http_ratelimit/entrypoint`, { rules });
+    if (put.status !== 200 || put.json?.success !== true) {
+      throw new Refusal(`REFUSED: the ruleset write failed (HTTP ${put.status}: ${JSON.stringify(put.json?.errors ?? [])}).`);
+    }
+    const written = (put.json.result?.rules ?? []).find((r) => r.description === RATE_LIMIT_DESCRIPTION);
+    io.log(`applied ${new Date().toISOString()} — rule ${written?.id ?? '?'} in ruleset ${put.json.result?.id ?? '?'}; journal it in docs/runbooks/deploy-share-relay.md (verify: 25 quick POSTs from one IP → the 21st is blocked).`);
+    return 0;
+  } catch (err) {
+    io.error(String(err.message));
+    return 1;
+  }
+}
+
 export const realIo = {
   env: process.env,
   log: (s) => console.log(s),
@@ -152,6 +288,21 @@ export const realIo = {
     if (r.error) throw r.error;
     return { status: r.status ?? 1, stdout: r.stdout ?? '' };
   },
+  /** The one HTTP seam (the Cloudflare REST API). The token travels only in this header; bodies are JSON. */
+  http: async (method, url, body, token) => {
+    const response = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    let json = null;
+    try {
+      json = await response.json();
+    } catch {
+      json = null;
+    }
+    return { status: response.status, json };
+  },
 };
 
 export function main(argv, io = realIo) {
@@ -160,7 +311,7 @@ export function main(argv, io = realIo) {
     parsed = parseArgs(argv);
   } catch (err) {
     io.error(String(err.message));
-    io.error('usage: node scripts/deploy-relay.mjs [init] [--deploy]');
+    io.error('usage: node scripts/deploy-relay.mjs [init | ratelimit [--apply]] [--deploy] [--dev-origin <origin>]');
     return 2;
   }
   if (parsed.init) {
@@ -212,5 +363,15 @@ export function main(argv, io = realIo) {
 }
 
 if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exit(main(process.argv));
+  let parsedForRatelimit;
+  try {
+    parsedForRatelimit = parseArgs(process.argv);
+  } catch {
+    parsedForRatelimit = undefined;
+  }
+  if (parsedForRatelimit?.ratelimit) {
+    ratelimitMain(parsedForRatelimit, realIo).then((code) => process.exit(code));
+  } else {
+    process.exit(main(process.argv));
+  }
 }

@@ -8,9 +8,12 @@
 // bits handed back ONCE and stored only as a sha-256 so a leaked bucket cannot revoke,
 // and nothing is written about who uploaded or fetched. Bodies are never logged.
 //
-// BOUNDS. One size cap (the bundle cap plus the AEAD overhead margin), one TTL
-// (`expiresAt` is stamped at upload and enforced at READ — the bucket's lifecycle rule
-// is the garbage collector, not the authority), an id grammar, and a CORS allowlist for
+// BOUNDS. One size cap (the bundle cap plus the AEAD overhead margin), a TTL the SHARER
+// chooses from a closed set (`?expires=1d|7d|30d`, default a week; `TTL_DAYS` is the
+// ceiling, and a choice above it is refused rather than clamped — `expiresAt` is stamped
+// at upload and enforced at READ; a read that finds an expired object deletes it, and
+// the bucket's lifecycle rule is the backstop, not the authority), an id grammar, and a
+// CORS allowlist for
 // the browser origins that may write; reads carry CORS headers only for those origins
 // too, but are served to any caller with a valid id (the id is the recipient's proof).
 //
@@ -21,7 +24,15 @@
 export const MAX_BODY_BYTES = 1024 * 1024 + 64 * 1024;
 export const ID_RULE = /^[A-Za-z0-9_-]{22}$/;
 export const TOKEN_RULE = /^[A-Za-z0-9_-]{43}$/;
+/** The ceiling when `TTL_DAYS` is unset; the config pins the same number. */
 export const DEFAULT_TTL_DAYS = 30;
+/** The sharer's choices (TASK-20260904-share-link-ux AC1): a closed set, days each. */
+export const EXPIRY_CHOICES = new Map([
+  ['1d', 1],
+  ['7d', 7],
+  ['30d', 30],
+]);
+export const DEFAULT_EXPIRY = '7d';
 export const DEFAULT_ALLOWED_ORIGINS = ['https://playground.snugprotocol.org', 'tauri://localhost', 'http://tauri.localhost'];
 
 const KEY_PREFIX = 'b/';
@@ -94,6 +105,21 @@ async function readCapped(request, cap) {
   return out.buffer;
 }
 
+/**
+ * The upload's lifetime in days: the `expires` choice (exactly one, from the closed
+ * set), defaulting to a week, never above the ceiling. `undefined` = refuse the upload.
+ */
+export function expiryDays(searchParams, ttlCeilingVar) {
+  const ceiling = Number(ttlCeilingVar) > 0 ? Number(ttlCeilingVar) : DEFAULT_TTL_DAYS;
+  const choices = searchParams.getAll('expires');
+  if (choices.length > 1) return undefined;
+  const choice = choices[0] ?? DEFAULT_EXPIRY;
+  const days = EXPIRY_CHOICES.get(choice);
+  if (days === undefined) return undefined;
+  if (choices.length === 0) return Math.min(days, ceiling);
+  return days > ceiling ? undefined : days;
+}
+
 function respond(status, body, headers) {
   return new Response(body ?? null, { status, headers: { ...NO_STORE, ...headers } });
 }
@@ -136,7 +162,8 @@ export async function handleRequest(request, env, seams = {}) {
     const body = await readCapped(request, MAX_BODY_BYTES);
     if (body === null) return respond(413, null, cors);
     if (body.byteLength === 0) return respond(400, null, cors);
-    const ttlDays = Number(env.TTL_DAYS ?? DEFAULT_TTL_DAYS) || DEFAULT_TTL_DAYS;
+    const ttlDays = expiryDays(url.searchParams, env.TTL_DAYS);
+    if (ttlDays === undefined) return respond(400, null, cors);
     const expiresAt = new Date(now().getTime() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
     const newId = base64url(randomBytes(16));
     const revokeToken = base64url(randomBytes(32));
@@ -160,7 +187,9 @@ export async function handleRequest(request, env, seams = {}) {
     if (object === null) return respond(404, null, cors);
     const expiresAt = object.customMetadata?.expiresAt;
     if (expiresAt === undefined || Number.isNaN(Date.parse(expiresAt)) || Date.parse(expiresAt) <= now().getTime()) {
-      // Expired but not yet collected: the lifecycle rule is a janitor, not the authority.
+      // Expired but not yet collected: the lifecycle rule is a backstop, not the
+      // authority — and this read is the cheapest janitor there is (AC2).
+      await env.BUNDLES.delete(`${KEY_PREFIX}${id}`);
       return respond(404, null, cors);
     }
     const bytes = request.method === 'HEAD' ? null : await object.arrayBuffer();

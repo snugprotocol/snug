@@ -146,9 +146,13 @@ test('AC4: preview deploys any OTHER branch (dirty allowed) and refuses main / d
 // AC5 — hosted-posture refusals (ADR-0013)
 // ---------------------------------------------------------------------------
 
-test('AC5a: the pinned build env disables hub auth and forces production site mode', () => {
+test('AC5a: the pinned build env disables hub auth, forces production site mode, and names the share relay', () => {
   assert.equal(PINNED_BUILD_ENV.VITE_SNUG_HUB_AUTH, '');
   assert.equal(PINNED_BUILD_ENV.PUBLIC_SITE_MODE, 'production');
+  // TASK-20260904-share-link-ux AC8: the hosted playground's link transport is a build
+  // invariant, pinned here rather than read from any env file (ADR-0064).
+  assert.equal(PINNED_BUILD_ENV.VITE_SNUG_SHARE_RELAY, 'https://share.snugprotocol.org');
+  assert.equal(Object.isFrozen(PINNED_BUILD_ENV), true);
 });
 
 test('AC5b/c: hostedPostureCheck refuses app-level .env* files and a staged local-artifacts dir; passes when clean', () => {

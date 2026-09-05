@@ -24,16 +24,27 @@ time and the verification performed.
    (verified against `wrangler r2 bucket lifecycle add --help` on wrangler 4.125 — the
    dashboard path R2 → the bucket → Settings → Object lifecycle does the same thing).
    This reclaims storage; it is NOT the expiry authority — the Worker stamps `expiresAt`
-   (`TTL_DAYS`, 30) at upload and refuses reads past it, so a lapsed rule cannot extend
-   a link. Confirm with `pnpm exec wrangler r2 bucket lifecycle list snug-share-bundles`.
+   at upload — the sharer's choice, `?expires=1d|7d|30d`, default a week, under the
+   `TTL_DAYS` ceiling (30; a choice above it is refused) — and refuses reads past it
+   (deleting the object it found), so a lapsed rule cannot extend a link. Confirm with `pnpm exec wrangler r2 bucket lifecycle list snug-share-bundles`.
 3. **Custom domain:** `apps/share-relay/wrangler.jsonc` declares
    `share.snugprotocol.org` with `custom_domain: true`; the first deploy binds it (the
    zone must be on this account). `workers_dev` is `false` — there is no second host.
-4. **Rate limit — the one genuinely dashboard-only step:** Security → WAF → Rate
-   limiting rules → for `share.snugprotocol.org`, method `POST`, path `/v1/bundles`:
-   **20 requests per minute per IP, block for 10 minutes**. This is the abuse control for
-   the blind blob drop (threat-model R-36); it lives outside the code and outside
-   wrangler, which is exactly why it is written here.
+4. **Rate limit — a scripted act since 2026-09-04 (TASK-20260904-share-link-ux):**
+   `node scripts/deploy-relay.mjs ratelimit` prints the WAF rule the zone would get —
+   `share.snugprotocol.org`, method `POST`, path `/v1/bundles`: **20 requests per minute per
+   IP, block for 10 minutes**, clamped to the zone's plan with every clamp printed (the Free
+   plan allows only a 10 s period and a 10 s block, so the same rate becomes 4 per 10 s) —
+   and `--apply` writes it through the rulesets API's `http_ratelimit` phase, updating our
+   rule in place by its description and leaving any other rule alone. It needs ONE scoped
+   API token in the gitignored root `.env` as `CLOUDFLARE_WAF_TOKEN` (dash → My Profile →
+   API Tokens → Create Token → custom: `Zone.Zone:Read` + `Zone.Zone WAF:Edit`, zone
+   `snugprotocol.org`). **Not `CLOUDFLARE_API_TOKEN`** — wrangler reads that name and would
+   switch every deploy from the OAuth session to a token that cannot deploy Workers.
+   Wrangler's own session cannot do this (its token answers `9109 Invalid access token` on
+   the REST API and carries `zone (read)` only). This is the abuse control for the blind
+   blob drop (threat-model R-36). Verify: 25 quick POSTs from one IP → the 21st answers
+   429 (or 403 in the block window).
 5. **Nothing else.** No Workers Analytics, no Logpush, no KV/D1 — `deploy-relay.mjs`
    refuses a config that carries any of them (`configPreflight`).
 
@@ -58,13 +69,17 @@ Pre-flight: wrangler ≥ 4 logged in to the account; clean tree on `main == orig
 - `pnpm exec wrangler deployments list --config apps/share-relay/wrangler.jsonc` names
   the commit (`DEPLOY_SHA`).
 
-## The playground build must know the relay
+## The playground and the desktop build must know the relay
 
-The copy-link action renders only when the playground was BUILT with
+The link actions (copy link, share…) render only when the UI was BUILT with
 `VITE_SNUG_SHARE_RELAY=https://share.snugprotocol.org` (`config/site.ts`
-`SHARE_RELAY_ORIGIN`; empty = no link transport). `deploy-web.mjs` pins the build env —
-add the variable there when the relay is live, in the same change that turns the link on.
-Until then the hosted playground ships the attachment path alone, by design.
+`SHARE_RELAY_ORIGIN`; empty = no link transport). Since 2026-09-04 both shipped builds pin
+it from ONE constant: `deploy-web.mjs` `PINNED_BUILD_ENV` (the hosted playground) and
+`release-desktop.mjs` `DESKTOP_PINNED_BUILD_ENV` (the shell's `tauri build`, which also
+refuses an environment naming a different relay and any `apps/desktop/.env*`). A self-hosted
+build without the variable ships the attachment path alone, by design. **Contract order:**
+the relay must understand `?expires=` BEFORE a UI that sends it ships — deploy the relay
+first, then the playground, then the next desktop release.
 
 ## Deploy log
 
@@ -86,8 +101,9 @@ Until then the hosted playground ships the attachment path alone, by design.
   just from the API's view) · a 1.2 MiB body → 413 · an empty body → 400 · `/v2/bundles`
   → 404.
 
-  **Still owed:** the WAF rate-limit rule (below) — the host is live and currently
-  unrated-limited.
+  **Still owed:** the WAF rate-limit rule — the host is live and currently
+  unrate-limited. As of 2026-09-04 it is a scripted act (`deploy-relay.mjs ratelimit
+  --apply`, step 4 above) waiting on the owner's `CLOUDFLARE_WAF_TOKEN`.
 
 ### Note — the custom domain takes longer than ~10 minutes to start routing
 

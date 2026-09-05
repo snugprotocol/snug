@@ -18,6 +18,7 @@ import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { APP_BUNDLE_FORMAT } from '@snugprotocol/protocol';
+import { sharedAppSettingKey } from '@snugprotocol/db';
 import type { UserDb } from '@snugprotocol/db';
 
 import RunView from '../run/RunView.js';
@@ -204,6 +205,21 @@ describe('the shared preview route (AC13)', () => {
     expect(q(el, 'share-app')).toBeNull();
     expect(q(el, 'app-model-select')).toBeNull();
     expect(q(el, 'manage-connections')).toBeNull();
+  });
+
+  it('a LINK preview (memory-only) offers install directly — there is no "keep" step (TASK-20260904-share-link-ux AC6)', async () => {
+    const received = await receiveSharedBundle(bundleText(), { source: 'link', persist: false });
+    if (!received.ok) throw new Error('receive failed');
+    expect(received.entry.kept).toBe(false);
+    const { el } = await renderRun(sharedRouteIdFor(received.entry.bundleId));
+    await settleUntil(() => q(el, 'shared-install') !== null, 'the install button');
+    expect(q(el, 'shared-keep')).toBeNull();
+    expect(el.textContent).not.toMatch(/\bkeep\b(?! your)/);
+    await act(async () => {
+      q(el, 'shared-install')!.click();
+    });
+    await settleUntil(() => db.getAppByInstallSource(`share:${LINEAGE}`) !== undefined, 'the install');
+    expect(db.getSetting(sharedAppSettingKey(received.entry.bundleId))).toBeUndefined(); // never persisted on the way
   });
 
   it('the docs tab shows the bundle docs and the contract as text', async () => {
