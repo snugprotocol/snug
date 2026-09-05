@@ -75,6 +75,17 @@ export interface RunnerHostBaseOptions extends RunnerHostCallbacks {
   budgetStore?: BudgetStore;
   theme?: ThemeName;
   locale?: string;
+  /**
+   * What `host-ready.capabilities.streaming` advertises (TASK-20260905-host-kit AC6).
+   * Default `true` — today's behavior, byte for byte. An embedder whose brain cannot
+   * stream (a host binding whose transport answers whole, e.g. a chat artifact's
+   * `window.claude.complete`) declares `false` so the app is never promised cumulative
+   * frames. ADVERTISEMENT ONLY: the runner relays the declaration and keeps forwarding
+   * whatever the transport emits — a transport that yields no deltas produces no
+   * streaming frames, so the embedder keeps the flag truthful by pairing it with the
+   * transport it actually wired, never by asking the runner to drop frames.
+   */
+  streaming?: boolean;
 }
 
 /**
@@ -210,7 +221,7 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
       instanceId,
       protocolVersions: [PROTOCOL_VERSION],
       capabilities: {
-        streaming: true,
+        streaming: options.streaming ?? true,
         db: options.db !== undefined,
         auth: false,
         net: options.net !== undefined,

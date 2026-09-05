@@ -124,6 +124,23 @@ describe('SnugAppFrame', () => {
     expect(sequence.slice(announceAt + 1)).toContain(`outbound:${FRAME_TYPES.hostReady}`);
   });
 
+  it('forwards `streaming` to the host it creates: the ready ack advertises exactly what the prop declares (TASK-20260905-host-kit AC6)', async () => {
+    // SnugAppFrame enumerates the host options one by one, so a missing forward is
+    // SILENT: the host would default to true while the embedder believed it had said
+    // false. Both arms pinned — the declaration and the default.
+    const declared = await render({ streaming: false });
+    postFromApp(declared.iframe, announceFrame());
+    await act(flush);
+    const ready = declared.posted.find((f) => (f as { type?: string }).type === FRAME_TYPES.hostReady) as HostReadyFrame | undefined;
+    expect(ready?.capabilities.streaming).toBe(false);
+
+    const absent = await render();
+    postFromApp(absent.iframe, announceFrame());
+    await act(flush);
+    const defaulted = absent.posted.find((f) => (f as { type?: string }).type === FRAME_TYPES.hostReady) as HostReadyFrame | undefined;
+    expect(defaulted?.capabilities.streaming).toBe(true);
+  });
+
   it('is StrictMode-safe: double-mounted effects leave exactly ONE live host', async () => {
     const r = await render({}, (el) => <StrictMode>{el}</StrictMode>);
     postFromApp(r.iframe, announceFrame());
