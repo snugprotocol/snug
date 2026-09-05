@@ -58,7 +58,3 @@ playwright-report/
 # here on so a per-release 35 MB does not repeat.
 apps/desktop/release-out/
 apps/whatsapp-sidecar/release-out/
-
-# TASK-20260905 spikes: fetched vendor bundles + generated outputs (scratch; the whole folder is deleted at Gate 6)
-scripts/spikes/vendor/
-scripts/spikes/out/
