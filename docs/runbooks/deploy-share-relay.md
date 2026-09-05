@@ -103,9 +103,15 @@ first, then the playground, then the next desktop release.
   just from the API's view) · a 1.2 MiB body → 413 · an empty body → 400 · `/v2/bundles`
   → 404.
 
-  **Still owed:** the WAF rate-limit rule — the host is live and currently
-  unrate-limited. As of 2026-09-04 it is a scripted act (`deploy-relay.mjs ratelimit
-  --apply`, step 4 above) waiting on the owner's `CLOUDFLARE_WAF_TOKEN`.
+  ~~Still owed: the WAF rate-limit rule.~~ **Applied by the owner 2026-09-04/05** via
+  `deploy-relay.mjs ratelimit --apply` (step 4 above).
+
+- **2026-09-04/05 — second deploy (owner, after PR #166 merged @ `f21120d`)**: the
+  `?expires=1d|7d|30d` contract. Verified from this machine 2026-09-05T00:45Z against
+  `https://share.snugprotocol.org`: `POST ?expires=2d` → 400 · `POST ?expires=1d` → 201 with
+  `expiresAt` exactly +1 day · the real revoke token → 204 · then `GET` → 404. The playground
+  was deployed AFTER it (2026-09-05T00:44:40Z, deployment `3c511c52`), in the contract order
+  the runbook requires.
 
 ### Note — the custom domain takes longer than ~10 minutes to start routing
 
@@ -122,6 +128,35 @@ was early. If it is ever genuinely stuck, check **Workers & Pages → snug-share
 Settings → Domains & Routes**. Do NOT "fix" routing by enabling `workers_dev`: the config
 pins it false on purpose (a `*.workers.dev` name is a second, unpinned host for a blind
 relay) and `deploy-relay.mjs`'s preflight refuses the change.
+
+## Local end-to-end (playground + desktop against a relay on this machine)
+
+`wrangler dev` runs the Worker with a simulated R2 bucket; nothing touches the real bucket
+or host. Two constraints shape the recipe: the local playground's BROWSER needs its origin
+in the CORS allowlist, and the desktop's HTTP scope admits plain `http://` only on two
+loopback literals (the RFC-1918 entries never match — next-steps 2026-09-05), so the relay
+must sit on the debug stub port `127.0.0.1:43120`:
+
+```
+cd apps/share-relay && pnpm exec wrangler dev --ip 127.0.0.1 --port 43120 \
+  --var "ALLOWED_ORIGINS:https://playground.snugprotocol.org,tauri://localhost,http://tauri.localhost,http://localhost:5173,http://localhost:41419"
+```
+
+(`pnpm exec`, not a bare `wrangler` — a stale global wrangler carries a workerd that refuses
+the config's compatibility date. The last origin is the `tauri dev` webview: the Tauri HTTP
+plugin ALWAYS stamps `Origin` from the webview URL — `tauri://localhost` in a release,
+`http://localhost:41419` under `tauri dev` — so a dev shell is a foreign origin to the
+production relay too; `deploy-relay.mjs --dev-origin http://localhost:41419` is the sanctioned,
+non-sticky door for that.) Then `VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120` in `apps/playground/.env.local` (with
+`VITE_SNUG_SHARE_LINK_ORIGIN=http://localhost:5173`; restart `pnpm dev` AND hard-reload the
+tab at exactly `http://localhost:5173` — a tab opened before the change still holds the
+production relay, and `127.0.0.1:5173` is a different origin to the allowlist; both surface
+as "failed to fetch") and
+`VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120 VITE_SNUG_SHARE_LINK_ORIGIN=http://localhost:5173 pnpm --filter desktop dev`
+(the link origin is a SEPARATE variable — without it the desktop mints production links).
+Links read `http://localhost:5173/s/<id>#<key>`; "open in Snug for Mac" hands the same id to the dev
+shell, which fetches from the same local store. Do not run the in-shell gate at the same
+time (it owns 43120), and put `.env.local` back before testing production behaviour.
 
 ## Rollback
 
