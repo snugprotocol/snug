@@ -64,6 +64,9 @@ export default defineConfig({
     // here and only here (the engine itself comes through `?inline` in wasmBytes.ts).
     assetsInlineLimit: () => true,
     cssCodeSplit: false,
+    // One chunk, nothing to preload. (The lazy RunView import's `__VITE_PRELOAD__` marker
+    // is resolved by Vite's own generateBundle — the inliner must run AFTER it, see its
+    // `order: 'post'`; the inliner refuses a surviving marker.)
     modulePreload: false,
     sourcemap: false,
     reportCompressedSize: false,

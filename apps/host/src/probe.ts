@@ -133,9 +133,14 @@ const sameBytes = (back: unknown): boolean => {
  * under the root, a file handle with `create`, a writable stream, a readable File. Any
  * step missing or rejecting means the backend would fail the same way at first save.
  */
-export async function opfsRoundTrip(getDirectory: unknown): Promise<boolean> {
+export async function opfsRoundTrip(storage: { getDirectory?: unknown } | undefined): Promise<boolean> {
+  const getDirectory = storage?.getDirectory;
   if (typeof getDirectory !== 'function') return false;
-  const root = (await (getDirectory as () => Promise<unknown>)()) as {
+  // Invoked AS A METHOD of `navigator.storage`: an unbound `getDirectory()` throws
+  // "Illegal invocation" in Chromium, which the try-the-ladder wrapper would read as
+  // "OPFS does not work here" — found on the real page (2026-09-05), invisible to a
+  // closure fake.
+  const root = (await (getDirectory as () => Promise<unknown>).call(storage)) as {
     getDirectoryHandle?: (name: string, opts?: { create?: boolean }) => Promise<unknown>;
   };
   if (typeof root?.getDirectoryHandle !== 'function') return false;
@@ -208,7 +213,7 @@ const tried = async (attempt: () => Promise<boolean>): Promise<boolean> => {
 };
 
 export async function probeStorage(env: StorageEnv, factories: StorageFactories = DEFAULT_FACTORIES): Promise<StorageProbeResult> {
-  if (await tried(() => opfsRoundTrip(env.storage?.getDirectory))) return { backend: factories.opfs(), kind: 'opfs' };
+  if (await tried(() => opfsRoundTrip(env.storage))) return { backend: factories.opfs(), kind: 'opfs' };
   if (await tried(() => idbRoundTrip(env.indexedDB))) return { backend: factories.idb(), kind: 'idb' };
   return { backend: factories.memory(), kind: 'memory' };
 }

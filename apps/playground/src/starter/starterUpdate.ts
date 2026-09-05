@@ -72,7 +72,15 @@ function starterFolderOf(db: UserDb, appId: string): string | undefined {
 
 async function bundledHtml(folder: string): Promise<string | undefined> {
   if (htmlFixtures !== undefined) return htmlFixtures[folder];
-  return loadStarterHtml(`${STARTER_PREFIX}${folder}`);
+  try {
+    return await loadStarterHtml(`${STARTER_PREFIX}${folder}`);
+  } catch {
+    // The host kit loads starter html on demand and REJECTS by name when the page is
+    // offline (TASK-20260905-host-kit AC14): no bundle reachable ⇒ no update question,
+    // never an unhandled rejection at hub paint. (In the kit this status check costs one
+    // wrapper fetch per installed starter; T4 may answer it from the catalogue instead.)
+    return undefined;
+  }
 }
 
 /** The newest factory pin's html — fact 1's subject, shared with the vouch's semantics. */

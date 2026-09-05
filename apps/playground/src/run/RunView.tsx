@@ -68,11 +68,11 @@ import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
 import { useMediaQuery } from './useMediaQuery.js';
-import { starterInstallDisclosureTail } from './copy.js';
+import { missingAppCopy, starterInstallDisclosureTail } from './copy.js';
 import { sqlJsEngineOptions } from './sqlJsEngine.js';
 import { ChatLog } from '../views/ChatLog.js';
 
-type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
+type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing'; reason?: string };
 
 // 'inspector' is the LLM round-trip surface, composed by ThinkPanel. It briefly also
 // showed an app↔host frame timeline; TASK-20260813 AC11 removed that view as noise
@@ -584,8 +584,10 @@ export default function RunView(): ReactElement {
         if (cancelled) return;
         setHtmlState(html === undefined ? { phase: 'missing' } : { phase: 'ready', html });
       })
-      .catch(() => {
-        if (!cancelled) setHtmlState({ phase: 'missing' });
+      .catch((err: unknown) => {
+        // A NAMED failure (the host kit's starter loader refusing offline) becomes the
+        // lesson the user reads — never a dead "app not found" (TASK-20260905-host-kit AC2).
+        if (!cancelled) setHtmlState({ phase: 'missing', reason: err instanceof Error ? err.message : String(err) });
       });
     // Library display name — the header's fallback when the app never announces.
     if (isSharedId(id)) {
@@ -1146,7 +1148,7 @@ export default function RunView(): ReactElement {
             </div>
           ) : htmlState.phase === 'missing' ? (
             <div className="run-overlay">
-              <EmptyState glyph="◌" title="app not found" lesson="it may live in the other mode — check settings, or build a new one." action={<Link to="/" className="btn">back to your apps</Link>} />
+              <EmptyState glyph="◌" {...missingAppCopy(htmlState.reason)} action={<Link to="/" className="btn">back to your apps</Link>} />
             </div>
           ) : (
             <SnugAppFrame

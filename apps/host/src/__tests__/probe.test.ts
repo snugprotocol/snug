@@ -93,6 +93,18 @@ describe('probeStorage — tries the ladder, never trusts presence', () => {
     expect([...opfs.files.keys()].some((k) => k.includes('probe'))).toBe(false);
   });
 
+  it('calls getDirectory AS A METHOD of navigator.storage — an unbound call is "Illegal invocation" in Chromium', async () => {
+    const opfs = workingOpfs();
+    const storage = {
+      getDirectory(this: unknown) {
+        if (this !== storage) throw new TypeError('Illegal invocation');
+        return opfs.getDirectory();
+      },
+    };
+    const result = await probeStorage({ storage, indexedDB: new IDBFactory() });
+    expect(result.kind).toBe('opfs');
+  });
+
   it('OPFS present but REJECTING at call time (the file:// shape) falls through to IndexedDB', async () => {
     const getDirectory = async (): Promise<never> => {
       throw Object.assign(new Error('The request is not allowed'), { name: 'SecurityError' });

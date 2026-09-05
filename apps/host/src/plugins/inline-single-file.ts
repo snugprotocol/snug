@@ -47,6 +47,9 @@ export function refuseUnsafeScript(code: string, label: string): void {
   if (closers.length > 0) {
     throw new Error(`inline-single-file: ${label} contains "</script" — it would close the inlined script:\n  ${closers.join('\n  ')}`);
   }
+  if (code.includes('__VITE_PRELOAD__')) {
+    throw new Error(`inline-single-file: ${label} still contains Vite's unresolved "__VITE_PRELOAD__" marker — every lazy import would throw at runtime (build.modulePreload must be { polyfill: false }, never false)`);
+  }
   const lastOpen = code.lastIndexOf('<!--');
   if (lastOpen !== -1 && code.indexOf('-->', lastOpen + 4) === -1) {
     throw new Error(`inline-single-file: ${label} contains an UNCLOSED "<!--" — script-data escaping could hide the page's closing tag:\n  ${neighbourhoods(code.slice(lastOpen), /<!--/g, 1).join('')}`);
@@ -62,7 +65,16 @@ export function inlineSingleFile(options: InlineSingleFileOptions): Plugin {
   return {
     name: 'snug-host:inline-single-file',
     enforce: 'post',
-    generateBundle(_outputOptions, bundle: Rollup.OutputBundle) {
+    // `order: 'post'` on the HOOK, not only `enforce` on the plugin: a user post plugin's
+    // generateBundle still runs BEFORE Vite's core `vite:build-import-analysis`, which is
+    // the hook that resolves the `__VITE_PRELOAD__` markers around lazy imports. Captured
+    // earlier, the chunk still carried the marker and every run-view route threw on a
+    // blank page (found by the e2e 2026-09-05). Rollup runs every `order: 'post'` hook
+    // after all normal-order ones, so this sees the finished chunk; the marker refusal
+    // below is the pin.
+    generateBundle: {
+      order: 'post',
+      handler(_outputOptions, bundle: Rollup.OutputBundle) {
       const htmlKeys = Object.keys(bundle).filter((k) => bundle[k]!.type === 'asset' && k.endsWith('.html'));
       if (htmlKeys.length !== 1) throw new Error(`inline-single-file: exactly one html page expected, found ${htmlKeys.length}: ${htmlKeys.join(', ')}`);
       const entries = Object.values(bundle).filter((item) => item.type === 'chunk' && item.isEntry);
@@ -106,6 +118,7 @@ export function inlineSingleFile(options: InlineSingleFileOptions): Plugin {
       page.fileName = options.fileName;
       page.source = html;
       bundle[options.fileName] = page;
+      },
     },
   };
 }

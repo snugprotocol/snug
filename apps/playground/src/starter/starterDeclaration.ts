@@ -84,9 +84,17 @@ export function __resetDeclarationManifestsForTests(): void {
 async function bundled(folder: string): Promise<{ manifest: string; html: string } | null> {
   if (fixtures !== undefined) return fixtures[folder] ?? null;
   const source = starterSource();
-  const [manifest, html] = await Promise.all([source.manifest(folder), source.html(folder)]);
-  if (manifest === undefined || html === undefined) return null;
-  return { manifest, html };
+  try {
+    const [manifest, html] = await Promise.all([source.manifest(folder), source.html(folder)]);
+    if (manifest === undefined || html === undefined) return null;
+    return { manifest, html };
+  } catch {
+    // The host kit loads a starter's html on demand and REJECTS by name when the page is
+    // offline (TASK-20260905-host-kit AC14); a declaration that cannot be vouched for is
+    // no declaration — the same degrade-quietly posture as a missing file, never an
+    // unhandled rejection on the run view (found by the kit's file:// e2e, 2026-09-05).
+    return null;
+  }
 }
 
 /**

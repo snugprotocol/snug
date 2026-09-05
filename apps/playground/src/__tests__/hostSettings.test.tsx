@@ -136,6 +136,18 @@ describe('Settings under the host platform (D15 + capability truth)', () => {
     expect(container?.querySelector('.settings-hero-sub')?.textContent).toBe('your file, your apps — everything lives with you.');
   });
 
+  it('host: the "your file" card names the storage the probe found working (AC2) — memory here', async () => {
+    const g = await fresh({ ...hostPlatform(), userdbBackend: createMemoryBackend() });
+    await render(<g.SettingsView />);
+    expect(section('your-file')?.textContent).toContain('this copy of your file lives in memory only');
+  });
+
+  it('web (positive twin): the "your file" card carries no storage sentence', async () => {
+    const g = await fresh();
+    await render(<g.SettingsView />);
+    expect(section('your-file')?.textContent).not.toContain('this copy of your file lives');
+  });
+
   it('web (positive twin): every hidden surface renders — sections, the armed confirm card, the origin picker, the checkbox, the web hero', async () => {
     const g = await fresh();
     g.mode.endpointsNeedConfirmStore.set(true);

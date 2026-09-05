@@ -34,8 +34,9 @@ function viteShapedBundle(over: { js?: string; css?: string; extra?: Bundle; hea
 
 function run(bundle: Bundle, stamp = '0.1.0 abc1234'): string {
   const plugin = inlineSingleFile({ stamp, fileName: 'snug-host.html' });
-  const generate = plugin.generateBundle as (this: unknown, options: unknown, bundle: Bundle) => void;
-  generate.call({}, {}, bundle);
+  const hook = plugin.generateBundle as { order: 'post'; handler: (this: unknown, options: unknown, bundle: Bundle) => void };
+  expect(hook.order).toBe('post'); // after Vite's own generateBundle (the preload-marker resolution)
+  hook.handler.call({}, {}, bundle);
   const html = bundle['snug-host.html'];
   if (html === undefined || html.type !== 'asset') throw new Error('no html emitted');
   return html.source as string;
@@ -87,6 +88,10 @@ describe('inlineSingleFile', () => {
   it('accepts the escaped forms esbuild emits (`<\\/script`, `\\x3C!--`)', () => {
     const html = run(viteShapedBundle({ js: 'const s = "<\\/script>"; const t = "\\x3C!--"' }));
     expect(html).toContain('<\\/script>');
+  });
+
+  it("REFUSES a script still carrying Vite's unresolved `__VITE_PRELOAD__` marker (a lazy import that would throw at runtime)", () => {
+    expect(() => run(viteShapedBundle({ js: 'const m = __vitePreload(() => import("./x"), __VITE_PRELOAD__)' }))).toThrow(/__VITE_PRELOAD__/);
   });
 
   it('REFUSES a stylesheet containing `</style`', () => {

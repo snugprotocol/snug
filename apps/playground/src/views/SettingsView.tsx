@@ -54,6 +54,7 @@ import { useOllama } from '../state/ollama.js';
 import { ProtectSetupFlow } from '../vault/ProtectSetupFlow.js';
 import { disableProtection } from '../vault/enableProtection.js';
 import { SETTING_PROTECTION_ENABLED, markProtectionDisabled } from '../vault/protectOffer.js';
+import { storageDisclosure } from '../platform/copy.js';
 import { allows, getPlatform, secretsUsable } from '../platform/platform.js';
 import { autoCheckEnabled, checkForAppUpdate, setAutoCheckEnabled, useAppUpdate } from '../state/appUpdate.js';
 import { login, useAuth } from '../state/auth.js';
@@ -810,6 +811,9 @@ function DataCard(): ReactElement {
     sharedOpenRequestStore.set(result.entry.bundleId);
   };
 
+  // The host kit names where this copy of the file actually lives — the rung the boot
+  // probe found working (TASK-20260905-host-kit AC2); web and desktop say nothing new.
+  const storageNote = getPlatform().kind === 'host' ? storageDisclosure(getPlatform().userdbBackend?.kind) : undefined;
   return (
     <Card className="settings-group">
       {/* The sync-origin picker exists only where an origin can be reached (the host kit
@@ -941,6 +945,7 @@ function DataCard(): ReactElement {
         <span className="hint">
           the export is the whole file — every app you built, its versions, its data and its chats. this file is the
           app: take it to another hub, a personal origin, or a local runner.{' '}
+          {storageNote !== undefined ? `${storageNote} ` : ''}
           {secretsUsable()
             ? 'secrets stay out unless you opt in; with "include secrets" checked, the exported file then carries every saved key and token. imported files ask you to re-confirm model endpoints before running. '
             : 'secrets never travel with it here — this host can use none, so an imported file’s keys and tokens are left behind too. '}
