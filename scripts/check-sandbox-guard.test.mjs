@@ -32,7 +32,9 @@ const ROOTS = ['packages', 'apps'];
  * the string, and a guard that failed on its own counter-evidence would push authors to
  * stop writing that evidence.
  */
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', '.turbo', '__tests__', 'e2e', 'coverage']);
+// `starters-pkg` is the host kit's DERIVED starters package (built from examples/, which
+// the sweep never scanned: it is app HTML that runs INSIDE the sandbox) — build output.
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', '.turbo', '__tests__', 'e2e', 'coverage', 'starters-pkg']);
 const SOURCE_RE = /\.(ts|tsx|js|jsx|html)$/;
 
 function shippedSources() {
@@ -59,7 +61,9 @@ test('the scan reaches every shipped root — a guard that collects nothing prov
   // Non-vacuity, and specific: the sweep must reach the app directories the package-local
   // guard cannot see, or this file would pass while checking almost nothing.
   assert.ok(sources.length > 100, `only ${sources.length} sources collected`);
-  for (const dir of ['packages/runner/src', 'apps/playground/src', 'apps/desktop/src']) {
+  // apps/host/src is the positive control added with the host kit (TASK-20260905-host-kit
+  // AC12): the page whose whole job is to embed the sandboxed runner inside foreign hosts.
+  for (const dir of ['packages/runner/src', 'apps/playground/src', 'apps/desktop/src', 'apps/host/src']) {
     assert.ok(
       sources.some((s) => s.path.startsWith(dir)),
       `the sweep never reached ${dir}`,

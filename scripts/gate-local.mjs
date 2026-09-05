@@ -69,6 +69,10 @@ export const LEGS = [
       'pnpm exec turbo run test --force',
       'pnpm run check-threat-model',
       'pnpm run check-sandbox-guard',
+      // The host kit's structural gate (TASK-20260905-host-kit AC1/AC11/AC12): one
+      // self-contained page, reproducible. Needs the kit's dist, which `turbo run build`
+      // above produces.
+      'pnpm run check-host-kit',
       // The gate's own tests. Deliberately self-referential: this script is now
       // the only merge gate, so "the gate is still wired to ci.yml correctly"
       // (AC3) has to be a property the gate itself checks on every run. Note it
