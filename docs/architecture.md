@@ -112,6 +112,63 @@ named hard prerequisites — both LANDED with TASK-20260812 (guard in
 `packages/protocol/src/connection-requirement.ts`, borrow ban in
 `packages/auth/src/requirement-admission.ts`).
 
+## Host kit — the third shell (TASK-20260905-host-kit, ADR-0065)
+
+`apps/host` builds **`snug-host.html`** — one self-contained page over the SAME playground
+source, the way the desktop is built (vite alias, `HashRouter`, a platform installed before
+React boots) — for the skill-delivered bindings: a Claude artifact, a local host page, a
+plain file. What differs is the OUTPUT and what the platform carries:
+
+- **The probe** (`src/probe.ts`, before boot): the binding decided purely from four facts
+  (protocol, hostname, whether `window.claude.use` / `.complete` are functions); storage
+  TRIED rung by rung with a real write/read round trip (OPFS → IndexedDB → memory — never
+  presence-detected: `file://` exposes OPFS and rejects it; `getDirectory` invoked as a
+  method, an unbound call is "Illegal invocation"); the brain legs recorded (`sample`,
+  `complete` detected/absent) with the DEMO brain pinned until T3/T4 wire a leg. Nothing
+  asks the user anything (D15).
+- **The platform** (`src/platform-host.ts`): `kind:'host'`, the binding, the pinned brain,
+  the engine as bytes, the backend that WORKED, the four launch booleans explicit, every
+  surface flag off — and no transport seat a host cannot honour (no fetch, LAN, sidecar,
+  helper, OAuth, update seats). The playground's own readers do the rest: `allows()`,
+  `secretsUsable()`, `resolveBrain()` — the kit is a clone of the playground / Snug Desktop
+  minus the brain, model/provider and account controls, builder included (A5).
+- **One file** (`vite.config.ts` + `src/plugins/`): `inlineDynamicImports`, every asset a
+  data URL, the sql.js engine through `?inline` (Vite 6 must be told `.wasm` is an asset),
+  the entry script and stylesheet folded into the html by `inline-single-file` with its
+  refusals (a surviving `</script`, an UNCLOSED `<!--`, `</style`, Vite's unresolved
+  `__VITE_PRELOAD__` marker — which is why the hook is `order:'post'`, after Vite's own
+  generateBundle — any other emitted file, any leftover `./assets/` reference), and the
+  build stamp `<version> <sha>[-dirty]`. Two modules are swapped by RESOLVED path
+  (`swap-resolved`, a dead swap fails the build): the starter source and the sql.js locator.
+  WebLLM is aliased to a stub. Measured 2,219,519 B (2026-09-05); 3,255,702 B without the
+  starter swap; sha-identical across clean builds.
+- **Starters on demand** (AC14, A3): `src/starterSource.ts` implements the playground's
+  `StarterSource` over the index the build bakes in (`starters-pkg/index.json`, emitted by
+  `scripts/build-starters-pkg.mjs` from `examples/`) — the catalogue, release meta,
+  contracts and manifests inline (≈ 30 KB), each starter's html + docs loaded on click
+  through ONE `<script src="https://cdn.jsdelivr.net/npm/@snugprotocol/starters@<pinned>/<id>.js"
+  integrity="sha384-…" crossorigin="anonymous">`, a page hook the wrapper registers into,
+  and NAMED refusals (offline, timeout, bad payload, wrong version) the run view renders —
+  never a dead control. Publishing the package is an owner act; the version pin lives in
+  `examples/starters-package.json`.
+- **Gates**: `scripts/check-host-kit.mjs` (a top-level DOM tokenizer that never scans
+  script/style bodies; AC1's rules, the 16 MiB cap and a 2,750,000-byte ceiling, the stamp,
+  exactly one file in `dist/`, two clean builds sha-compared) in root `test`, gate-local's
+  workspace leg and ci.yml; `apps/host/e2e/kit.spec.ts` on the BUILT page — served over
+  loopback (the artifact shape) and from `file://` — with every request aborted except
+  jsDelivr `/npm/` and the intercepted starters package (gate-local's e2e leg; a missing
+  dist is CANNOT RUN by name).
+
+Steps 1–4 of the task landed the seams the kit needs in the packages and the playground,
+all additive and all "absence = today's behavior": `kind:'host'`, `binding`, a pinned
+**`brain`** honoured by the one brain derivation ahead of the webllm flag and the user
+file (apps AND the builder), `sqlJsWasmBinary` (`packages/db` makes bytes win over the
+locator at both `initSqlJs` sites), five optional surface flags read through `allows()`
+plus `secretsUsable()` (hides the secrets export AND strips `snug_secrets` from an imported
+file before adoption — C1), the runner's `host-ready` advertising `streaming` truthfully,
+`starter/starterSource.ts` owning the five `examples/` globs, a storage disclosure in the
+"your file" card under host, and a named reason on a failed app load.
+
 ## Desktop shell (TASK-20260812-desktop-hub-scaffold, ADR-0021)
 
 `apps/desktop` wraps the SAME playground source (vite alias, `HashRouter`, desktop entry)
@@ -433,6 +490,7 @@ Until 2026-09-03 every piece of a builder turn — messages, busy flag, step tim
 - `runner` ← `playground`, `server`; `adapters`/`db`/`sdk` dev-depend on it (their suites exercise it)
 - `auth` depends on `protocol` + `db` (CredentialStore seats on the user DB); `playground` now consumes it (AL-03 wires the connected-fetch executor into the runner's NetHandler seam) — change `auth` → run `auth` + `playground`. `runner` does NOT depend on `auth` (value-blind by lint, R4).
 - `desktop` (apps/desktop) consumes the playground SOURCE (vite alias) + ALL seven @snugprotocol packages (protocol/runner/sdk/db/knowledge/adapters/auth per its package.json) — change any of those → run `desktop` too (`pnpm --filter desktop test`, plus `test:rust` and the `gate` script for shell-level changes).
+- `host` (apps/host, TASK-20260905-host-kit) consumes the playground SOURCE (vite alias, two modules swapped by resolved path) + ALL seven @snugprotocol packages, like `desktop` — change any of those, or playground source, → run `host` too (`pnpm --filter host test`, then `pnpm --filter host build` + `test:e2e` on the built page); root `check-host-kit` rebuilds the page twice and reads the runner's built `dist/csp.js` in the e2e.
 - `share-relay` (apps/share-relay, ADR-0064) is a standalone Worker with NO workspace dependencies — plain `.mjs`, tested with `node:test`; its only contract with the playground is the HTTP shape in `handler.mjs` and the id/key grammar restated in `apps/playground/src/share/relayClient.ts` (a change to either → run both).
 - `website` (apps/website, ADR-0048) is the public marketing + docs/spec site — a static Astro build OUTSIDE the runtime product. It reads the playground source read-only via the same `@playground` alias (`releaseChannel.ts` constants, theme tokens) and derives its docs pages from `docs/spec-drafts/` + `packages/protocol/schemas/` + the whitepaper; drift is gated by root `check-website-sync` (manifest `apps/website/docs-sync.json`, remedy `/sync-website`). Change `releaseChannel.ts`, the spec draft, the schemas, `docs/product-vision.md`, or the whitepaper → the gate names the website pages owed an update. Both the website and the playground deploy to Cloudflare Pages as static direct uploads via `scripts/deploy-web.mjs` (ADR-0054; runbook `docs/runbooks/deploy-web.md`) — production only from merged `main`, hosted-posture invariants (ADR-0013) enforced by the script. **Live since 2026-08-24**: `snugprotocol.org` (project `snug-website`, whose `pages.dev` subdomain is `snug-website-c7z.pages.dev` — Cloudflare suffixed it) and `playground.snugprotocol.org` (project `snug-playground`). The zone's script-injecting features are OFF and read back from the API, which is how ADR-0013's no-telemetry claim is actually falsified — the `cdn-cgi` response grep alone does not prove it.
 

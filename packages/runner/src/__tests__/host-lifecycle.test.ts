@@ -62,6 +62,19 @@ describe('announce → host-ready handshake', () => {
     expect(withNet.readies().at(-1)!.capabilities).toEqual({ streaming: true, db: false, auth: false, net: true, openUrl: false });
   });
 
+  it('advertises streaming false only when the embedder declares it; absent means true (TASK-20260905-host-kit AC6)', async () => {
+    // The host kit's brain seat decides this per binding: a host brain that cannot stream
+    // must not have the app promised cumulative frames. The runner RELAYS the declaration
+    // and nothing more — the transport it wraps is what emits or withholds deltas.
+    const declared = await mount({ options: { streaming: false } });
+    await declared.connect();
+    expect(declared.readies().at(-1)!.capabilities).toEqual({ streaming: false, db: false, auth: false, net: false, openUrl: false });
+
+    const explicit = await mount({ options: { streaming: true } });
+    await explicit.connect();
+    expect(explicit.readies().at(-1)!.capabilities.streaming).toBe(true);
+  });
+
   it('ready-ack is idempotent: a duplicate announce in the same load supersedes and re-acks', async () => {
     const ctx = await mount();
     const first = await ctx.connect();

@@ -17,7 +17,7 @@
 import { LOCAL_DEFAULT_BASE_URL } from '@snugprotocol/adapters';
 import type { UserDb } from '@snugprotocol/db';
 
-import { getPlatform } from '../platform/platform.js';
+import { allows, getPlatform } from '../platform/platform.js';
 // NOTE: appModel.ts imports `modelStore` from THIS module, so this is a cycle. It is
 // safe because neither side touches the other at module-evaluation time — the imports
 // are only dereferenced inside functions (`hydrateAppModels` here,
@@ -267,6 +267,19 @@ export async function getByokKey(provider: ByokProvider): Promise<string | undef
 }
 
 /** F15: called when foreign bytes become the local DB (import, first pull). */
+/**
+ * Whether the F15 endpoint-confirm gate is ARMED for this platform (TASK-20260905-host-kit
+ * AC4, Gate-5 review 2026-09-05): the card that clears it lives in the brain section, so
+ * where that section is hidden (`allows('brainSettings')` false — the host kit) the gate
+ * must not fire, or one imported file would kill every builder and app turn forever with
+ * no reachable "these settings are mine". The file's endpoints are not that host's business:
+ * its brain is pinned (or the demo), and neither reads them. The store still carries the
+ * file's flag (the file is portable) — this reader is what the two direct factories consult.
+ */
+export function endpointsNeedConfirm(): boolean {
+  return allows('brainSettings') && endpointsNeedConfirmStore.get();
+}
+
 export function markEndpointsNeedConfirm(): void {
   endpointsNeedConfirmStore.set(true);
   writeSetting(SETTING_NEEDS_CONFIRM, true);

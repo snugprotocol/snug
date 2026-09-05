@@ -298,3 +298,37 @@ describe('size guard (AC7, F8)', () => {
     await db.close();
   });
 });
+
+// TASK-20260905-host-kit AC9 (C1): a host where no credential can be USED (no BYOK rows,
+// no connections — the host kit inside an artifact) must never adopt one. The strip runs
+// on the CANDIDATE before it becomes live, so the secret bytes never touch the store.
+describe('importUserDb({ stripSecrets }) — the candidate loses snug_secrets before adoption (AC9)', () => {
+  const SECRET = 'sk-ant-must-never-land';
+
+  async function donorBytes(): Promise<Uint8Array> {
+    const donor = await open(createMemoryBackend());
+    donor.setSecret('byok:anthropic', SECRET);
+    donor.setSetting('mode', 'local');
+    const bytes = await donor.exportUserDb({ includeSecrets: true });
+    await donor.close();
+    return bytes;
+  }
+
+  it('strips: no secret keys after import, and the adopted bytes carry no trace of the value', async () => {
+    const target = await open(backend);
+    await target.importUserDb(await donorBytes(), { stripSecrets: true });
+    expect(target.listSecretKeys()).toEqual([]);
+    expect(target.getSetting('mode')).toBe('local'); // everything else arrives untouched
+    const adopted = await target.exportUserDb({ includeSecrets: true });
+    expect(new TextDecoder('latin1').decode(adopted)).not.toContain(SECRET);
+    await target.close();
+  });
+
+  it('positive twin: without the option the secret arrives, as today', async () => {
+    const target = await open(backend);
+    await target.importUserDb(await donorBytes());
+    expect(target.listSecretKeys()).toEqual(['byok:anthropic']);
+    expect(target.getSecret('byok:anthropic')).toBe(SECRET);
+    await target.close();
+  });
+});

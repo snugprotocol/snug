@@ -33,6 +33,13 @@ const ROOTS = ['packages', 'apps'];
  * stop writing that evidence.
  */
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', '.turbo', '__tests__', 'e2e', 'coverage']);
+/**
+ * Derived output at an EXACT repo-relative path, never a basename: the host kit's starters
+ * package (built from examples/, which the sweep never scanned — it is app HTML that runs
+ * INSIDE the sandbox). A basename skip would also hide any future `starters-pkg/` of shipped
+ * sources anywhere under the roots.
+ */
+const SKIP_PATHS = new Set(['apps/host/starters-pkg']);
 const SOURCE_RE = /\.(ts|tsx|js|jsx|html)$/;
 
 function shippedSources() {
@@ -42,7 +49,7 @@ function shippedSources() {
       if (SKIP_DIRS.has(name)) continue;
       const path = join(dir, name);
       if (statSync(path).isDirectory()) {
-        walk(path);
+        if (!SKIP_PATHS.has(relative(REPO, path))) walk(path);
         continue;
       }
       if (name.includes('.test.') || name.includes('.spec.')) continue;
@@ -59,7 +66,9 @@ test('the scan reaches every shipped root — a guard that collects nothing prov
   // Non-vacuity, and specific: the sweep must reach the app directories the package-local
   // guard cannot see, or this file would pass while checking almost nothing.
   assert.ok(sources.length > 100, `only ${sources.length} sources collected`);
-  for (const dir of ['packages/runner/src', 'apps/playground/src', 'apps/desktop/src']) {
+  // apps/host/src is the positive control added with the host kit (TASK-20260905-host-kit
+  // AC12): the page whose whole job is to embed the sandboxed runner inside foreign hosts.
+  for (const dir of ['packages/runner/src', 'apps/playground/src', 'apps/desktop/src', 'apps/host/src']) {
     assert.ok(
       sources.some((s) => s.path.startsWith(dir)),
       `the sweep never reached ${dir}`,

@@ -35,7 +35,7 @@ function applyRef(ref: Ref<RunnerHost | null> | undefined, value: RunnerHost | n
  * Semantics (deliberate, documented):
  * - The host is keyed on the mounted iframe element and created once per mount.
  *   Identity options (transport, budgetKey, budgetStore, db, dbNamespace, net, netAppId,
- *   locale) are captured at mount — pass a React `key` to remount when they must change.
+ *   locale, streaming) are captured at mount — pass a React `key` to remount when they must change.
  * - `html` changes flow through the RESET path, not host recreation: the same host
  *   persists, the srcdoc reassignment is counted as an expected load, and in-flight
  *   work is superseded with SUPERSEDED terminal frames on the reload — never dropped
@@ -82,6 +82,9 @@ export function SnugAppFrame(props: SnugAppFrameProps): ReactElement {
       budgetStore: initial.budgetStore,
       theme: initial.theme,
       locale: initial.locale,
+      // Explicit forward (the options are enumerated one by one here, so an omission is
+      // silent — pinned by snug-app-frame.test.tsx). Mount-captured like the identity options.
+      ...(initial.streaming !== undefined ? { streaming: initial.streaming } : {}),
       onAnnounce: (frame) => propsRef.current.onAnnounce?.(frame),
       onAppEvent: (event, data) => propsRef.current.onAppEvent?.(event, data),
       onFrame: (direction, frame) => propsRef.current.onFrame?.(direction, frame),

@@ -101,6 +101,10 @@ jobs:
       # whitepaper tells implementers a frame carrying `allow-same-origin` fails the BUILD;
       # this is what makes that claim true across the repo rather than in one package.
       - run: pnpm run check-sandbox-guard
+      # The host kit (TASK-20260905-host-kit AC12): the built snug-host.html is ONE
+      # self-contained page (structural DOM rules, size caps, build stamp) and two clean
+      # builds at this commit are byte-identical. Runs after `turbo run test`, which built it.
+      - run: pnpm run check-host-kit
 
   desktop-shell:
     strategy:

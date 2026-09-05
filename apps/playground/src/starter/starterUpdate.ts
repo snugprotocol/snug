@@ -27,6 +27,7 @@ import type { UserDb } from '@snugprotocol/db';
 import { starterVersionSettingKey } from '@snugprotocol/db';
 import { runtimeContractSchema, type RuntimeContract } from '@snugprotocol/protocol';
 
+import { isNamedLoadRefusal } from '../run/copy.js';
 import { STARTER_PREFIX, loadStarterHtml } from './starterApps.js';
 import { installStarterConnections, normalizeStarterHtml } from './starterDeclaration.js';
 import { installStarterDocs } from './starterDocs.js';
@@ -72,7 +73,17 @@ function starterFolderOf(db: UserDb, appId: string): string | undefined {
 
 async function bundledHtml(folder: string): Promise<string | undefined> {
   if (htmlFixtures !== undefined) return htmlFixtures[folder];
-  return loadStarterHtml(`${STARTER_PREFIX}${folder}`);
+  try {
+    return await loadStarterHtml(`${STARTER_PREFIX}${folder}`);
+  } catch (err) {
+    // The host kit loads starter html on demand and REJECTS BY NAME when the page is
+    // offline (TASK-20260905-host-kit AC14): no bundle reachable ⇒ no update question,
+    // never an unhandled rejection at hub paint — only that named refusal; anything else
+    // propagates as before. (In the kit this status check costs one wrapper fetch per
+    // installed starter; T4 may answer it from the catalogue instead.)
+    if (isNamedLoadRefusal(err)) return undefined;
+    throw err;
+  }
 }
 
 /** The newest factory pin's html — fact 1's subject, shared with the vouch's semantics. */

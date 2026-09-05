@@ -20,6 +20,7 @@
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
+import { allows, getPlatform } from '../platform/platform.js';
 import { setMode } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
 import { useOllama } from '../state/ollama.js';
@@ -28,6 +29,14 @@ import { useDismissableMenu } from '../ui/useDismissableMenu.js';
 
 export const DEMO_BRAIN_BODY =
   'a tiny script inside this page fakes the AI so you can try the flow — no AI model or service is called.';
+
+/**
+ * The host kit with no host brain (TASK-20260905-host-kit AC5): the chip DISCLOSES the
+ * fallback and instructs nothing — there is no brain to switch to here (D15).
+ */
+export const HOST_NO_BRAIN_HEADLINE = 'demo brain — no host brain wired yet';
+export const HOST_NO_BRAIN_BODY =
+  'no host brain reached this page, so a tiny script inside it fakes the AI — nothing to configure.';
 
 export const BYOK_HONESTY_COPY =
   'your key is saved in your Snug file on this device and sent only to the AI provider you choose — never to Snug’s servers.';
@@ -70,7 +79,28 @@ const BRAINS: Record<ActiveBrainKind, { label: string; aria: string; headline: s
     headline: 'snug hub',
     body: 'turns run through the Snug hub server you signed into.',
   },
+  // The platform-pinned host brain (TASK-20260905-host-kit P2): the label is the host's
+  // own (`PlatformBrain.label`), substituted at render — this row is the fallback shape.
+  host: {
+    label: 'host',
+    aria: 'what’s thinking: the AI of the host you opened Snug in',
+    headline: 'this host’s AI',
+    body: 'the AI of the host you opened Snug in answers every turn — nothing to configure.',
+  },
 };
+
+/** The chip copy for the active brain, with the host brain's own label substituted in. */
+function copyFor(brain: ActiveBrainKind): { label: string; aria: string; headline: string; body: string } {
+  const platform = getPlatform();
+  const pinned = platform.brain;
+  if (brain === 'host' && pinned?.kind === 'host') {
+    return { ...BRAINS.host, label: pinned.label, headline: pinned.label, aria: `what’s thinking: ${pinned.label}` };
+  }
+  if (brain === 'demo' && platform.kind === 'host') {
+    return { ...BRAINS.demo, headline: HOST_NO_BRAIN_HEADLINE, body: HOST_NO_BRAIN_BODY, aria: `what’s thinking: ${HOST_NO_BRAIN_HEADLINE}` };
+  }
+  return BRAINS[brain];
+}
 
 export function BrainChip(): ReactElement {
   const brain = useActiveBrain();
@@ -82,7 +112,7 @@ export function BrainChip(): ReactElement {
   const overrideArmed = useBrain().kind !== 'settings';
   const { open, toggle, close, triggerRef, menuRef } = useDismissableMenu();
 
-  const copy = BRAINS[brain];
+  const copy = copyFor(brain);
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
 
   return (
@@ -117,15 +147,19 @@ export function BrainChip(): ReactElement {
         <div className="identity-menu brain-menu" data-testid="brain-menu" ref={menuRef} aria-label="what’s thinking">
           <span className="identity-menu-label">{copy.headline}</span>
           <span className="brain-menu-body">{copy.body}</span>
-          <Link
-            to="/settings"
-            className="identity-menu-item"
-            data-testid="brain-menu-settings"
-            onClick={() => close(false)}
-          >
-            {brain === 'demo' ? 'use your own AI key' : 'change in settings'}
-          </Link>
-          {brain === 'demo' && !overrideArmed && models.length > 0 ? (
+          {/* The switch affordances exist only where a brain can be chosen (D15): under the
+              host kit the brain is the host's and the chip stays disclosure-only. */}
+          {allows('brainSettings') ? (
+            <Link
+              to="/settings"
+              className="identity-menu-item"
+              data-testid="brain-menu-settings"
+              onClick={() => close(false)}
+            >
+              {brain === 'demo' ? 'use your own AI key' : 'change in settings'}
+            </Link>
+          ) : null}
+          {brain === 'demo' && allows('brainSettings') && !overrideArmed && models.length > 0 ? (
             <button
               type="button"
               className="identity-menu-item"
@@ -138,7 +172,7 @@ export function BrainChip(): ReactElement {
               use ollama now — {models.length} {models.length === 1 ? 'model' : 'models'} found
             </button>
           ) : null}
-          {brain === 'demo' ? <span className="brain-menu-hint">{BYOK_HONESTY_COPY}</span> : null}
+          {brain === 'demo' && allows('brainSettings') ? <span className="brain-menu-hint">{BYOK_HONESTY_COPY}</span> : null}
         </div>
       ) : null}
     </div>

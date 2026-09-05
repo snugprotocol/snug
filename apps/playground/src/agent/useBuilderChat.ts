@@ -413,6 +413,18 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
     // app model there would imply a routing that cannot happen.
     if (brain.kind === 'webllm') return createDirectBuilder({ mode: 'webllm', provider, sink, localUrl });
     if (brain.kind === 'demo') return createDirectBuilder({ mode: 'byok', provider: 'mock', sink, localUrl });
+    // The platform-pinned host brain (TASK-20260905-host-kit P2 / A5): the builder runs
+    // on it exactly as the apps do — the file's mode/provider/keys are not consulted.
+    // `appId` still rides along so the app-attached lanes keep their per-app context.
+    if (brain.kind === 'host') {
+      return createDirectBuilder({
+        mode: 'host',
+        provider,
+        sink,
+        localUrl,
+        ...(attachedAppId !== undefined ? { appId: attachedAppId } : {}),
+      });
+    }
     // A FRESH thread's pending pick (TASK-20260821 AC12) routes the build turns until an
     // app exists to pin; once attached, the app's own rows own the routing and the pick
     // is ignored here (onInstall transferred it). Keyed on `builderPick`, so a pick made

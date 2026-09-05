@@ -15,6 +15,7 @@ export {
   type DbPersistence,
   type DbRecoverableErrorEvent,
   type SnugDbDriver,
+  type SqlJsEngineOptions,
 } from './driver.js';
 
 export { DB_ERROR_CODES, type DbErrorCode } from './errors.js';

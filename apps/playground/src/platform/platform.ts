@@ -4,8 +4,32 @@
 // module stays dependency-light on purpose (types from the packages, nothing from
 // state/): it is imported before React boot, ahead of any store.
 
+import type { AgentAdapter } from '@snugprotocol/adapters';
 import type { DesktopRedirectPosture } from '@snugprotocol/auth';
 import type { PersistenceBackend } from '@snugprotocol/db';
+
+/**
+ * THE BRAIN SEAT (TASK-20260905-host-kit P2, ADR-0065 §4 / D15). A host that supplies
+ * the brain pins it here, and the playground's ONE brain derivation (`resolveBrain`,
+ * state/webllm.ts) honours the pin AHEAD of the webllm flag and ahead of whatever the
+ * user file says about mode, provider or keys — so an imported file cannot route a turn
+ * to localhost, a provider or the hub behind the user's back, and F15's endpoint-confirm
+ * has nothing to guard. Apps and the builder both construct their adapter through
+ * `createTurnAdapter` (agent/adapter.ts), so the one `'host'` arm there serves both.
+ *
+ * `'demo'` pins the demo brain (a plain file opened in a browser: no host brain exists,
+ * and the chip says so). `'host'` carries the adapter itself plus what the disclosure and
+ * the capability truth need: `label` (the chip), `streaming` (→ `host-ready`), `tools`
+ * (a brain that cannot call tools builds tool-free — the webllm arm generalised), and
+ * `maxPromptBytes` (the transport's input cap; T4 budgets the app-attached context to it).
+ * Absent = today's behavior: the file decides.
+ */
+export type PlatformBrain =
+  | { kind: 'demo' }
+  | { kind: 'host'; label: string; adapter: AgentAdapter; streaming: boolean; tools: boolean; maxPromptBytes?: number };
+
+/** The surfaces a host may switch off; `allows()` is the ONE reader. */
+export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share';
 
 /**
  * Structurally identical to connectionWizard's `ConnectionChannelLike`, defined
@@ -18,7 +42,21 @@ export interface PlatformConnectionChannel {
 }
 
 export interface SnugPlatform {
-  kind: 'web' | 'desktop';
+  kind: 'web' | 'desktop' | 'host';
+  /**
+   * Which host the kit woke up in (TASK-20260905-host-kit P6) — disclosure and the
+   * per-binding recipes read it; nothing routes on it (feature flags do). Host kit only.
+   */
+  binding?: 'artifact' | 'artifact-chat' | 'local-host' | 'file';
+  /** The pinned brain — see `PlatformBrain`. Absent → the user file decides (web, desktop). */
+  brain?: PlatformBrain;
+  /**
+   * The sql.js engine as bytes (TASK-20260905-host-kit P4): both user-db callers pass it
+   * to `openUserDb` / `createDbDriver` beside `locateWasm`, and with bytes present no
+   * request for `sql-wasm.wasm` is ever made — the artifact viewer's `connect-src 'self'`
+   * would block it. Host kit only; absent → today's locator path.
+   */
+  sqlJsWasmBinary?: Uint8Array;
   /** Outbound fetch for connected-fetch, adapters, OAuth exchange. Web: undefined → globalThis.fetch. */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   /**
@@ -201,7 +239,40 @@ export interface SnugPlatform {
      * the launch posture without a seat edit.
      */
     hubAuth?: boolean;
+    /**
+     * THE HOST SURFACE FLAGS (TASK-20260905-host-kit P2/P3). Optional, and ABSENCE MEANS
+     * ENABLED — the inverse of `hubAuth?`, on purpose: every web/desktop/test-constructed
+     * platform keeps every surface, and only a host that says `false` hides one. Read
+     * through `allows()`, never directly. `brainSettings` (the brain section, mode
+     * segment, BYOK rows, local URL, default model/provider, `ModelSelect`, the chip's
+     * switch links) and `account` (identity/sign-in) are D15 — the kit attaches to the
+     * host's brain and never asks. `sync` (hub-sync origin, Dropbox token), `connections`
+     * (wizard, door, net-error CTA, chat directive door — D4: no connected apps in an
+     * artifact) and `share` (the relay is unreachable behind `connect-src 'self'`) are
+     * capability truth: a control that cannot work is not rendered.
+     */
+    brainSettings?: boolean;
+    account?: boolean;
+    sync?: boolean;
+    connections?: boolean;
+    share?: boolean;
   };
+}
+
+/** Whether a surface renders on this platform: absent or `true` → yes; only an explicit `false` hides it. */
+export function allows(surface: HostSurface): boolean {
+  return getPlatform().capabilities[surface] !== false;
+}
+
+/**
+ * Whether ANY credential has a use on this platform (C1, TASK-20260905-host-kit AC9):
+ * BYOK keys need the brain settings, connection tokens need connections. Where both are
+ * off (the host kit inside an artifact) a secret can only leak, never work — so the
+ * "include secrets" export is not offered and an imported file's `snug_secrets` are
+ * stripped before the store adopts them. ONE rule for both sides.
+ */
+export function secretsUsable(): boolean {
+  return allows('brainSettings') || allows('connections');
 }
 
 const WEB_DEFAULT: SnugPlatform = {

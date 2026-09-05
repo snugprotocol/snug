@@ -10,6 +10,7 @@ import type { AppDocRecord } from '@snugprotocol/db';
 
 import { getUserDb } from '../state/userdb.js';
 import type { TurnMode } from '../state/webllm.js';
+import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
 import { Chip } from '../ui/Chip.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -35,6 +36,11 @@ export interface DocsPanelProps {
  * R4: branches on the MODE VALUE — when the server gains the tool, only this switch
  * changes.
  */
+function hostBrainHasTools(): boolean {
+  const pinned = getPlatform().brain;
+  return pinned?.kind === 'host' ? pinned.tools : true;
+}
+
 function emptyCopy(mode: TurnMode): { title: string; lesson: string } {
   if (mode === 'subscription') {
     return {
@@ -50,6 +56,14 @@ function emptyCopy(mode: TurnMode): { title: string; lesson: string } {
       title: 'no wiki in webllm mode',
       lesson:
         'the experimental in-browser model runs without tools, so it cannot write these pages however long you build — switch to byok or local mode in settings to get a wiki.',
+    };
+  }
+  if (mode === 'host' && !hostBrainHasTools()) {
+    // A platform-pinned host brain without tool calling builds tool-free too
+    // (TASK-20260905-host-kit P2) — same consequence, honest copy, no settings door.
+    return {
+      title: 'no wiki with this brain',
+      lesson: 'the AI of the host you opened Snug in runs without tools here, so it cannot write these pages however long you build.',
     };
   }
   return {

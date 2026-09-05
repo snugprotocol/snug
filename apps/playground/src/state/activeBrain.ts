@@ -54,6 +54,7 @@ export interface ActiveBrainInputs {
 }
 
 export function resolveActiveBrainFrom(inputs: ActiveBrainInputs): ActiveBrainKind {
+  if (inputs.brain.kind === 'host') return 'host'; // the platform pin outranks everything (P2)
   if (inputs.brain.kind === 'webllm') return 'webllm';
   if (inputs.brain.kind === 'demo') return 'demo';
   const { mode } = inputs;

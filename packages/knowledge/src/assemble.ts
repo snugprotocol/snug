@@ -25,9 +25,12 @@ export const SYSTEM_BLOCK_SEPARATOR = SEPARATOR;
 /**
  * The shell a prompt assembly serves (TASK-20260812-desktop-auth-awareness P2). PINNED
  * name and members: callers derive it from `getPlatform().kind`, which carries exactly
- * this union.
+ * this union. `'host'` (TASK-20260905-host-kit step 3) is the host kit — the playground's
+ * own tree rendered inside a foreign host (a Claude artifact, a local host page). It
+ * assembles BYTE-IDENTICALLY to `'web'`: the kit owns no platform facts of its own, and
+ * the desktop layer's LAN/loopback claims would be false there. Only `'desktop'` adds a layer.
  */
-export type HostPlatform = 'web' | 'desktop';
+export type HostPlatform = 'web' | 'desktop' | 'host';
 
 export interface HostSystemPromptOptions {
   /** Include the app-builder layers (30-summary + 40-response-format). */

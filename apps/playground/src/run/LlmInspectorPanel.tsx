@@ -202,6 +202,12 @@ function emptyCopy(mode: TurnMode): { title: string; lesson: string } {
         lesson:
           'the experimental in-browser model runs on WebGPU inside this tab, so each prompt, reply, token count and timing lands here the moment a turn runs. in-memory only.',
       };
+    case 'host':
+      return {
+        title: 'no round trips yet',
+        lesson:
+          'the host you opened Snug in answers each turn directly, so each prompt, reply and timing lands here the moment a turn runs. in-memory only.',
+      };
   }
 }
 

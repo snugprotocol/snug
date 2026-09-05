@@ -69,6 +69,10 @@ export const LEGS = [
       'pnpm exec turbo run test --force',
       'pnpm run check-threat-model',
       'pnpm run check-sandbox-guard',
+      // The host kit's structural gate (TASK-20260905-host-kit AC1/AC11/AC12): one
+      // self-contained page, reproducible. Needs the kit's dist, which `turbo run build`
+      // above produces.
+      'pnpm run check-host-kit',
       // The gate's own tests. Deliberately self-referential: this script is now
       // the only merge gate, so "the gate is still wired to ci.yml correctly"
       // (AC3) has to be a property the gate itself checks on every run. Note it
@@ -86,19 +90,25 @@ export const LEGS = [
   },
   {
     name: 'e2e',
-    description: 'Playwright real-browser suite (~6 min) — EXCEEDS ci.yml, which runs no Playwright',
+    description: 'Playwright real-browser suites: playground (~6 min) + the host kit on its built page (~2 min) — EXCEEDS ci.yml, which runs no Playwright',
     defaultOn: false,
-    commands: ['pnpm --filter playground test:e2e'],
+    commands: ['pnpm --filter playground test:e2e', 'pnpm --filter host test:e2e'],
     // A selected e2e leg on a tree where appIsPresent() is false would silently
     // convert 10 of 15 specs from assertions into skips. That is the exact
     // false-green shape AC4 forbids, so it is a precondition, not a warning.
+    // The kit suite has the same shape (TASK-20260905-host-kit AC12): it opens the BUILT
+    // page, so a missing dist is CANNOT RUN by name, never a skip.
     precondition: () => {
       const dir = join(REPO, 'apps', 'playground');
       const present =
         existsSync(join(dir, 'index.html')) &&
         existsSync(join(dir, 'src', 'main.tsx')) &&
         (existsSync(join(dir, 'vite.config.ts')) || existsSync(join(dir, 'vite.config.js')));
-      return present ? null : 'appIsPresent() is false — 10 of 15 e2e specs would silently skip';
+      if (!present) return 'appIsPresent() is false — 10 of 15 e2e specs would silently skip';
+      if (!existsSync(join(REPO, 'apps', 'host', 'dist', 'snug-host.html'))) {
+        return 'apps/host/dist/snug-host.html missing — the kit e2e opens the built page (pnpm --filter host build)';
+      }
+      return null;
     },
   },
   {

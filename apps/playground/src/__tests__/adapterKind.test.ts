@@ -101,6 +101,19 @@ describe('adapterKindFor mirrors createTurnAdapter (AC1)', () => {
   });
 
   it('ADAPTER_KINDS is the single-homed kind vocabulary the meta reader validates against', () => {
-    expect(ADAPTER_KINDS).toEqual(['webllm', 'local', 'anthropic', 'openai', 'demo']);
+    // 'host' joined 2026-09-05 (TASK-20260905-host-kit P2): the platform-pinned host brain.
+    expect(ADAPTER_KINDS).toEqual(['webllm', 'local', 'anthropic', 'openai', 'demo', 'host']);
+  });
+
+  it("mode 'host' outranks provider and key entirely — the platform pin is named first", () => {
+    expect(adapterKindFor({ mode: 'host', provider: 'anthropic', hasKey: true })).toBe('host');
+    expect(adapterKindFor({ mode: 'host', provider: 'mock', hasKey: false })).toBe('host');
+  });
+
+  it("constructing a 'host' adapter with NO platform-pinned brain throws — loud on drift, never a silent reroute", () => {
+    // The seat is set once, before boot; `resolveBrain` names 'host' only when it is set,
+    // so reaching this dispatch without it means the derivation and the seat disagree.
+    // The pinned path itself is proven end-to-end in hostBrain.test.ts (a fresh graph).
+    expect(() => createTurnAdapter({ mode: 'host', provider: 'mock' }, 'chat')).toThrow(/without a platform-pinned host brain/);
   });
 });

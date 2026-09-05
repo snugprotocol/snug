@@ -29,7 +29,7 @@ export type ByokPurpose = 'chat' | 'app';
  * through the experimental `?webllm=1` brain override (state/webllm.ts) and must not
  * join the persisted mode union until GA (AL-07).
  */
-export type DirectMode = Exclude<PlaygroundMode, 'subscription'> | 'webllm';
+export type DirectMode = Exclude<PlaygroundMode, 'subscription'> | 'webllm' | 'host';
 
 export interface TurnAdapterConfig {
   mode: DirectMode;
@@ -91,7 +91,7 @@ function demoAppScript(): MockTurn[] {
  * the runtime list, so the meta reader's validation (`useBuilderChat`'s
  * metaToBrainKind) can never silently strip a newly-added kind.
  */
-export const ADAPTER_KINDS = ['webllm', 'local', 'anthropic', 'openai', 'demo'] as const;
+export const ADAPTER_KINDS = ['webllm', 'local', 'anthropic', 'openai', 'demo', 'host'] as const;
 export type AdapterKind = (typeof ADAPTER_KINDS)[number];
 
 /**
@@ -112,6 +112,9 @@ export function routeOf(config: Pick<TurnAdapterConfig, 'mode' | 'provider' | 'k
 }
 
 export function adapterKindFor(route: AdapterRoute): AdapterKind {
+  // The platform-pinned brain (TASK-20260905-host-kit P2): named first because it
+  // outranks every setting below it — the one derivation, at its one entry.
+  if (route.mode === 'host') return 'host';
   if (route.mode === 'webllm') return 'webllm';
   if (route.mode === 'local') return 'local';
   if (route.provider === 'anthropic' && route.hasKey) return 'anthropic';
@@ -133,6 +136,16 @@ export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpos
   const modelDep = config.model !== undefined ? { model: config.model } : {};
   const kind = adapterKindFor(routeOf(config));
   switch (kind) {
+    case 'host': {
+      // The adapter the HOST supplied (TASK-20260905-host-kit P2) — reached only through
+      // the brain seat, never constructed here, never given a key. Loud on drift, like
+      // the keyed case below: `resolveBrain` names 'host' only when the seat is set.
+      const pinned = getPlatform().brain;
+      if (pinned === undefined || pinned.kind !== 'host') {
+        throw new Error("adapterKindFor said 'host' without a platform-pinned host brain");
+      }
+      return pinned.adapter;
+    }
     case 'webllm':
       // The shared `model` setting holds byok/local wire ids (e.g. "llama3.2") — a
       // different namespace from web-llm prebuilt ids, so it is deliberately IGNORED:

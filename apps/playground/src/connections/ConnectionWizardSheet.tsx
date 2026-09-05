@@ -1260,7 +1260,8 @@ function CredentialsScreen({
    * desktop the wall does not exist (native fetch), so nothing is claimed there either.
    */
   const disclosedBrowserWall =
-    getPlatform().kind === 'web' && lookupWellKnownProvider(requirement.provider.name)?.browserCallable === false;
+    // Any non-desktop shell is a browser page for this purpose (the host kit included).
+    getPlatform().kind !== 'desktop' && lookupWellKnownProvider(requirement.provider.name)?.browserCallable === false;
 
   /**
    * THE POPUP IS OPENED SYNCHRONOUSLY, INSIDE THE CLICK, BEFORE ANY AWAIT.

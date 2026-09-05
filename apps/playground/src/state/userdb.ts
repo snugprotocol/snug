@@ -13,7 +13,7 @@ import {
 import { admitConnectionRequirement, type AdmissionChannel } from '@snugprotocol/auth';
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { getPlatform } from '../platform/platform.js';
-import { locateWasm } from '../run/wasm.js';
+import { sqlJsEngineOptions } from '../run/sqlJsEngine.js';
 import { resetThreadSessions } from '../agent/threadSessions.js';
 import { resetSidecarIdentitySession } from './sidecarIdentity.js';
 import { createStore, useStore } from './store.js';
@@ -73,7 +73,9 @@ function attemptOpen(secrets?: ContainerSecrets): void {
   // passes nothing and keeps the package's OPFS detection byte-for-byte (AC10).
   const backend = getPlatform().userdbBackend;
   void openUserDb({
-    locateWasm,
+    // The engine source — the bundler locator, plus the host kit's bytes when the platform
+    // carries them (TASK-20260905-host-kit P4; this boot is the first initSqlJs caller).
+    ...sqlJsEngineOptions(),
     admissionGate,
     ...(backend !== undefined ? { backend } : {}),
     ...(secrets !== undefined ? { secrets } : {}),

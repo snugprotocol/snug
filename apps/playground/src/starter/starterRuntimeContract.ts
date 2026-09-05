@@ -21,15 +21,7 @@
 import type { UserDb } from '@snugprotocol/db';
 import { runtimeContractSchema } from '@snugprotocol/protocol';
 
-/**
- * Raw glob over the examples tree — the same pattern (and the same `?raw` rationale) as
- * the connection-manifest glob: Vite never parses these at transform time, so a malformed
- * contract degrades to "this starter declares nothing" instead of breaking the build.
- */
-const contractModules = import.meta.glob('../../../../examples/*/runtime-contract.json', {
-  query: '?raw',
-  import: 'default',
-}) as Record<string, () => Promise<string>>;
+import { starterSource } from './starterSource.js';
 
 /** Test seam: starter folder → raw contract JSON. */
 let fixtures: Record<string, string> | undefined;
@@ -42,16 +34,14 @@ export function __resetRuntimeContractFixturesForTests(): void {
   fixtures = undefined;
 }
 
-function folderOf(path: string): string {
-  return /examples\/([^/]+)\/runtime-contract\.json$/.exec(path)?.[1] ?? path;
-}
-
-/** Every bundled starter contract, keyed by starter folder. */
+/** Every bundled starter contract, keyed by starter folder (read through the one source). */
 export async function bundledStarterContracts(): Promise<Record<string, string>> {
   if (fixtures !== undefined) return fixtures;
+  const source = starterSource();
   const out: Record<string, string> = {};
-  for (const [path, load] of Object.entries(contractModules)) {
-    out[folderOf(path)] = await load();
+  for (const folder of source.appFolders()) {
+    const raw = await source.contract(folder);
+    if (raw !== undefined) out[folder] = raw;
   }
   return out;
 }

@@ -34,7 +34,7 @@ import { useStore } from '../state/store.js';
 import { getAppMeta, recordAppMeta, useAppMetaMap } from '../state/appMeta.js';
 import { userLibrary } from '../state/library.js';
 import { useMode, useProvider } from '../state/mode.js';
-import { useTurnMode } from '../state/webllm.js';
+import { hostReadyStreaming, useBrain, useTurnMode } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { toggleTheme, useTheme } from '../state/theme.js';
 import { toggleRailShown, useRailShown } from '../state/railLayout.js';
@@ -47,7 +47,7 @@ import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
 import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
 import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, sharedInboxStore } from '../share/sharedInbox.js';
 import { desktopLinkFor } from '../share/relayClient.js';
-import { getPlatform } from '../platform/platform.js';
+import { getPlatform, allows } from '../platform/platform.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { installStarterDocs } from '../starter/starterDocs.js';
@@ -68,10 +68,11 @@ import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
 import { useMediaQuery } from './useMediaQuery.js';
-import { locateWasm } from './wasm.js';
+import { isNamedLoadRefusal, missingAppCopy, starterInstallDisclosureTail } from './copy.js';
+import { sqlJsEngineOptions } from './sqlJsEngine.js';
 import { ChatLog } from '../views/ChatLog.js';
 
-type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
+type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing'; reason?: string };
 
 // 'inspector' is the LLM round-trip surface, composed by ThinkPanel. It briefly also
 // showed an app↔host frame timeline; TASK-20260813 AC11 removed that view as noise
@@ -161,6 +162,8 @@ export default function RunView(): ReactElement {
   // The run-rail panels' copy depends on where turns EXECUTE — the effective turn
   // mode with the webllm brain override applied, never the raw mode (review F3).
   const turnMode = useTurnMode();
+  // P7/AC6: the pinned brain's streaming truth rides to host-ready; undefined = the runner's default.
+  const streaming = hostReadyStreaming(useBrain());
   const theme = useTheme();
   // Whether the "watch it think" rail is shown (AC6). Global, like the theme — it is a
   // workspace preference, not a property of any one app.
@@ -342,9 +345,11 @@ export default function RunView(): ReactElement {
   // NOTHING here (offering a connect CTA on an off-ceiling attempt would coach
   // ceiling-widening in direct response to the attack, M12).
   const [netAuthError, setNetAuthError] = useState<{ appId: string; code: string } | null>(null);
+  // No handler where the platform allows no connections (TASK-20260905-host-kit P3, D4):
+  // `host-ready.net` is then false STRUCTURALLY, not by a flag the app must trust.
   const netHandler = useMemo(
     () =>
-      isUnownedId(id)
+      isUnownedId(id) || !allows('connections')
         ? undefined
         : createNetHandlerFor({
             onNetError: (appId, code) => {
@@ -374,7 +379,7 @@ export default function RunView(): ReactElement {
   useEffect(() => {
     let cancelled = false;
     if (isUnownedId(id)) {
-      const ephemeral = createDbDriver({ backend: createMemoryBackend(), locateWasm });
+      const ephemeral = createDbDriver({ backend: createMemoryBackend(), ...sqlJsEngineOptions() });
       setDb(ephemeral);
       return () => {
         cancelled = true;
@@ -581,8 +586,11 @@ export default function RunView(): ReactElement {
         if (cancelled) return;
         setHtmlState(html === undefined ? { phase: 'missing' } : { phase: 'ready', html });
       })
-      .catch(() => {
-        if (!cancelled) setHtmlState({ phase: 'missing' });
+      .catch((err: unknown) => {
+        // ONLY a NAMED failure (the host kit's starter loader refusing offline) becomes the
+        // lesson the user reads (TASK-20260905-host-kit AC2); any other rejection — a driver
+        // or library error — stays the library miss it always was, never raw internals as copy.
+        if (!cancelled) setHtmlState({ phase: 'missing', ...(isNamedLoadRefusal(err) ? { reason: err.message } : {}) });
       });
     // Library display name — the header's fallback when the app never announces.
     if (isSharedId(id)) {
@@ -1080,7 +1088,7 @@ export default function RunView(): ReactElement {
             {(starterDeclaration.declaredApiHosts ?? []).length > 0
               ? ` (${(starterDeclaration.declaredApiHosts ?? []).join(', ')})`
               : ''}
-            . installing only copies the app — nothing is connected until you review and approve it yourself.
+            {starterInstallDisclosureTail(allows('connections'))}
           </div>
         ) : null}
         {/*
@@ -1143,7 +1151,7 @@ export default function RunView(): ReactElement {
             </div>
           ) : htmlState.phase === 'missing' ? (
             <div className="run-overlay">
-              <EmptyState glyph="◌" title="app not found" lesson="it may live in the other mode — check settings, or build a new one." action={<Link to="/" className="btn">back to your apps</Link>} />
+              <EmptyState glyph="◌" {...missingAppCopy(htmlState.reason)} action={<Link to="/" className="btn">back to your apps</Link>} />
             </div>
           ) : (
             <SnugAppFrame
@@ -1155,6 +1163,7 @@ export default function RunView(): ReactElement {
               budgetKey={`app:${id}`}
               db={db}
               dbNamespace={id}
+              {...(streaming !== undefined ? { streaming } : {})}
               {...netProps}
               openUrl={openUrlHandler}
               theme={theme}
