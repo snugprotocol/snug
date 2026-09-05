@@ -136,10 +136,23 @@ export function capsAppHtml(): string {
 <pre id="caps"></pre>
 <div id="fetch"></div>
 <div id="csp"></div>
+<div id="reach"></div>
 <script>
 (function () {
   var V = 1, instanceId = null, sent = false, announced = false;
   function set(id, text) { document.getElementById(id).textContent = text; }
+  // T4 AC10 (C2 inside an artifact): the app frame is an OPAQUE origin — the kit page's
+  // window.claude (sample / artifact.publish) must be out of reach one hop up and at the top.
+  (function () {
+    var out = [];
+    ['parent', 'top'].forEach(function (name) {
+      try { var w = window[name]; var c = w.claude; out.push(name + ':' + (c === undefined ? 'undefined' : 'REACHED')); }
+      catch (e) { out.push(name + ':' + (e && e.name)); }
+    });
+    try { var pp = window.parent.parent; var c2 = pp.claude; out.push('parent.parent:' + (c2 === undefined ? 'undefined' : 'REACHED')); }
+    catch (e) { out.push('parent.parent:' + (e && e.name)); }
+    set('reach', out.join(' '));
+  })();
   document.addEventListener('securitypolicyviolation', function (e) {
     set('csp', 'violation:' + e.violatedDirective + ':' + (e.blockedURI || ''));
   });

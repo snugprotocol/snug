@@ -73,7 +73,18 @@ export function YourFileChip(): ReactElement | null {
             </span>
           ) : null}
           {canSave ? (
-            <button type="button" className="identity-menu-item" data-testid="your-file-save" disabled={busy} onClick={run(() => seat.save!().then(() => close(true)))}>
+            <button
+              type="button"
+              className="identity-menu-item"
+              data-testid="your-file-save"
+              disabled={busy}
+              // The menu closes on success; a refusal keeps it open so the status and the note are read.
+              onClick={run(() =>
+                seat.save!().then((outcome) => {
+                  if (outcome.ok) close(true);
+                }),
+              )}
+            >
               save to this artifact
             </button>
           ) : null}

@@ -119,19 +119,60 @@ source, the way the desktop is built (vite alias, `HashRouter`, a platform insta
 React boots) — for the skill-delivered bindings: a Claude artifact, a local host page, a
 plain file. What differs is the OUTPUT and what the platform carries:
 
-- **The probe** (`src/probe.ts`, before boot): the binding decided purely from four facts
-  (protocol, hostname, whether `window.claude.use` / `.complete` are functions); storage
-  TRIED rung by rung with a real write/read round trip (OPFS → IndexedDB → memory — never
-  presence-detected: `file://` exposes OPFS and rejects it; `getDirectory` invoked as a
-  method, an unbound call is "Illegal invocation"); the brain legs recorded (`sample`,
-  `complete` detected/absent) with the DEMO brain pinned until T3/T4 wire a leg. Nothing
+- **The probe** (`src/probe.ts`, before boot): when `window.claude.use` is a function the
+  host namespaces are asked TOGETHER behind one guard (`sample`, `artifact`, `downloads` —
+  `resolved` or `null`; `use()` and `limits()` prompt nothing and spend nothing); the
+  binding decided purely from five facts (protocol, hostname, the two claude globals, what
+  the host answered — `artifact-static` when `use` exists but sample AND artifact are
+  `null`: the page served top-level on the artifact host); storage TRIED rung by rung with
+  a real write/read round trip (OPFS → IndexedDB → memory — never presence-detected:
+  `file://` exposes OPFS and rejects it; `getDirectory` invoked as a method, an unbound
+  call is "Illegal invocation"); the brain PINNED from what resolved (TASK-20260905-binding-a-artifacts):
+  `sample` → two adapters (`src/brains/sample.ts`: app envelopes on `quick`, the builder
+  and the inferrer on `default` — measured, never a control), the ONE shaper
+  (`src/brains/prompt.ts`: system + messages as one user turn; `measurePrompt` = the bytes
+  sent) as the seat's ruler, the cap from `limits()` (65,536 fallback); `window.claude.complete`
+  → the chat adapter (`src/brains/complete.ts`, no streaming); nothing → the demo brain with
+  every leg recorded. Every runtime error code maps to a NAMED adapter error, `retryable`
+  only on a transient upstream failure — the runner never loops on a host brain. Nothing
   asks the user anything (D15).
-- **The platform** (`src/platform-host.ts`): `kind:'host'`, the binding, the pinned brain,
-  the engine as bytes, the backend that WORKED, the four launch booleans explicit, every
-  surface flag off — and no transport seat a host cannot honour (no fetch, LAN, sidecar,
-  helper, OAuth, update seats). The playground's own readers do the rest: `allows()`,
-  `secretsUsable()`, `resolveBrain()` — the kit is a clone of the playground / Snug Desktop
-  minus the brain, model/provider and account controls, builder included (A5).
+- **The platform** (`src/platform-host.ts`, composed by `src/compose.ts`): `kind:'host'`,
+  the binding, the pinned brain, the engine as bytes, the backend that WORKED (or the
+  record composed over it — below), the four launch booleans explicit, every surface flag
+  off except `appExport` (the download-only share sheet — how a kit-edited app goes back to
+  the agent; the LINK acts stay off), plus three seats the playground renders from:
+  `custody` (the "your file" chip — state and acts), `saveFile` (`src/exportSeat.ts`: a user
+  file leaves as the `snug-user-file/1` wrapper `snug-user.snug.json` through `downloads.save`,
+  or copied where the host has no downloads; every code owned, one prompt at a time) and
+  `agentHandIns` (the run header's offered update). No transport seat a host cannot honour
+  (no fetch, LAN, sidecar, helper, OAuth, update seats). The playground's own readers do the
+  rest: `allows()`, `secretsUsable()`, `resolveBrain()` — the kit is a clone of the
+  playground / Snug Desktop minus the brain, model/provider and account controls, builder
+  included (A5). Under a capped host brain the builder BUDGETS OR REFUSES a turn on the
+  seat's own ruler (`agent/promptBudget.ts`: history dropped oldest-first, the app's html
+  never cut, a named refusal with zero calls) and skips the router classifier (one viewer-
+  billed call per app-attached message).
+- **Binding A — two storage seams, one file** (`src/storage/`): inside a hosted artifact the
+  browser bucket stays the WORKING copy and the page's own `<script type="text/plain"
+  id="snug-db">` block is the DURABLE copy (`artifactHtml.ts`, a record OVER the bucket:
+  seed-on-empty with one counted save and a magic-prefixed custody sidecar; a divergence
+  with a direction from the block's save counter, resolved only by an explicit act; "save
+  to this artifact" fetches the page's canonical source — never the live DOM, which carries
+  the viewer's injected runtime — verifies it with the shared tokenizer, refuses a projected
+  page over the cap naming its three parts, maps every runtime code, stashes the conflict
+  note across the reload). Inside a chat artifact `window.storage` IS the file's home
+  (`windowStorage.ts`: generation-numbered base64 chunks, the manifest flipped LAST, absence
+  proven by `list()`, corrupt never fresh). Both are `PersistenceKind`s appended without a
+  version bump.
+- **The hand-in** (`src/handin.ts`, ADR-0065 §6): the page's `snug-app-bundle+json` blocks
+  (written by `scripts/snug-embed.mjs` through the ONE grammar `scripts/lib/page-blocks.mjs`,
+  which also owns the top-level tokenizer every reader uses) resolve at boot — before the
+  first paint when the db opens promptly — to an `agent:<lineage>` app, the app the bundle
+  was lifted from, or a new OWNED install; an unedited copy takes the update, an edited
+  copy is OFFERED in the run header (`AgentUpdateControls`, ADR-0045 §7's confirm), a
+  deleted app stays deleted (`agentDismissed:` tombstone), a bundle with connections is
+  refused (D4). The trust boundary is the artifact's write permission — a page writer could
+  replace the kit's own script — so the guards that hold are the ones inside it.
 - **One file** (`vite.config.ts` + `src/plugins/`): `inlineDynamicImports`, every asset a
   data URL, the sql.js engine through `?inline` (Vite 6 must be told `.wasm` is an asset),
   the entry script and stylesheet folded into the html by `inline-single-file` with its
@@ -154,10 +195,19 @@ plain file. What differs is the OUTPUT and what the platform carries:
 - **Gates**: `scripts/check-host-kit.mjs` (a top-level DOM tokenizer that never scans
   script/style bodies; AC1's rules, the 16 MiB cap and a 2,750,000-byte ceiling, the stamp,
   exactly one file in `dist/`, two clean builds sha-compared) in root `test`, gate-local's
-  workspace leg and ci.yml; `apps/host/e2e/kit.spec.ts` on the BUILT page — served over
-  loopback (the artifact shape) and from `file://` — with every request aborted except
-  jsDelivr `/npm/` and the intercepted starters package (gate-local's e2e leg; a missing
-  dist is CANNOT RUN by name).
+  workspace leg and ci.yml — its tokenizer now lives in `scripts/lib/page-blocks.mjs`, and
+  the root chain also runs `page-blocks.test.mjs` and `snug-embed.test.mjs`;
+  `apps/host/e2e/kit.spec.ts` on the BUILT page — served over loopback (the artifact shape)
+  and from `file://` — with every request aborted except jsDelivr `/npm/` and the
+  intercepted starters package (gate-local's e2e leg; a missing dist is CANNOT RUN by name);
+  `apps/host/e2e/artifact.spec.ts` — the two Claude runtimes FAKED on the built page
+  (`window.claude.use` with recording `sample` / `artifact` / `downloads`; the flat
+  `window.claude.complete` + a `window.storage` that persists like the real one), spliced
+  pages served through `page.route`: no call on load, one call per move, the save round trip
+  and the seed in a fresh browser, read-only after the first refusal, the wrapper export,
+  the hand-in (install, update, idempotence), `artifact-static`, the chat brain and storage
+  across a reload, and the C2 reach test (the app frame's `parent`/`top` are opaque). The
+  REAL runtimes are the owner's walk, journaled with the artifact URL.
 
 Steps 1–4 of the task landed the seams the kit needs in the packages and the playground,
 all additive and all "absence = today's behavior": `kind:'host'`, `binding`, a pinned

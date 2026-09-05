@@ -27,7 +27,9 @@ An app can:
 
 Apps that DO think through the agent send structured actions (a chess move, a quiz answer,
 a data question) and turn the structured JSON replies back into UI state. See "Choosing an
-App Type" for deciding, per app, whether a turn needs the model at all.
+App Type" for deciding, per app, whether a turn needs the model at all. Every such request
+is a USER act — never send one from a timer, an interval, or on load: a host may bill the
+viewer for each call (see "Never Think on a Timer" under CDN Compatibility).
 
 An app cannot: call `fetch`/`XMLHttpRequest` (network is blocked by CSP), use browser
 storage (the sandbox has a null origin — storage exists only via the host bridge), open

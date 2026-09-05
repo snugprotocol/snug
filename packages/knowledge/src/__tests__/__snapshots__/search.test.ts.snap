@@ -100,6 +100,8 @@ exports[`KB retrieval structure stability > heading tree per file is locked (edi
     "headingTree": [
       "# CDN Compatibility",
       "## The Allowlist Is Fixed",
+      "## Inside a Claude Artifact: a Narrower Allowlist",
+      "## Never Think on a Timer",
       "## UMD vs ESM: Why Libraries Break",
       "### Picking a URL",
       "### If no browser build exists — inline the logic",

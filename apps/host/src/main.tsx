@@ -42,6 +42,24 @@ async function boot(): Promise<void> {
   );
   setPlatform(composition.platform);
 
+  // The hand-in: after the user db opens, never before — and BEFORE the first paint when
+  // the db opens promptly, so the hub's first render already lists what the agent handed
+  // in (the hub reads the library once at mount). A db that cannot open (corrupt, locked)
+  // never resolves `getUserDb()`, so the wait is bounded: past it the App renders its
+  // recovery surface and the hand-in lands whenever the db does. Its outcome is one note
+  // on the custody chip; a refusal is named there too, never a crash.
+  const handIn = getUserDb()
+    .then(async (db) => {
+      const outcome = await composition.handIn(db);
+      const note = describeHandIn(outcome);
+      if (note !== undefined) composition.custody.patch({ note });
+      if (outcome.installed.length > 0 || outcome.updated.length > 0) await refreshAppMeta();
+    })
+    .catch((error: unknown) => {
+      composition.custody.patch({ note: `the handed-in apps could not be read: ${error instanceof Error ? error.message : String(error)}` });
+    });
+  await Promise.race([handIn, new Promise<void>((resolve) => setTimeout(resolve, HAND_IN_BEFORE_PAINT_MS))]);
+
   const container = document.getElementById('root');
   if (container === null) throw new Error('missing #root');
 
@@ -52,19 +70,9 @@ async function boot(): Promise<void> {
       </HashRouter>
     </StrictMode>,
   );
-
-  // The hand-in: after the user db opens, never before. Its outcome is one note on the
-  // custody chip; a refusal is named there too, never a crash.
-  void getUserDb()
-    .then(async (db) => {
-      const outcome = await composition.handIn(db);
-      const note = describeHandIn(outcome);
-      if (note !== undefined) composition.custody.patch({ note });
-      if (outcome.installed.length > 0 || outcome.updated.length > 0) await refreshAppMeta();
-    })
-    .catch((error: unknown) => {
-      composition.custody.patch({ note: `the handed-in apps could not be read: ${error instanceof Error ? error.message : String(error)}` });
-    });
 }
+
+/** How long the first paint waits for the db + hand-in before rendering anyway (a stuck db must still show its recovery UI). */
+const HAND_IN_BEFORE_PAINT_MS = 4_000;
 
 void boot();
