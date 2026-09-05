@@ -72,3 +72,14 @@ Delete `scripts/spikes/`; unpublish the probe artifacts (or leave them private a
 - State: waiting on the workflow; nothing published yet.
 - Next step: publish S1 + S4 (private), run S7's report into this journal, publish S3, hand `s2-s10-chat.html` + `s9-cowork.md` to the owner.
 - Open questions: none.
+
+### 2026-09-05 05:45 UTC — Jeetu (via Claude Code) — session (probes published, owner walks handed over)
+- Done: the four probe pages went through two workflow rounds (author → contract + measurement verifiers → fix → re-check → fix → final skeptic; 33 agents in all) plus two hand-applied final fixes (S3's "done" gate now refuses when the final db write FAILED; S4 stashes to sessionStorage BEFORE any db round trip) — both re-verified with the skeptics' Playwright harnesses. Published PRIVATE under the owner's account:
+  - **S1** https://claude.ai/code/artifact/9b0182d2-3f6c-41c3-ab96-5d0b2323e948 (`capabilities {db}`) — nothing to click; done when the db line reads "wrote results/s1 … (final)".
+  - **S4** https://claude.ai/code/artifact/59dfe0a8-cbc0-46de-9633-27c95e72f557 (`{artifact, downloads, db}`) — six-button walk; step 4 needs the session to republish the page (build tag r1 → r2) between the owner's clicks.
+  - **S3** https://claude.ai/code/artifact/d5df9417-0781-435e-8da0-d995d7438507 (`{sample, db}`) — "run all arms" (48 calls, ~10–12 min, consent on call #1), then "done".
+  - `scripts/spikes/s2-s10-chat.html` (160 lines, complete document) is attached to a claude.ai chat by the owner ("render verbatim"); four pastes back (draft/1, draft/2, published/1, published/2). `scripts/spikes/s9-cowork.md` is the Cowork checklist.
+- State: S7 GO (journaled above). S1/S3/S4 await the owner's opens; S2/S10 and S9 await the owner's pastes. Nothing else blocks.
+- Next step: read `results/s1`, `results/s4`, `results/s3` with `read_db` as the owner reports; republish S4 as r2 when told "verified"; fill `sessionChecks` on results/s4; journal every number; update the parent's D2/D3/D11.
+- Open questions: none.
+
