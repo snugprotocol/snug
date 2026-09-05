@@ -10,6 +10,20 @@ import { defineConfig } from 'vite';
 
 const playgroundSrc = fileURLToPath(new URL('../playground/src', import.meta.url));
 
+/**
+ * The shell is Snug's own binary, so it knows the ONE hosted share relay (ADR-0064) by
+ * default — `tauri dev` and `tauri build` both bake it in without an env file (there is
+ * no `apps/desktop/.env*`, by the same posture rule deploy-web enforces, and
+ * release-desktop.mjs refuses one). Vite folds VITE_*-prefixed `process.env` entries
+ * into `import.meta.env` when it loads env after this file, so defaulting here is the
+ * mechanism — an explicit value in the environment still wins (a developer pointing at
+ * a dev relay); a release refuses a value that differs from this one
+ * (`desktopBuildEnv`). TASK-20260905-desktop-share-relay-default; pinned by
+ * `shareRelayDefault.test.ts` against release-desktop.mjs's constant.
+ */
+export const DESKTOP_SHARE_RELAY_DEFAULT = 'https://share.snugprotocol.org';
+process.env.VITE_SNUG_SHARE_RELAY ??= DESKTOP_SHARE_RELAY_DEFAULT;
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
