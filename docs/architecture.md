@@ -112,6 +112,24 @@ named hard prerequisites — both LANDED with TASK-20260812 (guard in
 `packages/protocol/src/connection-requirement.ts`, borrow ban in
 `packages/auth/src/requirement-admission.ts`).
 
+## Host kit — the third shell (TASK-20260905-host-kit, ADR-0065; in progress)
+
+`apps/host` (step 5 of the task; not yet in the tree) will build `snug-host.html` — one
+self-contained page over the SAME playground source, the way the desktop is built — for the
+skill-delivered bindings (a Claude artifact, a local host page). Steps 1–4 landed the seams
+it needs, all additive and all "absence = today's behavior": the platform seam gained
+`kind:'host'`, `binding`, a pinned **`brain`** honoured by the one brain derivation ahead of
+the webllm flag and the user file (apps AND the builder — the kit is a clone of the
+playground / Snug Desktop minus the brain, model/provider and account controls, D15),
+`sqlJsWasmBinary` (the sql.js engine as bytes, because an artifact's `connect-src 'self'`
+blocks the wasm fetch — `packages/db` makes bytes win over the locator at both `initSqlJs`
+sites) and five optional surface flags read through `allows()` (brain settings, account,
+sync, connections, share) plus `secretsUsable()`, the one rule that hides the secrets export
+AND strips `snug_secrets` from an imported file before adoption (C1). The runner's
+`host-ready` learned to advertise `streaming` truthfully. `starter/starterSource.ts` owns the
+five `examples/` globs so the kit can alias one module and keep the starter bytes out of its
+page. See the task file for the kit's own plan (probe, single-file build, `check-host-kit`).
+
 ## Desktop shell (TASK-20260812-desktop-hub-scaffold, ADR-0021)
 
 `apps/desktop` wraps the SAME playground source (vite alias, `HashRouter`, desktop entry)
