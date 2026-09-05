@@ -62,6 +62,7 @@ import {
 } from '@snugprotocol/protocol';
 import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
 import {
+  agentDismissedSettingKey,
   appIdFromModelSettingKey,
   appIdFromProviderSettingKey,
   appIdFromRenamedSettingKey,
@@ -99,6 +100,12 @@ export const USERDB_ERROR_CODES = {
    * user their backup is broken would be both false and frightening.
    */
   LOCKED_IMPORT: 'USERDB_LOCKED_IMPORT',
+  /**
+   * An `agent`-provenance bundle (a Claude-artifact hand-in) carries connections. D4:
+   * nothing in an artifact may claim connected apps, so the hand-in is refused whole —
+   * never installed with the declarations quietly dropped (TASK-20260905-binding-a-artifacts).
+   */
+  AGENT_CONNECTIONS_REFUSED: 'USERDB_AGENT_CONNECTIONS_REFUSED',
   /** The referenced app/version/thread does not exist. */
   NOT_FOUND: 'USERDB_NOT_FOUND',
   /**
@@ -2347,6 +2354,18 @@ function construct(
         //     bundle marker by equality, and the MANY-per-app minted-link records by the
         //     same escaped prefix delete the `auth:` slice uses — mutation-checked by
         //     app-bundle.test.ts.
+        //     … but FIRST, for an app the user's agent handed in (`agent:<lineage>`,
+        //     TASK-20260905-binding-a-artifacts AC8): the tombstone. The bundle block is
+        //     still embedded in the artifact page, and without this row the next boot
+        //     would find no app under that source and install it again — a delete that
+        //     does not hold. Keyed by lineage (the app row is going), valued with the
+        //     bundle id being deleted, inside this transaction so it commits or rolls
+        //     back with the delete. A `share:` copy or a built app writes nothing here.
+        const lineage = app.installSource?.startsWith('agent:') === true ? app.installSource.slice('agent:'.length) : undefined;
+        const dismissedBundleId = lineage !== undefined ? kvGet(USERDB_TABLES.settings, sharedBundleSettingKey(appId)) : undefined;
+        if (lineage !== undefined && typeof dismissedBundleId === 'string') {
+          kvSet(USERDB_TABLES.settings, agentDismissedSettingKey(lineage), dismissedBundleId);
+        }
         db.run(`DELETE FROM ${USERDB_TABLES.settings} WHERE key = ?`, [sharedBundleSettingKey(appId)]);
         const linkPrefix = shareLinkSettingPrefixFor(appId).replace(/([!%_])/g, '!$1');
         //     … whose `share:<linkId>` SECRETS (revoke token + key) go with them (Gate-5

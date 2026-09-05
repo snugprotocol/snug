@@ -69,6 +69,64 @@ export function shareInstallSource(lineage: string): string {
 }
 
 /**
+ * The AGENT provenance (TASK-20260905-binding-a-artifacts AC8, ADR-0065 §6): an app the
+ * user's own agent handed in as a bundle block embedded in a Claude artifact. Installed as
+ * an OWNED app (editable, versioned — the builder-chat semantics, not the shared shelf's)
+ * under `agent:<lineage>`, which cannot spell `share:` or `starter:` (the lineage is a
+ * UUID, enforced by the bundle schema). Prose in the spec, not schema: `install_source`
+ * is free TEXT with a partial unique index.
+ */
+export const AGENT_INSTALL_SOURCE_PREFIX = 'agent:';
+
+export function agentInstallSource(lineage: string): string {
+  return `${AGENT_INSTALL_SOURCE_PREFIX}${lineage}`;
+}
+
+/** Which channel a bundle arrives on. `'shared'` is ADR-0063's (the default, byte-for-byte); `'agent'` is the artifact hand-in. */
+export type BundleProvenance = 'shared' | 'agent';
+
+const INSTALL_NOTE: Record<BundleProvenance, string> = {
+  shared: 'installed from a shared app',
+  agent: 'installed by your agent',
+};
+const UPDATE_NOTE: Record<BundleProvenance, string> = {
+  shared: 'shared update',
+  agent: 'updated by your agent',
+};
+
+/**
+ * D4 — nothing in Binding A may claim connected apps. Under `agent` a bundle that carries
+ * connections is a HARD refusal at the boundary: nothing installs, nothing updates, and the
+ * code names it — never "skip the declarations and land the rest", which would quietly
+ * drop the one signal that says this app wanted network access (plan review S1).
+ */
+function refuseAgentConnections(bundle: AppBundle, provenance: BundleProvenance): void {
+  if (provenance === 'agent' && bundle.connections.length > 0) {
+    throw new UserDbError(
+      USERDB_ERROR_CODES.AGENT_CONNECTIONS_REFUSED,
+      `"${bundle.app.displayName}" asks for ${bundle.connections.length} connection(s) — connected apps are not available inside an artifact, so this hand-in was refused`,
+    );
+  }
+}
+
+/**
+ * Has the user re-authored their copy since the newest pinned (factory / hand-in) version
+ * landed? The ONE predicate the artifact boot and the run header share (plan review A3):
+ * `current ≠ newest pinned` AND the html differs — a revert to the pinned bytes reads as
+ * unedited. An app with no pinned version at all is never "edited" (nothing to compare).
+ */
+export function isEditedCopy(db: UserDb, appId: string): boolean {
+  const app = db.getApp(appId);
+  if (app === undefined) return false;
+  const newestPinned = db
+    .listAppVersions(appId)
+    .filter((v) => v.pinned)
+    .sort((a, b) => b.version - a.version)[0];
+  if (newestPinned === undefined || newestPinned.version === app.currentVersion) return false;
+  return db.getAppHtml(appId) !== db.getAppHtml(appId, newestPinned.version);
+}
+
+/**
  * Strip the two seats a bundle must never carry from a stored requirement. Pure: returns a
  * new object; the stored row is untouched.
  */
@@ -148,6 +206,8 @@ export async function buildAppBundle(db: UserDb, appId: string, options: BuildAp
 export interface AppBundleInstallOptions {
   /** The receiver-computed content id (`appBundleId`), recorded as `sharedBundle:<appId>`. */
   bundleId: string;
+  /** The channel the bundle arrived on; absent = `'shared'` (ADR-0063, unchanged). */
+  provenance?: BundleProvenance;
 }
 
 export interface RefusedSlot {
@@ -223,11 +283,13 @@ export async function installAppFromBundle(
   bundle: AppBundle,
   options: AppBundleInstallOptions,
 ): Promise<AppBundleInstallResult> {
-  const installSource = shareInstallSource(bundle.lineage);
+  const provenance = options.provenance ?? 'shared';
+  const installSource = provenance === 'agent' ? agentInstallSource(bundle.lineage) : shareInstallSource(bundle.lineage);
   const existing = db.getAppByInstallSource(installSource);
   if (existing !== undefined) {
     return { status: 'already-installed', appId: existing.appId, refusedSlots: [] };
   }
+  refuseAgentConnections(bundle, provenance);
 
   const app = db.installApp({
     displayName: uniqueDisplayName(db, bundle.app.displayName),
@@ -236,7 +298,7 @@ export async function installAppFromBundle(
     ...(bundle.app.iconColor !== undefined ? { iconColor: bundle.app.iconColor } : {}),
     usesDb: bundle.app.usesDb,
     html: bundle.html,
-    note: 'installed from a shared app',
+    note: INSTALL_NOTE[provenance],
     installSource,
   });
 
@@ -280,15 +342,27 @@ export async function updateAppFromBundle(
   bundle: AppBundle,
   options: AppBundleInstallOptions,
 ): Promise<AppBundleUpdateResult> {
+  const provenance = options.provenance ?? 'shared';
   const app = db.getApp(appId);
   if (app === undefined) throw new UserDbError(USERDB_ERROR_CODES.NOT_FOUND, `app "${appId}" not found`);
-  if (app.installSource !== shareInstallSource(bundle.lineage)) {
+  // The target rule per channel. `shared`: the installed copy of this lineage, only.
+  // `agent`: that, OR the app the bundle was LIFTED FROM (`buildAppBundle` sets
+  // `lineage = appId`) — a kit-built app or an installed starter the agent edited and
+  // handed back takes the update in place, its own install_source untouched (plan review
+  // A4). A `share:` copy is never an agent target.
+  const isTarget =
+    provenance === 'agent'
+      ? app.installSource === agentInstallSource(bundle.lineage) || app.appId === bundle.lineage
+      : app.installSource === shareInstallSource(bundle.lineage);
+  if (!isTarget) {
     throw new UserDbError(
       USERDB_ERROR_CODES.NOT_FOUND,
       `app "${appId}" is not an installed copy of this bundle's lineage`,
     );
   }
   if (db.getSetting(sharedBundleSettingKey(appId)) === options.bundleId) return { status: 'already-current' };
+  // Before any DDL: a refused hand-in leaves the app exactly as it was.
+  refuseAgentConnections(bundle, provenance);
 
   // DDL FIRST (Gate-5 finding 5): CREATE-only statements are additive and harmless under
   // the old html, so a failure at statement N leaves the OLD code current with a few
@@ -304,20 +378,32 @@ export async function updateAppFromBundle(
     }
   }
 
-  const meta = db.saveAppVersion(appId, bundle.html, 'shared update', undefined, {
+  const meta = db.saveAppVersion(appId, bundle.html, UPDATE_NOTE[provenance], undefined, {
     pinned: true,
     ...(bundle.contract !== undefined ? { contract: bundle.contract } : {}),
   });
 
   seedDocsAbsentOnly(db, appId, bundle.docs ?? []);
-  const refusedSlots = declareSharedConnections(db, appId, bundle.connections);
+  // Under `agent` the list is empty by the refusal above — the `shared` writer is never
+  // reached with an agent bundle, so no `shared` provenance row can be minted by a hand-in.
+  const refusedSlots = provenance === 'agent' ? [] : declareSharedConnections(db, appId, bundle.connections);
   db.setSetting(sharedBundleSettingKey(appId), options.bundleId);
   return { status: 'updated', version: meta.version, refusedSlots };
 }
 
 // ----------------------------------------------------------------------- sniff
 
-export type SnugFileKind = 'user-file' | 'app-bundle' | 'unknown';
+/**
+ * `'user-file-wrapper'` (TASK-20260905-binding-a-artifacts AC6): a user file wrapped as
+ * JSON for an artifact export — `{"format":"snug-user-file/1",…}` with `format` as the FIRST
+ * key by contract, so the sniff reads a fixed prefix and never parses. Decoded and
+ * re-sniffed by `unwrapUserFile` (user-file-wrapper.ts) before any import.
+ */
+export type SnugFileKind = 'user-file' | 'app-bundle' | 'user-file-wrapper' | 'unknown';
+
+export const USER_FILE_WRAPPER_FORMAT = 'snug-user-file/1' as const;
+/** The canonical wrapper's first bytes — `wrapUserFile` emits exactly this; the sniff reads exactly this. */
+export const USER_FILE_WRAPPER_PREFIX = `{"format":"${USER_FILE_WRAPPER_FORMAT}"`;
 
 const SQLITE_MAGIC = 'SQLite format 3\0';
 const BOM = [0xef, 0xbb, 0xbf] as const;
@@ -346,7 +432,14 @@ export function sniffSnugFile(bytes: Uint8Array): SnugFileKind {
       i++;
       continue;
     }
-    return b === 0x7b ? 'app-bundle' : 'unknown';
+    if (b !== 0x7b) return 'unknown';
+    return startsWithAt(bytes, i, USER_FILE_WRAPPER_PREFIX) ? 'user-file-wrapper' : 'app-bundle';
   }
   return 'unknown';
+}
+
+function startsWithAt(bytes: Uint8Array, offset: number, text: string): boolean {
+  if (bytes.length - offset < text.length) return false;
+  for (let i = 0; i < text.length; i++) if (bytes[offset + i] !== text.charCodeAt(i)) return false;
+  return true;
 }

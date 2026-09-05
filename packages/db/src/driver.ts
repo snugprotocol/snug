@@ -21,7 +21,8 @@ export type DbDriverResult =
   | { ok: true; rows?: unknown[][]; columns?: string[]; value?: unknown; bytesBase64?: string }
   | { ok: false; code: string; message: string; retryable: boolean };
 
-export type DbPersistence = 'opfs' | 'idb' | 'file' | 'none';
+/** `PersistenceKind` as surfaced to embedders: every real kind as itself, `memory` as `'none'`. */
+export type DbPersistence = 'opfs' | 'idb' | 'file' | 'window-storage' | 'artifact-html' | 'none';
 
 /** A failure the driver recovered from on its own — surfaced so embedders can log/notify. */
 export interface DbRecoverableErrorEvent {
