@@ -77,6 +77,7 @@ import { base64ToBytes } from '../base64.js';
 import {
   KV_TABLE_DDL,
   createDbDriver,
+  sqlJsInitConfig,
   forbiddenStatementReason,
   isRowModifyingStatement,
   isSqlTailEmpty,
@@ -820,6 +821,13 @@ export type OpenUserDbResult =
 export interface OpenUserDbOptions {
   backend?: PersistenceBackend;
   locateWasm?: (file: string) => string;
+  /**
+   * The sql.js engine as bytes (TASK-20260905-host-kit P4) — see `CreateDbDriverOptions`.
+   * The user-db open is the FIRST initSqlJs caller in the playground, and sql.js memoizes
+   * that first call, so the bytes must ride THIS option; they are also forwarded to the
+   * inner per-app driver so both sites boot the same way.
+   */
+  wasmBinary?: ArrayBuffer | Uint8Array;
   persistDebounceMs?: number;
   /** Whole-file cap; defaults to the spec constant. Tests shrink it. */
   maxBytes?: number;
@@ -1262,8 +1270,7 @@ export async function openUserDb(options: OpenUserDbOptions = {}): Promise<OpenU
   // Default backend lives in the user DB's OWN directory (F13) — never the per-app store.
   const backend = options.backend ?? detectPersistenceBackend(USERDB_OPFS_DIR);
   const file = options.file ?? USERDB_FILE;
-  const config = options.locateWasm !== undefined ? { locateFile: (f: string) => options.locateWasm!(f) } : undefined;
-  const SQL = await initSqlJs(config);
+  const SQL = await initSqlJs(sqlJsInitConfig(options));
 
   // ADOPT-FORWARD (ADR-0042, AC1/AC2/AC22). The canonical name moved from
   // `user.sqlite` to `user.snug`; a user upgrading has bytes only under the old name.
@@ -1998,6 +2005,7 @@ function construct(
     createDbDriver({
       backend: materializerBackend,
       ...(options.locateWasm !== undefined ? { locateWasm: options.locateWasm } : {}),
+      ...(options.wasmBinary !== undefined ? { wasmBinary: options.wasmBinary } : {}),
       persistDebounceMs: debounceMs,
     });
 

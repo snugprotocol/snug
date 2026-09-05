@@ -41,6 +41,16 @@ export interface CreateDbDriverOptions {
    * return the bundler-resolved URL (e.g. `import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'`).
    */
   locateWasm?: (file: string) => string;
+  /**
+   * The sql.js engine AS BYTES (TASK-20260905-host-kit P4). When present it REPLACES the
+   * locator — `initSqlJs` receives `{ wasmBinary }` and no `locateFile`, so the engine is
+   * instantiated from memory and no request for `sql-wasm.wasm` is ever made. This is
+   * how the host kit boots inside an artifact viewer whose `connect-src 'self'` blocks
+   * every wasm fetch (a `data:` URL through the locator would still be fetched, and
+   * blocked). Note sql.js memoizes its FIRST initialisation per page: the caller that
+   * boots first (the user-db open, in the playground) must be the one carrying the bytes.
+   */
+  wasmBinary?: ArrayBuffer | Uint8Array;
   /** Write-back debounce after a mutation, in ms. flush() forces pending writes. */
   persistDebounceMs?: number;
   /**
@@ -66,6 +76,38 @@ export interface SnugDbDriver {
   evict(namespace: string): Promise<void>;
   /** flush + close all sql.js handles. The driver is unusable afterwards. */
   close(): Promise<void>;
+}
+
+/** The two engine-source options, shared by both `initSqlJs` sites (`createDbDriver`, `openUserDb`). */
+export interface SqlJsEngineOptions {
+  locateWasm?: (file: string) => string;
+  wasmBinary?: ArrayBuffer | Uint8Array;
+}
+
+/**
+ * The ONE rule turning engine-source options into sql.js's init config, used by BOTH
+ * `initSqlJs` sites so they can never disagree (the userdb open and its inner per-app
+ * driver — a caller that forwarded one option and not the other would boot two ways).
+ * Bytes win and REPLACE the locator: Emscripten still computes the asset path when both
+ * are given, and in the artifact viewer that path is a blocked fetch waiting to happen.
+ * Neither option → `undefined`, sql.js's own resolution, byte-identical to before.
+ */
+export function sqlJsInitConfig(options: SqlJsEngineOptions): Parameters<typeof initSqlJs>[0] {
+  if (options.wasmBinary !== undefined) return { wasmBinary: toArrayBuffer(options.wasmBinary) };
+  if (options.locateWasm !== undefined) {
+    const locate = options.locateWasm;
+    return { locateFile: (file: string) => locate(file) };
+  }
+  return undefined;
+}
+
+/** Emscripten wants an ArrayBuffer; a view over a larger buffer is copied to exactly its bytes. */
+function toArrayBuffer(bytes: ArrayBuffer | Uint8Array): ArrayBuffer {
+  if (bytes instanceof Uint8Array) {
+    const exact = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength;
+    return (exact ? bytes.buffer : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)) as ArrayBuffer;
+  }
+  return bytes;
 }
 
 /** Exported for the userdb materializer: the kv table must be byte-identical on both sides. */
@@ -216,8 +258,7 @@ export function createDbDriver(options: CreateDbDriverOptions = {}): SnugDbDrive
 
   function loadSqlJs(): Promise<SqlJsStatic> {
     if (sqlPromise === undefined) {
-      const config = options.locateWasm !== undefined ? { locateFile: (file: string) => options.locateWasm!(file) } : undefined;
-      sqlPromise = initSqlJs(config).catch((err: unknown) => {
+      sqlPromise = initSqlJs(sqlJsInitConfig(options)).catch((err: unknown) => {
         sqlPromise = undefined; // transient init failures (network, wasm fetch) may be retried
         throw err;
       });
