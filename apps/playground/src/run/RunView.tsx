@@ -68,7 +68,7 @@ import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
 import { useMediaQuery } from './useMediaQuery.js';
-import { locateWasm } from './wasm.js';
+import { sqlJsEngineOptions } from './sqlJsEngine.js';
 import { ChatLog } from '../views/ChatLog.js';
 
 type HtmlState = { phase: 'loading' } | { phase: 'ready'; html: string } | { phase: 'missing' };
@@ -374,7 +374,7 @@ export default function RunView(): ReactElement {
   useEffect(() => {
     let cancelled = false;
     if (isUnownedId(id)) {
-      const ephemeral = createDbDriver({ backend: createMemoryBackend(), locateWasm });
+      const ephemeral = createDbDriver({ backend: createMemoryBackend(), ...sqlJsEngineOptions() });
       setDb(ephemeral);
       return () => {
         cancelled = true;
