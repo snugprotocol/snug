@@ -80,6 +80,19 @@ export interface CustodySeat {
   dismissNote?: () => void;
 }
 
+/** A newer version the user's agent handed in for an app the user EDITED — offered, never applied silently (T4 AC8, ADR-0045 §7). */
+export interface PendingAgentUpdate {
+  appId: string;
+  displayName: string;
+  bundleId: string;
+}
+
+/** The hand-in seat a host platform may carry: what is pending, and the act that takes it after the confirm. */
+export interface AgentHandInSeat {
+  pending: { get(): readonly PendingAgentUpdate[]; subscribe(listener: () => void): () => void };
+  apply(appId: string): Promise<{ version: number }>;
+}
+
 /**
  * The surfaces a host may switch off; `allows()` is the ONE reader. `appExport` (T4 AC6)
  * is the per-app bundle download — the share sheet's download-only mode; `share` gates the
@@ -212,6 +225,8 @@ export interface SnugPlatform {
   userdbBackend?: PersistenceBackend;
   /** Where the file stands and the acts on it (T4 AC5/AC7). Host kit only; the chip renders nothing without it. */
   custody?: CustodySeat;
+  /** Offered agent hand-ins for edited copies (T4 AC8). Host kit only; the run header renders nothing without it. */
+  agentHandIns?: AgentHandInSeat;
   /** OAuth transport. Web: undefined → popup + BroadcastChannel + `${origin}/oauth/callback`. */
   oauth?: {
     /** Recorded-string lifecycle: byte-identical across both OAuthService call sites. */

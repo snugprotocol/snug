@@ -18,7 +18,7 @@
     "check-whitepaper": "node scripts/check-whitepaper.mjs",
     "check-threat-model": "node --test scripts/check-threat-model.test.mjs && node scripts/check-threat-model.mjs",
     "check-sandbox-guard": "node --test scripts/check-sandbox-guard.test.mjs",
-    "check-host-kit": "node --test scripts/lib/page-blocks.test.mjs scripts/build-starters-pkg.test.mjs scripts/check-host-kit.test.mjs && node scripts/check-host-kit.mjs",
+    "check-host-kit": "node --test scripts/lib/page-blocks.test.mjs scripts/snug-embed.test.mjs scripts/build-starters-pkg.test.mjs scripts/check-host-kit.test.mjs && node scripts/check-host-kit.mjs",
     "check-gate-local": "node --test scripts/gate-local.test.mjs",
     "gate:local": "node scripts/gate-local.mjs",
     "check-release-desktop": "node --test scripts/release-desktop.test.mjs",
