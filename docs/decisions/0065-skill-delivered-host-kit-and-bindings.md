@@ -1,6 +1,6 @@
 # 0065 — A skill-delivered host kit and the host bindings: Snug apps run inside the agent the user already has
 
-- **Status:** proposed (draft at Gate 2 of the program; becomes `accepted` when the owner approves the plan and T7 lands the documentation)
+- **Status:** proposed (the owner approved D0–D15 on 2026-09-05 — "go ahead with defaults"; becomes `accepted` when T7 lands the documentation)
 - **Date:** 2026-09-05
 - **Task:** TASK-20260904-skill-only-snug (program) — children T1–T9
 

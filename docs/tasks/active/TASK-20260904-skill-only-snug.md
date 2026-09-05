@@ -1,6 +1,6 @@
 # TASK-20260904-skill-only-snug: Skill-only Snug — one skill, one host kit, the host bindings (program record)
 
-- **Status**: planned — **awaiting plan approval (Gate 2)**; nothing implemented
+- **Status**: in-progress — **plan APPROVED by the owner 2026-09-05 ("go ahead with defaults"; D0–D15 stand as written; the owner installs Hermes / OpenClaw / Codex as needed)**; T1 started
 - **Owner**: Jeetu
 - **Risk tier**: high — a program; every child carries its own tier (T2, T4, T5, T7 are High; T1 Low; T3, T6, T9 Medium unless escalated at their Gate 2; T8 owner-gated)
 - **Branch**: `feat/TASK-20260904-skill-only-snug` — carries this record, the ADR-0065 draft and T1's task file (docs only). **Children branch separately** (`feat/TASK-2026MMDD-<child-slug>`), one PR each; each child's Gate 6 updates this record in its own branch.
@@ -204,3 +204,9 @@ Single-homing (one contract, byte-compared, never restated) · silent frame drop
 - Next step: on approval → merge this docs branch (PR), then start T1 (`/pickup TASK-20260905-host-bindings-spikes`): publish the S1/S3/S4 probe artifacts, run S7, prepare the S2/S10 paste-page and the S9 Cowork checklist for the owner.
 - Mid-session owner ask (folded in as D15, AC8, T2/T3 specs): the skill attaches to the host's brain — no mode/BYOK/demo choice, no default model/provider, no hub account anywhere in the artifact or a skill-launched host.
 - Open questions: the D-batch above; whether the owner wants Hermes/OpenClaw/Codex installed on this Mac by the session or by hand.
+
+### 2026-09-05 03:40 UTC — Jeetu — plan approval
+- Done: owner answered the D-batch: **"go ahead with defaults"** — D0–D15 stand as recommended. On D14: **the owner installs Hermes, OpenClaw and Codex as needed** (S5/S6/S8 wait on that at T3/T5/T9).
+- State: Gate 2 passed for the program. ADR-0065 stays `proposed` until T7 lands the docs (its own status line says so). Docs branch pushed + PR opened; T1 branched from it (stacked; rebases onto `main` when the docs PR merges).
+- Next step: T1 — S7 first, then the S1/S3/S4 probe artifacts, then the S2/S10 page and the S9 checklist for the owner.
+- Open questions: none.
