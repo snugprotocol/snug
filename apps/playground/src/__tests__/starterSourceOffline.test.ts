@@ -75,18 +75,22 @@ describe('starterUpdateStatus when the html cannot be loaded', () => {
     return { db: opened.userDb, appId: app.appId };
   }
 
-  it('a rejecting html load resolves undefined — no update question, no unhandled rejection at hub paint', async () => {
+  it('the update QUESTION never reads the html (T4 AC12): offline or not, the catalogue answers it — no request at hub paint', async () => {
     const mod = await updateWith(sourceWith(rejecting));
     const { db, appId } = await installedWeather();
-    await expect(mod.starterUpdateStatus(db, appId)).resolves.toBeUndefined();
+    await expect(mod.starterUpdateStatus(db, appId)).resolves.toMatchObject({ folder: 'weather', latestVersion: 2 });
     await db.close();
   });
 
-  it('a FOREIGN rejection still propagates from the update question too', async () => {
-    const mod = await updateWith(sourceWith(foreign));
+  it('the update ACT is where the html is read: the named offline refusal is "unavailable"; a FOREIGN rejection still propagates', async () => {
+    const offline = await updateWith(sourceWith(rejecting));
     const { db, appId } = await installedWeather();
-    await expect(mod.starterUpdateStatus(db, appId)).rejects.toThrow(/malformed/);
+    await expect(offline.applyStarterUpdate(db, appId)).resolves.toEqual({ status: 'unavailable' });
     await db.close();
+    const broken = await updateWith(sourceWith(foreign));
+    const second = await installedWeather();
+    await expect(broken.applyStarterUpdate(second.db, second.appId)).rejects.toThrow(/malformed/);
+    await second.db.close();
   });
 
   it('positive twin: a resolving html load answers the update question', async () => {

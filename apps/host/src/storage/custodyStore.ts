@@ -3,20 +3,10 @@
 // artifact record and the export seat write it. A plain store (the playground's own
 // `createStore`), one object, read by the chip through `useStore`.
 
+import type { CustodyState } from '@playground/platform/platform';
 import { createStore, type Store } from '@playground/state/store';
 
-export interface CustodyState {
-  /** The working copy has changes the durable copy does not (a save is owed). */
-  dirty: boolean;
-  /** No durable write is possible in this view (no `artifact` namespace, or the first refusal came back). */
-  readOnly: boolean;
-  /** The browser's copy and the page's copy differ; which is the more recent by the save counter. */
-  divergence?: 'newer' | 'older';
-  /** The last outcome worth telling the user (a refusal, a conflict, an export result). */
-  note?: string;
-  /** The durable copy's counter and instant, when known. */
-  saved?: { saved: number; savedAt: string };
-}
+export type { CustodyState };
 
 export interface CustodyStore extends Store<CustodyState> {
   patch(partial: Partial<CustodyState>): void;

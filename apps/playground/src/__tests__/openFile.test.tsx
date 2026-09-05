@@ -175,6 +175,47 @@ describe('registerPlatformOpenFile — the App boot wiring (W2b item 5)', () => 
   });
 });
 
+describe('dispatchOpenedSnugFile — the artifact export wrapper (T4 AC6)', () => {
+  it('a `.snug.json` wrapper is unwrapped, re-sniffed and takes the confirm-then-replace path with the REAL bytes', async () => {
+    const harness = await fresh();
+    const { wrapUserFile } = await import('@snugprotocol/db');
+    const real = await exportedUserFileBytes(harness);
+    const wrapped = new TextEncoder().encode(await wrapUserFile(real));
+    const confirm = vi.fn(async () => true);
+    const importSpy = vi.spyOn(harness.sync, 'importUserFile').mockResolvedValue(undefined as never);
+    await harness.openFile.dispatchOpenedSnugFile(wrapped, '/Users/g/snug-user.snug.json', confirm);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(importSpy).toHaveBeenCalledTimes(1);
+    const handed = new Uint8Array(await importSpy.mock.calls[0]![0].arrayBuffer());
+    expect(handed).toEqual(real);
+    expect(harness.openFile.openUserFileErrorStore.get()).toBeNull();
+  });
+
+  it('(N) a wrapper whose payload is not a user file — or whose sha is wrong — reaches the banner, never the confirm', async () => {
+    const harness = await fresh();
+    const { USER_FILE_WRAPPER_FORMAT, bytesToBase64 } = await import('@snugprotocol/db');
+    const bundleBytes = new TextEncoder().encode('{"format":"snug-app-bundle/1"}');
+    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bundleBytes.slice()))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const smuggled = new TextEncoder().encode(JSON.stringify({ format: USER_FILE_WRAPPER_FORMAT, sha256: digest, bytesBase64: bytesToBase64(bundleBytes) }));
+    const confirm = vi.fn(async () => true);
+    await harness.openFile.dispatchOpenedSnugFile(smuggled, '/Users/g/snug-user.snug.json', confirm);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(harness.openFile.openUserFileErrorStore.get()).toMatch(/could not be opened/);
+    const wrongSha = new TextEncoder().encode(JSON.stringify({ format: USER_FILE_WRAPPER_FORMAT, sha256: '0'.repeat(64), bytesBase64: bytesToBase64(bundleBytes) }));
+    await harness.openFile.dispatchOpenedSnugFile(wrongSha, '/Users/g/snug-user.snug.json', confirm);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('(N) a wrapper under a path that is not a Snug file name is inert', async () => {
+    const harness = await fresh();
+    const { wrapUserFile } = await import('@snugprotocol/db');
+    const wrapped = new TextEncoder().encode(await wrapUserFile(await exportedUserFileBytes(harness)));
+    const confirm = vi.fn(async () => true);
+    await harness.openFile.dispatchOpenedSnugFile(wrapped, '/Users/g/notes.json', confirm);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+});
+
 describe('OpenUserFileConfirmDialog — the plain-language replace prompt', () => {
   let container: HTMLDivElement | undefined;
   let root: Root | undefined;

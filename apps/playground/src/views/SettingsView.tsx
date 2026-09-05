@@ -73,7 +73,7 @@ import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { downloadBlob } from '../run/exportDb.js';
-import { sniffSnugFile } from '@snugprotocol/db';
+import { sniffSnugFile, unwrapUserFile } from '@snugprotocol/db';
 import { receiveSharedBundle, sharedOpenRequestStore } from '../share/sharedInbox.js';
 import { FeedbackCard } from '../feedback/FeedbackCard.js';
 import { ADAPTER_DEFAULTS, labelFor, PROVIDER_LABELS } from '../run/ModelSelect.js';
@@ -768,9 +768,20 @@ function DataCard(): ReactElement {
       .arrayBuffer()
       .then(async (buffer) => {
         const bytes = new Uint8Array(buffer);
-        if (sniffSnugFile(bytes) === 'app-bundle') {
+        const kind = sniffSnugFile(bytes);
+        if (kind === 'app-bundle') {
           await addSharedFromBytes(bytes);
           setDataError('that file is a shared app, not a whole snug file — it has been added to “shared with you” on your apps page');
+          return;
+        }
+        if (kind === 'user-file-wrapper') {
+          // The artifact export (T4 AC6): unwrapped by the db package's one reader — sha
+          // verified, payload re-sniffed — then the ordinary import with the real bytes.
+          const unwrapped = await unwrapUserFile(new TextDecoder().decode(bytes));
+          if (!unwrapped.ok) throw new Error(`that Snug export could not be opened — ${unwrapped.detail}`);
+          const copy = new ArrayBuffer(unwrapped.bytes.byteLength);
+          new Uint8Array(copy).set(unwrapped.bytes);
+          await importUserFile({ arrayBuffer: () => Promise.resolve(copy) });
           return;
         }
         await importUserFile({ arrayBuffer: () => Promise.resolve(buffer) });
@@ -925,7 +936,7 @@ function DataCard(): ReactElement {
             import snug file
             <input
               type="file"
-              accept=".snug,.sqlite,application/x-sqlite3,application/octet-stream"
+              accept=".snug,.sqlite,.json,application/x-sqlite3,application/octet-stream,application/json"
               style={{ display: 'none' }}
               onChange={(event) => onImport(event.target.files?.[0])}
             />
@@ -936,7 +947,7 @@ function DataCard(): ReactElement {
             add shared app
             <input
               type="file"
-              accept=".snug,application/json"
+              accept=".snug,.json,application/json"
               style={{ display: 'none' }}
               onChange={(event) => onAddSharedApp(event.target.files?.[0])}
             />

@@ -116,11 +116,18 @@ async function click(el: Element | null): Promise<void> {
 describe('the run header cluster (P3: ModelSelect, connections door, share)', () => {
   const props = { appId: 'app-host-1', isStarter: false, connectionSlots: 1 };
 
-  it('host: no model selector, no connections door, no share control', async () => {
+  it('host: no model selector, no connections door; the share door STAYS as the app-export door (T4 AC6: appExport on by absence)', async () => {
     const g = await fresh(hostPlatform());
     await render(<g.RunHeaderActions {...props} onManageConnections={() => undefined} onShare={() => undefined} />);
     expect(byTestId('app-model-select')).toBeNull();
     expect(byTestId('manage-connections')).toBeNull();
+    expect(byTestId('share-app')).not.toBeNull();
+  });
+
+  it('host with appExport off as well: no share door at all', async () => {
+    const base = hostPlatform();
+    const g = await fresh({ ...base, capabilities: { ...base.capabilities, appExport: false } });
+    await render(<g.RunHeaderActions {...props} onManageConnections={() => undefined} onShare={() => undefined} />);
     expect(byTestId('share-app')).toBeNull();
   });
 

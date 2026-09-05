@@ -150,6 +150,14 @@ describe('starterUpdateStatus — detection (AC2, AC3)', () => {
     expect(status).toMatchObject({ installedVersion: 1, latestVersion: 2, updateAvailable: true });
   });
 
+  it('the status never reads the bundled html — the catalogue answers "still bundled" (T4 AC12: no CDN fetch at hub paint)', async () => {
+    setBundle(HTML_V2, 2);
+    const appId = installAtV1();
+    __setStarterUpdateFixturesForTests({}); // no html reachable at all — the status must still resolve
+    const status = await starterUpdateStatus(db, appId);
+    expect(status).toMatchObject({ installedVersion: 1, latestVersion: 2, updateAvailable: true });
+  });
+
   it('a non-starter app has no update status', async () => {
     setBundle(HTML_V2, 2);
     const app = db.installApp({ displayName: 'Built by hand', html: HTML_V1 });

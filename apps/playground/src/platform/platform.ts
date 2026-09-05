@@ -46,6 +46,41 @@ export type PlatformBrain =
     };
 
 /**
+ * Where the user's file stands relative to its durable copy (TASK-20260905-binding-a-artifacts
+ * AC5/AC7). The host kit's storage record writes it; the "your file" chip renders it. ONE
+ * home for the shape — the kit's store imports it from here.
+ */
+export interface CustodyState {
+  /** The working copy has changes the durable copy does not (a save is owed). */
+  dirty: boolean;
+  /** No durable write is possible in this view (no `artifact` namespace, or the first refusal came back). */
+  readOnly: boolean;
+  /** The browser's copy and the page's copy differ; which is the more recent by the save counter. */
+  divergence?: 'newer' | 'older';
+  /** The last outcome worth telling the user (a refusal, a conflict, an export result). */
+  note?: string;
+  /** The durable copy's counter and instant, when known. */
+  saved?: { saved: number; savedAt: string };
+}
+
+/**
+ * The custody seat a host platform may carry: the state the chip renders and the acts it
+ * offers. Every act is optional — an act that is absent is never rendered (no dead control).
+ */
+export interface CustodySeat {
+  state: { get(): CustodyState; subscribe(listener: () => void): () => void };
+  /** The explicit durable save ("save to this artifact"). Absent → no save act. */
+  save?: () => Promise<{ ok: boolean; message: string }>;
+  /** Whether a save can be attempted right now (a namespace exists and no refusal came back). */
+  canSave?: () => boolean;
+  /** The two divergence acts. */
+  loadPageCopy?: () => Promise<void>;
+  keepBrowserCopy?: () => void;
+  /** Clear the note. */
+  dismissNote?: () => void;
+}
+
+/**
  * The surfaces a host may switch off; `allows()` is the ONE reader. `appExport` (T4 AC6)
  * is the per-app bundle download — the share sheet's download-only mode; `share` gates the
  * LINK acts. The kit keeps `appExport` on while `share` is off, so a kit-edited app can be
@@ -175,6 +210,8 @@ export interface SnugPlatform {
   helperInstall?: (name: string, onProgress?: (p: HelperInstallProgressSeat) => void) => Promise<HelperStatusSeat>;
   /** Userdb + sync-sidecar backend. Web: undefined → detectPersistenceBackend(USERDB_OPFS_DIR). */
   userdbBackend?: PersistenceBackend;
+  /** Where the file stands and the acts on it (T4 AC5/AC7). Host kit only; the chip renders nothing without it. */
+  custody?: CustodySeat;
   /** OAuth transport. Web: undefined → popup + BroadcastChannel + `${origin}/oauth/callback`. */
   oauth?: {
     /** Recorded-string lifecycle: byte-identical across both OAuthService call sites. */

@@ -7,6 +7,7 @@
 
 import { memo, useEffect, useState, type ReactElement } from 'react';
 
+import { getPlatform } from '../platform/platform.js';
 import type { TurnMode } from '../state/webllm.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import type { LlmInspectorEntry, LlmInspectorState, LlmInspectorTool } from './llmInspector.js';
@@ -185,6 +186,15 @@ function emptyCopy(mode: TurnMode): { title: string; lesson: string } {
           'the hub runs the model server-side and never sends the round trip back, so this stays empty by design — switch to byok or local mode in settings to watch the prompts.',
       };
     case 'byok':
+      // The host kit on the DEMO brain (T4 AC12): its effective mode is byok/mock, but
+      // "your browser calls the model directly" would name a wire that does not exist there.
+      if (getPlatform().kind === 'host') {
+        return {
+          title: 'no round trips yet',
+          lesson:
+            'no host brain was found in this page, so the demo brain answers — a tiny offline script, no model, no server. each scripted turn still lands here. in-memory only.',
+        };
+      }
       return {
         title: 'no round trips yet',
         lesson:

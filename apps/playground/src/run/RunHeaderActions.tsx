@@ -163,7 +163,10 @@ export function RunHeaderActions({
         only: `onShare` is absent for a starter or a shared preview. Glyph `⇪` — the
         share arrow, monochrome like its neighbours; the accessible name is "share".
       */}
-      {onShare !== undefined && !isStarter && allows('share') ? (
+      {/* T4 AC6: the door also opens for the DOWNLOAD-ONLY sheet under a host that keeps
+          `appExport` while `share` (the link acts) is off — how a kit-edited app goes back
+          to the agent. */}
+      {onShare !== undefined && !isStarter && (allows('share') || allows('appExport')) ? (
         <Button
           variant="ghost"
           onClick={onShare}
