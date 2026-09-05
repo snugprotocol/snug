@@ -20,6 +20,7 @@
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
+import { getPlatform } from '../platform/platform.js';
 import { setMode } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
 import { useOllama } from '../state/ollama.js';
@@ -70,7 +71,24 @@ const BRAINS: Record<ActiveBrainKind, { label: string; aria: string; headline: s
     headline: 'snug hub',
     body: 'turns run through the Snug hub server you signed into.',
   },
+  // The platform-pinned host brain (TASK-20260905-host-kit P2): the label is the host's
+  // own (`PlatformBrain.label`), substituted at render — this row is the fallback shape.
+  host: {
+    label: 'host',
+    aria: 'what’s thinking: the AI of the host you opened Snug in',
+    headline: 'this host’s AI',
+    body: 'the AI of the host you opened Snug in answers every turn — nothing to configure.',
+  },
 };
+
+/** The chip copy for the active brain, with the host brain's own label substituted in. */
+function copyFor(brain: ActiveBrainKind): { label: string; aria: string; headline: string; body: string } {
+  const pinned = getPlatform().brain;
+  if (brain === 'host' && pinned?.kind === 'host') {
+    return { ...BRAINS.host, label: pinned.label, headline: pinned.label, aria: `what’s thinking: ${pinned.label}` };
+  }
+  return BRAINS[brain];
+}
 
 export function BrainChip(): ReactElement {
   const brain = useActiveBrain();
@@ -82,7 +100,7 @@ export function BrainChip(): ReactElement {
   const overrideArmed = useBrain().kind !== 'settings';
   const { open, toggle, close, triggerRef, menuRef } = useDismissableMenu();
 
-  const copy = BRAINS[brain];
+  const copy = copyFor(brain);
   const models = ollama !== 'unknown' && ollama.running ? ollama.models : [];
 
   return (

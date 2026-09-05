@@ -14,6 +14,7 @@
 // (lessons 2026-08-05: test where the decision is made).
 
 import { useMemo } from 'react';
+import { getPlatform, type PlatformBrain } from '../platform/platform.js';
 
 import { WEBLLM_DEFAULT_MODEL } from '../agent/webllm/model.js';
 import { useMode, type PlaygroundMode } from './mode.js';
@@ -70,11 +71,30 @@ export async function detectWebGpu(gpu: GpuLike | undefined): Promise<boolean> {
 export type Brain =
   | { kind: 'settings' }
   | { kind: 'webllm'; model: string }
-  | { kind: 'demo'; reason: 'no-webgpu' | 'probing' };
+  /** `'host'`: the platform pinned the demo brain — no host brain exists where the kit woke up. */
+  | { kind: 'demo'; reason: 'no-webgpu' | 'probing' | 'host' }
+  /**
+   * The HOST brain (TASK-20260905-host-kit P2): pinned by the platform, outranks
+   * everything below it. Disclosure fields only — the adapter itself stays on the
+   * platform seat and is reached through `createTurnAdapter`'s `'host'` arm.
+   */
+  | { kind: 'host'; label: string; streaming: boolean; tools: boolean; maxPromptBytes?: number };
 
-/** The one decision line (see module comment). 'unknown' never yields webllm: a turn
- * sent before the probe lands falls back to demo silently rather than racing the GPU. */
-export function resolveBrain(flagOn: boolean, webgpu: WebGpuStatus): Brain {
+/** The one decision line (see module comment). A platform-pinned brain wins outright
+ * (TASK-20260905-host-kit P2 — the host kit attaches to the host's brain, D15); below
+ * it, 'unknown' never yields webllm: a turn sent before the probe lands falls back to
+ * demo silently rather than racing the GPU. */
+export function resolveBrain(flagOn: boolean, webgpu: WebGpuStatus, pinned?: PlatformBrain): Brain {
+  if (pinned !== undefined) {
+    if (pinned.kind === 'demo') return { kind: 'demo', reason: 'host' };
+    return {
+      kind: 'host',
+      label: pinned.label,
+      streaming: pinned.streaming,
+      tools: pinned.tools,
+      ...(pinned.maxPromptBytes !== undefined ? { maxPromptBytes: pinned.maxPromptBytes } : {}),
+    };
+  }
   if (!flagOn) return { kind: 'settings' };
   if (webgpu === 'yes') return { kind: 'webllm', model: WEBLLM_DEFAULT_MODEL };
   return { kind: 'demo', reason: webgpu === 'no' ? 'no-webgpu' : 'probing' };
@@ -82,13 +102,15 @@ export function resolveBrain(flagOn: boolean, webgpu: WebGpuStatus): Brain {
 
 /** Non-hook read for factories (transport creation happens outside render). */
 export function currentBrain(): Brain {
-  return resolveBrain(webllmFlagStore.get(), webgpuStore.get());
+  return resolveBrain(webllmFlagStore.get(), webgpuStore.get(), getPlatform().brain);
 }
 
 export function useBrain(): Brain {
   const flag = useStore(webllmFlagStore);
   const gpu = useStore(webgpuStore);
-  return useMemo(() => resolveBrain(flag, gpu), [flag, gpu]);
+  // The platform is set once, before boot — a static input, so it needs no subscription.
+  const pinned = getPlatform().brain;
+  return useMemo(() => resolveBrain(flag, gpu, pinned), [flag, gpu, pinned]);
 }
 
 export function useWebllmFlag(): boolean {
@@ -103,9 +125,10 @@ export function useWebllmFlag(): boolean {
  * the brain makes the raw mode lie. The demo fallback runs the mock adapter through
  * the byok path, so it reports as 'byok'.
  */
-export type TurnMode = PlaygroundMode | 'webllm';
+export type TurnMode = PlaygroundMode | 'webllm' | 'host';
 
 export function resolveTurnMode(brain: Brain, mode: PlaygroundMode): TurnMode {
+  if (brain.kind === 'host') return 'host';
   if (brain.kind === 'webllm') return 'webllm';
   if (brain.kind === 'demo') return 'byok';
   return mode;

@@ -113,7 +113,9 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
   });
   return {
     async send(wire, { signal, onDelta }) {
-      if (needsConfirm()) {
+      // F15 guards the FILE's endpoints; a platform-pinned host brain never reads them
+      // (TASK-20260905-host-kit P3 — otherwise an imported file kills every turn in the kit).
+      if (options.mode !== 'host' && needsConfirm()) {
         return {
           ok: false,
           code: ERROR_CODES.CONSENT_REQUIRED,
@@ -131,9 +133,13 @@ export function createDirectAppTransport(options: DirectTransportOptions): Agent
         return { ok: false, code: guarded.code, message: guarded.message, retryable: guarded.retryable };
       }
       const outbound = guarded.wire;
-      // local talks to an unauthenticated endpoint; webllm runs IN the page — neither
-      // reads a provider key (webllm must not touch snug_secrets at all).
-      const key = options.mode === 'local' || options.mode === 'webllm' ? undefined : await readKey(options.provider);
+      // local talks to an unauthenticated endpoint; webllm runs IN the page; the host
+      // brain is the host's own — none reads a provider key (webllm and host must not
+      // touch snug_secrets at all).
+      const key =
+        options.mode === 'local' || options.mode === 'webllm' || options.mode === 'host'
+          ? undefined
+          : await readKey(options.provider);
       const adapter = createTurnAdapter(
         {
           mode: options.mode,
@@ -245,6 +251,16 @@ export function resolveAppTransport(
   // graceful no-WebGPU fallback (the shell banner explains it). `'settings'` is the
   // pre-existing behavior, byte-for-byte.
   const brain = currentBrain();
+  if (brain.kind === 'host') {
+    // The platform-pinned brain (TASK-20260905-host-kit P2) outranks the file entirely —
+    // mode, provider, keys and the F15 confirm are all the file's business, not this arm's.
+    return createDirectAppTransport({
+      mode: 'host',
+      provider,
+      ...(appId !== undefined ? { appId } : {}),
+      ...(onLlmEvent !== undefined ? { onLlmEvent } : {}),
+    });
+  }
   if (brain.kind === 'webllm') {
     return createDirectAppTransport({
       mode: 'webllm',

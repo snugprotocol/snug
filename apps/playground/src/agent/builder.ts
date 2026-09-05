@@ -220,6 +220,10 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
   const readKey = options.getKey ?? getByokKey;
   const needsConfirm = options.needsConfirm ?? ((): boolean => endpointsNeedConfirmStore.get());
   const isWebllm = options.mode === 'webllm';
+  // A platform-pinned host brain that cannot call tools builds tool-free too — the
+  // webllm arm generalised (TASK-20260905-host-kit P2 / A5: `PlatformBrain.tools`).
+  const pinnedBrain = getPlatform().brain;
+  const toolFree = isWebllm || (options.mode === 'host' && pinnedBrain?.kind === 'host' && !pinnedBrain.tools);
   // webllm builds run TOOL-FREE (web-llm 0.2.84 function calling is 8B-Hermes-only and
   // forbids custom system prompts — see webllmAdapter.ts): the file-creation layer is
   // replaced by the fenced-HTML instruction, and the artifact is extracted from the
@@ -235,15 +239,16 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
   // app-chat lanes ride this same assembly (useBuilderChat builds its agent only here),
   // so this is their platform decision altitude too.
   const platform = getPlatform().kind;
-  const system = isWebllm
+  const system = toolFree
     ? `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform })}${CONTEXT_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`
     : buildHostSystemPrompt({ appBuilder: true, artifacts: true, platform });
   return {
     async send(turn, handlers, signal) {
       const { message, contextBlock, history, tools: toolOverride } = asTurn(turn);
       // F15: an imported/pulled DB is executable config — its endpoint/provider
-      // settings must be re-confirmed before ANY direct turn, builder included.
-      if (needsConfirm()) {
+      // settings must be re-confirmed before ANY direct turn, builder included. A
+      // platform-pinned host brain never reads them (TASK-20260905-host-kit P3).
+      if (options.mode !== 'host' && needsConfirm()) {
         return {
           ok: false,
           code: ERROR_CODES.CONSENT_REQUIRED,
@@ -260,9 +265,9 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         options.mode === 'byok' && options.provider !== 'mock' && options.appId !== undefined
           ? (appProviderPinFor(options.appId) ?? options.provider)
           : options.provider;
-      // local talks to an unauthenticated endpoint; webllm runs IN the page — neither
-      // reads a provider key.
-      const key = options.mode === 'local' || isWebllm ? undefined : await readKey(provider);
+      // local talks to an unauthenticated endpoint; webllm runs IN the page; the host
+      // brain is the host's own — none reads a provider key.
+      const key = options.mode === 'local' || isWebllm || options.mode === 'host' ? undefined : await readKey(provider);
       // PER SEND, never at construction — useBuilderChat memoizes this agent, so a model
       // captured here at creation would freeze the thread on whatever was chosen when the
       // view mounted. An explicit `options.model` still wins (test pins, existing callers).
@@ -281,7 +286,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
       const adapter = createTurnAdapter(adapterConfig, 'chat');
       // Tool-free in webllm mode: `runAgentTurn` treats an empty list as JSON-only
       // mode and offers the adapter NO tools (which would refuse them anyway).
-      const tools: AgentTool[] = isWebllm
+      const tools: AgentTool[] = toolFree
         ? []
         : toolOverride !== undefined
         ? toolOverride
@@ -327,7 +332,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         },
       });
       if (signal.aborted) return cancelled();
-      if (result.ok && isWebllm) {
+      if (result.ok && toolFree) {
         // The webllm "artifact_write": a complete single-file document in the reply
         // is the app (see appHtml.ts). A failed sink write must not destroy the reply
         // text — the user keeps the code in chat, and the next build can retry.

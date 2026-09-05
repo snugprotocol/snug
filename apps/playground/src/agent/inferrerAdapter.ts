@@ -42,6 +42,8 @@ type LiveAdapterResolution = { ok: true; adapter: AgentAdapter } | { ok: false }
  */
 type WireDecision =
   | { kind: 'webllm' }
+  /** The platform-pinned host brain (TASK-20260905-host-kit P2) — the host's own adapter. */
+  | { kind: 'host' }
   // No `provider`: local mode ignores provider/key entirely (adapter.ts) — the
   // endpoint IS the wire, so carrying a provider here would only license copy that
   // names something the local adapter never reads.
@@ -51,6 +53,7 @@ type WireDecision =
 
 async function decideWire(appId?: string): Promise<WireDecision> {
   const brain = currentBrain();
+  if (brain.kind === 'host') return { kind: 'host' };
   if (brain.kind === 'webllm') return { kind: 'webllm' };
   if (brain.kind === 'demo') return { kind: 'unavailable' }; // the demo brain cannot read docs
   const mode = modeStore.get();
@@ -78,6 +81,8 @@ async function decideWire(appId?: string): Promise<WireDecision> {
 export async function inferenceWireCopy(): Promise<string> {
   const wire = await decideWire();
   switch (wire.kind) {
+    case 'host':
+      return 'pasted text goes to the AI of the host you opened Snug in';
     case 'webllm':
       return 'pasted text stays in this browser (local WebLLM model)';
     case 'local':
@@ -109,6 +114,9 @@ export async function inferenceWireCopy(): Promise<string> {
 export async function liveInferenceAdapter(appId?: string): Promise<LiveAdapterResolution> {
   const wire = await decideWire(appId);
   if (wire.kind === 'unavailable') return { ok: false };
+  if (wire.kind === 'host') {
+    return { ok: true, adapter: createTurnAdapter({ mode: 'host', provider: providerStore.get() }, 'chat') };
+  }
   if (wire.kind === 'webllm') {
     return { ok: true, adapter: createTurnAdapter({ mode: 'webllm', provider: providerStore.get() }, 'chat') };
   }
