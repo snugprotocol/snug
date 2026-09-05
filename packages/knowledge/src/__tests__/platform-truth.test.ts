@@ -207,3 +207,42 @@ describe('AC2 — the inferrer user slot gains platform facts on desktop ONLY; s
     expect(desktop.user.endsWith(absent.user.slice(absent.user.indexOf('<provider_docs>')))).toBe(true);
   });
 });
+
+// TASK-20260905-host-kit step 3: the host kit is a THIRD shell. It assembles exactly as
+// 'web' does — the kit renders the playground's own tree inside a foreign host and owns
+// no platform facts of its own (the desktop layer's LAN/loopback claims would be false
+// there). Absent, 'web' and 'host' are byte-identical on both branches and in the
+// inferrer's user slot; 'desktop' stays the one platform with a layer (positive twin).
+describe("TASK-20260905-host-kit: 'host' assembles byte-identically to 'web'", () => {
+  const builder = { appBuilder: true, artifacts: true } as const;
+  const runtime = { appBuilder: false, artifacts: false, appRuntime: true } as const;
+
+  it("builder branch: 'host' === 'web' === absent", () => {
+    const web = buildHostSystemPrompt({ ...builder, platform: 'web' });
+    const host = buildHostSystemPrompt({ ...builder, platform: 'host' });
+    expect(host).toBe(web);
+    expect(host).toBe(buildHostSystemPrompt(builder));
+    expect(host).not.toContain(getSystemLayer('platform-desktop'));
+  });
+
+  it("app-runtime branch: 'host' === 'web' === absent", () => {
+    const web = buildHostSystemPrompt({ ...runtime, platform: 'web' });
+    const host = buildHostSystemPrompt({ ...runtime, platform: 'host' });
+    expect(host).toBe(web);
+    expect(host).toBe(buildHostSystemPrompt(runtime));
+  });
+
+  it("'desktop' still differs from 'host' (positive twin — the layer exists and lands on desktop only)", () => {
+    const desktop = buildHostSystemPrompt({ ...builder, platform: 'desktop' });
+    expect(desktop).not.toBe(buildHostSystemPrompt({ ...builder, platform: 'host' }));
+    expect(desktop).toContain(getSystemLayer('platform-desktop'));
+  });
+
+  it("inferrer user slot: 'host' carries no platform facts, exactly like 'web'", () => {
+    const input = { providerName: 'Acme', docsText: 'docs' } as const;
+    const web = buildConnectionRequirementInferrerPrompt({ ...input, platform: 'web' });
+    const host = buildConnectionRequirementInferrerPrompt({ ...input, platform: 'host' });
+    expect(host).toEqual(web);
+    expect(host).toEqual(buildConnectionRequirementInferrerPrompt(input));
+  });
+});
