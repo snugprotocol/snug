@@ -139,10 +139,15 @@ must sit on the debug stub port `127.0.0.1:43120`:
 
 ```
 cd apps/share-relay && pnpm exec wrangler dev --ip 127.0.0.1 --port 43120 \
-  --var "ALLOWED_ORIGINS:https://playground.snugprotocol.org,tauri://localhost,http://tauri.localhost,http://localhost:5173"
+  --var "ALLOWED_ORIGINS:https://playground.snugprotocol.org,tauri://localhost,http://tauri.localhost,http://localhost:5173,http://localhost:41419"
 ```
 
-Then `VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120` in `apps/playground/.env.local` (with
+(`pnpm exec`, not a bare `wrangler` — a stale global wrangler carries a workerd that refuses
+the config's compatibility date. The last origin is the `tauri dev` webview: the Tauri HTTP
+plugin ALWAYS stamps `Origin` from the webview URL — `tauri://localhost` in a release,
+`http://localhost:41419` under `tauri dev` — so a dev shell is a foreign origin to the
+production relay too; `deploy-relay.mjs --dev-origin http://localhost:41419` is the sanctioned,
+non-sticky door for that.) Then `VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120` in `apps/playground/.env.local` (with
 `VITE_SNUG_SHARE_LINK_ORIGIN=http://localhost:5173`; restart `pnpm dev`) and
 `VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120 pnpm --filter desktop dev`. Links read
 `http://localhost:5173/s/<id>#<key>`; "open in Snug for Mac" hands the same id to the dev
