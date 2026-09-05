@@ -1,6 +1,6 @@
 # 0063 — App sharing: a shared app is a starter that travels
 
-- **Status:** accepted (owner plan approval 2026-09-04, "go with defaults": `.snug` for bundles, update act included, contract carried as reviewed text — §8(b) — which amends ADR-0018 D3 for this one channel; drafted at Gate 2 and revised after the fresh-context plan review the same day)
+- **Status:** accepted (owner plan approval 2026-09-04, "go with defaults": `.snug` for bundles, update act included, contract carried as reviewed text — §8(b) — which amends ADR-0018 D3 for this one channel; drafted at Gate 2 and revised after the fresh-context plan review the same day); **§4 and §6 amended 2026-09-04 (owner walk, TASK-20260904-share-link-ux) — see [Amendment](#amendment--2026-09-04-no-keep-step-no-file-through-the-os-sheet-task-20260904-share-link-ux)**
 - **Date:** 2026-09-04
 - **Task:** TASK-20260904-app-sharing
 
@@ -171,3 +171,26 @@ system-slot text arriving on an untrusted channel (§8).
   review; mutating connected calls still confirm; third-party system-slot text iff §8b).
 - Spec impact: internal draft only. Promotion of `snug-app-bundle/1` to `schemas/` is a
   separate spec-sync when a second implementation wants it.
+
+## Amendment — 2026-09-04: no "keep" step, no file through the OS sheet (TASK-20260904-share-link-ux)
+
+The owner walked the shipped surfaces the day they merged and two of §4/§6's mechanisms
+did not survive contact:
+
+- **§4, the "keep" act is gone.** A link preview stays memory-only and **installs directly
+  from memory**; the row `sharedApp:<bundleId>` is written only when a bundle arrived as an
+  attachment (the double-click or the Settings pick is the act). "Keep" was a bookmark the
+  messenger already holds, and beside "install" it read as a prerequisite it never was.
+  The property §4 exists for — a drive-by URL writes nothing into the user file — is
+  unchanged; the link's only write is the install the user clicks.
+- **§6, the OS share sheet carries the LINK, never a file.** Chrome's
+  `navigator.canShare({ files })` validates count and size only; the file-extension
+  allowlist lives in the browser process and surfaces as `NotAllowedError: Permission
+  denied` from `share()`, and `.snug` is not on it. A capability check that cannot see the
+  refusal is not a capability check. "share…" now mints the same link "copy link" mints
+  (ADR-0064) and hands `{ title, text, url }` to `navigator.share` — every Web Share
+  implementation accepts a URL, and on the desktop the macOS sheet offers Messages, Mail,
+  Notes and AirDrop for it. The `.snug` download stays as the offline path; a build with no
+  relay renders neither link act.
+- **The sharer picks the link's lifetime** — 24 hours, 1 week (default) or 1 month — see
+  ADR-0064's amendment.

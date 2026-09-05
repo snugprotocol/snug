@@ -18,7 +18,7 @@ import {
   hydrateSharedInbox,
   isSharedId,
   isUnownedId,
-  keepSharedEntry,
+  persistSharedEntry,
   listSharedEntries,
   receiveSharedBundle,
   removeSharedEntry,
@@ -67,10 +67,10 @@ describe('receiveSharedBundle — memory first, persisted on an explicit act', (
     expect(db.getSetting(sharedAppSettingKey(expectedId))).toMatchObject({ source: 'file' });
   });
 
-  it('keep promotes a memory entry to the file; remove deletes both', async () => {
+  it('persist promotes a memory entry to the file; remove deletes both', async () => {
     const received = await receiveSharedBundle(bundleText(), { source: 'link', persist: false });
     if (!received.ok) throw new Error('receive failed');
-    const kept = await keepSharedEntry(received.entry.bundleId);
+    const kept = await persistSharedEntry(received.entry.bundleId);
     expect(kept?.kept).toBe(true);
     expect(db.getSetting(sharedAppSettingKey(received.entry.bundleId))).toBeDefined();
     await removeSharedEntry(received.entry.bundleId);

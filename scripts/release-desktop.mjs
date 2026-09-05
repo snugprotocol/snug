@@ -62,6 +62,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { pinMatchesManifest, readPin } from './check-helper-pin.mjs';
+import { SHARE_RELAY_ORIGIN, isAppEnvFile } from './deploy-web.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DESKTOP = path.join(ROOT, 'apps', 'desktop');
@@ -71,6 +72,34 @@ const UNIVERSAL_BUNDLE = path.join(DESKTOP, 'src-tauri', 'target', 'universal-ap
 const EULA_PATH = path.join(DESKTOP, 'src-tauri', 'EULA.txt');
 
 export const SEMVER = /^\d+\.\d+\.\d+$/;
+
+/**
+ * What the shipped shell's UI build must know (TASK-20260904-share-link-ux AC8): the
+ * share relay, so the link actions render on the desktop exactly as on the hosted
+ * playground. Pinned to deploy-web.mjs's constant so the two builds cannot name two
+ * relays.
+ */
+export const DESKTOP_PINNED_BUILD_ENV = Object.freeze({ VITE_SNUG_SHARE_RELAY: SHARE_RELAY_ORIGIN });
+export { isAppEnvFile };
+
+/**
+ * The environment `tauri build` runs in. A caller's DIFFERENT relay is refused rather
+ * than overridden (a release naming another relay is a different product), and an
+ * app-level `.env*` under apps/desktop is refused for the reason deploy-web.mjs refuses
+ * it: Vite would fold its VITE_* values into a release no clean-tree check sees.
+ */
+export function desktopBuildEnv(env, desktopEnvFiles) {
+  if (desktopEnvFiles.length) {
+    throw new Error(`REFUSED: ${desktopEnvFiles.join(', ')} exists — an app-level .env file can put VITE_* values into the release. Move it aside.`);
+  }
+  const given = env.VITE_SNUG_SHARE_RELAY;
+  if (given !== undefined && given !== DESKTOP_PINNED_BUILD_ENV.VITE_SNUG_SHARE_RELAY) {
+    throw new Error(
+      `REFUSED: VITE_SNUG_SHARE_RELAY is set to ${JSON.stringify(given)} in the environment; a release pins ${DESKTOP_PINNED_BUILD_ENV.VITE_SNUG_SHARE_RELAY} (ADR-0064). Unset it.`,
+    );
+  }
+  return { ...env, ...DESKTOP_PINNED_BUILD_ENV };
+}
 
 /** The stable asset names the playground's single-homed URLs expect (releaseChannel.ts). */
 export const STABLE_ASSETS = ['Snug.dmg', 'Snug.app.tar.gz', 'Snug.app.tar.gz.sig', 'latest.json', 'desktop-releases.json'];
@@ -664,9 +693,21 @@ async function main() {
     }
   }
 
+  let buildEnv;
+  try {
+    const desktopEnvFiles = readdirSync(path.join(ROOT, 'apps/desktop'))
+      .filter(isAppEnvFile)
+      .map((f) => `apps/desktop/${f}`);
+    buildEnv = desktopBuildEnv(process.env, desktopEnvFiles);
+  } catch (err) {
+    console.error(String(err.message));
+    process.exit(2);
+  }
+  console.log(`· VITE_SNUG_SHARE_RELAY=${buildEnv.VITE_SNUG_SHARE_RELAY} (pinned — the shell's share links)`);
   execSync('pnpm --filter desktop exec tauri build --target universal-apple-darwin', {
     cwd: ROOT,
     stdio: 'inherit',
+    env: buildEnv,
   });
 
   const dmg = findOne(path.join(UNIVERSAL_BUNDLE, 'dmg'), '.dmg');

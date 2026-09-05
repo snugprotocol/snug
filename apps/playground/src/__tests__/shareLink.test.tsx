@@ -30,9 +30,11 @@ declare global {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 // The relay origin is a BUILD-TIME constant; mock the config so the link path is live here.
+// The link origin is pinned too: vitest reads a developer's gitignored `.env.local`, and
+// a local VITE_SNUG_SHARE_LINK_ORIGIN would otherwise red the grammar test (2026-09-04).
 vi.mock('../config/site.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../config/site.js')>();
-  return { ...actual, SHARE_RELAY_ORIGIN: 'https://share.test' };
+  return { ...actual, SHARE_RELAY_ORIGIN: 'https://share.test', SHARE_LINK_ORIGIN: 'https://playground.snugprotocol.org' };
 });
 
 const LINEAGE = '0b6e5a1c-8d5e-4f13-9a2b-7c1d2e3f4a5b';
@@ -110,8 +112,31 @@ describe('relayClient — the key is never sent (AC19 N)', () => {
         // and the plaintext never travels either
         if (body instanceof Uint8Array) expect(new TextDecoder().decode(body)).not.toContain('Weather Wall');
       }
-      expect(seen[0]?.url).toBe('https://share.test/v1/bundles');
+      expect(seen[0]?.url).toBe('https://share.test/v1/bundles?expires=7d'); // the default lifetime: a week
       expect(seen[2]?.init?.headers).toEqual({ Authorization: `Bearer ${'T'.repeat(43)}` });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('the sharer\'s expiry choice rides as the `expires` query param — the closed set 1d / 7d / 30d, default 7d', async () => {
+    const seen: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        seen.push(url);
+        return new Response(JSON.stringify({ id: 'A'.repeat(22), expiresAt: '2026-09-05T00:00:00.000Z', revokeToken: 'T'.repeat(43) }), { status: 201 });
+      }),
+    );
+    try {
+      const { DEFAULT_SHARE_EXPIRY, SHARE_EXPIRY_CHOICES, uploadCiphertext } = await import('../share/relayClient.js');
+      expect(SHARE_EXPIRY_CHOICES.map((c) => c.value)).toEqual(['1d', '7d', '30d']);
+      expect(SHARE_EXPIRY_CHOICES.map((c) => c.label)).toEqual(['24 hours', '1 week', '1 month']);
+      expect(DEFAULT_SHARE_EXPIRY).toBe('7d');
+      await uploadCiphertext(new Uint8Array([1]), '1d');
+      await uploadCiphertext(new Uint8Array([1]), '30d');
+      await uploadCiphertext(new Uint8Array([1]));
+      expect(seen).toEqual(['https://share.test/v1/bundles?expires=1d', 'https://share.test/v1/bundles?expires=30d', 'https://share.test/v1/bundles?expires=7d']);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -217,17 +242,16 @@ describe('receiveShareLink + SharedLinkView (AC20)', () => {
 
 describe('shareLinks — records split by sensitivity (AC22)', () => {
   it('the public record lives in settings, the token and key in secrets; a default export carries neither', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ id: 'E'.repeat(22), expiresAt: '2099-10-04T00:00:00.000Z', revokeToken: 'T'.repeat(43) }), { status: 201 })),
-    );
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ id: 'E'.repeat(22), expiresAt: '2099-10-04T00:00:00.000Z', revokeToken: 'T'.repeat(43) }), { status: 201 }));
+    vi.stubGlobal('fetch', fetchSpy);
     try {
       const { mintShareLink, listShareLinks, linkForRecord, revokeShareLink } = await import('../share/shareLinks.js');
       const { prepareShare } = await import('../share/exportShare.js');
       const app = db.installApp({ displayName: 'Weather Wall', html: '<html>hi</html>' });
       const prepared = await prepareShare(app.appId, []);
-      const { link, record } = await mintShareLink(app.appId, prepared);
+      const { link, record } = await mintShareLink(app.appId, prepared, '30d');
       const key = link.split('#')[1]!;
+      expect((fetchSpy.mock.calls[0] as unknown as [string])[0]).toBe('https://share.test/v1/bundles?expires=30d');
       expect(db.getSetting(shareLinkSettingKey(app.appId, record.id))).toMatchObject({ id: record.id, expiresAt: record.expiresAt });
       expect(JSON.stringify(db.getSetting(shareLinkSettingKey(app.appId, record.id)))).not.toContain('T'.repeat(43));
       expect(db.getSecret(`share:${record.id}`)).toContain('T'.repeat(43));

@@ -26,7 +26,7 @@ export interface SharedShelfProps {
 
 function receivedLabel(entry: SharedEntry): string {
   const via = entry.source === 'link' ? 'from a link' : entry.source === 'settings' ? 'from a file you added' : 'from a file';
-  return entry.kept ? via : `${via} · not kept yet`;
+  return entry.kept ? via : `${via} · this visit only`;
 }
 
 export function SharedShelf({ installedBySource }: SharedShelfProps): ReactElement | null {

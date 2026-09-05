@@ -4,9 +4,9 @@
 // the docs (each with its size and first line — the wiki is the app's living memory and
 // `memory` in particular is defined as what the app learned about the USER, so it is
 // off by default; owner Q7), shows the share scan's warnings by location, and offers the
-// transports: download the `.snug`, hand it to the OS share sheet where the browser can
-// (mobile sheets, macOS AirDrop), and — phase 2, only when a relay origin is configured —
-// copy a link.
+// transports: download the `.snug`, and — only when a relay origin is configured — the
+// LINK, copied or handed to the OS share sheet (ShareLinkPanel). A file never goes to the
+// OS sheet (TASK-20260904-share-link-ux: Chrome refuses a .snug after canShare said yes).
 //
 // Through ConfirmOverlay, which PORTALS to <body>: the run header's backdrop-filter
 // would otherwise confine this fixed overlay to the header's box (lesson 2026-08-26).
@@ -20,7 +20,7 @@ import type { ReactElement } from 'react';
 import { getUserDb } from '../state/userdb.js';
 import { Button } from '../ui/Button.js';
 import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
-import { canShareFile, downloadShare, prepareShare, shareViaOs, type PreparedShare } from './exportShare.js';
+import { downloadShare, prepareShare, type PreparedShare } from './exportShare.js';
 import { ShareLinkPanel, shareLinksAvailable } from './ShareLinkPanel.js';
 
 export interface ShareSheetProps {
@@ -56,7 +56,7 @@ export function ShareSheet({ appId, displayName, onClose }: ShareSheetProps): Re
   const [docs, setDocs] = useState<DocChoice[] | undefined>(undefined);
   const [prepared, setPrepared] = useState<PreparedShare | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
-  const [busy, setBusy] = useState<'download' | 'share' | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
 
   useEffect(() => {
@@ -111,20 +111,12 @@ export function ShareSheet({ appId, displayName, onClose }: ShareSheetProps): Re
 
   const onDownload = useCallback(() => {
     if (prepared === undefined) return;
-    setBusy('download');
+    setBusy(true);
     try {
       downloadShare(prepared);
     } finally {
-      setBusy(undefined);
+      setBusy(false);
     }
-  }, [prepared]);
-
-  const onShareOs = useCallback(() => {
-    if (prepared === undefined) return;
-    setBusy('share');
-    void shareViaOs(prepared)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setBusy(undefined));
   }, [prepared]);
 
   const bundle = prepared?.bundle;
@@ -240,15 +232,10 @@ export function ShareSheet({ appId, displayName, onClose }: ShareSheetProps): Re
         <span className="hint share-size" data-testid="share-size">
           {prepared !== undefined ? `${kb(prepared.bytes)} · ${prepared.fileName}` : ''}
         </span>
-        {prepared !== undefined && canShareFile(prepared) ? (
-          <Button variant="ghost" data-testid="share-os" disabled={blocked || busy !== undefined} onClick={onShareOs} title="AirDrop, Messages, Mail — wherever this device can send a file">
-            share…
-          </Button>
-        ) : null}
         <Button
           variant="primary"
           data-testid="share-download"
-          disabled={prepared === undefined || blocked || busy !== undefined}
+          disabled={prepared === undefined || blocked || busy}
           onClick={onDownload}
           title="a .snug file you send yourself — nothing leaves this device until you do"
         >

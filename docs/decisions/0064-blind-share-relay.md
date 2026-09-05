@@ -1,6 +1,6 @@
 # 0064 — One blind relay for share links (amends ADR-0013)
 
-- **Status:** accepted (owner Q1 = A, plan approval 2026-09-04, "go with defaults"; amends ADR-0013 — the relay is BUILT under TASK-20260904 and DEPLOYED only on a separate explicit owner ask per the release rules)
+- **Status:** accepted (owner Q1 = A, plan approval 2026-09-04, "go with defaults"; amends ADR-0013 — the relay is BUILT under TASK-20260904 and DEPLOYED only on a separate explicit owner ask per the release rules; **deployed 2026-09-04T19:16Z**); **§3 amended 2026-09-04 (TASK-20260904-share-link-ux) — see [Amendment](#amendment--2026-09-04-the-sharer-picks-the-lifetime-the-rate-limit-is-a-scripted-act-task-20260904-share-link-ux)**
 - **Date:** 2026-09-04
 - **Task:** TASK-20260904-app-sharing
 
@@ -71,3 +71,27 @@ only for users who connected a sync origin — which today is nobody by default.
 - Cost: Cloudflare free tier at launch scale (Workers 100k req/day; R2 10 GB); grows with
   shares, bounded by TTL.
 - A revoke is best-effort: a recipient who already fetched keeps the bytes.
+
+## Amendment — 2026-09-04: the sharer picks the lifetime; the rate limit is a scripted act (TASK-20260904-share-link-ux)
+
+- **§3's "30-day TTL" becomes a ceiling.** `POST /v1/bundles?expires=1d|7d|30d` stamps the
+  sharer's choice — **24 hours, 1 week (the default) or 1 month** — and `TTL_DAYS` (30) is
+  the ceiling: a choice above it is refused with 400, never clamped silently; an absent
+  choice is a week. The closed set is the contract (a free-form seconds value would make
+  the relay's retention a caller's decision). A read that finds an expired object deletes
+  it; the bucket's 31-day lifecycle rule remains the backstop, not the authority. The
+  receiver's copy no longer promises "30 days" — it says the sender picks.
+- **The per-IP rate limit is written by `deploy-relay.mjs ratelimit`** (print-and-stop,
+  `--apply` on the explicit ask) through the rulesets API's `http_ratelimit` phase, not by
+  hand in the dashboard: POST `/v1/bundles` on the relay host, 20 per minute per IP, block
+  10 minutes, **clamped to the zone's plan with every clamp printed** (the Free plan allows
+  only 10 s / 10 s). It needs one scoped API token (`Zone.Zone:Read` + `Zone.Zone WAF:Edit`)
+  held as `CLOUDFLARE_WAF_TOKEN` in the gitignored root `.env` — deliberately not
+  `CLOUDFLARE_API_TOKEN`, which wrangler would adopt for every deploy. Wrangler's own OAuth
+  session cannot call the WAF API (verified: `9109 Invalid access token`, scopes `zone
+  (read)` only).
+- **The relay origin is a pinned build invariant on both shipped surfaces**:
+  `deploy-web.mjs`'s `PINNED_BUILD_ENV` and `release-desktop.mjs`'s
+  `DESKTOP_PINNED_BUILD_ENV` both carry `VITE_SNUG_SHARE_RELAY=https://share.snugprotocol.org`
+  from one constant, so the hosted playground and the desktop shell cannot name two relays,
+  and §4's "a build without it renders no link action" now describes only self-hosters.

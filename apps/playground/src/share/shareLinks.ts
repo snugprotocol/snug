@@ -12,7 +12,7 @@ import { shareLinkSettingKey, shareLinkSettingPrefixFor, type UserDb } from '@sn
 
 import { getUserDb } from '../state/userdb.js';
 import { encryptBundle } from './bundleCrypto.js';
-import { revokeShare, shareLinkFor, uploadCiphertext } from './relayClient.js';
+import { DEFAULT_SHARE_EXPIRY, revokeShare, shareLinkFor, uploadCiphertext, type ShareExpiry } from './relayClient.js';
 import type { PreparedShare } from './exportShare.js';
 
 export const SHARE_SECRET_PREFIX = 'share:';
@@ -44,10 +44,14 @@ function readSecret(db: UserDb, id: string): ShareSecret | undefined {
   }
 }
 
-/** Encrypt → upload → record. Returns the link to copy. */
-export async function mintShareLink(appId: string, prepared: PreparedShare): Promise<{ link: string; record: ShareLinkRecord }> {
+/** Encrypt → upload (for the chosen lifetime) → record. Returns the link to copy or share. */
+export async function mintShareLink(
+  appId: string,
+  prepared: PreparedShare,
+  expires: ShareExpiry = DEFAULT_SHARE_EXPIRY,
+): Promise<{ link: string; record: ShareLinkRecord }> {
   const sealed = await encryptBundle(new TextEncoder().encode(prepared.text));
-  const uploaded = await uploadCiphertext(sealed.ciphertext);
+  const uploaded = await uploadCiphertext(sealed.ciphertext, expires);
   const db = await getUserDb();
   const record: ShareLinkRecord = { id: uploaded.id, expiresAt: uploaded.expiresAt, createdAt: new Date().toISOString() };
   db.setSecret(shareSecretKey(uploaded.id), JSON.stringify({ revokeToken: uploaded.revokeToken, key: sealed.key } satisfies ShareSecret));

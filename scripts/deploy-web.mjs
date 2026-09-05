@@ -47,8 +47,14 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PROJECTS = Object.freeze({ website: 'snug-website', playground: 'snug-playground' });
 export const DIST_DIRS = Object.freeze({ website: 'apps/website/dist', playground: 'apps/playground/dist' });
 const APP_DIRS = Object.freeze({ website: 'apps/website', playground: 'apps/playground' });
-/** ADR-0013: the hosted playground ships no sign-in; the hosted website is never local-mode. */
-export const PINNED_BUILD_ENV = Object.freeze({ VITE_SNUG_HUB_AUTH: '', PUBLIC_SITE_MODE: 'production' });
+/** The one hosted endpoint (ADR-0064) — the playground's link transport is a BUILD invariant. */
+export const SHARE_RELAY_ORIGIN = 'https://share.snugprotocol.org';
+/**
+ * ADR-0013: the hosted playground ships no sign-in; the hosted website is never local-mode.
+ * ADR-0064 (TASK-20260904-share-link-ux): the hosted playground knows the relay, so the
+ * link actions render — pinned here, never read from an env file.
+ */
+export const PINNED_BUILD_ENV = Object.freeze({ VITE_SNUG_HUB_AUTH: '', PUBLIC_SITE_MODE: 'production', VITE_SNUG_SHARE_RELAY: SHARE_RELAY_ORIGIN });
 /** Cloudflare Pages direct-upload limits. */
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_FILES = 20_000;

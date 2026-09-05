@@ -20,3 +20,7 @@ export function buildLatestJson(args: { version: string; pubDate: string; signat
   platforms: Record<string, { signature: string; url: string }>;
 };
 export function ghReleaseCommand(version: string): string;
+/** TASK-20260904-share-link-ux AC8: the shell's UI build knows the share relay (one constant with deploy-web.mjs). */
+export const DESKTOP_PINNED_BUILD_ENV: Readonly<{ VITE_SNUG_SHARE_RELAY: string }>;
+export function desktopBuildEnv(env: Record<string, string | undefined>, desktopEnvFiles: string[]): Record<string, string | undefined>;
+export function isAppEnvFile(name: string): boolean;

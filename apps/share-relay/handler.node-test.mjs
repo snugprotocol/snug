@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEFAULT_ALLOWED_ORIGINS, ID_RULE, MAX_BODY_BYTES, handleRequest, parseAllowedOrigins } from './handler.mjs';
+import { DEFAULT_ALLOWED_ORIGINS, DEFAULT_EXPIRY, EXPIRY_CHOICES, ID_RULE, MAX_BODY_BYTES, handleRequest, parseAllowedOrigins } from './handler.mjs';
 
 function memoryStore() {
   const objects = new Map();
@@ -47,7 +47,7 @@ test('POST stores ciphertext and answers id + expiresAt + revokeToken; the token
   assert.equal(res.status, 201);
   const body = await res.json();
   assert.match(body.id, ID_RULE);
-  assert.equal(body.expiresAt, '2026-10-04T00:00:00.000Z');
+  assert.equal(body.expiresAt, '2026-09-11T00:00:00.000Z'); // the default: one week
   assert.match(body.revokeToken, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(res.headers.get('Access-Control-Allow-Origin'), ORIGIN);
   const stored = store.objects.get(`b/${body.id}`);
@@ -61,7 +61,7 @@ test('GET returns the bytes until expiry, then 404 — read-time enforcement, no
   const store = memoryStore();
   const uploadedAt = new Date('2026-09-04T00:00:00.000Z');
   const { id } = await (await upload(store, new Uint8Array([9, 9]), ORIGIN, { now: () => uploadedAt })).json();
-  const fresh = await handleRequest(new Request(`${base}/v1/bundles/${id}`), env(store), { now: () => new Date('2026-09-20T00:00:00Z') });
+  const fresh = await handleRequest(new Request(`${base}/v1/bundles/${id}`), env(store), { now: () => new Date('2026-09-08T00:00:00Z') });
   assert.equal(fresh.status, 200);
   assert.equal(fresh.headers.get('Content-Type'), 'application/octet-stream');
   assert.equal(fresh.headers.get('Cache-Control'), 'private, no-store, max-age=0');
@@ -134,10 +134,42 @@ test('everything else is a bodiless 404 — no listing, no banner', async () => 
   assert.equal(put.status, 404);
 });
 
-test('TTL_DAYS is honoured from the environment', async () => {
+test('expiry is the sharer\'s choice: ?expires=1d|7d|30d, default 7d, anything else 400 (AC1)', async () => {
   const store = memoryStore();
   const fixed = new Date('2026-09-04T00:00:00.000Z');
-  const request = new Request(`${base}/v1/bundles`, { method: 'POST', body: new Uint8Array([1]), headers: { Origin: ORIGIN } });
-  const res = await handleRequest(request, env(store, { TTL_DAYS: '7' }), { now: () => fixed });
-  assert.equal((await res.json()).expiresAt, '2026-09-11T00:00:00.000Z');
+  const post = (query) =>
+    handleRequest(new Request(`${base}/v1/bundles${query}`, { method: 'POST', body: new Uint8Array([1]), headers: { Origin: ORIGIN } }), env(store), { now: () => fixed });
+  assert.equal((await (await post('')).json()).expiresAt, '2026-09-11T00:00:00.000Z');
+  assert.equal((await (await post('?expires=1d')).json()).expiresAt, '2026-09-05T00:00:00.000Z');
+  assert.equal((await (await post('?expires=7d')).json()).expiresAt, '2026-09-11T00:00:00.000Z');
+  assert.equal((await (await post('?expires=30d')).json()).expiresAt, '2026-10-04T00:00:00.000Z');
+  assert.deepEqual([...EXPIRY_CHOICES.keys()], ['1d', '7d', '30d']);
+  assert.equal(DEFAULT_EXPIRY, '7d');
+  for (const bad of ['?expires=', '?expires=0d', '?expires=2d', '?expires=31d', '?expires=365d', '?expires=7', '?expires=1d&expires=7d']) {
+    const res = await post(bad);
+    assert.equal(res.status, 400, bad);
+    assert.equal(await res.text(), '', bad);
+  }
+  assert.equal(store.objects.size, 4);
+});
+
+test('TTL_DAYS is the CEILING: a choice above it is refused, never clamped; the default is capped by it', async () => {
+  const store = memoryStore();
+  const fixed = new Date('2026-09-04T00:00:00.000Z');
+  const post = (query, ttl) =>
+    handleRequest(new Request(`${base}/v1/bundles${query}`, { method: 'POST', body: new Uint8Array([1]), headers: { Origin: ORIGIN } }), env(store, { TTL_DAYS: ttl }), { now: () => fixed });
+  assert.equal((await post('?expires=30d', '7')).status, 400);
+  assert.equal((await (await post('?expires=7d', '7')).json()).expiresAt, '2026-09-11T00:00:00.000Z');
+  assert.equal((await (await post('', '1')).json()).expiresAt, '2026-09-05T00:00:00.000Z');
+  assert.equal((await (await post('?expires=30d', '')).json()).expiresAt, '2026-10-04T00:00:00.000Z'); // unset → the default ceiling, 30
+});
+
+test('an expired object is deleted on the read that finds it — the janitor assist (AC2)', async () => {
+  const store = memoryStore();
+  const uploadedAt = new Date('2026-09-04T00:00:00.000Z');
+  const { id } = await (await upload(store, new Uint8Array([5]), ORIGIN, { now: () => uploadedAt })).json();
+  assert.equal(store.objects.size, 1);
+  const stale = await handleRequest(new Request(`${base}/v1/bundles/${id}`), env(store), { now: () => new Date('2026-09-12T00:00:00Z') });
+  assert.equal(stale.status, 404);
+  assert.equal(store.objects.size, 0);
 });
