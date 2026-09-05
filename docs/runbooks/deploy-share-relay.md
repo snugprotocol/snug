@@ -101,9 +101,15 @@ first, then the playground, then the next desktop release.
   just from the API's view) · a 1.2 MiB body → 413 · an empty body → 400 · `/v2/bundles`
   → 404.
 
-  **Still owed:** the WAF rate-limit rule — the host is live and currently
-  unrate-limited. As of 2026-09-04 it is a scripted act (`deploy-relay.mjs ratelimit
-  --apply`, step 4 above) waiting on the owner's `CLOUDFLARE_WAF_TOKEN`.
+  ~~Still owed: the WAF rate-limit rule.~~ **Applied by the owner 2026-09-04/05** via
+  `deploy-relay.mjs ratelimit --apply` (step 4 above).
+
+- **2026-09-04/05 — second deploy (owner, after PR #166 merged @ `f21120d`)**: the
+  `?expires=1d|7d|30d` contract. Verified from this machine 2026-09-05T00:45Z against
+  `https://share.snugprotocol.org`: `POST ?expires=2d` → 400 · `POST ?expires=1d` → 201 with
+  `expiresAt` exactly +1 day · the real revoke token → 204 · then `GET` → 404. The playground
+  was deployed AFTER it (2026-09-05T00:44:40Z, deployment `3c511c52`), in the contract order
+  the runbook requires.
 
 ### Note — the custom domain takes longer than ~10 minutes to start routing
 
