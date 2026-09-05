@@ -74,3 +74,4 @@ Tests first, in this order: relay handler (AC1–2) → relayClient/shareLinks (
 - State: root `pnpm test` running with `.env.local` moved aside (deploy-web's posture check refuses it, and it reds/greens tests it should not); then e2e `share.spec.ts`; then push + PR.
 - Gate: root `pnpm test` **exit 0** (protocol 372 · auth 946 · db 444 · playground **1800** · desktop 192 · relay **10** · scripts checks incl. threat-model 235/235, deploy-web, deploy-relay, release-desktop, website-sync OK); e2e `share.spec.ts` green in Chromium (the attachment journey is unchanged).
 - Next step: PR → CI → owner review → merge; then the owner acts listed above (token + `ratelimit --apply`; relay deploy; playground deploy).
+- **PR #166 OPEN** (https://github.com/snugprotocol/snug/pull/166); CI pending at the time of writing.
