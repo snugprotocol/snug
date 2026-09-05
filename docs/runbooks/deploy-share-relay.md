@@ -129,6 +129,26 @@ Settings → Domains & Routes**. Do NOT "fix" routing by enabling `workers_dev`:
 pins it false on purpose (a `*.workers.dev` name is a second, unpinned host for a blind
 relay) and `deploy-relay.mjs`'s preflight refuses the change.
 
+## Local end-to-end (playground + desktop against a relay on this machine)
+
+`wrangler dev` runs the Worker with a simulated R2 bucket; nothing touches the real bucket
+or host. Two constraints shape the recipe: the local playground's BROWSER needs its origin
+in the CORS allowlist, and the desktop's HTTP scope admits plain `http://` only on two
+loopback literals (the RFC-1918 entries never match — next-steps 2026-09-05), so the relay
+must sit on the debug stub port `127.0.0.1:43120`:
+
+```
+cd apps/share-relay && pnpm exec wrangler dev --ip 127.0.0.1 --port 43120 \
+  --var "ALLOWED_ORIGINS:https://playground.snugprotocol.org,tauri://localhost,http://tauri.localhost,http://localhost:5173"
+```
+
+Then `VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120` in `apps/playground/.env.local` (with
+`VITE_SNUG_SHARE_LINK_ORIGIN=http://localhost:5173`; restart `pnpm dev`) and
+`VITE_SNUG_SHARE_RELAY=http://127.0.0.1:43120 pnpm --filter desktop dev`. Links read
+`http://localhost:5173/s/<id>#<key>`; "open in Snug for Mac" hands the same id to the dev
+shell, which fetches from the same local store. Do not run the in-shell gate at the same
+time (it owns 43120), and put `.env.local` back before testing production behaviour.
+
 ## Rollback
 
 `pnpm exec wrangler rollback --config apps/share-relay/wrangler.jsonc` to the previous
