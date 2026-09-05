@@ -47,7 +47,7 @@ import { SharedDocsPanel } from '../share/SharedDocsPanel.js';
 import { SharedUpdateControls } from '../share/SharedUpdateControls.js';
 import { bundleIdFromSharedRouteId, getSharedEntry, isSharedId, isUnownedId, sharedInboxStore } from '../share/sharedInbox.js';
 import { desktopLinkFor } from '../share/relayClient.js';
-import { getPlatform } from '../platform/platform.js';
+import { getPlatform, allows } from '../platform/platform.js';
 import { installStarterConnections, starterDeclarationForStarterId } from '../starter/starterDeclaration.js';
 import { installStarterRuntimeContract } from '../starter/starterRuntimeContract.js';
 import { installStarterDocs } from '../starter/starterDocs.js';
@@ -68,6 +68,7 @@ import { ThinkPanel } from './ThinkPanel.js';
 import { VersionsPanel } from './VersionsPanel.js';
 import { initialInspectorState, inspectorReduce, type InspectorState } from './inspector.js';
 import { useMediaQuery } from './useMediaQuery.js';
+import { starterInstallDisclosureTail } from './copy.js';
 import { sqlJsEngineOptions } from './sqlJsEngine.js';
 import { ChatLog } from '../views/ChatLog.js';
 
@@ -342,9 +343,11 @@ export default function RunView(): ReactElement {
   // NOTHING here (offering a connect CTA on an off-ceiling attempt would coach
   // ceiling-widening in direct response to the attack, M12).
   const [netAuthError, setNetAuthError] = useState<{ appId: string; code: string } | null>(null);
+  // No handler where the platform allows no connections (TASK-20260905-host-kit P3, D4):
+  // `host-ready.net` is then false STRUCTURALLY, not by a flag the app must trust.
   const netHandler = useMemo(
     () =>
-      isUnownedId(id)
+      isUnownedId(id) || !allows('connections')
         ? undefined
         : createNetHandlerFor({
             onNetError: (appId, code) => {
@@ -1080,7 +1083,7 @@ export default function RunView(): ReactElement {
             {(starterDeclaration.declaredApiHosts ?? []).length > 0
               ? ` (${(starterDeclaration.declaredApiHosts ?? []).join(', ')})`
               : ''}
-            . installing only copies the app — nothing is connected until you review and approve it yourself.
+            {starterInstallDisclosureTail(allows('connections'))}
           </div>
         ) : null}
         {/*

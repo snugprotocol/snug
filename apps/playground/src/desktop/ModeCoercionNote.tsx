@@ -8,11 +8,14 @@
 import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 
+import { allows } from '../platform/platform.js';
 import { dismissModeCoercionNote, useModeCoerced } from '../state/mode.js';
 
 export function ModeCoercionNote(): ReactElement | null {
   const coerced = useModeCoerced();
-  if (!coerced) return null;
+  // The note points at the brain section; where that section does not exist (the host
+  // kit, D15) the divergence has no user action, so the note renders nothing.
+  if (!coerced || !allows('brainSettings')) return null;
   return (
     <div
       role="status"
