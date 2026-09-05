@@ -1,6 +1,29 @@
 {
   "releases": [
     {
+      "version": "0.1.3",
+      "date": "2026-09-05",
+      "title": "Share an app by link, straight from your Mac",
+      "sections": [
+        {
+          "title": "What's new",
+          "items": [
+            "Share any app you own as a link. Open the app, click share, and choose copy link — or share…, which hands the link to the Mac share sheet so you can send it through Messages, Mail, Notes or AirDrop. The app is encrypted on your Mac before anything is uploaded; the link carries the key, and the relay stores bytes it cannot read.",
+            "You choose how long a link lasts — 24 hours, 1 week or 1 month — and can revoke it from the share sheet at any time.",
+            "Snug links open in the app: a snug:// link from a shared preview now lands on the same read-only preview inside Snug, where you can read the app's docs, try it, and install it.",
+            "A shared app's preview installs with one click. The separate keep step is gone."
+          ]
+        },
+        {
+          "title": "Good to know",
+          "items": [
+            "What travels is the app's code, the shapes of its connections, its data structure and the docs you tick — never your data, your credentials or your approved connections.",
+            "A shared preview runs without your AI until you switch it on for that preview, so a stranger's app cannot spend your tokens on a click."
+          ]
+        }
+      ]
+    },
+    {
       "version": "0.1.2",
       "date": "2026-08-26",
       "title": "Telepath's helper installs itself",
