@@ -1,4 +1,4 @@
-# TASK-20260905-host-kit: the host kit — `apps/host` builds `snug-host.html` and `snug-host-micro.html` (T2 of TASK-20260904-skill-only-snug)
+# TASK-20260905-host-kit: the host kit — `apps/host` builds `snug-host.html` (T2 of TASK-20260904-skill-only-snug; the micro kit moved to T5)
 
 - **Status**: planned — **awaiting plan approval (Gate 2)**; High tier — the fresh-context plan review ran 2026-09-05 (4 lenses, 49 findings, 35 serious adversarially verified, 34 confirmed) and every confirmed finding is folded into the plan below
 - **Owner**: Jeetu
