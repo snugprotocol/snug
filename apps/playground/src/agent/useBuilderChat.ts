@@ -22,13 +22,14 @@ import { createServerArtifactFetch } from '../state/library.js';
 import { resolveModelForApp } from '../state/appModel.js';
 import { applyBuilderPickToApp, useBuilderPick } from '../state/builderModel.js';
 import { useLocalUrl, useMode, useModel, useProvider } from '../state/mode.js';
-import { resolveTurnMode, useBrain } from '../state/webllm.js';
+import { currentBrain, resolveTurnMode, useBrain } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { initialLlmInspectorState, llmInspectorReduce, type LlmInspectorState } from '../run/llmInspector.js';
 import { patchSession, peekThreadSession, stopThread, useThreadSession } from './threadSessions.js';
 import { buildAppTurnContext } from './appContext.js';
 import { buildIntentTurnContext } from './intentContext.js';
-import { routeChatMessage, type ChatRoute } from './chatRouter.js';
+import { classifierApplies, routeChatMessage, type ChatRoute } from './chatRouter.js';
+import { HOST_CONTEXT_CAPS } from './promptBudget.js';
 import type { PendingWriteProposal } from './dataTools.js';
 import { createAppTargetSink } from './artifactSink.js';
 import { needsSynthesizedContract } from './runtimeContractSynthesis.js';
@@ -606,7 +607,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
          * (ADR-0015) — and the rail states that gap rather than hiding it.
          */
         let route: ChatRoute | undefined;
-        if (contextTarget !== undefined && !serverTurn) {
+        // Under the platform-pinned HOST brain the classifier is skipped (TASK-20260905-
+        // binding-a-artifacts AC1): tool-free, no data lanes, and every call is viewer-
+        // billed — an app-attached message costs exactly the build turn.
+        if (contextTarget !== undefined && classifierApplies({ brain: currentBrain().kind, contextTarget, serverTurn })) {
           const { liveInferenceAdapter } = await import('./inferrerAdapter.js');
           // The classifier turn belongs to the app the message sits beside, so it
           // routes on that app's model like the build/chat turn that follows it.
@@ -662,7 +666,9 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
 
         const { contextBlock, history } =
           route === undefined
-            ? await buildAppTurnContext(db, contextTarget, threadId)
+            ? // The host caps (T4 AC3): the html rides whole or the builder refuses; the
+              // rest shrinks under the host's 64 KiB. Every other brain keeps today's caps.
+              await buildAppTurnContext(db, contextTarget, threadId, currentBrain().kind === 'host' ? HOST_CONTEXT_CAPS : undefined)
             : await buildIntentTurnContext(db, contextTarget, route.intent, threadId);
         db.upsertThread(threadId, {
           ...(pinnedAppId !== undefined ? { appId: pinnedAppId } : {}),

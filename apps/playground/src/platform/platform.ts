@@ -4,7 +4,7 @@
 // module stays dependency-light on purpose (types from the packages, nothing from
 // state/): it is imported before React boot, ahead of any store.
 
-import type { AgentAdapter } from '@snugprotocol/adapters';
+import type { AdapterMessage, AgentAdapter } from '@snugprotocol/adapters';
 import type { DesktopRedirectPosture } from '@snugprotocol/auth';
 import type { PersistenceBackend } from '@snugprotocol/db';
 
@@ -23,13 +23,35 @@ import type { PersistenceBackend } from '@snugprotocol/db';
  * (a brain that cannot call tools builds tool-free — the webllm arm generalised), and
  * `maxPromptBytes` (the transport's input cap; T4 budgets the app-attached context to it).
  * Absent = today's behavior: the file decides.
+ *
+ * TASK-20260905-binding-a-artifacts AC1/AC3: `chatAdapter` is the adapter for the
+ * 'chat' purpose (the builder and the inferrer — the artifact runtime's `default` tier);
+ * `adapter` answers 'app' turns (envelopes — `quick`). Absent → `adapter` serves both. One
+ * host decision per purpose, never a control (D15). `promptBytes` is the RULER the host's
+ * adapters send with; with `maxPromptBytes` it lets the builder budget-or-refuse a turn on
+ * the identical string (agent/promptBudget.ts). A brain with a cap but no ruler is never
+ * budgeted (the T2 seat, unchanged).
  */
 export type PlatformBrain =
   | { kind: 'demo' }
-  | { kind: 'host'; label: string; adapter: AgentAdapter; streaming: boolean; tools: boolean; maxPromptBytes?: number };
+  | {
+      kind: 'host';
+      label: string;
+      adapter: AgentAdapter;
+      chatAdapter?: AgentAdapter;
+      streaming: boolean;
+      tools: boolean;
+      maxPromptBytes?: number;
+      promptBytes?: (system: string, messages: AdapterMessage[]) => number;
+    };
 
-/** The surfaces a host may switch off; `allows()` is the ONE reader. */
-export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share';
+/**
+ * The surfaces a host may switch off; `allows()` is the ONE reader. `appExport` (T4 AC6)
+ * is the per-app bundle download — the share sheet's download-only mode; `share` gates the
+ * LINK acts. The kit keeps `appExport` on while `share` is off, so a kit-edited app can be
+ * handed back to the agent.
+ */
+export type HostSurface = 'brainSettings' | 'account' | 'sync' | 'connections' | 'share' | 'appExport';
 
 /**
  * Structurally identical to connectionWizard's `ConnectionChannelLike`, defined
@@ -256,6 +278,7 @@ export interface SnugPlatform {
     sync?: boolean;
     connections?: boolean;
     share?: boolean;
+    appExport?: boolean;
   };
 }
 

@@ -144,7 +144,10 @@ export function createTurnAdapter(config: TurnAdapterConfig, purpose: ByokPurpos
       if (pinned === undefined || pinned.kind !== 'host') {
         throw new Error("adapterKindFor said 'host' without a platform-pinned host brain");
       }
-      return pinned.adapter;
+      // One adapter per PURPOSE (TASK-20260905-binding-a-artifacts AC1): the builder and
+      // the inferrer ('chat') take the host's chat adapter when it carries one; app
+      // envelopes ('app') and a host with a single adapter take `adapter`.
+      return purpose === 'chat' ? (pinned.chatAdapter ?? pinned.adapter) : pinned.adapter;
     }
     case 'webllm':
       // The shared `model` setting holds byok/local wire ids (e.g. "llama3.2") — a

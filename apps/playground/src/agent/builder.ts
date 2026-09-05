@@ -14,6 +14,7 @@ import { endpointsNeedConfirm, getByokKey, type ByokProvider } from '../state/mo
 import { adapterKindFor, createTurnAdapter, routeOf, type AdapterKind, type DirectMode } from './adapter.js';
 import type { ArtifactSink } from './artifactSink.js';
 import { buildByokTools } from './tools.js';
+import { PROMPT_TOO_LARGE_CODE, fitHostTurn, promptTooLargeMessage } from './promptBudget.js';
 import { extractAppHtml, WEBLLM_BUILD_SUFFIX } from './webllm/appHtml.js';
 
 export interface ArtifactEvent {
@@ -301,12 +302,32 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
         schema_apply: 'designing the app’s database…',
         app_doc_write: 'updating the app’s docs…',
       };
+      // The app-attached context (code, schema, docs) rides as a per-turn system
+      // suffix; the base layers stay byte-stable for the golden assembly tests.
+      const turnSystem = contextBlock !== undefined ? `${system}${CONTEXT_SEPARATOR}${contextBlock}` : system;
+      // Budget or refuse under a capped host brain (TASK-20260905-binding-a-artifacts
+      // AC3): measured on the identical string the host adapter sends (the seat's own
+      // ruler), history dropped oldest-first, the app's html never cut — a named refusal
+      // with zero adapter calls when nothing fits. No ruler on the seat → no budget.
+      const fitted =
+        options.mode === 'host' && pinnedBrain?.kind === 'host' && pinnedBrain.maxPromptBytes !== undefined && pinnedBrain.promptBytes !== undefined
+          ? fitHostTurn(
+              { system: turnSystem, history: history ?? [], message },
+              { maxPromptBytes: pinnedBrain.maxPromptBytes, promptBytes: pinnedBrain.promptBytes },
+            )
+          : undefined;
+      if (fitted !== undefined && !fitted.ok) {
+        return {
+          ok: false,
+          code: PROMPT_TOO_LARGE_CODE,
+          message: promptTooLargeMessage(fitted.bytes, fitted.maxPromptBytes),
+          retryable: false,
+        };
+      }
       const result = await runAgentTurn({
         adapter,
-        // The app-attached context (code, schema, docs) rides as a per-turn system
-        // suffix; the base layers stay byte-stable for the golden assembly tests.
-        system: contextBlock !== undefined ? `${system}${CONTEXT_SEPARATOR}${contextBlock}` : system,
-        messages: [...(history ?? []), { role: 'user', content: message }],
+        system: turnSystem,
+        messages: fitted !== undefined ? fitted.messages : [...(history ?? []), { role: 'user', content: message }],
         tools,
         // AC12's direct-mode half: this is the BUILDER turn — a large system prompt plus
         // a fixed tool list, repeated across a build. The app-frame transport (the other

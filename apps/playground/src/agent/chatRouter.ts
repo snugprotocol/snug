@@ -64,6 +64,21 @@ export interface RouteChatMessageInput {
  * Never throws: an exception anywhere in classification is a `clarify`, so a routing bug
  * can never escalate into the outer turn-failure path (fold F-M4c).
  */
+/**
+ * Whether the router classifier runs for this turn (TASK-20260905-binding-a-artifacts
+ * AC1, plan review F3). Its scope was always "byok/local with a pinned app on a direct
+ * turn": webllm and demo have no data lanes; the platform-pinned HOST brain builds
+ * tool-free too and every classifier call is a viewer-billed `sample` call — so an
+ * app-attached message under the host brain costs exactly one call, the build turn.
+ */
+export function classifierApplies(input: {
+  brain: 'settings' | 'webllm' | 'demo' | 'host';
+  contextTarget: string | undefined;
+  serverTurn: boolean;
+}): boolean {
+  return input.brain === 'settings' && input.contextTarget !== undefined && !input.serverTurn;
+}
+
 export async function routeChatMessage(input: RouteChatMessageInput): Promise<ChatRoute> {
   try {
     const { db, appId, message, threadId, adapter, signal, onLlmEvent } = input;
