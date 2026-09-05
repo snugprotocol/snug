@@ -80,7 +80,7 @@ export const SEMVER = /^\d+\.\d+\.\d+$/;
  * relays.
  */
 export const DESKTOP_PINNED_BUILD_ENV = Object.freeze({ VITE_SNUG_SHARE_RELAY: SHARE_RELAY_ORIGIN });
-export { isAppEnvFile };
+export { SHARE_RELAY_ORIGIN, isAppEnvFile };
 
 /**
  * The environment `tauri build` runs in. A caller's DIFFERENT relay is refused rather

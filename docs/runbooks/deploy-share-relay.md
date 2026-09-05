@@ -76,7 +76,9 @@ The link actions (copy link, share…) render only when the UI was BUILT with
 `SHARE_RELAY_ORIGIN`; empty = no link transport). Since 2026-09-04 both shipped builds pin
 it from ONE constant: `deploy-web.mjs` `PINNED_BUILD_ENV` (the hosted playground) and
 `release-desktop.mjs` `DESKTOP_PINNED_BUILD_ENV` (the shell's `tauri build`, which also
-refuses an environment naming a different relay and any `apps/desktop/.env*`). A self-hosted
+refuses an environment naming a different relay and any `apps/desktop/.env*`) — and since
+TASK-20260905 `apps/desktop/vite.config.ts` DEFAULTS the same value, so `tauri dev` shows
+the link actions too (an explicit env value still wins; the release refuses a different one). A self-hosted
 build without the variable ships the attachment path alone, by design. **Contract order:**
 the relay must understand `?expires=` BEFORE a UI that sends it ships — deploy the relay
 first, then the playground, then the next desktop release.
