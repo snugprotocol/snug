@@ -1,6 +1,6 @@
 # TASK-20260905-binding-a-artifacts: Binding A — Snug apps inside Claude artifacts (T4 of the skill-only Snug program)
 
-- **Status**: draft — Gate 1–2; awaiting the owner's answers to Q1–Q4 and plan approval (High tier → fresh-context plan review before any code)
+- **Status**: planned — Gate 2; **Q1–Q4 answered by the owner 2026-09-05 (all four defaults)**; the S11 spike runs now (Q4); awaiting the fresh-context plan review + the owner's plan approval before any implementation code (High tier)
 - **Owner**: Jeetu
 - **Risk tier**: **high** — the app sandbox runs nested inside a foreign (Anthropic) sandbox (C2 negatives owed); user-file custody moves into page storage (a data-loss class); `packages/db` gains persisted-enum literals and a new file kind at the import boundary; viewer-billed inference (a `sample` call on load would spend a stranger's usage — lesson 2026-09-04)
 - **Branch**: `feat/TASK-20260905-binding-a-artifacts` (off `main` `6514f52`)
@@ -109,6 +109,7 @@ Publishing anything to npm (the chat binding's prerequisite); creating or editin
 
 ### 2026-09-05 — Jeetu (via Claude Code) — session (Gates 1–2)
 - Done: task file drafted from the parent record's T4 row, T1's numbers, T2's seams and the code (`apps/host/src/*`, `packages/db` persistence + app-bundle + sniff, the playground's `'host'` arms, `exportDb`/`saveFile`, `sharedInbox`/`installShared`, the runtime contract 0.2.41 type definitions). Four owner questions (Q1–Q4) with defaults; the plan, test plan and file order written above. Branch `feat/TASK-20260905-binding-a-artifacts` created off `main` `6514f52`.
-- State: **STOPPED for plan approval** (High tier: a fresh-context plan review precedes any code).
-- Next step: the owner answers Q1–Q4 (or "go with defaults") → fold the answers in place → fresh-context plan review → if Q4 = now: publish the S11 probe artifact and hand the owner the open → Gate 3 step 1 (`packages/db` wrapper + enum, tests first).
-- Open questions: Q1–Q4 above.
+- Then: **the owner answered Q1–Q4 with all four defaults** (nested runner + KB rule/lint; `agent:<lineage>` owned + auto-apply; explicit save act, files form on first save; spike now). **S11 probe authored and published PRIVATE**: `scripts/spikes/s11-gen.mjs` emits `s11-sample-whole-app.html` (451,562 B; system 4,651 B = the tool-free builder layers + `WEBLLM_BUILD_SUFFIX`; chess block 32,947 B, flying-pig block 51,641 B, trade-copilot block 117,359 B; 8 arms / 10 calls: A chess×2 `default`, B chess×2 `quick`, C pig `default`, D fresh build `default`, E over-cap copilot, F exactly `maxPromptBytes`, G cap+1, H chess `complex`) → **https://claude.ai/code/artifact/38974070-6821-43fd-b0a4-7a98f956aa00** (`capabilities {sample, db}`, contract 0.2.41; results land in `results/s11`, read back with `read_db`).
+- State: **STOPPED for plan approval** (High tier: a fresh-context plan review precedes any code). The S11 probe awaits the owner's open ("run all arms", allow consent once, answer the pause question, say "done" — ~15 min).
+- Next step: read `results/s11` → fold the numbers into AC1/AC3 (tier per purpose, the html budget under the cap, the output ceiling) → fresh-context plan review → owner approval → Gate 3 step 1 (`packages/db` wrapper + enum, tests first). Owner acts still queued: npm scope + `@snugprotocol/host` / `@snugprotocol/starters` publish (the chat walk's prerequisite), the kits' GitHub Release.
+- Open questions: none until S11 answers (then: is `default` fast enough for the builder, or does the kit need `quick` + a smaller context; does a 50 KB whole-app reply truncate).
