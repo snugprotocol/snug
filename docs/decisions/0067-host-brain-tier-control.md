@@ -1,6 +1,6 @@
 # 0067 — The thinking level inside the host's brain is the user's (D15 amended, narrowly)
 
-- **Status:** proposed (the owner answered Q1–Q4 with the four recommended defaults on 2026-09-06 — narrow scope, `auto` + overrides, this-browser persistence, disable + annotate; `accepted` on plan approval)
+- **Status:** accepted (the owner answered Q1–Q4 with the four recommended defaults and approved the plan on 2026-09-06)
 - **Date:** 2026-09-06
 - **Task:** TASK-20260906-host-brain-tier-control (stacks on TASK-20260905-binding-a-artifacts / TASK-20260904-skill-only-snug)
 

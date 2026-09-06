@@ -1,6 +1,6 @@
 # TASK-20260906-host-brain-tier-control: a thinking-level control on the host kit's brain chip (D15 amended)
 
-- **Status**: planned — **interview answered 2026-09-06 (Q1–Q4 = the four recommended defaults); STOPPED for plan approval; no code written**
+- **Status**: in-progress — **plan APPROVED 2026-09-06 ("Approve"); Gate 3 in progress, tests first**
 - **Owner**: Jeetu (via Claude Code)
 - **Risk tier**: **Medium** — `apps/playground` (the brain chip and the platform brain seat, widely depended on) and `apps/host` (the brains); no `packages/protocol`, no `packages/runner` sandbox/CSP, no `packages/auth`, no `packages/db`; C1/C2 untouched (the adapter is still reached only through `createTurnAdapter`'s `'host'` arm and is never given a key or a URL). The real-view behaviour of a substituted tier can be measured only on the artifact, so the task owes one walk leg.
 - **Branch**: `feat/TASK-20260906-host-brain-tier-control` — **off the T4 tip `340a7de`** (`feat/TASK-20260905-binding-a-artifacts`), NOT `main`: the host brains (`apps/host/src/brains/sample.ts`), the probe's tier pins and the artifact e2e live only there (the `TASK-20260906-tool-free-kb-inlining` precedent). PR stacks on T4 or lands after it.
@@ -74,3 +74,6 @@
 - **Q1 = Narrow** (the brain stays the host's; the tier is the user's within a tiered brain). **Q2 = B** (one dropdown; `auto` = today's per-purpose pins first; quick/default/complex override every turn). **Q3 = this browser** (`localStorage` at the artifact origin; memory where denied; never the user file). **Q4 = disable + annotate** (an unavailable tier stays listed, disabled, "not on this plan — answered on <applied>"; the selection falls back to what answered). Folded into AC2–AC5 and the plan; ADR-0067 → accepted on plan approval.
 - State: **planned — STOPPED for plan approval.**
 - Next step: on approval → Gate 3 step 1 (the seat types, tests first).
+
+### 2026-09-06 — Jeetu — plan approved
+- **Approved** as written. ADR-0067 → accepted. Gate 3 begins (step 1: the seat types).
