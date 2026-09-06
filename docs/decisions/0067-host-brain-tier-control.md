@@ -1,6 +1,6 @@
 # 0067 — The thinking level inside the host's brain is the user's (D15 amended, narrowly)
 
-- **Status:** proposed (drafted at Gate 1 of the task; `accepted` when the owner answers Q1–Q4 and approves the plan)
+- **Status:** proposed (the owner answered Q1–Q4 with the four recommended defaults on 2026-09-06 — narrow scope, `auto` + overrides, this-browser persistence, disable + annotate; `accepted` on plan approval)
 - **Date:** 2026-09-06
 - **Task:** TASK-20260906-host-brain-tier-control (stacks on TASK-20260905-binding-a-artifacts / TASK-20260904-skill-only-snug)
 
@@ -17,8 +17,8 @@ What the runtime contract (0.2.41 `sample.d.ts`) offers: ONE knob, `modelTier: "
 1. **D15 is amended narrowly.** The BRAIN stays the host's and is never chosen (every other D15 sentence stands). Within a brain whose contract offers tiers, **the tier is the user's**, set from the brain chip's popover — the one disclosure surface — and read by the adapters at call time.
 2. **The control exists only where a tier seat exists.** The platform's host brain arm gains an optional `TierSeat` (options, the viewer's default, state, `set`); the kit pins it on the `sample` brain only. No seat → no control: the `complete` brain (no tier in its contract), the demo brain, the web and the desktop render nothing new. Never a dead control.
 3. **Switching spends nothing.** A switch changes the option the NEXT call carries; no call on switch, none on load (lesson 2026-09-04: every model call bills the viewer).
-4. **Honesty about substitution.** When `modelTierApplied` differs from the ask, the chip says which tier answered and why ("the viewer's plan"); the note derives from the store the adapter writes, never from parallel UI state (ADR-0059 rules 2 and 4). What becomes of the option after a substitution is the owner's Q4 (recommended: listed, disabled, annotated).
-5. **The default selection and the per-purpose question are the owner's Q2.** The literal ask (one tier for every turn, initial = the viewer's `default`) costs app replies their `quick` speed; the recommended shape keeps an "auto" entry equal to today's per-purpose pins and lets the three tiers override every turn. The persistence rung is Q3 (recommended: this browser at the artifact origin, never the user file).
+4. **Honesty about substitution.** When `modelTierApplied` differs from the ask, the chip says which tier answered and why ("the viewer's plan"); the note derives from the store the adapter writes, never from parallel UI state (ADR-0059 rules 2 and 4). After a substitution the asked-for option stays listed but disabled and annotated ("not on this plan — answered on <applied>"), and the selection falls back to the tier that answered (Q4, decided).
+5. **One dropdown, `auto` first (Q2, decided).** `auto` is today's per-purpose pins — app replies on `quick`, building and inferring on `default` — labelled as Snug's pick, not as the viewer's default; `quick` / `default` / `complex` override every turn, with `default` marked as the viewer's default. The literal ask (one tier for every turn, initial = `default`) was set aside because it would cost app replies their measured `quick` speed by default. **The choice lives in this browser (Q3, decided):** `localStorage` at the artifact origin, memory where storage is denied, never the user file — a viewer preference, like theme, not file content.
 
 ## Consequences
 
