@@ -92,6 +92,7 @@
 - **Found on the way (T4's code, fixed here since both PRs would flake on it):** `exportSeat.ts` took its one-prompt guard AFTER `await wrapUserFile` (the sha), so two clicks raced on whose hash finished first and the loser's "already open" note could be overwritten by the winner's "saved" — the seat's own test failed 1 in 4 runs. The guard is now taken before the first await and released on a refused prepare; the test asserts the FIRST click owns the prompt and that a refusal releases the guard (3/3 runs green).
 - Verdicts: host 188 (tsc + vitest) · host e2e 17/17 on the rebuilt page · playground 1911 · desktop tsc clean · tierStore 16.
 - Published: `f690356` (stamp `0.1.0 f690356`) → the SAME artifact **https://claude.ai/code/artifact/d2013d26-fa05-42c9-a573-2f05182acdd3**, version "tier control: f690356 (review folded)" — supersedes `92ec486` there.
-- State: **Gate 5 review folded and republished; the owner's walk leg (AC7) is the one open Gate-5 item.** Branch NOT pushed (9 commits over T4's tip).
+- Root `pnpm test` exit 0 at `f690356` (turbo 28/28 + every `check-*`; check-host-kit 2,274,084 B; website-sync OK).
+- State: **Gate 5 review folded and republished; the owner's walk leg (AC7) is the one open Gate-5 item.** Branch NOT pushed (10 commits over T4's tip).
 - Next step: republish → the owner's walk leg → Gate 6 → PR stacked on T4.
 - Open questions: none.
