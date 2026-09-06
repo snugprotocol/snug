@@ -34,6 +34,7 @@ import type { PendingWriteProposal } from './dataTools.js';
 import { createAppTargetSink } from './artifactSink.js';
 import { needsSynthesizedContract } from './runtimeContractSynthesis.js';
 import { finalizeConnectionDeclaration } from './connectionPipeline.js';
+import { knowledgeDeliveryFor } from './knowledgeDelivery.js';
 import { authChoiceForPersistedRow, metaToAuthChoice, type AuthChoiceSeed } from './authChoiceCard.js';
 import { buildPresentCardTool, metaToCard, sanitizeCardText, type ChatCardState } from './cards.js';
 import { ADAPTER_KINDS, type AdapterKind } from './adapter.js';
@@ -668,7 +669,10 @@ export function useBuilderChat(threadId: string, options: UseBuilderChatOptions 
           route === undefined
             ? // The host caps (T4 AC3): the html rides whole or the builder refuses; the
               // rest shrinks under the host's 64 KiB. Every other brain keeps today's caps.
-              await buildAppTurnContext(db, contextTarget, threadId, currentBrain().kind === 'host' ? HOST_CONTEXT_CAPS : undefined)
+              await buildAppTurnContext(db, contextTarget, threadId, currentBrain().kind === 'host' ? HOST_CONTEXT_CAPS : undefined, {
+                // ADR-0066: the block's tool sentences follow the brain's delivery.
+                toolFree: knowledgeDeliveryFor(currentBrain()) !== 'tool',
+              })
             : await buildIntentTurnContext(db, contextTarget, route.intent, threadId);
         db.upsertThread(threadId, {
           ...(pinnedAppId !== undefined ? { appId: pinnedAppId } : {}),

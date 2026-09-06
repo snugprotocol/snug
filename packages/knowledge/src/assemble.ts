@@ -113,14 +113,31 @@ export function buildHostSystemPrompt(opts: HostSystemPromptOptions): string {
   if (opts.artifacts) layers.push(getSystemLayer('capability-file-creation'));
   if (opts.appBuilder) {
     const knowledge: KnowledgeDelivery = opts.knowledge ?? 'tool';
-    if (knowledge === 'tool') {
-      layers.push(`${getSystemLayer('app-builder-summary').trimEnd()}\n\n${getKnowledgeSummary()}`);
-    } else if (knowledge === 'inline') {
-      // Each core file is its own block: the same separator as every other layer, so the
-      // forging guards cover them and a block count in a test reads the truth.
-      layers.push(getSystemLayer('app-builder-inline'), ...getInlineKnowledgeCore());
-    } else {
-      layers.push(getSystemLayer('app-builder-unaided'));
+    // A tool-free delivery under the 20 layer ("call the artifact write tool") would ship
+    // the very citation the seat removes — refuse the combination rather than assemble it
+    // (Gate-5 review: the next caller that keeps `artifacts: true` while switching to a
+    // tool-free brain must fail here, not on a viewer's screen).
+    if (opts.artifacts && knowledge !== 'tool') {
+      throw new Error(`buildHostSystemPrompt: knowledge '${knowledge}' is a tool-free delivery and cannot ride with artifacts: true (the file-creation layer cites the artifact write tool)`);
+    }
+    switch (knowledge) {
+      case 'tool':
+        layers.push(`${getSystemLayer('app-builder-summary').trimEnd()}\n\n${getKnowledgeSummary()}`);
+        break;
+      case 'inline':
+        // Each core file is its own block: the same separator as every other layer, so the
+        // forging guards cover them and a block count in a test reads the truth.
+        layers.push(getSystemLayer('app-builder-inline'), ...getInlineKnowledgeCore());
+        break;
+      case 'none':
+        layers.push(getSystemLayer('app-builder-unaided'));
+        break;
+      default: {
+        // A fourth member of the union must be assembled on purpose, never degraded to
+        // the unaided layer by a trailing else (a silently thinner prompt is this task's bug).
+        const exhaustive: never = knowledge;
+        throw new Error(`buildHostSystemPrompt: unknown knowledge delivery ${String(exhaustive)}`);
+      }
     }
     layers.push(getSystemLayer('app-response-format'));
   }

@@ -54,6 +54,12 @@ export async function buildAppTurnContext(
    * shrunk under 64 KiB). Absent or partial → the defaults, byte for byte.
    */
   capsOverride?: Partial<Record<keyof typeof CONTEXT_CAPS, number>>,
+  /**
+   * TASK-20260906 (ADR-0066, Gate-5 fold): the block's two "use the tool" sentences have a
+   * tool-free wording for a brain that has none (the pinned host brain, webllm) — an edit
+   * turn under such a brain was still told to "write the file via the artifact write tool".
+   */
+  options: { toolFree?: boolean } = {},
 ): Promise<AppTurnContext> {
   const caps: Record<keyof typeof CONTEXT_CAPS, number> = { ...CONTEXT_CAPS, ...capsOverride };
   const history: TurnHistoryMessage[] = [];
@@ -86,7 +92,9 @@ export async function buildAppTurnContext(
     '### Registered data schema',
     schema !== undefined && schema.objects.length > 0
       ? capText(schema.objects.map((o) => o.ddl).join(';\n'), caps.schema)
-      : '(none registered yet — design one with the schema tool before writing data-backed code)',
+      : options.toolFree === true
+        ? "(none registered — create the app's tables in its own startup DDL, as the persistence rules describe)"
+        : '(none registered yet — design one with the schema tool before writing data-backed code)',
   );
 
   if (docs.length > 0) {
@@ -99,7 +107,9 @@ export async function buildAppTurnContext(
     parts.push(
       `### Current app code (v${app!.currentVersion})`,
       '```html\n' + capText(html, caps.html) + '\n```',
-      'When changing the app, write the ENTIRE updated file via the artifact write tool — it lands as the next version of THIS app.',
+      options.toolFree === true
+        ? 'When changing the app, reply with the ENTIRE updated file as one complete HTML document — it lands as the next version of THIS app.'
+        : 'When changing the app, write the ENTIRE updated file via the artifact write tool — it lands as the next version of THIS app.',
     );
   }
 

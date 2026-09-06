@@ -151,18 +151,6 @@ export function useTurnMode(): TurnMode {
   return resolveTurnMode(brain, mode);
 }
 
-/**
- * Does a BUILD on this brain run without tools? (TASK-20260906-tool-free-kb-inlining.)
- * webllm always (web-llm's function calling excludes the builder's system prompt —
- * ADR-0015); a pinned host brain when it says so (`sample` cannot call tools). THE one
- * derivation for every surface that must know: the builder's `toolFree` arm agrees with it
- * by construction (mode 'webllm'/'host' come from `resolveTurnMode` over this same brain),
- * and the build view picks the tool-free USER message from it — a tool named in the user
- * slot is the same defect as one named in the system slot.
- */
-export function buildsToolFree(brain: Brain): boolean {
-  return brain.kind === 'webllm' || (brain.kind === 'host' && !brain.tools);
-}
 
 export interface InitWebllmOptions {
   /** Defaults to the page's location.search. */

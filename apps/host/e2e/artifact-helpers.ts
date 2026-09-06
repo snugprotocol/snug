@@ -57,7 +57,13 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
         const at = prompt.indexOf('## Full Template');
         const fence = at < 0 ? null : /```html\n([\s\S]*?)```/.exec(prompt.slice(at));
         if (fence === null) return NO_TEMPLATE;
-        const doc = fence[1]!.replace(/\n *\/\/ =+\n *\/\/ 5\. useConnectedFetch[\s\S]*?(?=\n *\/\/ =+\n *\/\/ 6\.)/, '');
+        // The section is located by its banner + the hook's own name, never by its number
+        // (the template has been renumbered before), and a miss THROWS so a drift fails at
+        // the cause instead of as "expected 3 sample calls to be 2" three files away.
+        const section = /\n *\/\/ =+\n *\/\/ \d+\. useConnectedFetch[\s\S]*?function useConnectedFetch\(\)[\s\S]*?(?=\n *\/\/ =+\n *\/\/ \d+\. )/.exec(fence[1]!);
+        if (section === null) throw new Error('templateFromPrompt: the useConnectedFetch section was not found in the lifted template — the template\'s structure moved');
+        const doc = fence[1]!.replace(section[0], '');
+        if (/useConnectedFetch/.test(doc)) throw new Error('templateFromPrompt: useConnectedFetch survived the strip');
         return `Here is your app.\n\n\`\`\`html\n${doc}\`\`\``;
       };
       const sample = Object.assign(

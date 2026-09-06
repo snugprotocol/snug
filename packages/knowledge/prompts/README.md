@@ -23,14 +23,17 @@ prompts/
 │   └── app-authoring/               ← the app-builder KB, section-searchable
 │       ├── 00-summary.md            ← ~600-char blurb injected into the system prompt; NOT part
 │       │                               of the searchable KB/search corpus (it duplicates content)
-│       ├── 10-overview-and-contract.md      ┐
-│       ├── 20-html-template.md      ← mandatory skeleton + copy-exactly SDK hooks   │ the INLINE CORE (ADR-0066):
-│       ├── 30-bridge-protocol.md                                                    │ served whole, as system blocks,
-│       ├── 40-persistence-and-db.md                                                 │ to a tool-free brain (knowledge 'inline')
+│       ├── 10-overview-and-contract.md      ★
+│       ├── 20-html-template.md      ← mandatory skeleton + copy-exactly SDK hooks   ★
+│       ├── 30-bridge-protocol.md                                                    ★
+│       ├── 40-persistence-and-db.md                                                 ★
 │       ├── 50-app-catalog.md        ← app types + worked chess example
 │       ├── 60-design-quality.md
 │       ├── 70-defensive-coding.md
-│       ├── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)      ┘ (pinned by name: `INLINE_KNOWLEDGE_CORE_FILES`)
+│       ├── 80-cdn-compatibility.md  ← incl. pinned known-good CDN table (DATA section)      ★
+│       │                               ★ = the INLINE CORE (ADR-0066): these five, and only these, ride whole as
+│       │                                   system blocks to a tool-free brain (knowledge 'inline'; pinned by name in
+│       │                                   `INLINE_KNOWLEDGE_CORE_FILES`)
 │       └── 90-auth-and-connected-apis.md  ← connected APIs: useConnectedFetch design + the connection_requirement directive contract, completeness bar, edit skip-rules (AL-05, rewritten by Dynamic Auth v2 P2; headings are retrieval-tested)
 ├── tools/                           ← tool + parameter descriptions
 │   ├── app-builder.md
@@ -47,7 +50,7 @@ prompts/
 ├── templates/
 │   └── user-identity.md             ← tenant template; runtime {{{triple-brace}}} placeholders only
 └── ui/
-    └── build-app-prompt.md          ← Playground user-message template (+ its tool-free twin, ADR-0066) + suggestion chips
+    └── build-app-prompt.md          ← Playground user-message templates, one per knowledge delivery (tool / inline / unaided, ADR-0066) + suggestion chips
 ```
 
 ## Layers
@@ -72,8 +75,10 @@ prompts/
      `searchKnowledge` corpus because it duplicates KB content and would pollute retrieval.
    - `'inline'` (a pinned host brain that cannot call tools): `system/35-app-builder-inline.md`,
      then the five core KB files (`INLINE_KNOWLEDGE_CORE_FILES`: 10, 20, 30, 40, 80) each as
-     its own block through the same separator — 37,437 rendered bytes, under a 44 KiB ceiling
-     the host kit's test measures on the wire (`HOST_BUILDER_SYSTEM_MAX_BYTES`).
+     its own block through the same separator. The WHOLE inline assembly plus the builder's
+     fenced-HTML suffix (not just the core) must measure under `HOST_BUILDER_SYSTEM_MAX_BYTES`
+     (44 KiB) on the host kit's own ruler — its `brains.test.ts` pins that and prints the
+     measured bytes; the current figures live in `packages/knowledge/src/layers.ts`.
    - `'none'` (webllm — a 4,096-token window): `system/36-app-builder-unaided.md` alone.
    Neither tool-free layer names a tool; a test asserts it against the tool-name constants.
 4. `system/40-app-response-format.md` — iff app-builder enabled.

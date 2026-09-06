@@ -199,7 +199,8 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     const record = await fakeRecord(page);
     const call = record.sampleCalls[0]!;
     expect(call.options).toMatchObject({ modelTier: 'default', cache: false });
-    const prompt = typeof call.input === 'string' ? call.input : (call.input as { content: string }[]).map((t) => t.content).join('\n');
+    expect(typeof call.input).toBe('string'); // the first builder turn is ONE string on the wire
+    const prompt = call.input as string;
     expect(prompt).toContain('## Full Template');
     expect(prompt).toContain('snug:app-announce');
     expect(prompt).toContain('## Storage Is Host-Brokered');
@@ -216,7 +217,11 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     await expect(app.locator('main')).toBeAttached({ timeout: 30_000 });
     await expect(app.getByText('Connecting…')).toHaveCount(0);
     expect((await fakeRecord(page)).sampleCalls).toHaveLength(2); // the app itself thinks on nothing at load
-    expect(record.sampleCalls[1]!.input as string).toContain("runtime contract"); // the one extra call is the synthesis
+    // The one extra call is the runtime-contract synthesis. The fake answers it with the
+    // no-template marker (that prompt carries no "## Full Template"), so the app lands
+    // contract-less by construction — a supported state (the runtime layers answer its
+    // turns generically); this test's claim is the build leg, not the synthesis.
+    expect(record.sampleCalls[1]!.input as string).toContain('runtime contract');
   });
 
   test('AC5 (artifact-static): use() resolves null for everything — nothing saves here, no save act, the demo brain', async ({ page }) => {

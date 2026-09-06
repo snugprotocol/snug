@@ -27,7 +27,11 @@ import {
   SYSTEM_BLOCK_SEPARATOR,
 } from '../index.js';
 
-/** Every name a tool-free brain must never be told to call. */
+/**
+ * Every way a tool-free brain could be told to call a tool: the wire names (the package's
+ * own constants) AND the prose forms the KB uses — the Gate-5 review found "the host's
+ * schema-apply tool" riding the inline core past a constants-only check.
+ */
 const TOOL_CITATIONS = [
   APP_BUILDER_TOOL_NAME,
   SCHEMA_APPLY_TOOL_NAME,
@@ -36,6 +40,9 @@ const TOOL_CITATIONS = [
   RUNTIME_CONTRACT_WRITE_TOOL_NAME,
   'artifact_write',
   'artifact write tool',
+  'schema-apply tool',
+  'schema tool',
+  'app-builder tool',
 ];
 
 const inline = buildHostSystemPrompt({ appBuilder: true, artifacts: false, knowledge: 'inline' });
@@ -91,6 +98,17 @@ describe("AC1 — knowledge: 'inline' is SELF-SUFFICIENT", () => {
     expect(inline).toContain('## Never Think on a Timer');
   });
 
+  it('names what is ABSENT: the overview still points at sections the core does not carry, and the frame says so', () => {
+    // 10-overview rides byte-identical to the tool rendering, Section Map included; the
+    // inline frame must own the gap rather than let "everything is here" contradict it.
+    const frame = getSystemLayer('app-builder-inline');
+    for (const absent of ['App Catalog', 'Design Quality', 'Defensive Coding', 'Connected APIs']) {
+      expect(frame, absent).toContain(absent);
+      expect(inline, absent).not.toContain(`## ${absent}`);
+    }
+    expect(frame).toMatch(/never include the template's `useConnectedFetch` section/);
+  });
+
   it('never tells the model to fetch the rules — the inline layer says they FOLLOW', () => {
     // The 30-layer's "call the tool… never write an app from memory" bind is the bug; its
     // tool-free sibling must not carry that sentence in any form.
@@ -118,6 +136,12 @@ describe('AC2 — a tool-free assembly never cites a tool it cannot call', () =>
     expect(buildHostSystemPrompt({ appBuilder: true, artifacts: false, knowledge: 'tool' })).toBe(
       buildHostSystemPrompt({ appBuilder: true, artifacts: false }),
     );
+  });
+
+  it('a tool-free delivery under the file-creation layer is REFUSED — the 20 layer cites the artifact write tool', () => {
+    for (const knowledge of ['inline', 'none'] as const) {
+      expect(() => buildHostSystemPrompt({ appBuilder: true, artifacts: true, knowledge })).toThrow(/tool-free delivery/);
+    }
   });
 
   it('the seat is a builder-branch seat: the runtime branch and the no-builder branch ignore it', () => {

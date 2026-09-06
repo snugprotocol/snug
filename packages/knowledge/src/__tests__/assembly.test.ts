@@ -11,7 +11,6 @@ import {
   getSkillCreatorFile,
   getSkillMode,
   getSystemLayer,
-  INLINE_KNOWLEDGE_CORE_FILES,
   listSkillModes,
 } from '../index.js';
 
@@ -42,17 +41,15 @@ describe('buildHostSystemPrompt gating matrix', () => {
   }
 
   it('layer count and order follow the gates (10 always; 20 iff artifacts; 30+40 iff appBuilder)', () => {
-    for (const combo of combos.filter((c) => !('appRuntime' in c))) {
+    // The two tool-free combos are pinned block-by-block in tool-free-assembly.test.ts.
+    for (const combo of combos.filter((c) => !('appRuntime' in c) && !('knowledge' in c))) {
       const prompt = buildHostSystemPrompt(combo);
       const parts = prompt.split(SEPARATOR);
-      // The 30-slot is one block under 'tool' and 'none'; under 'inline' it is the
-      // inline layer plus one block per core file.
-      const builderBlocks = 'knowledge' in combo && combo.knowledge === 'inline' ? 2 + INLINE_KNOWLEDGE_CORE_FILES.length : 2;
-      const expected = 1 + (combo.artifacts ? 1 : 0) + (combo.appBuilder ? builderBlocks : 0);
+      const expected = 1 + (combo.artifacts ? 1 : 0) + (combo.appBuilder ? 2 : 0);
       expect(parts.length, JSON.stringify(combo)).toBe(expected);
       expect(parts[0]).toBe(getSystemLayer('host-identity'));
       expect(prompt.includes(getSystemLayer('capability-file-creation'))).toBe(combo.artifacts);
-      expect(prompt.includes(getSystemLayer('app-builder-summary'))).toBe(combo.appBuilder && !('knowledge' in combo));
+      expect(prompt.includes(getSystemLayer('app-builder-summary'))).toBe(combo.appBuilder);
       expect(prompt.includes(getSystemLayer('app-response-format'))).toBe(combo.appBuilder);
     }
   });

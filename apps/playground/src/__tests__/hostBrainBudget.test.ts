@@ -133,8 +133,9 @@ describe('budget or refuse — the builder under a capped host brain (AC3)', () 
     const result = await agent.send({ message: 'add a timestamp', contextBlock: block(html(51)) }, {}, signal());
     expect(result).toMatchObject({ ok: false, code: g.budget.PROMPT_TOO_LARGE_CODE, retryable: false });
     if (!result.ok) {
-      // 52,224 of html + ~41–44 KB of builder system text: the message names the real total.
-      expect(result.message).toMatch(/9\d,\d{3} bytes/);
+      // The message names the WHOLE turn (52,224 of html + the builder's own system text)
+      // and the cap — the exact total is the ruler's business, not a band fit to today's bytes.
+      expect(result.message).toMatch(/comes to \d{2,3},\d{3} bytes \(the app, its context and the builder's own instructions/);
       expect(result.message).toContain('65,536');
       expect(result.message).toMatch(/export/i);
     }
@@ -145,14 +146,23 @@ describe('budget or refuse — the builder under a capped host brain (AC3)', () 
     const chat = fakeAdapter('chat');
     const g = await fresh(brain(chat.adapter));
     const agent = g.builder.createDirectBuilder({ mode: 'host', provider: 'mock', sink: fakeSink });
-    // 12 KB of app beside ~41 KB of layers leaves ≈ 10 KB; a 20 KB oldest message puts the
-    // turn over by LESS than that one message, whatever the layers drift by within the ceiling.
     const code = html(12);
-    const history = [
-      { role: 'user' as const, content: `oldest ${'h'.repeat(20 * 1024)}` },
-      { role: 'assistant' as const, content: `older ${'a'.repeat(1024)}` },
+    // Self-calibrating (Gate-5 fold): learn the turn's bytes WITHOUT history from the
+    // ruler, then size the OLDEST message so the turn is over the cap by ~1 KB — less than
+    // that one message, whatever the builder layers measure.
+    const recent = [
       { role: 'user' as const, content: 'recent question' },
       { role: 'assistant' as const, content: 'recent answer' },
+    ];
+    const probe = await agent.send({ message: 'one more change', contextBlock: block(code), history: recent }, {}, signal());
+    expect(probe.ok).toBe(true);
+    const base = ruler(chat.calls[0]!.system, chat.calls[0]!.messages);
+    chat.calls.length = 0;
+    const oldestSize = CAP - base + 1024;
+    const history = [
+      { role: 'user' as const, content: `oldest ${'h'.repeat(oldestSize)}` },
+      { role: 'assistant' as const, content: 'older answer' },
+      ...recent,
     ];
     const result = await agent.send({ message: 'one more change', contextBlock: block(code), history }, {}, signal());
     expect(result.ok).toBe(true);

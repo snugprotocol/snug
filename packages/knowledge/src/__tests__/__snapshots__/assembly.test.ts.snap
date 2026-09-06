@@ -227,10 +227,15 @@ The authoring knowledge base you need rides in full in the sections that follow 
 mandatory HTML template with its copy-exactly bridge hooks, the bridge protocol, the
 persistence rules, and the pinned CDN table. Read them before writing any app, and take the
 bridge runtime, the hooks, and every CDN URL from them VERBATIM. Do not write an app from
-memory, and do not stop to say you could not retrieve anything — everything is here.
-Include the template's \`useConnectedFetch\` section ONLY when the app calls an external API
-through the host; otherwise leave it out entirely — its presence alone marks the app as
-connected.
+memory, and do not stop to say you could not retrieve anything — the five sections that
+follow are the whole of what you have here, and they are enough.
+
+**What is NOT here.** The overview's Section Map names sections this host does not carry:
+App Catalog, Design Quality, Defensive Coding, Connected APIs. Do not look for them and do
+not mention them — build from the five sections. **This host does not connect apps to
+external APIs:** never include the template's \`useConnectedFetch\` section (its presence
+alone marks the app as connected), and do not build an app whose point is an external
+service — say so in one line and offer the self-contained version instead.
 
 **Persistence goes through the Snug hooks only.** The app runs in a sandboxed frame with a
 null origin, so \`localStorage\`, \`sessionStorage\`, cookies and IndexedDB do not work there.
@@ -904,11 +909,10 @@ const { rows, columns } = await db.exec(
 
 ## Schema Design Guidance
 
-- Plan the schema from the app's PURPOSE before writing app code, and apply it with the
-  host's schema-apply tool when it is available — the host registers the schema so every
-  future conversation about the app sees it. Keep the app's startup
-  \`CREATE TABLE IF NOT EXISTS\` statements in the code as well (idempotent, and they make
-  the app self-healing on a fresh database).
+- Plan the schema from the app's PURPOSE before writing app code, and register it with the
+  host's schema registry where one is offered — every future conversation about the app
+  then sees it. Keep the app's startup \`CREATE TABLE IF NOT EXISTS\` statements in the code
+  as well (idempotent, and they make the app self-healing on a fresh database).
 - Prefer a few narrow tables with real columns over one JSON-blob column — real columns are
   what make the agent-SQL pattern below work.
 - Table and index names: lowercase snake_case matching \`^[A-Za-z][A-Za-z0-9_]{0,40}$\`, never
@@ -1117,8 +1121,9 @@ retrieve anything — build from what is here.
   \`<style>\` block, logic in one \`<script>\` block, no separate files, no build step.
 - React 18 and other UMD libraries may load from the allowed CDNs only:
   https://cdn.jsdelivr.net, https://cdnjs.cloudflare.com, https://unpkg.com. Plain HTML, CSS and JavaScript are always fine.
-- The app runs in a sandboxed frame: no network, and no browser storage — \`localStorage\`,
-  \`sessionStorage\`, cookies and IndexedDB are unavailable there. Keep state in memory.
+- The app runs in a sandboxed frame: no \`fetch\`/XHR (the sandbox blocks connections; CDN
+  scripts still load), and no browser storage — \`localStorage\`, \`sessionStorage\`, cookies
+  and IndexedDB are unavailable there. Keep state in memory.
 - Without the knowledge base you cannot wire the app to the agent, so build apps that are
   complete on their own: games, timers, calculators, drawing pads, converters, trackers
   that live for one session.

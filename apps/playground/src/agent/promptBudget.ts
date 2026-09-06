@@ -36,17 +36,29 @@ export const PROMPT_TOO_LARGE_CODE = 'HOST_BRAIN_PROMPT_TOO_LARGE';
 export const HOST_BUILDER_SYSTEM_MAX_BYTES = 45_056;
 
 /**
+ * The stated minimum the ceiling leaves under the 65,536-byte cap for the request, the
+ * app context and history (20 KiB). Pinned beside the ceiling so the two numbers that give
+ * it meaning have one home: the host kit's test asserts `cap − ceiling ≥ this`, and
+ * `knowledgeDeliveryFor` refuses to send the inline core to a brain whose declared cap is
+ * below `ceiling + this`.
+ */
+export const HOST_BUILDER_RESERVED_MIN_BYTES = 20_480;
+
+/**
  * The context caps under a 64 KiB host: html unbounded (whole or refused), the rest shrunk
  * so the app still fits beside the builder layers and the message.
  *
- * The arithmetic since TASK-20260906 (the tool-free builder carries the KB core inline):
- * 65,536 − ~41,300 of builder system text ≈ 24,200 for everything else; with schema, docs
- * and history all at their caps (14,000) that leaves ≈ 10,200 for the app's html + the
- * message. History is dropped oldest-first by the ladder below before anything is refused,
- * so its cap is soft; schema and docs truncate upstream with a marker. A host-side EDIT of
- * an app above ~10 KB with saturated context is therefore refused BY NAME — T4's
- * budget-or-refuse working as designed (the refusal names the playground as the place to
- * edit). Shrinking these caps buys a few KB of html; the values are unchanged for now.
+ * The arithmetic since TASK-20260906 (the tool-free builder carries the KB core inline), at
+ * the CEILING rather than today's bytes: 65,536 − 45,056 = 20,480 for everything else; with
+ * schema and docs at their caps (10,000) and history shed by the ladder below (it drops
+ * oldest-first before anything is refused, so its cap is soft) that leaves ≈ 10 KB for the
+ * app's html + the message; with an empty context block, ≈ 20 KB. Schema and docs truncate
+ * upstream with a marker. A host-side EDIT of an app above those sizes is refused BY NAME —
+ * T4's budget-or-refuse working as designed (the refusal names the playground as the place
+ * to edit) — and NO shipped starter (the smallest is ~30 KB) can be edited under the host
+ * brain while the core rides whole on edit turns; that consequence is recorded in
+ * ADR-0066 and next-steps as an open decision. Shrinking these caps buys a few KB of html;
+ * the values are unchanged for now.
  */
 export const HOST_CONTEXT_CAPS: Record<keyof typeof CONTEXT_CAPS, number> = {
   html: Number.POSITIVE_INFINITY,
@@ -86,7 +98,11 @@ export function fitHostTurn(input: HostTurnInput, budget: HostBudget): FittedTur
   }
 }
 
-/** The refusal copy: the numbers, and the one thing the user can do about it. */
+/**
+ * The refusal copy: the numbers, and the one thing the user can do about it. `bytes` is the
+ * WHOLE turn — since TASK-20260906 the builder's own instructions are ~42 KB of it on a
+ * tool-free host, so the copy names the parts rather than calling the total "this app".
+ */
 export function promptTooLargeMessage(bytes: number, maxPromptBytes: number): string {
-  return `this app and its context come to ${format(bytes)} bytes; this host accepts up to ${format(maxPromptBytes)} per turn — export your file and edit the app in the Snug playground, or ask for a smaller app`;
+  return `this turn comes to ${format(bytes)} bytes (the app, its context and the builder's own instructions together); this host accepts up to ${format(maxPromptBytes)} per turn — export your file and edit the app in the Snug playground, or ask for a smaller app`;
 }

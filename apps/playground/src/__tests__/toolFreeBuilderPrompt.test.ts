@@ -13,18 +13,15 @@
 // set-once) — the hostBrain.test.ts harness.
 import type { AdapterRequest, AgentAdapter } from '@snugprotocol/adapters';
 import { createMemoryBackend } from '@snugprotocol/db';
-import { APP_BUILDER_TOOL_NAME, APP_DOC_WRITE_TOOL_NAME, SCHEMA_APPLY_TOOL_NAME, buildHostSystemPrompt } from '@snugprotocol/knowledge';
-import { FRAME_TYPES } from '@snugprotocol/protocol';
-import { createRequire } from 'node:module';
+import { APP_BUILDER_TOOL_NAME, SYSTEM_BLOCK_SEPARATOR, buildHostSystemPrompt } from '@snugprotocol/knowledge';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformBrain, SnugPlatform } from '../platform/platform.js';
 import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
-
-const require = createRequire(import.meta.url);
-const locateWasm = (): string => require.resolve('sql.js/dist/sql-wasm.wasm');
+import { locateWasm } from './userdbTestHelper.js';
 
 const HOST_LABEL = 'Claude · this artifact’s viewer';
-const TOOL_NAMES = [APP_BUILDER_TOOL_NAME, SCHEMA_APPLY_TOOL_NAME, APP_DOC_WRITE_TOOL_NAME, 'artifact_write', 'artifact write tool'];
+/** The prose forms an EDIT turn's context block used to carry (appContext.ts) — the wire names are pinned in the knowledge package. */
+const CONTEXT_TOOL_PHRASES = ['artifact write tool', 'schema tool', APP_BUILDER_TOOL_NAME];
 
 interface Graph {
   platform: typeof import('../platform/platform.js');
@@ -32,6 +29,8 @@ interface Graph {
   webllm: typeof import('../state/webllm.js');
   engine: typeof import('../agent/webllm/engine.js');
   appHtml: typeof import('../agent/webllm/appHtml.js');
+  appContext: typeof import('../agent/appContext.js');
+  budget: typeof import('../agent/promptBudget.js');
   builder: typeof import('../agent/builder.js');
   userdb: typeof import('./userdbTestHelper.js');
 }
@@ -62,6 +61,8 @@ async function fresh(install?: (platform: Graph['platform']) => void): Promise<G
     webllm: await import('../state/webllm.js'),
     engine: await import('../agent/webllm/engine.js'),
     appHtml: await import('../agent/webllm/appHtml.js'),
+    appContext: await import('../agent/appContext.js'),
+    budget: await import('../agent/promptBudget.js'),
     builder: await import('../agent/builder.js'),
     userdb: await import('./userdbTestHelper.js'),
   };
@@ -86,17 +87,33 @@ describe('AC4 — the tool-free arms carry knowledge the brain can actually use'
     const agent = g.builder.createDirectBuilder({ mode: 'host', provider: 'mock', sink: fakeSink });
     await agent.send('build me a tiny app', {}, new AbortController().signal);
     expect(fake.calls).toHaveLength(1);
-    const system = fake.calls[0]!.system;
-    // Exactly the assembly the knowledge package produces for this arm + the suffix.
-    expect(system).toBe(
-      `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform: 'host', knowledge: 'inline' })}\n\n---\n\n${g.appHtml.WEBLLM_BUILD_SUFFIX}`,
+    // Exactly the assembly the knowledge package produces for this arm + the suffix — the
+    // assembly's CONTENT (template, hooks, persistence rule, no tool name) is pinned once,
+    // in the knowledge package's tool-free-assembly.test.ts; this pins the call site.
+    expect(fake.calls[0]!.system).toBe(
+      `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform: 'host', knowledge: 'inline' })}${SYSTEM_BLOCK_SEPARATOR}${g.appHtml.WEBLLM_BUILD_SUFFIX}`,
     );
-    expect(system).toContain('## Full Template');
-    expect(system).toContain(FRAME_TYPES.announce);
-    expect(system).toContain(FRAME_TYPES.appMessage);
-    expect(system).toContain('## Storage Is Host-Brokered');
-    for (const name of TOOL_NAMES) expect(system, name).not.toContain(name);
-    expect(system).not.toMatch(/Never write an app from memory/);
+  });
+
+  it('an EDIT turn under the host brain carries the app context with NO tool sentence (Gate-5 fold: the context block cited the artifact write tool)', async () => {
+    const fake = fakeAdapter();
+    const g = await fresh((p) =>
+      p.setPlatform(hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: fake.adapter, streaming: false, tools: false })),
+    );
+    const db = await g.userdb.installTestUserDb();
+    const { appId } = db.installApp({ displayName: 'Counter', usesDb: false, html: '<!doctype html><html><body>counter</body></html>' });
+    const { contextBlock } = await g.appContext.buildAppTurnContext(db, appId, 'thread-1', g.budget.HOST_CONTEXT_CAPS, { toolFree: true });
+    const agent = g.builder.createDirectBuilder({ mode: 'host', provider: 'mock', sink: fakeSink });
+    await agent.send({ message: 'make the button blue', contextBlock }, {}, new AbortController().signal);
+    expect(fake.calls).toHaveLength(1);
+    const system = fake.calls[0]!.system;
+    expect(system).toContain('### Current app code');
+    expect(system).toContain('reply with the ENTIRE updated file as one complete HTML document');
+    for (const phrase of CONTEXT_TOOL_PHRASES) expect(system, phrase).not.toContain(phrase);
+    // The tooled wording is what the same block says for a brain that has the tools.
+    const tooled = await g.appContext.buildAppTurnContext(db, appId, 'thread-1');
+    expect(tooled.contextBlock).toContain('artifact write tool');
+    expect(tooled.contextBlock).toContain('schema tool');
   });
 
   it("webllm builds on knowledge 'none': the honest unaided layer + the fenced-HTML suffix, no tool name, no 37 KB core", async () => {
@@ -128,13 +145,26 @@ describe('AC4 — the tool-free arms carry knowledge the brain can actually use'
     const system = requests[0]!.messages[0]!;
     expect(system.role).toBe('system');
     expect(system.content).toBe(
-      `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform: 'web', knowledge: 'none' })}\n\n---\n\n${g.appHtml.WEBLLM_BUILD_SUFFIX}`,
+      `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform: 'web', knowledge: 'none' })}${SYSTEM_BLOCK_SEPARATOR}${g.appHtml.WEBLLM_BUILD_SUFFIX}`,
     );
-    expect(system.content).not.toContain('## Full Template');
-    for (const name of TOOL_NAMES) expect(system.content, name).not.toContain(name);
-    expect(system.content).toMatch(/knowledge base/i);
     g.engine.setWebllmEngineLoaderForTests(undefined);
     g.engine.resetWebllmEngineForTests();
+  });
+
+  it('a tool-less host brain whose declared cap cannot hold the core gets the unaided layer, not a first build refused before any call', async () => {
+    const fake = fakeAdapter();
+    const g = await fresh((p) =>
+      p.setPlatform(
+        hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: fake.adapter, streaming: false, tools: false, maxPromptBytes: 32_768, promptBytes: (system, messages) => system.length + messages.reduce((n, m) => n + m.content.length, 0) }),
+      ),
+    );
+    const agent = g.builder.createDirectBuilder({ mode: 'host', provider: 'mock', sink: fakeSink });
+    const result = await agent.send('build me a tiny app', {}, new AbortController().signal);
+    expect(result.ok).toBe(true);
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0]!.system).toBe(
+      `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform: 'host', knowledge: 'none' })}${SYSTEM_BLOCK_SEPARATOR}${g.appHtml.WEBLLM_BUILD_SUFFIX}`,
+    );
   });
 
   it('negative twin: a host brain WITH tools, and byok, still get the tooled assembly byte-for-byte', async () => {

@@ -107,6 +107,10 @@ export function renderedStore(): RenderedStoreEntry[] {
     ['host-identity', 'system/10-host-identity.md'],
     ['capability-file-creation', 'system/20-capability-file-creation.md'],
     ['app-builder-summary', 'system/30-app-builder-summary.md'],
+    // TASK-20260906 (ADR-0066): the 30-slot's tool-free siblings walk with the store —
+    // a layer missing here escapes the ancestor-token and localStorage-negation guards.
+    ['app-builder-inline', 'system/35-app-builder-inline.md'],
+    ['app-builder-unaided', 'system/36-app-builder-unaided.md'],
     ['app-runtime', 'system/45-app-runtime.md'],
     ['app-response-format', 'system/40-app-response-format.md'],
     ['platform-desktop', 'system/95-platform-desktop.md'],

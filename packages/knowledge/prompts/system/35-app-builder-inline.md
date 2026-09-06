@@ -1,6 +1,6 @@
 <!--
 layer: system
-destination: host system prompt block, injection order 35; the 30-slot's TOOL-FREE sibling — included only when the app-builder capability is enabled AND the caller passes knowledge 'inline' (a pinned host brain that cannot call tools, e.g. a Claude artifact's `sample`); mutually exclusive with 30-app-builder-summary; the loader appends the five core knowledge-base files (10 overview, 20 template, 30 bridge, 40 persistence, 80 cdn) as their own blocks immediately below this one
+destination: host system prompt block, injection order 35; the 30-slot's TOOL-FREE sibling — included only when the app-builder capability is enabled AND the caller passes knowledge 'inline' (a pinned host brain that cannot call tools, e.g. a Claude artifact's `sample`); mutually exclusive with 30-app-builder-summary; the loader appends the five core knowledge-base files (10 overview, 20 template, 30 bridge, 40 persistence, 80 cdn) as their own blocks immediately below this one. ASSUMES the host has no connected apps (ADR-0065 D4 — every tool-free host brain today is Binding A); a future tool-free host WITH connections needs a sibling layer, not an edit here
 blast-radius: what a tool-free brain is told BEFORE the 37 KB of authoring rules that follow — this layer must never name a tool (there is none to call) and must never say "fetch the rules" (TASK-20260906: that sentence produced a self-contained localStorage app with no bridge hooks, which rendered as a white page); deleting it leaves the core unframed and the model free to skim it
 source: written for TASK-20260906-tool-free-kb-inlining (ADR-0066); the tool-free rewrite of 30-app-builder-summary — schema/docs doctrine kept where the app can carry it itself
 -->
@@ -12,10 +12,15 @@ The authoring knowledge base you need rides in full in the sections that follow 
 mandatory HTML template with its copy-exactly bridge hooks, the bridge protocol, the
 persistence rules, and the pinned CDN table. Read them before writing any app, and take the
 bridge runtime, the hooks, and every CDN URL from them VERBATIM. Do not write an app from
-memory, and do not stop to say you could not retrieve anything — everything is here.
-Include the template's `useConnectedFetch` section ONLY when the app calls an external API
-through the host; otherwise leave it out entirely — its presence alone marks the app as
-connected.
+memory, and do not stop to say you could not retrieve anything — the five sections that
+follow are the whole of what you have here, and they are enough.
+
+**What is NOT here.** The overview's Section Map names sections this host does not carry:
+App Catalog, Design Quality, Defensive Coding, Connected APIs. Do not look for them and do
+not mention them — build from the five sections. **This host does not connect apps to
+external APIs:** never include the template's `useConnectedFetch` section (its presence
+alone marks the app as connected), and do not build an app whose point is an external
+service — say so in one line and offer the self-contained version instead.
 
 **Persistence goes through the Snug hooks only.** The app runs in a sandboxed frame with a
 null origin, so `localStorage`, `sessionStorage`, cookies and IndexedDB do not work there.

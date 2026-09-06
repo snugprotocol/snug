@@ -244,19 +244,18 @@ describe('createCompleteAdapter — the chat brain (AC2)', () => {
 // the artifact.
 // ---------------------------------------------------------------------------
 describe('the tool-free builder assembly under the host cap (AC3)', () => {
-  const SAMPLE_CAP = 65_536;
-  /** The stated minimum the ceiling leaves for the request + the app context + history. */
-  const RESERVED_MIN = 20_480;
-
-  it('inline core + the fenced-HTML suffix measure ≤ HOST_BUILDER_SYSTEM_MAX_BYTES on the wire shape, and the ceiling leaves ≥ 20 KiB', async () => {
+  it('inline core + the fenced-HTML suffix measure ≤ HOST_BUILDER_SYSTEM_MAX_BYTES on the wire shape, and the ceiling leaves the reserved minimum under the probe\'s default cap', async () => {
     const { buildHostSystemPrompt, SYSTEM_BLOCK_SEPARATOR } = await import('@snugprotocol/knowledge');
     const { WEBLLM_BUILD_SUFFIX } = await import('@playground/agent/webllm/appHtml');
-    const { HOST_BUILDER_SYSTEM_MAX_BYTES } = await import('@playground/agent/promptBudget');
+    const { HOST_BUILDER_RESERVED_MIN_BYTES, HOST_BUILDER_SYSTEM_MAX_BYTES } = await import('@playground/agent/promptBudget');
+    const { DEFAULT_MAX_PROMPT_BYTES } = await import('../probe.js');
     const system = `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform: 'host', knowledge: 'inline' })}${SYSTEM_BLOCK_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`;
     // The FIRST builder turn is one user message → ONE string on the wire (the S11 shape).
     const measured = measurePrompt(system, [{ role: 'user', content: '' }]);
-    expect(measured).toBeLessThanOrEqual(HOST_BUILDER_SYSTEM_MAX_BYTES);
-    expect(SAMPLE_CAP - HOST_BUILDER_SYSTEM_MAX_BYTES).toBeGreaterThanOrEqual(RESERVED_MIN);
+    // The failure message prints the measured bytes — the one place the current figure is
+    // derived rather than restated.
+    expect(measured, `inline builder system text measures ${measured} B on the wire`).toBeLessThanOrEqual(HOST_BUILDER_SYSTEM_MAX_BYTES);
+    expect(DEFAULT_MAX_PROMPT_BYTES - HOST_BUILDER_SYSTEM_MAX_BYTES).toBeGreaterThanOrEqual(HOST_BUILDER_RESERVED_MIN_BYTES);
     // The ruler counts what shapeInput sends — the string's UTF-8 bytes — nothing derived.
     expect(measured).toBe(bytes(shapeString(system, [{ role: 'user', content: '' }])));
   });
@@ -264,8 +263,9 @@ describe('the tool-free builder assembly under the host cap (AC3)', () => {
   it("the ceiling is meaningful: today's tooled assembly is far under it and the whole KB would be far over", async () => {
     const { buildHostSystemPrompt, getKnowledgeBase } = await import('@snugprotocol/knowledge');
     const { HOST_BUILDER_SYSTEM_MAX_BYTES } = await import('@playground/agent/promptBudget');
+    const { DEFAULT_MAX_PROMPT_BYTES } = await import('../probe.js');
     expect(bytes(buildHostSystemPrompt({ appBuilder: true, artifacts: true, platform: 'host' }))).toBeLessThan(HOST_BUILDER_SYSTEM_MAX_BYTES / 4);
     const wholeKb = getKnowledgeBase().reduce((n, s) => n + bytes(s.text), 0);
-    expect(wholeKb).toBeGreaterThan(SAMPLE_CAP); // the reason this task SELECTS instead of inlining everything
+    expect(wholeKb).toBeGreaterThan(DEFAULT_MAX_PROMPT_BYTES); // the reason this task SELECTS instead of inlining everything
   });
 });

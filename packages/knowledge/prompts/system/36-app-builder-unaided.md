@@ -15,8 +15,9 @@ retrieve anything — build from what is here.
   `<style>` block, logic in one `<script>` block, no separate files, no build step.
 - React 18 and other UMD libraries may load from the allowed CDNs only:
   {{cdnAllowlist}}. Plain HTML, CSS and JavaScript are always fine.
-- The app runs in a sandboxed frame: no network, and no browser storage — `localStorage`,
-  `sessionStorage`, cookies and IndexedDB are unavailable there. Keep state in memory.
+- The app runs in a sandboxed frame: no `fetch`/XHR (the sandbox blocks connections; CDN
+  scripts still load), and no browser storage — `localStorage`, `sessionStorage`, cookies
+  and IndexedDB are unavailable there. Keep state in memory.
 - Without the knowledge base you cannot wire the app to the agent, so build apps that are
   complete on their own: games, timers, calculators, drawing pads, converters, trackers
   that live for one session.
