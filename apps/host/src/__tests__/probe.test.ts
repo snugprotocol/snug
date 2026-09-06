@@ -186,12 +186,12 @@ describe('probeStorage — tries the ladder, never trusts presence', () => {
 });
 
 describe('probeBrain — the demo brain when nothing answered; the legs record what was seen', () => {
-  it('with no host namespaces it is the demo brain; a detected-but-unresolved leg stays `detected` (the T2 shape)', () => {
-    expect(probeBrain(env({}))).toMatchObject({
+  it('with no host namespaces it is the demo brain; a detected-but-unresolved leg stays `detected` (the T2 shape)', async () => {
+    expect(await probeBrain(env({}))).toMatchObject({
       brain: { kind: 'demo' },
       legs: { sample: 'absent', complete: 'absent', local: 'absent' },
     });
-    expect(probeBrain(env({ claudeUse: true, claudeComplete: true }))).toMatchObject({
+    expect(await probeBrain(env({ claudeUse: true, claudeComplete: true }))).toMatchObject({
       brain: { kind: 'demo' },
       legs: { sample: 'detected', complete: 'detected', local: 'absent' },
     });
@@ -251,7 +251,7 @@ describe('decideBinding with the host’s answer (AC5 — artifact-static)', () 
 describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () => {
   it('sample resolved → the host brain: two adapters (quick app, default chat), the ruler, the cap from limits()', async () => {
     const sample = fakeSample({ maxPromptBytes: 65536 });
-    const result = probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false });
+    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
     expect(result.legs).toEqual({ sample: 'resolved', complete: 'absent', local: 'absent' });
     const brain = result.brain;
     expect(brain.kind).toBe('host');
@@ -262,26 +262,24 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     expect(brain.promptBytes).toBe(measurePrompt);
     expect(brain.chatAdapter).toBeDefined();
     expect(brain.chatAdapter).not.toBe(brain.adapter);
-    // The cap arrives asynchronously from limits(); `pinCap` resolves it onto the seat.
-    await result.ready;
+    // The cap came from limits() BEFORE the adapters were built (one number, one time).
     expect(brain.maxPromptBytes).toBe(65536);
   });
 
   it('limits() rejecting → the documented 65,536 fallback', async () => {
-    const result = probeBrain(env({ claudeUse: true }), { sample: fakeSample('reject'), legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false });
-    await result.ready;
+    const result = await probeBrain(env({ claudeUse: true }), { sample: fakeSample('reject'), legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
     expect(result.brain.kind === 'host' && result.brain.maxPromptBytes).toBe(65536);
   });
 
-  it('sample null (artifact resolved or not) → the demo brain, leg `null`', () => {
-    const result = probeBrain(env({ claudeUse: true }), { artifact: artifactNs, legs: { sample: 'null', artifact: 'resolved', downloads: 'null' }, guardTripped: false });
+  it('sample null (artifact resolved or not) → the demo brain, leg `null`', async () => {
+    const result = await probeBrain(env({ claudeUse: true }), { artifact: artifactNs, legs: { sample: 'null', artifact: 'resolved', downloads: 'null' }, guardTripped: false, rejected: false });
     expect(result.brain).toEqual({ kind: 'demo' });
     expect(result.legs.sample).toBe('null');
   });
 
-  it('window.claude.complete alone → the chat brain: one adapter, no streaming, no cap (unmeasured), the ruler still pinned', () => {
+  it('window.claude.complete alone → the chat brain: one adapter, no streaming, no cap (unmeasured), the ruler still pinned', async () => {
     const complete = async (): Promise<unknown> => 'reply';
-    const result = probeBrain(env({ claudeComplete: true }), undefined, complete);
+    const result = await probeBrain(env({ claudeComplete: true }), undefined, complete);
     expect(result.legs).toEqual({ sample: 'absent', complete: 'resolved', local: 'absent' });
     const brain = result.brain;
     if (brain.kind !== 'host') throw new Error('expected the chat brain');
@@ -301,8 +299,7 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     }) as unknown as SampleFn;
     sample.limits = async () => ({ maxPromptBytes: 1 });
     sample.json = async () => ({});
-    const result = probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false });
-    await result.ready;
+    await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
     expect(calls).toBe(0);
   });
 });
@@ -350,5 +347,56 @@ describe('runProbe — the whole boot, from a window', () => {
     expect(result.binding).toBe('file');
     expect(result.brain.brain).toEqual({ kind: 'demo' });
     expect(result.host).toBeUndefined();
+  });
+});
+
+describe('the runtime is invoked as a METHOD; a rejecting use is never a static page (correctness review 6)', () => {
+  const baseWindow = () => ({ location: { protocol: 'https:', hostname: 'x.frame.claudeusercontent.com' }, navigator: undefined, indexedDB: undefined });
+
+  it('a this-dependent `use` / `complete` still works — the kit calls them on window.claude', async () => {
+    const sample = fakeSample({ maxPromptBytes: 4096 });
+    const claude = {
+      use(this: unknown, name: string): Promise<unknown> {
+        if (this !== claude) throw new TypeError('Illegal invocation');
+        return Promise.resolve(name === 'sample' ? sample : null);
+      },
+    };
+    const hosted = await runProbe({ ...baseWindow(), claude }, { guardMs: 50 });
+    expect(hosted.binding).toBe('artifact');
+    expect(hosted.brain.brain.kind === 'host' && hosted.brain.brain.maxPromptBytes).toBe(4096);
+    const chat = {
+      complete(this: unknown, prompt: string): Promise<unknown> {
+        if (this !== chat) throw new TypeError('Illegal invocation');
+        return Promise.resolve(`echo ${prompt.length}`);
+      },
+    };
+    const chatProbe = await runProbe({ ...baseWindow(), claude: chat });
+    expect(chatProbe.brain.brain.kind).toBe('host');
+    if (chatProbe.brain.brain.kind !== 'host') return;
+    const result = await chatProbe.brain.brain.adapter.complete({ system: 'S', messages: [{ role: 'user', content: 'hi' }] });
+    expect(result).toMatchObject({ ok: true, text: 'echo 5' }); // 'S' + PROMPT_SEPARATOR + 'hi'
+  });
+
+  it('a `use` that REJECTS leaves the binding at artifact with the demo brain — only an answer of null makes a static page', async () => {
+    const win = { ...baseWindow(), claude: { use: () => Promise.reject(new TypeError('Illegal invocation')) } };
+    const result = await runProbe(win, { guardMs: 50 });
+    expect(result.binding).toBe('artifact');
+    expect(result.brain.brain).toEqual({ kind: 'demo' });
+    expect(result.host?.rejected).toBe(true);
+  });
+
+  it('the cap limits() reports is the cap the adapters NAME in a refusal (maintainability review 3)', async () => {
+    const sample = Object.assign(
+      async () => {
+        throw Object.assign(new Error('too big'), { code: 'prompt_too_large' });
+      },
+      { limits: async () => ({ maxPromptBytes: 1000 }), json: async () => ({}) },
+    ) as unknown as SampleFn;
+    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
+    if (result.brain.kind !== 'host') throw new Error('expected the host brain');
+    const refusal = await result.brain.chatAdapter!.complete({ system: 'S', messages: [{ role: 'user', content: 'x' }] });
+    expect(refusal.ok).toBe(false);
+    if (!refusal.ok) expect(refusal.message).toContain('1,000');
+    expect(result.brain.maxPromptBytes).toBe(1000);
   });
 });

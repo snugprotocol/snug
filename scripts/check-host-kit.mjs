@@ -18,7 +18,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { tokenizeTopLevel } from './lib/page-blocks.mjs';
+import { externalCssRefs, tokenizeTopLevel } from './lib/page-blocks.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const KIT_DIST_DIR = path.join(ROOT, 'apps/host/dist');
@@ -67,10 +67,8 @@ export function checkHostKitPage(html, { sizeBytes = Buffer.byteLength(html, 'ut
   }
 
   for (const st of elements.filter((e) => e.name === 'style')) {
-    const css = st.body ?? '';
-    if (/@import\b/i.test(css)) problems.push('top-level <style> uses @import — every stylesheet is inline');
-    for (const m of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi)) {
-      if (!isDataUrl(m[2])) problems.push(`top-level <style> references url(${m[2]}) — every asset is a data: URL`);
+    for (const ref of externalCssRefs(st.body ?? '')) {
+      problems.push(ref.kind === 'import' ? 'top-level <style> uses @import — every stylesheet is inline' : `top-level <style> references url(${ref.url}) — every asset is a data: URL`);
     }
   }
 

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentHandInSeat, PendingAgentUpdate, SnugPlatform } from '../platform/platform.js';
 import { createStore } from '../state/store.js';
+import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -41,15 +42,7 @@ const click = (el: HTMLElement | null): void => {
   });
 };
 
-function hostPlatform(seat?: AgentHandInSeat): SnugPlatform {
-  return {
-    kind: 'host',
-    binding: 'artifact',
-    brain: { kind: 'demo' },
-    ...(seat !== undefined ? { agentHandIns: seat } : {}),
-    capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: false, hubAuth: false, brainSettings: false, account: false, sync: false, connections: false, share: false },
-  };
-}
+const hostPlatform = (seat?: AgentHandInSeat): SnugPlatform => hostFixture(seat !== undefined ? { agentHandIns: seat } : {});
 
 async function mount(platform: SnugPlatform | undefined, appId: string, onUpdated = vi.fn()): Promise<ReturnType<typeof vi.fn>> {
   vi.resetModules();

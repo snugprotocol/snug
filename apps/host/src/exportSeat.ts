@@ -57,17 +57,23 @@ export function createExportSeat(options: ExportSeatOptions): (bytes: Uint8Array
   const note = (text: string): void => store.patch({ note: text });
 
   return async (bytes, suggestedName) => {
-    const kind = sniffSnugFile(bytes);
     let text: string;
     let filename: string;
-    if (kind === 'user-file') {
-      text = await wrapUserFile(bytes);
-      filename = USER_FILE_WRAPPER_FILE_NAME;
-    } else if (kind === 'app-bundle' || kind === 'user-file-wrapper') {
-      text = new TextDecoder().decode(bytes);
-      filename = artifactBundleName(suggestedName);
-    } else {
-      note('that is not a Snug file — nothing was exported');
+    // The seat owns EVERY outcome — the caller fires it with `void` (correctness review 12).
+    try {
+      const kind = sniffSnugFile(bytes);
+      if (kind === 'user-file') {
+        text = await wrapUserFile(bytes);
+        filename = USER_FILE_WRAPPER_FILE_NAME;
+      } else if (kind === 'app-bundle' || kind === 'user-file-wrapper') {
+        text = new TextDecoder().decode(bytes);
+        filename = artifactBundleName(suggestedName);
+      } else {
+        note('that is not a Snug file — nothing was exported');
+        return;
+      }
+    } catch (error) {
+      note(`the export could not be prepared (${error instanceof Error ? error.message : String(error)}) — nothing was written`);
       return;
     }
 

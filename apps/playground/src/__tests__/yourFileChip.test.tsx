@@ -13,6 +13,7 @@ import { createMemoryBackend } from '@snugprotocol/db';
 
 import type { CustodySeat, CustodyState, SnugPlatform } from '../platform/platform.js';
 import { createStore } from '../state/store.js';
+import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -45,14 +46,7 @@ function seatWith(state: CustodyState, acts: Partial<CustodySeat> = {}): { seat:
 
 function hostPlatform(seat: CustodySeat | undefined, binding: SnugPlatform['binding'] = 'artifact', kind: 'opfs' | 'memory' = 'opfs'): SnugPlatform {
   const backend = kind === 'memory' ? createMemoryBackend() : { ...createMemoryBackend(), kind: 'artifact-html' as const };
-  return {
-    kind: 'host',
-    binding,
-    brain: { kind: 'demo' },
-    userdbBackend: backend,
-    ...(seat !== undefined ? { custody: seat } : {}),
-    capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: false, hubAuth: false, brainSettings: false, account: false, sync: false, connections: false, share: false },
-  };
+  return hostFixture({ binding, userdbBackend: backend, ...(seat !== undefined ? { custody: seat } : {}) });
 }
 
 async function mountChip(platform?: SnugPlatform): Promise<void> {

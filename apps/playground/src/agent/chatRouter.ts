@@ -76,7 +76,9 @@ export function classifierApplies(input: {
   contextTarget: string | undefined;
   serverTurn: boolean;
 }): boolean {
-  return input.brain === 'settings' && input.contextTarget !== undefined && !input.serverTurn;
+  // Positive rule: the classifier runs for any brain that is NOT the host's. webllm and demo
+  // never reach here with a context target today; when they do, they classify like settings.
+  return input.brain !== 'host' && input.contextTarget !== undefined && !input.serverTurn;
 }
 
 export async function routeChatMessage(input: RouteChatMessageInput): Promise<ChatRoute> {

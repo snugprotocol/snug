@@ -29,7 +29,7 @@
 import { createIdbBackend, createMemoryBackend, createOpfsBackend, type PersistenceBackend } from '@snugprotocol/db';
 import { USERDB_OPFS_DIR } from '@snugprotocol/protocol';
 
-import type { PlatformBrain } from '@playground/platform/platform';
+import type { PlatformBrain, SnugPlatform } from '@playground/platform/platform';
 import { isLocalEndpointHost } from '@playground/security/privateHost';
 
 import { createCompleteAdapter, type CompleteFn } from './brains/complete.js';
@@ -38,7 +38,8 @@ import { createSampleAdapter, type SampleFn } from './brains/sample.js';
 
 // ---------------------------------------------------------------------------- binding
 
-export type Binding = 'artifact' | 'artifact-static' | 'artifact-chat' | 'local-host' | 'file';
+/** ONE home: the platform seat's union (apps/playground/src/platform/platform.ts). */
+export type Binding = NonNullable<SnugPlatform['binding']>;
 
 /** The facts the binding is decided on — read once from `window` by `readBindingEnv`, plus what the host answered. */
 export interface BindingEnv {
@@ -111,6 +112,8 @@ export interface HostNamespaces {
   legs: { sample: CapabilityLeg; artifact: CapabilityLeg; downloads: CapabilityLeg };
   /** True when at least one `use()` never settled inside the guard (a broken host, not a `null` answer). */
   guardTripped: boolean;
+  /** True when at least one `use()` REJECTED (threw) — a broken host, never reported as a static page. */
+  rejected: boolean;
 }
 
 /**
@@ -125,10 +128,12 @@ const NAMESPACES = ['sample', 'artifact', 'downloads'] as const;
 
 export async function resolveHostNamespaces(
   use: (name: string) => Promise<unknown>,
+  /** `guardMs` is a test seam; production takes HOST_ANSWER_GUARD_MS. */
   options: { guardMs?: number } = {},
 ): Promise<HostNamespaces> {
   const guardMs = options.guardMs ?? HOST_ANSWER_GUARD_MS;
   let guardTripped = false;
+  let rejected = false;
   const ask = async (name: (typeof NAMESPACES)[number]): Promise<unknown> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const guard = new Promise<null>((resolve) => {
@@ -138,7 +143,13 @@ export async function resolveHostNamespaces(
       }, guardMs);
     });
     try {
-      return await Promise.race([use(name).catch(() => null), guard]);
+      return await Promise.race([
+        use(name).catch(() => {
+          rejected = true;
+          return null;
+        }),
+        guard,
+      ]);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -153,6 +164,7 @@ export async function resolveHostNamespaces(
     ...(isDownloads ? { downloads: downloads as DownloadsNamespace } : {}),
     legs: { sample: isSample ? 'resolved' : 'null', artifact: isArtifact ? 'resolved' : 'null', downloads: isDownloads ? 'resolved' : 'null' },
     guardTripped,
+    rejected,
   };
 }
 
@@ -306,8 +318,6 @@ export interface BrainProbeResult {
   brain: PlatformBrain;
   /** The typed seats: `sample` (hosted), `complete` (chat), `local` (T3's boot config). */
   legs: { sample: BrainLeg; complete: BrainLeg; local: 'absent' };
-  /** Resolves once the cap from `limits()` is on the seat (a `sample` brain) — never before boot needs it. */
-  ready: Promise<void>;
 }
 
 export const HOSTED_BRAIN_LABEL = 'Claude · this artifact’s viewer';
@@ -315,31 +325,32 @@ export const CHAT_BRAIN_LABEL = 'Claude · this chat';
 /** The documented cap when `limits()` cannot be read (T4 S11 measured exactly this value). */
 export const DEFAULT_MAX_PROMPT_BYTES = 65_536;
 
-export function probeBrain(env: BindingEnv, host?: HostNamespaces, complete?: CompleteFn): BrainProbeResult {
+/**
+ * The brain, pinned from what resolved. Async only because `sample.limits()` is: the cap is
+ * read FIRST (it prompts and spends nothing — sample.d.ts) so both adapters and the seat are
+ * built with the same number, once (maintainability review 3 — a seat copied by value into
+ * the adapters and mutated later named 65,536 in its refusal while the builder budgeted on
+ * the real cap).
+ */
+export async function probeBrain(env: BindingEnv, host?: HostNamespaces, complete?: CompleteFn): Promise<BrainProbeResult> {
   const sampleLeg: BrainLeg = env.claudeUse ? (host === undefined ? 'detected' : host.legs.sample) : 'absent';
   if (host?.sample !== undefined) {
     const sample = host.sample;
-    // Both adapters share the seat's cap: the object is mutated once `limits()` answers,
-    // and the adapters read the seat by reference (the message names the cap). No call
-    // is made here — `limits()` prompts and spends nothing.
-    const seat = { maxPromptBytes: DEFAULT_MAX_PROMPT_BYTES };
-    const brain: Extract<PlatformBrain, { kind: 'host' }> = {
+    const maxPromptBytes = await sample
+      .limits()
+      .then((limits) => (typeof limits?.maxPromptBytes === 'number' && limits.maxPromptBytes > 0 ? limits.maxPromptBytes : DEFAULT_MAX_PROMPT_BYTES))
+      .catch(() => DEFAULT_MAX_PROMPT_BYTES);
+    const brain: PlatformBrain = {
       kind: 'host',
       label: HOSTED_BRAIN_LABEL,
-      adapter: createSampleAdapter(sample, { modelTier: 'quick', ...seat }),
-      chatAdapter: createSampleAdapter(sample, { modelTier: 'default', ...seat }),
+      adapter: createSampleAdapter(sample, { modelTier: 'quick', maxPromptBytes }),
+      chatAdapter: createSampleAdapter(sample, { modelTier: 'default', maxPromptBytes }),
       streaming: true,
       tools: false,
-      maxPromptBytes: DEFAULT_MAX_PROMPT_BYTES,
+      maxPromptBytes,
       promptBytes: measurePrompt,
     };
-    const ready = sample
-      .limits()
-      .then((limits) => {
-        if (typeof limits?.maxPromptBytes === 'number' && limits.maxPromptBytes > 0) brain.maxPromptBytes = limits.maxPromptBytes;
-      })
-      .catch(() => undefined);
-    return { brain, legs: { sample: 'resolved', complete: env.claudeComplete ? 'detected' : 'absent', local: 'absent' }, ready };
+    return { brain, legs: { sample: 'resolved', complete: env.claudeComplete ? 'detected' : 'absent', local: 'absent' } };
   }
   if (!env.claudeUse && env.claudeComplete && complete !== undefined) {
     const brain: PlatformBrain = {
@@ -350,12 +361,11 @@ export function probeBrain(env: BindingEnv, host?: HostNamespaces, complete?: Co
       tools: false,
       promptBytes: measurePrompt,
     };
-    return { brain, legs: { sample: 'absent', complete: 'resolved', local: 'absent' }, ready: Promise.resolve() };
+    return { brain, legs: { sample: 'absent', complete: 'resolved', local: 'absent' } };
   }
   return {
     brain: { kind: 'demo' },
     legs: { sample: sampleLeg, complete: env.claudeComplete ? 'detected' : 'absent', local: 'absent' },
-    ready: Promise.resolve(),
   };
 }
 
@@ -374,18 +384,23 @@ export interface ProbeWindowLike extends BindingWindowLike {
   indexedDB?: IDBFactory | undefined;
 }
 
-/** The whole probe, from `window`, in the order the kit boots: host, binding, storage, brain. */
+/**
+ * The whole probe, from `window`, in the order the kit boots: host, binding, storage, brain.
+ * `use` and `complete` are invoked AS METHODS of `window.claude` — an unbound call is
+ * "Illegal invocation" on a this-dependent runtime, the `getDirectory` class of defect the
+ * T2 walk found (correctness review 6). A `use` that rejects, like one that never answers,
+ * leaves the binding at `artifact`: only an ANSWER of `null` makes a static page.
+ */
 export async function runProbe(win: ProbeWindowLike, options: { guardMs?: number } = {}): Promise<ProbeResult> {
   const env = readBindingEnv(win);
-  const claude = (win.claude ?? undefined) as { use?: unknown; complete?: unknown } | undefined;
+  const claude = (win.claude ?? undefined) as { use?: (name: string) => Promise<unknown>; complete?: CompleteFn } | undefined;
   let host: HostNamespaces | undefined;
-  if (env.claudeUse) {
-    host = await resolveHostNamespaces((name) => (claude!.use as (name: string) => Promise<unknown>)(name), options);
-    if (!host.guardTripped) env.hostAnswered = { sample: host.sample !== undefined, artifact: host.artifact !== undefined };
+  if (env.claudeUse && claude?.use !== undefined) {
+    host = await resolveHostNamespaces((name) => claude.use!(name), options);
+    if (!host.guardTripped && !host.rejected) env.hostAnswered = { sample: host.sample !== undefined, artifact: host.artifact !== undefined };
   }
-  const complete = !env.claudeUse && env.claudeComplete ? (claude!.complete as CompleteFn) : undefined;
+  const complete = !env.claudeUse && env.claudeComplete && claude?.complete !== undefined ? (prompt: string) => claude.complete!(prompt) : undefined;
   const storage = await probeStorage({ storage: win.navigator?.storage, indexedDB: win.indexedDB });
-  const brain = probeBrain(env, host, complete);
-  await brain.ready;
+  const brain = await probeBrain(env, host, complete);
   return { binding: decideBinding(env), storage, brain, ...(host !== undefined ? { host } : {}) };
 }

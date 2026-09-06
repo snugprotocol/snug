@@ -17,6 +17,7 @@ import { createMemoryBackend, openUserDb, type UserDb } from '@snugprotocol/db';
 import { createRequire } from 'node:module';
 
 import type { SnugPlatform } from '../platform/platform.js';
+import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -27,24 +28,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const require = createRequire(import.meta.url);
 const locateWasm = (): string => require.resolve('sql.js/dist/sql-wasm.wasm');
 
-function hostPlatform(): SnugPlatform {
-  return {
-    kind: 'host',
-    binding: 'artifact',
-    brain: { kind: 'demo' },
-    capabilities: {
-      subscriptionMode: false,
-      hubSyncOrigin: false,
-      lanHttpPrivate: false,
-      hubAuth: false,
-      brainSettings: false,
-      account: false,
-      sync: false,
-      connections: false,
-      share: false,
-    },
-  };
-}
+const hostPlatform = (): SnugPlatform => hostFixture();
 
 interface Graph {
   db: UserDb;

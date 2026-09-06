@@ -14,7 +14,7 @@ import { setPlatform } from '@playground/platform/platform';
 import { refreshAppMeta } from '@playground/state/appMeta';
 import { getUserDb } from '@playground/state/userdb';
 
-import { composeHostPlatform } from './compose.js';
+import { composeHostPlatform, handInBeforePaint } from './compose.js';
 import { describeHandIn } from './handin.js';
 import { runProbe } from './probe.js';
 import { sqlJsWasmBinary } from './wasmBytes.js';
@@ -36,7 +36,7 @@ async function boot(): Promise<void> {
   });
   const composition = composeHostPlatform(
     probe,
-    { location, fetch: (input, init) => fetch(input, init), sessionStorage, storage: (window as { storage?: unknown }).storage },
+    { location, fetch: (input, init) => fetch(input, init), sessionStorage, storage: (window as { storage?: unknown }).storage, reload: () => location.reload() },
     document,
     sqlJsWasmBinary(),
   );
@@ -58,7 +58,7 @@ async function boot(): Promise<void> {
     .catch((error: unknown) => {
       composition.custody.patch({ note: `the handed-in apps could not be read: ${error instanceof Error ? error.message : String(error)}` });
     });
-  await Promise.race([handIn, new Promise<void>((resolve) => setTimeout(resolve, HAND_IN_BEFORE_PAINT_MS))]);
+  await handInBeforePaint(handIn);
 
   const container = document.getElementById('root');
   if (container === null) throw new Error('missing #root');
@@ -72,7 +72,5 @@ async function boot(): Promise<void> {
   );
 }
 
-/** How long the first paint waits for the db + hand-in before rendering anyway (a stuck db must still show its recovery UI). */
-const HAND_IN_BEFORE_PAINT_MS = 4_000;
 
 void boot();

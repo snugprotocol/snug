@@ -5,14 +5,13 @@
 // FETCHED and verified, never serialized from the live DOM (the contract forbids it: the
 // viewer injects its runtime). Every refusal is named; nothing here overwrites a copy.
 
-import { createMemoryBackend } from '@snugprotocol/db';
+import { createMemoryBackend, sha256Hex } from '@snugprotocol/db';
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { DB_BLOCK_FORMAT, readDbBlock, writeDbBlock } from '../../../../scripts/lib/page-blocks.mjs';
 import { ARTIFACT_MAX_PAGE_BYTES, BEFORE_LOAD_FILE, CUSTODY_NOTE_STASH_KEY, CUSTODY_SIDECAR_FILE, createArtifactRecord } from '../storage/artifactHtml.js';
 import { createCustodyStore } from '../storage/custodyStore.js';
-import { sha256Hex } from '../storage/sha256.js';
 
 const STAMP = '0.1.0 abcdef1';
 const KIT_PAGE = `<!doctype html>
@@ -108,19 +107,41 @@ describe('load — bucket first, the page block as the seed, never an overwrite'
     expect(store.get().divergence).toBeUndefined();
   });
 
-  it('(N) a block whose bytes do not match its sha is CORRUPT — load throws, the bucket is untouched', async () => {
+  it('(N) a block whose bytes do not match its sha is CORRUPT: an EMPTY bucket starts a fresh, dirty file and the note says so (never a boot that throws forever — correctness review 15); the block is not seeded', async () => {
     const page = (await pageWithBlock(bytesOf(16), 1)).replace(/"sha256":"[0-9a-f]{64}"/, `"sha256":"${'0'.repeat(64)}"`);
     const bucket = createMemoryBackend();
     const store = createCustodyStore();
     const record = createArtifactRecord({ bucket, pageBlock: readDbBlock(page), canonicalSource: async () => page, expectedStamp: STAMP, publish: recorder().publish, store });
-    await expect(record.backend.load(USERDB_FILE)).rejects.toThrow(/corrupt|sha/i);
+    expect(await record.backend.load(USERDB_FILE)).toBeUndefined();
     expect(await bucket.load(USERDB_FILE)).toBeUndefined();
+    expect(store.get().dirty).toBe(true);
+    expect(store.get().note).toMatch(/corrupt.*new file/);
   });
 
-  it('(N) a block the page-blocks reader called corrupt is CORRUPT too, never "no file"', async () => {
+  it('(N) a block the page-blocks reader called corrupt beside a bucket that HAS a file: the bucket copy is used, the note names the unreadable page copy', async () => {
     const page = KIT_PAGE.replace('</body>', '<script type="text/plain" id="snug-db">not json\nAAAA</script>\n</body>');
-    const record = createArtifactRecord({ bucket: createMemoryBackend(), pageBlock: readDbBlock(page), canonicalSource: async () => page, expectedStamp: STAMP, publish: recorder().publish, store: createCustodyStore() });
-    await expect(record.backend.load(USERDB_FILE)).rejects.toThrow(/corrupt/i);
+    const bucket = createMemoryBackend();
+    await bucket.save(USERDB_FILE, bytesOf(12));
+    const store = createCustodyStore();
+    const record = createArtifactRecord({ bucket, pageBlock: readDbBlock(page), canonicalSource: async () => page, expectedStamp: STAMP, publish: recorder().publish, store });
+    expect(await record.backend.load(USERDB_FILE)).toEqual(bytesOf(12));
+    expect(store.get().note).toMatch(/corrupt.*in use/);
+  });
+
+  it('a sha match RE-SYNCS a stale sidecar (correctness review 4): the next divergence reads the right direction', async () => {
+    const payload = bytesOf(30);
+    const page = await pageWithBlock(payload, 2);
+    const bucket = createMemoryBackend();
+    await bucket.save(USERDB_FILE, payload);
+    // The sidecar still says #1 (a publish whose reload outran the sidecar write).
+    const stale = createArtifactRecord({ bucket, pageBlock: readDbBlock(page), canonicalSource: async () => page, expectedStamp: STAMP, publish: recorder().publish, store: createCustodyStore(), custodyStart: { saved: 1 } });
+    await stale.backend.load(USERDB_FILE);
+    // A fresh record over the same bucket reads the sidecar: it must say #2 now, so a later edit is "newer".
+    await bucket.save(USERDB_FILE, bytesOf(30, 7));
+    const store = createCustodyStore();
+    const next = createArtifactRecord({ bucket, pageBlock: readDbBlock(page), canonicalSource: async () => page, expectedStamp: STAMP, publish: recorder().publish, store });
+    await next.backend.load(USERDB_FILE);
+    expect(store.get().divergence).toBe('newer');
   });
 
   it('every other file name passes straight through to the bucket', async () => {
@@ -218,6 +239,42 @@ describe('publish — the one explicit act', () => {
     expect(pub.calls).toHaveLength(0);
   });
 
+  it('a fetched page whose block is NEWER than the boot-time one is a conflict — another view saved meanwhile (security review 6)', async () => {
+    const bootPage = await pageWithBlock(bytesOf(4), 6);
+    const livePage = await pageWithBlock(bytesOf(4, 3), 8);
+    const bucket = createMemoryBackend();
+    const store = createCustodyStore();
+    const pub = recorder();
+    const record = createArtifactRecord({ bucket, pageBlock: readDbBlock(bootPage), canonicalSource: async () => livePage, expectedStamp: STAMP, publish: pub.publish, store });
+    await record.backend.load(USERDB_FILE);
+    await record.backend.save(USERDB_FILE, bytesOf(12));
+    const outcome = await record.publish();
+    expect(outcome).toMatchObject({ ok: false, reason: 'conflict' });
+    expect(pub.calls).toHaveLength(0);
+    expect(store.get().divergence).toBe('older');
+    expect(store.get().saved?.saved).toBe(8);
+  });
+
+  it('the sidecar takes the projected counter BEFORE the publish and is restored on a rejection; the stash survives only a conflict (correctness reviews 3 + 4)', async () => {
+    const bucket = createMemoryBackend();
+    const store = createCustodyStore();
+    let sidecarDuringPublish: string | undefined;
+    const pub = recorder();
+    const publishSpy = async (html: string): Promise<{ version: string }> => {
+      const raw = await bucket.load(CUSTODY_SIDECAR_FILE);
+      sidecarDuringPublish = raw === undefined ? undefined : new TextDecoder().decode(raw);
+      return pub.publish(html);
+    };
+    const record = createArtifactRecord({ bucket, pageBlock: undefined, canonicalSource: async () => KIT_PAGE, expectedStamp: STAMP, publish: publishSpy, store });
+    await record.backend.save(USERDB_FILE, bytesOf(8));
+    expect(await record.publish()).toMatchObject({ ok: true, saved: 1 });
+    expect(sidecarDuringPublish).toContain('"saved":1');
+    pub.setOutcome({ reject: { code: 'too_large' } });
+    expect(await record.publish()).toMatchObject({ ok: false, reason: 'too-large' });
+    expect(new TextDecoder().decode((await bucket.load(CUSTODY_SIDECAR_FILE))!)).toContain('"saved":1'); // restored, not 2
+    expect(sessionStorage.getItem(CUSTODY_NOTE_STASH_KEY)).toBeNull(); // no "saved" lie for the next boot
+  });
+
   it('maps the runtime’s codes: conflict keeps the copy safe (dirty stays), not_writer / not_granted flip read-only, too_large is the size refusal', async () => {
     const bucket = createMemoryBackend();
     const store = createCustodyStore();
@@ -232,6 +289,7 @@ describe('publish — the one explicit act', () => {
     expect(await record.publish()).toMatchObject({ ok: false, reason: 'read-only' });
     expect(store.get().readOnly).toBe(true);
     expect(record.canSave()).toBe(false);
+    expect(sessionStorage.getItem(CUSTODY_NOTE_STASH_KEY)).toBeNull(); // a read-only refusal reloads nothing — no stale stash
     pub.setOutcome({ reject: { code: 'too_large' } });
     const store2 = createCustodyStore();
     const record2 = createArtifactRecord({ bucket, pageBlock: undefined, canonicalSource: async () => KIT_PAGE, expectedStamp: STAMP, publish: pub.publish, store: store2 });
@@ -257,7 +315,11 @@ describe('the divergence acts', () => {
     const record = createArtifactRecord({ bucket, pageBlock: readDbBlock(page), canonicalSource: async () => page, expectedStamp: STAMP, publish: recorder().publish, store, custodyStart: { saved: 3 } });
     await record.backend.load(USERDB_FILE);
     expect(store.get().divergence).toBe('older');
-    await record.loadPageCopy();
+    let reloads = 0;
+    const terminal = createArtifactRecord({ bucket, pageBlock: readDbBlock(page), canonicalSource: async () => page, expectedStamp: STAMP, publish: recorder().publish, store, custodyStart: { saved: 3 }, onReload: () => (reloads += 1) });
+    await terminal.loadPageCopy();
+    expect(reloads).toBe(1); // terminal: the open db would flush the browser copy back (correctness review 1)
+    expect(sessionStorage.getItem(CUSTODY_NOTE_STASH_KEY)).toContain('loaded the page’s saved copy');
     expect(await bucket.load(BEFORE_LOAD_FILE)).toEqual(bytesOf(20, 5));
     expect(await bucket.load(USERDB_FILE)).toEqual(bytesOf(20, 2));
     expect(store.get()).toMatchObject({ dirty: false, saved: { saved: 9 } });

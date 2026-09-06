@@ -137,10 +137,17 @@ export function capsAppHtml(): string {
 <div id="fetch"></div>
 <div id="csp"></div>
 <div id="reach"></div>
+<div id="bridge">pending</div>
 <script>
 (function () {
-  var V = 1, instanceId = null, sent = false, announced = false;
+  var V = 1, instanceId = null, sent = false, announced = false, foreign = 0;
   function set(id, text) { document.getElementById(id).textContent = text; }
+  // T4 AC10 (the viewer-bridge residual, ADR-0065 §6): a runtime-shaped message posted to
+  // 'top' / 'parent' gets NO reply back into this frame — the kit page answers only the
+  // snug frame protocol. (Under the real viewer, 'top' is the viewer itself; the walk proves that.)
+  ['top', 'parent'].forEach(function (name) {
+    try { window[name].postMessage({ jsonrpc: '2.0', id: 'bridge-probe', method: 'claude.use', params: { name: 'sample' } }, '*'); } catch (e) {}
+  });
   // T4 AC10 (C2 inside an artifact): the app frame is an OPAQUE origin — the kit page's
   // window.claude (sample / artifact.publish) must be out of reach one hop up and at the top.
   (function () {
@@ -158,7 +165,7 @@ export function capsAppHtml(): string {
   });
   window.addEventListener('message', function (event) {
     var d = event.data;
-    if (!d || d.v !== V) return;
+    if (!d || d.v !== V) { foreign += 1; set('bridge', 'reply:' + foreign); return; }
     if (d.type === 'snug:host-ready') {
       instanceId = d.instanceId;
       set('caps', JSON.stringify(d.capabilities));
@@ -182,6 +189,7 @@ export function capsAppHtml(): string {
       // The error CODE is part of the truth: CONSENT_REQUIRED here would mean the F15 gate
       // armed with no card to clear it (Gate-5 finding, 2026-09-05).
       set('status', d.ok ? 'done' : 'error:' + ((d.error && d.error.code) || 'unknown'));
+      if (foreign === 0) set('bridge', 'no-reply');
     }
   });
 })();

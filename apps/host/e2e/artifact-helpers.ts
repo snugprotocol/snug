@@ -4,6 +4,11 @@
 // RECORDS what the page did — calls, inputs, options, published html, saved files — on
 // `window.__snugFake`, which the specs read back. Nothing here is the real runtime: the
 // real hosted walk is the owner's (AC13), and it is journaled with the artifact URL.
+//
+// Two fidelities the Gate-5 review asked for: the fakes install in the TOP frame only (a
+// viewer never hands the app iframe a `window.claude`; an init script would otherwise run
+// in every frame), and `use` / `complete` are this-dependent (the real runtime throws
+// "Illegal invocation" when called detached — the kit must call them as methods).
 import type { Page } from '@playwright/test';
 
 export interface HostedFakeOptions {
@@ -29,6 +34,7 @@ const DEFAULT_REPLY = '```json\n{"move":{"from":"e7","to":"e5"},"message":"the f
 export async function installHostedFake(page: Page, options: HostedFakeOptions = {}): Promise<void> {
   await page.addInitScript(
     ({ reply, publish, nulls }) => {
+      if (window !== window.top) return; // top frame only
       const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storage: {} } as unknown as FakeRecord;
       (window as unknown as { __snugFake: FakeRecord }).__snugFake = record;
       const sample = Object.assign(
@@ -57,7 +63,13 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
       };
       const table: Record<string, unknown> = { sample, artifact, downloads };
       for (const name of nulls) table[name] = null;
-      (window as unknown as { claude: unknown }).claude = { use: async (name: string) => table[name] ?? null };
+      const claude = {
+        use(this: unknown, name: string): Promise<unknown> {
+          if (this !== claude) return Promise.reject(new TypeError('Illegal invocation'));
+          return Promise.resolve(table[name] ?? null);
+        },
+      };
+      (window as unknown as { claude: unknown }).claude = claude;
     },
     { reply: options.reply ?? DEFAULT_REPLY, publish: options.publish ?? { version: 'v-fake' }, nulls: options.nulls ?? [] },
   );
@@ -66,14 +78,17 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
 /** The chat runtime: a flat `window.claude.complete` and `window.storage` (T1 S2/S10 shapes). */
 export async function installChatFake(page: Page, reply = DEFAULT_REPLY): Promise<void> {
   await page.addInitScript((replyText) => {
+    if (window !== window.top) return; // top frame only
     const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storage: {} } as unknown as FakeRecord;
     (window as unknown as { __snugFake: FakeRecord }).__snugFake = record;
-    (window as unknown as { claude: unknown }).claude = {
-      complete: async (prompt: string) => {
+    const claude = {
+      complete(this: unknown, prompt: string): Promise<string> {
+        if (this !== claude) return Promise.reject(new TypeError('Illegal invocation'));
         record.completeCalls.push(prompt);
-        return replyText;
+        return Promise.resolve(replyText);
       },
     };
+    (window as unknown as { claude: unknown }).claude = claude;
     // The real `window.storage` PERSISTS across reloads (T1 S10); an init script runs afresh
     // on every navigation, so the fake keeps its rows in the page's localStorage.
     const PREFIX = 'snug-fake-window-storage:';

@@ -29,7 +29,9 @@ export function YourFileChip(): ReactElement | null {
   if (seat === undefined || state === undefined) return null;
 
   const copy = custodyDisclosure(platform.binding, platform.userdbBackend?.kind, state);
-  const canSave = seat.save !== undefined && (seat.canSave?.() ?? true) && !state.readOnly;
+  // Narrowed ONCE so the buttons below call the acts without a non-null assertion.
+  const save = seat.save !== undefined && (seat.canSave?.() ?? true) && !state.readOnly ? seat.save : undefined;
+  const loadPageCopy = state.divergence !== undefined ? seat.loadPageCopy : undefined;
   // The act runs synchronously on the click (the seat's own promise carries the outcome);
   // `busy` only guards a second click while it is in flight.
   const run = (act: () => Promise<unknown> | void) => (): void => {
@@ -72,7 +74,7 @@ export function YourFileChip(): ReactElement | null {
               ) : null}
             </span>
           ) : null}
-          {canSave ? (
+          {save !== undefined ? (
             <button
               type="button"
               className="identity-menu-item"
@@ -80,7 +82,7 @@ export function YourFileChip(): ReactElement | null {
               disabled={busy}
               // The menu closes on success; a refusal keeps it open so the status and the note are read.
               onClick={run(() =>
-                seat.save!().then((outcome) => {
+                save().then((outcome) => {
                   if (outcome.ok) close(true);
                 }),
               )}
@@ -88,8 +90,8 @@ export function YourFileChip(): ReactElement | null {
               save to this artifact
             </button>
           ) : null}
-          {state.divergence !== undefined && seat.loadPageCopy !== undefined ? (
-            <button type="button" className="identity-menu-item" data-testid="your-file-load-page" disabled={busy} onClick={run(() => seat.loadPageCopy!().then(() => close(true)))}>
+          {loadPageCopy !== undefined ? (
+            <button type="button" className="identity-menu-item" data-testid="your-file-load-page" disabled={busy} onClick={run(() => loadPageCopy().then(() => close(true)))}>
               load the page’s copy
             </button>
           ) : null}

@@ -14,9 +14,8 @@
 // missing, or whose bytes fail their sha is CORRUPT: `load` throws, and `openUserDb`'s
 // quarantine path does the rest — never a pristine file over the user's data.
 
-import { base64ToBytes, bytesToBase64, type PersistenceBackend } from '@snugprotocol/db';
+import { base64ToBytes, bytesToBase64, sha256Hex, type PersistenceBackend } from '@snugprotocol/db';
 
-import { sha256Hex } from './sha256.js';
 
 export const WINDOW_STORAGE_KEY_PREFIX = 'snug-user/';
 export const WINDOW_STORAGE_FORMAT = 'snug-window-storage/1';
@@ -86,13 +85,22 @@ export function createWindowStorageBackend(
     }
   };
 
-  /** The manifest, `undefined` when PROVEN absent, a throw when present but unreadable. */
+  /**
+   * The manifest, `undefined` when PROVEN absent, a throw when present but unreadable. The
+   * proof is `list()` succeeding without the key: a `list()` that itself fails proves
+   * nothing, and "nothing" must never open a pristine file over data (correctness review 2).
+   */
   const readManifest = async (file: string): Promise<Manifest | undefined> => {
     let raw: unknown;
     try {
       raw = await storage.get(manifestKey(file));
     } catch {
-      const keys = await listKeys(manifestKey(file));
+      let keys: string[];
+      try {
+        keys = unwrapKeys(await storage.list(manifestKey(file)));
+      } catch {
+        throw new WindowStorageCorrupt('its manifest could not be read and the store could not be listed — not proven absent');
+      }
       if (!keys.includes(manifestKey(file))) return undefined;
       throw new WindowStorageCorrupt('its manifest exists but could not be read (unreadable, not absent)');
     }

@@ -61,6 +61,8 @@ export interface CustodyState {
   note?: string;
   /** The durable copy's counter and instant, when known. */
   saved?: { saved: number; savedAt: string };
+  /** The WORKING copy's rung when it is memory only (Safari denies third-party storage): gone with the tab, so the chip says so. */
+  workingCopy?: 'memory';
 }
 
 /**

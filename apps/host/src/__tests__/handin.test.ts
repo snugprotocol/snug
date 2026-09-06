@@ -142,3 +142,36 @@ describe('readBundleBlocksFromDocument — the DOM at boot', () => {
     expect((JSON.parse(blocks[0]!.json) as AppBundle).html).toBe(HTML_V2);
   });
 });
+
+describe('the review’s hand-in rules', () => {
+  it('(N, security review 4) a connections-bearing bundle for an EDITED copy is refused at the boundary — never offered', async () => {
+    const { installed } = await handInFromPage(db, blocksOf(bundle(LINEAGE_A, HTML_V1)));
+    db.saveAppVersion(installed[0]!.appId, USER_EDIT, 'user edit');
+    const withConnections = bundle(LINEAGE_A, HTML_V2, {
+      connections: [{ slot: 'weather', provider: { name: 'OpenWeather' }, kind: 'api_key', fields: [{ key: 'api_key', label: 'API key', type: 'secret' }], declaredApiHosts: ['api.openweathermap.org'] }],
+    });
+    const outcome = await handInFromPage(db, blocksOf(withConnections));
+    expect(outcome.pending).toEqual([]);
+    expect(outcome.refused).toHaveLength(1);
+    expect(outcome.refused[0]!.reason).toMatch(/connection/);
+  });
+
+  it('(security review 3) a `share:` copy whose own id is the lineage is never a lifted-from target — the block installs a separate owned app', async () => {
+    const { installAppFromBundle } = await import('@snugprotocol/db');
+    const shared = await installAppFromBundle(db, bundle(LINEAGE_A, HTML_V1), { bundleId: 'from-the-sharer' });
+    const outcome = await handInFromPage(db, blocksOf(bundle(shared.appId, HTML_V2)));
+    expect(outcome.installed).toHaveLength(1);
+    expect(outcome.installed[0]!.appId).not.toBe(shared.appId);
+    expect(db.getAppHtml(shared.appId)).toBe(HTML_V1);
+  });
+
+  it('(correctness review 10) the tombstone applies only when NO target exists — a live app still takes a rolled-back bundle', async () => {
+    const first = await handInFromPage(db, blocksOf(bundle(LINEAGE_A, HTML_V1)));
+    await db.deleteApp(first.installed[0]!.appId); // tombstone = X (v1's id)
+    const second = await handInFromPage(db, blocksOf(bundle(LINEAGE_A, HTML_V2))); // Y installs
+    expect(second.installed).toHaveLength(1);
+    const rolledBack = await handInFromPage(db, blocksOf(bundle(LINEAGE_A, HTML_V1))); // X again, app present → update, not "dismissed"
+    expect(rolledBack.updated).toHaveLength(1);
+    expect(db.getAppHtml(second.installed[0]!.appId)).toBe(HTML_V1);
+  });
+});

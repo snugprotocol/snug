@@ -37,7 +37,12 @@ export type DbBlockRead =
   | { manifest: DbBlockManifest; base64: string; index: number; end: number; corrupt?: undefined }
   | { corrupt: string; manifest?: undefined; base64?: undefined };
 
+/** A db block's body parsed: the manifest (every field validated) and the base64, or `corrupt`. */
+export type DbBlockBody = { manifest: DbBlockManifest; base64: string; corrupt?: undefined } | { corrupt: string; manifest?: undefined; base64?: undefined };
+export function parseDbBlockBody(body: string): DbBlockBody;
 export function readDbBlock(html: string): DbBlockRead | undefined;
+/** Every external reference a stylesheet makes (an `@import`, or a non-`data:` `url(…)`). */
+export function externalCssRefs(css: string): ({ kind: 'import' } | { kind: 'url'; url: string })[];
 export function writeDbBlock(html: string, block: { manifest: DbBlockManifest; base64: string }): string;
 
 export interface BundleBlockRead {

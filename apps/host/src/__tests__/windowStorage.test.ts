@@ -164,3 +164,19 @@ describe('createWindowStorageBackend', () => {
     await second.userDb.close();
   });
 });
+
+describe('absence is PROVEN, never assumed (correctness review 2)', () => {
+  it('a manifest read that throws while list() ALSO throws is CORRUPT — never a pristine file over data; nothing is written', async () => {
+    const storage = fakeStorage();
+    const backend = createWindowStorageBackend(storage);
+    await backend.save(FILE, bytes(10));
+    storage.get = async () => {
+      throw new Error('Storage get failed: Unexpected response type');
+    };
+    storage.list = async () => {
+      throw new Error('Storage list failed');
+    };
+    await expect(createWindowStorageBackend(storage).load(FILE)).rejects.toThrow(/not proven absent/);
+    expect(storage.data.size).toBeGreaterThan(0);
+  });
+});

@@ -22,11 +22,12 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { LINEAGE_RULE, readBundleBlocks, removeBundleBlock, tokenizeTopLevel, upsertBundleBlock } from './lib/page-blocks.mjs';
+import { LINEAGE_RULE, externalCssRefs, readBundleBlocks, removeBundleBlock, tokenizeTopLevel, upsertBundleBlock } from './lib/page-blocks.mjs';
 
 export const BUNDLE_FORMAT = 'snug-app-bundle/1';
-/** The protocol's whole-bundle cap (packages/protocol app-bundle.ts) — restated as a number, pinned by the test. */
+/** The protocol's caps (packages/protocol/src/app-bundle.ts) — restated as numbers; the test pins them against that source text. */
 export const BUNDLE_MAX_BYTES = 1024 * 1024;
+export const BUNDLE_MAX_HTML_CHARS = 768 * 1024;
 /** What the artifact viewer's embedder CSP lets an app load (T1 S1, verbatim allowlist prefixes). */
 export const ARTIFACT_SCRIPT_ALLOWLIST = ['https://cdn.jsdelivr.net/npm/', 'https://cdnjs.cloudflare.com/'];
 
@@ -44,10 +45,8 @@ export function lintBundleHtml(html) {
       warnings.push(`<link rel="stylesheet" href="${e.attrs.href ?? ''}"> will not load inside an artifact — inline the CSS in a <style> block`);
     }
     if (e.name === 'style') {
-      const css = e.body ?? '';
-      if (/@import\b/i.test(css)) warnings.push('a <style> uses @import — inline the CSS instead; artifact viewers block CDN stylesheets');
-      for (const m of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi)) {
-        if (!/^\s*data:/i.test(m[2])) warnings.push(`a <style> references url(${m[2]}) — artifact viewers block CDN fonts and images; use a data: URL`);
+      for (const ref of externalCssRefs(e.body ?? '')) {
+        warnings.push(ref.kind === 'import' ? 'a <style> uses @import — inline the CSS instead; artifact viewers block CDN stylesheets' : `a <style> references url(${ref.url}) — artifact viewers block CDN fonts and images; use a data: URL`);
       }
     }
   }
@@ -59,13 +58,19 @@ export function parseBundleText(text, label = 'bundle') {
   if (Buffer.byteLength(text, 'utf8') > BUNDLE_MAX_BYTES) return { ok: false, error: `${label}: over the ${BUNDLE_MAX_BYTES}-byte bundle cap` };
   let json;
   try {
-    json = JSON.parse(text.replace(/^﻿/, ''));
+    json = JSON.parse(text.replace(/^\uFEFF/, ''));
   } catch {
     return { ok: false, error: `${label}: not JSON` };
   }
   if (typeof json !== 'object' || json === null || json.format !== BUNDLE_FORMAT) return { ok: false, error: `${label}: not a ${BUNDLE_FORMAT} document` };
   if (typeof json.lineage !== 'string' || !LINEAGE_RULE.test(json.lineage)) return { ok: false, error: `${label}: lineage must be a lowercase UUID` };
   if (typeof json.html !== 'string' || json.html === '') return { ok: false, error: `${label}: html must be a non-empty string` };
+  if (json.html.length > BUNDLE_MAX_HTML_CHARS) return { ok: false, error: `${label}: html is over the ${BUNDLE_MAX_HTML_CHARS}-character cap` };
+  if (typeof json.app !== 'object' || json.app === null || typeof json.app.displayName !== 'string') return { ok: false, error: `${label}: no app.displayName` };
+  if (!Array.isArray(json.connections)) return { ok: false, error: `${label}: connections must be an array (empty inside an artifact)` };
+  // D4: connected apps are not available inside an artifact — the kit refuses such a bundle at
+  // boot, so merging it would hand in nothing and print a refusal on every load.
+  if (json.connections.length > 0) return { ok: false, error: `${label}: carries ${json.connections.length} connection(s) — connected apps are not available inside an artifact (D4); drop them` };
   return { ok: true, bundle: json, text: JSON.stringify(json) };
 }
 

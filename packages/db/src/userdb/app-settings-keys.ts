@@ -149,6 +149,19 @@ export function shareLinkSettingPrefixFor(appId: string): string {
   return `${SHARE_LINK_SETTING_PREFIX}${appId}:`;
 }
 
+/**
+ * The AGENT install-source prefix (TASK-20260905-binding-a-artifacts AC8, ADR-0065 §6): an
+ * app the user's own agent handed in as a bundle block embedded in a Claude artifact.
+ * `agent:<lineage>` cannot spell `share:` or `starter:` (the lineage is a UUID). Homed here
+ * — beside the tombstone key — because `deleteApp` (userdb.ts) needs it and userdb.ts
+ * cannot import app-bundle.ts (which imports userdb.ts); app-bundle.ts re-exports it.
+ */
+export const AGENT_INSTALL_SOURCE_PREFIX = 'agent:';
+
+export function agentInstallSource(lineage: string): string {
+  return `${AGENT_INSTALL_SOURCE_PREFIX}${lineage}`;
+}
+
 /** The `agentDismissed:` namespace prefix (TASK-20260905-binding-a-artifacts AC8). */
 export const AGENT_DISMISSED_SETTING_PREFIX = 'agentDismissed:';
 

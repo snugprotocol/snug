@@ -120,7 +120,13 @@ export const LINEAGE_RULE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 const isDbBlock = (e) => e.name === 'script' && (e.attrs.type ?? '') === 'text/plain' && e.attrs.id === DB_BLOCK_ID;
 const isBundleBlock = (e) => e.name === 'script' && (e.attrs.type ?? '') === BUNDLE_BLOCK_TYPE;
 
-/** Insert `block` before the LAST `</body>` (case-insensitive); with no `</body>`, append. */
+/**
+ * Insert `block` before the LAST `</body>` (case-insensitive); with no `</body>`, append. Located
+ * by regex, not the tokenizer: a page whose ONLY `</body>` sat inside a script string would
+ * take the block inside that script — unreachable on the kit page, whose real `</body>` is
+ * last (the AC5 byte-equality e2e proves the splice), and `snug-embed` refuses a page with no
+ * `</body>` at all.
+ */
 function insertBeforeBodyEnd(html, block) {
   const at = html.search(/<\/body\s*>(?![\s\S]*<\/body\s*>)/i);
   return at === -1 ? `${html}\n${block}\n` : `${html.slice(0, at)}${block}\n${html.slice(at)}`;
@@ -130,17 +136,31 @@ function refuseCloser(text, label) {
   if (/<\/script/i.test(text) || /<!--/.test(text)) throw new Error(`page-blocks: the ${label} contains a sequence that would end or escape the block`);
 }
 
+// ------------------------------------------------------------------------ css refs
+
+/**
+ * Every external reference a stylesheet makes — an `@import`, or a `url(…)` that is not a
+ * `data:` URL. ONE reader for check-host-kit (the kit page must carry none) and snug-embed
+ * (an artifact-bound app must carry none — the viewer blocks CDN stylesheets and fonts).
+ */
+export function externalCssRefs(css) {
+  const refs = [];
+  if (/@import\b/i.test(css)) refs.push({ kind: 'import' });
+  for (const m of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi)) {
+    if (!/^\s*data:/i.test(m[2])) refs.push({ kind: 'url', url: m[2] });
+  }
+  return refs;
+}
+
 // ---------------------------------------------------------------------------- db block
 
 /**
- * The db block, or `undefined` when the page carries none, or `{ corrupt }` when a block is
- * present but its manifest is unreadable — an unreadable block is never "no file" (lesson
- * 2026-08-22).
+ * Parse a db block's BODY (the text between the tags): a JSON manifest line, then the
+ * base64. Every manifest field is checked against its shape (a hand-edited or truncated
+ * manifest is CORRUPT, never a counter of NaN — correctness review 13). The kit calls this
+ * on the block's `textContent` at boot; `readDbBlock` calls it after the tokenizer found the block.
  */
-export function readDbBlock(html) {
-  const block = tokenizeTopLevel(html).find(isDbBlock);
-  if (block === undefined) return undefined;
-  const body = block.body ?? '';
+export function parseDbBlockBody(body) {
   const nl = body.indexOf('\n');
   const manifestText = nl === -1 ? body : body.slice(0, nl);
   let manifest;
@@ -152,7 +172,22 @@ export function readDbBlock(html) {
   if (typeof manifest !== 'object' || manifest === null || manifest.format !== DB_BLOCK_FORMAT) {
     return { corrupt: `the snug-db block manifest is not ${DB_BLOCK_FORMAT} (format ${String(manifest?.format)})` };
   }
-  return { manifest, base64: nl === -1 ? '' : body.slice(nl + 1).trim(), index: block.index, end: block.end };
+  if (!Number.isInteger(manifest.bytes) || manifest.bytes < 0) return { corrupt: 'the snug-db block manifest has no byte length' };
+  if (typeof manifest.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(manifest.sha256)) return { corrupt: 'the snug-db block manifest has no sha256' };
+  if (!Number.isInteger(manifest.saved) || manifest.saved < 0) return { corrupt: 'the snug-db block manifest has no save counter' };
+  if (typeof manifest.savedAt !== 'string') return { corrupt: 'the snug-db block manifest has no save instant' };
+  return { manifest, base64: nl === -1 ? '' : body.slice(nl + 1).trim() };
+}
+
+/**
+ * The db block, or `undefined` when the page carries none, or `{ corrupt }` when a block is
+ * present but unreadable — an unreadable block is never "no file" (lesson 2026-08-22).
+ */
+export function readDbBlock(html) {
+  const block = tokenizeTopLevel(html).find(isDbBlock);
+  if (block === undefined) return undefined;
+  const parsed = parseDbBlockBody(block.body ?? '');
+  return parsed.corrupt !== undefined ? parsed : { ...parsed, index: block.index, end: block.end };
 }
 
 /** Write (replace or insert) the db block. The manifest is JSON; the base64 is one line. */
@@ -198,11 +233,14 @@ export function removeBundleBlock(html, lineage) {
 // ---------------------------------------------------------------------- verifyKitPage
 
 /**
- * Is `html` the kit page and nothing else? The artifact record calls this on the CANONICAL
- * source it fetched before republishing (the contract forbids serializing the live DOM: the
- * viewer injects its runtime — artifact.d.ts 0.2.41). A page that fails is never published:
- * exactly one inline module script (the kit), a stamp equal to the running page's, every
- * other script a known data block, no `<script src>`, no `<link>`, a doctype first.
+ * A SHAPE check on the page source the artifact record fetched before republishing — NOT a
+ * security control: exactly one inline module script (the kit), a stamp equal to the
+ * running page's, every other script a known data block, no `<script src>`, no `<link>`, a
+ * doctype first. What it catches is the viewer's INJECTED runtime and a foreign or
+ * mismatched page (the contract forbids serializing the live DOM — artifact.d.ts 0.2.41),
+ * so a republish never captures them. It defends nothing against a page WRITER, who can
+ * edit the one module script and its stamp: that boundary is the artifact's write
+ * permission (ADR-0065 §6 amendment).
  */
 export function verifyKitPage(html, { expectedStamp }) {
   const problems = [];

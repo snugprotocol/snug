@@ -168,6 +168,17 @@ describe('update under `agent` provenance', () => {
     });
   });
 
+  it('(N, security review 3) a `share:` copy whose OWN id is the lineage is not a lifted-from target either', async () => {
+    const first = await agentBundle(V1);
+    const shared = await installAppFromBundle(db, first.bundle, { bundleId: first.bundleId });
+    // The agent lifted the share copy itself: lineage = the share copy's app id.
+    const lifted = await agentBundle(V2, { lineage: shared.appId });
+    await expect(updateAppFromBundle(db, shared.appId, lifted.bundle, { bundleId: lifted.bundleId, provenance: 'agent' })).rejects.toMatchObject({
+      code: USERDB_ERROR_CODES.NOT_FOUND,
+    });
+    expect(db.getAppHtml(shared.appId)).toBe(V1);
+  });
+
   it('(N) a `share:` copy of the same lineage is NOT an agent target', async () => {
     const first = await agentBundle(V1);
     const shared = await installAppFromBundle(db, first.bundle, { bundleId: first.bundleId });
@@ -204,7 +215,7 @@ describe('delete honours the hand-in — the tombstone', () => {
     expect(lineageFromAgentDismissedSettingKey('appModel:x')).toBeUndefined();
   });
 
-  it('(N) deleting a `share:` copy or a built app writes no tombstone', async () => {
+  it('(N) deleting a `share:` copy, or a built app no agent ever touched, writes no tombstone', async () => {
     const { bundle, bundleId } = await agentBundle(V1);
     const shared = await installAppFromBundle(db, bundle, { bundleId });
     await db.deleteApp(shared.appId);
@@ -212,5 +223,13 @@ describe('delete honours the hand-in — the tombstone', () => {
     const built = db.installApp({ displayName: 'Built', html: V1 });
     await db.deleteApp(built.appId);
     expect(db.listSettingKeys().filter((key) => key.startsWith(AGENT_DISMISSED_SETTING_PREFIX))).toHaveLength(0);
+  });
+
+  it('a lifted-from app the agent updated IN PLACE tombstones under its own id on delete (correctness review 5)', async () => {
+    const built = db.installApp({ displayName: 'Built in the kit', usesDb: true, html: V1 });
+    const lifted = await agentBundle(V2, { lineage: built.appId });
+    await updateAppFromBundle(db, built.appId, lifted.bundle, { bundleId: lifted.bundleId, provenance: 'agent' });
+    await db.deleteApp(built.appId);
+    expect(db.getSetting(agentDismissedSettingKey(built.appId))).toBe(lifted.bundleId);
   });
 });

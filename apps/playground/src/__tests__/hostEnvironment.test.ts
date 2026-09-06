@@ -1,6 +1,7 @@
 // hostEnvironment.test.ts — TASK-20260905-host-kit: a feedback report from the kit names the
 // kit and its binding, never "web", and never the file's mode (the host pins the brain).
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { hostPlatform } from './fixtures/hostPlatform.js';
 
 afterEach(() => {
   vi.resetModules();
@@ -10,12 +11,7 @@ describe('reportEnvironment', () => {
   it('host: names the kit, its binding and the pinned brain', async () => {
     vi.resetModules();
     const platform = await import('../platform/platform.js');
-    platform.setPlatform({
-      kind: 'host',
-      binding: 'artifact',
-      brain: { kind: 'demo' },
-      capabilities: { subscriptionMode: false, hubSyncOrigin: false, lanHttpPrivate: false, hubAuth: false, brainSettings: false, account: false, sync: false, connections: false, share: false },
-    });
+    platform.setPlatform(hostPlatform());
     const { reportEnvironment } = await import('../feedback/environment.js');
     const line = reportEnvironment();
     expect(line.startsWith('host kit (artifact) / ')).toBe(true);

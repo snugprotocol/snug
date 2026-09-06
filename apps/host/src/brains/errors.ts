@@ -37,8 +37,6 @@ export const HOST_BRAIN_CODES = {
   BAD_REPLY: 'HOST_BRAIN_BAD_REPLY',
 } as const;
 
-export type HostBrainCode = (typeof HOST_BRAIN_CODES)[keyof typeof HOST_BRAIN_CODES];
-
 /** The slice of a rejected `sample` promise the mapping reads. */
 export interface SampleErrorLike {
   code?: unknown;

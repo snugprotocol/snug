@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import { DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, writeDbBlock } from './lib/page-blocks.mjs';
-import { ARTIFACT_SCRIPT_ALLOWLIST, BUNDLE_MAX_BYTES, embed, lintBundleHtml, listBlocks, parseArgs } from './snug-embed.mjs';
+import { ARTIFACT_SCRIPT_ALLOWLIST, BUNDLE_MAX_BYTES, BUNDLE_MAX_HTML_CHARS, embed, lintBundleHtml, listBlocks, parseArgs } from './snug-embed.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STAMP = '0.1.0 abcdef1';
@@ -116,4 +116,28 @@ test('CLI: merges into --out, exit 0; a refusal exits 2 and writes nothing', () 
   const listed = spawnSync(process.execPath, [path.join(HERE, 'snug-embed.mjs'), out, '--list'], { encoding: 'utf8' });
   assert.equal(listed.status, 0);
   assert.match(listed.stdout, new RegExp(`${A}\\s+Pomodoro`));
+});
+
+test('(N, D4) a bundle carrying connections, a bundle with no app/connections seat, or an html over the per-field cap is refused at EMBED time — never merged to be refused at boot', () => {
+  const withConnections = bundle(A, '<p/>', { connections: [{ slot: 'w', provider: { name: 'X' }, kind: 'api_key' }] });
+  const r1 = embed({ page: PAGE, bundles: [{ name: 'c', text: withConnections }] });
+  assert.match(r1.errors[0], /connection/);
+  assert.equal(r1.html, PAGE);
+  const noApp = JSON.stringify({ format: 'snug-app-bundle/1', lineage: A, html: '<p/>', connections: [] });
+  assert.match(embed({ page: PAGE, bundles: [{ name: 'n', text: noApp }] }).errors[0], /app\.displayName/);
+  const noConnections = JSON.stringify({ format: 'snug-app-bundle/1', lineage: A, app: { displayName: 'x' }, html: '<p/>' });
+  assert.match(embed({ page: PAGE, bundles: [{ name: 'n', text: noConnections }] }).errors[0], /connections/);
+  const bigHtml = bundle(A, 'x'.repeat(BUNDLE_MAX_HTML_CHARS + 1));
+  assert.match(embed({ page: PAGE, bundles: [{ name: 'h', text: bigHtml }] }).errors[0], /character cap/);
+});
+
+test('the caps restated here equal the protocol source (one home, text-pinned)', () => {
+  const protocol = readFileSync(path.join(HERE, '..', 'packages', 'protocol', 'src', 'app-bundle.ts'), 'utf8');
+  const valueOf = (name) => {
+    const m = new RegExp(`export const ${name} = ([0-9 *]+);`).exec(protocol);
+    assert.ok(m, `${name} not found in the protocol source`);
+    return Function(`return ${m[1]}`)();
+  };
+  assert.equal(BUNDLE_MAX_BYTES, valueOf('APP_BUNDLE_MAX_BYTES'));
+  assert.equal(BUNDLE_MAX_HTML_CHARS, valueOf('APP_BUNDLE_MAX_HTML_CHARS'));
 });

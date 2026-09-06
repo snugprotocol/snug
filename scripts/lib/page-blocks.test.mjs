@@ -15,6 +15,8 @@ import {
   DB_BLOCK_FORMAT,
   BUNDLE_BLOCK_TYPE,
   escapeForInlineScript,
+  externalCssRefs,
+  parseDbBlockBody,
   readBundleBlocks,
   readDbBlock,
   removeBundleBlock,
@@ -155,4 +157,32 @@ test('verifyKitPage: the kit page with its data blocks passes; a foreign script,
   const twoModules = good.replace('</head>', '<script type="module">2</script></head>');
   assert.match(verifyKitPage(twoModules, { expectedStamp: STAMP })[0], /module/);
   assert.match(verifyKitPage('<html><body></body></html>', { expectedStamp: STAMP })[0], /doctype/);
+});
+
+test('parseDbBlockBody validates every manifest field — a hand-edited counter is corrupt, never NaN (correctness review 13)', () => {
+  const good = { format: DB_BLOCK_FORMAT, bytes: 3, sha256: 'ab'.repeat(32), saved: 4, savedAt: '2026-09-05T00:00:00Z' };
+  assert.deepEqual(parseDbBlockBody(`${JSON.stringify(good)}\nAAEC`), { manifest: good, base64: 'AAEC' });
+  for (const [label, bad] of [
+    ['saved as a string', { ...good, saved: '4' }],
+    ['saved missing', { format: good.format, bytes: 3, sha256: good.sha256, savedAt: 'x' }],
+    ['bytes negative', { ...good, bytes: -1 }],
+    ['sha too short', { ...good, sha256: 'abc' }],
+    ['savedAt missing', { format: good.format, bytes: 3, sha256: good.sha256, saved: 1 }],
+  ]) {
+    const out = parseDbBlockBody(`${JSON.stringify(bad)}\nAAEC`);
+    assert.equal(typeof out.corrupt, 'string', label);
+    assert.equal(out.manifest, undefined, label);
+  }
+  // readDbBlock reports the same corrupt reason from a page.
+  const page = PAGE.replace('</body>', `<script type="text/plain" id="snug-db">${JSON.stringify({ ...good, saved: 'x' })}\nAAEC</script>\n</body>`);
+  assert.match(readDbBlock(page).corrupt, /save counter/);
+});
+
+test('externalCssRefs: every @import and non-data url(), nothing else', () => {
+  assert.deepEqual(externalCssRefs('body{background:url(data:image/png;base64,AA)} h1{color:red}'), []);
+  assert.deepEqual(externalCssRefs('@import url("https://fonts.googleapis.com/css2"); p{background:url(https://cdn.example/x.png)}'), [
+    { kind: 'import' },
+    { kind: 'url', url: 'https://fonts.googleapis.com/css2' },
+    { kind: 'url', url: 'https://cdn.example/x.png' },
+  ]);
 });

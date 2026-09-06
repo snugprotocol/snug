@@ -1,15 +1,14 @@
 // compose.test.ts — TASK-20260905-binding-a-artifacts: the composition root wires each
 // binding to its storage seam and its seats, from injected window/document slices.
-import { createMemoryBackend, openUserDb } from '@snugprotocol/db';
+import { createMemoryBackend, openUserDb, sha256Hex } from '@snugprotocol/db';
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { createRequire } from 'node:module';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DB_BLOCK_FORMAT, upsertBundleBlock, writeDbBlock } from '../../../../scripts/lib/page-blocks.mjs';
-import { composeHostPlatform, type ComposeDocument, type ComposeWindow } from '../compose.js';
+import { composeHostPlatform, handInBeforePaint, type ComposeDocument, type ComposeWindow } from '../compose.js';
 import type { HostNamespaces, ProbeResult } from '../probe.js';
 import { CUSTODY_NOTE_STASH_KEY } from '../storage/artifactHtml.js';
-import { sha256Hex } from '../storage/sha256.js';
 
 const require = createRequire(import.meta.url);
 const locateWasm = (): string => require.resolve('sql.js/dist/sql-wasm.wasm');
@@ -37,8 +36,8 @@ function winOf(page: string, extra: Partial<ComposeWindow> = {}): ComposeWindow 
 const probeOf = (binding: ProbeResult['binding'], host?: Partial<HostNamespaces>): ProbeResult => ({
   binding,
   storage: { backend: createMemoryBackend(), kind: 'memory' },
-  brain: { brain: { kind: 'demo' }, legs: { sample: 'absent', complete: 'absent', local: 'absent' }, ready: Promise.resolve() },
-  ...(host !== undefined ? { host: { legs: { sample: 'null', artifact: 'null', downloads: 'null' }, guardTripped: false, ...host } } : {}),
+  brain: { brain: { kind: 'demo' }, legs: { sample: 'absent', complete: 'absent', local: 'absent' } },
+  ...(host !== undefined ? { host: { legs: { sample: 'null', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false, ...host } } : {}),
 });
 
 describe('composeHostPlatform', () => {
@@ -124,5 +123,32 @@ describe('composeHostPlatform', () => {
     expect(c2.platform.agentHandIns?.pending.get()).toEqual([]);
     expect(opened.userDb.getAppHtml(appId)).toContain('v2');
     await opened.userDb.close();
+  });
+});
+
+describe('handInBeforePaint — the named, bounded pre-paint wait', () => {
+  it('resolves true when the hand-in finishes inside the bound, false past it; a rejected hand-in never blocks the paint', async () => {
+    expect(await handInBeforePaint(Promise.resolve(), 50)).toBe(true);
+    expect(await handInBeforePaint(new Promise(() => undefined), 20)).toBe(false);
+    expect(await handInBeforePaint(Promise.reject(new Error('db')), 50)).toBe(true);
+  });
+
+  it('"load the page’s copy" is TERMINAL: the composition hands the record the window’s reload (correctness review 1)', async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const page = writeDbBlock(KIT, { manifest: { format: DB_BLOCK_FORMAT, bytes: 3, sha256: await sha256Hex(bytes), saved: 4, savedAt: 'x' }, base64: btoa(String.fromCharCode(...bytes)) });
+    const reload = vi.fn();
+    const probe = probeOf('artifact', { artifact: { publish: async () => ({ version: 'v' }) } });
+    await probe.storage.backend.save(USERDB_FILE, new Uint8Array([9]));
+    const c = composeHostPlatform(probe, winOf(page, { reload }), docOf(page), wasm);
+    await c.platform.userdbBackend!.load(USERDB_FILE);
+    expect(c.custody.get().divergence).toBeDefined();
+    await c.platform.custody!.loadPageCopy!();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.getItem(CUSTODY_NOTE_STASH_KEY)).toContain('loaded the page’s saved copy');
+  });
+
+  it('a memory bucket under an artifact is named on the custody state (correctness review 14)', () => {
+    const c = composeHostPlatform(probeOf('artifact', {}), winOf(KIT), docOf(KIT), wasm);
+    expect(c.custody.get().workingCopy).toBe('memory');
   });
 });

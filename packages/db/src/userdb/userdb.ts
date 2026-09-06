@@ -62,6 +62,7 @@ import {
 } from '@snugprotocol/protocol';
 import { authAppSecretPrefix, authConnectionSlotPrefix, isLegacyAppSecretKey } from './auth-secrets.js';
 import {
+  AGENT_INSTALL_SOURCE_PREFIX,
   agentDismissedSettingKey,
   appIdFromModelSettingKey,
   appIdFromProviderSettingKey,
@@ -2361,8 +2362,17 @@ function construct(
         //     does not hold. Keyed by lineage (the app row is going), valued with the
         //     bundle id being deleted, inside this transaction so it commits or rolls
         //     back with the delete. A `share:` copy or a built app writes nothing here.
-        const lineage = app.installSource?.startsWith('agent:') === true ? app.installSource.slice('agent:'.length) : undefined;
-        const dismissedBundleId = lineage !== undefined ? kvGet(USERDB_TABLES.settings, sharedBundleSettingKey(appId)) : undefined;
+        //     The lineage is the `agent:` source's, or — for an app the agent updated IN
+        //     PLACE (a kit-built app or a starter, whose own id IS the lineage) — the app
+        //     id, whenever a bundle marker says a hand-in ever landed on it (correctness
+        //     review 5). A `share:` copy is never an agent target, so it never tombstones.
+        const dismissedBundleId = kvGet(USERDB_TABLES.settings, sharedBundleSettingKey(appId));
+        const lineage =
+          app.installSource?.startsWith(AGENT_INSTALL_SOURCE_PREFIX) === true
+            ? app.installSource.slice(AGENT_INSTALL_SOURCE_PREFIX.length)
+            : app.installSource?.startsWith('share:') === true
+              ? undefined
+              : appId;
         if (lineage !== undefined && typeof dismissedBundleId === 'string') {
           kvSet(USERDB_TABLES.settings, agentDismissedSettingKey(lineage), dismissedBundleId);
         }

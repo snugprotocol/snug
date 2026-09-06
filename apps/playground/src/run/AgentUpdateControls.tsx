@@ -11,6 +11,7 @@ import type { ReactElement } from 'react';
 
 import { getPlatform } from '../platform/platform.js';
 import { Button } from '../ui/Button.js';
+import { ConfirmOverlay } from '../ui/ConfirmOverlay.js';
 
 export interface AgentUpdateControlsProps {
   appId: string;
@@ -67,24 +68,22 @@ export function AgentUpdateControls({ appId, onUpdated }: AgentUpdateControlsPro
         </span>
       ) : null}
       {confirmOpen ? (
-        <div className="net-confirm-overlay" role="dialog" aria-modal="true" aria-label="confirm updating an edited app from your agent">
-          <div className="net-confirm-card">
-            <h2 className="net-confirm-title">you’ve customized this app</h2>
-            <p className="net-confirm-body">
-              Your agent handed in a new version of {entry.displayName}. Updating replaces your edited version with it. Nothing
-              is lost — your current version stays in the versions panel and you can revert to it any time. Your data, chats
-              and docs are untouched either way.
-            </p>
-            <div className="field-row net-confirm-actions">
-              <Button variant="ghost" data-testid="agent-update-cancel" onClick={() => setConfirmOpen(false)}>
-                keep my version
-              </Button>
-              <Button variant="primary" data-testid="agent-update-confirm" onClick={apply}>
-                update · keeps your data
-              </Button>
-            </div>
+        <ConfirmOverlay ariaLabel="confirm updating an edited app from your agent">
+          <h2 className="net-confirm-title">you’ve customized this app</h2>
+          <p className="net-confirm-body">
+            Your agent handed in a new version of {entry.displayName}. Updating replaces your edited version with it. Nothing
+            is lost — your current version stays in the versions panel and you can revert to it any time. Your data, chats
+            and docs are untouched either way.
+          </p>
+          <div className="field-row net-confirm-actions">
+            <Button variant="ghost" data-testid="agent-update-cancel" onClick={() => setConfirmOpen(false)}>
+              keep my version
+            </Button>
+            <Button variant="primary" data-testid="agent-update-confirm" onClick={apply}>
+              update · keeps your data
+            </Button>
           </div>
-        </div>
+        </ConfirmOverlay>
       ) : null}
     </>
   );

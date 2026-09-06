@@ -73,7 +73,8 @@ import { setTheme, useTheme } from '../state/theme.js';
 import { useBrain, useWebllmFlag, WEBLLM_FALLBACK_BANNER } from '../state/webllm.js';
 import { getUserDb } from '../state/userdb.js';
 import { downloadBlob } from '../run/exportDb.js';
-import { sniffSnugFile, unwrapUserFile } from '@snugprotocol/db';
+import { sniffSnugFile } from '@snugprotocol/db';
+import { unwrapOpenedWrapper } from '../platform/openFile.js';
 import { receiveSharedBundle, sharedOpenRequestStore } from '../share/sharedInbox.js';
 import { FeedbackCard } from '../feedback/FeedbackCard.js';
 import { ADAPTER_DEFAULTS, labelFor, PROVIDER_LABELS } from '../run/ModelSelect.js';
@@ -775,12 +776,11 @@ function DataCard(): ReactElement {
           return;
         }
         if (kind === 'user-file-wrapper') {
-          // The artifact export (T4 AC6): unwrapped by the db package's one reader — sha
-          // verified, payload re-sniffed — then the ordinary import with the real bytes.
-          const unwrapped = await unwrapUserFile(new TextDecoder().decode(bytes));
-          if (!unwrapped.ok) throw new Error(`that Snug export could not be opened — ${unwrapped.detail}`);
-          const copy = new ArrayBuffer(unwrapped.bytes.byteLength);
-          new Uint8Array(copy).set(unwrapped.bytes);
+          // The artifact export (T4 AC6): the open-file route's one unwrap — sha verified,
+          // payload re-sniffed — then the ordinary import with the real bytes.
+          const unwrapped = await unwrapOpenedWrapper(bytes);
+          const copy = new ArrayBuffer(unwrapped.byteLength);
+          new Uint8Array(copy).set(unwrapped);
           await importUserFile({ arrayBuffer: () => Promise.resolve(copy) });
           return;
         }

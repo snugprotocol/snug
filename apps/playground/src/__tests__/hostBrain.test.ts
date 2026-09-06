@@ -12,6 +12,7 @@ import { createMemoryBackend } from '@snugprotocol/db';
 import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformBrain, SnugPlatform } from '../platform/platform.js';
+import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 const require = createRequire(import.meta.url);
 const locateWasm = (): string => require.resolve('sql.js/dist/sql-wasm.wasm');
@@ -43,25 +44,7 @@ function fakeAdapter(): { adapter: AgentAdapter; calls: AdapterRequest[] } {
   };
 }
 
-function hostPlatform(brain: PlatformBrain): SnugPlatform {
-  return {
-    kind: 'host',
-    binding: 'artifact',
-    brain,
-    userdbBackend: createMemoryBackend(),
-    capabilities: {
-      subscriptionMode: false,
-      hubSyncOrigin: false,
-      lanHttpPrivate: false,
-      hubAuth: false,
-      brainSettings: false,
-      account: false,
-      sync: false,
-      connections: false,
-      share: false,
-    },
-  };
-}
+const hostPlatform = (brain: PlatformBrain): SnugPlatform => hostFixture({ brain, userdbBackend: createMemoryBackend() });
 
 /** A fresh graph; `install` runs against the fresh platform module BEFORE anything reads it. */
 async function fresh(install?: (platform: Graph['platform']) => void): Promise<Graph> {

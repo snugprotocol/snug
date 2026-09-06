@@ -22,10 +22,11 @@ import type { AdapterResult, AgentAdapter, ToolCall } from '@snugprotocol/adapte
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
 import { HOST_BRAIN_CODES, mapSampleError } from './errors.js';
-import { measurePrompt, shapeInput, type HostTurn } from './prompt.js';
+import { measurePrompt, shapeInput, type ShapedInput } from './prompt.js';
 
 export type ModelTier = 'quick' | 'default' | 'complex';
-export type SampleInput = string | HostTurn[];
+/** What `sample` accepts — exactly what the shaper produces (one type, one home). */
+export type SampleInput = ShapedInput;
 
 export interface SampleOptions {
   onText?: (event: { text: string; delta: string }) => void;

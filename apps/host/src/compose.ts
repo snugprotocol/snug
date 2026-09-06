@@ -12,14 +12,15 @@
 //
 // The hand-in runs AFTER the user db opens (`handIn(db)`), never before: it installs and
 // updates through the db, and pending (edited-copy) hand-ins are offered through the
-// run header's seat.
+// run header's seat. `handInBeforePaint` is the named, bounded wait the entry uses so a
+// prompt db paints with the handed-in apps and a stuck db still shows its recovery UI.
 
 import { type PersistenceBackend, type UserDb } from '@snugprotocol/db';
 
 import type { AgentHandInSeat, CustodySeat, PendingAgentUpdate, SnugPlatform } from '@playground/platform/platform';
 import { createStore, type Store } from '@playground/state/store';
 
-import { readDbBlock } from '../../../scripts/lib/page-blocks.mjs';
+import { parseDbBlockBody } from '../../../scripts/lib/page-blocks.mjs';
 import { createExportSeat } from './exportSeat.js';
 import { applyPendingHandIn, handInFromPage, readBundleBlocksFromDocument, type HandInOutcome, type PendingHandIn } from './handin.js';
 import { createHostPlatform } from './platform-host.js';
@@ -34,6 +35,8 @@ export interface ComposeWindow {
   sessionStorage?: { getItem(key: string): string | null; removeItem(key: string): void };
   /** The chat viewer's flat storage, when present. */
   storage?: unknown;
+  /** The terminal act after "load the page's copy". */
+  reload?: () => void;
 }
 
 export interface ComposeDocument {
@@ -51,24 +54,45 @@ export interface Composition {
   handIn(db: UserDb): Promise<HandInOutcome>;
 }
 
+/** How long the first paint waits for the db + hand-in before rendering anyway (a stuck db must still show its recovery UI). */
+export const HAND_IN_BEFORE_PAINT_MS = 4_000;
+
+/**
+ * Wait for the hand-in, but never longer than `ms`: a db that opens promptly paints with
+ * the handed-in apps (the hub reads its list once at mount); a db that cannot open never
+ * resolves `getUserDb()`, so past the bound the App renders its recovery surface and the
+ * hand-in lands whenever the db does. Resolves `true` when the hand-in finished in time.
+ */
+export function handInBeforePaint(handIn: Promise<unknown>, ms: number = HAND_IN_BEFORE_PAINT_MS): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  return Promise.race([handIn.then(() => true, () => true), bound]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
 const isWindowStorage = (value: unknown): value is WindowStorageLike => {
   const s = value as Partial<WindowStorageLike> | null;
   return typeof s?.get === 'function' && typeof s.set === 'function' && typeof s.delete === 'function' && typeof s.list === 'function';
 };
 
 export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc: ComposeDocument, wasm: Uint8Array): Composition {
-  const custody = createCustodyStore();
+  // A working copy in MEMORY (Safari denies third-party storage) is gone with the tab —
+  // the chip says so beside the artifact arms (correctness review 14).
+  const custody = createCustodyStore(probe.storage.kind === 'memory' ? { workingCopy: 'memory' } : {});
   const stamp = doc.querySelector('meta[name="snug-host-build"]')?.getAttribute('content') ?? 'dev';
 
   let backend: PersistenceBackend = probe.storage.backend;
   let record: ArtifactRecord | undefined;
+  const artifact = probe.host?.artifact;
   if (probe.binding === 'artifact' || probe.binding === 'artifact-static') {
     const blockBody = doc.getElementById('snug-db')?.textContent;
-    const pageBlock = blockBody == null ? undefined : readDbBlock(`<script type="text/plain" id="snug-db">${blockBody}</script>`);
-    const artifact = probe.host?.artifact;
+    const pageBlock = blockBody == null ? undefined : parseDbBlockBody(blockBody);
     record = createArtifactRecord({
       bucket: probe.storage.backend,
-      pageBlock,
+      pageBlock: pageBlock === undefined ? undefined : pageBlock.corrupt !== undefined ? pageBlock : { ...pageBlock, index: 0, end: 0 },
       canonicalSource: async () => {
         if (win.fetch === undefined) throw new Error('this page cannot read its own source');
         const response = await win.fetch(win.location.href, { cache: 'no-store' });
@@ -78,6 +102,7 @@ export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc:
       expectedStamp: stamp,
       publish: artifact === undefined ? undefined : (html) => artifact.publish(html),
       store: custody,
+      ...(win.reload !== undefined ? { onReload: win.reload } : {}),
     });
     backend = record.backend;
   } else if (probe.binding === 'artifact-chat' && isWindowStorage(win.storage)) {
@@ -95,30 +120,25 @@ export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc:
     /* no session storage here */
   }
 
-  const custodySeat: CustodySeat = {
-    state: custody,
-    dismissNote: () => custody.patch({ note: undefined }),
+  const custodySeat: CustodySeat = { state: custody, dismissNote: () => custody.patch({ note: undefined }) };
+  if (record !== undefined) {
+    const r = record;
+    custodySeat.loadPageCopy = () => r.loadPageCopy();
+    custodySeat.keepBrowserCopy = () => r.keepBrowserCopy();
     // The save act exists only where a save can ever happen: the `artifact` namespace
     // resolved. A static page carries the record (it seeds from the block) but no act.
-    ...(record !== undefined && probe.host?.artifact !== undefined
-      ? {
-          save: async () => {
-            const outcome = await record!.publish();
-            return outcome.ok ? { ok: true, message: `saved to this artifact (save #${outcome.saved})` } : { ok: false, message: outcome.message };
-          },
-          canSave: () => record!.canSave(),
-        }
-      : {}),
-    ...(record !== undefined
-      ? {
-          loadPageCopy: () => record!.loadPageCopy(),
-          keepBrowserCopy: () => record!.keepBrowserCopy(),
-        }
-      : {}),
-  };
+    if (artifact !== undefined) {
+      custodySeat.save = async () => {
+        const outcome = await r.publish();
+        return outcome.ok ? { ok: true, message: `saved to this artifact (save #${outcome.saved})` } : { ok: false, message: outcome.message };
+      };
+      custodySeat.canSave = () => r.canSave();
+    }
+  }
 
   const pending = createStore<readonly PendingAgentUpdate[]>([]);
   const pendingByApp = new Map<string, PendingHandIn>();
+  const publishPending = (): void => pending.set([...pendingByApp.values()].map((p) => ({ appId: p.appId, displayName: p.displayName, bundleId: p.bundleId })));
   let dbForApply: UserDb | undefined;
   const agentHandIns: AgentHandInSeat = {
     pending,
@@ -127,7 +147,7 @@ export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc:
       if (entry === undefined || dbForApply === undefined) throw new Error('nothing is pending for this app');
       const result = await applyPendingHandIn(dbForApply, entry);
       pendingByApp.delete(appId);
-      pending.set([...pendingByApp.values()].map((p) => ({ appId: p.appId, displayName: p.displayName, bundleId: p.bundleId })));
+      publishPending();
       return result;
     },
   };
@@ -148,7 +168,7 @@ export function composeHostPlatform(probe: ProbeResult, win: ComposeWindow, doc:
       dbForApply = db;
       const outcome = await handInFromPage(db, readBundleBlocksFromDocument(doc));
       for (const p of outcome.pending) pendingByApp.set(p.appId, p);
-      pending.set(outcome.pending.map((p) => ({ appId: p.appId, displayName: p.displayName, bundleId: p.bundleId })));
+      publishPending();
       return outcome;
     },
   };

@@ -5,15 +5,18 @@
 //
 //   1. an app under `agent:<lineage>`            → an update candidate
 //   2. else the app the bundle was LIFTED FROM     → an update candidate (kit-built or an
-//      (`bundle.lineage === appId`)                  installed starter; its install_source untouched)
+//      (`bundle.lineage === appId`)                  installed starter; its install_source
+//                                                    untouched; NEVER a `share:` copy)
 //   3. else                                        → a NEW install, owned (`agent:<lineage>`)
 //
 // An update candidate whose recorded bundle id differs applies ONLY when the copy is
 // unedited (`isEditedCopy` — the one predicate the run header shares); an edited copy is
 // never superseded silently: it is PENDING and the run header offers it through the
-// ADR-0045 §7 confirm. A deleted app stays deleted (the `agentDismissed:` tombstone).
-// A bundle carrying connections is a hard refusal (D4); every refusal is named, never a
-// crash. Idempotent: the same block on the next boot installs nothing twice.
+// ADR-0045 §7 confirm. A deleted app stays deleted (the `agentDismissed:` tombstone — read
+// only when no target exists, so a rolled-back bundle can still update a live app). A
+// bundle carrying connections is a hard refusal at the boundary (D4), BEFORE it can be
+// offered; every refusal is named, never a crash. Idempotent: the same block on the next
+// boot installs nothing twice.
 //
 // THE TRUST BOUNDARY (plan review S1, written down): under Binding A the page is the
 // publisher's output — whoever can republish the artifact can replace the kit's own
@@ -23,6 +26,7 @@
 // the hub note, the tombstone.
 
 import {
+  SHARE_INSTALL_SOURCE_PREFIX,
   agentDismissedSettingKey,
   agentInstallSource,
   installAppFromBundle,
@@ -34,6 +38,9 @@ import {
 import { appBundleId, parseAppBundle, type AppBundle } from '@snugprotocol/protocol';
 
 import { BUNDLE_BLOCK_TYPE, LINEAGE_RULE, type BundleBlockRead } from '../../../scripts/lib/page-blocks.mjs';
+
+/** What the hand-in reads of a block: the lineage attribute and the JSON text. */
+export type HandInBlock = Pick<BundleBlockRead, 'lineage' | 'json'>;
 
 export interface PendingHandIn {
   lineage: string;
@@ -52,20 +59,20 @@ export interface HandInOutcome {
   refused: { lineage: string; reason: string }[];
 }
 
-/** The blocks as the live DOM carries them — the same shape `readBundleBlocks` yields from a page string. */
-export function readBundleBlocksFromDocument(doc: { querySelectorAll(selector: string): ArrayLike<{ getAttribute(name: string): string | null; textContent: string | null }> }): BundleBlockRead[] {
+/** The blocks as the live DOM carries them. */
+export function readBundleBlocksFromDocument(doc: { querySelectorAll(selector: string): ArrayLike<{ getAttribute(name: string): string | null; textContent: string | null }> }): HandInBlock[] {
   const nodes = doc.querySelectorAll(`script[type="${BUNDLE_BLOCK_TYPE}"]`);
-  const blocks: BundleBlockRead[] = [];
+  const blocks: HandInBlock[] = [];
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i]!;
-    blocks.push({ lineage: node.getAttribute('data-lineage') ?? '', json: (node.textContent ?? '').trim(), index: i, end: i });
+    blocks.push({ lineage: node.getAttribute('data-lineage') ?? '', json: (node.textContent ?? '').trim() });
   }
   return blocks;
 }
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-export async function handInFromPage(db: UserDb, blocks: readonly BundleBlockRead[]): Promise<HandInOutcome> {
+export async function handInFromPage(db: UserDb, blocks: readonly HandInBlock[]): Promise<HandInOutcome> {
   const outcome: HandInOutcome = { installed: [], updated: [], pending: [], skipped: [], refused: [] };
   for (const block of blocks) {
     const parsed = parseAppBundle(block.json);
@@ -80,14 +87,25 @@ export async function handInFromPage(db: UserDb, blocks: readonly BundleBlockRea
       continue;
     }
     const lineage = bundle.lineage;
-    const bundleId = await appBundleId(bundle);
-    if (db.getSetting(agentDismissedSettingKey(lineage)) === bundleId) {
-      outcome.skipped.push({ lineage, reason: 'dismissed' });
+    // D4 at the boundary — before the block can be installed, updated OR offered.
+    if (bundle.connections.length > 0) {
+      outcome.refused.push({
+        lineage,
+        reason: `"${bundle.app.displayName}" asks for ${bundle.connections.length} connection(s) — connected apps are not available inside an artifact, so this hand-in was refused`,
+      });
       continue;
     }
-    const target = db.getAppByInstallSource(agentInstallSource(lineage)) ?? db.getApp(lineage);
+    const bundleId = await appBundleId(bundle);
+    const lifted = db.getApp(lineage);
+    const target =
+      db.getAppByInstallSource(agentInstallSource(lineage)) ??
+      (lifted !== undefined && lifted.installSource?.startsWith(SHARE_INSTALL_SOURCE_PREFIX) !== true ? lifted : undefined);
     try {
       if (target === undefined) {
+        if (db.getSetting(agentDismissedSettingKey(lineage)) === bundleId) {
+          outcome.skipped.push({ lineage, reason: 'dismissed' });
+          continue;
+        }
         const result = await installAppFromBundle(db, bundle, { bundleId, provenance: 'agent' });
         const app = db.getApp(result.appId);
         outcome.installed.push({ appId: result.appId, displayName: app?.displayName ?? bundle.app.displayName });
@@ -118,7 +136,7 @@ export async function applyPendingHandIn(db: UserDb, pending: PendingHandIn): Pr
   return { version: result.version };
 }
 
-/** One line for the hub / the chip after a boot that handed something in. */
+/** One line for the custody chip after a boot that handed something in. */
 export function describeHandIn(outcome: HandInOutcome): string | undefined {
   const parts: string[] = [];
   if (outcome.installed.length > 0) parts.push(`installed by your agent: ${outcome.installed.map((a) => a.displayName).join(', ')}`);

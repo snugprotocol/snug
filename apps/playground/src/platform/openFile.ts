@@ -177,12 +177,25 @@ export async function handleOpenedWrapper(
   confirm: (info: { path: string; needsRestore: boolean }) => Promise<boolean>,
 ): Promise<void> {
   if (!looksLikeUserFilePath(path)) return;
-  const result = await unwrapUserFile(new TextDecoder().decode(bytes));
-  if (!result.ok) {
-    openUserFileErrorStore.set(`that Snug export could not be opened — ${result.detail}`);
+  let unwrapped: Uint8Array;
+  try {
+    unwrapped = await unwrapOpenedWrapper(bytes);
+  } catch (err) {
+    openUserFileErrorStore.set(err instanceof Error ? err.message : String(err));
     return;
   }
-  await handleOpenedUserFile(result.bytes, path, confirm);
+  await handleOpenedUserFile(unwrapped, path, confirm);
+}
+
+/**
+ * The ONE unwrap for an opened export wrapper, shared by the open-file route and the
+ * settings importer: the db package's reader (sha verified, payload re-sniffed as a user
+ * file), a refusal turned into the one readable sentence both surfaces show.
+ */
+export async function unwrapOpenedWrapper(bytes: Uint8Array): Promise<Uint8Array> {
+  const result = await unwrapUserFile(new TextDecoder().decode(bytes));
+  if (!result.ok) throw new Error(`that Snug export could not be opened — ${result.detail}`);
+  return result.bytes;
 }
 
 /** The kind-dispatcher above the handlers — the ONE place a `.snug` file is told apart. */

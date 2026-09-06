@@ -160,10 +160,15 @@ plain file. What differs is the OUTPUT and what the platform carries:
   to this artifact" fetches the page's canonical source — never the live DOM, which carries
   the viewer's injected runtime — verifies it with the shared tokenizer, refuses a projected
   page over the cap naming its three parts, maps every runtime code, stashes the conflict
-  note across the reload). Inside a chat artifact `window.storage` IS the file's home
+  note across the reload — and only across a conflict; "load the page's copy" is TERMINAL
+  and reloads, since the open db would otherwise flush the browser copy straight back). The
+  seed TRUSTS the block's bytes (sha-verified for self-consistency only): the page is the
+  publisher's output, and `verifyKitPage` is a SHAPE check on the fetched source, not a
+  security control. Inside a chat artifact `window.storage` IS the file's home
   (`windowStorage.ts`: generation-numbered base64 chunks, the manifest flipped LAST, absence
-  proven by `list()`, corrupt never fresh). Both are `PersistenceKind`s appended without a
-  version bump.
+  proven by `list()` — a `list()` that itself throws is CORRUPT, not absent — corrupt never
+  fresh). Both are `PersistenceKind`s appended without a version bump. Under a viewer that
+  denies third-party storage the working copy is memory only, and the chip says so.
 - **The hand-in** (`src/handin.ts`, ADR-0065 §6): the page's `snug-app-bundle+json` blocks
   (written by `scripts/snug-embed.mjs` through the ONE grammar `scripts/lib/page-blocks.mjs`,
   which also owns the top-level tokenizer every reader uses) resolve at boot — before the
@@ -171,8 +176,12 @@ plain file. What differs is the OUTPUT and what the platform carries:
   was lifted from, or a new OWNED install; an unedited copy takes the update, an edited
   copy is OFFERED in the run header (`AgentUpdateControls`, ADR-0045 §7's confirm), a
   deleted app stays deleted (`agentDismissed:` tombstone), a bundle with connections is
-  refused (D4). The trust boundary is the artifact's write permission — a page writer could
-  replace the kit's own script — so the guards that hold are the ones inside it.
+  refused (D4) at the boundary, before any pending offer. A `share:` copy is never a
+  lifted-from target (its id is the sharer's lineage). The trust boundary is the artifact's
+  write permission — a page writer could replace the kit's own script — so the guards that
+  hold are the ones inside it. One residual is the viewer's own bridge: an app frame can
+  `postMessage` a runtime-shaped message to `top`; the kit page never answers one (e2e), and
+  whether the viewer does is answerable only by the hosted walk.
 - **One file** (`vite.config.ts` + `src/plugins/`): `inlineDynamicImports`, every asset a
   data URL, the sql.js engine through `?inline` (Vite 6 must be told `.wasm` is an asset),
   the entry script and stylesheet folded into the html by `inline-single-file` with its

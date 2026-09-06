@@ -51,7 +51,7 @@ export interface CustodyCopy {
 export function custodyDisclosure(
   binding: SnugPlatform['binding'],
   kind: PersistenceKind | undefined,
-  state: Pick<CustodyState, 'dirty' | 'readOnly' | 'divergence'>,
+  state: Pick<CustodyState, 'dirty' | 'readOnly' | 'divergence' | 'workingCopy'>,
 ): CustodyCopy {
   const status = state.readOnly
     ? 'read-only view — export to keep a copy.'
@@ -62,7 +62,13 @@ export function custodyDisclosure(
         : state.dirty
           ? 'unsaved changes — save to this artifact to keep them.'
           : undefined;
-  const withStatus = (copy: Omit<CustodyCopy, 'status'>): CustodyCopy => ({ ...copy, ...(status !== undefined ? { status } : {}) });
+  // S2: a working copy that lives in memory only (third-party storage denied) is gone with the tab.
+  const memoryNote = state.workingCopy === 'memory' ? ' this tab holds the working copy in memory only — close it unsaved and the changes are gone.' : '';
+  const withStatus = (copy: Omit<CustodyCopy, 'status'>): CustodyCopy => ({
+    ...copy,
+    body: copy.body + memoryNote,
+    ...(status !== undefined ? { status } : {}),
+  });
   switch (binding) {
     case 'artifact':
       return withStatus({

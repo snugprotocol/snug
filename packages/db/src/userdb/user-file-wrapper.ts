@@ -21,6 +21,7 @@
 import { USERDB_LIMITS } from '@snugprotocol/protocol';
 
 import { base64ToBytes, bytesToBase64 } from '../base64.js';
+import { sha256Hex } from '../sync/sidecar.js';
 import { USER_FILE_WRAPPER_FORMAT, USER_FILE_WRAPPER_PREFIX, sniffSnugFile } from './app-bundle.js';
 import { USERDB_ERROR_CODES, UserDbError } from './userdb.js';
 
@@ -37,16 +38,7 @@ export type UserFileUnwrap =
   | { ok: false; reason: 'too-large' | 'not-json' | 'not-a-wrapper' | 'invalid' | 'corrupt' | 'not-a-user-file'; detail: string };
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
-const BOM = '﻿';
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  // `slice()` hands WebCrypto a view over its own ArrayBuffer (a SharedArrayBuffer-backed
-  // view is refused by the type and by the platform).
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice()));
-  let hex = '';
-  for (const b of digest) hex += b.toString(16).padStart(2, '0');
-  return hex;
-}
+const BOM = '\uFEFF';
 
 /**
  * Wrap a user file for export. Refuses anything that is not a user file by its first bytes —

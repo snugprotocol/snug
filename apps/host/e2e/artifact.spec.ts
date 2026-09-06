@@ -65,6 +65,7 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     expect(caps.streaming).toBe(true);
     await expect(app.locator('#csp')).toContainText('violation:connect-src');
     await expect(app.locator('#reach')).toHaveText('parent:SecurityError top:SecurityError parent.parent:SecurityError');
+    await expect(app.locator('#bridge')).toHaveText('no-reply'); // a runtime-shaped postMessage to top/parent is never answered
     const record = await fakeRecord(page);
     expect(record.sampleCalls).toHaveLength(1);
     const call = record.sampleCalls[0]!;
@@ -162,8 +163,9 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     await expect(page.getByTestId('your-file-note')).toContainText('installed by your agent: Pomodoro');
     // The install is a db write behind the 250 ms persist debounce; a reload that outruns
     // it re-installs from the block on the next boot (idempotence would hide that as "installed"
-    // twice). Let the flush land before reloading — the survival is what this asserts.
-    await page.waitForTimeout(1_500);
+    // twice). The chip's "unsaved changes" status is the STATE SIGNAL that the flush landed in
+    // the bucket (the record flips dirty on the backend write) — wait on that, not on a clock.
+    await expect(page.getByTestId('your-file-status')).toContainText('unsaved changes');
     await page.reload();
     await expect(page.getByTestId('installed-tile').filter({ hasText: 'Pomodoro' })).toHaveCount(1, { timeout: 20_000 });
     await page.getByTestId('your-file-chip').click();
@@ -215,8 +217,9 @@ test.describe('A2 — the chat artifact runtime (faked on the built page)', () =
     const record = await fakeRecord(page);
     expect(record.completeCalls).toHaveLength(1);
     expect(record.completeCalls[0]).toContain('[SNUG_APP_REQUEST]');
-    // The file lives in window.storage: chunks + manifest under the kit's prefix, and a reload finds the app.
-    expect(Object.keys(record.storage).some((k) => k.startsWith('snug-user/user.snug'))).toBe(true);
+    // The file lives in window.storage: chunks + manifest under the kit's prefix, and a reload
+    // finds the app. The write sits behind the persist debounce — poll the fake's record.
+    await expect.poll(async () => Object.keys((await fakeRecord(page)).storage).some((k) => k.startsWith('snug-user/user.snug'))).toBe(true);
     await page.goto(`${KIT_URL}#/`);
     await page.reload();
     await expect(page.getByTestId('installed-tile').filter({ hasText: 'caps probe' })).toHaveCount(1, { timeout: 20_000 });

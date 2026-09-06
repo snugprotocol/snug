@@ -51,6 +51,13 @@ describe('custodyDisclosure — the "your file" chip, one arm per binding × sta
     expect(custodyDisclosure('local-host', 'idb', clean)).toMatchObject({ label: 'your file: in this browser', body: storageDisclosure('idb') });
     expect(custodyDisclosure('file', 'memory', clean)).toMatchObject({ label: 'your file: in memory', body: storageDisclosure('memory') });
   });
+  it('S2 — a memory-only WORKING copy under an artifact says the tab holds it, on every arm, and never without the flag', () => {
+    const memory = { ...clean, workingCopy: 'memory' as const };
+    for (const binding of ['artifact', 'artifact-static', 'artifact-chat'] as const) {
+      expect(custodyDisclosure(binding, 'memory', memory).body).toContain('in memory only — close it unsaved and the changes are gone');
+      expect(custodyDisclosure(binding, 'artifact-html', clean).body).not.toContain('in memory only');
+    }
+  });
 });
 
 describe('missingAppCopy — a named failure becomes the lesson', () => {

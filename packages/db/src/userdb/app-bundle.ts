@@ -43,7 +43,7 @@ import {
   type ConnectionRequirement,
 } from '@snugprotocol/protocol';
 
-import { sharedBundleSettingKey } from './app-settings-keys.js';
+import { AGENT_INSTALL_SOURCE_PREFIX, agentInstallSource, sharedBundleSettingKey } from './app-settings-keys.js';
 import { ConnectionNotAdmitted, USERDB_ERROR_CODES, UserDbError, type AppDocRecord, type UserDb } from './userdb.js';
 
 // ----------------------------------------------------------------------- build
@@ -72,15 +72,11 @@ export function shareInstallSource(lineage: string): string {
  * The AGENT provenance (TASK-20260905-binding-a-artifacts AC8, ADR-0065 §6): an app the
  * user's own agent handed in as a bundle block embedded in a Claude artifact. Installed as
  * an OWNED app (editable, versioned — the builder-chat semantics, not the shared shelf's)
- * under `agent:<lineage>`, which cannot spell `share:` or `starter:` (the lineage is a
- * UUID, enforced by the bundle schema). Prose in the spec, not schema: `install_source`
- * is free TEXT with a partial unique index.
+ * under `agent:<lineage>`. The identity is homed in app-settings-keys.ts (deleteApp reads
+ * it too); re-exported here as part of the bundle surface. Prose in the spec, not schema:
+ * `install_source` is free TEXT with a partial unique index.
  */
-export const AGENT_INSTALL_SOURCE_PREFIX = 'agent:';
-
-export function agentInstallSource(lineage: string): string {
-  return `${AGENT_INSTALL_SOURCE_PREFIX}${lineage}`;
-}
+export { AGENT_INSTALL_SOURCE_PREFIX, agentInstallSource };
 
 /** Which channel a bundle arrives on. `'shared'` is ADR-0063's (the default, byte-for-byte); `'agent'` is the artifact hand-in. */
 export type BundleProvenance = 'shared' | 'agent';
@@ -350,9 +346,13 @@ export async function updateAppFromBundle(
   // `lineage = appId`) — a kit-built app or an installed starter the agent edited and
   // handed back takes the update in place, its own install_source untouched (plan review
   // A4). A `share:` copy is never an agent target.
+  // A `share:` copy is never an agent target even when its own id is the lineage
+  // (`buildAppBundle` lifts ANY app): the sharer's next update would silently overwrite
+  // the agent's version, and the agent's would overwrite theirs (security review 3).
+  const isSharedCopy = app.installSource?.startsWith(SHARE_INSTALL_SOURCE_PREFIX) === true;
   const isTarget =
     provenance === 'agent'
-      ? app.installSource === agentInstallSource(bundle.lineage) || app.appId === bundle.lineage
+      ? app.installSource === agentInstallSource(bundle.lineage) || (app.appId === bundle.lineage && !isSharedCopy)
       : app.installSource === shareInstallSource(bundle.lineage);
   if (!isTarget) {
     throw new UserDbError(
@@ -433,13 +433,34 @@ export function sniffSnugFile(bytes: Uint8Array): SnugFileKind {
       continue;
     }
     if (b !== 0x7b) return 'unknown';
-    return startsWithAt(bytes, i, USER_FILE_WRAPPER_PREFIX) ? 'user-file-wrapper' : 'app-bundle';
+    return wrapperHeadAt(bytes, i) ? 'user-file-wrapper' : 'app-bundle';
   }
   return 'unknown';
 }
 
-function startsWithAt(bytes: Uint8Array, offset: number, text: string): boolean {
-  if (bytes.length - offset < text.length) return false;
-  for (let i = 0; i < text.length; i++) if (bytes[offset + i] !== text.charCodeAt(i)) return false;
-  return true;
+const isJsonWs = (b: number | undefined): boolean => b === 0x20 || b === 0x09 || b === 0x0a || b === 0x0d;
+
+/**
+ * `{ "format" : "snug-user-file/1"` at `offset`, JSON whitespace tolerated between the
+ * tokens — the canonical export is the tight prefix, but a wrapper a user re-saved through
+ * a pretty-printing editor must still be the wrapper, not "a shared app" (correctness
+ * review 11). Still a HEAD read: at most a few dozen bytes, never a parse.
+ */
+function wrapperHeadAt(bytes: Uint8Array, offset: number): boolean {
+  let i = offset;
+  const expect = (text: string): boolean => {
+    for (let k = 0; k < text.length; k++) if (bytes[i + k] !== text.charCodeAt(k)) return false;
+    i += text.length;
+    return true;
+  };
+  const ws = (): void => {
+    while (isJsonWs(bytes[i])) i++;
+  };
+  if (!expect('{')) return false;
+  ws();
+  if (!expect('"format"')) return false;
+  ws();
+  if (!expect(':')) return false;
+  ws();
+  return expect(`"${USER_FILE_WRAPPER_FORMAT}"`);
 }

@@ -18,6 +18,7 @@ import type { AgentAdapter } from '@snugprotocol/adapters';
 
 import type { ChatMessage } from '../agent/useBuilderChat.js';
 import type { PlatformBrain, SnugPlatform } from '../platform/platform.js';
+import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -28,24 +29,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const HOST_LABEL = 'Claude · this artifact’s viewer';
 const idleAdapter: AgentAdapter = { complete: async () => ({ ok: true, text: '{}', toolCalls: [], stopReason: 'end' }) };
 
-function hostPlatform(brain: PlatformBrain = { kind: 'demo' }): SnugPlatform {
-  return {
-    kind: 'host',
-    binding: 'artifact',
-    brain,
-    capabilities: {
-      subscriptionMode: false,
-      hubSyncOrigin: false,
-      lanHttpPrivate: false,
-      hubAuth: false,
-      brainSettings: false,
-      account: false,
-      sync: false,
-      connections: false,
-      share: false,
-    },
-  };
-}
+const hostPlatform = (brain: PlatformBrain = { kind: 'demo' }): SnugPlatform => hostFixture({ brain });
 
 interface Graph {
   RunHeaderActions: typeof import('../run/RunHeaderActions.js')['RunHeaderActions'];
