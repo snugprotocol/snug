@@ -12,8 +12,14 @@
 import type { Page } from '@playwright/test';
 
 export interface HostedFakeOptions {
-  /** What `sample` answers — the chess reply on `quick` is fenced, like the platform (T1 S3). */
-  reply?: string;
+  /**
+   * What `sample` answers — the chess reply on `quick` is fenced, like the platform (T1 S3).
+   * `{ templateFromPrompt: true }` (TASK-20260906-tool-free-kb-inlining AC5): the fake reads
+   * the prompt it RECEIVED, lifts the first ```html fence after "## Full Template", and answers
+   * with that document fenced — no fixture template, so a prompt that stopped carrying the
+   * template answers with the marker below and the build lands nothing.
+   */
+  reply?: string | { templateFromPrompt: true };
   /** `artifact.publish` outcome: a version, or a rejection code. */
   publish?: { version: string } | { reject: string };
   /** Resolve `artifact` / `downloads` / `sample` to null (a static top-level page resolves all three null). */
@@ -37,16 +43,26 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
       if (window !== window.top) return; // top frame only
       const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storage: {} } as unknown as FakeRecord;
       (window as unknown as { __snugFake: FakeRecord }).__snugFake = record;
+      const NO_TEMPLATE = 'the prompt carried no "## Full Template" fence — the fake viewer has nothing to copy';
+      /** The reply for one call: the scripted string, or the template lifted from the prompt itself. */
+      const replyFor = (input: unknown): string => {
+        if (typeof reply === 'string') return reply;
+        const prompt = typeof input === 'string' ? input : (input as { content: string }[]).map((t) => t.content).join('\n');
+        const at = prompt.indexOf('## Full Template');
+        const fence = at < 0 ? null : /```html\n([\s\S]*?)```/.exec(prompt.slice(at));
+        return fence === null ? NO_TEMPLATE : `Here is your app.\n\n\`\`\`html\n${fence[1]}\`\`\``;
+      };
       const sample = Object.assign(
         async (input: unknown, opts: Record<string, unknown> = {}) => {
           record.sampleCalls.push({ input, options: { ...opts, onText: opts.onText === undefined ? undefined : 'fn', signal: opts.signal === undefined ? undefined : 'signal' } });
+          const text = replyFor(input);
           const onText = opts.onText as ((e: { text: string; delta: string }) => void) | undefined;
-          const half = reply.slice(0, Math.floor(reply.length / 2));
+          const half = text.slice(0, Math.floor(text.length / 2));
           onText?.({ text: half, delta: half });
-          onText?.({ text: reply, delta: reply.slice(half.length) });
-          return { text: reply, truncated: false, modelTierApplied: (opts.modelTier as string) ?? 'default' };
+          onText?.({ text, delta: text.slice(half.length) });
+          return { text, truncated: false, modelTierApplied: (opts.modelTier as string) ?? 'default' };
         },
-        { limits: async () => ({ maxPromptBytes: 65536 }), json: async () => JSON.parse(reply.replace(/```json\n|\n```/g, '')) },
+        { limits: async () => ({ maxPromptBytes: 65536 }), json: async (input: unknown) => JSON.parse(replyFor(input).replace(/```json\n|\n```/g, '')) },
       );
       const artifact = {
         publish: async (html: string) => {

@@ -183,6 +183,38 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     await expect(appFrame(page).locator('#body')).toHaveText('pomodoro v2', { timeout: 20_000 });
   });
 
+  test('TASK-20260906 AC5: an app BUILT under the tool-free host brain announces and renders — the fake viewer copies the template out of the prompt it was sent', async ({ page }) => {
+    await installHostedFake(page, { reply: { templateFromPrompt: true } });
+    await installRoutePolicy(page, { allowJsDelivr: true });
+    await page.goto(`${KIT_URL}#/build`);
+    await expect(page.getByTestId('brain-chip')).toContainText('Claude · this artifact’s viewer');
+    await page.getByRole('textbox', { name: 'describe your app' }).fill('build me a tiny app');
+    await page.getByRole('button', { name: 'build', exact: true }).click();
+    // The builder turn is ONE sample call on `default` (D15), and the prompt it carried is
+    // SELF-SUFFICIENT: the template with the copy-exactly hooks, the persistence rule, no
+    // tool it cannot call (the defect the hosted walk found — T4 journal 2026-09-06).
+    await expect(page.getByTestId('artifact-card')).toBeVisible({ timeout: 30_000 });
+    const record = await fakeRecord(page);
+    expect(record.sampleCalls).toHaveLength(1);
+    const call = record.sampleCalls[0]!;
+    expect(call.options).toMatchObject({ modelTier: 'default', cache: false });
+    const prompt = typeof call.input === 'string' ? call.input : (call.input as { content: string }[]).map((t) => t.content).join('\n');
+    expect(prompt).toContain('## Full Template');
+    expect(prompt).toContain('snug:app-announce');
+    expect(prompt).toContain('## Storage Is Host-Brokered');
+    expect(prompt).not.toContain('snug_app_builder');
+    expect(prompt).not.toMatch(/Never write an app from memory/);
+    // The built app is NOT a white page: the template renders "Connecting…" until the
+    // host's ready frame answers its announce, then <main>. <main> visible ⇔ the
+    // announce → host-ready round trip completed inside the sandboxed frame.
+    await page.getByRole('link', { name: 'run it' }).click();
+    await expect(page).toHaveURL(INSTALLED_ROUTE, { timeout: 20_000 });
+    const app = appFrame(page);
+    await expect(app.locator('main')).toBeVisible({ timeout: 30_000 });
+    await expect(app.getByText('Connecting…')).toHaveCount(0);
+    expect((await fakeRecord(page)).sampleCalls).toHaveLength(1); // the app itself thinks on nothing at load
+  });
+
   test('AC5 (artifact-static): use() resolves null for everything — nothing saves here, no save act, the demo brain', async ({ page }) => {
     await installHostedFake(page, { nulls: ['sample', 'artifact', 'downloads'] });
     await installRoutePolicy(page, { allowJsDelivr: true });

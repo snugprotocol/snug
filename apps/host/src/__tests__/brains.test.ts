@@ -235,3 +235,37 @@ describe('createCompleteAdapter — the chat brain (AC2)', () => {
     expect(tools).toMatchObject({ ok: false, code: HOST_BRAIN_CODES.TOOLS_UNSUPPORTED });
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK-20260906-tool-free-kb-inlining AC3 — the tool-free builder assembly fits the host
+// cap WITH HEADROOM, measured by THIS ruler (the one the adapter sends with — lesson
+// 2026-08-05: a bound re-derived upstream of the sent string is a second bound). A layer
+// that grows past the pinned ceiling fails HERE, not as a silently refused build turn on
+// the artifact.
+// ---------------------------------------------------------------------------
+describe('the tool-free builder assembly under the host cap (AC3)', () => {
+  const SAMPLE_CAP = 65_536;
+  /** The stated minimum the ceiling leaves for the request + the app context + history. */
+  const RESERVED_MIN = 20_480;
+
+  it('inline core + the fenced-HTML suffix measure ≤ HOST_BUILDER_SYSTEM_MAX_BYTES on the wire shape, and the ceiling leaves ≥ 20 KiB', async () => {
+    const { buildHostSystemPrompt, SYSTEM_BLOCK_SEPARATOR } = await import('@snugprotocol/knowledge');
+    const { WEBLLM_BUILD_SUFFIX } = await import('@playground/agent/webllm/appHtml');
+    const { HOST_BUILDER_SYSTEM_MAX_BYTES } = await import('@playground/agent/promptBudget');
+    const system = `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform: 'host', knowledge: 'inline' })}${SYSTEM_BLOCK_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`;
+    // The FIRST builder turn is one user message → ONE string on the wire (the S11 shape).
+    const measured = measurePrompt(system, [{ role: 'user', content: '' }]);
+    expect(measured).toBeLessThanOrEqual(HOST_BUILDER_SYSTEM_MAX_BYTES);
+    expect(SAMPLE_CAP - HOST_BUILDER_SYSTEM_MAX_BYTES).toBeGreaterThanOrEqual(RESERVED_MIN);
+    // The ruler counts what shapeInput sends — the string's UTF-8 bytes — nothing derived.
+    expect(measured).toBe(bytes(shapeString(system, [{ role: 'user', content: '' }])));
+  });
+
+  it("the ceiling is meaningful: today's tooled assembly is far under it and the whole KB would be far over", async () => {
+    const { buildHostSystemPrompt, getKnowledgeBase } = await import('@snugprotocol/knowledge');
+    const { HOST_BUILDER_SYSTEM_MAX_BYTES } = await import('@playground/agent/promptBudget');
+    expect(bytes(buildHostSystemPrompt({ appBuilder: true, artifacts: true, platform: 'host' }))).toBeLessThan(HOST_BUILDER_SYSTEM_MAX_BYTES / 4);
+    const wholeKb = getKnowledgeBase().reduce((n, s) => n + bytes(s.text), 0);
+    expect(wholeKb).toBeGreaterThan(SAMPLE_CAP); // the reason this task SELECTS instead of inlining everything
+  });
+});

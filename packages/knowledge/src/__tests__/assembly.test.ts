@@ -11,6 +11,7 @@ import {
   getSkillCreatorFile,
   getSkillMode,
   getSystemLayer,
+  INLINE_KNOWLEDGE_CORE_FILES,
   listSkillModes,
 } from '../index.js';
 
@@ -25,12 +26,17 @@ describe('buildHostSystemPrompt gating matrix', () => {
     // TASK-20260811 P1 (ADR-0018 D1): the RUNTIME branch — what an installed app's turn
     // gets instead of the builder assembly.
     { appBuilder: false, artifacts: false, appRuntime: true },
+    // TASK-20260906-tool-free-kb-inlining (D1): the two tool-free deliveries of the
+    // builder branch — the inline five-file core (host brain) and the unaided layer
+    // (webllm). The four combos above keep their bytes: `knowledge` defaults to 'tool'.
+    { appBuilder: true, artifacts: false, knowledge: 'inline' },
+    { appBuilder: true, artifacts: false, knowledge: 'none' },
   ] as const;
 
   for (const combo of combos) {
     it(`golden: appBuilder=${combo.appBuilder} artifacts=${combo.artifacts}${
       'appRuntime' in combo ? ' appRuntime=true' : ''
-    }`, () => {
+    }${'knowledge' in combo ? ` knowledge=${combo.knowledge}` : ''}`, () => {
       expect(buildHostSystemPrompt(combo)).toMatchSnapshot();
     });
   }
@@ -39,11 +45,14 @@ describe('buildHostSystemPrompt gating matrix', () => {
     for (const combo of combos.filter((c) => !('appRuntime' in c))) {
       const prompt = buildHostSystemPrompt(combo);
       const parts = prompt.split(SEPARATOR);
-      const expected = 1 + (combo.artifacts ? 1 : 0) + (combo.appBuilder ? 2 : 0);
+      // The 30-slot is one block under 'tool' and 'none'; under 'inline' it is the
+      // inline layer plus one block per core file.
+      const builderBlocks = 'knowledge' in combo && combo.knowledge === 'inline' ? 2 + INLINE_KNOWLEDGE_CORE_FILES.length : 2;
+      const expected = 1 + (combo.artifacts ? 1 : 0) + (combo.appBuilder ? builderBlocks : 0);
       expect(parts.length, JSON.stringify(combo)).toBe(expected);
       expect(parts[0]).toBe(getSystemLayer('host-identity'));
       expect(prompt.includes(getSystemLayer('capability-file-creation'))).toBe(combo.artifacts);
-      expect(prompt.includes(getSystemLayer('app-builder-summary'))).toBe(combo.appBuilder);
+      expect(prompt.includes(getSystemLayer('app-builder-summary'))).toBe(combo.appBuilder && !('knowledge' in combo));
       expect(prompt.includes(getSystemLayer('app-response-format'))).toBe(combo.appBuilder);
     }
   });
