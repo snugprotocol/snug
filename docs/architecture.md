@@ -128,8 +128,13 @@ plain file. What differs is the OUTPUT and what the platform carries:
   a real write/read round trip (OPFS → IndexedDB → memory — never presence-detected:
   `file://` exposes OPFS and rejects it; `getDirectory` invoked as a method, an unbound
   call is "Illegal invocation"); the brain PINNED from what resolved (TASK-20260905-binding-a-artifacts):
-  `sample` → two adapters (`src/brains/sample.ts`: app envelopes on `quick`, the builder
-  and the inferrer on `default` — measured, never a control), the ONE shaper
+  `sample` → two adapters (`src/brains/sample.ts`: under `auto` app envelopes on `quick`, the
+  builder and the inferrer on `default` — measured; since ADR-0067 the TIER is read at call
+  time from `src/brains/tierStore.ts`, the one home of the user's thinking-level choice —
+  `auto` | `quick` | `default` | `complex`, kept in this browser at the artifact origin, never
+  the user file — which the brain chip renders through the platform's `TierSeat` and which
+  records a substituted answer (`modelTierApplied`) so the chip disables and annotates the
+  tier the plan lacks; the brain itself is still never chosen — D15 amended narrowly), the ONE shaper
   (`src/brains/prompt.ts`: system + messages as one user turn; `measurePrompt` = the bytes
   sent) as the seat's ruler, the cap from `limits()` (65,536 fallback); `window.claude.complete`
   → the chat adapter (`src/brains/complete.ts`, no streaming); nothing → the demo brain with
