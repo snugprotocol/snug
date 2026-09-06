@@ -169,3 +169,35 @@ Three things the review changed after your Q1–Q4 answers, none of them widenin
 - State: **Gate 5 review closed; the hosted walk (AC13) is the one open Gate-5 item and is the owner's.** Then Gate 6 (journal, done-move) and the PR on the owner's ask.
 - Next step: the owner runs the walk (`docs/next-steps.md` T4 entry has the command sequence: build, publish `apps/host/dist/snug-host.html` private with `{sample, artifact, downloads}`, Chrome + Safari) and journals the artifact URL, version ids and the boot log's `document.scripts` line.
 - Open questions: none.
+
+### 2026-09-06 — Jeetu (owner walk, AC13 part 1) — 🔴 THE HOSTED WALK FOUND A REAL DEFECT: the tool-free host builder tells the model to call a tool it does not have
+
+**The walk so far.** The built page (`ac792c3`) was published PRIVATE through the Artifact tool as `Snug` with `{sample: {}, artifact: {}, downloads: true}` → **https://claude.ai/code/artifact/d2013d26-fa05-42c9-a573-2f05182acdd3**. **The hub RENDERS** — the kit boots inside a real hosted artifact, which is AC13's first and largest question answered YES. (A pre-publish worry that the publisher's `<!doctype>…<body>` wrapper would nest our complete document and strip the module script proved UNFOUNDED — the page boots.)
+
+**What the owner then hit, building an app from the hub:** the reply said *"I wasn't able to pull the Snug knowledge-base template in this session, so I built this as a fully self-contained app (client-side AI logic + localStorage persistence, no host round-trips needed)"* — and the app it wrote ran as a WHITE PAGE.
+
+**Root cause (confirmed from the LLM inspector + the assembled prompt, not inferred).** The inspector shows the leading user turn carries the KB HEADER (`You are the assistant behind a Snug reference host …`) but NOT the authoring rules — no `snug:app-message`, no `app-announce`, no "Never Think on a Timer". That is by design of the *tool* path and fatal on the *tool-free* path:
+
+- `buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform: 'host' })` is **4,101 bytes** and instructs, verbatim: *"Before writing ANY Snug app — even one you feel sure about — call the `snug_app_builder` tool to retrieve the authoring knowledge base: the mandatory HTML template, the copy-exactly bridge hooks, the reply contract, and the pinned CDN table. … **Never write an app from memory**."*
+- The host brain is **tool-free** (`builder.ts:227` — `toolFree` is set for a pinned host brain with `tools: false`, because `sample` cannot call tools). So the model is told to fetch the rules, has NO way to fetch them, and is forbidden to proceed from memory. It resolved the bind by building without the contract and saying so. **The model's message was literally true — not a confabulation.**
+- The white page is the same defect downstream: an app written without the bridge hooks never posts `snug:app-announce`, so the frame has nothing to render. ONE root cause, both symptoms.
+
+**Why no test caught it.** The webllm arm carries the identical tool-free constraint and answers it with `WEBLLM_BUILD_SUFFIX`, which replaces the *artifact-write* mechanism — NOT the *knowledge-base consult*. T4 generalised `toolFree` to the host brain (T2 P2/A5) and inherited that suffix and its blind spot. S11 measured whole-app builds on `sample` with a prompt assembled BY HAND for the spike, so it never exercised this assembly. The host tests assert which adapter a purpose routes to, never that the resulting prompt is SELF-SUFFICIENT. **The lesson, generalised: a prompt assembled for a tool-free brain must be checked for instructions that presuppose tools — "which adapter" and "what did it actually say" are different questions.**
+
+**Sizes measured for the fix (the reason this is a task, not a patch).** The full KB is **84,237 B across 10 files** — it does NOT fit the host's 65,536 B cap, so the fix must SELECT layers, and that is a decision:
+
+| file | bytes | carries |
+|---|---:|---|
+| `10-overview-and-contract.md` | 5,117 | announce · app-message · timer rule · cdn |
+| `20-html-template.md` | 15,626 | announce · app-message · cdn |
+| `30-bridge-protocol.md` | 5,609 | announce · app-message |
+| `40-persistence-and-db.md` | 5,476 | the db (vs `localStorage`) |
+| `80-cdn-compatibility.md` | 5,609 | app-message · timer rule · cdn (incl. T4's artifact rules) |
+| — essential core subtotal — | **37,437** | fits with room for the request + history |
+| `50-app-catalog.md` / `60-design-quality.md` / `70-defensive-coding.md` / `95-runtime-contract.md` | 19,136 | optional |
+| `90-auth-and-connected-apis.md` | 21,446 | MUST stay out (no connected apps under Binding A anyway — D4) |
+
+- **Status:** AC13 is PART DONE — the boot, the hub and the brain wiring are proven on real glass; **the BUILD path is broken under the host brain** and is now its own child task (below). The remaining AC13 legs (save to this artifact → version + reload, export → `snug-user.snug.json` → import in the playground, the `snug-embed` hand-in, Safari's memory rung) are INDEPENDENT of the builder and still owed.
+- **Also observed, correct behaviour, no action:** clicking a starter says *"starters load from the network — this page is offline or the starters package is unreachable"* — `@snugprotocol/starters` is not published yet (a queued owner act), and the named refusal instead of a dead control is exactly T2's intent.
+- **Next step:** the child task `TASK-20260906-tool-free-kb-inlining`; then the owner resumes the AC13 legs above.
+- **Open questions:** which layers inline by default, and whether the selection is static or request-shaped — the child task's interview.
