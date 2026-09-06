@@ -2,6 +2,10 @@
 // snug-embed.mjs — hand apps in to a live Snug artifact page (TASK-20260905-binding-a-artifacts
 // AC9, ADR-0065 §6). The agent's session reads the live page (the Artifact tool's read),
 // runs this over it, and publishes the result: an edit is a republish, never a second runner.
+// The read-back is the VIEWER-WRAPPED page (the viewer's skeleton and injected runtime
+// around the kit's whole document — measured on the real artifact, AC13 2026-09-06): this
+// script unwraps it through the one grammar, merges into the KIT document, and writes the
+// BARE kit page — the form a republish takes (the viewer wraps it again). Never re-wrap.
 //
 //   node scripts/snug-embed.mjs <live.html> --bundle app.json [--bundle …] [--remove <lineage>] [--out file] [--strict]
 //
@@ -22,7 +26,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { LINEAGE_RULE, externalCssRefs, readBundleBlocks, removeBundleBlock, tokenizeTopLevel, upsertBundleBlock } from './lib/page-blocks.mjs';
+import { LINEAGE_RULE, externalCssRefs, readBundleBlocks, removeBundleBlock, tokenizeTopLevel, unwrapViewerPage, upsertBundleBlock } from './lib/page-blocks.mjs';
 
 export const BUNDLE_FORMAT = 'snug-app-bundle/1';
 /** The protocol's caps (packages/protocol/src/app-bundle.ts) — restated as numbers; the test pins them against that source text. */
@@ -78,9 +82,14 @@ export function parseBundleText(text, label = 'bundle') {
  * Merge bundles into a page. Pure: returns `{ html, warnings, errors }`; `errors` non-empty
  * means the page is UNCHANGED (never half-merged). With `strict`, lint warnings are errors.
  */
-export function embed({ page, bundles = [], remove = [], strict = false }) {
+export function embed({ page: input, bundles = [], remove = [], strict = false }) {
   const warnings = [];
   const errors = [];
+  // The Artifact tool's read-back is viewer-wrapped: lift the kit document out first, and
+  // refuse a wrapper of any other shape rather than embed into it.
+  const lifted = unwrapViewerPage(input);
+  if (lifted.html === undefined) errors.push(`the page is inside a viewer wrapper this script does not recognise (${lifted.problem})`);
+  const page = lifted.html ?? input;
   if (!/^\s*<!doctype html>/i.test(page)) errors.push('the page does not start with <!doctype html> — is this the live artifact page?');
   if (!/<\/body\s*>/i.test(page)) errors.push('the page has no </body> — nothing to embed into');
   const parsed = [];
@@ -97,16 +106,16 @@ export function embed({ page, bundles = [], remove = [], strict = false }) {
     parsed.push(result);
   });
   for (const lineage of remove) if (!LINEAGE_RULE.test(lineage)) errors.push(`--remove ${lineage}: not a lineage (a lowercase UUID)`);
-  if (errors.length > 0) return { html: page, warnings, errors };
+  if (errors.length > 0) return { html: input, warnings, errors, unwrapped: lifted.wrapped };
   let html = page;
   for (const lineage of remove) html = removeBundleBlock(html, lineage);
   for (const { bundle, text } of parsed) html = upsertBundleBlock(html, bundle.lineage, text);
-  return { html, warnings, errors };
+  return { html, warnings, errors, unwrapped: lifted.wrapped };
 }
 
-/** What the page carries — for `--list`. */
+/** What the page carries — for `--list` (a wrapped read-back is read through the unwrap; an unrecognised wrapper lists nothing). */
 export function listBlocks(page) {
-  return readBundleBlocks(page).map((b) => {
+  return readBundleBlocks(unwrapViewerPage(page).html ?? '').map((b) => {
     try {
       const json = JSON.parse(b.json);
       return { lineage: b.lineage, displayName: json?.app?.displayName, bytes: Buffer.byteLength(b.json, 'utf8') };
@@ -153,7 +162,7 @@ export function main(argv, io = { log: console.log, error: console.error }) {
   }
   const out = args.out ?? args.page;
   writeFileSync(out, result.html);
-  io.log(`snug-embed: ${bundles.length} bundle(s) merged${args.remove.length ? `, ${args.remove.length} removed` : ''} → ${out}${result.warnings.length ? ` (${result.warnings.length} warning(s))` : ''}`);
+  io.log(`snug-embed: ${bundles.length} bundle(s) merged${args.remove.length ? `, ${args.remove.length} removed` : ''} → ${out}${result.unwrapped ? ' (the viewer wrapper was lifted off — publish this bare page as it is)' : ''}${result.warnings.length ? ` (${result.warnings.length} warning(s))` : ''}`);
   return 0;
 }
 

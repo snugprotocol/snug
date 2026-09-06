@@ -167,7 +167,12 @@ plain file. What differs is the OUTPUT and what the platform carries:
   seed-on-empty with one counted save and a magic-prefixed custody sidecar; a divergence
   with a direction from the block's save counter, resolved only by an explicit act; "save
   to this artifact" fetches the page's canonical source — never the live DOM, which carries
-  the viewer's injected runtime — verifies it with the shared tokenizer, refuses a projected
+  the viewer's injected runtime — LIFTS THE KIT DOCUMENT OUT OF THE VIEWER'S WRAPPER (the
+  viewer stores and serves a published page inside its own skeleton with two injected
+  scripts ahead of the kit's whole document — measured on the real artifact 2026-09-06;
+  `unwrapViewerPage` in the one grammar, a shape check that refuses any other wrapper by
+  name), verifies the kit document with the shared tokenizer, republishes the BARE page
+  (the viewer wraps it again), refuses a projected
   page over the cap naming its three parts, maps every runtime code, stashes the conflict
   note across the reload — and only across a conflict; "load the page's copy" is TERMINAL
   and reloads, since the open db would otherwise flush the browser copy straight back). The

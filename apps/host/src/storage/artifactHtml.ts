@@ -15,10 +15,14 @@
 // sql.js database still holds the browser copy and would flush it back over the seed, so
 // the act stashes its note and reloads (correctness review 1).
 //
-// The page source for a republish is FETCHED (`canonicalSource`) and checked by the shared
-// tokenizer — a SHAPE check that catches the viewer's injected runtime and a foreign page,
-// never a control against a page writer (they own the kit's script) — never serialized
-// from the live DOM (artifact.d.ts 0.2.41). A fetched page whose block is NEWER than the
+// The page source for a republish is FETCHED (`canonicalSource`) — never serialized from
+// the live DOM (artifact.d.ts 0.2.41). What the fetch returns is the VIEWER-WRAPPED page
+// (measured on the real artifact, AC13 2026-09-06: the viewer's own skeleton and two
+// injected scripts around the kit's whole document), so the record UNWRAPS it through the
+// shared grammar first and then runs the shape check on the kit document alone — a check
+// that catches a foreign page and the viewer's runtime, never a control against a page
+// writer (they own the kit's script). The publish sends the BARE kit page: the viewer
+// wraps it again on its side. A fetched page whose block is NEWER than the
 // one this view booted from is a conflict (another view saved meanwhile — security
 // review 6). A projected page over the artifact cap is refused with its three parts named;
 // nothing in the bucket is "nothing to save". Every runtime code is mapped; the stashed
@@ -27,7 +31,7 @@
 import { SYNC_SIDECAR_MAGIC, bytesToBase64, base64ToBytes, sha256Hex, type PersistenceBackend } from '@snugprotocol/db';
 import { USERDB_FILE } from '@snugprotocol/protocol';
 
-import { DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, verifyKitPage, writeDbBlock, type DbBlockManifest, type DbBlockRead } from '../../../../scripts/lib/page-blocks.mjs';
+import { DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, unwrapViewerPage, verifyKitPage, writeDbBlock, type DbBlockManifest, type DbBlockRead } from '../../../../scripts/lib/page-blocks.mjs';
 import type { CustodyStore } from './custodyStore.js';
 
 /** The viewer's 16 MiB page cap, minus a margin for the runtime the viewer injects. */
@@ -215,12 +219,19 @@ export function createArtifactRecord(options: ArtifactRecordOptions): ArtifactRe
     try {
       const bytes = await bucket.load(USERDB_FILE);
       if (bytes === undefined) return refuse('nothing-to-save', 'there is no file to save yet');
-      let source: string;
+      let fetched: string;
       try {
-        source = await options.canonicalSource();
+        fetched = await options.canonicalSource();
       } catch (error) {
         return refuse('failed', `the page’s own source could not be read (${(error as Error).message}) — nothing was saved`);
       }
+      // The viewer serves the kit page inside its own wrapper; the kit document is what is
+      // verified, spliced and republished (the viewer wraps it again).
+      const unwrapped = unwrapViewerPage(fetched);
+      if (unwrapped.html === undefined) {
+        return refuse('not-the-kit-page', `the page’s source is not the Snug page this view is running (${unwrapped.problem}) — nothing was saved; export to keep a copy`);
+      }
+      const source = unwrapped.html;
       const problems = verifyKitPage(source, { expectedStamp: options.expectedStamp });
       if (problems.length > 0) {
         return refuse('not-the-kit-page', `the page’s source is not the Snug page this view is running (${problems[0]}) — nothing was saved; export to keep a copy`);

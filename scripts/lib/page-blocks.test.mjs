@@ -21,10 +21,12 @@ import {
   readDbBlock,
   removeBundleBlock,
   tokenizeTopLevel,
+  unwrapViewerPage,
   upsertBundleBlock,
   verifyKitPage,
   writeDbBlock,
 } from './page-blocks.mjs';
+import { VIEWER_WRAPPER_HEAD, VIEWER_WRAPPER_TAIL, wrapAsViewerPage } from '../fixtures/viewer-wrapper.mjs';
 
 const STAMP = '0.1.0 abcdef1';
 const PAGE = `<!doctype html>
@@ -185,4 +187,53 @@ test('externalCssRefs: every @import and non-data url(), nothing else', () => {
     { kind: 'url', url: 'https://fonts.googleapis.com/css2' },
     { kind: 'url', url: 'https://cdn.example/x.png' },
   ]);
+});
+
+// ---------------------------------------------------------------- the viewer's wrapper (AC13 finding, 2026-09-06)
+// The artifact viewer stores and serves a published kit page WRAPPED: its own skeleton and
+// two injected classic scripts ahead of the kit's whole document (`scripts/fixtures/
+// viewer-wrapper.mjs` is that shape, read back from the real artifact). Every consumer of a
+// fetched or read-back page unwraps FIRST and works on the kit document; the strict shape
+// check then still refuses the wrapped form itself, so a republish never carries the viewer's
+// runtime inside the kit page (the A1 blocker of the plan review, kept).
+
+const WRAP_MANIFEST = { format: DB_BLOCK_FORMAT, bytes: 3, sha256: 'a'.repeat(64), saved: 1, savedAt: '2026-09-06T00:00:00Z' };
+
+test('unwrapViewerPage: a bare kit page is handed back unchanged and not wrapped', () => {
+  assert.deepEqual(unwrapViewerPage(PAGE), { html: PAGE, wrapped: false });
+  const withBlocks = upsertBundleBlock(writeDbBlock(PAGE, { manifest: WRAP_MANIFEST, base64: 'AAEC' }), LINEAGE_A, '{"format":"snug-app-bundle/1"}');
+  assert.deepEqual(unwrapViewerPage(withBlocks), { html: withBlocks, wrapped: false });
+});
+
+test('unwrapViewerPage: the viewer-wrapped page yields the kit document byte-for-byte; verifyKitPage passes on it and still refuses the wrapped form', () => {
+  const withBlocks = upsertBundleBlock(writeDbBlock(PAGE, { manifest: WRAP_MANIFEST, base64: 'AAEC' }), LINEAGE_A, '{"format":"snug-app-bundle/1"}');
+  for (const kit of [PAGE, withBlocks]) {
+    const wrapped = wrapAsViewerPage(kit);
+    assert.deepEqual(unwrapViewerPage(wrapped), { html: kit, wrapped: true });
+    assert.deepEqual(verifyKitPage(kit, { expectedStamp: STAMP }), []);
+    // The strict check is unchanged: the wrapped form carries two foreign scripts.
+    const problems = verifyKitPage(wrapped, { expectedStamp: STAMP });
+    assert.equal(problems.length, 2);
+    assert.match(problems[0], /unknown inline <script>/);
+  }
+  // Blocks written AFTER the unwrap land inside the kit body — and survive a re-wrap + unwrap.
+  const saved = writeDbBlock(unwrapViewerPage(wrapAsViewerPage(PAGE)).html, { manifest: WRAP_MANIFEST, base64: 'AAEC' });
+  assert.equal(unwrapViewerPage(wrapAsViewerPage(saved)).html, saved);
+  assert.equal(readDbBlock(saved).base64, 'AAEC');
+});
+
+test('unwrapViewerPage: refuses by name — a wrapper inside a wrapper, content after the kit document, a wrapper whose body does not open with the kit doctype', () => {
+  const twice = wrapAsViewerPage(wrapAsViewerPage(PAGE));
+  assert.match(unwrapViewerPage(twice).problem, /3 <html> elements/);
+  const trailing = `${VIEWER_WRAPPER_HEAD}${PAGE}\n<script>injected()</script>${VIEWER_WRAPPER_TAIL}`;
+  assert.match(unwrapViewerPage(trailing).problem, /after the kit document/);
+  const noDoctype = `${VIEWER_WRAPPER_HEAD}${PAGE.replace(/^<!doctype html>\n/i, '')}${VIEWER_WRAPPER_TAIL}`;
+  assert.match(unwrapViewerPage(noDoctype).problem, /does not open with the kit document/);
+  const beforeDoc = `${VIEWER_WRAPPER_HEAD}<div id="banner"></div>${PAGE}${VIEWER_WRAPPER_TAIL}`;
+  assert.match(unwrapViewerPage(beforeDoc).problem, /does not open with the kit document/);
+  for (const bad of [twice, trailing, noDoctype, beforeDoc]) {
+    const out = unwrapViewerPage(bad);
+    assert.equal(out.html, undefined);
+    assert.equal(out.wrapped, true);
+  }
 });

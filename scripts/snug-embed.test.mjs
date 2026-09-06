@@ -9,7 +9,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
-import { DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, writeDbBlock } from './lib/page-blocks.mjs';
+import { VIEWER_WRAPPER_HEAD, VIEWER_WRAPPER_TAIL, wrapAsViewerPage } from './fixtures/viewer-wrapper.mjs';
+import { DB_BLOCK_FORMAT, readBundleBlocks, readDbBlock, unwrapViewerPage, writeDbBlock } from './lib/page-blocks.mjs';
 import { ARTIFACT_SCRIPT_ALLOWLIST, BUNDLE_MAX_BYTES, BUNDLE_MAX_HTML_CHARS, embed, lintBundleHtml, listBlocks, parseArgs } from './snug-embed.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,34 @@ test('embed: appends new lineages, replaces the same lineage, removes on request
   const gone = embed({ page: two.html, remove: [A] });
   assert.deepEqual(readBundleBlocks(gone.html).map((b) => b.lineage), [B]);
   assert.deepEqual(listBlocks(gone.html), [{ lineage: B, displayName: 'Pomodoro', bytes: Buffer.byteLength(readBundleBlocks(gone.html)[0].json) }]);
+});
+
+test('the Artifact tool’s read-back is the VIEWER-WRAPPED page (AC13, 2026-09-06): embed unwraps it, merges into the kit body, and writes the BARE kit page — what a republish takes; a wrapper of another shape is refused', () => {
+  const wrapped = wrapAsViewerPage(withDb);
+  const out = embed({ page: wrapped, bundles: [{ name: 'a.json', text: bundle(A, '<p>a</p>') }] });
+  assert.deepEqual(out.errors, []);
+  assert.equal(out.unwrapped, true);
+  assert.equal(out.html.startsWith('<!doctype html>\n<html>'), true);
+  assert.equal(out.html.includes('frame-runtime'), false);
+  assert.deepEqual(unwrapViewerPage(out.html), { html: out.html, wrapped: false });
+  assert.deepEqual(readBundleBlocks(out.html).map((b) => b.lineage), [A]);
+  assert.equal(readDbBlock(out.html).base64, 'AAA=');
+  // The block sits inside the kit body, not in the wrapper's: the bare output, wrapped again by the viewer, unwraps to itself.
+  assert.equal(unwrapViewerPage(wrapAsViewerPage(out.html)).html, out.html);
+  assert.deepEqual(listBlocks(wrapped), []);
+  assert.deepEqual(listBlocks(wrapAsViewerPage(out.html)).map((b) => b.lineage), [A]);
+  const bare = embed({ page: withDb, bundles: [{ name: 'a.json', text: bundle(A, '<p>a</p>') }] });
+  assert.equal(bare.unwrapped, false);
+  assert.equal(bare.html, out.html);
+  for (const [label, page] of [
+    ['double wrap', wrapAsViewerPage(wrapped)],
+    ['trailing content', `${VIEWER_WRAPPER_HEAD}${withDb}<script>x()</script>${VIEWER_WRAPPER_TAIL}`],
+  ]) {
+    const refused = embed({ page, bundles: [{ name: 'a.json', text: bundle(A, '<p>a</p>') }] });
+    assert.equal(refused.errors.length, 1, label);
+    assert.match(refused.errors[0], /wrapper/, label);
+    assert.equal(refused.html, page, label);
+  }
 });
 
 test('(N) refusals leave the page UNCHANGED: not a bundle, a bad lineage, over the cap, a page with no </body>, a bad --remove', () => {

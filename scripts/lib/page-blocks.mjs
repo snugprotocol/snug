@@ -230,6 +230,52 @@ export function removeBundleBlock(html, lineage) {
   return `${html.slice(0, existing.index)}${html.slice(tail)}`;
 }
 
+// ------------------------------------------------------------------ the viewer's wrapper
+
+/**
+ * The artifact viewer stores and serves a published kit page WRAPPED (measured on the real
+ * artifact, 2026-09-06 — TASK-20260905 AC13): its own `<!doctype html><html><head>` with two
+ * injected classic `<script>`s (the frame preamble and the frame runtime), a meta/style
+ * reset, then `<body>` carrying the kit's WHOLE document — doctype and all — and
+ * `</body></html>`. `fetch(location.href)` and the Artifact tool's read both hand back this
+ * form, and a republish takes the BARE kit page (the viewer wraps it again), so every
+ * consumer unwraps first and every writer acts on the kit document. The check is a SHAPE
+ * check like `verifyKitPage`: the second `<html>` must be preceded by nothing but the kit's
+ * doctype inside the wrapper's body, and nothing but `</body></html>` may follow the kit's
+ * `</html>`; anything else is a named problem, never a guess — the kit page is then still
+ * put through `verifyKitPage`, which refuses the wrapped form itself (two foreign scripts).
+ *
+ * Returns `{ html, wrapped: false }` for a bare page, `{ html, wrapped: true }` for the kit
+ * document lifted out of one wrapper, or `{ wrapped: true, problem }` (no `html`).
+ */
+export function unwrapViewerPage(html) {
+  const elements = tokenizeTopLevel(html);
+  const htmls = elements.filter((e) => e.name === 'html');
+  if (htmls.length <= 1) return { html, wrapped: false };
+  if (htmls.length > 2) return { wrapped: true, problem: `${htmls.length} <html> elements — a wrapper inside a wrapper, not one viewer wrapper around the kit page` };
+  const inner = htmls[1];
+  const outerBody = elements.find((e) => e.name === 'body' && e.index < inner.index);
+  const opening = outerBody === undefined ? undefined : html.slice(outerBody.end, inner.index);
+  const doctype = opening === undefined ? -1 : opening.search(/<!doctype html>/i);
+  if (outerBody === undefined || doctype === -1 || !/^\s*<!doctype html>\s*$/i.test(opening)) {
+    return { wrapped: true, problem: 'the viewer wrapper’s body does not open with the kit document (its doctype)' };
+  }
+  const start = outerBody.end + doctype;
+  const lower = html.toLowerCase();
+  const outerClose = lower.lastIndexOf('</html>');
+  const innerClose = outerClose === -1 ? -1 : lower.lastIndexOf('</html>', outerClose - 1);
+  if (innerClose <= start) return { wrapped: true, problem: 'the kit document inside the viewer wrapper has no </html> of its own' };
+  const between = html.slice(innerClose + '</html>'.length, outerClose);
+  const after = html.slice(outerClose + '</html>'.length);
+  if (!/^\s*(<\/body>)?\s*$/i.test(between) || !/^\s*$/.test(after)) {
+    return { wrapped: true, problem: 'content after the kit document inside the viewer wrapper — not the wrapper the viewer was measured to write' };
+  }
+  // The kit page ends in ONE newline (the build writes it) and the wrapper puts its own
+  // before `</body>`: the first newline after the kit's `</html>` is the kit's.
+  const end = innerClose + '</html>'.length;
+  return { html: html.slice(start, html[end] === '\n' ? end + 1 : end), wrapped: true };
+}
+
 // ---------------------------------------------------------------------- verifyKitPage
 
 /**

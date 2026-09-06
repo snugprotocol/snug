@@ -9,7 +9,8 @@ import { createMemoryBackend, sha256Hex } from '@snugprotocol/db';
 import { USERDB_FILE } from '@snugprotocol/protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { DB_BLOCK_FORMAT, readDbBlock, writeDbBlock } from '../../../../scripts/lib/page-blocks.mjs';
+import { VIEWER_WRAPPER_HEAD, VIEWER_WRAPPER_TAIL, wrapAsViewerPage } from '../../../../scripts/fixtures/viewer-wrapper.mjs';
+import { DB_BLOCK_FORMAT, readDbBlock, unwrapViewerPage, writeDbBlock } from '../../../../scripts/lib/page-blocks.mjs';
 import { ARTIFACT_MAX_PAGE_BYTES, BEFORE_LOAD_FILE, CUSTODY_NOTE_STASH_KEY, CUSTODY_SIDECAR_FILE, createArtifactRecord } from '../storage/artifactHtml.js';
 import { createCustodyStore } from '../storage/custodyStore.js';
 
@@ -216,6 +217,49 @@ describe('publish — the one explicit act', () => {
     expect(store.get().note).toMatch(/script/);
     const stale = createArtifactRecord({ bucket, pageBlock: undefined, canonicalSource: async () => KIT_PAGE, expectedStamp: '9.9.9 0000000', publish: pub.publish, store });
     expect(await stale.publish()).toMatchObject({ ok: false, reason: 'not-the-kit-page' });
+  });
+
+  it('the fetched source is the VIEWER-WRAPPED page (AC13, measured 2026-09-06): the save unwraps it, verifies the kit document, and publishes the BARE kit page with the block — never the wrapper', async () => {
+    const bucket = createMemoryBackend();
+    const store = createCustodyStore();
+    const pub = recorder();
+    // The wrapped fetch is what `fetch(location.href)` returns on the real artifact; a saved
+    // page comes back wrapped too, its block inside the kit body.
+    const record = createArtifactRecord({ bucket, pageBlock: undefined, canonicalSource: async () => wrapAsViewerPage(KIT_PAGE), expectedStamp: STAMP, publish: pub.publish, store });
+    await record.backend.save(USERDB_FILE, bytesOf(8));
+    expect(await record.publish()).toMatchObject({ ok: true, saved: 1 });
+    expect(pub.calls).toHaveLength(1);
+    const published = pub.calls[0]!;
+    expect(published.startsWith('<!doctype html>\n<html lang="en">')).toBe(true);
+    expect(published).not.toContain('frame-runtime');
+    expect(unwrapViewerPage(published)).toEqual({ html: published, wrapped: false });
+    expect(readDbBlock(published)?.manifest?.saved).toBe(1);
+    // The block landed inside the kit body: stripping it gives the kit page back exactly.
+    const block = readDbBlock(published)!;
+    if (block.corrupt !== undefined) throw new Error(block.corrupt);
+    expect(`${published.slice(0, block.index)}${published.slice(block.end + 1)}`).toBe(KIT_PAGE);
+
+    // Save #2 fetches the wrapped SAVED page: the live block is read through the unwrap too.
+    const again = createArtifactRecord({ bucket, pageBlock: readDbBlock(published), canonicalSource: async () => wrapAsViewerPage(published), expectedStamp: STAMP, publish: pub.publish, store, custodyStart: { saved: 1 } });
+    expect(await again.publish()).toMatchObject({ ok: true, saved: 2 });
+    expect(readDbBlock(pub.calls[1]!)?.manifest?.saved).toBe(2);
+    expect((pub.calls[1]!.match(/id="snug-db"/g) ?? []).length).toBe(1);
+  });
+
+  it('(N) a wrapper that is not the measured shape — content after the kit document, a wrapper inside a wrapper — is refused by name with nothing published', async () => {
+    const bucket = createMemoryBackend();
+    const pub = recorder();
+    for (const [label, source] of [
+      ['trailing script', `${VIEWER_WRAPPER_HEAD}${KIT_PAGE}<script>injected()</script>${VIEWER_WRAPPER_TAIL}`],
+      ['double wrap', wrapAsViewerPage(wrapAsViewerPage(KIT_PAGE))],
+    ] as const) {
+      const store = createCustodyStore();
+      const record = createArtifactRecord({ bucket, pageBlock: undefined, canonicalSource: async () => source, expectedStamp: STAMP, publish: pub.publish, store });
+      await record.backend.save(USERDB_FILE, bytesOf(8));
+      expect(await record.publish(), label).toMatchObject({ ok: false, reason: 'not-the-kit-page' });
+      expect(store.get().note, label).toMatch(/wrapper/);
+    }
+    expect(pub.calls).toHaveLength(0);
   });
 
   it('(N) refuses when the PROJECTED page would exceed the cap — named with the three parts, export offered, nothing published', async () => {

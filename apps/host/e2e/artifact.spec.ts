@@ -8,7 +8,8 @@ import fs from 'node:fs';
 
 import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test';
 
-import { readBundleBlocks, readDbBlock, upsertBundleBlock } from '../../../scripts/lib/page-blocks.mjs';
+import { wrapAsViewerPage } from '../../../scripts/fixtures/viewer-wrapper.mjs';
+import { readBundleBlocks, readDbBlock, unwrapViewerPage, upsertBundleBlock } from '../../../scripts/lib/page-blocks.mjs';
 import { fakeRecord, installChatFake, installHostedFake } from './artifact-helpers';
 import { KIT_DIST_FILE, KIT_URL, buildProbeUserFile, capsAppHtml, installRoutePolicy, watchConsole } from './helpers';
 
@@ -19,9 +20,14 @@ const LINEAGE = '0f5e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
 
 const builtPage = (): string => fs.readFileSync(KIT_DIST_FILE, 'utf8');
 
-/** Serve `html` at the kit URL instead of dist/ — the spliced-page shape. */
+/**
+ * Serve `html` at the kit URL instead of dist/ — WRAPPED the way the artifact viewer stores
+ * and serves a published page (its skeleton and injected runtime around the kit's whole
+ * document; measured on the real artifact, AC13 2026-09-06). Every hosted test that reads
+ * the page's own source (the save act's fetch, the hand-in's blocks) runs against that shape.
+ */
 async function servePage(page: Page, html: string): Promise<void> {
-  await page.route(KIT_URL, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, body: html }));
+  await page.route(KIT_URL, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, body: wrapAsViewerPage(html) }));
 }
 
 async function installChessAndMove(page: Page): Promise<void> {
@@ -90,16 +96,20 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     expect(record.published).toHaveLength(0); // a move saves nothing to the artifact
   });
 
-  test('AC5: "save to this artifact" fetches the served page, verifies it, splices the file in, publishes ONCE; a fresh browser seeds from the published page', async ({ page, browser }) => {
+  test('AC5: "save to this artifact" fetches the served (viewer-wrapped) page, lifts the kit document out, verifies it, splices the file in, publishes the BARE page ONCE; a fresh browser seeds from the published page served wrapped again', async ({ page, browser }) => {
     await installHostedFake(page);
     await installRoutePolicy(page, { allowJsDelivr: true });
+    await servePage(page, builtPage()); // the real shape: the viewer's wrapper around the kit page
     await installChessAndMove(page);
     await page.getByTestId('your-file-chip').click();
     await expect(page.getByTestId('your-file-status')).toContainText('unsaved changes');
     await page.getByTestId('your-file-save').click();
     await expect.poll(async () => (await fakeRecord(page)).published.length, { timeout: 30_000 }).toBe(1);
     const published = (await fakeRecord(page)).published[0]!;
-    expect(published.startsWith('<!doctype html>')).toBe(true);
+    expect(published.startsWith('<!doctype html>\n<html lang="en">')).toBe(true);
+    // The BARE kit page went to publish — never the viewer's wrapper or its injected runtime.
+    expect(published).not.toContain('frame-runtime');
+    expect(unwrapViewerPage(published)).toEqual({ html: published, wrapped: false });
     const block = readDbBlock(published);
     expect(block?.manifest).toMatchObject({ format: 'snug-db-block/1', saved: 1 });
     expect(block!.manifest!.bytes).toBeGreaterThan(10_000);
