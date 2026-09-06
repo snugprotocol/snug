@@ -136,3 +136,9 @@ Two findings that change the shape of the plan (journal 2026-09-06 has the numbe
 - **Refuted by verification:** the CRLF fragility (fenced by tests + CI; hardened anyway), the "6,480 B html floor" (the ladder sheds history first; ~10 KB at the ceiling is the stated design).
 - State: **Gates 3–5 done; docs current; root `pnpm test` exit 0 at the fold.** Nothing pushed, no PR, nothing published.
 - Next step: the owner answers A8 → (if yes) the turn-shape rule as a small follow-up commit on this branch with its own test → `/close-session` → the owner's AC7 re-walk → PR stacked on T4.
+
+### 2026-09-06 — Jeetu (via Claude Code) — session closed (Gate 6)
+- Done: architecture (the host-kit paragraph names the knowledge delivery and the A8 room cost) + glossary ("Knowledge delivery") caught up; everything else was already in-branch. Lessons: 3 this session (read both slots as the model would; a fake follows the prompt's rules; a review target as one commit reviews that commit). ADR-0066 accepted + amended A1–A8. `packages/protocol` untouched — no spec-changelog entry. Root `pnpm test` exit 0 at `0e29f4d`; website-sync OK.
+- State: branch `fix/TASK-20260906-tool-free-kb-inlining` (stacked on T4's tip `4d3b8ab`), NOT pushed, no PR, nothing published; memory files updated.
+- **Single next step:** the owner answers ADR-0066 A8 (drop `20-html-template` on edit turns whose context block carries the app's html — recommended — or keep the template whole and accept that starter-sized apps are edited in the playground) → then the AC7 re-walk: `pnpm --filter host build`, republish `apps/host/dist/snug-host.html` to the SAME artifact, build an app from the hub, journal the version id in T4's AC13 → PR stacked on T4.
+- Open questions: A8 (above); whether `HOST_CONTEXT_CAPS` should shrink (next-steps); the A2 chat brain's cap (unmeasured; queued with the chat-delivery child).

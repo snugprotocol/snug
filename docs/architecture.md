@@ -151,7 +151,16 @@ plain file. What differs is the OUTPUT and what the platform carries:
   included (A5). Under a capped host brain the builder BUDGETS OR REFUSES a turn on the
   seat's own ruler (`agent/promptBudget.ts`: history dropped oldest-first, the app's html
   never cut, a named refusal with zero calls) and skips the router classifier (one viewer-
-  billed call per app-attached message).
+  billed call per app-attached message). **A tool-free brain carries the authoring
+  knowledge IN the prompt (ADR-0066):** `knowledgeDeliveryFor(brain)`
+  (`agent/knowledgeDelivery.ts`) is the one derivation both slots of a build turn consume —
+  the system prompt's `knowledge` delivery (`'inline'` = the 35 layer + the five-file KB
+  core, ~41 KB under `sample`'s 65,536-byte cap, pinned under a 44 KiB ceiling on the kit's
+  own ruler; `'none'` = the honest unaided layer for webllm or a brain whose declared cap
+  cannot hold the core) and the matching user-message template; the edit turn's context
+  block follows it too. The cost is room: ~23 KB beside the system text on an edit turn,
+  so a starter-sized app cannot be edited under the host brain while the template rides
+  whole on edit turns (ADR-0066 A8 — an open owner decision).
 - **Binding A — two storage seams, one file** (`src/storage/`): inside a hosted artifact the
   browser bucket stays the WORKING copy and the page's own `<script type="text/plain"
   id="snug-db">` block is the DURABLE copy (`artifactHtml.ts`, a record OVER the bucket:
