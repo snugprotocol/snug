@@ -2,7 +2,7 @@
 // run view's failed-load copy, pinned byte-for-byte on every arm (pure functions).
 import { describe, expect, it } from 'vitest';
 
-import { custodyDisclosure, storageDisclosure, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
+import { custodyDisclosure, storageDisclosure, tierAutoLabel, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
 import { isNamedLoadRefusal, missingAppCopy } from '../run/copy.js';
 
 describe('storageDisclosure — names the rung that WORKED', () => {
@@ -91,6 +91,12 @@ describe('the thinking-level copy (TASK-20260906 AC4/AC5, ADR-0067) — the cont
     expect(tierLabel('complex', seat, { unavailable: { complex: 'default' } })).toBe('complex — not on this plan, answered on default');
     // The marker follows the seat, not a constant: a contract whose default moved is labelled right.
     expect(tierLabel('quick', { viewerDefault: 'quick' }, none)).toBe('quick — answers at once, no thinking first (the viewer’s default)');
+  });
+  it('the auto label names the pins, and a pin the plan overrode by what answers (review C3)', () => {
+    const seat = { auto: { app: 'quick' as const, chat: 'default' as const } };
+    expect(tierAutoLabel(seat, { unavailable: {} })).toBe('auto — quick for app replies, default for building');
+    expect(tierAutoLabel(seat, { unavailable: { default: 'quick' } })).toBe('auto — quick for app replies, quick for building');
+    expect(tierAutoLabel(seat, { unavailable: { quick: 'default' } })).toBe('auto — default for app replies, default for building');
   });
   it('the substitution note derives from the recorded pair; nothing recorded → no note', () => {
     expect(tierSubstitutionNote(undefined)).toBeUndefined();

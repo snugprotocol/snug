@@ -57,6 +57,16 @@ export function createExportSeat(options: ExportSeatOptions): (bytes: Uint8Array
   const note = (text: string): void => store.patch({ note: text });
 
   return async (bytes, suggestedName) => {
+    // The one-prompt guard is taken BEFORE the first await (the wrap hashes the file): taken
+    // after it, two clicks raced on whose hash finished first, and the loser's "already open"
+    // note could be overwritten by the winner's "saved" (a flake in the seat's own test).
+    if (downloads !== undefined) {
+      if (inFlight) {
+        note('a save is already open — answer it first');
+        return;
+      }
+      inFlight = true;
+    }
     let text: string;
     let filename: string;
     // The seat owns EVERY outcome — the caller fires it with `void` (correctness review 12).
@@ -70,10 +80,12 @@ export function createExportSeat(options: ExportSeatOptions): (bytes: Uint8Array
         filename = artifactBundleName(suggestedName);
       } else {
         note('that is not a Snug file — nothing was exported');
+        inFlight = false;
         return;
       }
     } catch (error) {
       note(`the export could not be prepared (${error instanceof Error ? error.message : String(error)}) — nothing was written`);
+      inFlight = false;
       return;
     }
 
@@ -82,11 +94,6 @@ export function createExportSeat(options: ExportSeatOptions): (bytes: Uint8Array
       note(ok ? `copied ${kb(text.length)} to the clipboard — paste it into a file named ${filename} to keep it` : 'the copy failed — select the export text and copy it by hand');
       return;
     }
-    if (inFlight) {
-      note('a save is already open — answer it first');
-      return;
-    }
-    inFlight = true;
     try {
       await downloads.save({ filename, data: text });
       note(`saved ${filename} (${kb(text.length)})`);

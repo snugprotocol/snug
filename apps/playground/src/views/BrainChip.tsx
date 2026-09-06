@@ -21,7 +21,7 @@ import type { ReactElement } from 'react';
 import { useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 
-import { tierLabel, tierSubstitutionNote } from '../platform/copy.js';
+import { tierAutoLabel, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
 import { allows, getPlatform, type TierChoice } from '../platform/platform.js';
 import { setMode } from '../state/mode.js';
 import { useActiveBrain, type ActiveBrainKind } from '../state/activeBrain.js';
@@ -104,6 +104,9 @@ function copyFor(brain: ActiveBrainKind): { label: string; aria: string; headlin
   return BRAINS[brain];
 }
 
+/** One stable no-op for the seatless render (a fresh closure per render would resubscribe on every render). */
+const noSubscription = (): (() => void) => () => undefined;
+
 export function BrainChip(): ReactElement {
   const brain = useActiveBrain();
   const ollama = useOllama();
@@ -120,7 +123,7 @@ export function BrainChip(): ReactElement {
   const pinned = getPlatform().brain;
   const tierSeat = brain === 'host' && pinned?.kind === 'host' ? pinned.tiers : undefined;
   const tierState = useSyncExternalStore(
-    tierSeat?.state.subscribe ?? (() => () => undefined),
+    tierSeat?.state.subscribe ?? noSubscription,
     () => tierSeat?.state.get(),
     () => tierSeat?.state.get(),
   );
@@ -171,7 +174,7 @@ export function BrainChip(): ReactElement {
                 value={tierState.choice}
                 onChange={(event) => tierSeat.set(event.currentTarget.value as TierChoice)}
               >
-                <option value="auto">{tierSeat.autoLabel}</option>
+                <option value="auto">{tierAutoLabel(tierSeat, tierState)}</option>
                 {tierSeat.options.map((tier) => (
                   <option key={tier} value={tier} disabled={tierState.unavailable[tier] !== undefined}>
                     {tierLabel(tier, tierSeat, tierState)}

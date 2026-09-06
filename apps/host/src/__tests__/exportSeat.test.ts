@@ -79,16 +79,23 @@ describe('createExportSeat', () => {
     }
   });
 
-  it('a second export while a prompt is open is refused by name — one prompt at a time', async () => {
+  it('a second export while a prompt is open is refused by name — one prompt at a time, and the FIRST click owns the prompt (the guard is taken before the hash)', async () => {
     const bytes = await userFile();
     const dl = fakeDownloads('ok', 20);
     const store = createCustodyStore();
     const seat = createExportSeat({ downloads: dl.ns, store });
     const first = seat(bytes, 'snug-user.snug');
-    await seat(bytes, 'snug-user.snug');
+    await seat(bytes, 'snug-user.snug'); // resolves at once: refused before any await
     expect(store.get().note).toMatch(/already open/);
+    expect(dl.calls).toHaveLength(0); // the first is still hashing — nothing has reached downloads yet
     await first;
     expect(dl.calls).toHaveLength(1);
+    expect(store.get().note).toMatch(/^saved snug-user\.snug\.json/);
+    // A refused prepare releases the guard: the next export is not stuck behind it.
+    await seat(new Uint8Array([1, 2, 3]), 'junk');
+    expect(store.get().note).toMatch(/not a Snug file/);
+    await seat(bytes, 'snug-user.snug');
+    expect(dl.calls).toHaveLength(2);
   });
 
   it('without downloads (a chat artifact) the wrapper text is COPIED and the note names the size and the file name', async () => {

@@ -307,6 +307,17 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     expect(brain.tiers.state.get().choice).toBe('complex');
     await brain.adapter.complete({ system: 's', messages: [{ role: 'user', content: 'x' }] });
     expect(brain.tiers.state.get()).toEqual({ choice: 'default', applied: { asked: 'complex', answered: 'default' }, unavailable: { complex: 'default' } });
+    // The NEXT call carries the fallback on the wire (review testing gap 4), and the note survives it (review C1).
+    const asked: (string | undefined)[] = [];
+    const wire = (async (_input: unknown, options?: { modelTier?: string }) => (asked.push(options?.modelTier), { text: 'ok', truncated: false, modelTierApplied: 'default' as const })) as unknown as SampleFn;
+    wire.limits = async () => ({ maxPromptBytes: 65536 });
+    wire.json = async () => ({});
+    const again = await probeBrain(env({ claudeUse: true }), { sample: wire, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, undefined, storage);
+    if (again.brain.kind !== 'host' || again.brain.tiers === undefined) throw new Error('expected the seat');
+    await again.brain.adapter.complete({ system: 's', messages: [{ role: 'user', content: 'x' }] }); // complex → substituted
+    await again.brain.chatAdapter!.complete({ system: 's', messages: [{ role: 'user', content: 'x' }] }); // the fallback, honoured
+    expect(asked).toEqual(['complex', 'default']);
+    expect(again.brain.tiers.state.get().applied).toEqual({ asked: 'complex', answered: 'default' });
   });
 
   it('TASK-20260906 AC1 (twin): the chat brain and the demo brain carry NO tier seat', async () => {

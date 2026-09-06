@@ -68,8 +68,8 @@ export interface TierState {
 export interface TierSeat {
   options: readonly HostModelTier[];
   viewerDefault: HostModelTier;
-  /** The `auto` entry's label — names the per-purpose pins honestly (never "the viewer's default"). */
-  autoLabel: string;
+  /** The `auto` entry's per-purpose pins (app replies / building) — the chip derives the label from these and the marks, so it never claims a pin the plan overrode (review C3). */
+  auto: Readonly<Record<'app' | 'chat', HostModelTier>>;
   state: { get(): TierState; subscribe(listener: () => void): () => void };
   /** Changes what the NEXT call carries. Never calls the model. */
   set(choice: TierChoice): void;

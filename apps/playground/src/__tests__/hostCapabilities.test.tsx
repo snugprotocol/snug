@@ -179,7 +179,7 @@ describe('the brain chip (AC5: disclosure only)', () => {
       sets,
       options: ['quick', 'default', 'complex'],
       viewerDefault: 'default',
-      autoLabel: 'auto — quick for app replies, default for building',
+      auto: { app: 'quick', chat: 'default' },
       state: { get: store.get, subscribe: store.subscribe },
       set: (choice) => {
         sets.push(choice);
@@ -239,6 +239,17 @@ describe('the brain chip (AC5: disclosure only)', () => {
     expect(complex?.disabled).toBe(true);
     expect(complex?.textContent).toBe('complex — not on this plan, answered on default');
     expect(byTestId('brain-menu-tier-note')?.textContent).toBe('asked for complex — this view answered on default (the viewer’s plan)');
+  });
+
+  it('TASK-20260906 (review C3): under auto, a pin the plan answered elsewhere is named by what answers in the auto label', async () => {
+    const seat = fakeTierSeat({ choice: 'auto', applied: { asked: 'default', answered: 'quick' }, unavailable: { default: 'quick' } });
+    const g = await fresh(withSeat(seat));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    const select = byTestId('brain-menu-tier') as HTMLSelectElement;
+    expect(select.value).toBe('auto');
+    expect(Array.from(select.options).find((o) => o.value === 'auto')?.textContent).toBe('auto — quick for app replies, quick for building');
+    expect(Array.from(select.options).find((o) => o.value === 'default')?.textContent).toBe('default — not on this plan, answered on quick');
   });
 
   it('TASK-20260906 AC1 twin: the demo brain under host and the web chip render no thinking-level control', async () => {

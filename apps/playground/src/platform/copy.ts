@@ -122,6 +122,12 @@ export function tierLabel(tier: HostModelTier, seat: Pick<TierSeat, 'viewerDefau
   }
 }
 
+/** The `auto` entry, derived from the pins AND the marks: a pin the plan answered elsewhere is named by what answers (ADR-0059 rule 4 — never a claim the wire contradicts). */
+export function tierAutoLabel(seat: Pick<TierSeat, 'auto'>, state: Pick<TierState, 'unavailable'>): string {
+  const resolve = (tier: HostModelTier): HostModelTier => state.unavailable[tier] ?? tier;
+  return `auto — ${resolve(seat.auto.app)} for app replies, ${resolve(seat.auto.chat)} for building`;
+}
+
 /** The substitution note — derived from what the adapter recorded, never from UI state (ADR-0059 rule 2). */
 export function tierSubstitutionNote(applied: TierState['applied']): string | undefined {
   if (applied === undefined) return undefined;

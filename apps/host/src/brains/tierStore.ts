@@ -9,7 +9,11 @@
 // throws (Safari's denied third-party rung) it lives in memory for this boot. A tier the
 // viewer's plan lacks is unknowable at boot (`limits()` names no tiers — sample.d.ts) and is
 // learned from `modelTierApplied`: the asked tier is marked unavailable (listed, disabled,
-// annotated) and the selection falls back to what answered. The mark is per boot.
+// annotated) and the selection falls back to what answered. The mark, the note and the
+// fallback are all PER BOOT — only the user's own choice is ever written, so a plan that
+// changes is learned again on the next boot and the stored preference stays the user's
+// (review residual 1). The note describes the substitution that disabled the option and
+// lives as long as the mark does (review C1).
 
 import type { HostModelTier, TierChoice, TierSeat, TierState } from '@playground/platform/platform';
 import { createStore } from '@playground/state/store';
@@ -24,10 +28,10 @@ export const VIEWER_DEFAULT_TIER: HostModelTier = 'default';
 export type TierPurpose = 'app' | 'chat';
 /** `auto`: the per-purpose pins T4 measured (AC1) — unchanged by this task. */
 export const AUTO_TIERS: Readonly<Record<TierPurpose, HostModelTier>> = { app: 'quick', chat: 'default' };
-export const AUTO_LABEL = 'auto — quick for app replies, default for building';
 
 const CHOICES: readonly TierChoice[] = ['auto', ...HOST_TIER_OPTIONS];
 const isChoice = (value: unknown): value is TierChoice => typeof value === 'string' && (CHOICES as readonly string[]).includes(value);
+const isTier = (value: unknown): value is HostModelTier => typeof value === 'string' && (HOST_TIER_OPTIONS as readonly string[]).includes(value);
 
 /** The slice of `localStorage` the store uses. */
 export interface TierStorage {
@@ -66,16 +70,16 @@ export function createTierStore(options: { storage?: TierStorage | undefined }):
   };
   const store = createStore<TierState>({ choice: read(), unavailable: {} });
 
-  const choose = (choice: TierChoice): void => {
+  const choose = (choice: TierChoice, persist: boolean): void => {
     const current = store.get();
     if (current.choice === choice) return;
     store.set({ ...current, choice });
-    write(choice);
+    if (persist) write(choice);
   };
 
   const set = (choice: TierChoice): void => {
     if (!isChoice(choice)) throw new Error(`tierStore: "${String(choice)}" is not a thinking level (auto, quick, default, complex)`);
-    choose(choice);
+    choose(choice, true);
   };
 
   return {
@@ -88,23 +92,28 @@ export function createTierStore(options: { storage?: TierStorage | undefined }):
       return unavailable[asked] ?? asked;
     },
     markApplied(asked, answered) {
+      // A host that answers outside the contract's tiers (review C2) teaches nothing: never adopt
+      // an unknown value as the choice, never write it.
+      if (!isTier(asked) || !isTier(answered)) return;
       const current = store.get();
       if (asked === answered) {
-        // Honoured: clear the mark (and the note) if this tier carried one.
-        if (current.unavailable[asked] === undefined && current.applied === undefined) return;
+        // Honoured: clear the mark on THIS tier if it carried one, and the note if it was about it.
+        if (current.unavailable[asked] === undefined) return;
         const unavailable = { ...current.unavailable };
         delete unavailable[asked];
-        store.set({ choice: current.choice, unavailable });
+        const keepNote = current.applied !== undefined && current.applied.asked !== asked;
+        store.set({ choice: current.choice, unavailable, ...(keepNote ? { applied: current.applied } : {}) });
         return;
       }
       store.set({ ...current, applied: { asked, answered }, unavailable: { ...current.unavailable, [asked]: answered } });
-      // The selection follows what answered — an explicit ask the plan lacks falls back; `auto` stays `auto`.
-      if (current.choice === asked) choose(answered);
+      // The selection follows what answered — an explicit ask the plan lacks falls back (in memory
+      // only: the stored preference stays the user's); a choice changed meanwhile, and `auto`, stay.
+      if (current.choice === asked) choose(answered, false);
     },
     seat: () => ({
       options: HOST_TIER_OPTIONS,
       viewerDefault: VIEWER_DEFAULT_TIER,
-      autoLabel: AUTO_LABEL,
+      auto: AUTO_TIERS,
       state: { get: store.get, subscribe: store.subscribe },
       set,
     }),
