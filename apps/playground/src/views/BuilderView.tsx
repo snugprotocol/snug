@@ -8,6 +8,7 @@ import { BuilderModelSelect } from '../run/BuilderModelSelect.js';
 import { LlmInspectorPanel } from '../run/LlmInspectorPanel.js';
 import { mintBuildThread, setActiveBuildThread, useActiveBuildThread } from '../state/buildThread.js';
 import { useMode } from '../state/mode.js';
+import { buildsToolFree, useBrain } from '../state/webllm.js';
 import { openConnectionWizard, openConnectionWizardForApp } from '../state/connectionWizard.js';
 import { Button } from '../ui/Button.js';
 import { Chip } from '../ui/Chip.js';
@@ -24,6 +25,9 @@ export function BuilderView(): ReactElement {
   // resumes the SAME app; "+ new" / "new app" mint a fresh thread — the explicit escape.
   const threadId = useActiveBuildThread();
   const mode = useMode();
+  // The user message names no tool when the brain has none (TASK-20260906): the same
+  // derivation the builder's tool-free arm rests on, so the two slots cannot disagree.
+  const toolFree = buildsToolFree(useBrain());
   // The turn state — messages, progress, AND the round-trip inspector — lives on the
   // thread's session, not in this component, so leaving for "your apps" and coming back
   // (or switching threads) finds everything still running. The inspector stays in
@@ -42,13 +46,13 @@ export function BuilderView(): ReactElement {
       const trimmed = idea.trim();
       if (trimmed === '') return;
       // The bubble shows the raw idea; the KB template only travels on the wire.
-      chat.send(trimmed, buildUserMessage(trimmed, prompt));
+      chat.send(trimmed, buildUserMessage(trimmed, prompt, toolFree));
       setDraft('');
       // Back to the natural (CSS) height: a grown multi-line box must not stay tall
       // over an empty draft.
       if (composerRef.current !== null) composerRef.current.style.height = '';
     },
-    [chat, prompt],
+    [chat, prompt, toolFree],
   );
 
   // An idea handed over from the hub's create bar starts the build immediately. Safe

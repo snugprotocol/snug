@@ -231,6 +231,14 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
   // reply text after the turn. Blast radius (no KB consult round trip, no
   // schema_apply/app_doc_write) is documented in the task file.
   //
+  // TASK-20260906-tool-free-kb-inlining (ADR-0066): the suffix replaces the WRITE
+  // mechanism, never the KNOWLEDGE consult — and the 30 summary layer tells the model to
+  // call the app-builder tool for the rules, which a tool-free brain cannot. So the
+  // tool-free arms pick their knowledge delivery explicitly: the pinned host brain gets
+  // the five-file core INLINE (~41 KB under `sample`'s 65,536-byte cap, budgeted below);
+  // webllm gets the honest unaided layer (its pinned model's window is 4,096 tokens —
+  // the core alone is ~10K). The tooled arm passes nothing: today's bytes.
+  //
   // TASK-20260812-desktop-auth-awareness P2 (AC1): the assembly is told which shell it
   // serves — on desktop the 95-platform-desktop layer is appended LAST; on web (or with
   // no platform set) the bytes are identical to before the seat existed. ADR-0012 cache
@@ -241,7 +249,7 @@ export function createDirectBuilder(options: DirectBuilderOptions): BuilderAgent
   // so this is their platform decision altitude too.
   const platform = getPlatform().kind;
   const system = toolFree
-    ? `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform })}${CONTEXT_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`
+    ? `${buildHostSystemPrompt({ appBuilder: true, artifacts: false, platform, knowledge: isWebllm ? 'none' : 'inline' })}${CONTEXT_SEPARATOR}${WEBLLM_BUILD_SUFFIX}`
     : buildHostSystemPrompt({ appBuilder: true, artifacts: true, platform });
   return {
     async send(turn, handlers, signal) {

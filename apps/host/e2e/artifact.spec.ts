@@ -190,12 +190,13 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     await expect(page.getByTestId('brain-chip')).toContainText('Claude · this artifact’s viewer');
     await page.getByRole('textbox', { name: 'describe your app' }).fill('build me a tiny app');
     await page.getByRole('button', { name: 'build', exact: true }).click();
-    // The builder turn is ONE sample call on `default` (D15), and the prompt it carried is
-    // SELF-SUFFICIENT: the template with the copy-exactly hooks, the persistence rule, no
-    // tool it cannot call (the defect the hosted walk found — T4 journal 2026-09-06).
+    // The builder turn is ONE sample call on `default` (D15) and the artifact landing costs
+    // exactly one more (contract synthesis — T4's pinned count); the prompt the builder
+    // carried is SELF-SUFFICIENT: the template with the copy-exactly hooks, the persistence
+    // rule, no tool it cannot call (the defect the hosted walk found — T4 journal 2026-09-06).
     await expect(page.getByTestId('artifact-card')).toBeVisible({ timeout: 30_000 });
+    await expect.poll(async () => (await fakeRecord(page)).sampleCalls.length, { timeout: 15_000 }).toBe(2);
     const record = await fakeRecord(page);
-    expect(record.sampleCalls).toHaveLength(1);
     const call = record.sampleCalls[0]!;
     expect(call.options).toMatchObject({ modelTier: 'default', cache: false });
     const prompt = typeof call.input === 'string' ? call.input : (call.input as { content: string }[]).map((t) => t.content).join('\n');
@@ -205,14 +206,17 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     expect(prompt).not.toContain('snug_app_builder');
     expect(prompt).not.toMatch(/Never write an app from memory/);
     // The built app is NOT a white page: the template renders "Connecting…" until the
-    // host's ready frame answers its announce, then <main>. <main> visible ⇔ the
-    // announce → host-ready round trip completed inside the sandboxed frame.
+    // host's ready frame answers its announce, then <main>. <main> in the DOM with the
+    // connecting copy gone ⇔ the announce → host-ready round trip completed inside the
+    // sandboxed frame. (Attached, not visible: the template's <main> is an empty shell
+    // with no box of its own — a rule-following model fills it, the fake copies it bare.)
     await page.getByRole('link', { name: 'run it' }).click();
     await expect(page).toHaveURL(INSTALLED_ROUTE, { timeout: 20_000 });
     const app = appFrame(page);
-    await expect(app.locator('main')).toBeVisible({ timeout: 30_000 });
+    await expect(app.locator('main')).toBeAttached({ timeout: 30_000 });
     await expect(app.getByText('Connecting…')).toHaveCount(0);
-    expect((await fakeRecord(page)).sampleCalls).toHaveLength(1); // the app itself thinks on nothing at load
+    expect((await fakeRecord(page)).sampleCalls).toHaveLength(2); // the app itself thinks on nothing at load
+    expect(record.sampleCalls[1]!.input as string).toContain("runtime contract"); // the one extra call is the synthesis
   });
 
   test('AC5 (artifact-static): use() resolves null for everything — nothing saves here, no save act, the demo brain', async ({ page }) => {

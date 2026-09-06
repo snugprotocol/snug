@@ -38,6 +38,8 @@ export type SystemLayerName =
   | 'host-identity'
   | 'capability-file-creation'
   | 'app-builder-summary'
+  | 'app-builder-inline'
+  | 'app-builder-unaided'
   | 'app-runtime'
   | 'app-response-format'
   | 'platform-desktop';
@@ -46,6 +48,12 @@ const SYSTEM_LAYER_FILES: Readonly<Record<SystemLayerName, string>> = {
   'host-identity': 'system/10-host-identity.md',
   'capability-file-creation': 'system/20-capability-file-creation.md',
   'app-builder-summary': 'system/30-app-builder-summary.md',
+  // 35 and 36 are the 30-slot's TOOL-FREE siblings (TASK-20260906, ADR-0066): one slot,
+  // one occupant. 35 frames the inline five-file core that follows it (a pinned host brain
+  // with no tools); 36 is the honest unaided layer for a brain whose window cannot carry
+  // the core either (webllm at 4,096 tokens). Neither names a tool — there is none to call.
+  'app-builder-inline': 'system/35-app-builder-inline.md',
+  'app-builder-unaided': 'system/36-app-builder-unaided.md',
   // 45 sits between the builder summary and the response format by injection order, and
   // is mutually exclusive with 30: a turn is either authoring an app or running one.
   'app-runtime': 'system/45-app-runtime.md',
@@ -92,6 +100,37 @@ export function getKnowledgeBase(): KnowledgeSection[] {
     const text = renderedFile(file);
     return { file, headingTree: extractHeadings(text), text };
   });
+}
+
+/**
+ * The five knowledge-base files a TOOL-FREE brain gets INLINE in its system prompt
+ * (TASK-20260906-tool-free-kb-inlining, ADR-0066) — the essential core, in KB order:
+ * the loop + hard rules, the mandatory template with the copy-exactly hooks, the bridge
+ * protocol (the reply contract), persistence (the db — the layer whose absence produced a
+ * `localStorage` app), and the pinned CDN table with the artifact rules.
+ *
+ * PINNED BY NAME, ONE HOME: 37,437 rendered bytes against the host's 65,536-byte input
+ * cap; the whole KB (78,019) does not fit, so the selection is a decision, not a loop.
+ * Left out on purpose: 50 catalog / 60 design / 70 defensive / 95 runtime-contract
+ * (19,136 — would leave ~5 KB for the request) and 90 connected APIs (no connected apps
+ * under Binding A, ADR-0065 D4). Adding a file here must clear the AC3 ceiling test in
+ * apps/host (`HOST_BUILDER_SYSTEM_MAX_BYTES`).
+ */
+export const INLINE_KNOWLEDGE_CORE_FILES: readonly string[] = [
+  `${KB_PREFIX}10-overview-and-contract.md`,
+  `${KB_PREFIX}20-html-template.md`,
+  `${KB_PREFIX}30-bridge-protocol.md`,
+  `${KB_PREFIX}40-persistence-and-db.md`,
+  `${KB_PREFIX}80-cdn-compatibility.md`,
+];
+
+/**
+ * The inline core, rendered — the SAME rendering `getKnowledgeBase()` serves the tool, in
+ * `INLINE_KNOWLEDGE_CORE_FILES` order. A file missing from the store throws (a build
+ * error, never a silently thinner prompt — the failure mode this task exists to fix).
+ */
+export function getInlineKnowledgeCore(): string[] {
+  return INLINE_KNOWLEDGE_CORE_FILES.map((file) => renderedFile(file));
 }
 
 /**

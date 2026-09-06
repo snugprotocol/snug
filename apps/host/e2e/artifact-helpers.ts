@@ -44,13 +44,21 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
       const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storage: {} } as unknown as FakeRecord;
       (window as unknown as { __snugFake: FakeRecord }).__snugFake = record;
       const NO_TEMPLATE = 'the prompt carried no "## Full Template" fence — the fake viewer has nothing to copy';
-      /** The reply for one call: the scripted string, or the template lifted from the prompt itself. */
+      /**
+       * The reply for one call: the scripted string, or the template lifted from the prompt
+       * itself. The lift follows the template's OWN rule for its section 5 ("copy exactly
+       * when the app calls an approved API; omit otherwise"): the app calls none, so the
+       * section goes — its mere presence would mark the build as connected and send the
+       * post-turn recovery inferrer after the first URL in the file (the CDN).
+       */
       const replyFor = (input: unknown): string => {
         if (typeof reply === 'string') return reply;
         const prompt = typeof input === 'string' ? input : (input as { content: string }[]).map((t) => t.content).join('\n');
         const at = prompt.indexOf('## Full Template');
         const fence = at < 0 ? null : /```html\n([\s\S]*?)```/.exec(prompt.slice(at));
-        return fence === null ? NO_TEMPLATE : `Here is your app.\n\n\`\`\`html\n${fence[1]}\`\`\``;
+        if (fence === null) return NO_TEMPLATE;
+        const doc = fence[1]!.replace(/\n *\/\/ =+\n *\/\/ 5\. useConnectedFetch[\s\S]*?(?=\n *\/\/ =+\n *\/\/ 6\.)/, '');
+        return `Here is your app.\n\n\`\`\`html\n${doc}\`\`\``;
       };
       const sample = Object.assign(
         async (input: unknown, opts: Record<string, unknown> = {}) => {

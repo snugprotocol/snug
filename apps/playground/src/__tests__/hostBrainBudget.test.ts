@@ -107,11 +107,17 @@ describe('budget or refuse — the builder under a capped host brain (AC3)', () 
     promptBytes: ruler,
   });
 
-  it('a 51 KB app rides WHOLE and the bytes sent are at or under the cap on the identical string', async () => {
+  // Fixture sizes since TASK-20260906-tool-free-kb-inlining: the tool-free builder carries
+  // the five-file KB core INLINE (~41 KB of system text, ceiling 45,056 — `HOST_BUILDER_SYSTEM_MAX_BYTES`),
+  // so the room beside it is ≈ 20 KiB, not the ≈ 60 KB these cases were first written
+  // against. An 18 KB app fits under the CEILING (not just today's bytes); 51 KB — S11's
+  // measured whole-app case — is now the refused example. The doctrine is unchanged:
+  // whole or refused, never cut.
+  it('an 18 KB app rides WHOLE and the bytes sent are at or under the cap on the identical string', async () => {
     const chat = fakeAdapter('chat');
     const g = await fresh(brain(chat.adapter));
     const agent = g.builder.createDirectBuilder({ mode: 'host', provider: 'mock', sink: fakeSink });
-    const code = html(51);
+    const code = html(18);
     const result = await agent.send({ message: 'add a pause button', contextBlock: block(code) }, {}, signal());
     expect(result.ok).toBe(true);
     expect(chat.calls).toHaveLength(1);
@@ -120,14 +126,15 @@ describe('budget or refuse — the builder under a capped host brain (AC3)', () 
     expect(ruler(sent.system, sent.messages)).toBeLessThanOrEqual(CAP);
   });
 
-  it('(N) a 117 KB app is REFUSED by name before any call — the message carries the bytes and the cap', async () => {
+  it('(N) a 51 KB app is REFUSED by name before any call — the message carries the bytes and the cap', async () => {
     const chat = fakeAdapter('chat');
     const g = await fresh(brain(chat.adapter));
     const agent = g.builder.createDirectBuilder({ mode: 'host', provider: 'mock', sink: fakeSink });
-    const result = await agent.send({ message: 'add a timestamp', contextBlock: block(html(117)) }, {}, signal());
+    const result = await agent.send({ message: 'add a timestamp', contextBlock: block(html(51)) }, {}, signal());
     expect(result).toMatchObject({ ok: false, code: g.budget.PROMPT_TOO_LARGE_CODE, retryable: false });
     if (!result.ok) {
-      expect(result.message).toMatch(/1[12]\d,\d{3} bytes/);
+      // 52,224 of html + ~41–44 KB of builder system text: the message names the real total.
+      expect(result.message).toMatch(/9\d,\d{3} bytes/);
       expect(result.message).toContain('65,536');
       expect(result.message).toMatch(/export/i);
     }
@@ -138,10 +145,12 @@ describe('budget or refuse — the builder under a capped host brain (AC3)', () 
     const chat = fakeAdapter('chat');
     const g = await fresh(brain(chat.adapter));
     const agent = g.builder.createDirectBuilder({ mode: 'host', provider: 'mock', sink: fakeSink });
-    const code = html(40);
+    // 12 KB of app beside ~41 KB of layers leaves ≈ 10 KB; a 20 KB oldest message puts the
+    // turn over by LESS than that one message, whatever the layers drift by within the ceiling.
+    const code = html(12);
     const history = [
-      { role: 'user' as const, content: `oldest ${'h'.repeat(12 * 1024)}` },
-      { role: 'assistant' as const, content: `older ${'a'.repeat(12 * 1024)}` },
+      { role: 'user' as const, content: `oldest ${'h'.repeat(20 * 1024)}` },
+      { role: 'assistant' as const, content: `older ${'a'.repeat(1024)}` },
       { role: 'user' as const, content: 'recent question' },
       { role: 'assistant' as const, content: 'recent answer' },
     ];

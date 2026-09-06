@@ -25,8 +25,28 @@ import type { CONTEXT_CAPS } from './appContext.js';
 export const PROMPT_TOO_LARGE_CODE = 'HOST_BRAIN_PROMPT_TOO_LARGE';
 
 /**
+ * The ceiling for the tool-free BUILDER SYSTEM TEXT under the host cap (TASK-20260906
+ * AC3): the inline assembly (`knowledge: 'inline'` — the 35 layer + the five-file core,
+ * ~41.3 KB measured 2026-09-06) plus the fenced-HTML suffix must measure ≤ this on the
+ * kit's own ruler, leaving ≥ 20,480 B (20 KiB) of the 65,536 for the request, the app
+ * context and history. A layer growing past it fails the host test that pins it
+ * (`brains.test.ts`) instead of surfacing as a silently refused build turn on the artifact.
+ * ONE home: the test imports it; adding a file to `INLINE_KNOWLEDGE_CORE_FILES` must clear it.
+ */
+export const HOST_BUILDER_SYSTEM_MAX_BYTES = 45_056;
+
+/**
  * The context caps under a 64 KiB host: html unbounded (whole or refused), the rest shrunk
- * so a ~50 KB app still fits beside the builder layers (≈ 4.7 KB) and the message.
+ * so the app still fits beside the builder layers and the message.
+ *
+ * The arithmetic since TASK-20260906 (the tool-free builder carries the KB core inline):
+ * 65,536 − ~41,300 of builder system text ≈ 24,200 for everything else; with schema, docs
+ * and history all at their caps (14,000) that leaves ≈ 10,200 for the app's html + the
+ * message. History is dropped oldest-first by the ladder below before anything is refused,
+ * so its cap is soft; schema and docs truncate upstream with a marker. A host-side EDIT of
+ * an app above ~10 KB with saturated context is therefore refused BY NAME — T4's
+ * budget-or-refuse working as designed (the refusal names the playground as the place to
+ * edit). Shrinking these caps buys a few KB of html; the values are unchanged for now.
  */
 export const HOST_CONTEXT_CAPS: Record<keyof typeof CONTEXT_CAPS, number> = {
   html: Number.POSITIVE_INFINITY,
