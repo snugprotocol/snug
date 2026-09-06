@@ -137,6 +137,49 @@ test.describe('A1 — the hosted artifact runtime (faked on the built page)', ()
     await context.close();
   });
 
+  test('TASK-20260906 AC2/AC6: the thinking level — auto sends quick for a move; switching to complex makes no call and the next move carries complex; the choice survives a reload', async ({ page }) => {
+    await installHostedFake(page);
+    await installRoutePolicy(page, { allowJsDelivr: true });
+    await installChessAndMove(page);
+    const app = appFrame(page);
+    await expect(app.getByText(/the fake viewer answers/)).toBeVisible({ timeout: 30_000 });
+    expect((await fakeRecord(page)).sampleCalls.map((c) => c.options.modelTier)).toEqual(['quick']); // auto → quick for an app reply
+    await page.getByTestId('brain-chip').click();
+    const select = page.getByTestId('brain-menu-tier');
+    await expect(select).toHaveValue('auto');
+    await expect(page.getByTestId('brain-menu-tier').locator('option[value="default"]')).toHaveText(/the viewer’s default/);
+    await select.selectOption('complex');
+    await expect(page.getByTestId('brain-chip')).toHaveAttribute('data-tier', 'complex');
+    expect((await fakeRecord(page)).sampleCalls).toHaveLength(1); // the switch spent nothing
+    await page.keyboard.press('Escape');
+    await app.getByRole('button', { name: /^d2 / }).click();
+    await app.getByRole('button', { name: /^d4 / }).click();
+    await expect.poll(async () => (await fakeRecord(page)).sampleCalls.length, { timeout: 30_000 }).toBe(2);
+    expect((await fakeRecord(page)).sampleCalls.map((c) => c.options.modelTier)).toEqual(['quick', 'complex']);
+    // The choice lives in this browser: a reload boots on it, and boot makes no call.
+    await page.reload();
+    await expect(page.getByTestId('brain-chip')).toHaveAttribute('data-tier', 'complex', { timeout: 20_000 });
+    expect((await fakeRecord(page)).sampleCalls).toHaveLength(0);
+  });
+
+  test('TASK-20260906 AC4/AC6: a tier the plan lacks — the answer comes back on another tier, the option is disabled and annotated, the selection falls back, the note says so', async ({ page }) => {
+    await installHostedFake(page, { substitute: { complex: 'default' } });
+    await installRoutePolicy(page, { allowJsDelivr: true });
+    await page.goto(KIT_URL);
+    await page.getByTestId('brain-chip').click();
+    await page.getByTestId('brain-menu-tier').selectOption('complex');
+    await page.keyboard.press('Escape');
+    await installChessAndMove(page);
+    await expect(appFrame(page).getByText(/the fake viewer answers/)).toBeVisible({ timeout: 30_000 });
+    expect((await fakeRecord(page)).sampleCalls.map((c) => c.options.modelTier)).toEqual(['complex']);
+    await expect(page.getByTestId('brain-chip')).toHaveAttribute('data-tier', 'default');
+    await page.getByTestId('brain-chip').click();
+    await expect(page.getByTestId('brain-menu-tier')).toHaveValue('default');
+    await expect(page.getByTestId('brain-menu-tier').locator('option[value="complex"]')).toHaveJSProperty('disabled', true);
+    await expect(page.getByTestId('brain-menu-tier').locator('option[value="complex"]')).toHaveText('complex — not on this plan, answered on default');
+    await expect(page.getByTestId('brain-menu-tier-note')).toHaveText('asked for complex — this view answered on default (the viewer’s plan)');
+  });
+
   test('AC12: not_writer flips the view read-only after the first refusal — the save act disappears, the chip says export', async ({ page }) => {
     await installHostedFake(page, { publish: { reject: 'not_writer' } });
     await installRoutePolicy(page, { allowJsDelivr: true });
@@ -252,6 +295,11 @@ test.describe('A2 — the chat artifact runtime (faked on the built page)', () =
     await installRoutePolicy(page, { allowJsDelivr: true });
     await page.goto(KIT_URL);
     await expect(page.getByTestId('brain-chip')).toContainText('Claude · this chat');
+    // TASK-20260906 AC6(d): the chat brain has no tier in its contract — no thinking-level control.
+    await page.getByTestId('brain-chip').click();
+    await expect(page.getByTestId('brain-menu')).toBeVisible();
+    await expect(page.getByTestId('brain-menu-tier')).toHaveCount(0);
+    await page.keyboard.press('Escape');
     await expect(page.getByTestId('your-file-chip')).toContainText('in this chat');
     expect((await fakeRecord(page)).completeCalls).toHaveLength(0);
 

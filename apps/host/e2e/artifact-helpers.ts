@@ -24,6 +24,8 @@ export interface HostedFakeOptions {
   publish?: { version: string } | { reject: string };
   /** Resolve `artifact` / `downloads` / `sample` to null (a static top-level page resolves all three null). */
   nulls?: ('sample' | 'artifact' | 'downloads')[];
+  /** TASK-20260906 AC4/AC6: the viewer's plan lacks a tier — `modelTierApplied` answers with the substitute (sample.d.ts). */
+  substitute?: Partial<Record<'quick' | 'default' | 'complex', 'quick' | 'default' | 'complex'>>;
 }
 
 export interface FakeRecord {
@@ -39,7 +41,7 @@ const DEFAULT_REPLY = '```json\n{"move":{"from":"e7","to":"e5"},"message":"the f
 /** The hosted runtime: `window.claude.use(name)` — use-only, resolves per name. */
 export async function installHostedFake(page: Page, options: HostedFakeOptions = {}): Promise<void> {
   await page.addInitScript(
-    ({ reply, publish, nulls }) => {
+    ({ reply, publish, nulls, substitute }) => {
       if (window !== window.top) return; // top frame only
       const record = { sampleCalls: [], published: [], saved: [], completeCalls: [], storage: {} } as unknown as FakeRecord;
       (window as unknown as { __snugFake: FakeRecord }).__snugFake = record;
@@ -74,7 +76,8 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
           const half = text.slice(0, Math.floor(text.length / 2));
           onText?.({ text: half, delta: half });
           onText?.({ text, delta: text.slice(half.length) });
-          return { text, truncated: false, modelTierApplied: (opts.modelTier as string) ?? 'default' };
+          const asked = ((opts.modelTier as string | undefined) ?? 'default') as keyof typeof substitute;
+          return { text, truncated: false, modelTierApplied: substitute[asked] ?? asked };
         },
         { limits: async () => ({ maxPromptBytes: 65536 }), json: async (input: unknown) => JSON.parse(replyFor(input).replace(/```json\n|\n```/g, '')) },
       );
@@ -101,7 +104,7 @@ export async function installHostedFake(page: Page, options: HostedFakeOptions =
       };
       (window as unknown as { claude: unknown }).claude = claude;
     },
-    { reply: options.reply ?? DEFAULT_REPLY, publish: options.publish ?? { version: 'v-fake' }, nulls: options.nulls ?? [] },
+    { reply: options.reply ?? DEFAULT_REPLY, publish: options.publish ?? { version: 'v-fake' }, nulls: options.nulls ?? [], substitute: options.substitute ?? {} },
   );
 }
 
