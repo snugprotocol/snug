@@ -94,7 +94,7 @@ describe('shapeInput / shapeString — one shaper, one ruler (AC1/AC3)', () => {
 describe('createSampleAdapter — the hosted brain (AC1)', () => {
   it('sends the shaped input with cache:false, the pinned tier, the signal and onText; forwards deltas; reports end', async () => {
     const { sample, calls } = fakeSample({ text: '{"move":{"from":"e7","to":"e5"},"message":"hi"}', steps: ['{"move"', '{"move":{"from":"e7","to":"e5"},"message":"hi"}'] });
-    const adapter = createSampleAdapter(sample, { modelTier: 'quick' });
+    const adapter = createSampleAdapter(sample, { tier: () => 'quick' });
     const deltas: string[] = [];
     const ctl = new AbortController();
     const result = await adapter.complete({ system: SYSTEM, messages: userTurn(WIRE), signal: ctl.signal, onDelta: (d) => deltas.push(d) });
@@ -109,8 +109,8 @@ describe('createSampleAdapter — the hosted brain (AC1)', () => {
 
   it('the builder adapter pins `default`; both adapters make NO call on construction (never on load)', async () => {
     const { sample, calls } = fakeSample({ text: 'x' });
-    const app = createSampleAdapter(sample, { modelTier: 'quick' });
-    const chat = createSampleAdapter(sample, { modelTier: 'default' });
+    const app = createSampleAdapter(sample, { tier: () => 'quick' });
+    const chat = createSampleAdapter(sample, { tier: () => 'default' });
     expect(calls).toHaveLength(0);
     await chat.complete({ system: SYSTEM, messages: userTurn('build') });
     expect(calls[0]!.options?.modelTier).toBe('default');
@@ -120,14 +120,38 @@ describe('createSampleAdapter — the hosted brain (AC1)', () => {
 
   it('`truncated: true` → stopReason max_tokens, never a parse strike (lesson 2026-08-12)', async () => {
     const { sample } = fakeSample({ text: '{"partial":', truncated: true });
-    const result = await createSampleAdapter(sample, { modelTier: 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
+    const result = await createSampleAdapter(sample, { tier: () => 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
     expect(result).toMatchObject({ ok: true, text: '{"partial":', stopReason: 'max_tokens' });
   });
 
   it('reports the tier that actually answered as the wire model', async () => {
     const { sample } = fakeSample({ text: 'ok', modelTierApplied: 'quick' });
-    const result = await createSampleAdapter(sample, { modelTier: 'default' }).complete({ system: SYSTEM, messages: userTurn('x') });
+    const result = await createSampleAdapter(sample, { tier: () => 'default' }).complete({ system: SYSTEM, messages: userTurn('x') });
     expect(result).toMatchObject({ ok: true, model: 'claude (quick)' });
+  });
+
+  it('TASK-20260906 AC2: the tier is read at CALL time — a switch between calls changes the next call and makes no call of its own', async () => {
+    const { sample, calls } = fakeSample({ text: 'ok' });
+    let tier: 'quick' | 'default' | 'complex' = 'quick';
+    const adapter = createSampleAdapter(sample, { tier: () => tier });
+    await adapter.complete({ system: SYSTEM, messages: userTurn(WIRE) });
+    tier = 'complex'; // the switch
+    expect(calls).toHaveLength(1); // nothing spent by switching
+    await adapter.complete({ system: SYSTEM, messages: userTurn(WIRE) });
+    expect(calls.map((c) => c.options?.modelTier)).toEqual(['quick', 'complex']);
+  });
+
+  it('TASK-20260906 AC4: every answer reports (asked, answered) to `onApplied` — the store decides what a substitution means', async () => {
+    const applied: [string, string][] = [];
+    const honoured = createSampleAdapter(fakeSample({ text: 'ok' }).sample, { tier: () => 'complex', onApplied: (a, b) => applied.push([a, b]) });
+    await honoured.complete({ system: SYSTEM, messages: userTurn('x') });
+    const substituted = createSampleAdapter(fakeSample({ text: 'ok', modelTierApplied: 'default' }).sample, { tier: () => 'complex', onApplied: (a, b) => applied.push([a, b]) });
+    await substituted.complete({ system: SYSTEM, messages: userTurn('x') });
+    expect(applied).toEqual([['complex', 'complex'], ['complex', 'default']]);
+    // A rejection reports nothing: no tier answered.
+    const rejected = createSampleAdapter(fakeSample({ reject: { code: 'rate_limited' } }).sample, { tier: () => 'quick', onApplied: (a, b) => applied.push([a, b]) });
+    await rejected.complete({ system: SYSTEM, messages: userTurn('x') });
+    expect(applied).toHaveLength(2);
   });
 
   it.each([
@@ -145,7 +169,7 @@ describe('createSampleAdapter — the hosted brain (AC1)', () => {
     ['capability_disabled', HOST_BRAIN_CODES.CONSENT_DENIED, false],
   ])('maps SampleError %s → %s (retryable %s) — named, never retried in a loop', async (code, expected, retryable) => {
     const { sample } = fakeSample({ reject: { code, message: `platform said ${code}` } });
-    const result = await createSampleAdapter(sample, { modelTier: 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
+    const result = await createSampleAdapter(sample, { tier: () => 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
     expect(result).toMatchObject({ ok: false, code: expected, retryable });
     if (!result.ok) expect(result.message.length).toBeGreaterThan(10);
   });
@@ -153,33 +177,33 @@ describe('createSampleAdapter — the hosted brain (AC1)', () => {
   it('`cancelled` → the protocol CANCELLED code with the partial text kept; an already-aborted signal makes no call', async () => {
     const { sample, calls } = fakeSample({ reject: { code: 'cancelled', text: 'partial…' } });
     const ctl = new AbortController();
-    const result = await createSampleAdapter(sample, { modelTier: 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE), signal: ctl.signal });
+    const result = await createSampleAdapter(sample, { tier: () => 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE), signal: ctl.signal });
     expect(result).toMatchObject({ ok: false, code: ERROR_CODES.CANCELLED, retryable: false, partialText: 'partial…' });
     const pre = new AbortController();
     pre.abort();
-    const early = await createSampleAdapter(sample, { modelTier: 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE), signal: pre.signal });
+    const early = await createSampleAdapter(sample, { tier: () => 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE), signal: pre.signal });
     expect(early).toMatchObject({ ok: false, code: ERROR_CODES.CANCELLED });
     expect(calls).toHaveLength(1);
   });
 
   it('prompt_too_large names the byte count and the cap in its message', async () => {
     const { sample } = fakeSample({ reject: { code: 'prompt_too_large' } });
-    const result = await createSampleAdapter(sample, { modelTier: 'default', maxPromptBytes: 65536 }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
+    const result = await createSampleAdapter(sample, { tier: () => 'default', maxPromptBytes: 65536 }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
     expect(result).toMatchObject({ ok: false, code: HOST_BRAIN_CODES.PROMPT_TOO_LARGE });
     if (!result.ok) expect(result.message).toMatch(new RegExp(`${bytes(`${SYSTEM}${PROMPT_SEPARATOR}${WIRE}`)}.*65,?536`));
   });
 
   it('an unknown code and a non-SampleError throw both become HOST_ERROR with the message kept', async () => {
-    const unknown = await createSampleAdapter(fakeSample({ reject: { code: 'brand_new_code', message: 'm' } }).sample, { modelTier: 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
+    const unknown = await createSampleAdapter(fakeSample({ reject: { code: 'brand_new_code', message: 'm' } }).sample, { tier: () => 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
     expect(unknown).toMatchObject({ ok: false, code: ERROR_CODES.HOST_ERROR, retryable: false });
-    const thrown = await createSampleAdapter(fakeSample({ throw: new TypeError('boom') }).sample, { modelTier: 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
+    const thrown = await createSampleAdapter(fakeSample({ throw: new TypeError('boom') }).sample, { tier: () => 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE) });
     expect(thrown).toMatchObject({ ok: false, code: ERROR_CODES.HOST_ERROR });
     if (!thrown.ok) expect(thrown.message).toContain('boom');
   });
 
   it('(N) tool traffic is refused by name — the host brains are tool-free (the builder takes the tool-free arm)', async () => {
     const { sample, calls } = fakeSample({ text: 'x' });
-    const adapter = createSampleAdapter(sample, { modelTier: 'default' });
+    const adapter = createSampleAdapter(sample, { tier: () => 'default' });
     const withTools = await adapter.complete({ system: SYSTEM, messages: userTurn('x'), tools: [{ name: 't', description: 'd', inputSchema: {} }] });
     expect(withTools).toMatchObject({ ok: false, code: HOST_BRAIN_CODES.TOOLS_UNSUPPORTED, retryable: false });
     const withToolTurn = await adapter.complete({ system: SYSTEM, messages: [{ role: 'user', content: 'x' }, { role: 'assistant', content: '', toolCalls: [{ id: '1', name: 't', input: {} }] }, { role: 'tool', toolCallId: '1', content: '{}' }] });
@@ -189,7 +213,7 @@ describe('createSampleAdapter — the hosted brain (AC1)', () => {
 
   it('(N, C1) nothing but the shaped prompt reaches the host: no key, no URL, no header, no secret-shaped value', async () => {
     const { sample, calls } = fakeSample({ text: 'x' });
-    await createSampleAdapter(sample, { modelTier: 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE), cache: true, maxOutputTokens: 512 });
+    await createSampleAdapter(sample, { tier: () => 'quick' }).complete({ system: SYSTEM, messages: userTurn(WIRE), cache: true, maxOutputTokens: 512 });
     const wire = JSON.stringify(calls[0]!.input) + JSON.stringify({ ...calls[0]!.options, onText: undefined, signal: undefined });
     for (const forbidden of ['sk-ant', 'Authorization', 'apiKey', 'api_key', 'https://', 'localUrl', 'maxOutputTokens']) {
       expect(wire, `wire contains "${forbidden}"`).not.toContain(forbidden);

@@ -5,11 +5,15 @@
 // / `createDirectBuilder` every other brain is, so the R-9 egress scrub and the F15 skip
 // apply exactly as they do for webllm.
 //
-// One adapter per PURPOSE, one tier each (D15: a host decision, never a control): the app
-// adapter answers envelopes on `quick` (T1 S3: median 1.2 s, 48/48 legal, every reply
-// fenced — the graduated parser downstream unfences), the builder/inferrer adapter on
-// `default` (T4 S11: a 33 KB whole-app rewrite in 94 s on `default` vs 107 s on `quick` —
-// output dominates, `quick` buys nothing and thinks less).
+// One adapter per PURPOSE; the tier is read AT CALL TIME from the tier store (ADR-0067,
+// TASK-20260906-host-brain-tier-control — D15 amended narrowly: the brain stays the host's,
+// the thinking level is the user's). Under `auto` the app adapter answers envelopes on
+// `quick` (T1 S3: median 1.2 s, 48/48 legal, every reply fenced — the graduated parser
+// downstream unfences) and the builder/inferrer adapter on `default` (T4 S11: a 33 KB
+// whole-app rewrite in 94 s on `default` vs 107 s on `quick` — output dominates, `quick`
+// buys nothing and thinks less); an explicit choice overrides both. Every answer's
+// `modelTierApplied` goes back to the store through `onApplied` — the viewer may answer on a
+// cheaper tier the plan allows, and the chip says so (sample.d.ts).
 //
 // The text verb, never `sample.json`: only the text verb reports `truncated` (→
 // `stopReason: 'max_tokens'`, never a parse strike — lesson 2026-08-12) and
@@ -18,13 +22,15 @@
 // the adapter contract wants deltas, so the adapter diffs. Never called on load: the
 // first think is the first call, and the consent dialog appears there (S3, S11).
 
+import type { HostModelTier } from '@playground/platform/platform';
 import type { AdapterResult, AgentAdapter, ToolCall } from '@snugprotocol/adapters';
 import { ERROR_CODES } from '@snugprotocol/protocol';
 
 import { HOST_BRAIN_CODES, mapSampleError } from './errors.js';
 import { measurePrompt, shapeInput, type ShapedInput } from './prompt.js';
 
-export type ModelTier = 'quick' | 'default' | 'complex';
+/** The contract's tiers — typed once on the platform (the seat the chip renders), aliased here for the wire. */
+export type ModelTier = HostModelTier;
 /** What `sample` accepts — exactly what the shaper produces (one type, one home). */
 export type SampleInput = ShapedInput;
 
@@ -49,7 +55,10 @@ export interface SampleFn {
 }
 
 export interface SampleAdapterOptions {
-  modelTier: ModelTier;
+  /** The tier the NEXT call carries — read per call (a switch between calls changes the next one; never frozen at construction). */
+  tier: () => ModelTier;
+  /** Every answer's (asked, answered) pair from `modelTierApplied`; the tier store decides what a difference means. */
+  onApplied?: (asked: ModelTier, answered: ModelTier) => void;
   /** The cap `limits()` reported — named in the PROMPT_TOO_LARGE message. */
   maxPromptBytes?: number;
 }
@@ -95,13 +104,15 @@ export function createSampleAdapter(sample: SampleFn, options: SampleAdapterOpti
         sent = text;
         if (delta !== '') request.onDelta?.(delta);
       };
+      const modelTier = options.tier();
       try {
         const result = await sample(input, {
           cache: false,
-          modelTier: options.modelTier,
+          modelTier,
           onText,
           ...(request.signal !== undefined ? { signal: request.signal } : {}),
         });
+        options.onApplied?.(modelTier, result.modelTierApplied);
         return {
           ok: true,
           text: result.text,

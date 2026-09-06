@@ -43,7 +43,37 @@ export type PlatformBrain =
       tools: boolean;
       maxPromptBytes?: number;
       promptBytes?: (system: string, messages: AdapterMessage[]) => number;
+      /** The thinking-level seat (ADR-0067). Absent → no control anywhere (the chat brain, the demo brain, web, desktop). */
+      tiers?: TierSeat;
     };
+
+/**
+ * The thinking levels a host brain's contract offers (TASK-20260906-host-brain-tier-control,
+ * ADR-0067 — D15 amended narrowly: the BRAIN stays the host's; the TIER is the user's). The
+ * artifact runtime's `sample` has exactly these three (`sample.d.ts` 0.2.41), and the tier IS
+ * the thinking level: `quick` does not think first; `default` (the viewer's default) and
+ * `complex` think before writing. The playground owns the seat types (the `CustodyState`
+ * precedent); the kit's store implements them.
+ */
+export type HostModelTier = 'quick' | 'default' | 'complex';
+/** `auto` = the kit's per-purpose pins (app replies `quick`, building `default`); a tier overrides every purpose. */
+export type TierChoice = 'auto' | HostModelTier;
+export interface TierState {
+  choice: TierChoice;
+  /** The last call whose answering tier differed from the ask (`modelTierApplied`) — the chip's substitution note. */
+  applied?: { asked: HostModelTier; answered: HostModelTier };
+  /** Tiers this view's plan answered on another tier, keyed by the tier asked for: listed but disabled, annotated with what answered. Per boot. */
+  unavailable: Partial<Record<HostModelTier, HostModelTier>>;
+}
+export interface TierSeat {
+  options: readonly HostModelTier[];
+  viewerDefault: HostModelTier;
+  /** The `auto` entry's label — names the per-purpose pins honestly (never "the viewer's default"). */
+  autoLabel: string;
+  state: { get(): TierState; subscribe(listener: () => void): () => void };
+  /** Changes what the NEXT call carries. Never calls the model. */
+  set(choice: TierChoice): void;
+}
 
 /**
  * Where the user's file stands relative to its durable copy (TASK-20260905-binding-a-artifacts

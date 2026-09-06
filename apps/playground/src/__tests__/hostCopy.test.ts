@@ -2,7 +2,7 @@
 // run view's failed-load copy, pinned byte-for-byte on every arm (pure functions).
 import { describe, expect, it } from 'vitest';
 
-import { custodyDisclosure, storageDisclosure } from '../platform/copy.js';
+import { custodyDisclosure, storageDisclosure, tierLabel, tierSubstitutionNote } from '../platform/copy.js';
 import { isNamedLoadRefusal, missingAppCopy } from '../run/copy.js';
 
 describe('storageDisclosure — names the rung that WORKED', () => {
@@ -78,5 +78,22 @@ describe('isNamedLoadRefusal — the only failure the run view quotes', () => {
     expect(isNamedLoadRefusal(Object.assign(new Error('starters load from the network'), { name: 'StarterLoadError' }))).toBe(true);
     expect(isNamedLoadRefusal(new Error('database disk image is malformed'))).toBe(false);
     expect(isNamedLoadRefusal('starters load from the network')).toBe(false);
+  });
+});
+
+describe('the thinking-level copy (TASK-20260906 AC4/AC5, ADR-0067) — the contract’s own terms, every arm pinned', () => {
+  const seat = { viewerDefault: 'default' as const };
+  it('labels each tier by what it does and marks the viewer’s default; an unavailable tier names what answered instead', () => {
+    const none = { unavailable: {} };
+    expect(tierLabel('quick', seat, none)).toBe('quick — answers at once, no thinking first');
+    expect(tierLabel('default', seat, none)).toBe('default — thinks first (the viewer’s default)');
+    expect(tierLabel('complex', seat, none)).toBe('complex — thinks longest, for hard reasoning');
+    expect(tierLabel('complex', seat, { unavailable: { complex: 'default' } })).toBe('complex — not on this plan, answered on default');
+    // The marker follows the seat, not a constant: a contract whose default moved is labelled right.
+    expect(tierLabel('quick', { viewerDefault: 'quick' }, none)).toBe('quick — answers at once, no thinking first (the viewer’s default)');
+  });
+  it('the substitution note derives from the recorded pair; nothing recorded → no note', () => {
+    expect(tierSubstitutionNote(undefined)).toBeUndefined();
+    expect(tierSubstitutionNote({ asked: 'complex', answered: 'default' })).toBe('asked for complex — this view answered on default (the viewer’s plan)');
   });
 });

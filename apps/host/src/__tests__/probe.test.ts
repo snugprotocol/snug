@@ -266,6 +266,56 @@ describe('probeBrain with host namespaces — the pinned brains (AC1/AC2)', () =
     expect(brain.maxPromptBytes).toBe(65536);
   });
 
+  it('TASK-20260906 AC1/AC2: the sample brain carries the tier seat; both adapters read the store PER CALL (auto: quick app / default chat; an explicit tier overrides both); the seat is the store', async () => {
+    const calls: (string | undefined)[] = [];
+    const sample = (async (_input: unknown, options?: { modelTier?: string }) => {
+      calls.push(options?.modelTier);
+      return { text: 'ok', truncated: false, modelTierApplied: (options?.modelTier ?? 'default') as 'quick' | 'default' | 'complex' };
+    }) as unknown as SampleFn;
+    sample.limits = async () => ({ maxPromptBytes: 65536 });
+    sample.json = async () => ({});
+    const written: [string, string][] = [];
+    const storage = { getItem: () => null, setItem: (k: string, v: string) => void written.push([k, v]) };
+    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, undefined, storage);
+    const brain = result.brain;
+    if (brain.kind !== 'host') throw new Error('expected the sample brain');
+    const seat = brain.tiers;
+    if (seat === undefined) throw new Error('expected the tier seat');
+    expect(seat.options).toEqual(['quick', 'default', 'complex']);
+    expect(seat.viewerDefault).toBe('default');
+    expect(seat.state.get().choice).toBe('auto');
+    expect(calls).toEqual([]); // pinning made no call
+    const turn = { system: 's', messages: [{ role: 'user' as const, content: 'x' }] };
+    await brain.adapter.complete(turn);
+    await brain.chatAdapter!.complete(turn);
+    seat.set('complex');
+    expect(calls).toEqual(['quick', 'default']); // the switch itself called nothing
+    await brain.adapter.complete(turn);
+    await brain.chatAdapter!.complete(turn);
+    expect(calls).toEqual(['quick', 'default', 'complex', 'complex']);
+    expect(written).toEqual([['snug-host:tier', 'complex']]);
+  });
+
+  it('TASK-20260906 AC3/AC4: the saved choice is read at boot; a substituted answer marks the tier and the selection falls back', async () => {
+    const sample = (async (_input: unknown, options?: { modelTier?: string }) => ({ text: 'ok', truncated: false, modelTierApplied: (options?.modelTier === 'complex' ? 'default' : options?.modelTier ?? 'default') as 'quick' | 'default' | 'complex' })) as unknown as SampleFn;
+    sample.limits = async () => ({ maxPromptBytes: 65536 });
+    sample.json = async () => ({});
+    const storage = { getItem: () => 'complex', setItem: () => {} };
+    const result = await probeBrain(env({ claudeUse: true }), { sample, legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false }, undefined, storage);
+    const brain = result.brain;
+    if (brain.kind !== 'host' || brain.tiers === undefined) throw new Error('expected the seat');
+    expect(brain.tiers.state.get().choice).toBe('complex');
+    await brain.adapter.complete({ system: 's', messages: [{ role: 'user', content: 'x' }] });
+    expect(brain.tiers.state.get()).toEqual({ choice: 'default', applied: { asked: 'complex', answered: 'default' }, unavailable: { complex: 'default' } });
+  });
+
+  it('TASK-20260906 AC1 (twin): the chat brain and the demo brain carry NO tier seat', async () => {
+    const chat = await probeBrain(env({ claudeComplete: true }), undefined, async () => 'reply');
+    expect(chat.brain.kind === 'host' && chat.brain.tiers).toBeUndefined();
+    const demo = await probeBrain(env({}));
+    expect(demo.brain).toEqual({ kind: 'demo' });
+  });
+
   it('limits() rejecting → the documented 65,536 fallback', async () => {
     const result = await probeBrain(env({ claudeUse: true }), { sample: fakeSample('reject'), legs: { sample: 'resolved', artifact: 'null', downloads: 'null' }, guardTripped: false, rejected: false });
     expect(result.brain.kind === 'host' && result.brain.maxPromptBytes).toBe(65536);

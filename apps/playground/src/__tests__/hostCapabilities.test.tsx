@@ -16,8 +16,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentAdapter } from '@snugprotocol/adapters';
 
+import { createStore } from '../state/store.js';
+
 import type { ChatMessage } from '../agent/useBuilderChat.js';
-import type { PlatformBrain, SnugPlatform } from '../platform/platform.js';
+import type { PlatformBrain, SnugPlatform, TierChoice, TierSeat, TierState } from '../platform/platform.js';
 import { hostPlatform as hostFixture } from './fixtures/hostPlatform.js';
 
 declare global {
@@ -162,6 +164,95 @@ describe('the brain chip (AC5: disclosure only)', () => {
     await click(chip);
     expect(byTestId('brain-menu')?.textContent).toContain(HOST_LABEL);
     expect(byTestId('brain-menu-settings')).toBeNull();
+    // TASK-20260906 AC5 twin: a host brain WITHOUT a tier seat (the chat brain) shows no thinking-level control.
+    expect(byTestId('brain-menu-tier')).toBeNull();
+    expect(chip?.getAttribute('data-tier')).toBeNull();
+  });
+
+  // TASK-20260906-host-brain-tier-control (ADR-0067): the thinking level is the user's, from
+  // the chip, ONLY where the brain carries a tier seat. A fake seat here — the kit's store is
+  // the real one (apps/host/src/brains/tierStore.ts); the chip renders any seat honestly.
+  function fakeTierSeat(initial: TierState): TierSeat & { sets: TierChoice[] } {
+    const store = createStore<TierState>(initial);
+    const sets: TierChoice[] = [];
+    return {
+      sets,
+      options: ['quick', 'default', 'complex'],
+      viewerDefault: 'default',
+      autoLabel: 'auto — quick for app replies, default for building',
+      state: { get: store.get, subscribe: store.subscribe },
+      set: (choice) => {
+        sets.push(choice);
+        store.set({ ...store.get(), choice });
+      },
+    };
+  }
+  const withSeat = (seat: TierSeat): SnugPlatform => hostPlatform({ kind: 'host', label: HOST_LABEL, adapter: idleAdapter, streaming: true, tools: false, tiers: seat });
+
+  it('TASK-20260906 AC5: with a tier seat the popover lists auto first, then the three tiers with the viewer default marked; auto is selected; the D15 doors stay shut', async () => {
+    const seat = fakeTierSeat({ choice: 'auto', unavailable: {} });
+    const g = await fresh(withSeat(seat));
+    await render(<g.BrainChip />);
+    const chip = byTestId('brain-chip');
+    expect(chip?.getAttribute('data-tier')).toBe('auto');
+    expect(chip?.textContent).toBe(HOST_LABEL); // the label is unchanged (the 375 px header)
+    await click(chip);
+    const select = byTestId('brain-menu-tier');
+    if (!(select instanceof HTMLSelectElement)) throw new Error('expected the thinking-level select');
+    expect(select.getAttribute('aria-label')).toBe('thinking level');
+    expect(select.value).toBe('auto');
+    expect(Array.from(select.options).map((o) => [o.value, o.textContent, o.disabled])).toEqual([
+      ['auto', 'auto — quick for app replies, default for building', false],
+      ['quick', 'quick — answers at once, no thinking first', false],
+      ['default', 'default — thinks first (the viewer’s default)', false],
+      ['complex', 'complex — thinks longest, for hard reasoning', false],
+    ]);
+    expect(byTestId('brain-menu-settings')).toBeNull();
+    expect(byTestId('brain-menu-ollama')).toBeNull();
+    expect(byTestId('brain-menu-tier-note')).toBeNull();
+  });
+
+  it('TASK-20260906 AC2/AC5: choosing a tier calls the seat once, the select follows the seat’s state, the popover stays open', async () => {
+    const seat = fakeTierSeat({ choice: 'auto', unavailable: {} });
+    const g = await fresh(withSeat(seat));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    const select = byTestId('brain-menu-tier') as HTMLSelectElement;
+    await act(async () => {
+      select.value = 'complex';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(seat.sets).toEqual(['complex']);
+    expect((byTestId('brain-menu-tier') as HTMLSelectElement).value).toBe('complex');
+    expect(byTestId('brain-menu')).not.toBeNull();
+    expect(byTestId('brain-chip')?.getAttribute('data-tier')).toBe('complex');
+  });
+
+  it('TASK-20260906 AC4: a substituted tier is disabled and annotated, the selection sits on what answered, and the note names both — all derived from the seat', async () => {
+    const seat = fakeTierSeat({ choice: 'default', applied: { asked: 'complex', answered: 'default' }, unavailable: { complex: 'default' } });
+    const g = await fresh(withSeat(seat));
+    await render(<g.BrainChip />);
+    await click(byTestId('brain-chip'));
+    const select = byTestId('brain-menu-tier') as HTMLSelectElement;
+    expect(select.value).toBe('default');
+    const complex = Array.from(select.options).find((o) => o.value === 'complex');
+    expect(complex?.disabled).toBe(true);
+    expect(complex?.textContent).toBe('complex — not on this plan, answered on default');
+    expect(byTestId('brain-menu-tier-note')?.textContent).toBe('asked for complex — this view answered on default (the viewer’s plan)');
+  });
+
+  it('TASK-20260906 AC1 twin: the demo brain under host and the web chip render no thinking-level control', async () => {
+    const demo = await fresh(hostPlatform({ kind: 'demo' }));
+    demo.mode.providerStore.set('mock');
+    await render(<demo.BrainChip />);
+    await click(byTestId('brain-chip'));
+    expect(byTestId('brain-menu-tier')).toBeNull();
+    await act(async () => root?.unmount());
+    container?.remove();
+    const web = await fresh();
+    await render(<web.BrainChip />);
+    await click(byTestId('brain-chip'));
+    expect(byTestId('brain-menu-tier')).toBeNull();
   });
 
   it('web (positive twin): the demo chip offers the settings door and the key invitation', async () => {

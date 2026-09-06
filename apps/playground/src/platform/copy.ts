@@ -7,7 +7,7 @@
 
 import type { PersistenceKind } from '@snugprotocol/db';
 
-import type { CustodyState, SnugPlatform } from './platform.js';
+import type { CustodyState, HostModelTier, SnugPlatform, TierSeat, TierState } from './platform.js';
 
 /** One sentence naming the storage in use; `undefined` when the platform did not say. */
 export function storageDisclosure(kind: PersistenceKind | undefined): string | undefined {
@@ -99,4 +99,31 @@ export function custodyDisclosure(
         body: storageDisclosure(kind) ?? 'this copy of your file lives with this page.',
       });
   }
+}
+
+// ---------------------------------------------------------- the thinking level (ADR-0067)
+
+/** What each tier does, in the contract's own terms (sample.d.ts 0.2.41) — the option labels the chip lists. */
+export function tierLabel(tier: HostModelTier, seat: Pick<TierSeat, 'viewerDefault'>, state: Pick<TierState, 'unavailable'>): string {
+  const answered = state.unavailable[tier];
+  if (answered !== undefined) return `${tier} — not on this plan, answered on ${answered}`;
+  const marker = tier === seat.viewerDefault ? ' (the viewer’s default)' : '';
+  switch (tier) {
+    case 'quick':
+      return `quick — answers at once, no thinking first${marker}`;
+    case 'default':
+      return `default — thinks first${marker}`;
+    case 'complex':
+      return `complex — thinks longest, for hard reasoning${marker}`;
+    default: {
+      const never: never = tier;
+      return never;
+    }
+  }
+}
+
+/** The substitution note — derived from what the adapter recorded, never from UI state (ADR-0059 rule 2). */
+export function tierSubstitutionNote(applied: TierState['applied']): string | undefined {
+  if (applied === undefined) return undefined;
+  return `asked for ${applied.asked} — this view answered on ${applied.answered} (the viewer’s plan)`;
 }

@@ -35,6 +35,7 @@ import { isLocalEndpointHost } from '@playground/security/privateHost';
 import { createCompleteAdapter, type CompleteFn } from './brains/complete.js';
 import { measurePrompt } from './brains/prompt.js';
 import { createSampleAdapter, type SampleFn } from './brains/sample.js';
+import { createTierStore, type TierStorage } from './brains/tierStore.js';
 
 // ---------------------------------------------------------------------------- binding
 
@@ -332,7 +333,7 @@ export const DEFAULT_MAX_PROMPT_BYTES = 65_536;
  * the adapters and mutated later named 65,536 in its refusal while the builder budgeted on
  * the real cap).
  */
-export async function probeBrain(env: BindingEnv, host?: HostNamespaces, complete?: CompleteFn): Promise<BrainProbeResult> {
+export async function probeBrain(env: BindingEnv, host?: HostNamespaces, complete?: CompleteFn, tierStorage?: TierStorage): Promise<BrainProbeResult> {
   const sampleLeg: BrainLeg = env.claudeUse ? (host === undefined ? 'detected' : host.legs.sample) : 'absent';
   if (host?.sample !== undefined) {
     const sample = host.sample;
@@ -340,15 +341,20 @@ export async function probeBrain(env: BindingEnv, host?: HostNamespaces, complet
       .limits()
       .then((limits) => (typeof limits?.maxPromptBytes === 'number' && limits.maxPromptBytes > 0 ? limits.maxPromptBytes : DEFAULT_MAX_PROMPT_BYTES))
       .catch(() => DEFAULT_MAX_PROMPT_BYTES);
+    // The thinking level (ADR-0067): ONE store per boot, read by both adapters at call time
+    // and rendered by the chip through the seat; `auto` is the per-purpose pins T4 measured.
+    const tiers = createTierStore({ storage: tierStorage });
+    const onApplied = tiers.markApplied;
     const brain: PlatformBrain = {
       kind: 'host',
       label: HOSTED_BRAIN_LABEL,
-      adapter: createSampleAdapter(sample, { modelTier: 'quick', maxPromptBytes }),
-      chatAdapter: createSampleAdapter(sample, { modelTier: 'default', maxPromptBytes }),
+      adapter: createSampleAdapter(sample, { tier: () => tiers.tierFor('app'), onApplied, maxPromptBytes }),
+      chatAdapter: createSampleAdapter(sample, { tier: () => tiers.tierFor('chat'), onApplied, maxPromptBytes }),
       streaming: true,
       tools: false,
       maxPromptBytes,
       promptBytes: measurePrompt,
+      tiers: tiers.seat(),
     };
     return { brain, legs: { sample: 'resolved', complete: env.claudeComplete ? 'detected' : 'absent', local: 'absent' } };
   }
@@ -382,6 +388,17 @@ export interface ProbeResult {
 export interface ProbeWindowLike extends BindingWindowLike {
   navigator?: { storage?: { getDirectory?: unknown } | undefined } | undefined;
   indexedDB?: IDBFactory | undefined;
+  /** Where the thinking-level choice lives (this browser, this origin). Absent or throwing → memory for this boot. */
+  localStorage?: TierStorage | undefined;
+}
+
+/** `window.localStorage` is a THROWING getter where third-party storage is denied (Safari) — read it once, guarded. */
+function readLocalStorage(win: ProbeWindowLike): TierStorage | undefined {
+  try {
+    return win.localStorage ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -401,6 +418,6 @@ export async function runProbe(win: ProbeWindowLike, options: { guardMs?: number
   }
   const complete = !env.claudeUse && env.claudeComplete && claude?.complete !== undefined ? (prompt: string) => claude.complete!(prompt) : undefined;
   const storage = await probeStorage({ storage: win.navigator?.storage, indexedDB: win.indexedDB });
-  const brain = await probeBrain(env, host, complete);
+  const brain = await probeBrain(env, host, complete, readLocalStorage(win));
   return { binding: decideBinding(env), storage, brain, ...(host !== undefined ? { host } : {}) };
 }
