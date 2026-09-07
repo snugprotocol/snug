@@ -50,7 +50,19 @@ export function createLocalCustodyStore(initial: CustodyState = { dirty: false, 
   };
 }
 
-export function composeLocalPlatform(client: LocalClient, status: LocalStatus, backendOverride?: PersistenceBackend): LocalComposition {
+export function composeLocalPlatform(
+  client: LocalClient,
+  status: LocalStatus,
+  /**
+   * The sql.js engine as bytes. Both builds swap the `?url` locator for a stub that must
+   * never run, so the engine can ONLY arrive through this seat — without it the user db
+   * never opens and the page renders an empty shell with a console error. Caught by the
+   * first real-browser run; no unit test could see it, because every one of them injects
+   * its own backend.
+   */
+  sqlJsWasmBinary?: Uint8Array,
+  backendOverride?: PersistenceBackend,
+): LocalComposition {
   // The holder check decides whether we open AT ALL. Both of the db's save paths swallow a
   // failed write with a bare `catch`, and no persist-error seam exists — so a page that
   // opened read-only would take an hour of the user's work and lose it on tab close.
@@ -74,6 +86,7 @@ export function composeLocalPlatform(client: LocalClient, status: LocalStatus, b
       // The one binding whose page can reach the network — through the process, which
       // re-runs the executor's own gates on the far side of the socket.
       fetchImpl: (input, init) => client.fetchImpl(input, init),
+      ...(sqlJsWasmBinary !== undefined ? { sqlJsWasmBinary } : {}),
       userdbBackend: backendOverride ?? createFileBackend(client.fs, 'Snug'),
       custody: custodySeat,
       capabilities: {

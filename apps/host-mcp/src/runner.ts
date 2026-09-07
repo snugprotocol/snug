@@ -13,7 +13,7 @@ import path from 'node:path';
 import { parseAppBundle } from '@snugprotocol/protocol';
 
 import { createControlSocket, probeControlSocket, type ControlSocket } from './control-socket.js';
-import { createFetchProxy } from './fetch-proxy.js';
+import { createFetchProxy, type FetchProxy } from './fetch-proxy.js';
 import { acquireLock, releaseLock, type LockDeps } from './lock.js';
 import { createLoopbackServer, type LoopbackServer } from './loopback-server.js';
 import { nodeHttpsSend } from './node-transport.js';
@@ -42,6 +42,13 @@ export interface RunnerOptions {
   /** Names the product holding the user file, when one does (D-B10). */
   heldBy?(): string | undefined;
   lockDeps?: Partial<LockDeps>;
+  /**
+   * The outbound transport, injected. The release entry passes nothing and gets
+   * `nodeHttpsSend`; the TEST entry passes one carrying a resolver so a stub on 127.0.0.1
+   * can answer for a public-looking hostname (D-B11). The hook lives in the second build,
+   * never here — `check-host-mcp` sweeps the release bundle for its env names.
+   */
+  proxy?: { handle: FetchProxy['handle'] };
   /** How long after the last session leaves before exiting. */
   graceMs?: number;
 }
@@ -115,7 +122,7 @@ export function createRunner(options: RunnerOptions): Runner {
       server = createLoopbackServer({
         token,
         page: options.page,
-        proxy: createFetchProxy({ send: nodeHttpsSend }),
+        proxy: options.proxy ?? createFetchProxy({ send: nodeHttpsSend }),
         store,
         ...(options.heldBy !== undefined ? { heldBy: options.heldBy } : {}),
       });

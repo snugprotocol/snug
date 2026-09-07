@@ -3,11 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Snug local host process — serves the host kit on loopback, fills the desktop's platform seams (fetch, userdb, oauth callback), and exposes a four-tool control plane over stdio (ADR-0068)",
+  "description": "Snug local host process \u2014 serves the host kit on loopback, fills the desktop's platform seams (fetch, userdb, oauth callback), and exposes a four-tool control plane over stdio (ADR-0068)",
   "license": "MIT",
   "main": "dist/snug-mcp.mjs",
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && vite build --config vite.test-entry.config.ts",
     "test": "tsc -p tsconfig.test.json && vitest run"
   },
   "dependencies": {

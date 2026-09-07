@@ -51,7 +51,7 @@ export interface CustodyCopy {
 export function custodyDisclosure(
   binding: SnugPlatform['binding'],
   kind: PersistenceKind | undefined,
-  state: Pick<CustodyState, 'dirty' | 'readOnly' | 'divergence' | 'workingCopy'>,
+  state: Pick<CustodyState, 'dirty' | 'readOnly' | 'divergence' | 'workingCopy' | 'heldBy'>,
 ): CustodyCopy {
   const status = state.heldBy !== undefined
     ? `${state.heldBy} has your file open — close it to use Snug here.`

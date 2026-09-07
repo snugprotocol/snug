@@ -15,6 +15,7 @@ import { getUserDb } from '@playground/state/userdb';
 import { refreshAppMeta } from '@playground/state/appMeta';
 
 import { claimTokenFromFragment, createLocalClient } from './client.js';
+import { sqlJsWasmBinary } from '../wasmBytes.js';
 import { composeLocalPlatform } from './compose-local.js';
 import { LocalRefusal } from './LocalRefusal.js';
 
@@ -44,7 +45,8 @@ async function boot(): Promise<void> {
     return;
   }
 
-  const { platform, refusal } = composeLocalPlatform(client, status);
+  // The engine rides as bytes: both builds stub the locator, so this is the only path.
+  const { platform, refusal } = composeLocalPlatform(client, status, sqlJsWasmBinary());
   setPlatform(platform);
 
   if (refusal !== undefined) {
