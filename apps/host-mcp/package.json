@@ -1,0 +1,22 @@
+{
+  "name": "host-mcp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Snug local host process — serves the host kit on loopback, fills the desktop's platform seams (fetch, userdb, oauth callback), and exposes a four-tool control plane over stdio (ADR-0068)",
+  "license": "MIT",
+  "main": "dist/snug-mcp.mjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "test": "tsc -p tsconfig.test.json && vitest run"
+  },
+  "dependencies": {
+    "@snugprotocol/auth": "workspace:*",
+    "@snugprotocol/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@types/node": "^26.0.0",
+    "vite": "^6.4.3"
+  }
+}
