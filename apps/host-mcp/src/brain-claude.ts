@@ -101,3 +101,158 @@ export function completionToSseBody(completion: CliCompletion): string {
     'data: [DONE]\n\n'
   );
 }
+
+// ---------------------------------------------------------------- the wire shapes
+
+export interface ChatMessage {
+  role: string;
+  content: string | Array<{ type?: string; text?: string }>;
+}
+
+export interface ChatRequest {
+  messages: ChatMessage[];
+  model?: string;
+}
+
+/** OpenAI allows content as a string OR as an array of parts; the page's adapter uses both. */
+function textOf(content: ChatMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((part) => part.text ?? '')
+    .filter((text) => text !== '')
+    .join('\n');
+}
+
+/**
+ * Turn an OpenAI-shaped conversation into the ONE system prompt and ONE user prompt the CLI
+ * takes. The assistant turns are rendered into the prompt rather than dropped: without them
+ * every follow-up would reach the model as a fresh question with no memory of its own last
+ * answer.
+ */
+export function splitChatRequest(request: ChatRequest): { system: string; prompt: string } {
+  const system = request.messages
+    .filter((message) => message.role === 'system')
+    .map((message) => textOf(message.content))
+    .join('\n\n');
+
+  const turns = request.messages.filter((message) => message.role === 'user' || message.role === 'assistant');
+  if (!turns.some((message) => message.role === 'user')) {
+    throw new Error('this request carries no user turn — there is nothing to answer');
+  }
+  // A single user turn rides bare; a conversation is labelled so the model can tell the
+  // voices apart.
+  const prompt =
+    turns.length === 1 && turns[0] !== undefined
+      ? textOf(turns[0].content)
+      : turns.map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${textOf(message.content)}`).join('\n\n');
+
+  return { system, prompt };
+}
+
+/**
+ * Read `claude -p --output-format json`. An `is_error` result becomes a thrown error rather
+ * than an empty answer: the page would render "" as a model with nothing to say, hiding a
+ * usage limit or an auth failure the user could act on.
+ */
+export function parseClaudeOutput(stdout: string): { text: string; stopReason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    throw new Error(`could not read the CLI's answer: ${stdout.trim().slice(0, 200)}`);
+  }
+  if (typeof parsed !== 'object' || parsed === null) throw new Error('could not read the CLI’s answer');
+  const result = parsed as { is_error?: unknown; result?: unknown; stop_reason?: unknown };
+  const text = typeof result.result === 'string' ? result.result : '';
+  if (result.is_error === true) throw new Error(text === '' ? 'the CLI reported an error' : text);
+  return { text, stopReason: typeof result.stop_reason === 'string' ? result.stop_reason : 'end_turn' };
+}
+
+// ------------------------------------------------------------------- the spawn
+
+export interface BrainDeps {
+  /** Injected so tests never launch a real CLI. */
+  run?(args: string[], env: Record<string, string>, prompt: string, signal: AbortSignal): Promise<string>;
+  timeoutMs?: number;
+  binary?: string;
+}
+
+export interface Brain {
+  /** Answer one OpenAI-shaped chat request as an SSE body. */
+  complete(request: ChatRequest): Promise<string>;
+}
+
+/** The default runner: spawn the user's own CLI, feed the prompt on stdin, read stdout. */
+function spawnClaude(binary: string) {
+  return async function run(args: string[], env: Record<string, string>, prompt: string, signal: AbortSignal): Promise<string> {
+    const { spawn } = await import('node:child_process');
+    return new Promise<string>((resolve, reject) => {
+      const child = spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      // EVERY SPAWN OWES A REAP (lessons 2026-08-18/19). An abort — the wall clock, or the
+      // page giving up — must not leave a `claude` running against the user's quota.
+      const onAbort = (): void => {
+        child.kill('SIGTERM');
+        // TERM first so the CLI can exit cleanly; KILL only if it ignores us.
+        setTimeout(() => child.kill('SIGKILL'), 2_000).unref?.();
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
+      child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')));
+      child.on('error', (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(new Error(`could not start ${binary}: ${error.message}`));
+      });
+      child.on('close', (code) => {
+        signal.removeEventListener('abort', onAbort);
+        if (signal.aborted) {
+          reject(new Error('aborted'));
+          return;
+        }
+        // A non-zero exit with nothing on stdout is the CLI failing to start or refusing;
+        // its stderr is the only thing that says why, so it must reach the user.
+        if (code !== 0 && stdout.trim() === '') {
+          reject(new Error(`${binary} exited ${code}: ${stderr.trim().slice(0, 300) || 'no output'}`));
+          return;
+        }
+        resolve(stdout);
+      });
+      child.stdin.end(prompt);
+    });
+  };
+}
+
+export function createClaudeBrain(deps: BrainDeps = {}): Brain {
+  const timeoutMs = deps.timeoutMs ?? SHIM_TIMEOUT_MS;
+  const binary = deps.binary ?? 'claude';
+  const run = deps.run ?? spawnClaude(binary);
+
+  return {
+    async complete(request: ChatRequest): Promise<string> {
+      const { system, prompt } = splitChatRequest(request);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      timer.unref?.();
+      try {
+        const stdout = await run(
+          buildClaudeArgs({ system, ...(request.model !== undefined && request.model !== 'claude' ? { model: request.model } : {}) }),
+          childEnvFor(process.env),
+          prompt,
+          controller.signal,
+        );
+        const { text, stopReason } = parseClaudeOutput(stdout);
+        return completionToSseBody({ text, stopReason, model: request.model ?? 'claude' });
+      } catch (error) {
+        // THE BOUND THAT FIRED NAMES ITSELF (lesson 2026-08-18): an aborted spawn spells
+        // itself differently on every platform, and that spelling points nowhere.
+        if (controller.signal.aborted) {
+          throw new Error(`your Claude CLI did not answer within ${Math.round(timeoutMs / 1000)}s`);
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}

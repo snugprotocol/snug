@@ -14,6 +14,7 @@ import { setPlatform } from '@playground/platform/platform';
 import { getUserDb } from '@playground/state/userdb';
 import { refreshAppMeta } from '@playground/state/appMeta';
 
+import { applyHandInEvent } from './handinEvents.js';
 import { claimTokenFromFragment, createLocalClient } from './client.js';
 import { sqlJsWasmBinary } from '../wasmBytes.js';
 import { composeLocalPlatform } from './compose-local.js';
@@ -46,7 +47,7 @@ async function boot(): Promise<void> {
   }
 
   // The engine rides as bytes: both builds stub the locator, so this is the only path.
-  const { platform, refusal } = composeLocalPlatform(client, status, sqlJsWasmBinary());
+  const { platform, refusal } = composeLocalPlatform(client, status, sqlJsWasmBinary(), undefined, token);
   setPlatform(platform);
 
   if (refusal !== undefined) {
@@ -57,9 +58,21 @@ async function boot(): Promise<void> {
   }
 
   // Hand-ins arrive at any time here, not only at boot: the agent may deliver an app while
-  // the user is sitting on the hub.
-  client.events((name) => {
-    if (name === 'hand-in') void getUserDb().then(() => refreshAppMeta());
+  // the user sits on the hub, or while they are inside the app being updated. The bundle is
+  // APPLIED (not merely noticed), and the surfaces are told — the hub reads its library once
+  // at mount, so without that an arriving app is invisible until a reload.
+  client.events((name, data) => {
+    if (name !== 'hand-in') return;
+    void applyHandInEvent(data as { bundle: unknown }, {
+      getDb: getUserDb,
+      onLibraryChanged: async () => {
+        await refreshAppMeta();
+        // The hub's own list is a mount-time read; re-mounting the route is the one honest
+        // way to show a new app without inventing a second source of truth for the shelf.
+        window.dispatchEvent(new CustomEvent('snug:library-changed'));
+      },
+      onNote: (note) => window.dispatchEvent(new CustomEvent('snug:hand-in-note', { detail: note })),
+    });
   });
 
   root.render(

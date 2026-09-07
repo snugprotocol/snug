@@ -19,7 +19,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildClaudeArgs, childEnvFor, CHILD_ENV_ALLOWLIST, completionToSseBody, SHIM_TIMEOUT_MS } from '../brain-claude.js';
+import { buildClaudeArgs, childEnvFor, CHILD_ENV_ALLOWLIST, completionToSseBody, createClaudeBrain, parseClaudeOutput, SHIM_TIMEOUT_MS, splitChatRequest } from '../brain-claude.js';
 
 /** The names measured in a live Claude Code session — none may reach the child. */
 const MEASURED_INHERITED = [
@@ -134,5 +134,113 @@ describe('the shim answers as a stream', () => {
 describe('the timeout names itself and is sized from a cold start', () => {
   it('is well above a cold `claude -p` (lesson 2026-08-18)', () => {
     expect(SHIM_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
+  });
+});
+
+describe('the OpenAI-shaped request the page sends', () => {
+  it('flattens system and user turns into one prompt, system first', () => {
+    const { system, prompt } = splitChatRequest({
+      messages: [
+        { role: 'system', content: 'you are a brain' },
+        { role: 'user', content: 'hello' },
+      ],
+    });
+    expect(system).toBe('you are a brain');
+    expect(prompt).toBe('hello');
+  });
+
+  it('keeps a multi-turn conversation in order, labelled', () => {
+    const { prompt } = splitChatRequest({
+      messages: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'answer' },
+        { role: 'user', content: 'second' },
+      ],
+    });
+    // The CLI takes ONE prompt, so a conversation has to be rendered into it; losing the
+    // assistant turns would make every follow-up read as a fresh question.
+    expect(prompt).toMatch(/first[\s\S]*answer[\s\S]*second/);
+  });
+
+  it('joins multiple system messages rather than dropping all but one', () => {
+    const { system } = splitChatRequest({
+      messages: [
+        { role: 'system', content: 'rule one' },
+        { role: 'system', content: 'rule two' },
+        { role: 'user', content: 'go' },
+      ],
+    });
+    expect(system).toContain('rule one');
+    expect(system).toContain('rule two');
+  });
+
+  it('refuses a request with no user turn, by name', () => {
+    expect(() => splitChatRequest({ messages: [{ role: 'system', content: 'only rules' }] })).toThrow(/no user/i);
+  });
+
+  it('reads array-shaped content (the OpenAI content-parts form)', () => {
+    const { prompt } = splitChatRequest({
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'part one' }, { type: 'text', text: 'part two' }] as never }],
+    });
+    expect(prompt).toContain('part one');
+    expect(prompt).toContain('part two');
+  });
+});
+
+describe('reading the CLI’s answer', () => {
+  it('takes the result field and the stop reason', () => {
+    const parsed = parseClaudeOutput(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'pong', stop_reason: 'end_turn' }));
+    expect(parsed).toEqual({ text: 'pong', stopReason: 'end_turn' });
+  });
+
+  it('surfaces an is_error result as an error rather than as an empty answer', () => {
+    // An empty answer would look to the page like a model that had nothing to say.
+    expect(() => parseClaudeOutput(JSON.stringify({ type: 'result', is_error: true, result: 'usage limit reached' }))).toThrow(/usage limit reached/);
+  });
+
+  it('refuses output that is not the CLI’s JSON at all', () => {
+    expect(() => parseClaudeOutput('command not found: claude')).toThrow(/could not read/i);
+  });
+
+  it('defaults a missing stop_reason rather than throwing', () => {
+    expect(parseClaudeOutput(JSON.stringify({ result: 'hi' })).stopReason).toBe('end_turn');
+  });
+});
+
+describe('the brain end to end, with a fake CLI', () => {
+  const fakeRun = (stdout: string) => vi.fn(async () => stdout);
+  const okOutput = JSON.stringify({ type: 'result', is_error: false, result: 'pong', stop_reason: 'end_turn' });
+
+  it('answers a chat request as an SSE body the adapter can read', async () => {
+    const brain = createClaudeBrain({ run: fakeRun(okOutput) });
+    const body = await brain.complete({ messages: [{ role: 'user', content: 'ping' }] });
+    expect(body).toContain('"content":"pong"');
+    expect(body).toContain('"finish_reason":"stop"');
+    expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+  });
+
+  it('feeds the prompt on stdin and the system prompt in argv', async () => {
+    const run = vi.fn(async () => okOutput);
+    const brain = createClaudeBrain({ run });
+    await brain.complete({ messages: [{ role: 'system', content: 'be brief' }, { role: 'user', content: 'ping' }] });
+    const call = run.mock.calls[0] as unknown as [string[], Record<string, string>, string, AbortSignal];
+    expect(call[0]).toEqual(expect.arrayContaining(['--system-prompt', 'be brief']));
+    expect(call[2]).toBe('ping');
+    // The env the child gets is the allowlist, not this process's.
+    expect(Object.keys(call[1]).every((k) => (CHILD_ENV_ALLOWLIST as readonly string[]).includes(k))).toBe(true);
+  });
+
+  it('names its own timeout rather than passing on the transport’s spelling', async () => {
+    const brain = createClaudeBrain({
+      timeoutMs: 20,
+      run: (_a, _e, _p, signal) =>
+        new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('killed')), { once: true })),
+    });
+    await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/did not answer within 0s|did not answer within/);
+  });
+
+  it('surfaces a CLI that could not start, with its reason', async () => {
+    const brain = createClaudeBrain({ run: async () => { throw new Error('could not start claude: ENOENT'); } });
+    await expect(brain.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/ENOENT/);
   });
 });

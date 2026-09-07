@@ -15,6 +15,7 @@
 //    the executor's own named refusal is the honest answer for a LAN row rather than a
 //    silent fallback through the ordinary transport.
 
+import { localAdapter } from '@snugprotocol/adapters';
 import { createFileBackend, type PersistenceBackend } from '@snugprotocol/db';
 
 import type { CustodySeat, CustodyState, SnugPlatform } from '@playground/platform/platform';
@@ -50,6 +51,8 @@ export function createLocalCustodyStore(initial: CustodyState = { dirty: false, 
   };
 }
 
+const origin = typeof location === 'undefined' ? 'http://127.0.0.1:43127' : location.origin;
+
 export function composeLocalPlatform(
   client: LocalClient,
   status: LocalStatus,
@@ -62,6 +65,8 @@ export function composeLocalPlatform(
    */
   sqlJsWasmBinary?: Uint8Array,
   backendOverride?: PersistenceBackend,
+  /** The bearer, so the brain adapter can reach the shim on the same origin. */
+  token?: string,
 ): LocalComposition {
   // The holder check decides whether we open AT ALL. Both of the db's save paths swallow a
   // failed write with a bare `catch`, and no persist-error seam exists — so a page that
@@ -87,6 +92,23 @@ export function composeLocalPlatform(
       // re-runs the executor's own gates on the far side of the socket.
       fetchImpl: (input, init) => client.fetchImpl(input, init),
       ...(sqlJsWasmBinary !== undefined ? { sqlJsWasmBinary } : {}),
+      // THE BRAIN (D5, D-B7). The user's own `claude` CLI behind the process's shim,
+      // reached through the adapter the playground already has — `localAdapter` accepts a
+      // key, and the host arm of `createTurnAdapter` reads no BYOK key and skips the F15
+      // endpoint confirm, so no mode, setting or secret is involved. `streaming: false` is
+      // an app-facing declaration in `host-ready`, not a transport switch: the shim answers
+      // SSE regardless, because `openaiAdapter` always streams.
+      ...(token !== undefined
+        ? {
+            brain: {
+              kind: 'host' as const,
+              label: 'Claude · your CLI',
+              adapter: localAdapter({ baseUrl: `${origin}/v1`, apiKey: token, model: 'claude' }),
+              streaming: false,
+              tools: false,
+            },
+          }
+        : {}),
       userdbBackend: backendOverride ?? createFileBackend(client.fs, 'Snug'),
       custody: custodySeat,
       capabilities: {

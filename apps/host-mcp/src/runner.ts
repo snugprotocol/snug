@@ -12,6 +12,7 @@ import path from 'node:path';
 
 import { parseAppBundle } from '@snugprotocol/protocol';
 
+import { createClaudeBrain } from './brain-claude.js';
 import { createControlSocket, probeControlSocket, type ControlSocket } from './control-socket.js';
 import { createFetchProxy, type FetchProxy } from './fetch-proxy.js';
 import { acquireLock, releaseLock, type LockDeps } from './lock.js';
@@ -49,6 +50,8 @@ export interface RunnerOptions {
    * never here — `check-host-mcp` sweeps the release bundle for its env names.
    */
   proxy?: { handle: FetchProxy['handle'] };
+  /** The brain, injected in tests so no CLI is ever spawned. */
+  brain?: { complete(request: never): Promise<string> };
   /** How long after the last session leaves before exiting. */
   graceMs?: number;
 }
@@ -125,6 +128,9 @@ export function createRunner(options: RunnerOptions): Runner {
         proxy: options.proxy ?? createFetchProxy({ send: nodeHttpsSend }),
         store,
         ...(options.heldBy !== undefined ? { heldBy: options.heldBy } : {}),
+        // The user's OWN CLI, on their own subscription (D5). Absent binary → the route
+        // answers a named refusal and the page falls back to the demo brain.
+        brain: options.brain ?? createClaudeBrain(),
       });
 
       // The fixed port first; an ephemeral fallback keeps the runner usable, and the page

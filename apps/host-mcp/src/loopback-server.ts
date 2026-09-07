@@ -32,6 +32,8 @@ export interface LoopbackServerOptions {
   store?: UserFileStore;
   /** Names the other product holding the user file, when one is (D-B10). */
   heldBy?: () => string | undefined;
+  /** The `claude -p` shim. Absent → `/v1/chat/completions` answers a named refusal. */
+  brain?: { complete(request: { messages: Array<{ role: string; content: string | Array<{ type?: string; text?: string }> }>; model?: string }): Promise<string> };
 }
 
 export interface LoopbackServer {
@@ -144,6 +146,31 @@ export function createLoopbackServer(options: LoopbackServerOptions = {}): Loopb
       // A proxy REFUSAL rides as a 200 envelope: the page needs the code to name the
       // failure, and an HTTP 4xx here would be indistinguishable from a gate refusal.
       json(response, 200, await options.proxy.handle(parsed));
+      return;
+    }
+
+    // The brain shim (ADR-0068 §5): OpenAI-compatible, so the page reaches it through the
+    // adapter it already has. It answers SSE because `openaiAdapter` always streams.
+    if (path === '/v1/chat/completions' && request.method === 'POST') {
+      if (options.brain === undefined) {
+        json(response, 503, { error: { message: 'no brain is configured for this runner' } });
+        return;
+      }
+      const body = await readBody(request, MAX_FETCH_REQUEST_BYTES);
+      if (body === undefined) {
+        end(response, 413);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(body.toString('utf8')) as { messages?: unknown; model?: string };
+        if (!Array.isArray(parsed.messages)) throw new Error('messages must be an array');
+        const sse = await options.brain.complete(parsed as never);
+        end(response, 200, sse, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      } catch (error) {
+        // The reason reaches the page: a usage limit or a missing CLI is something the
+        // user can act on, and an opaque failure would read as "the model said nothing".
+        json(response, 502, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
       return;
     }
 
