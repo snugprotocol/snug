@@ -126,3 +126,9 @@ ADR-0065 amendment (§2 B → "delivered as the plugin-bundled process; the proc
 - State: **Gate 2 — plan printed, awaiting approval + Q1–Q5.** No implementation code.
 - Next step: on approval → plan review (finder angles), then Gate 3 red tests in `apps/host-mcp` (step 1).
 - Open questions: Q1–Q5 above.
+
+### 2026-09-07 06:40 UTC — Jeetu — plan approval
+- Done: owner answered **"yes go ahead"** — the plan stands as written and Q1–Q5 take the recommended defaults: Q1 hand-rolled JSON-RPC over stdio with the SDK as a dev-only interop client; Q2 process-table holder signal now, shared marker queued; Q3 LAN rungs out of scope; Q4 `share` off on the local page; Q5 `--max-turns` verified at Gate 3, else `--tools ""` + `--disallowedTools "*"`.
+- State: Gate 2 passed. ADR-0068 moves to `accepted` at Gate 6 (its status line says so). Next: the plan review (finder angles) before any implementation, then Gate 3.
+- Next step: plan review → Gate 3 red tests in `apps/host-mcp` (step 1 of the order).
+- Open questions: none.
